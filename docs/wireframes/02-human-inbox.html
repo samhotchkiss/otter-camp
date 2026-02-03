@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wireframe: Human Inbox — AI Hub</title>
+  <style>
+    :root {
+      --bg: #f5f5f7;
+      --surface: #ffffff;
+      --surface-alt: #f0f0f2;
+      --border: #d1d1d6;
+      --text: #1d1d1f;
+      --text-muted: #86868b;
+      --accent: #0071e3;
+      --red: #ff3b30;
+      --yellow: #ff9500;
+      --green: #34c759;
+      --purple: #af52de;
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --space-xl: 32px;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.4;
+      font-size: 14px;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      display: grid;
+      grid-template-columns: 220px 380px 1fr;
+      grid-template-rows: 56px 1fr;
+      min-height: 100vh;
+    }
+    
+    /* ========== TOP BAR ========== */
+    .topbar {
+      grid-column: 1 / -1;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 var(--space-lg);
+      gap: var(--space-lg);
+    }
+    
+    .logo {
+      font-weight: 700;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .logo-mark {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--accent), #5856d6);
+      border-radius: 6px;
+    }
+    
+    .topbar-center { flex: 1; }
+    
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      font-size: 14px;
+    }
+    
+    .breadcrumb a {
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+    
+    .breadcrumb a:hover {
+      color: var(--accent);
+    }
+    
+    .breadcrumb span {
+      color: var(--text-muted);
+    }
+    
+    .breadcrumb .current {
+      color: var(--text);
+      font-weight: 500;
+    }
+    
+    /* ========== SIDEBAR ========== */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: var(--space-md) 0;
+      overflow-y: auto;
+    }
+    
+    .nav-section { margin-bottom: var(--space-lg); }
+    
+    .nav-label {
+      padding: var(--space-sm) var(--space-md);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: 10px var(--space-md);
+      color: var(--text);
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    
+    .nav-item:hover { background: var(--surface-alt); }
+    .nav-item.active {
+      background: rgba(0, 113, 227, 0.08);
+      color: var(--accent);
+      font-weight: 500;
+    }
+    
+    .nav-icon { width: 20px; text-align: center; }
+    
+    .nav-item .badge {
+      margin-left: auto;
+      background: var(--red);
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 10px;
+    }
+    
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .pulse-dot.red { background: var(--red); }
+    .pulse-dot.green { background: var(--green); }
+    .pulse-dot.yellow { background: var(--yellow); }
+    .pulse-dot.gray { background: #8e8e93; }
+    
+    /* ========== INBOX LIST ========== */
+    .inbox-list-panel {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .inbox-header {
+      padding: var(--space-md);
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .inbox-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: var(--space-sm);
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .inbox-title .count {
+      background: var(--red);
+      color: white;
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    
+    .inbox-filters {
+      display: flex;
+      gap: var(--space-sm);
+    }
+    
+    .filter-btn {
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .filter-btn:hover { background: var(--surface-alt); }
+    .filter-btn.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+    
+    .inbox-items {
+      flex: 1;
+      overflow-y: auto;
+    }
+    
+    .inbox-item {
+      padding: var(--space-md);
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    
+    .inbox-item:hover { background: var(--surface-alt); }
+    .inbox-item.selected {
+      background: rgba(0, 113, 227, 0.08);
+      border-left: 3px solid var(--accent);
+    }
+    
+    .inbox-item-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      margin-bottom: var(--space-xs);
+    }
+    
+    .type-badge {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    
+    .type-badge.approval {
+      background: rgba(255, 59, 48, 0.12);
+      color: var(--red);
+    }
+    
+    .type-badge.decision {
+      background: rgba(255, 149, 0, 0.12);
+      color: var(--yellow);
+    }
+    
+    .type-badge.review {
+      background: rgba(175, 82, 222, 0.12);
+      color: var(--purple);
+    }
+    
+    .type-badge.question {
+      background: rgba(0, 113, 227, 0.12);
+      color: var(--accent);
+    }
+    
+    .type-badge.blocking {
+      background: var(--red);
+      color: white;
+    }
+    
+    .urgency-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-left: auto;
+    }
+    
+    .urgency-dot.high { background: var(--yellow); }
+    .urgency-dot.blocking { background: var(--red); animation: pulse 1.5s infinite; }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    
+    .inbox-item-title {
+      font-weight: 500;
+      margin-bottom: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .inbox-item-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .inbox-empty {
+      padding: var(--space-xl);
+      text-align: center;
+      color: var(--text-muted);
+    }
+    
+    .inbox-empty .icon {
+      font-size: 48px;
+      margin-bottom: var(--space-md);
+    }
+    
+    /* ========== DETAIL PANEL ========== */
+    .detail-panel {
+      background: var(--bg);
+      padding: var(--space-lg);
+      overflow-y: auto;
+    }
+    
+    .detail-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    
+    .detail-header {
+      padding: var(--space-lg);
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .detail-type-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      margin-bottom: var(--space-sm);
+    }
+    
+    .detail-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: var(--space-sm);
+    }
+    
+    .detail-meta {
+      display: flex;
+      gap: var(--space-lg);
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .detail-meta-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-xs);
+    }
+    
+    .detail-body {
+      padding: var(--space-lg);
+    }
+    
+    .detail-section {
+      margin-bottom: var(--space-lg);
+    }
+    
+    .detail-section:last-child {
+      margin-bottom: 0;
+    }
+    
+    .detail-section-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: var(--space-sm);
+    }
+    
+    .detail-context {
+      background: var(--surface-alt);
+      border-radius: 8px;
+      padding: var(--space-md);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    
+    .detail-files {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+    }
+    
+    .file-link {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: 8px 12px;
+      background: var(--surface-alt);
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .file-link:hover {
+      background: var(--border);
+    }
+    
+    /* Actions Section */
+    .detail-actions {
+      padding: var(--space-lg);
+      background: var(--surface-alt);
+      border-top: 1px solid var(--border);
+    }
+    
+    .action-buttons {
+      display: flex;
+      gap: var(--space-sm);
+      margin-bottom: var(--space-md);
+    }
+    
+    .action-btn {
+      flex: 1;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      transition: all 0.15s;
+    }
+    
+    .action-btn:hover {
+      background: var(--surface-alt);
+    }
+    
+    .action-btn.primary {
+      background: var(--green);
+      border-color: var(--green);
+      color: white;
+    }
+    
+    .action-btn.primary:hover {
+      background: #2db84d;
+    }
+    
+    .action-btn.danger {
+      color: var(--red);
+      border-color: var(--red);
+    }
+    
+    .action-secondary {
+      display: flex;
+      gap: var(--space-md);
+      font-size: 13px;
+    }
+    
+    .action-link {
+      color: var(--text-muted);
+      text-decoration: none;
+      cursor: pointer;
+    }
+    
+    .action-link:hover {
+      color: var(--accent);
+    }
+    
+    /* Comment input */
+    .comment-input {
+      margin-top: var(--space-md);
+    }
+    
+    .comment-input label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      margin-bottom: var(--space-xs);
+    }
+    
+    .comment-input textarea {
+      width: 100%;
+      padding: var(--space-sm);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 13px;
+      resize: vertical;
+      min-height: 60px;
+    }
+    
+    /* Options grid for decisions */
+    .options-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: var(--space-sm);
+    }
+    
+    .option-btn {
+      padding: 16px;
+      border-radius: 8px;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: left;
+    }
+    
+    .option-btn:hover {
+      border-color: var(--accent);
+      background: rgba(0, 113, 227, 0.04);
+    }
+    
+    .option-btn.selected {
+      border-color: var(--accent);
+      background: rgba(0, 113, 227, 0.08);
+    }
+    
+    .option-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .option-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    /* Keyboard shortcuts */
+    .keyboard-hints {
+      position: fixed;
+      bottom: var(--space-md);
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: var(--space-sm) var(--space-md);
+      border-radius: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      gap: var(--space-md);
+    }
+    
+    .keyboard-hints kbd {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      margin: 0 2px;
+    }
+    
+    /* Annotation */
+    .annotation {
+      position: fixed;
+      top: var(--space-md);
+      right: var(--space-md);
+      background: #1d1d1f;
+      color: white;
+      padding: var(--space-md);
+      border-radius: 8px;
+      font-size: 12px;
+      max-width: 300px;
+      z-index: 1000;
+    }
+    
+    .annotation h4 {
+      color: #ff9500;
+      margin-bottom: var(--space-sm);
+    }
+    
+    .annotation ul {
+      padding-left: var(--space-md);
+      line-height: 1.6;
+    }
+    
+    .annotation-toggle {
+      position: fixed;
+      top: var(--space-md);
+      right: var(--space-md);
+      background: #1d1d1f;
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      z-index: 1001;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <div class="logo">
+        <div class="logo-mark"></div>
+        <span>AI Hub</span>
+      </div>
+      
+      <div class="topbar-center">
+        <nav class="breadcrumb">
+          <a href="01-dashboard.html">Dashboard</a>
+          <span>/</span>
+          <span class="current">Human Inbox</span>
+        </nav>
+      </div>
+    </header>
+    
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="nav-section">
+        <div class="nav-label">Overview</div>
+        <a class="nav-item" onclick="location.href='01-dashboard.html'">
+          <span class="nav-icon">📊</span>
+          Dashboard
+        </a>
+        <a class="nav-item active">
+          <span class="nav-icon">📥</span>
+          Human Inbox
+          <span class="badge">3</span>
+        </a>
+        <a class="nav-item" onclick="location.href='04-crankfeed.html'">
+          <span class="nav-icon">📡</span>
+          Crankfeed
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">🤖</span>
+          Agents
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Projects</div>
+        <a class="nav-item">
+          <div class="pulse-dot red"></div>
+          ItsAlive
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot green"></div>
+          Pearl
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot green"></div>
+          Three Stones
+        </a>
+      </div>
+    </nav>
+    
+    <!-- Inbox List -->
+    <div class="inbox-list-panel">
+      <div class="inbox-header">
+        <h1 class="inbox-title">
+          Human Inbox
+          <span class="count">3</span>
+        </h1>
+        <div class="inbox-filters">
+          <button class="filter-btn active">All</button>
+          <button class="filter-btn">Approvals</button>
+          <button class="filter-btn">Decisions</button>
+          <button class="filter-btn">Reviews</button>
+        </div>
+      </div>
+      
+      <div class="inbox-items">
+        <!-- Blocking urgency -->
+        <div class="inbox-item selected">
+          <div class="inbox-item-header">
+            <span class="type-badge approval">Approval</span>
+            <div class="urgency-dot blocking" title="Blocking"></div>
+          </div>
+          <div class="inbox-item-title">Approve production deploy?</div>
+          <div class="inbox-item-meta">ItsAlive · Ivy · 5m ago</div>
+        </div>
+        
+        <!-- Normal -->
+        <div class="inbox-item">
+          <div class="inbox-item-header">
+            <span class="type-badge decision">Decision</span>
+          </div>
+          <div class="inbox-item-title">API versioning strategy?</div>
+          <div class="inbox-item-meta">Pearl · Derek · 20m ago</div>
+        </div>
+        
+        <div class="inbox-item">
+          <div class="inbox-item-header">
+            <span class="type-badge review">Review</span>
+          </div>
+          <div class="inbox-item-title">Blog post: "Why I Run 12 AI Agents"</div>
+          <div class="inbox-item-meta">Content · Stone · 1h ago</div>
+        </div>
+        
+        <!-- Snoozed section -->
+        <div style="padding: var(--space-md); border-top: 1px solid var(--border); margin-top: var(--space-md);">
+          <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); margin-bottom: var(--space-sm);">
+            Snoozed (1)
+          </div>
+        </div>
+        
+        <div class="inbox-item" style="opacity: 0.6;">
+          <div class="inbox-item-header">
+            <span class="type-badge question">Question</span>
+          </div>
+          <div class="inbox-item-title">Should we support Safari 14?</div>
+          <div class="inbox-item-meta">snoozed until 2pm · Derek</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Detail Panel -->
+    <div class="detail-panel">
+      <div class="detail-card">
+        <div class="detail-header">
+          <div class="detail-type-row">
+            <span class="type-badge approval">Approval</span>
+            <span class="type-badge blocking">⚡ Blocking</span>
+          </div>
+          <h2 class="detail-title">Approve production deploy?</h2>
+          <div class="detail-meta">
+            <div class="detail-meta-item">
+              📁 <strong>ItsAlive</strong>
+            </div>
+            <div class="detail-meta-item">
+              🤖 from <strong>Ivy</strong>
+            </div>
+            <div class="detail-meta-item">
+              🕐 5 minutes ago
+            </div>
+          </div>
+        </div>
+        
+        <div class="detail-body">
+          <div class="detail-section">
+            <div class="detail-section-title">Context</div>
+            <div class="detail-context">
+              All tests pass. Staging verified by QA. Ready to ship v2.1.0 with new onboarding flow.
+              <br><br>
+              Changes include:
+              <ul style="margin-top: 8px; padding-left: 20px;">
+                <li>New user onboarding wizard (3 steps)</li>
+                <li>Email verification flow update</li>
+                <li>Dashboard welcome state</li>
+              </ul>
+            </div>
+          </div>
+          
+          <div class="detail-section">
+            <div class="detail-section-title">Related Files</div>
+            <div class="detail-files">
+              <a class="file-link" href="#">
+                📄 src/onboarding/wizard.tsx
+              </a>
+              <a class="file-link" href="#">
+                📄 src/auth/verify-email.ts
+              </a>
+              <a class="file-link" href="#">
+                🔗 PR #142: Onboarding flow v2
+              </a>
+            </div>
+          </div>
+          
+          <div class="detail-section">
+            <div class="detail-section-title">Test Results</div>
+            <div style="display: flex; gap: var(--space-md);">
+              <div style="padding: 12px 16px; background: rgba(52, 199, 89, 0.1); border-radius: 8px; flex: 1;">
+                <div style="font-weight: 600; color: var(--green);">✓ 142 tests passing</div>
+                <div style="font-size: 12px; color: var(--text-muted);">All CI checks green</div>
+              </div>
+              <div style="padding: 12px 16px; background: var(--surface-alt); border-radius: 8px; flex: 1;">
+                <div style="font-weight: 600;">Staging verified</div>
+                <div style="font-size: 12px; color: var(--text-muted);">Manual QA complete</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="detail-actions">
+          <div class="action-buttons">
+            <button class="action-btn primary">✓ Approve Deploy</button>
+            <button class="action-btn">Hold</button>
+            <button class="action-btn danger">✕ Reject</button>
+          </div>
+          
+          <div class="comment-input">
+            <label>Add a comment (optional)</label>
+            <textarea placeholder="Ship it! 🚀"></textarea>
+          </div>
+          
+          <div class="action-secondary" style="margin-top: var(--space-md);">
+            <a class="action-link">⏰ Snooze</a>
+            <a class="action-link">🔗 View in project</a>
+            <a class="action-link">💬 Ask Ivy a question</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="keyboard-hints">
+    <span><kbd>j</kbd>/<kbd>k</kbd> navigate</span>
+    <span><kbd>a</kbd> approve</span>
+    <span><kbd>h</kbd> hold</span>
+    <span><kbd>s</kbd> snooze</span>
+    <span><kbd>Enter</kbd> open</span>
+  </div>
+  
+  <button class="annotation-toggle" onclick="toggleAnnotation()">💡 Design Notes</button>
+  <div class="annotation" id="annotation" style="display: none;">
+    <h4>Human Inbox Design Decisions</h4>
+    <ul>
+      <li><strong>3-column layout</strong>: List on left, detail on right — gmail-style efficiency</li>
+      <li><strong>Urgency indicators</strong>: Pulsing red dot for blocking items</li>
+      <li><strong>Type badges</strong>: Quick visual scan of what kind of input is needed</li>
+      <li><strong>One-click actions</strong>: Big buttons, keyboard shortcuts</li>
+      <li><strong>Context-rich detail</strong>: Files, test results, everything needed to decide</li>
+      <li><strong>Snooze built in</strong>: "Not now" is valid — don't force bad decisions</li>
+    </ul>
+  </div>
+  
+  <script>
+    function toggleAnnotation() {
+      const el = document.getElementById('annotation');
+      el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+  </script>
+</body>
+</html>

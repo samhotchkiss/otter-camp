@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wireframe: Project Detail — AI Hub</title>
+  <style>
+    :root {
+      --bg: #f5f5f7;
+      --surface: #ffffff;
+      --surface-alt: #f0f0f2;
+      --border: #d1d1d6;
+      --text: #1d1d1f;
+      --text-muted: #86868b;
+      --accent: #0071e3;
+      --red: #ff3b30;
+      --yellow: #ff9500;
+      --green: #34c759;
+      --purple: #af52de;
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --space-xl: 32px;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.4;
+      font-size: 14px;
+    }
+    
+    .app {
+      display: grid;
+      grid-template-columns: 220px 1fr 300px;
+      grid-template-rows: 56px 1fr;
+      min-height: 100vh;
+    }
+    
+    /* Top Bar */
+    .topbar {
+      grid-column: 1 / -1;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 var(--space-lg);
+      gap: var(--space-lg);
+    }
+    
+    .logo {
+      font-weight: 700;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .logo-mark {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--accent), #5856d6);
+      border-radius: 6px;
+    }
+    
+    .topbar-center { flex: 1; }
+    
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      font-size: 14px;
+    }
+    
+    .breadcrumb a { color: var(--text-muted); text-decoration: none; }
+    .breadcrumb a:hover { color: var(--accent); }
+    .breadcrumb span { color: var(--text-muted); }
+    .breadcrumb .current { color: var(--text); font-weight: 500; }
+    
+    /* Sidebar */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: var(--space-md) 0;
+      overflow-y: auto;
+    }
+    
+    .nav-section { margin-bottom: var(--space-lg); }
+    
+    .nav-label {
+      padding: var(--space-sm) var(--space-md);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: 10px var(--space-md);
+      color: var(--text);
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    
+    .nav-item:hover { background: var(--surface-alt); }
+    .nav-item.active {
+      background: rgba(0, 113, 227, 0.08);
+      color: var(--accent);
+      font-weight: 500;
+    }
+    
+    .nav-icon { width: 20px; text-align: center; }
+    .nav-item .badge {
+      margin-left: auto;
+      background: var(--red);
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 10px;
+    }
+    
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .pulse-dot.red { background: var(--red); }
+    .pulse-dot.green { background: var(--green); }
+    .pulse-dot.yellow { background: var(--yellow); }
+    .pulse-dot.gray { background: #8e8e93; }
+    
+    /* Main Content */
+    .main {
+      padding: var(--space-lg);
+      overflow-y: auto;
+    }
+    
+    .project-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: var(--space-lg);
+    }
+    
+    .project-title-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      margin-bottom: var(--space-xs);
+    }
+    
+    .project-pulse {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--red);
+      box-shadow: 0 0 8px var(--red);
+    }
+    
+    .project-name {
+      font-size: 24px;
+      font-weight: 600;
+    }
+    
+    .project-subtitle {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+    
+    .project-actions {
+      display: flex;
+      gap: var(--space-sm);
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+    
+    .btn-secondary {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    
+    /* Needs You Alert */
+    .needs-you-banner {
+      background: rgba(255, 59, 48, 0.08);
+      border: 1px solid var(--red);
+      border-radius: 12px;
+      padding: var(--space-md);
+      margin-bottom: var(--space-lg);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .needs-you-content {
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+    }
+    
+    .needs-you-icon {
+      font-size: 24px;
+    }
+    
+    .needs-you-text strong {
+      color: var(--red);
+    }
+    
+    .needs-you-actions {
+      display: flex;
+      gap: var(--space-sm);
+    }
+    
+    .quick-btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+    }
+    
+    .quick-btn.approve {
+      background: var(--green);
+      color: white;
+    }
+    
+    .quick-btn.hold {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: var(--space-lg);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: var(--space-lg);
+    }
+    
+    .tab {
+      padding: var(--space-sm) 0;
+      font-size: 14px;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    
+    .tab:hover { color: var(--text); }
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      font-weight: 500;
+    }
+    
+    .tab .count {
+      background: var(--surface-alt);
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 11px;
+      margin-left: 4px;
+    }
+    
+    /* Tasks Board */
+    .tasks-board {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--space-md);
+    }
+    
+    .task-column {
+      background: var(--surface-alt);
+      border-radius: 12px;
+      padding: var(--space-md);
+      min-height: 400px;
+    }
+    
+    .column-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-md);
+      padding-bottom: var(--space-sm);
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .column-title {
+      font-weight: 600;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .column-count {
+      background: var(--surface);
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    
+    .task-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: var(--space-sm);
+      margin-bottom: var(--space-sm);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .task-card:hover {
+      border-color: var(--accent);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    
+    .task-card.needs-human {
+      border-color: var(--red);
+      border-width: 2px;
+    }
+    
+    .task-id {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+    
+    .task-title {
+      font-size: 13px;
+      font-weight: 500;
+      margin: 4px 0;
+    }
+    
+    .task-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    
+    .task-agent {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .agent-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      font-size: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+    }
+    
+    .agent-dot.ivy { background: var(--green); }
+    .agent-dot.derek { background: var(--accent); }
+    .agent-dot.josh { background: var(--purple); }
+    
+    .priority-badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    
+    .priority-badge.p0 { background: var(--red); color: white; }
+    .priority-badge.p1 { background: var(--yellow); color: white; }
+    .priority-badge.p2 { background: var(--surface-alt); color: var(--text-muted); }
+    
+    /* Right Panel - Activity */
+    .activity-panel {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .activity-header {
+      padding: var(--space-md);
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    
+    .activity-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .activity-tab {
+      flex: 1;
+      padding: var(--space-sm);
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+    }
+    
+    .activity-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    
+    .activity-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: var(--space-sm);
+    }
+    
+    .activity-item {
+      padding: var(--space-sm);
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .activity-item:last-child {
+      border-bottom: none;
+    }
+    
+    .activity-time {
+      color: var(--text-muted);
+      margin-right: var(--space-sm);
+    }
+    
+    .activity-item strong {
+      font-weight: 500;
+    }
+    
+    /* Commits section */
+    .commit-item {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-sm);
+      padding: var(--space-sm);
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .commit-sha {
+      font-family: monospace;
+      color: var(--accent);
+      background: var(--surface-alt);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    
+    .commit-message {
+      flex: 1;
+    }
+    
+    .commit-author {
+      color: var(--text-muted);
+    }
+    
+    /* Stats bar */
+    .stats-bar {
+      display: flex;
+      gap: var(--space-lg);
+      padding: var(--space-md);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: var(--space-lg);
+    }
+    
+    .stat-item {
+      text-align: center;
+    }
+    
+    .stat-value {
+      font-size: 24px;
+      font-weight: 600;
+    }
+    
+    .stat-label {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    /* Annotation */
+    .annotation {
+      position: fixed;
+      top: var(--space-md);
+      right: var(--space-md);
+      background: #1d1d1f;
+      color: white;
+      padding: var(--space-md);
+      border-radius: 8px;
+      font-size: 12px;
+      max-width: 300px;
+      z-index: 1000;
+    }
+    
+    .annotation h4 { color: #ff9500; margin-bottom: var(--space-sm); }
+    .annotation ul { padding-left: var(--space-md); line-height: 1.6; }
+    
+    .annotation-toggle {
+      position: fixed;
+      top: var(--space-md);
+      right: var(--space-md);
+      background: #1d1d1f;
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      z-index: 1001;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <div class="logo">
+        <div class="logo-mark"></div>
+        <span>AI Hub</span>
+      </div>
+      <div class="topbar-center">
+        <nav class="breadcrumb">
+          <a href="01-dashboard.html">Dashboard</a>
+          <span>/</span>
+          <span class="current">ItsAlive</span>
+        </nav>
+      </div>
+    </header>
+    
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="nav-section">
+        <div class="nav-label">Overview</div>
+        <a class="nav-item" onclick="location.href='01-dashboard.html'">
+          <span class="nav-icon">📊</span>
+          Dashboard
+        </a>
+        <a class="nav-item" onclick="location.href='02-human-inbox.html'">
+          <span class="nav-icon">📥</span>
+          Human Inbox
+          <span class="badge">3</span>
+        </a>
+        <a class="nav-item" onclick="location.href='04-crankfeed.html'">
+          <span class="nav-icon">📡</span>
+          Crankfeed
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Projects</div>
+        <a class="nav-item active">
+          <div class="pulse-dot red"></div>
+          ItsAlive
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot green"></div>
+          Pearl
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot green"></div>
+          Three Stones
+        </a>
+      </div>
+    </nav>
+    
+    <!-- Main Content -->
+    <main class="main">
+      <div class="project-header">
+        <div>
+          <div class="project-title-row">
+            <div class="project-pulse"></div>
+            <h1 class="project-name">ItsAlive</h1>
+          </div>
+          <p class="project-subtitle">Web hosting platform for AI-built apps</p>
+        </div>
+        <div class="project-actions">
+          <button class="btn btn-secondary">⚙️ Settings</button>
+          <button class="btn btn-primary">+ New Task</button>
+        </div>
+      </div>
+      
+      <!-- Needs You Alert -->
+      <div class="needs-you-banner">
+        <div class="needs-you-content">
+          <span class="needs-you-icon">🔴</span>
+          <div class="needs-you-text">
+            <strong>NEEDS YOU:</strong> Approve production deploy
+            <div style="font-size: 12px; color: var(--text-muted);">from Ivy · 5 minutes ago</div>
+          </div>
+        </div>
+        <div class="needs-you-actions">
+          <button class="quick-btn approve">✓ Approve</button>
+          <button class="quick-btn hold">Hold</button>
+          <button class="quick-btn hold">View →</button>
+        </div>
+      </div>
+      
+      <!-- Stats -->
+      <div class="stats-bar">
+        <div class="stat-item">
+          <div class="stat-value">3</div>
+          <div class="stat-label">Active Tasks</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">12</div>
+          <div class="stat-label">Done This Week</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">2</div>
+          <div class="stat-label">Agents Working</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">28</div>
+          <div class="stat-label">Commits Today</div>
+        </div>
+      </div>
+      
+      <!-- Tabs -->
+      <div class="tabs">
+        <div class="tab active">Tasks <span class="count">8</span></div>
+        <div class="tab">Files</div>
+        <div class="tab">Commits <span class="count">28</span></div>
+        <div class="tab">Agents</div>
+        <div class="tab">Settings</div>
+      </div>
+      
+      <!-- Task Board -->
+      <div class="tasks-board">
+        <!-- Queued -->
+        <div class="task-column">
+          <div class="column-header">
+            <span class="column-title">📋 Queued</span>
+            <span class="column-count">2</span>
+          </div>
+          
+          <div class="task-card">
+            <div class="task-id">ITS-024</div>
+            <div class="task-title">Add email notifications</div>
+            <div class="task-meta">
+              <div class="task-agent">
+                <div class="agent-dot derek">D</div>
+                Derek
+              </div>
+              <span class="priority-badge p2">P2</span>
+            </div>
+          </div>
+          
+          <div class="task-card">
+            <div class="task-id">ITS-025</div>
+            <div class="task-title">Mobile responsive fixes</div>
+            <div class="task-meta">
+              <span style="color: var(--text-muted);">Unassigned</span>
+              <span class="priority-badge p2">P2</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- In Progress -->
+        <div class="task-column">
+          <div class="column-header">
+            <span class="column-title">🔄 In Progress</span>
+            <span class="column-count">2</span>
+          </div>
+          
+          <div class="task-card">
+            <div class="task-id">ITS-022</div>
+            <div class="task-title">Auth implementation review</div>
+            <div class="task-meta">
+              <div class="task-agent">
+                <div class="agent-dot derek">D</div>
+                Derek
+              </div>
+              <span class="priority-badge p1">P1</span>
+            </div>
+          </div>
+          
+          <div class="task-card">
+            <div class="task-id">ITS-023</div>
+            <div class="task-title">Dashboard metrics API</div>
+            <div class="task-meta">
+              <div class="task-agent">
+                <div class="agent-dot josh">J</div>
+                Josh S
+              </div>
+              <span class="priority-badge p1">P1</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Review -->
+        <div class="task-column">
+          <div class="column-header">
+            <span class="column-title">👁️ Review</span>
+            <span class="column-count">1</span>
+          </div>
+          
+          <div class="task-card needs-human">
+            <div class="task-id">ITS-020</div>
+            <div class="task-title" style="color: var(--red);">🔴 Onboarding flow v2</div>
+            <div style="font-size: 11px; color: var(--red); margin: 4px 0;">
+              ⚠️ Needs your approval
+            </div>
+            <div class="task-meta">
+              <div class="task-agent">
+                <div class="agent-dot ivy">I</div>
+                Ivy
+              </div>
+              <span class="priority-badge p0">P0</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Done -->
+        <div class="task-column">
+          <div class="column-header">
+            <span class="column-title">✅ Done</span>
+            <span class="column-count">12</span>
+          </div>
+          
+          <div class="task-card" style="opacity: 0.7;">
+            <div class="task-id">ITS-019</div>
+            <div class="task-title">Email verification flow</div>
+            <div class="task-meta">
+              <div class="task-agent">
+                <div class="agent-dot ivy">I</div>
+                Ivy
+              </div>
+              <span>2h ago</span>
+            </div>
+          </div>
+          
+          <div class="task-card" style="opacity: 0.7;">
+            <div class="task-id">ITS-018</div>
+            <div class="task-title">User settings page</div>
+            <div class="task-meta">
+              <div class="task-agent">
+                <div class="agent-dot derek">D</div>
+                Derek
+              </div>
+              <span>4h ago</span>
+            </div>
+          </div>
+          
+          <div style="text-align: center; padding: var(--space-md); color: var(--text-muted); font-size: 12px;">
+            +10 more this week
+          </div>
+        </div>
+      </div>
+    </main>
+    
+    <!-- Activity Panel -->
+    <aside class="activity-panel">
+      <div class="activity-header">Activity</div>
+      <div class="activity-tabs">
+        <div class="activity-tab active">Feed</div>
+        <div class="activity-tab">Commits</div>
+      </div>
+      
+      <div class="activity-list">
+        <div class="activity-item">
+          <span class="activity-time">11:21</span>
+          <strong>Ivy</strong> requested approval for deploy
+        </div>
+        <div class="activity-item">
+          <span class="activity-time">11:19</span>
+          <strong>Ivy</strong> pushed 2 commits
+        </div>
+        <div class="activity-item">
+          <span class="activity-time">11:15</span>
+          <strong>Derek</strong> started ITS-022
+        </div>
+        <div class="activity-item">
+          <span class="activity-time">11:08</span>
+          <strong>Josh S</strong> ran test suite (142 passing)
+        </div>
+        <div class="activity-item">
+          <span class="activity-time">10:55</span>
+          <strong>Ivy</strong> marked ITS-019 complete
+        </div>
+        <div class="activity-item">
+          <span class="activity-time">10:42</span>
+          <strong>Derek</strong> pushed 5 commits
+        </div>
+        <div class="activity-item">
+          <span class="activity-time">10:30</span>
+          <strong>Jeremy H</strong> approved PR #141
+        </div>
+        <div class="activity-item">
+          <span class="activity-time">10:15</span>
+          <strong>Ivy</strong> created PR #142
+        </div>
+        <div class="activity-item">
+          <span class="activity-time">09:45</span>
+          <strong>Derek</strong> marked ITS-018 complete
+        </div>
+        <div class="activity-item">
+          <span class="activity-time">09:30</span>
+          <strong>Josh S</strong> started ITS-023
+        </div>
+      </div>
+    </aside>
+  </div>
+  
+  <button class="annotation-toggle" onclick="toggleAnnotation()">💡 Design Notes</button>
+  <div class="annotation" id="annotation" style="display: none;">
+    <h4>Project Detail Design Decisions</h4>
+    <ul>
+      <li><strong>Needs-you banner</strong>: Prominent at top with quick actions</li>
+      <li><strong>Kanban board</strong>: Tasks by status, visual workflow</li>
+      <li><strong>Task cards highlight needs_human</strong>: Red border, icon</li>
+      <li><strong>Activity sidebar</strong>: Real-time feed without leaving page</li>
+      <li><strong>Stats at a glance</strong>: Active, done, agents, commits</li>
+      <li><strong>Quick approve from banner</strong>: Don't force navigation</li>
+    </ul>
+  </div>
+  
+  <script>
+    function toggleAnnotation() {
+      const el = document.getElementById('annotation');
+      el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+  </script>
+</body>
+</html>

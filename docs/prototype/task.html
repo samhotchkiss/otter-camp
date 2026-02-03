@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ENG-042 — AI Hub</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface-hover: #1c2128;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --purple: #a371f7;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    
+    .app {
+      display: grid;
+      grid-template-columns: 240px 1fr 360px;
+      min-height: 100vh;
+    }
+    
+    /* Sidebar */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 20px 0;
+    }
+    
+    .logo {
+      padding: 0 20px 20px;
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+    }
+    
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, var(--accent), var(--purple));
+      border-radius: 8px;
+    }
+    
+    .nav-section { padding: 10px 0; }
+    
+    .nav-label {
+      padding: 8px 20px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 20px;
+      color: var(--text-muted);
+      text-decoration: none;
+      cursor: pointer;
+    }
+    
+    .nav-item:hover { background: var(--surface-hover); color: var(--text); }
+    
+    /* Main content */
+    .main {
+      padding: 24px 32px;
+      overflow-y: auto;
+    }
+    
+    /* Breadcrumb */
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    
+    .breadcrumb a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .breadcrumb a:hover { text-decoration: underline; }
+    
+    /* Task header */
+    .task-header {
+      margin-bottom: 24px;
+    }
+    
+    .task-id {
+      font-size: 14px;
+      color: var(--text-muted);
+      font-family: monospace;
+      margin-bottom: 8px;
+    }
+    
+    .task-title {
+      font-size: 28px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    
+    .task-meta {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    
+    .status-badge.in-progress {
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--accent);
+    }
+    
+    .status-badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    
+    .priority-badge {
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    
+    .priority-badge.p1 {
+      background: rgba(248, 81, 73, 0.2);
+      color: var(--red);
+    }
+    
+    .label {
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      background: rgba(163, 113, 247, 0.2);
+      color: var(--purple);
+    }
+    
+    /* Sections */
+    .section {
+      margin-bottom: 32px;
+    }
+    
+    .section-header {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    /* Description */
+    .description {
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 16px;
+      white-space: pre-wrap;
+      font-size: 14px;
+    }
+    
+    /* Context */
+    .context-grid {
+      display: grid;
+      gap: 16px;
+    }
+    
+    .context-card {
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    
+    .context-card h4 {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    
+    .context-list {
+      list-style: none;
+    }
+    
+    .context-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    
+    .context-list li:last-child {
+      border-bottom: none;
+    }
+    
+    .file-path {
+      font-family: monospace;
+      font-size: 13px;
+      color: var(--accent);
+    }
+    
+    .check-icon {
+      color: var(--green);
+      flex-shrink: 0;
+    }
+    
+    /* Timeline */
+    .timeline {
+      position: relative;
+      padding-left: 24px;
+    }
+    
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 7px;
+      top: 8px;
+      bottom: 8px;
+      width: 2px;
+      background: var(--border);
+    }
+    
+    .timeline-item {
+      position: relative;
+      padding-bottom: 24px;
+    }
+    
+    .timeline-item:last-child {
+      padding-bottom: 0;
+    }
+    
+    .timeline-dot {
+      position: absolute;
+      left: -24px;
+      top: 4px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 2px solid var(--accent);
+    }
+    
+    .timeline-dot.complete {
+      background: var(--green);
+      border-color: var(--green);
+    }
+    
+    .timeline-dot.current {
+      background: var(--accent);
+      border-color: var(--accent);
+      animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.4); }
+      50% { box-shadow: 0 0 0 8px rgba(88, 166, 255, 0); }
+    }
+    
+    .timeline-content {
+      font-size: 14px;
+    }
+    
+    .timeline-content strong {
+      color: var(--text);
+    }
+    
+    .timeline-time {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    
+    /* Right panel */
+    .right-panel {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      padding: 24px;
+    }
+    
+    .panel-section {
+      margin-bottom: 24px;
+    }
+    
+    .panel-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    
+    .panel-value {
+      font-size: 14px;
+    }
+    
+    .agent-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: var(--bg);
+      border-radius: 8px;
+    }
+    
+    .agent-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #0969da;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+    }
+    
+    .agent-info h4 {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    
+    .agent-info p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .session-info {
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+      background: var(--bg);
+      padding: 8px 12px;
+      border-radius: 6px;
+    }
+    
+    .dep-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 0;
+      font-size: 14px;
+    }
+    
+    .dep-status {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+    }
+    
+    .dep-status.done {
+      background: var(--green);
+      color: white;
+    }
+    
+    /* Actions */
+    .actions {
+      display: flex;
+      gap: 12px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+    
+    .btn {
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      flex: 1;
+    }
+    
+    .btn-primary {
+      background: var(--green);
+      color: white;
+    }
+    
+    .btn-secondary {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar (same as other pages) -->
+    <nav class="sidebar">
+      <a class="logo" href="index.html">
+        <div class="logo-icon"></div>
+        <span>AI Hub</span>
+      </a>
+      
+      <div class="nav-section">
+        <div class="nav-label">Overview</div>
+        <a class="nav-item" href="index.html">
+          <span>📊</span>
+          <span>Projects</span>
+        </a>
+        <a class="nav-item" href="index.html">
+          <span>📥</span>
+          <span>Inbox</span>
+        </a>
+        <a class="nav-item" href="agents.html">
+          <span>🤖</span>
+          <span>Agents</span>
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Projects</div>
+        <a class="nav-item" href="index.html">
+          <span>🟢</span>
+          <span>ItsAlive</span>
+        </a>
+        <a class="nav-item" href="project.html">
+          <span>🟢</span>
+          <span>Pearl</span>
+        </a>
+      </div>
+    </nav>
+    
+    <!-- Main Content -->
+    <main class="main">
+      <div class="breadcrumb">
+        <a href="project.html">Pearl</a>
+        <span>/</span>
+        <span>ENG-042</span>
+      </div>
+      
+      <div class="task-header">
+        <div class="task-id">ENG-042</div>
+        <h1 class="task-title">Implement retry logic for 500 errors</h1>
+        <div class="task-meta">
+          <div class="status-badge in-progress">
+            <span class="dot"></span>
+            In Progress
+          </div>
+          <span class="priority-badge p1">P1</span>
+          <span class="label">backend</span>
+          <span class="label">reliability</span>
+        </div>
+      </div>
+      
+      <div class="section">
+        <div class="section-header">Description</div>
+        <div class="description">When Anthropic returns HTTP 500, we currently fail over immediately to the next provider.
+
+We should retry 2-3 times with exponential backoff first, since 500 errors are often transient.
+
+This will reduce unnecessary failovers and improve reliability.</div>
+      </div>
+      
+      <div class="section">
+        <div class="section-header">Context</div>
+        <div class="context-grid">
+          <div class="context-card">
+            <h4>📁 Files</h4>
+            <ul class="context-list">
+              <li>
+                <span class="file-path">pearl/src/providers/anthropic.ts</span>
+              </li>
+              <li>
+                <span class="file-path">pearl/src/core/retry.ts</span>
+              </li>
+            </ul>
+          </div>
+          
+          <div class="context-card">
+            <h4>🎯 Decisions</h4>
+            <ul class="context-list">
+              <li>
+                <span class="check-icon">✓</span>
+                Use exponential backoff with jitter
+              </li>
+              <li>
+                <span class="check-icon">✓</span>
+                Max 3 retries for 500 errors
+              </li>
+            </ul>
+          </div>
+          
+          <div class="context-card">
+            <h4>✅ Acceptance Criteria</h4>
+            <ul class="context-list">
+              <li>
+                <span class="check-icon">☐</span>
+                500 errors trigger retry before failover
+              </li>
+              <li>
+                <span class="check-icon">☐</span>
+                Retry count logged to session
+              </li>
+              <li>
+                <span class="check-icon">☐</span>
+                Unit tests for retry wrapper
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      
+      <div class="section">
+        <div class="section-header">Activity</div>
+        <div class="timeline">
+          <div class="timeline-item">
+            <div class="timeline-dot current"></div>
+            <div class="timeline-content">
+              <strong>Derek</strong> is working on this task
+              <div class="timeline-time">Started 45 minutes ago</div>
+            </div>
+          </div>
+          
+          <div class="timeline-item">
+            <div class="timeline-dot complete"></div>
+            <div class="timeline-content">
+              <strong>Derek</strong> acknowledged dispatch
+              <div class="timeline-time">50 minutes ago</div>
+            </div>
+          </div>
+          
+          <div class="timeline-item">
+            <div class="timeline-dot complete"></div>
+            <div class="timeline-content">
+              Task dispatched to <strong>Derek</strong>
+              <div class="timeline-time">55 minutes ago</div>
+            </div>
+          </div>
+          
+          <div class="timeline-item">
+            <div class="timeline-dot complete"></div>
+            <div class="timeline-content">
+              <strong>Frank</strong> created this task
+              <div class="timeline-time">1 hour ago</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    
+    <!-- Right Panel -->
+    <aside class="right-panel">
+      <div class="panel-section">
+        <div class="panel-label">Assigned To</div>
+        <div class="agent-card">
+          <div class="agent-avatar">D</div>
+          <div class="agent-info">
+            <h4>Derek</h4>
+            <p>Engineering Lead</p>
+          </div>
+        </div>
+      </div>
+      
+      <div class="panel-section">
+        <div class="panel-label">Session</div>
+        <div class="session-info">agent:2b:main</div>
+      </div>
+      
+      <div class="panel-section">
+        <div class="panel-label">Project</div>
+        <div class="panel-value">
+          <a href="project.html" style="color: var(--accent); text-decoration: none;">Pearl</a>
+        </div>
+      </div>
+      
+      <div class="panel-section">
+        <div class="panel-label">Dependencies</div>
+        <div class="dep-item">
+          <span class="dep-status done">✓</span>
+          <span>ENG-041 — Streaming support</span>
+        </div>
+      </div>
+      
+      <div class="panel-section">
+        <div class="panel-label">Created</div>
+        <div class="panel-value" style="color: var(--text-muted);">
+          Feb 3, 2026 at 10:30 AM<br>
+          by Frank
+        </div>
+      </div>
+      
+      <div class="panel-section">
+        <div class="panel-label">Time Tracking</div>
+        <div class="panel-value">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="color: var(--text-muted);">In Progress</span>
+            <span>45m</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: var(--text-muted);">Queued</span>
+            <span>5m</span>
+          </div>
+        </div>
+      </div>
+      
+      <div class="actions">
+        <button class="btn btn-secondary">Request Review</button>
+        <button class="btn btn-primary">Mark Complete</button>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>

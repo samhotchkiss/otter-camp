@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wireframe: Dashboard — AI Hub</title>
+  <style>
+    /* ========== WIREFRAME DESIGN SYSTEM ========== */
+    :root {
+      --bg: #f5f5f7;
+      --surface: #ffffff;
+      --surface-alt: #f0f0f2;
+      --border: #d1d1d6;
+      --border-strong: #8e8e93;
+      --text: #1d1d1f;
+      --text-muted: #86868b;
+      --accent: #0071e3;
+      
+      /* Status colors */
+      --red: #ff3b30;
+      --yellow: #ff9500;
+      --green: #34c759;
+      --gray: #8e8e93;
+      
+      /* Spacing */
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --space-xl: 32px;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.4;
+      font-size: 14px;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      grid-template-rows: 56px 1fr;
+      min-height: 100vh;
+    }
+    
+    /* ========== TOP BAR ========== */
+    .topbar {
+      grid-column: 1 / -1;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 var(--space-lg);
+      gap: var(--space-lg);
+    }
+    
+    .logo {
+      font-weight: 700;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .logo-mark {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--accent), #5856d6);
+      border-radius: 6px;
+    }
+    
+    .topbar-center {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+    }
+    
+    .quick-stats {
+      display: flex;
+      gap: var(--space-lg);
+      font-size: 13px;
+    }
+    
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: var(--space-xs);
+    }
+    
+    .stat-value {
+      font-weight: 600;
+    }
+    
+    .stat-label {
+      color: var(--text-muted);
+    }
+    
+    .inbox-badge {
+      background: var(--red);
+      color: white;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: transform 0.15s;
+    }
+    
+    .inbox-badge:hover {
+      transform: scale(1.05);
+    }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+    }
+    
+    .search-box {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--text-muted);
+      width: 200px;
+    }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      background: var(--border);
+      border-radius: 50%;
+    }
+    
+    /* ========== SIDEBAR ========== */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: var(--space-md) 0;
+      overflow-y: auto;
+    }
+    
+    .nav-section {
+      margin-bottom: var(--space-lg);
+    }
+    
+    .nav-label {
+      padding: var(--space-sm) var(--space-md);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: 10px var(--space-md);
+      color: var(--text);
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    
+    .nav-item:hover {
+      background: var(--surface-alt);
+    }
+    
+    .nav-item.active {
+      background: rgba(0, 113, 227, 0.08);
+      color: var(--accent);
+      font-weight: 500;
+    }
+    
+    .nav-icon {
+      width: 20px;
+      text-align: center;
+      font-size: 16px;
+    }
+    
+    .nav-item .badge {
+      margin-left: auto;
+      background: var(--red);
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 10px;
+    }
+    
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    
+    .pulse-dot.red { background: var(--red); }
+    .pulse-dot.yellow { background: var(--yellow); }
+    .pulse-dot.green { background: var(--green); }
+    .pulse-dot.gray { background: var(--gray); }
+    
+    /* ========== MAIN CONTENT ========== */
+    .main {
+      padding: var(--space-lg);
+      overflow-y: auto;
+      background: var(--bg);
+    }
+    
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: var(--space-lg);
+    }
+    
+    .page-title {
+      font-size: 22px;
+      font-weight: 600;
+    }
+    
+    .page-subtitle {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-top: var(--space-xs);
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+    
+    .btn-secondary {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    
+    /* ========== PROJECT CARDS ========== */
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: var(--space-md);
+    }
+    
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    
+    .projects-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: var(--space-md);
+      margin-bottom: var(--space-xl);
+    }
+    
+    .project-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: var(--space-md);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .project-card:hover {
+      border-color: var(--accent);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      transform: translateY(-2px);
+    }
+    
+    .project-card.status-red {
+      border-color: var(--red);
+      border-width: 2px;
+    }
+    
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      margin-bottom: var(--space-sm);
+    }
+    
+    .pulse {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    
+    .pulse.red { background: var(--red); box-shadow: 0 0 8px var(--red); }
+    .pulse.yellow { background: var(--yellow); }
+    .pulse.green { background: var(--green); }
+    .pulse.gray { background: var(--gray); }
+    
+    .card-title {
+      font-weight: 600;
+      flex: 1;
+    }
+    
+    .card-time {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .needs-you-alert {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      background: rgba(255, 59, 48, 0.08);
+      border: 1px solid rgba(255, 59, 48, 0.3);
+      color: var(--red);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: var(--space-sm);
+    }
+    
+    .card-activity {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: var(--space-sm);
+      line-height: 1.5;
+    }
+    
+    .card-activity strong {
+      color: var(--text);
+      font-weight: 500;
+    }
+    
+    .card-footer {
+      display: flex;
+      gap: var(--space-md);
+      font-size: 12px;
+      color: var(--text-muted);
+      padding-top: var(--space-sm);
+      border-top: 1px solid var(--border);
+    }
+    
+    .agent-stack {
+      display: flex;
+      margin-left: auto;
+    }
+    
+    .agent-avatar {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid var(--surface);
+      margin-left: -6px;
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .agent-avatar:first-child { margin-left: 0; }
+    .agent-avatar.ivy { background: #34c759; }
+    .agent-avatar.derek { background: #007aff; }
+    .agent-avatar.stone { background: #af52de; }
+    .agent-avatar.nova { background: #ff2d55; }
+    .agent-avatar.jeff { background: #ff9500; }
+    
+    /* ========== INLINE INBOX PREVIEW ========== */
+    .inbox-preview {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    
+    .inbox-preview-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: var(--space-md);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-alt);
+    }
+    
+    .inbox-preview-title {
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .inbox-preview-title .badge {
+      background: var(--red);
+      color: white;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    
+    .view-all-link {
+      font-size: 13px;
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .inbox-item {
+      padding: var(--space-md);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: var(--space-md);
+      align-items: flex-start;
+      transition: background 0.15s;
+      cursor: pointer;
+    }
+    
+    .inbox-item:last-child {
+      border-bottom: none;
+    }
+    
+    .inbox-item:hover {
+      background: var(--surface-alt);
+    }
+    
+    .inbox-type-badge {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 3px 6px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    
+    .inbox-type-badge.approval {
+      background: rgba(255, 59, 48, 0.1);
+      color: var(--red);
+    }
+    
+    .inbox-type-badge.decision {
+      background: rgba(255, 149, 0, 0.1);
+      color: var(--yellow);
+    }
+    
+    .inbox-type-badge.review {
+      background: rgba(175, 82, 222, 0.1);
+      color: #af52de;
+    }
+    
+    .inbox-content {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .inbox-summary {
+      font-weight: 500;
+      margin-bottom: 2px;
+    }
+    
+    .inbox-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .inbox-actions {
+      display: flex;
+      gap: var(--space-sm);
+      flex-shrink: 0;
+    }
+    
+    .inbox-btn {
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      transition: all 0.15s;
+    }
+    
+    .inbox-btn.primary {
+      background: var(--green);
+      border-color: var(--green);
+      color: white;
+    }
+    
+    .inbox-btn:hover {
+      background: var(--surface-alt);
+    }
+    
+    .inbox-btn.primary:hover {
+      background: #2db84d;
+    }
+    
+    /* ========== WIREFRAME ANNOTATIONS ========== */
+    .annotation {
+      position: fixed;
+      top: var(--space-md);
+      right: var(--space-md);
+      background: #1d1d1f;
+      color: white;
+      padding: var(--space-md);
+      border-radius: 8px;
+      font-size: 12px;
+      max-width: 280px;
+      z-index: 1000;
+    }
+    
+    .annotation h4 {
+      font-size: 13px;
+      margin-bottom: var(--space-sm);
+      color: #ff9500;
+    }
+    
+    .annotation ul {
+      padding-left: var(--space-md);
+      line-height: 1.6;
+    }
+    
+    .annotation-toggle {
+      position: fixed;
+      top: var(--space-md);
+      right: var(--space-md);
+      background: #1d1d1f;
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      z-index: 1001;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <div class="logo">
+        <div class="logo-mark"></div>
+        <span>AI Hub</span>
+      </div>
+      
+      <div class="topbar-center">
+        <div class="quick-stats">
+          <div class="stat">
+            <span class="stat-value">12</span>
+            <span class="stat-label">agents active</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value">47</span>
+            <span class="stat-label">tasks today</span>
+          </div>
+        </div>
+        
+        <div class="inbox-badge" onclick="location.href='02-human-inbox.html'">
+          📥 3 need you
+        </div>
+      </div>
+      
+      <div class="topbar-right">
+        <div class="search-box">⌘K Search...</div>
+        <div class="avatar"></div>
+      </div>
+    </header>
+    
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="nav-section">
+        <div class="nav-label">Overview</div>
+        <a class="nav-item active">
+          <span class="nav-icon">📊</span>
+          Dashboard
+        </a>
+        <a class="nav-item" onclick="location.href='02-human-inbox.html'">
+          <span class="nav-icon">📥</span>
+          Human Inbox
+          <span class="badge">3</span>
+        </a>
+        <a class="nav-item" onclick="location.href='04-crankfeed.html'">
+          <span class="nav-icon">📡</span>
+          Crankfeed
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">🤖</span>
+          Agents
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Projects</div>
+        <a class="nav-item" onclick="location.href='03-project-detail.html'">
+          <div class="pulse-dot red"></div>
+          ItsAlive
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot green"></div>
+          Pearl
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot green"></div>
+          Three Stones
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot yellow"></div>
+          sam.blog
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot gray"></div>
+          Content
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot gray"></div>
+          Markets
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Settings</div>
+        <a class="nav-item">
+          <span class="nav-icon">⚙️</span>
+          Preferences
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">🔔</span>
+          Notifications
+        </a>
+      </div>
+    </nav>
+    
+    <!-- Main Content -->
+    <main class="main">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">What needs me right now?</h1>
+          <p class="page-subtitle">3 items need your attention · 6 projects cranking</p>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary">Filter</button>
+          <button class="btn btn-primary">+ New Task</button>
+        </div>
+      </div>
+      
+      <!-- Needs You Section -->
+      <div class="section-header">
+        <h2 class="section-title">🔴 Needs Your Attention</h2>
+      </div>
+      
+      <div class="projects-grid">
+        <div class="project-card status-red" onclick="location.href='03-project-detail.html'">
+          <div class="card-header">
+            <div class="pulse red"></div>
+            <span class="card-title">ItsAlive</span>
+            <span class="card-time">2m ago</span>
+          </div>
+          <div class="needs-you-alert">
+            ⚠️ Approve production deploy
+          </div>
+          <div class="card-activity">
+            <strong>Ivy</strong> pushed onboarding flow v2.<br>
+            <strong>Derek</strong> reviewing auth implementation.
+          </div>
+          <div class="card-footer">
+            <span>📋 3 active</span>
+            <span>✅ 12 this week</span>
+            <div class="agent-stack">
+              <div class="agent-avatar ivy">I</div>
+              <div class="agent-avatar derek">D</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Cranking Section -->
+      <div class="section-header">
+        <h2 class="section-title">🟢 Currently Cranking</h2>
+      </div>
+      
+      <div class="projects-grid">
+        <div class="project-card">
+          <div class="card-header">
+            <div class="pulse green"></div>
+            <span class="card-title">Pearl</span>
+            <span class="card-time">5m ago</span>
+          </div>
+          <div class="card-activity">
+            <strong>Derek</strong> pushed 3 commits to main.<br>
+            <strong>Josh S</strong> running test suite.
+          </div>
+          <div class="card-footer">
+            <span>📋 4 active</span>
+            <span>✅ 28 this week</span>
+            <div class="agent-stack">
+              <div class="agent-avatar derek">D</div>
+              <div class="agent-avatar" style="background: #5856d6;">J</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="project-card">
+          <div class="card-header">
+            <div class="pulse green"></div>
+            <span class="card-title">Three Stones</span>
+            <span class="card-time">1h ago</span>
+          </div>
+          <div class="card-activity">
+            <strong>Stone</strong> finalizing chapter 4 edits.<br>
+            Presentation deployed.
+          </div>
+          <div class="card-footer">
+            <span>📋 1 active</span>
+            <span>✅ 8 this week</span>
+            <div class="agent-stack">
+              <div class="agent-avatar stone">S</div>
+              <div class="agent-avatar jeff">J</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="project-card">
+          <div class="card-header">
+            <div class="pulse yellow"></div>
+            <span class="card-title">sam.blog</span>
+            <span class="card-time">15m ago</span>
+          </div>
+          <div class="card-activity">
+            <strong>Jeff G</strong> waiting on design assets.<br>
+            <strong>Stone</strong> has 2 posts ready.
+          </div>
+          <div class="card-footer">
+            <span>📋 2 active</span>
+            <span>⏸️ 1 blocked</span>
+            <div class="agent-stack">
+              <div class="agent-avatar jeff">J</div>
+              <div class="agent-avatar stone">S</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Idle Section -->
+      <div class="section-header">
+        <h2 class="section-title">⚪ Idle</h2>
+      </div>
+      
+      <div class="projects-grid">
+        <div class="project-card" style="opacity: 0.7;">
+          <div class="card-header">
+            <div class="pulse gray"></div>
+            <span class="card-title">Content</span>
+            <span class="card-time">3h ago</span>
+          </div>
+          <div class="card-activity">
+            No active tasks. Last: <strong>Nova</strong> scheduled tweets.
+          </div>
+          <div class="card-footer">
+            <span>📋 0 active</span>
+            <span>✅ 5 this week</span>
+          </div>
+        </div>
+        
+        <div class="project-card" style="opacity: 0.7;">
+          <div class="card-header">
+            <div class="pulse gray"></div>
+            <span class="card-title">Markets</span>
+            <span class="card-time">6h ago</span>
+          </div>
+          <div class="card-activity">
+            <strong>Beau H</strong> completed morning analysis.
+          </div>
+          <div class="card-footer">
+            <span>📋 0 active</span>
+            <span>✅ 3 today</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Inline Inbox Preview -->
+      <div style="margin-top: var(--space-xl);">
+        <div class="inbox-preview">
+          <div class="inbox-preview-header">
+            <div class="inbox-preview-title">
+              📥 Human Inbox
+              <span class="badge">3</span>
+            </div>
+            <a class="view-all-link" href="02-human-inbox.html">View all →</a>
+          </div>
+          
+          <div class="inbox-item">
+            <span class="inbox-type-badge approval">Approval</span>
+            <div class="inbox-content">
+              <div class="inbox-summary">Approve production deploy?</div>
+              <div class="inbox-meta">ItsAlive · from Ivy · 5m ago</div>
+            </div>
+            <div class="inbox-actions">
+              <button class="inbox-btn primary">Approve</button>
+              <button class="inbox-btn">Hold</button>
+            </div>
+          </div>
+          
+          <div class="inbox-item">
+            <span class="inbox-type-badge decision">Decision</span>
+            <div class="inbox-content">
+              <div class="inbox-summary">API versioning strategy?</div>
+              <div class="inbox-meta">Pearl · from Derek · 20m ago</div>
+            </div>
+            <div class="inbox-actions">
+              <button class="inbox-btn">URL Path</button>
+              <button class="inbox-btn">Header</button>
+            </div>
+          </div>
+          
+          <div class="inbox-item">
+            <span class="inbox-type-badge review">Review</span>
+            <div class="inbox-content">
+              <div class="inbox-summary">Blog post: "Why I Run 12 AI Agents"</div>
+              <div class="inbox-meta">Content · from Stone · 1h ago</div>
+            </div>
+            <div class="inbox-actions">
+              <button class="inbox-btn primary">Approve</button>
+              <button class="inbox-btn">Review →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  
+  <!-- Design Annotation -->
+  <button class="annotation-toggle" onclick="toggleAnnotation()">💡 Design Notes</button>
+  <div class="annotation" id="annotation" style="display: none;">
+    <h4>Dashboard Design Decisions</h4>
+    <ul>
+      <li><strong>Top bar</strong>: Quick stats + inbox badge for constant awareness</li>
+      <li><strong>Grouped by status</strong>: Red first (needs you), then green (cranking), then gray (idle)</li>
+      <li><strong>Inline inbox preview</strong>: Most important items surfaced on dashboard</li>
+      <li><strong>Agent avatars</strong>: See who's working without clicking in</li>
+      <li><strong>"What needs me?"</strong>: The core question answered at a glance</li>
+    </ul>
+  </div>
+  
+  <script>
+    function toggleAnnotation() {
+      const el = document.getElementById('annotation');
+      el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+  </script>
+</body>
+</html>

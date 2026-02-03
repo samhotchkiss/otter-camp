@@ -1,0 +1,1322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wireframe: GitHub Sync — AI Hub</title>
+  <style>
+    :root {
+      --bg: #f5f5f7;
+      --surface: #ffffff;
+      --surface-alt: #f0f0f2;
+      --border: #d1d1d6;
+      --text: #1d1d1f;
+      --text-muted: #86868b;
+      --accent: #0071e3;
+      --red: #ff3b30;
+      --yellow: #ff9500;
+      --green: #34c759;
+      --purple: #af52de;
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --space-xl: 32px;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.4;
+      font-size: 14px;
+    }
+    
+    .app {
+      display: grid;
+      grid-template-columns: 220px 280px 1fr;
+      grid-template-rows: 56px 1fr;
+      min-height: 100vh;
+    }
+    
+    /* Top Bar */
+    .topbar {
+      grid-column: 1 / -1;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 var(--space-lg);
+      gap: var(--space-lg);
+    }
+    
+    .logo {
+      font-weight: 700;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .logo-mark {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--accent), #5856d6);
+      border-radius: 6px;
+    }
+    
+    .topbar-center { flex: 1; }
+    
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      font-size: 14px;
+    }
+    
+    .breadcrumb a { color: var(--text-muted); text-decoration: none; }
+    .breadcrumb a:hover { color: var(--accent); }
+    .breadcrumb span { color: var(--text-muted); }
+    .breadcrumb .current { color: var(--text); font-weight: 500; }
+    
+    /* Sidebar */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: var(--space-md) 0;
+      overflow-y: auto;
+    }
+    
+    .nav-section { margin-bottom: var(--space-lg); }
+    
+    .nav-label {
+      padding: var(--space-sm) var(--space-md);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: 10px var(--space-md);
+      color: var(--text);
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    
+    .nav-item:hover { background: var(--surface-alt); }
+    .nav-item.active {
+      background: rgba(0, 113, 227, 0.08);
+      color: var(--accent);
+      font-weight: 500;
+    }
+    
+    .nav-icon { width: 20px; text-align: center; }
+    .nav-item .badge {
+      margin-left: auto;
+      background: var(--red);
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 10px;
+    }
+    
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .pulse-dot.red { background: var(--red); }
+    .pulse-dot.green { background: var(--green); }
+    .pulse-dot.yellow { background: var(--yellow); }
+    .pulse-dot.gray { background: #8e8e93; }
+    
+    /* Settings Sidebar */
+    .settings-nav {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: var(--space-md);
+    }
+    
+    .settings-nav-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: var(--space-md);
+      padding-bottom: var(--space-sm);
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .settings-nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: 10px var(--space-sm);
+      border-radius: 6px;
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    
+    .settings-nav-item:hover { background: var(--surface-alt); }
+    .settings-nav-item.active {
+      background: rgba(0, 113, 227, 0.08);
+      color: var(--accent);
+      font-weight: 500;
+    }
+    
+    .settings-nav-item .new-badge {
+      margin-left: auto;
+      background: var(--green);
+      color: white;
+      font-size: 9px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 8px;
+    }
+    
+    /* Main Content */
+    .main {
+      padding: var(--space-xl);
+      overflow-y: auto;
+    }
+    
+    .settings-header {
+      margin-bottom: var(--space-xl);
+    }
+    
+    .settings-title {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: var(--space-xs);
+    }
+    
+    .settings-subtitle {
+      color: var(--text-muted);
+    }
+    
+    /* Sync Status Banner */
+    .sync-status-banner {
+      background: linear-gradient(135deg, rgba(0,113,227,0.08), rgba(88,86,214,0.08));
+      border: 1px solid rgba(0,113,227,0.3);
+      border-radius: 12px;
+      padding: var(--space-lg);
+      margin-bottom: var(--space-xl);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .sync-status-left {
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+    }
+    
+    .sync-icon {
+      width: 48px;
+      height: 48px;
+      background: var(--surface);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    .sync-info h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    
+    .sync-info p {
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    
+    .sync-stats {
+      display: flex;
+      align-items: center;
+      gap: var(--space-lg);
+    }
+    
+    .sync-stat {
+      text-align: center;
+    }
+    
+    .sync-stat-value {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    
+    .sync-stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .sync-arrow {
+      font-size: 24px;
+      color: var(--text-muted);
+    }
+    
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #0077ed;
+    }
+    
+    .btn-secondary {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    
+    .btn-secondary:hover {
+      background: var(--surface-alt);
+    }
+    
+    .btn-lg {
+      padding: 14px 28px;
+      font-size: 15px;
+    }
+    
+    /* Settings Sections */
+    .settings-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: var(--space-lg);
+      overflow: hidden;
+    }
+    
+    .section-header {
+      padding: var(--space-md) var(--space-lg);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .section-header h3 {
+      font-size: 15px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .section-content {
+      padding: var(--space-lg);
+    }
+    
+    /* External Repo Config */
+    .repo-link-card {
+      background: var(--surface-alt);
+      border-radius: 8px;
+      padding: var(--space-md);
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+    }
+    
+    .repo-link-card.connected {
+      background: rgba(52, 199, 89, 0.08);
+      border: 1px solid rgba(52, 199, 89, 0.3);
+    }
+    
+    .repo-icon {
+      width: 40px;
+      height: 40px;
+      background: #24292e;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 20px;
+    }
+    
+    .repo-details {
+      flex: 1;
+    }
+    
+    .repo-name {
+      font-weight: 600;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .repo-url {
+      color: var(--text-muted);
+      font-size: 12px;
+      font-family: monospace;
+    }
+    
+    .connected-badge {
+      background: var(--green);
+      color: white;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    
+    .repo-actions {
+      display: flex;
+      gap: var(--space-sm);
+    }
+    
+    /* Form Elements */
+    .form-group {
+      margin-bottom: var(--space-md);
+    }
+    
+    .form-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: var(--space-xs);
+    }
+    
+    .form-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: var(--space-xs);
+    }
+    
+    .form-input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    
+    .form-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(0,113,227,0.1);
+    }
+    
+    /* Commit History Preview */
+    .commits-preview {
+      margin-top: var(--space-md);
+    }
+    
+    .commits-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-sm);
+    }
+    
+    .commits-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+    
+    .commits-list {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    
+    .commit-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: var(--space-sm) var(--space-md);
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    
+    .commit-row:last-child {
+      border-bottom: none;
+    }
+    
+    .commit-row.squashed {
+      background: rgba(0, 113, 227, 0.05);
+    }
+    
+    .commit-sha {
+      font-family: monospace;
+      color: var(--accent);
+      background: var(--surface-alt);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    
+    .commit-message {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .commit-author {
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .agent-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      font-size: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+    }
+    
+    .agent-dot.ivy { background: var(--green); }
+    .agent-dot.derek { background: var(--accent); }
+    .agent-dot.josh { background: var(--purple); }
+    
+    .commit-time {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+    
+    .squash-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--space-sm);
+      color: var(--accent);
+      font-size: 18px;
+      background: rgba(0,113,227,0.05);
+    }
+    
+    .squash-result {
+      background: rgba(0, 113, 227, 0.08) !important;
+      border: 2px solid var(--accent) !important;
+    }
+    
+    .squash-result .commit-sha {
+      background: var(--accent);
+      color: white;
+    }
+    
+    /* Branch selector */
+    .branch-selector {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: var(--space-sm) var(--space-md);
+      background: var(--surface-alt);
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    
+    .branch-icon {
+      color: var(--text-muted);
+    }
+    
+    .branch-select {
+      background: none;
+      border: none;
+      font-family: monospace;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    
+    /* Toggle */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-md) 0;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .toggle-row:last-child {
+      border-bottom: none;
+    }
+    
+    .toggle-info h4 {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 2px;
+    }
+    
+    .toggle-info p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .toggle {
+      width: 44px;
+      height: 24px;
+      background: var(--border);
+      border-radius: 12px;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    
+    .toggle.on {
+      background: var(--green);
+    }
+    
+    .toggle-knob {
+      width: 20px;
+      height: 20px;
+      background: white;
+      border-radius: 50%;
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      transition: left 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    
+    .toggle.on .toggle-knob {
+      left: 22px;
+    }
+    
+    /* Modal Overlay */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    
+    .modal-overlay.hidden {
+      display: none;
+    }
+    
+    .modal {
+      background: var(--surface);
+      border-radius: 16px;
+      width: 720px;
+      max-width: 90vw;
+      max-height: 85vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    
+    .modal-header {
+      padding: var(--space-lg);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .modal-header h2 {
+      font-size: 18px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 24px;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+    }
+    
+    .modal-close:hover {
+      color: var(--text);
+    }
+    
+    .modal-body {
+      padding: var(--space-lg);
+      overflow-y: auto;
+      flex: 1;
+    }
+    
+    .modal-footer {
+      padding: var(--space-md) var(--space-lg);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface-alt);
+    }
+    
+    .modal-footer-left {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .modal-footer-right {
+      display: flex;
+      gap: var(--space-sm);
+    }
+    
+    /* Squash Preview */
+    .squash-preview {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: var(--space-md);
+      margin-bottom: var(--space-lg);
+    }
+    
+    .squash-before, .squash-after {
+      background: var(--surface-alt);
+      border-radius: 8px;
+      padding: var(--space-md);
+    }
+    
+    .squash-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: var(--space-sm);
+    }
+    
+    .squash-before .squash-label {
+      color: var(--yellow);
+    }
+    
+    .squash-after .squash-label {
+      color: var(--green);
+    }
+    
+    .squash-count {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: var(--space-xs);
+    }
+    
+    .squash-before .squash-count {
+      color: var(--yellow);
+    }
+    
+    .squash-after .squash-count {
+      color: var(--green);
+    }
+    
+    .squash-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .squash-center {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      color: var(--accent);
+    }
+    
+    /* Commit message editor */
+    .commit-editor {
+      margin-bottom: var(--space-lg);
+    }
+    
+    .commit-editor-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-sm);
+    }
+    
+    .commit-editor-label span {
+      font-size: 13px;
+      font-weight: 500;
+    }
+    
+    .auto-generate-btn {
+      font-size: 12px;
+      color: var(--accent);
+      background: none;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .commit-textarea {
+      width: 100%;
+      min-height: 120px;
+      padding: var(--space-md);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 13px;
+      resize: vertical;
+    }
+    
+    .commit-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(0,113,227,0.1);
+    }
+    
+    /* Diff preview */
+    .diff-preview {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    
+    .diff-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-sm) var(--space-md);
+      background: var(--surface-alt);
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    
+    .diff-stats {
+      display: flex;
+      gap: var(--space-md);
+      font-size: 12px;
+    }
+    
+    .diff-stat-add {
+      color: var(--green);
+    }
+    
+    .diff-stat-remove {
+      color: var(--red);
+    }
+    
+    .diff-files {
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .diff-file {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: var(--space-sm) var(--space-md);
+      font-size: 12px;
+      font-family: monospace;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .diff-file:last-child {
+      border-bottom: none;
+    }
+    
+    .diff-file-status {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    
+    .diff-file-status.added {
+      background: rgba(52, 199, 89, 0.15);
+      color: var(--green);
+    }
+    
+    .diff-file-status.modified {
+      background: rgba(0, 113, 227, 0.15);
+      color: var(--accent);
+    }
+    
+    .diff-file-status.deleted {
+      background: rgba(255, 59, 48, 0.15);
+      color: var(--red);
+    }
+    
+    .diff-file-changes {
+      margin-left: auto;
+      font-size: 11px;
+    }
+    
+    .diff-file-changes .add { color: var(--green); }
+    .diff-file-changes .remove { color: var(--red); }
+    
+    /* Annotation */
+    .annotation {
+      position: fixed;
+      top: var(--space-md);
+      right: var(--space-md);
+      background: #1d1d1f;
+      color: white;
+      padding: var(--space-md);
+      border-radius: 8px;
+      font-size: 12px;
+      max-width: 320px;
+      z-index: 1000;
+    }
+    
+    .annotation h4 { color: #ff9500; margin-bottom: var(--space-sm); }
+    .annotation ul { padding-left: var(--space-md); line-height: 1.6; }
+    
+    .annotation-toggle {
+      position: fixed;
+      top: var(--space-md);
+      right: var(--space-md);
+      background: #1d1d1f;
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      z-index: 1001;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <div class="logo">
+        <div class="logo-mark"></div>
+        <span>AI Hub</span>
+      </div>
+      <div class="topbar-center">
+        <nav class="breadcrumb">
+          <a href="01-dashboard.html">Dashboard</a>
+          <span>/</span>
+          <a href="03-project-detail.html">ItsAlive</a>
+          <span>/</span>
+          <span class="current">Settings</span>
+        </nav>
+      </div>
+    </header>
+    
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="nav-section">
+        <div class="nav-label">Overview</div>
+        <a class="nav-item" onclick="location.href='01-dashboard.html'">
+          <span class="nav-icon">📊</span>
+          Dashboard
+        </a>
+        <a class="nav-item" onclick="location.href='02-human-inbox.html'">
+          <span class="nav-icon">📥</span>
+          Human Inbox
+          <span class="badge">3</span>
+        </a>
+        <a class="nav-item" onclick="location.href='04-crankfeed.html'">
+          <span class="nav-icon">📡</span>
+          Crankfeed
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Projects</div>
+        <a class="nav-item active">
+          <div class="pulse-dot green"></div>
+          ItsAlive
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot green"></div>
+          Pearl
+        </a>
+        <a class="nav-item">
+          <div class="pulse-dot gray"></div>
+          Three Stones
+        </a>
+      </div>
+    </nav>
+    
+    <!-- Settings Nav -->
+    <nav class="settings-nav">
+      <div class="settings-nav-title">⚙️ Project Settings</div>
+      <div class="settings-nav-item">
+        <span>📝</span>
+        General
+      </div>
+      <div class="settings-nav-item">
+        <span>👥</span>
+        Agents
+      </div>
+      <div class="settings-nav-item">
+        <span>🔔</span>
+        Notifications
+      </div>
+      <div class="settings-nav-item active">
+        <span>🔗</span>
+        GitHub Sync
+        <span class="new-badge">NEW</span>
+      </div>
+      <div class="settings-nav-item">
+        <span>🔐</span>
+        Access
+      </div>
+      <div class="settings-nav-item">
+        <span>⚠️</span>
+        Danger Zone
+      </div>
+    </nav>
+    
+    <!-- Main Content -->
+    <main class="main">
+      <div class="settings-header">
+        <h1 class="settings-title">🔗 External GitHub Sync</h1>
+        <p class="settings-subtitle">Squash agent commits into clean history for your public repo</p>
+      </div>
+      
+      <!-- Sync Status Banner -->
+      <div class="sync-status-banner">
+        <div class="sync-status-left">
+          <div class="sync-icon">🔄</div>
+          <div class="sync-info">
+            <h3>Ready to sync</h3>
+            <p>12 internal commits since last push to external repo</p>
+          </div>
+        </div>
+        <div class="sync-stats">
+          <div class="sync-stat">
+            <div class="sync-stat-value">12</div>
+            <div class="sync-stat-label">Agent Commits</div>
+          </div>
+          <div class="sync-arrow">→</div>
+          <div class="sync-stat">
+            <div class="sync-stat-value">1</div>
+            <div class="sync-stat-label">Clean Commit</div>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-lg" onclick="openModal()">
+          🚀 Prepare for Push
+        </button>
+      </div>
+      
+      <!-- External Repo Section -->
+      <div class="settings-section">
+        <div class="section-header">
+          <h3>📦 Linked External Repository</h3>
+          <button class="btn btn-secondary">Change</button>
+        </div>
+        <div class="section-content">
+          <div class="repo-link-card connected">
+            <div class="repo-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+              </svg>
+            </div>
+            <div class="repo-details">
+              <div class="repo-name">
+                samhotchkiss/itsalive
+                <span class="connected-badge">Connected</span>
+              </div>
+              <div class="repo-url">github.com/samhotchkiss/itsalive</div>
+            </div>
+            <div class="repo-actions">
+              <button class="btn btn-secondary">View on GitHub →</button>
+            </div>
+          </div>
+          
+          <div style="margin-top: var(--space-md); display: flex; gap: var(--space-lg);">
+            <div class="branch-selector">
+              <span class="branch-icon">🌿</span>
+              <span>Push to:</span>
+              <select class="branch-select">
+                <option>main</option>
+                <option>develop</option>
+                <option>feature/v2</option>
+              </select>
+            </div>
+            <div class="form-hint" style="margin: 0; align-self: center;">
+              Last pushed: 2 days ago · <strong>3 commits behind</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Pending Commits Preview -->
+      <div class="settings-section">
+        <div class="section-header">
+          <h3>📋 Pending Agent Commits (12)</h3>
+          <span style="font-size: 12px; color: var(--text-muted);">Since last sync</span>
+        </div>
+        <div class="section-content" style="padding: 0;">
+          <div class="commits-list" style="border: none; border-radius: 0;">
+            <div class="commit-row">
+              <span class="commit-sha">a7b3c2d</span>
+              <span class="commit-message">feat: add webhook retry logic with exponential backoff</span>
+              <span class="commit-author">
+                <span class="agent-dot derek">D</span>
+                Derek
+              </span>
+              <span class="commit-time">2h ago</span>
+            </div>
+            <div class="commit-row">
+              <span class="commit-sha">f4e5d6c</span>
+              <span class="commit-message">fix: handle edge case in deploy status check</span>
+              <span class="commit-author">
+                <span class="agent-dot ivy">I</span>
+                Ivy
+              </span>
+              <span class="commit-time">3h ago</span>
+            </div>
+            <div class="commit-row">
+              <span class="commit-sha">b8a9c0d</span>
+              <span class="commit-message">refactor: extract validation into helper function</span>
+              <span class="commit-author">
+                <span class="agent-dot josh">J</span>
+                Josh S
+              </span>
+              <span class="commit-time">4h ago</span>
+            </div>
+            <div class="commit-row">
+              <span class="commit-sha">e1f2g3h</span>
+              <span class="commit-message">wip: debugging auth flow</span>
+              <span class="commit-author">
+                <span class="agent-dot derek">D</span>
+                Derek
+              </span>
+              <span class="commit-time">5h ago</span>
+            </div>
+            <div class="commit-row">
+              <span class="commit-sha">i4j5k6l</span>
+              <span class="commit-message">wip: more auth debugging</span>
+              <span class="commit-author">
+                <span class="agent-dot derek">D</span>
+                Derek
+              </span>
+              <span class="commit-time">5h ago</span>
+            </div>
+            <div class="commit-row" style="background: var(--surface-alt); text-align: center; color: var(--text-muted);">
+              +7 more commits...
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Sync Settings -->
+      <div class="settings-section">
+        <div class="section-header">
+          <h3>⚙️ Sync Preferences</h3>
+        </div>
+        <div class="section-content">
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h4>Auto-suggest commit message</h4>
+              <p>Use AI to generate a summary of all squashed changes</p>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')">
+              <div class="toggle-knob"></div>
+            </div>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h4>Include agent attribution</h4>
+              <p>Add "Co-authored-by" lines for each agent who contributed</p>
+            </div>
+            <div class="toggle" onclick="this.classList.toggle('on')">
+              <div class="toggle-knob"></div>
+            </div>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h4>Require review before sync</h4>
+              <p>Always show diff preview before allowing push to external</p>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')">
+              <div class="toggle-knob"></div>
+            </div>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h4>Push notifications</h4>
+              <p>Notify me when there are 10+ commits ready to sync</p>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')">
+              <div class="toggle-knob"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  
+  <!-- Prepare for Push Modal -->
+  <div class="modal-overlay hidden" id="modalOverlay" onclick="closeModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>🚀 Prepare for Push</h2>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      
+      <div class="modal-body">
+        <!-- Before/After -->
+        <div class="squash-preview">
+          <div class="squash-before">
+            <div class="squash-label">Before (Internal)</div>
+            <div class="squash-count">12</div>
+            <div class="squash-desc">messy agent commits</div>
+          </div>
+          <div class="squash-center">→</div>
+          <div class="squash-after">
+            <div class="squash-label">After (External)</div>
+            <div class="squash-count">1</div>
+            <div class="squash-desc">clean commit under your name</div>
+          </div>
+        </div>
+        
+        <!-- Commit Message Editor -->
+        <div class="commit-editor">
+          <div class="commit-editor-label">
+            <span>Commit Message</span>
+            <button class="auto-generate-btn">✨ Auto-generate</button>
+          </div>
+          <textarea class="commit-textarea">feat: Add webhook retry logic and improve deploy status checks
+
+- Implement exponential backoff for webhook retries
+- Fix edge case in deploy status validation
+- Refactor validation into reusable helper functions
+- Improve error handling throughout auth flow</textarea>
+        </div>
+        
+        <!-- Diff Preview -->
+        <div class="diff-preview">
+          <div class="diff-header">
+            <span>📁 Changed Files (8)</span>
+            <div class="diff-stats">
+              <span class="diff-stat-add">+247 lines</span>
+              <span class="diff-stat-remove">-34 lines</span>
+            </div>
+          </div>
+          <div class="diff-files">
+            <div class="diff-file">
+              <span class="diff-file-status added">A</span>
+              <span>src/lib/webhook-retry.ts</span>
+              <span class="diff-file-changes"><span class="add">+89</span></span>
+            </div>
+            <div class="diff-file">
+              <span class="diff-file-status modified">M</span>
+              <span>src/lib/deploy.ts</span>
+              <span class="diff-file-changes"><span class="add">+42</span> <span class="remove">-12</span></span>
+            </div>
+            <div class="diff-file">
+              <span class="diff-file-status modified">M</span>
+              <span>src/lib/validation.ts</span>
+              <span class="diff-file-changes"><span class="add">+56</span> <span class="remove">-8</span></span>
+            </div>
+            <div class="diff-file">
+              <span class="diff-file-status modified">M</span>
+              <span>src/routes/api/webhooks.ts</span>
+              <span class="diff-file-changes"><span class="add">+23</span> <span class="remove">-5</span></span>
+            </div>
+            <div class="diff-file">
+              <span class="diff-file-status modified">M</span>
+              <span>src/routes/api/deploy.ts</span>
+              <span class="diff-file-changes"><span class="add">+18</span> <span class="remove">-4</span></span>
+            </div>
+            <div class="diff-file">
+              <span class="diff-file-status added">A</span>
+              <span>tests/webhook-retry.test.ts</span>
+              <span class="diff-file-changes"><span class="add">+67</span></span>
+            </div>
+            <div class="diff-file">
+              <span class="diff-file-status deleted">D</span>
+              <span>src/lib/old-validation.ts</span>
+              <span class="diff-file-changes"><span class="remove">-45</span></span>
+            </div>
+            <div class="diff-file">
+              <span class="diff-file-status modified">M</span>
+              <span>package.json</span>
+              <span class="diff-file-changes"><span class="add">+2</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="modal-footer">
+        <div class="modal-footer-left">
+          <span>✓ Pushing to <strong>samhotchkiss/itsalive</strong> → <code>main</code></span>
+        </div>
+        <div class="modal-footer-right">
+          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button class="btn btn-primary btn-lg">
+            🚀 Push to GitHub
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <button class="annotation-toggle" onclick="toggleAnnotation()">💡 Design Notes</button>
+  <div class="annotation" id="annotation" style="display: none;">
+    <h4>GitHub Sync Design Decisions</h4>
+    <ul>
+      <li><strong>12 → 1 visualization</strong>: Clear before/after for the squash concept</li>
+      <li><strong>Settings page context</strong>: Sync lives in project settings, not main nav</li>
+      <li><strong>Sync status banner</strong>: Prominent "ready to sync" call-to-action</li>
+      <li><strong>AI commit message</strong>: Auto-generate from agent commits</li>
+      <li><strong>Diff preview in modal</strong>: Human reviews before external push</li>
+      <li><strong>Attribution toggle</strong>: Option to credit agents via Co-authored-by</li>
+      <li><strong>One-click flow</strong>: Review → edit message → push</li>
+      <li><strong>Your name, your history</strong>: Clean public attribution</li>
+    </ul>
+  </div>
+  
+  <script>
+    function toggleAnnotation() {
+      const el = document.getElementById('annotation');
+      el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+    
+    function openModal() {
+      document.getElementById('modalOverlay').classList.remove('hidden');
+    }
+    
+    function closeModal(event) {
+      if (!event || event.target === document.getElementById('modalOverlay')) {
+        document.getElementById('modalOverlay').classList.add('hidden');
+      }
+    }
+    
+    // Close on Escape
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeModal();
+    });
+  </script>
+</body>
+</html>

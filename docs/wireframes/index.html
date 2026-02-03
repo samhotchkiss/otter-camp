@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Hub Wireframes — Design by Jeff G</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 60px 40px;
+    }
+    
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    
+    .header {
+      margin-bottom: 48px;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .logo-mark {
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, var(--accent), #a371f7);
+      border-radius: 12px;
+    }
+    
+    .logo-text {
+      font-size: 32px;
+      font-weight: 700;
+    }
+    
+    .subtitle {
+      font-size: 18px;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+    }
+    
+    .meta {
+      display: flex;
+      gap: 24px;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    .meta-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .wireframes-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+      margin-bottom: 48px;
+    }
+    
+    .wireframe-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      transition: all 0.2s;
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .wireframe-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-4px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+    
+    .wireframe-preview {
+      height: 200px;
+      background: #1c2128;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 64px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .wireframe-info {
+      padding: 20px;
+    }
+    
+    .wireframe-number {
+      font-size: 12px;
+      color: var(--accent);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .wireframe-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    
+    .wireframe-desc {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    
+    .section {
+      margin-bottom: 48px;
+    }
+    
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    
+    .design-notes {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    
+    .design-notes h3 {
+      font-size: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .design-notes ul {
+      padding-left: 20px;
+      line-height: 1.8;
+      color: var(--text-muted);
+    }
+    
+    .design-notes li {
+      margin-bottom: 8px;
+    }
+    
+    .design-notes strong {
+      color: var(--text);
+    }
+    
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(63, 185, 80, 0.15);
+      color: var(--green);
+      padding: 4px 12px;
+      border-radius: 16px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--green);
+      border-radius: 50%;
+    }
+    
+    footer {
+      text-align: center;
+      padding-top: 48px;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="logo">
+        <div class="logo-mark"></div>
+        <span class="logo-text">AI Hub Wireframes</span>
+      </div>
+      <p class="subtitle">
+        UX exploration for AI agent work management platform
+      </p>
+      <div class="meta">
+        <div class="meta-item">
+          🎨 <strong>Design:</strong>&nbsp;Jeff G
+        </div>
+        <div class="meta-item">
+          📅 <strong>Date:</strong>&nbsp;2026-02-03
+        </div>
+        <div class="meta-item">
+          <span class="status-badge">
+            <span class="status-dot"></span>
+            v1 Complete
+          </span>
+        </div>
+      </div>
+    </header>
+    
+    <section class="section">
+      <h2 class="section-title">Wireframes</h2>
+      <div class="wireframes-grid">
+        <a href="01-dashboard.html" class="wireframe-card">
+          <div class="wireframe-preview">📊</div>
+          <div class="wireframe-info">
+            <div class="wireframe-number">01</div>
+            <h3 class="wireframe-title">Main Dashboard</h3>
+            <p class="wireframe-desc">
+              The "war room" view. Projects grouped by status (needs you → cranking → idle), quick stats, inline inbox preview.
+            </p>
+          </div>
+        </a>
+        
+        <a href="02-human-inbox.html" class="wireframe-card">
+          <div class="wireframe-preview">📥</div>
+          <div class="wireframe-info">
+            <div class="wireframe-number">02</div>
+            <h3 class="wireframe-title">Human Inbox</h3>
+            <p class="wireframe-desc">
+              The action queue. Items needing human judgment with one-click actions, urgency indicators, and context-rich detail panel.
+            </p>
+          </div>
+        </a>
+        
+        <a href="03-project-detail.html" class="wireframe-card">
+          <div class="wireframe-preview">📁</div>
+          <div class="wireframe-info">
+            <div class="wireframe-number">03</div>
+            <h3 class="wireframe-title">Project Detail</h3>
+            <p class="wireframe-desc">
+              Single project view with Kanban task board, needs-you banner, agent activity sidebar, and quick stats.
+            </p>
+          </div>
+        </a>
+        
+        <a href="04-crankfeed.html" class="wireframe-card">
+          <div class="wireframe-preview">📡</div>
+          <div class="wireframe-info">
+            <div class="wireframe-number">04</div>
+            <h3 class="wireframe-title">Crankfeed</h3>
+            <p class="wireframe-desc">
+              Ambient activity stream. Time-grouped, filterable, collapsible history. Pull-only awareness, no notifications.
+            </p>
+          </div>
+        </a>
+        
+        <a href="05-github-sync.html" class="wireframe-card">
+          <div class="wireframe-preview">🔗</div>
+          <div class="wireframe-info">
+            <div class="wireframe-number">05</div>
+            <h3 class="wireframe-title">GitHub Sync</h3>
+            <p class="wireframe-desc">
+              External repo sync. Squash messy agent commits into clean history. Push under your name to your public GitHub.
+            </p>
+          </div>
+        </a>
+      </div>
+    </section>
+    
+    <section class="section">
+      <h2 class="section-title">Design Principles</h2>
+      <div class="design-notes">
+        <h3>Core UX Decisions</h3>
+        <ul>
+          <li><strong>Operator, not worker:</strong> The human provides judgment, agents provide labor. UI optimized for decisions, not task execution.</li>
+          <li><strong>Explicit over inferred:</strong> Items only need attention when agents explicitly flag <code>needs_human: true</code>. No guessing.</li>
+          <li><strong>Attention is scarce:</strong> Ruthless filtering. Dashboard grouped by urgency. Inbox is action-only. Crankfeed is ambient awareness.</li>
+          <li><strong>Status pulse colors:</strong> 🔴 Red = needs you, 🟡 Yellow = blocked (not on you), 🟢 Green = cranking, ⚪ Gray = idle.</li>
+          <li><strong>One-click resolution:</strong> Approve/decide/review without leaving context. Big buttons, keyboard shortcuts.</li>
+          <li><strong>Real-time by default:</strong> Live updates via WebSocket. No refresh needed. The dashboard breathes.</li>
+          <li><strong>Keyboard power users:</strong> j/k navigation, a to approve, g+i for inbox, g+p for projects.</li>
+        </ul>
+      </div>
+    </section>
+    
+    <section class="section">
+      <h2 class="section-title">Key Patterns</h2>
+      <div class="design-notes">
+        <h3>Reusable Components</h3>
+        <ul>
+          <li><strong>Project Card:</strong> Pulse color, title, activity preview, needs-you badge, agent stack</li>
+          <li><strong>Inbox Item:</strong> Type badge, urgency dot, summary, meta, action buttons</li>
+          <li><strong>Task Card:</strong> ID, title, agent, priority badge, needs-human border</li>
+          <li><strong>Activity Item:</strong> Time, agent avatar, action text, project badge, expandable details</li>
+          <li><strong>Agent Avatar:</strong> Colored circle with initial, stackable</li>
+          <li><strong>Status Badges:</strong> Approval (red), Decision (yellow), Review (purple), Question (blue)</li>
+        </ul>
+      </div>
+    </section>
+    
+    <footer>
+      <p>AI Hub Wireframes · Jeff G · 2026-02-03</p>
+      <p style="margin-top: 8px; font-size: 12px;">
+        Open each wireframe in browser to interact. Click 💡 Design Notes for annotations.
+      </p>
+    </footer>
+  </div>
+</body>
+</html>

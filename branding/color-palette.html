@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp — Brand Color Palette</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Georgia, serif;
+      background: #faf8f5;
+      color: #2d2a26;
+      padding: 60px 40px;
+      min-height: 100vh;
+    }
+    
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+    
+    header {
+      margin-bottom: 48px;
+      text-align: center;
+    }
+    
+    .logo {
+      font-size: 48px;
+      margin-bottom: 8px;
+    }
+    
+    h1 {
+      font-size: 36px;
+      font-weight: 600;
+      color: #5c4a3d;
+      margin-bottom: 8px;
+    }
+    
+    .subtitle {
+      font-size: 18px;
+      color: #8b7355;
+      font-style: italic;
+    }
+    
+    .palette-section {
+      margin-bottom: 48px;
+    }
+    
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #8b7355;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #e8e2d9;
+    }
+    
+    .color-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 20px;
+    }
+    
+    .color-card {
+      background: white;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(92, 74, 61, 0.1);
+    }
+    
+    .color-swatch {
+      height: 120px;
+      display: flex;
+      align-items: flex-end;
+      padding: 12px;
+    }
+    
+    .color-swatch.light-text { color: white; }
+    .color-swatch.dark-text { color: #2d2a26; }
+    
+    .color-info {
+      padding: 16px;
+    }
+    
+    .color-name {
+      font-weight: 600;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }
+    
+    .color-hex {
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 13px;
+      color: #8b7355;
+    }
+    
+    .color-use {
+      font-size: 12px;
+      color: #a69582;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+    
+    /* Primary Colors */
+    .swatch-otter-brown { background: #5c4a3d; }
+    .swatch-warm-cream { background: #faf8f5; }
+    .swatch-bark { background: #8b7355; }
+    .swatch-driftwood { background: #c4b5a4; }
+    
+    /* Secondary Colors */
+    .swatch-river-blue { background: #4a6d7c; }
+    .swatch-forest-green { background: #5a7a5c; }
+    .swatch-sunset-orange { background: #c87941; }
+    .swatch-campfire { background: #b85c38; }
+    
+    /* Neutrals */
+    .swatch-deep-earth { background: #2d2a26; }
+    .swatch-stone { background: #6b6560; }
+    .swatch-pebble { background: #a69582; }
+    .swatch-sand { background: #e8e2d9; }
+    .swatch-foam { background: #f5f2ed; }
+    
+    /* Accents */
+    .swatch-kelp { background: #3d5a4c; }
+    .swatch-shell-pink { background: #d4a59a; }
+    .swatch-tide-pool { background: #6b8f9c; }
+    
+    .usage-section {
+      background: white;
+      border-radius: 12px;
+      padding: 32px;
+      margin-top: 48px;
+      box-shadow: 0 2px 8px rgba(92, 74, 61, 0.1);
+    }
+    
+    .usage-section h2 {
+      font-size: 20px;
+      color: #5c4a3d;
+      margin-bottom: 24px;
+    }
+    
+    .usage-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+    }
+    
+    .usage-item h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #5c4a3d;
+      margin-bottom: 8px;
+    }
+    
+    .usage-item p {
+      font-size: 14px;
+      color: #6b6560;
+      line-height: 1.6;
+    }
+    
+    .sample-combo {
+      display: flex;
+      gap: 4px;
+      margin-top: 12px;
+    }
+    
+    .sample-dot {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+    }
+    
+    footer {
+      text-align: center;
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid #e8e2d9;
+      color: #a69582;
+      font-size: 14px;
+    }
+    
+    .vibe-words {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      margin-top: 24px;
+      flex-wrap: wrap;
+    }
+    
+    .vibe-word {
+      background: #5c4a3d;
+      color: #faf8f5;
+      padding: 8px 20px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">🦦</div>
+      <h1>otter.camp</h1>
+      <p class="subtitle">Brand Color Palette — Warm, Organic, Collaborative</p>
+      
+      <div class="vibe-words">
+        <span class="vibe-word">Earthy</span>
+        <span class="vibe-word">Approachable</span>
+        <span class="vibe-word">Vintage</span>
+        <span class="vibe-word">Collaborative</span>
+        <span class="vibe-word">Warm</span>
+      </div>
+    </header>
+    
+    <section class="palette-section">
+      <h2 class="section-title">Primary Colors</h2>
+      <div class="color-grid">
+        <div class="color-card">
+          <div class="color-swatch swatch-otter-brown light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Otter Brown</div>
+            <div class="color-hex">#5C4A3D</div>
+            <div class="color-use">Primary brand color. Headers, buttons, key UI.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-warm-cream dark-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Warm Cream</div>
+            <div class="color-hex">#FAF8F5</div>
+            <div class="color-use">Background. Warm, not stark white.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-bark light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Bark</div>
+            <div class="color-hex">#8B7355</div>
+            <div class="color-use">Secondary text, labels, borders.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-driftwood dark-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Driftwood</div>
+            <div class="color-hex">#C4B5A4</div>
+            <div class="color-use">Subtle backgrounds, cards, dividers.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <section class="palette-section">
+      <h2 class="section-title">Secondary Colors</h2>
+      <div class="color-grid">
+        <div class="color-card">
+          <div class="color-swatch swatch-river-blue light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">River Blue</div>
+            <div class="color-hex">#4A6D7C</div>
+            <div class="color-use">Links, active states, water themes.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-forest-green light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Forest Green</div>
+            <div class="color-hex">#5A7A5C</div>
+            <div class="color-use">Success states, positive indicators.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-sunset-orange light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Sunset Orange</div>
+            <div class="color-hex">#C87941</div>
+            <div class="color-use">Warnings, highlights, CTAs.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-campfire light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Campfire</div>
+            <div class="color-hex">#B85C38</div>
+            <div class="color-use">Errors, urgent states, accents.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <section class="palette-section">
+      <h2 class="section-title">Neutrals</h2>
+      <div class="color-grid">
+        <div class="color-card">
+          <div class="color-swatch swatch-deep-earth light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Deep Earth</div>
+            <div class="color-hex">#2D2A26</div>
+            <div class="color-use">Primary text, headings.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-stone light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Stone</div>
+            <div class="color-hex">#6B6560</div>
+            <div class="color-use">Body text, paragraphs.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-pebble light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Pebble</div>
+            <div class="color-hex">#A69582</div>
+            <div class="color-use">Muted text, timestamps, metadata.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-sand dark-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Sand</div>
+            <div class="color-hex">#E8E2D9</div>
+            <div class="color-use">Borders, dividers, subtle UI.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-foam dark-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Foam</div>
+            <div class="color-hex">#F5F2ED</div>
+            <div class="color-use">Card backgrounds, alternating rows.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <section class="palette-section">
+      <h2 class="section-title">Accent Colors</h2>
+      <div class="color-grid">
+        <div class="color-card">
+          <div class="color-swatch swatch-kelp light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Kelp</div>
+            <div class="color-hex">#3D5A4C</div>
+            <div class="color-use">Deep green accent, nature elements.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-shell-pink dark-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Shell Pink</div>
+            <div class="color-hex">#D4A59A</div>
+            <div class="color-use">Soft accent, highlights, badges.</div>
+          </div>
+        </div>
+        
+        <div class="color-card">
+          <div class="color-swatch swatch-tide-pool light-text">
+            <span>Aa</span>
+          </div>
+          <div class="color-info">
+            <div class="color-name">Tide Pool</div>
+            <div class="color-hex">#6B8F9C</div>
+            <div class="color-use">Info states, secondary links.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <section class="usage-section">
+      <h2>Usage Guidelines</h2>
+      <div class="usage-grid">
+        <div class="usage-item">
+          <h3>Backgrounds</h3>
+          <p>Use Warm Cream (#FAF8F5) as the default background. Foam (#F5F2ED) for cards and elevated surfaces. Never use pure white — keep it warm.</p>
+          <div class="sample-combo">
+            <div class="sample-dot" style="background: #FAF8F5; border: 1px solid #E8E2D9;"></div>
+            <div class="sample-dot" style="background: #F5F2ED;"></div>
+            <div class="sample-dot" style="background: #E8E2D9;"></div>
+          </div>
+        </div>
+        
+        <div class="usage-item">
+          <h3>Text Hierarchy</h3>
+          <p>Deep Earth (#2D2A26) for headings. Stone (#6B6560) for body. Pebble (#A69582) for muted/meta. Bark (#8B7355) for labels.</p>
+          <div class="sample-combo">
+            <div class="sample-dot" style="background: #2D2A26;"></div>
+            <div class="sample-dot" style="background: #6B6560;"></div>
+            <div class="sample-dot" style="background: #A69582;"></div>
+            <div class="sample-dot" style="background: #8B7355;"></div>
+          </div>
+        </div>
+        
+        <div class="usage-item">
+          <h3>Interactive Elements</h3>
+          <p>Otter Brown (#5C4A3D) for primary buttons/CTAs. River Blue (#4A6D7C) for links. Sunset Orange (#C87941) for attention-grabbing CTAs.</p>
+          <div class="sample-combo">
+            <div class="sample-dot" style="background: #5C4A3D;"></div>
+            <div class="sample-dot" style="background: #4A6D7C;"></div>
+            <div class="sample-dot" style="background: #C87941;"></div>
+          </div>
+        </div>
+        
+        <div class="usage-item">
+          <h3>Status Colors</h3>
+          <p>Forest Green (#5A7A5C) for success. Sunset Orange (#C87941) for warnings. Campfire (#B85C38) for errors. Tide Pool (#6B8F9C) for info.</p>
+          <div class="sample-combo">
+            <div class="sample-dot" style="background: #5A7A5C;"></div>
+            <div class="sample-dot" style="background: #C87941;"></div>
+            <div class="sample-dot" style="background: #B85C38;"></div>
+            <div class="sample-dot" style="background: #6B8F9C;"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+    
+    <footer>
+      <p>otter.camp Brand Color Palette · Designed by Jeff G · February 2026</p>
+      <p style="margin-top: 8px;">Inspired by warm O'Reilly book aesthetics · Collaborative floating & drift avoidance 🦦</p>
+    </footer>
+  </div>
+</body>
+</html>

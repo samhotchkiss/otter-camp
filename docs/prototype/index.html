@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Hub — Dashboard</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface-hover: #1c2128;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --purple: #a371f7;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* Layout */
+    .app {
+      display: grid;
+      grid-template-columns: 240px 1fr 320px;
+      min-height: 100vh;
+    }
+    
+    /* Sidebar */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 20px 0;
+    }
+    
+    .logo {
+      padding: 0 20px 20px;
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, var(--accent), var(--purple));
+      border-radius: 8px;
+    }
+    
+    .nav-section {
+      padding: 10px 0;
+    }
+    
+    .nav-label {
+      padding: 8px 20px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+    }
+    
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 20px;
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: all 0.15s;
+      cursor: pointer;
+    }
+    
+    .nav-item:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+    }
+    
+    .nav-item.active {
+      background: rgba(88, 166, 255, 0.1);
+      color: var(--accent);
+      border-right: 2px solid var(--accent);
+    }
+    
+    .nav-item .badge {
+      margin-left: auto;
+      background: var(--red);
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    
+    .nav-icon {
+      font-size: 18px;
+      width: 20px;
+      text-align: center;
+    }
+    
+    /* Main Content */
+    .main {
+      padding: 24px 32px;
+      overflow-y: auto;
+    }
+    
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    
+    .header h1 {
+      font-size: 24px;
+      font-weight: 600;
+    }
+    
+    .header-actions {
+      display: flex;
+      gap: 12px;
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: none;
+    }
+    
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #4393e6;
+    }
+    
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    
+    .btn-secondary:hover {
+      background: var(--surface-hover);
+    }
+    
+    /* Project Cards */
+    .projects-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 16px;
+    }
+    
+    .project-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      transition: all 0.15s;
+      cursor: pointer;
+    }
+    
+    .project-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    
+    .project-card.needs-you {
+      border-color: var(--red);
+      box-shadow: 0 0 0 1px var(--red);
+    }
+    
+    .project-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    
+    .pulse {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    
+    .pulse.green { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .pulse.yellow { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); }
+    .pulse.red { background: var(--red); box-shadow: 0 0 8px var(--red); animation: pulse-red 2s infinite; }
+    .pulse.gray { background: var(--text-muted); }
+    
+    @keyframes pulse-red {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    .project-name {
+      font-size: 16px;
+      font-weight: 600;
+      flex: 1;
+    }
+    
+    .project-time {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .project-activity {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      line-height: 1.6;
+    }
+    
+    .project-activity strong {
+      color: var(--text);
+      font-weight: 500;
+    }
+    
+    .needs-you-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(248, 81, 73, 0.1);
+      border: 1px solid var(--red);
+      color: var(--red);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 12px;
+    }
+    
+    .project-stats {
+      display: flex;
+      gap: 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .project-stats span {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    /* Right Panel - Inbox */
+    .right-panel {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .panel-header {
+      padding: 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .panel-header h2 {
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .panel-header .count {
+      background: var(--red);
+      color: white;
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    
+    .inbox-list {
+      flex: 1;
+      overflow-y: auto;
+    }
+    
+    .inbox-item {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    
+    .inbox-item:hover {
+      background: var(--surface-hover);
+    }
+    
+    .inbox-item-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    
+    .inbox-type {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(248, 81, 73, 0.2);
+      color: var(--red);
+    }
+    
+    .inbox-type.decision {
+      background: rgba(210, 153, 34, 0.2);
+      color: var(--yellow);
+    }
+    
+    .inbox-type.review {
+      background: rgba(163, 113, 247, 0.2);
+      color: var(--purple);
+    }
+    
+    .inbox-project {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .inbox-from {
+      margin-left: auto;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .inbox-title {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+    
+    .inbox-context {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    
+    .inbox-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .inbox-btn {
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    
+    .inbox-btn:hover {
+      background: var(--surface-hover);
+    }
+    
+    .inbox-btn.approve {
+      background: var(--green);
+      border-color: var(--green);
+      color: white;
+    }
+    
+    .inbox-btn.approve:hover {
+      background: #36a146;
+    }
+    
+    /* Crankfeed Tab */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .tab {
+      padding: 12px 20px;
+      font-size: 14px;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    
+    .tab:hover {
+      color: var(--text);
+    }
+    
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    
+    .feed-list {
+      flex: 1;
+      overflow-y: auto;
+      display: none;
+    }
+    
+    .feed-list.active {
+      display: block;
+    }
+    
+    .feed-item {
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .feed-item time {
+      color: var(--text-muted);
+      margin-right: 8px;
+    }
+    
+    .feed-item strong {
+      color: var(--text);
+      font-weight: 500;
+    }
+    
+    /* Agent avatars */
+    .agent-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+    
+    .agent-avatar.ivy { background: #2ea043; }
+    .agent-avatar.derek { background: #0969da; }
+    .agent-avatar.stone { background: #8b5cf6; }
+    .agent-avatar.nova { background: #db61a2; }
+    .agent-avatar.jeff { background: #f97316; }
+    
+    /* Keyboard hint */
+    .keyboard-hint {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .keyboard-hint kbd {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin: 0 2px;
+    }
+    
+    /* Empty states */
+    .empty-state {
+      padding: 40px 20px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+    
+    .empty-state .icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    
+    .empty-state h3 {
+      font-size: 16px;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    /* Toast notification */
+    .toast {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--green);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0;
+      transition: all 0.3s;
+      z-index: 1000;
+    }
+    
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="logo">
+        <div class="logo-icon"></div>
+        <span>AI Hub</span>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Overview</div>
+        <a class="nav-item active" onclick="showView('projects')">
+          <span class="nav-icon">📊</span>
+          <span>Projects</span>
+        </a>
+        <a class="nav-item" onclick="showView('inbox')">
+          <span class="nav-icon">📥</span>
+          <span>Inbox</span>
+          <span class="badge">3</span>
+        </a>
+        <a class="nav-item" onclick="showView('agents')">
+          <span class="nav-icon">🤖</span>
+          <span>Agents</span>
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Projects</div>
+        <a class="nav-item">
+          <span class="nav-icon">🔴</span>
+          <span>ItsAlive</span>
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">🟢</span>
+          <span>Pearl</span>
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">🟢</span>
+          <span>Three Stones</span>
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">🟡</span>
+          <span>sam.blog</span>
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">⚪</span>
+          <span>Content</span>
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Settings</div>
+        <a class="nav-item">
+          <span class="nav-icon">⚙️</span>
+          <span>Preferences</span>
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">🔑</span>
+          <span>API Keys</span>
+        </a>
+      </div>
+    </nav>
+    
+    <!-- Main Content -->
+    <main class="main">
+      <div class="header">
+        <h1>Projects Currently Cranking</h1>
+        <div class="header-actions">
+          <button class="btn btn-secondary">Filter</button>
+          <button class="btn btn-primary">+ New Project</button>
+        </div>
+      </div>
+      
+      <div class="projects-grid">
+        <!-- Red - Needs You -->
+        <div class="project-card needs-you" onclick="openProject('itsalive')">
+          <div class="project-header">
+            <div class="pulse red"></div>
+            <span class="project-name">ItsAlive</span>
+            <span class="project-time">2m ago</span>
+          </div>
+          <div class="needs-you-badge">
+            ⚠️ NEEDS YOU: Approve production deploy
+          </div>
+          <div class="project-activity">
+            <strong>Ivy</strong> pushed onboarding flow v2.<br>
+            <strong>Derek</strong> reviewing auth implementation.
+          </div>
+          <div class="project-stats">
+            <span>📋 3 active</span>
+            <span>✅ 12 done this week</span>
+          </div>
+        </div>
+        
+        <!-- Yellow - Blocked -->
+        <div class="project-card" onclick="openProject('samblog')">
+          <div class="project-header">
+            <div class="pulse yellow"></div>
+            <span class="project-name">sam.blog</span>
+            <span class="project-time">15m ago</span>
+          </div>
+          <div class="project-activity">
+            <strong>Jeff G</strong> waiting on design assets from Figma export.<br>
+            <strong>Stone</strong> has 2 posts ready for review.
+          </div>
+          <div class="project-stats">
+            <span>📋 2 active</span>
+            <span>⏸️ 1 blocked</span>
+          </div>
+        </div>
+        
+        <!-- Green - Cranking -->
+        <div class="project-card" onclick="openProject('pearl')">
+          <div class="project-header">
+            <div class="pulse green"></div>
+            <span class="project-name">Pearl</span>
+            <span class="project-time">5m ago</span>
+          </div>
+          <div class="project-activity">
+            <strong>Derek</strong> pushed 3 commits to main.<br>
+            <strong>Josh S</strong> running test suite (675 passing).
+          </div>
+          <div class="project-stats">
+            <span>📋 4 active</span>
+            <span>✅ 28 done this week</span>
+          </div>
+        </div>
+        
+        <!-- Green - Cranking -->
+        <div class="project-card" onclick="openProject('threestones')">
+          <div class="project-header">
+            <div class="pulse green"></div>
+            <span class="project-name">Three Stones</span>
+            <span class="project-time">1h ago</span>
+          </div>
+          <div class="project-activity">
+            <strong>Stone</strong> finalizing chapter 4 edits.<br>
+            Presentation deployed to maycenter.itsalive.co
+          </div>
+          <div class="project-stats">
+            <span>📋 1 active</span>
+            <span>✅ 8 done this week</span>
+          </div>
+        </div>
+        
+        <!-- Gray - Idle -->
+        <div class="project-card" onclick="openProject('content')">
+          <div class="project-header">
+            <div class="pulse gray"></div>
+            <span class="project-name">Content</span>
+            <span class="project-time">3h ago</span>
+          </div>
+          <div class="project-activity">
+            No active tasks. Last: <strong>Nova</strong> scheduled 3 tweets.
+          </div>
+          <div class="project-stats">
+            <span>📋 0 active</span>
+            <span>✅ 5 done this week</span>
+          </div>
+        </div>
+        
+        <!-- Gray - Idle -->
+        <div class="project-card" onclick="openProject('markets')">
+          <div class="project-header">
+            <div class="pulse gray"></div>
+            <span class="project-name">Markets</span>
+            <span class="project-time">6h ago</span>
+          </div>
+          <div class="project-activity">
+            <strong>Beau H</strong> completed morning analysis.<br>
+            Waiting for market open.
+          </div>
+          <div class="project-stats">
+            <span>📋 0 active</span>
+            <span>✅ 3 done today</span>
+          </div>
+        </div>
+      </div>
+    </main>
+    
+    <!-- Right Panel -->
+    <aside class="right-panel">
+      <div class="tabs">
+        <div class="tab active" onclick="showPanel('inbox')">Inbox</div>
+        <div class="tab" onclick="showPanel('feed')">Crankfeed</div>
+      </div>
+      
+      <div class="inbox-list active" id="inbox-panel">
+        <!-- Approval -->
+        <div class="inbox-item">
+          <div class="inbox-item-header">
+            <span class="inbox-type">Approval</span>
+            <span class="inbox-project">ItsAlive</span>
+            <span class="inbox-from">from Ivy · 5m</span>
+          </div>
+          <div class="inbox-title">Approve production deploy?</div>
+          <div class="inbox-context">All tests pass. Staging verified by QA. Ready to ship v2.1.0 with new onboarding flow.</div>
+          <div class="inbox-actions">
+            <button class="inbox-btn approve" onclick="handleApprove(event, 'deploy')">Approve</button>
+            <button class="inbox-btn">Hold</button>
+            <button class="inbox-btn">View →</button>
+          </div>
+        </div>
+        
+        <!-- Decision -->
+        <div class="inbox-item">
+          <div class="inbox-item-header">
+            <span class="inbox-type decision">Decision</span>
+            <span class="inbox-project">Pearl</span>
+            <span class="inbox-from">from Derek · 20m</span>
+          </div>
+          <div class="inbox-title">API versioning strategy?</div>
+          <div class="inbox-context">We need to decide: URL path versioning (/v1/...) or header versioning (Accept: application/vnd.pearl.v1)?</div>
+          <div class="inbox-actions">
+            <button class="inbox-btn" onclick="handleDecision(event, 'url')">URL Path</button>
+            <button class="inbox-btn" onclick="handleDecision(event, 'header')">Header</button>
+            <button class="inbox-btn">Discuss →</button>
+          </div>
+        </div>
+        
+        <!-- Review -->
+        <div class="inbox-item">
+          <div class="inbox-item-header">
+            <span class="inbox-type review">Review</span>
+            <span class="inbox-project">Content</span>
+            <span class="inbox-from">from Stone · 1h</span>
+          </div>
+          <div class="inbox-title">Blog post: "Why I Run 12 AI Agents"</div>
+          <div class="inbox-context">Draft ready for your review. 1,400 words. Covers the journey from single agent to full fleet.</div>
+          <div class="inbox-actions">
+            <button class="inbox-btn approve" onclick="handleApprove(event, 'post')">Approve</button>
+            <button class="inbox-btn">Request Changes</button>
+            <button class="inbox-btn">Preview →</button>
+          </div>
+        </div>
+      </div>
+      
+      <div class="feed-list" id="feed-panel">
+        <div class="feed-item"><time>11:21</time> <strong>Derek</strong> started working on eng-042</div>
+        <div class="feed-item"><time>11:19</time> <strong>Ivy</strong> pushed 2 commits to itsalive/main</div>
+        <div class="feed-item"><time>11:15</time> <strong>Stone</strong> marked content-015 complete</div>
+        <div class="feed-item"><time>11:12</time> <strong>Josh S</strong> ran test suite: 675 passing</div>
+        <div class="feed-item"><time>11:08</time> <strong>Nova</strong> scheduled 3 tweets for tomorrow</div>
+        <div class="feed-item"><time>11:05</time> <strong>Derek</strong> pushed 3 commits to pearl/main</div>
+        <div class="feed-item"><time>11:00</time> <strong>Jeff G</strong> uploaded design mockups</div>
+        <div class="feed-item"><time>10:55</time> <strong>Claudette</strong> completed essie-003</div>
+        <div class="feed-item"><time>10:48</time> <strong>Jeremy H</strong> approved PR #47</div>
+        <div class="feed-item"><time>10:42</time> <strong>Beau H</strong> completed market analysis</div>
+        <div class="feed-item"><time>10:35</time> <strong>Max</strong> updated health tracking</div>
+        <div class="feed-item"><time>10:30</time> <strong>Penny</strong> processed 12 emails</div>
+      </div>
+    </aside>
+  </div>
+  
+  <div class="keyboard-hint">
+    <kbd>j</kbd>/<kbd>k</kbd> navigate · <kbd>a</kbd> approve · <kbd>g</kbd><kbd>i</kbd> inbox · <kbd>g</kbd><kbd>p</kbd> projects
+  </div>
+  
+  <div class="toast" id="toast"></div>
+  
+  <script>
+    // Panel switching
+    function showPanel(panel) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.feed-list, .inbox-list').forEach(p => p.classList.remove('active'));
+      
+      event.target.classList.add('active');
+      document.getElementById(panel + '-panel').classList.add('active');
+    }
+    
+    // Toast notifications
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+    
+    // Handle approval
+    function handleApprove(e, item) {
+      e.stopPropagation();
+      const inboxItem = e.target.closest('.inbox-item');
+      inboxItem.style.opacity = '0.5';
+      inboxItem.style.transform = 'translateX(20px)';
+      setTimeout(() => {
+        inboxItem.remove();
+        updateBadge();
+      }, 300);
+      
+      if (item === 'deploy') {
+        showToast('✅ Deploy approved — Ivy notified');
+        // Update project card
+        const card = document.querySelector('.project-card.needs-you');
+        if (card) {
+          card.classList.remove('needs-you');
+          card.querySelector('.pulse').className = 'pulse green';
+          card.querySelector('.needs-you-badge').remove();
+        }
+      } else if (item === 'post') {
+        showToast('✅ Post approved — Stone notified');
+      }
+    }
+    
+    // Handle decision
+    function handleDecision(e, choice) {
+      e.stopPropagation();
+      const inboxItem = e.target.closest('.inbox-item');
+      inboxItem.style.opacity = '0.5';
+      inboxItem.style.transform = 'translateX(20px)';
+      setTimeout(() => {
+        inboxItem.remove();
+        updateBadge();
+      }, 300);
+      showToast(`✅ Decision recorded: ${choice === 'url' ? 'URL Path' : 'Header'} versioning — Derek notified`);
+    }
+    
+    // Update badge count
+    function updateBadge() {
+      const count = document.querySelectorAll('.inbox-item').length;
+      const badge = document.querySelector('.nav-item .badge');
+      if (count === 0) {
+        badge.style.display = 'none';
+      } else {
+        badge.textContent = count;
+      }
+    }
+    
+    // Project click
+    function openProject(id) {
+      showToast(`Opening ${id}...`);
+    }
+    
+    // Keyboard navigation
+    let selectedIndex = -1;
+    const items = () => document.querySelectorAll('.inbox-item');
+    
+    document.addEventListener('keydown', (e) => {
+      const inboxItems = items();
+      
+      if (e.key === 'j') {
+        selectedIndex = Math.min(selectedIndex + 1, inboxItems.length - 1);
+        highlightItem(inboxItems);
+      } else if (e.key === 'k') {
+        selectedIndex = Math.max(selectedIndex - 1, 0);
+        highlightItem(inboxItems);
+      } else if (e.key === 'a' && selectedIndex >= 0) {
+        const approveBtn = inboxItems[selectedIndex].querySelector('.inbox-btn.approve');
+        if (approveBtn) approveBtn.click();
+      } else if (e.key === 'g') {
+        // Wait for next key
+        document.addEventListener('keydown', function handler(e2) {
+          if (e2.key === 'i') {
+            showPanel('inbox');
+            document.querySelector('.tab').click();
+          } else if (e2.key === 'p') {
+            // Go to projects (already there)
+          }
+          document.removeEventListener('keydown', handler);
+        }, { once: true });
+      }
+    });
+    
+    function highlightItem(inboxItems) {
+      inboxItems.forEach((item, i) => {
+        item.style.background = i === selectedIndex ? 'var(--surface-hover)' : '';
+      });
+    }
+    
+    // Simulate live updates
+    setInterval(() => {
+      const feedPanel = document.getElementById('feed-panel');
+      const newItem = document.createElement('div');
+      newItem.className = 'feed-item';
+      newItem.style.opacity = '0';
+      
+      const agents = ['Derek', 'Ivy', 'Stone', 'Nova', 'Josh S', 'Jeff G'];
+      const actions = [
+        'pushed a commit',
+        'completed a task',
+        'started working on',
+        'commented on',
+        'updated'
+      ];
+      const agent = agents[Math.floor(Math.random() * agents.length)];
+      const action = actions[Math.floor(Math.random() * actions.length)];
+      const now = new Date();
+      const time = now.toTimeString().slice(0, 5);
+      
+      newItem.innerHTML = `<time>${time}</time> <strong>${agent}</strong> ${action} something`;
+      feedPanel.insertBefore(newItem, feedPanel.firstChild);
+      
+      requestAnimationFrame(() => {
+        newItem.style.transition = 'opacity 0.3s';
+        newItem.style.opacity = '1';
+      });
+      
+      // Remove old items
+      while (feedPanel.children.length > 20) {
+        feedPanel.lastChild.remove();
+      }
+    }, 15000);
+  </script>
+</body>
+</html>
