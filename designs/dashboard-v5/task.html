@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ENG-042 · Implement retry logic · otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+      
+      /* Light theme */
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --red: #B85C38;
+      --blue: #4A6D7C;
+      --yellow: #C4A03C;
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .search-trigger {
+      flex: 1;
+      max-width: 400px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .search-trigger:hover { background: rgba(255,255,255,0.2); }
+    .search-trigger-text { flex: 1; opacity: 0.7; font-size: 14px; }
+    .kbd { font-size: 12px; opacity: 0.6; font-family: var(--mono); }
+    
+    .topbar-nav {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .nav-link {
+      color: inherit;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0.8;
+      transition: all 0.15s;
+    }
+    
+    .nav-link:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+    .nav-link.active { opacity: 1; background: rgba(255,255,255,0.15); }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-left: auto;
+    }
+    
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    
+    /* ========== MAIN CONTENT ========== */
+    .main {
+      flex: 1;
+      display: flex;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    
+    .content {
+      flex: 1;
+      padding: 24px;
+      max-width: 900px;
+    }
+    
+    .sidebar {
+      width: 320px;
+      padding: 24px;
+      border-left: 1px solid var(--border);
+      background: var(--surface-alt);
+    }
+    
+    /* ========== BREADCRUMB & HEADER ========== */
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    
+    .breadcrumb a {
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+    
+    .breadcrumb a:hover { color: var(--accent); }
+    .breadcrumb-sep { opacity: 0.5; }
+    
+    .task-header {
+      margin-bottom: 24px;
+    }
+    
+    .task-header-top {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+    
+    .task-id {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent);
+      background: var(--surface-alt);
+      padding: 4px 10px;
+      border-radius: 6px;
+    }
+    
+    .task-title {
+      flex: 1;
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+    
+    .task-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    
+    .btn-primary:hover { background: var(--accent-hover); }
+    
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    
+    .btn-secondary:hover { background: var(--surface-alt); }
+    
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-muted);
+    }
+    
+    .btn-ghost:hover { background: var(--surface-alt); color: var(--text); }
+    
+    .task-meta {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    
+    .meta-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    .meta-item strong { color: var(--text); font-weight: 500; }
+    
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .status-in-progress {
+      background: rgba(90, 122, 92, 0.2);
+      color: var(--green);
+    }
+    
+    .status-blocked {
+      background: rgba(196, 160, 60, 0.2);
+      color: var(--yellow);
+    }
+    
+    .status-needs-review {
+      background: rgba(74, 109, 124, 0.2);
+      color: var(--blue);
+    }
+    
+    .priority-badge {
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    
+    .priority-p1 {
+      background: rgba(184, 92, 56, 0.2);
+      color: var(--red);
+    }
+    
+    .priority-p2 {
+      background: rgba(196, 160, 60, 0.2);
+      color: var(--yellow);
+    }
+    
+    .agent-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+    }
+    
+    /* ========== SECTIONS ========== */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-alt);
+    }
+    
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    
+    .section-body {
+      padding: 20px;
+    }
+    
+    .section-toggle {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 18px;
+      transition: transform 0.2s;
+    }
+    
+    .section-toggle.collapsed { transform: rotate(-90deg); }
+    
+    /* ========== DESCRIPTION ========== */
+    .description {
+      font-size: 15px;
+      line-height: 1.7;
+    }
+    
+    .description p { margin-bottom: 12px; }
+    .description p:last-child { margin-bottom: 0; }
+    
+    .description code {
+      font-family: var(--mono);
+      font-size: 13px;
+      background: var(--surface-alt);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    
+    /* ========== CONTEXT BLOCK ========== */
+    .context-grid {
+      display: grid;
+      gap: 16px;
+    }
+    
+    .context-item {
+      display: flex;
+      gap: 12px;
+    }
+    
+    .context-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--surface-alt);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    
+    .context-content {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .context-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    
+    .context-value {
+      font-size: 14px;
+    }
+    
+    .file-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    
+    .file-link {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--accent);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .file-link:hover { text-decoration: underline; }
+    
+    .checklist {
+      list-style: none;
+    }
+    
+    .checklist li {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 6px 0;
+      font-size: 14px;
+    }
+    
+    .checklist input[type="checkbox"] {
+      margin-top: 3px;
+      accent-color: var(--accent);
+    }
+    
+    .checklist .done {
+      text-decoration: line-through;
+      opacity: 0.6;
+    }
+    
+    /* ========== DEPENDENCIES ========== */
+    .dep-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .dep-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      background: var(--surface-alt);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    
+    .dep-status {
+      font-size: 16px;
+    }
+    
+    .dep-id {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    
+    .dep-title {
+      flex: 1;
+      color: var(--text);
+    }
+    
+    .dep-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    
+    .dep-done {
+      background: rgba(90, 122, 92, 0.2);
+      color: var(--green);
+    }
+    
+    .dep-pending {
+      background: rgba(196, 160, 60, 0.2);
+      color: var(--yellow);
+    }
+    
+    .add-dep-btn {
+      margin-top: 12px;
+    }
+    
+    /* ========== ACTIVITY & DISCUSSION ========== */
+    .activity-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    
+    .activity-item {
+      display: flex;
+      gap: 12px;
+    }
+    
+    .activity-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    
+    .activity-content {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .activity-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    
+    .activity-author {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    
+    .activity-time {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .activity-text {
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    
+    .activity-event {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .activity-event strong {
+      color: var(--text);
+      font-weight: 500;
+    }
+    
+    .comment-input-wrap {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+    }
+    
+    .comment-input {
+      display: flex;
+      gap: 12px;
+    }
+    
+    .comment-input textarea {
+      flex: 1;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--text);
+      resize: vertical;
+      min-height: 80px;
+    }
+    
+    .comment-input textarea::placeholder {
+      color: var(--text-muted);
+    }
+    
+    .comment-input textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    
+    /* ========== SIDEBAR ========== */
+    .sidebar-section {
+      margin-bottom: 24px;
+    }
+    
+    .sidebar-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    
+    .sidebar-value {
+      font-size: 14px;
+    }
+    
+    .sidebar-select {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--text);
+      cursor: pointer;
+    }
+    
+    .assignee-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    
+    .assignee-info {
+      flex: 1;
+    }
+    
+    .assignee-name {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    
+    .assignee-role {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .sub-agent-list {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px dashed var(--border);
+    }
+    
+    .sub-agent-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    
+    .sub-agent-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0;
+      font-size: 13px;
+    }
+    
+    .sub-agent-status {
+      font-size: 12px;
+    }
+    
+    .labels-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    
+    .label-tag {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+    
+    .related-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .related-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .related-item a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .related-item a:hover { text-decoration: underline; }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      padding: 20px 24px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+      text-align: center;
+    }
+    
+    .footer-fact {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .footer-fact strong {
+      color: var(--accent);
+    }
+    
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 1024px) {
+      .main {
+        flex-direction: column;
+      }
+      
+      .sidebar {
+        width: 100%;
+        border-left: none;
+        border-top: 1px solid var(--border);
+      }
+    }
+    
+    @media (max-width: 640px) {
+      .topbar {
+        padding: 12px 16px;
+        flex-wrap: wrap;
+      }
+      
+      .search-trigger {
+        order: 3;
+        max-width: 100%;
+        flex-basis: 100%;
+      }
+      
+      .topbar-nav {
+        display: none;
+      }
+      
+      .content {
+        padding: 16px;
+      }
+      
+      .task-header-top {
+        flex-direction: column;
+        gap: 12px;
+      }
+      
+      .task-actions {
+        width: 100%;
+      }
+      
+      .task-actions .btn {
+        flex: 1;
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- ========== TOP BAR ========== -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="search-trigger">
+        <span>🔍</span>
+        <span class="search-trigger-text">Search or command...</span>
+        <span class="kbd">⌘K</span>
+      </div>
+      
+      <nav class="topbar-nav">
+        <a href="index.html" class="nav-link">Dashboard</a>
+        <a href="inbox.html" class="nav-link">Inbox <span style="opacity:0.6">(3)</span></a>
+        <a href="project.html" class="nav-link active">Projects</a>
+        <a href="agents.html" class="nav-link">Agents</a>
+        <a href="feed.html" class="nav-link">Feed</a>
+      </nav>
+      
+      <div class="topbar-right">
+        <div class="connection-status">
+          <span class="status-dot"></span>
+          <span>Live</span>
+        </div>
+        <div class="avatar">S</div>
+      </div>
+    </header>
+    
+    <!-- ========== MAIN CONTENT ========== -->
+    <main class="main">
+      <div class="content">
+        <!-- Breadcrumb -->
+        <nav class="breadcrumb">
+          <a href="project.html">Pearl</a>
+          <span class="breadcrumb-sep">›</span>
+          <span>ENG-042</span>
+        </nav>
+        
+        <!-- Task Header -->
+        <header class="task-header">
+          <div class="task-header-top">
+            <span class="task-id">ENG-042</span>
+            <h1 class="task-title">Implement retry logic for 500 errors</h1>
+            <div class="task-actions">
+              <button class="btn btn-secondary">✏️ Edit</button>
+              <button class="btn btn-ghost">⋯</button>
+            </div>
+          </div>
+          
+          <div class="task-meta">
+            <span class="status-badge status-in-progress">
+              <span>●</span> In Progress
+            </span>
+            <span class="priority-badge priority-p1">P1</span>
+            <div class="meta-item">
+              <span class="agent-avatar">🔧</span>
+              <strong>Derek</strong>
+            </div>
+            <div class="meta-item">
+              Created <strong>2h ago</strong>
+            </div>
+            <div class="meta-item">
+              Updated <strong>5m ago</strong>
+            </div>
+          </div>
+        </header>
+        
+        <!-- Description -->
+        <section class="section">
+          <header class="section-header">
+            <h2 class="section-title">📄 Description</h2>
+            <button class="section-toggle">▼</button>
+          </header>
+          <div class="section-body">
+            <div class="description">
+              <p>When Anthropic returns HTTP 500, we currently fail immediately and surface the error to the user. This is bad UX and wastes context window since we have to explain the failure.</p>
+              <p>Instead, we should implement exponential backoff with jitter for transient errors:</p>
+              <p>• First retry after 1s + random(0-500ms)<br>
+              • Second retry after 2s + random(0-1000ms)<br>
+              • Third retry after 4s + random(0-2000ms)<br>
+              • After 3 failures, fail over to the next provider in the rotation</p>
+              <p>The retry logic should be generic enough to apply to all providers via the <code>ProviderClient</code> interface.</p>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Context Block -->
+        <section class="section">
+          <header class="section-header">
+            <h2 class="section-title">📋 Context</h2>
+            <button class="section-toggle">▼</button>
+          </header>
+          <div class="section-body">
+            <div class="context-grid">
+              <div class="context-item">
+                <div class="context-icon">📁</div>
+                <div class="context-content">
+                  <div class="context-label">Files</div>
+                  <div class="context-value file-list">
+                    <a href="#" class="file-link">📄 src/providers/anthropic.ts</a>
+                    <a href="#" class="file-link">📄 src/core/retry.ts</a>
+                    <a href="#" class="file-link">📄 src/core/provider-client.ts</a>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="context-item">
+                <div class="context-icon">🧭</div>
+                <div class="context-content">
+                  <div class="context-label">Decisions</div>
+                  <div class="context-value">
+                    <ul class="checklist">
+                      <li><input type="checkbox" checked disabled><span class="done">Use exponential backoff with jitter</span></li>
+                      <li><input type="checkbox" checked disabled><span class="done">Max 3 retries before failover</span></li>
+                      <li><input type="checkbox" disabled><span>Log all retry attempts for debugging</span></li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="context-item">
+                <div class="context-icon">✅</div>
+                <div class="context-content">
+                  <div class="context-label">Acceptance Criteria</div>
+                  <div class="context-value">
+                    <ul class="checklist">
+                      <li><input type="checkbox" disabled><span>500 errors trigger retry before failover</span></li>
+                      <li><input type="checkbox" disabled><span>Retries use exponential backoff + jitter</span></li>
+                      <li><input type="checkbox" disabled><span>After 3 failures, failover to next provider</span></li>
+                      <li><input type="checkbox" disabled><span>Retry logic is reusable across providers</span></li>
+                      <li><input type="checkbox" disabled><span>All tests pass</span></li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Dependencies -->
+        <section class="section">
+          <header class="section-header">
+            <h2 class="section-title">🔗 Dependencies</h2>
+            <button class="btn btn-ghost" style="font-size: 12px;">+ Add</button>
+          </header>
+          <div class="section-body">
+            <div class="dep-list">
+              <div class="dep-item">
+                <span class="dep-status">✅</span>
+                <span class="dep-id">ENG-041</span>
+                <span class="dep-title">Refactor provider interface</span>
+                <span class="dep-badge dep-done">Done</span>
+              </div>
+              <div class="dep-item">
+                <span class="dep-status">⏳</span>
+                <span class="dep-id">ENG-038</span>
+                <span class="dep-title">Add provider health monitoring</span>
+                <span class="dep-badge dep-pending">In Progress</span>
+              </div>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Activity & Discussion -->
+        <section class="section">
+          <header class="section-header">
+            <h2 class="section-title">💬 Activity & Discussion</h2>
+          </header>
+          <div class="section-body">
+            <div class="activity-list">
+              <div class="activity-item">
+                <div class="activity-avatar">🔧</div>
+                <div class="activity-content">
+                  <div class="activity-header">
+                    <span class="activity-author">Derek</span>
+                    <span class="activity-time">2h ago</span>
+                  </div>
+                  <div class="activity-text">
+                    Starting work — session <code>agent:2b:main</code>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="activity-item">
+                <div class="activity-avatar" style="background: var(--surface-alt); color: var(--text-muted);">⚡</div>
+                <div class="activity-content">
+                  <div class="activity-event">
+                    <strong>Derek</strong> changed status from <strong>Queued</strong> to <strong>In Progress</strong>
+                    <span class="activity-time">2h ago</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="activity-item">
+                <div class="activity-avatar">🔧</div>
+                <div class="activity-content">
+                  <div class="activity-header">
+                    <span class="activity-author">Derek</span>
+                    <span class="activity-time">1h ago</span>
+                  </div>
+                  <div class="activity-text">
+                    Spawned sub-agent <code>vivid-tidepool</code> to run schema tests while I work on the retry implementation.
+                  </div>
+                </div>
+              </div>
+              
+              <div class="activity-item">
+                <div class="activity-avatar" style="background: var(--green);">✓</div>
+                <div class="activity-content">
+                  <div class="activity-event">
+                    Sub-agent <strong>vivid-tidepool</strong> completed — schema tests all pass
+                    <span class="activity-time">45m ago</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="activity-item">
+                <div class="activity-avatar">🔧</div>
+                <div class="activity-content">
+                  <div class="activity-header">
+                    <span class="activity-author">Derek</span>
+                    <span class="activity-time">5m ago</span>
+                  </div>
+                  <div class="activity-text">
+                    Core retry logic implemented in <code>src/core/retry.ts</code>. Now integrating with the provider interface. ETA 20 minutes.
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="comment-input-wrap">
+              <div class="comment-input">
+                <div class="activity-avatar">S</div>
+                <textarea placeholder="Add a comment or @mention an agent..."></textarea>
+              </div>
+              <div style="display: flex; justify-content: flex-end; margin-top: 12px;">
+                <button class="btn btn-primary">Send</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+      
+      <!-- ========== SIDEBAR ========== -->
+      <aside class="sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-label">Status</div>
+          <select class="sidebar-select">
+            <option>Queued</option>
+            <option selected>In Progress</option>
+            <option>Blocked</option>
+            <option>Review</option>
+            <option>Done</option>
+          </select>
+        </div>
+        
+        <div class="sidebar-section">
+          <div class="sidebar-label">Assignee</div>
+          <div class="assignee-card">
+            <div class="agent-avatar" style="width: 36px; height: 36px; font-size: 18px;">🔧</div>
+            <div class="assignee-info">
+              <div class="assignee-name">Derek</div>
+              <div class="assignee-role">Engineering Lead</div>
+            </div>
+          </div>
+          
+          <div class="sub-agent-list">
+            <div class="sub-agent-label">Sub-agents (2)</div>
+            <div class="sub-agent-item">
+              <span class="sub-agent-status">✅</span>
+              <span>vivid-tidepool</span>
+              <span style="color: var(--text-muted); font-size: 11px; margin-left: auto;">done</span>
+            </div>
+            <div class="sub-agent-item">
+              <span class="sub-agent-status">⏳</span>
+              <span>warm-mist</span>
+              <span style="color: var(--text-muted); font-size: 11px; margin-left: auto;">running</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="sidebar-section">
+          <div class="sidebar-label">Priority</div>
+          <select class="sidebar-select">
+            <option>P0 - Critical</option>
+            <option selected>P1 - High</option>
+            <option>P2 - Medium</option>
+            <option>P3 - Low</option>
+          </select>
+        </div>
+        
+        <div class="sidebar-section">
+          <div class="sidebar-label">Labels</div>
+          <div class="labels-list">
+            <span class="label-tag">backend</span>
+            <span class="label-tag">reliability</span>
+            <span class="label-tag">provider</span>
+            <button class="btn btn-ghost" style="padding: 4px 8px; font-size: 12px;">+ Add</button>
+          </div>
+        </div>
+        
+        <div class="sidebar-section">
+          <div class="sidebar-label">Project</div>
+          <div class="sidebar-value" style="display: flex; align-items: center; gap: 8px;">
+            <span>🦪</span>
+            <a href="project.html" style="color: var(--accent); text-decoration: none;">Pearl</a>
+          </div>
+        </div>
+        
+        <div class="sidebar-section">
+          <div class="sidebar-label">Related</div>
+          <div class="related-list">
+            <div class="related-item">
+              <span>🔗</span>
+              <span>Blocks:</span>
+              <a href="#">ENG-045</a>
+            </div>
+            <div class="related-item">
+              <span>🔗</span>
+              <span>Related to:</span>
+              <a href="#">ENG-039</a>
+            </div>
+            <button class="btn btn-ghost" style="padding: 4px 8px; font-size: 12px; margin-top: 4px;">+ Add relation</button>
+          </div>
+        </div>
+        
+        <div class="sidebar-section" style="margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);">
+          <div class="sidebar-label">Quick Actions</div>
+          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
+            <button class="btn btn-secondary" style="justify-content: center;">📋 Copy context for sub-agent</button>
+            <button class="btn btn-secondary" style="justify-content: center;">🔀 Move to another project</button>
+            <button class="btn btn-ghost" style="justify-content: center; color: var(--red);">🗑️ Delete task</button>
+          </div>
+        </div>
+      </aside>
+    </main>
+    
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+      <div class="footer-fact">
+        <span>🦦</span>
+        <span><strong>Otter fact:</strong> Sea otters have the densest fur of any mammal — about 1 million hairs per square inch.</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
