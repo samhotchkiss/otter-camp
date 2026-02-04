@@ -21,8 +21,9 @@ export type ShortcutDefinition = Omit<Shortcut, "action">;
 // All available shortcuts for the help modal
 export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   // General
+  { key: "/", description: "Open command palette", category: "General", skipInInput: true },
   { key: "k", modifiers: { cmd: true }, description: "Open command palette", category: "General" },
-  { key: "/", modifiers: { cmd: true }, description: "Show keyboard shortcuts", category: "General" },
+  { key: "?", modifiers: { shift: true }, description: "Show keyboard shortcuts", category: "General", skipInInput: true },
   { key: "Escape", description: "Close modals/panels", category: "General" },
   
   // Tasks

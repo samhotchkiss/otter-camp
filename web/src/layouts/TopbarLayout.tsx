@@ -59,10 +59,10 @@ export default function TopbarLayout({ children }: TopbarLayoutProps) {
       action: openCommandPalette,
     },
     {
-      key: "/",
-      modifiers: { cmd: true },
+      key: "?",
       description: "Show keyboard shortcuts",
       category: "General",
+      skipInInput: true,
       action: openShortcutsHelp,
     },
     {
