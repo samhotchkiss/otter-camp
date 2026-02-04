@@ -12,6 +12,7 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const FeedPage = lazy(() => import("./pages/FeedPage"));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
+const InboxPage = lazy(() => import("./pages/InboxPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
 /**
@@ -69,6 +70,10 @@ export const router = createBrowserRouter([
       {
         path: "notifications",
         element: <NotificationsPage />,
+      },
+      {
+        path: "inbox",
+        element: <InboxPage />,
       },
     ],
   },
