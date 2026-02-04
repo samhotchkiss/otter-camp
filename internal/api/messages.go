@@ -1,0 +1,918 @@
+package api
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+)
+
+const (
+	defaultThreadPageSize = 20
+	maxThreadPageSize     = 100
+)
+
+// Message represents a task or DM message payload.
+type Message struct {
+	ID              string               `json:"id"`
+	TaskID          *string              `json:"taskId,omitempty"`
+	ThreadID        *string              `json:"threadId,omitempty"`
+	SenderID        *string              `json:"senderId,omitempty"`
+	SenderType      *string              `json:"senderType,omitempty"`
+	SenderName      *string              `json:"senderName,omitempty"`
+	SenderAvatarURL *string              `json:"senderAvatarUrl,omitempty"`
+	Content         string               `json:"content"`
+	Attachments     []AttachmentMetadata `json:"attachments,omitempty"`
+	CreatedAt       time.Time            `json:"createdAt"`
+	UpdatedAt       time.Time            `json:"updatedAt"`
+}
+
+type messageRow struct {
+	ID              string
+	OrgID           string
+	TaskID          sql.NullString
+	ThreadID        sql.NullString
+	AuthorID        sql.NullString
+	SenderID        sql.NullString
+	SenderType      sql.NullString
+	SenderName      sql.NullString
+	SenderAvatarURL sql.NullString
+	Content         string
+	Attachments     []byte
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type MessageHandler struct{}
+
+type messageListResponse struct {
+	Messages   []Message `json:"messages"`
+	HasMore    bool      `json:"hasMore,omitempty"`
+	NextCursor string    `json:"nextCursor,omitempty"`
+	TotalCount int       `json:"totalCount,omitempty"`
+}
+
+type createMessageRequest struct {
+	OrgID           *string
+	TaskID          *string
+	ThreadID        *string
+	AuthorID        *string
+	SenderID        *string
+	SenderType      *string
+	SenderName      *string
+	SenderAvatarURL *string
+	Content         string
+	Attachments     []AttachmentMetadata
+}
+
+type updateMessageRequest struct {
+	Content     *string
+	Attachments *[]AttachmentMetadata
+}
+
+type cursorToken struct {
+	CreatedAt time.Time
+	ID        string
+}
+
+// CreateMessage handles POST /api/messages.
+func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	req, err := decodeCreateMessageRequest(r)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
+	if req.TaskID == nil && req.ThreadID == nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing task_id or thread_id"})
+		return
+	}
+	if req.TaskID != nil && req.ThreadID != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "task_id and thread_id are mutually exclusive"})
+		return
+	}
+
+	db, err := getTasksDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	orgID, err := resolveMessageOrgID(r.Context(), db, req)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
+	if strings.TrimSpace(req.Content) == "" && len(req.Attachments) == 0 {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "content or attachments required"})
+		return
+	}
+
+	if req.AuthorID != nil && !uuidRegex.MatchString(*req.AuthorID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid author_id"})
+		return
+	}
+
+	if req.TaskID != nil && !uuidRegex.MatchString(*req.TaskID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid task_id"})
+		return
+	}
+
+	if req.ThreadID != nil && strings.TrimSpace(*req.ThreadID) == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid thread_id"})
+		return
+	}
+
+	attachmentsJSON, err := json.Marshal(req.Attachments)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid attachments"})
+		return
+	}
+
+	var messageID string
+	err = db.QueryRowContext(r.Context(), `
+		INSERT INTO comments (
+			org_id,
+			task_id,
+			author_id,
+			thread_id,
+			sender_id,
+			sender_type,
+			sender_name,
+			sender_avatar_url,
+			content,
+			attachments
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		RETURNING id
+	`,
+		orgID,
+		nullableString(req.TaskID),
+		nullableString(req.AuthorID),
+		nullableString(req.ThreadID),
+		nullableString(req.SenderID),
+		nullableString(req.SenderType),
+		nullableString(req.SenderName),
+		nullableString(req.SenderAvatarURL),
+		req.Content,
+		attachmentsJSON,
+	).Scan(&messageID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create message"})
+		return
+	}
+
+	if err := linkAttachmentsToMessage(db, messageID, req.Attachments); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to link attachments"})
+		return
+	}
+
+	message, err := loadMessageByID(r.Context(), db, messageID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load message"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]Message{"message": message})
+}
+
+// GetMessage handles GET /api/messages/{id}.
+func (h *MessageHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	messageID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if messageID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing message id"})
+		return
+	}
+	if !uuidRegex.MatchString(messageID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid message id"})
+		return
+	}
+
+	db, err := getTasksDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	message, err := loadMessageByID(r.Context(), db, messageID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
+			return
+		}
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load message"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]Message{"message": message})
+}
+
+// UpdateMessage handles PUT /api/messages/{id}.
+func (h *MessageHandler) UpdateMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	messageID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if messageID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing message id"})
+		return
+	}
+	if !uuidRegex.MatchString(messageID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid message id"})
+		return
+	}
+
+	updateReq, err := decodeUpdateMessageRequest(r)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	if updateReq.Content == nil && updateReq.Attachments == nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "no fields to update"})
+		return
+	}
+
+	db, err := getTasksDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	existing, err := loadMessageRowByID(r.Context(), db, messageID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
+			return
+		}
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load message"})
+		return
+	}
+
+	content := existing.Content
+	if updateReq.Content != nil {
+		content = *updateReq.Content
+	}
+
+	attachments := existing.Attachments
+	if updateReq.Attachments != nil {
+		attachments, err = json.Marshal(*updateReq.Attachments)
+		if err != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid attachments"})
+			return
+		}
+	}
+
+	_, err = db.ExecContext(r.Context(), `
+		UPDATE comments
+		SET content = $1, attachments = $2
+		WHERE id = $3
+	`, content, attachments, messageID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update message"})
+		return
+	}
+
+	if updateReq.Attachments != nil {
+		if err := linkAttachmentsToMessage(db, messageID, *updateReq.Attachments); err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to link attachments"})
+			return
+		}
+	}
+
+	message, err := loadMessageByID(r.Context(), db, messageID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load message"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]Message{"message": message})
+}
+
+// DeleteMessage handles DELETE /api/messages/{id}.
+func (h *MessageHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	messageID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if messageID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing message id"})
+		return
+	}
+	if !uuidRegex.MatchString(messageID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid message id"})
+		return
+	}
+
+	db, err := getTasksDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	result, err := db.ExecContext(r.Context(), `DELETE FROM comments WHERE id = $1`, messageID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete message"})
+		return
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete message"})
+		return
+	}
+	if rows == 0 {
+		sendJSON(w, http.StatusNotFound, errorResponse{Error: "message not found"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// ListMessages handles GET /api/messages?task_id=<uuid> or ?thread_id=<id>.
+func (h *MessageHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	taskID := firstNonEmpty(
+		strings.TrimSpace(r.URL.Query().Get("task_id")),
+		strings.TrimSpace(r.URL.Query().Get("taskId")),
+	)
+	threadID := firstNonEmpty(
+		strings.TrimSpace(r.URL.Query().Get("thread_id")),
+		strings.TrimSpace(r.URL.Query().Get("threadId")),
+	)
+
+	if taskID == "" && threadID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing task_id or thread_id"})
+		return
+	}
+	if taskID != "" && threadID != "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "task_id and thread_id are mutually exclusive"})
+		return
+	}
+
+	if taskID != "" {
+		h.listTaskMessages(w, r, taskID)
+		return
+	}
+	h.listThreadMessages(w, r, threadID)
+}
+
+// ListThreadMessages handles GET /api/threads/{id}/messages.
+func (h *MessageHandler) ListThreadMessages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	threadID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if threadID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing thread id"})
+		return
+	}
+
+	threadType := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("type")))
+	if threadType == "task" || (threadType == "" && uuidRegex.MatchString(threadID)) {
+		h.listTaskMessages(w, r, threadID)
+		return
+	}
+
+	h.listThreadMessages(w, r, threadID)
+}
+
+func (h *MessageHandler) listTaskMessages(w http.ResponseWriter, r *http.Request, taskID string) {
+	if !uuidRegex.MatchString(taskID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid task_id"})
+		return
+	}
+
+	db, err := getTasksDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	rows, err := db.QueryContext(r.Context(), `
+		SELECT
+			c.id,
+			c.org_id,
+			c.task_id,
+			c.thread_id,
+			c.author_id,
+			COALESCE(c.sender_id, c.author_id::text),
+			COALESCE(c.sender_type, CASE WHEN c.author_id IS NOT NULL THEN 'agent' ELSE NULL END),
+			COALESCE(c.sender_name, a.display_name),
+			COALESCE(c.sender_avatar_url, a.avatar_url),
+			c.content,
+			c.attachments,
+			c.created_at,
+			c.updated_at
+		FROM comments c
+		LEFT JOIN agents a ON c.author_id = a.id
+		WHERE c.task_id = $1
+		ORDER BY c.created_at ASC
+	`, taskID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list messages"})
+		return
+	}
+	defer rows.Close()
+
+	messages := make([]Message, 0)
+	for rows.Next() {
+		row, err := scanMessageRow(rows)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read messages"})
+			return
+		}
+		msg, err := buildMessageFromRow(row)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read messages"})
+			return
+		}
+		messages = append(messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read messages"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, messageListResponse{Messages: messages})
+}
+
+func (h *MessageHandler) listThreadMessages(w http.ResponseWriter, r *http.Request, threadID string) {
+	db, err := getTasksDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	limit, err := parseLimit(r.URL.Query().Get("limit"), defaultThreadPageSize, maxThreadPageSize)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid limit"})
+		return
+	}
+
+	cursor, err := parseCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid cursor"})
+		return
+	}
+
+	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+	if orgID != "" && !uuidRegex.MatchString(orgID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid org_id"})
+		return
+	}
+
+	totalCount, err := countThreadMessages(r.Context(), db, threadID, orgID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to count messages"})
+		return
+	}
+
+	query, args := buildThreadMessagesQuery(threadID, orgID, cursor, limit+1)
+	rows, err := db.QueryContext(r.Context(), query, args...)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list messages"})
+		return
+	}
+	defer rows.Close()
+
+	messages := make([]Message, 0)
+	for rows.Next() {
+		row, err := scanMessageRow(rows)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read messages"})
+			return
+		}
+		msg, err := buildMessageFromRow(row)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read messages"})
+			return
+		}
+		messages = append(messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read messages"})
+		return
+	}
+
+	hasMore := false
+	if len(messages) > limit {
+		hasMore = true
+		messages = messages[:limit]
+	}
+
+	// currently messages are newest-first; reverse to ascending
+	reverseMessages(messages)
+
+	nextCursor := ""
+	if hasMore && len(messages) > 0 {
+		oldest := messages[0]
+		nextCursor = encodeCursor(oldest.CreatedAt, oldest.ID)
+	}
+
+	sendJSON(w, http.StatusOK, messageListResponse{
+		Messages:   messages,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
+		TotalCount: totalCount,
+	})
+}
+
+func decodeCreateMessageRequest(r *http.Request) (createMessageRequest, error) {
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		return createMessageRequest{}, errors.New("invalid request body")
+	}
+
+	taskID, _, err := parseOptionalStringFieldAny(raw, "task_id", "taskId")
+	if err != nil {
+		return createMessageRequest{}, errors.New("invalid task_id")
+	}
+
+	threadID, _, err := parseOptionalStringFieldAny(raw, "thread_id", "threadId")
+	if err != nil {
+		return createMessageRequest{}, errors.New("invalid thread_id")
+	}
+
+	orgID, _, err := parseOptionalStringFieldAny(raw, "org_id", "orgId")
+	if err != nil {
+		return createMessageRequest{}, errors.New("invalid org_id")
+	}
+
+	authorID, _, err := parseOptionalStringFieldAny(raw, "author_id", "authorId")
+	if err != nil {
+		return createMessageRequest{}, errors.New("invalid author_id")
+	}
+
+	senderID, _, err := parseOptionalStringFieldAny(raw, "sender_id", "senderId")
+	if err != nil {
+		return createMessageRequest{}, errors.New("invalid sender_id")
+	}
+
+	senderType, _, err := parseOptionalStringFieldAny(raw, "sender_type", "senderType")
+	if err != nil {
+		return createMessageRequest{}, errors.New("invalid sender_type")
+	}
+
+	senderName, _, err := parseOptionalStringFieldAny(raw, "sender_name", "senderName")
+	if err != nil {
+		return createMessageRequest{}, errors.New("invalid sender_name")
+	}
+
+	senderAvatarURL, _, err := parseOptionalStringFieldAny(raw, "sender_avatar_url", "senderAvatarUrl")
+	if err != nil {
+		return createMessageRequest{}, errors.New("invalid sender_avatar_url")
+	}
+
+	contentRaw, ok := raw["content"]
+	content := ""
+	if ok && len(contentRaw) > 0 && string(contentRaw) != "null" {
+		if err := json.Unmarshal(contentRaw, &content); err != nil {
+			return createMessageRequest{}, errors.New("invalid content")
+		}
+	}
+
+	attachments := []AttachmentMetadata{}
+	if attachmentsRaw, ok := raw["attachments"]; ok && len(attachmentsRaw) > 0 && string(attachmentsRaw) != "null" {
+		if err := json.Unmarshal(attachmentsRaw, &attachments); err != nil {
+			return createMessageRequest{}, errors.New("invalid attachments")
+		}
+	}
+
+	return createMessageRequest{
+		OrgID:           trimPtr(orgID),
+		TaskID:          trimPtr(taskID),
+		ThreadID:        trimPtr(threadID),
+		AuthorID:        trimPtr(authorID),
+		SenderID:        trimPtr(senderID),
+		SenderType:      trimPtr(senderType),
+		SenderName:      trimPtr(senderName),
+		SenderAvatarURL: trimPtr(senderAvatarURL),
+		Content:         strings.TrimSpace(content),
+		Attachments:     attachments,
+	}, nil
+}
+
+func decodeUpdateMessageRequest(r *http.Request) (updateMessageRequest, error) {
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		return updateMessageRequest{}, errors.New("invalid request body")
+	}
+
+	var content *string
+	if rawContent, ok := raw["content"]; ok {
+		if len(rawContent) == 0 || string(rawContent) == "null" {
+			empty := ""
+			content = &empty
+		} else {
+			var parsed string
+			if err := json.Unmarshal(rawContent, &parsed); err != nil {
+				return updateMessageRequest{}, errors.New("invalid content")
+			}
+			content = &parsed
+		}
+	}
+
+	var attachments *[]AttachmentMetadata
+	if rawAttachments, ok := raw["attachments"]; ok {
+		if len(rawAttachments) == 0 || string(rawAttachments) == "null" {
+			empty := []AttachmentMetadata{}
+			attachments = &empty
+		} else {
+			var parsed []AttachmentMetadata
+			if err := json.Unmarshal(rawAttachments, &parsed); err != nil {
+				return updateMessageRequest{}, errors.New("invalid attachments")
+			}
+			attachments = &parsed
+		}
+	}
+
+	return updateMessageRequest{
+		Content:     content,
+		Attachments: attachments,
+	}, nil
+}
+
+func resolveMessageOrgID(ctx context.Context, db *sql.DB, req createMessageRequest) (string, error) {
+	if req.TaskID != nil {
+		var orgID string
+		err := db.QueryRowContext(ctx, `SELECT org_id FROM tasks WHERE id = $1`, *req.TaskID).Scan(&orgID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", errors.New("task not found")
+			}
+			return "", errors.New("failed to load task")
+		}
+		return orgID, nil
+	}
+
+	if req.OrgID != nil && strings.TrimSpace(*req.OrgID) != "" {
+		if !uuidRegex.MatchString(*req.OrgID) {
+			return "", errors.New("invalid org_id")
+		}
+		return *req.OrgID, nil
+	}
+
+	if req.ThreadID != nil {
+		if agentID := parseDMThreadAgentID(*req.ThreadID); agentID != "" {
+			var orgID string
+			err := db.QueryRowContext(ctx, `SELECT org_id FROM agents WHERE id = $1`, agentID).Scan(&orgID)
+			if err == nil {
+				return orgID, nil
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return "", errors.New("failed to load agent")
+			}
+		}
+	}
+
+	return "", errors.New("missing org_id")
+}
+
+func parseDMThreadAgentID(threadID string) string {
+	threadID = strings.TrimSpace(threadID)
+	if !strings.HasPrefix(threadID, "dm_") {
+		return ""
+	}
+	agentID := strings.TrimPrefix(threadID, "dm_")
+	if !uuidRegex.MatchString(agentID) {
+		return ""
+	}
+	return agentID
+}
+
+func loadMessageByID(ctx context.Context, db *sql.DB, messageID string) (Message, error) {
+	row, err := loadMessageRowByID(ctx, db, messageID)
+	if err != nil {
+		return Message{}, err
+	}
+	return buildMessageFromRow(row)
+}
+
+func loadMessageRowByID(ctx context.Context, db *sql.DB, messageID string) (messageRow, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT
+			c.id,
+			c.org_id,
+			c.task_id,
+			c.thread_id,
+			c.author_id,
+			COALESCE(c.sender_id, c.author_id::text),
+			COALESCE(c.sender_type, CASE WHEN c.author_id IS NOT NULL THEN 'agent' ELSE NULL END),
+			COALESCE(c.sender_name, a.display_name),
+			COALESCE(c.sender_avatar_url, a.avatar_url),
+			c.content,
+			c.attachments,
+			c.created_at,
+			c.updated_at
+		FROM comments c
+		LEFT JOIN agents a ON c.author_id = a.id
+		WHERE c.id = $1
+	`, messageID)
+	return scanMessageRow(row)
+}
+
+func scanMessageRow(scanner interface{ Scan(...any) error }) (messageRow, error) {
+	var row messageRow
+	err := scanner.Scan(
+		&row.ID,
+		&row.OrgID,
+		&row.TaskID,
+		&row.ThreadID,
+		&row.AuthorID,
+		&row.SenderID,
+		&row.SenderType,
+		&row.SenderName,
+		&row.SenderAvatarURL,
+		&row.Content,
+		&row.Attachments,
+		&row.CreatedAt,
+		&row.UpdatedAt,
+	)
+	return row, err
+}
+
+func buildMessageFromRow(row messageRow) (Message, error) {
+	msg := Message{
+		ID:        row.ID,
+		Content:   row.Content,
+		CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt,
+	}
+
+	if row.TaskID.Valid {
+		msg.TaskID = &row.TaskID.String
+	}
+	if row.ThreadID.Valid {
+		msg.ThreadID = &row.ThreadID.String
+	}
+	if row.SenderID.Valid {
+		msg.SenderID = &row.SenderID.String
+	}
+	if row.SenderType.Valid {
+		msg.SenderType = &row.SenderType.String
+	}
+	if row.SenderName.Valid {
+		msg.SenderName = &row.SenderName.String
+	}
+	if row.SenderAvatarURL.Valid {
+		msg.SenderAvatarURL = &row.SenderAvatarURL.String
+	}
+
+	if len(row.Attachments) > 0 {
+		var attachments []AttachmentMetadata
+		if err := json.Unmarshal(row.Attachments, &attachments); err != nil {
+			return msg, err
+		}
+		if len(attachments) > 0 {
+			msg.Attachments = attachments
+		}
+	}
+
+	return msg, nil
+}
+
+func linkAttachmentsToMessage(db *sql.DB, messageID string, attachments []AttachmentMetadata) error {
+	for _, attachment := range attachments {
+		if strings.TrimSpace(attachment.ID) == "" {
+			continue
+		}
+		if _, err := db.Exec(`UPDATE attachments SET comment_id = $1 WHERE id = $2`, messageID, attachment.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func parseOptionalStringFieldAny(raw map[string]json.RawMessage, keys ...string) (*string, bool, error) {
+	for _, key := range keys {
+		if _, ok := raw[key]; ok {
+			return parseOptionalStringField(raw, key)
+		}
+	}
+	return nil, false, nil
+}
+
+func trimPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func parseLimit(value string, defaultValue, maxValue int) (int, error) {
+	if strings.TrimSpace(value) == "" {
+		return defaultValue, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 || parsed > maxValue {
+		return 0, fmt.Errorf("invalid limit")
+	}
+	return parsed, nil
+}
+
+func parseCursor(value string) (*cursorToken, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parts := strings.SplitN(value, "|", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid cursor")
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return nil, err
+	}
+	return &cursorToken{CreatedAt: createdAt, ID: parts[1]}, nil
+}
+
+func encodeCursor(createdAt time.Time, id string) string {
+	return fmt.Sprintf("%s|%s", createdAt.UTC().Format(time.RFC3339Nano), id)
+}
+
+func countThreadMessages(ctx context.Context, db *sql.DB, threadID, orgID string) (int, error) {
+	query := "SELECT COUNT(*) FROM comments WHERE thread_id = $1"
+	args := []interface{}{threadID}
+	if orgID != "" {
+		query += " AND org_id = $2"
+		args = append(args, orgID)
+	}
+	var total int
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func buildThreadMessagesQuery(threadID, orgID string, cursor *cursorToken, limit int) (string, []interface{}) {
+	conditions := []string{"c.thread_id = $1"}
+	args := []interface{}{threadID}
+	if orgID != "" {
+		args = append(args, orgID)
+		conditions = append(conditions, fmt.Sprintf("c.org_id = $%d", len(args)))
+	}
+	if cursor != nil {
+		args = append(args, cursor.CreatedAt, cursor.ID)
+		conditions = append(conditions, fmt.Sprintf("(c.created_at, c.id) < ($%d, $%d)", len(args)-1, len(args)))
+	}
+
+	query := `
+		SELECT
+			c.id,
+			c.org_id,
+			c.task_id,
+			c.thread_id,
+			c.author_id,
+			COALESCE(c.sender_id, c.author_id::text),
+			COALESCE(c.sender_type, CASE WHEN c.author_id IS NOT NULL THEN 'agent' ELSE NULL END),
+			COALESCE(c.sender_name, a.display_name),
+			COALESCE(c.sender_avatar_url, a.avatar_url),
+			c.content,
+			c.attachments,
+			c.created_at,
+			c.updated_at
+		FROM comments c
+		LEFT JOIN agents a ON c.author_id = a.id
+		WHERE ` + strings.Join(conditions, " AND ") + `
+		ORDER BY c.created_at DESC, c.id DESC
+		LIMIT ` + strconv.Itoa(limit)
+
+	return query, args
+}
+
+func reverseMessages(messages []Message) {
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+}

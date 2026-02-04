@@ -64,6 +64,14 @@ func NewRouter() http.Handler {
 	r.Post("/api/messages/attachments", attachmentsHandler.Upload)
 	r.Get("/api/attachments/{id}", attachmentsHandler.GetAttachment)
 
+	messageHandler := &MessageHandler{}
+	r.Get("/api/messages", messageHandler.ListMessages)
+	r.Post("/api/messages", messageHandler.CreateMessage)
+	r.Get("/api/messages/{id}", messageHandler.GetMessage)
+	r.Put("/api/messages/{id}", messageHandler.UpdateMessage)
+	r.Delete("/api/messages/{id}", messageHandler.DeleteMessage)
+	r.Get("/api/threads/{id}/messages", messageHandler.ListThreadMessages)
+
 	// Export/Import endpoints
 	r.Get("/api/export", HandleExport)
 	r.Post("/api/import", HandleImport)
