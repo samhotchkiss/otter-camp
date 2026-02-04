@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, Suspense } from "react";
+import { useState, useMemo, Suspense } from "react";
 import CommandPalette from "../components/CommandPalette";
 import KanbanBoard from "../components/KanbanBoard";
 import ActivityPanel from "../components/ActivityPanel";

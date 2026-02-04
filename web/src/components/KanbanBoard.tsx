@@ -114,9 +114,10 @@ async function updateTaskStatus(taskId: string, newStatus: TaskStatus): Promise<
 interface TaskCardProps {
   task: Task;
   isDragging?: boolean;
+  isSelected?: boolean;
 }
 
-const TaskCard = memo(function TaskCard({ task, isDragging }: TaskCardProps) {
+const TaskCard = memo(function TaskCard({ task, isDragging, isSelected }: TaskCardProps) {
   const {
     attributes,
     listeners,
@@ -134,20 +135,24 @@ const TaskCard = memo(function TaskCard({ task, isDragging }: TaskCardProps) {
   const isBeingDragged = isDragging || isSortableDragging;
 
   const className = useMemo(() => `
-    group cursor-grab rounded-lg border border-slate-200 bg-white p-4 shadow-sm
+    group cursor-grab rounded-lg border bg-white p-4 shadow-sm
     transition-all duration-200
     hover:border-sky-300 hover:shadow-md
     active:cursor-grabbing
-    dark:border-slate-700 dark:bg-slate-800
-    ${isBeingDragged ? "opacity-50 shadow-lg ring-2 ring-sky-400" : ""}
-  `.trim(), [isBeingDragged]);
+    dark:bg-slate-800
+    ${isBeingDragged ? "opacity-50 shadow-lg ring-2 ring-sky-400 border-slate-200 dark:border-slate-700" : ""}
+    ${isSelected && !isBeingDragged ? "border-sky-500 ring-2 ring-sky-500/30 dark:border-sky-400" : "border-slate-200 dark:border-slate-700"}
+  `.trim(), [isBeingDragged, isSelected]);
 
   return (
-    <div
+    <article
       ref={setNodeRef}
       style={style}
       {...attributes}
       {...listeners}
+      role="listitem"
+      aria-label={`Task: ${task.title}${task.priority ? `, Priority: ${task.priority}` : ""}`}
+      aria-grabbed={isBeingDragged}
       className={className}
     >
       <h4 className="font-medium text-slate-900 dark:text-white">{task.title}</h4>
@@ -159,11 +164,12 @@ const TaskCard = memo(function TaskCard({ task, isDragging }: TaskCardProps) {
       {task.priority && (
         <span
           className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${PRIORITY_COLORS[task.priority]}`}
+          aria-label={`Priority: ${task.priority}`}
         >
           {task.priority}
         </span>
       )}
-    </div>
+    </article>
   );
 });
 
@@ -193,9 +199,10 @@ interface KanbanColumnProps {
   column: Column;
   tasks: Task[];
   isOver?: boolean;
+  selectedTaskId?: string | null;
 }
 
-const KanbanColumn = memo(function KanbanColumn({ column, tasks, isOver }: KanbanColumnProps) {
+const KanbanColumn = memo(function KanbanColumn({ column, tasks, isOver, selectedTaskId }: KanbanColumnProps) {
   const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
 
   const containerClassName = useMemo(() => `
@@ -214,30 +221,42 @@ const KanbanColumn = memo(function KanbanColumn({ column, tasks, isOver }: Kanba
   `.trim(), [isOver]);
 
   return (
-    <div className={containerClassName}>
+    <section
+      aria-labelledby={`column-${column.id}-heading`}
+      aria-describedby={`column-${column.id}-count`}
+      className={containerClassName}
+    >
       <div className="mb-4 flex items-center gap-2">
-        <span className="text-xl">{column.emoji}</span>
-        <h3 className="font-semibold text-slate-800 dark:text-slate-100">
+        <span className="text-xl" aria-hidden="true">{column.emoji}</span>
+        <h3 id={`column-${column.id}-heading`} className="font-semibold text-slate-800 dark:text-slate-100">
           {column.title}
         </h3>
-        <span className="ml-auto rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+        <span
+          id={`column-${column.id}-count`}
+          className="ml-auto rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+          aria-label={`${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}`}
+        >
           {tasks.length}
         </span>
       </div>
 
       <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
-        <div className="flex flex-1 flex-col gap-3">
+        <div role="list" aria-label={`${column.title} tasks`} className="flex flex-1 flex-col gap-3">
           {tasks.map((task) => (
-            <TaskCard key={task.id} task={task} />
+            <TaskCard
+              key={task.id}
+              task={task}
+              isSelected={task.id === selectedTaskId}
+            />
           ))}
           {tasks.length === 0 && (
-            <div className={emptyClassName}>
+            <div className={emptyClassName} role="status">
               {isOver ? "Drop here!" : "No tasks yet"}
             </div>
           )}
         </div>
       </SortableContext>
-    </div>
+    </section>
   );
 });
 
@@ -404,13 +423,13 @@ function KanbanBoardComponent() {
   }, [findColumnByTaskId, taskMap, announce]);
 
   return (
-    <div className="w-full overflow-x-auto p-4">
+    <div className="w-full overflow-x-auto p-4" role="region" aria-labelledby="kanban-heading">
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-slate-900 dark:text-white">
-          🦦 Camp Tasks
-        </h2>
+        <h1 id="kanban-heading" className="text-2xl font-bold text-slate-900 dark:text-white">
+          <span aria-hidden="true">🦦 </span>Camp Tasks
+        </h1>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Drag and drop tasks between columns to update their status
+          Drag and drop tasks between columns to update their status. Use keyboard to navigate.
         </p>
       </div>
 

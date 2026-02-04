@@ -64,6 +64,11 @@ func NewRouter() http.Handler {
 	r.Post("/api/messages/attachments", attachmentsHandler.Upload)
 	r.Get("/api/attachments/{id}", attachmentsHandler.GetAttachment)
 
+	// Export/Import endpoints
+	r.Get("/api/export", HandleExport)
+	r.Post("/api/import", HandleImport)
+	r.Post("/api/import/validate", HandleImportValidate)
+
 	return r
 }
 
