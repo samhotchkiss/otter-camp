@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp</title>
+  <style>
+    /* ========== DRAPLIN-INSPIRED DESIGN SYSTEM ========== */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
+    
+    :root {
+      /* Core palette - LIMITED */
+      --cream: #FAF8F5;
+      --brown: #5C4A3D;
+      --brown-light: #8B7355;
+      --sand: #E8E2D9;
+      
+      /* Accent - ONE pop color */
+      --orange: #C87941;
+      --orange-light: #F5DFD0;
+      
+      /* Semantic */
+      --success: #5A7A5C;
+      --alert: #B85C38;
+      
+      /* Type scale - BOLD */
+      --font: 'Inter', -apple-system, sans-serif;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--cream);
+      color: var(--brown);
+      min-height: 100vh;
+    }
+    
+    /* ========== LAYOUT - SIMPLE ========== */
+    .app {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 48px 24px;
+    }
+    
+    /* ========== HEADER ========== */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 48px;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: var(--brown);
+    }
+    
+    .logo-icon {
+      font-size: 40px;
+    }
+    
+    .logo-text {
+      font-size: 28px;
+      font-weight: 900;
+      letter-spacing: -1px;
+    }
+    
+    .nav {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .nav-btn {
+      background: none;
+      border: 2px solid var(--sand);
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--brown-light);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .nav-btn:hover {
+      border-color: var(--brown);
+      color: var(--brown);
+    }
+    
+    .nav-btn.active {
+      background: var(--brown);
+      border-color: var(--brown);
+      color: var(--cream);
+    }
+    
+    /* ========== GREETING ========== */
+    .greeting {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+    
+    .greeting-otter {
+      font-size: 80px;
+      margin-bottom: 16px;
+      display: block;
+    }
+    
+    .greeting-text {
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+    
+    .greeting-sub {
+      font-size: 18px;
+      color: var(--brown-light);
+    }
+    
+    /* ========== SECTION ========== */
+    .section {
+      margin-bottom: 48px;
+    }
+    
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    
+    .section-title {
+      font-size: 14px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--brown-light);
+    }
+    
+    .section-count {
+      background: var(--alert);
+      color: var(--cream);
+      font-size: 12px;
+      font-weight: 800;
+      padding: 4px 10px;
+      border-radius: 12px;
+    }
+    
+    .section-count.success {
+      background: var(--success);
+    }
+    
+    /* ========== NEEDS YOU - BIG AND BOLD ========== */
+    .needs-you-card {
+      background: var(--orange-light);
+      border: 3px solid var(--orange);
+      border-radius: 16px;
+      padding: 28px;
+      margin-bottom: 16px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .needs-you-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(200, 121, 65, 0.2);
+    }
+    
+    .needs-you-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+    
+    .needs-you-icon {
+      font-size: 32px;
+    }
+    
+    .needs-you-project {
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+    
+    .needs-you-action {
+      font-size: 18px;
+      color: var(--brown);
+      line-height: 1.5;
+    }
+    
+    .needs-you-action strong {
+      font-weight: 700;
+    }
+    
+    .needs-you-buttons {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+    
+    .btn {
+      padding: 14px 28px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--brown);
+      color: var(--cream);
+    }
+    
+    .btn-primary:hover {
+      background: #4a3c31;
+      transform: translateY(-1px);
+    }
+    
+    .btn-secondary {
+      background: var(--cream);
+      color: var(--brown);
+      border: 2px solid var(--sand);
+    }
+    
+    .btn-secondary:hover {
+      border-color: var(--brown);
+    }
+    
+    /* ========== NOTHING NEEDS YOU - HAPPY STATE ========== */
+    .all-clear {
+      background: rgba(90, 122, 92, 0.1);
+      border: 2px dashed var(--success);
+      border-radius: 16px;
+      padding: 40px;
+      text-align: center;
+    }
+    
+    .all-clear-icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+    }
+    
+    .all-clear-text {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--success);
+    }
+    
+    /* ========== PROGRESS SUMMARY ========== */
+    .progress-card {
+      background: white;
+      border: 2px solid var(--sand);
+      border-radius: 16px;
+      padding: 28px;
+    }
+    
+    .progress-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    
+    .progress-since {
+      font-size: 14px;
+      color: var(--brown-light);
+    }
+    
+    .progress-items {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    
+    .progress-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--sand);
+    }
+    
+    .progress-item:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    
+    .progress-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--brown);
+      color: var(--cream);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    
+    .progress-content {
+      flex: 1;
+    }
+    
+    .progress-text {
+      font-size: 16px;
+      line-height: 1.5;
+      margin-bottom: 4px;
+    }
+    
+    .progress-text strong {
+      font-weight: 700;
+    }
+    
+    .progress-meta {
+      font-size: 13px;
+      color: var(--brown-light);
+    }
+    
+    .progress-footer {
+      margin-top: 20px;
+      text-align: center;
+    }
+    
+    .progress-link {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--orange);
+      text-decoration: none;
+    }
+    
+    .progress-link:hover {
+      text-decoration: underline;
+    }
+    
+    /* ========== QUICK CAPTURE ========== */
+    .capture-card {
+      background: white;
+      border: 2px solid var(--sand);
+      border-radius: 16px;
+      padding: 24px;
+    }
+    
+    .capture-input {
+      width: 100%;
+      padding: 16px;
+      border: 2px solid var(--sand);
+      border-radius: 10px;
+      font-size: 16px;
+      font-family: var(--font);
+      resize: none;
+      transition: border-color 0.15s;
+    }
+    
+    .capture-input:focus {
+      outline: none;
+      border-color: var(--brown);
+    }
+    
+    .capture-input::placeholder {
+      color: var(--brown-light);
+    }
+    
+    .capture-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 12px;
+    }
+    
+    .capture-hint {
+      font-size: 13px;
+      color: var(--brown-light);
+    }
+    
+    .capture-hint kbd {
+      background: var(--sand);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: var(--font);
+      font-size: 12px;
+    }
+    
+    /* ========== PROJECTS GRID - MINIMAL ========== */
+    .projects-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    
+    .project-card {
+      background: white;
+      border: 2px solid var(--sand);
+      border-radius: 12px;
+      padding: 20px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .project-card:hover {
+      border-color: var(--brown);
+      transform: translateY(-2px);
+    }
+    
+    .project-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    
+    .project-status {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    
+    .project-status.working { background: var(--success); }
+    .project-status.blocked { background: var(--alert); }
+    .project-status.idle { background: var(--sand); }
+    
+    .project-name {
+      font-size: 16px;
+      font-weight: 700;
+    }
+    
+    .project-activity {
+      font-size: 13px;
+      color: var(--brown-light);
+      line-height: 1.4;
+    }
+    
+    /* ========== OTTER ILLUSTRATION ========== */
+    .otter-scene {
+      text-align: center;
+      margin: 60px 0 40px;
+      opacity: 0.6;
+    }
+    
+    .otter-scene img {
+      max-width: 300px;
+      height: auto;
+    }
+    
+    .otter-scene-placeholder {
+      font-size: 64px;
+      margin-bottom: 12px;
+    }
+    
+    .otter-scene-text {
+      font-size: 14px;
+      color: var(--brown-light);
+      font-style: italic;
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      text-align: center;
+      padding: 40px 0;
+      color: var(--brown-light);
+      font-size: 13px;
+    }
+    
+    .footer a {
+      color: var(--brown);
+      text-decoration: none;
+    }
+    
+    .footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <a class="logo" href="#">
+        <span class="logo-icon">🦦</span>
+        <span class="logo-text">otter.camp</span>
+      </a>
+      <nav class="nav">
+        <button class="nav-btn active">Home</button>
+        <button class="nav-btn">Projects</button>
+        <button class="nav-btn">Workflows</button>
+        <button class="nav-btn">Knowledge</button>
+      </nav>
+    </header>
+    
+    <!-- Greeting -->
+    <div class="greeting">
+      <span class="greeting-otter">🦦</span>
+      <h1 class="greeting-text">Good evening, Sam</h1>
+      <p class="greeting-sub">Your otters have been busy while you were away</p>
+    </div>
+    
+    <!-- SECTION 1: What needs me right now? -->
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">Needs You</h2>
+        <span class="section-count">2</span>
+      </div>
+      
+      <div class="needs-you-card">
+        <div class="needs-you-header">
+          <span class="needs-you-icon">🚀</span>
+          <span class="needs-you-project">ItsAlive</span>
+        </div>
+        <p class="needs-you-action">
+          <strong>Ivy</strong> is waiting on your approval to deploy v2.1.0 with the new onboarding flow.
+        </p>
+        <div class="needs-you-buttons">
+          <button class="btn btn-primary">Approve Deploy</button>
+          <button class="btn btn-secondary">View Details</button>
+        </div>
+      </div>
+      
+      <div class="needs-you-card">
+        <div class="needs-you-header">
+          <span class="needs-you-icon">✍️</span>
+          <span class="needs-you-project">Content</span>
+        </div>
+        <p class="needs-you-action">
+          <strong>Stone</strong> has a blog post ready for your review: "Why I Run 12 AI Agents"
+        </p>
+        <div class="needs-you-buttons">
+          <button class="btn btn-primary">Review Post</button>
+          <button class="btn btn-secondary">Later</button>
+        </div>
+      </div>
+      
+      <!-- All clear state (hidden when there are items) -->
+      <!--
+      <div class="all-clear">
+        <div class="all-clear-icon">🦦✨</div>
+        <p class="all-clear-text">Nothing needs you right now. Your otters are handling it.</p>
+      </div>
+      -->
+    </section>
+    
+    <!-- SECTION 2: What happened since I was last here? -->
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">Since You Left</h2>
+        <span class="section-count success">14 updates</span>
+      </div>
+      
+      <div class="progress-card">
+        <div class="progress-header">
+          <span class="progress-since">Last 6 hours</span>
+        </div>
+        
+        <div class="progress-items">
+          <div class="progress-item">
+            <div class="progress-avatar" style="background: #4a6d7c;">D</div>
+            <div class="progress-content">
+              <p class="progress-text"><strong>Derek</strong> finished retry logic for API errors and pushed 4 commits to Pearl</p>
+              <p class="progress-meta">Pearl · 2 hours ago</p>
+            </div>
+          </div>
+          
+          <div class="progress-item">
+            <div class="progress-avatar" style="background: #c87941;">J</div>
+            <div class="progress-content">
+              <p class="progress-text"><strong>Jeff G</strong> completed v4 dashboard mockups for Otter Camp</p>
+              <p class="progress-meta">Otter Camp · 1 hour ago</p>
+            </div>
+          </div>
+          
+          <div class="progress-item">
+            <div class="progress-avatar" style="background: #ec4899;">N</div>
+            <div class="progress-content">
+              <p class="progress-text"><strong>Nova</strong> scheduled 3 tweets and responded to 5 mentions</p>
+              <p class="progress-meta">Twitter workflow · 45 minutes ago</p>
+            </div>
+          </div>
+          
+          <div class="progress-item">
+            <div class="progress-avatar" style="background: #8b5cf6;">S</div>
+            <div class="progress-content">
+              <p class="progress-text"><strong>Stone</strong> finished first draft of "Why I Run 12 AI Agents" (1,400 words)</p>
+              <p class="progress-meta">Content · 3 hours ago</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="progress-footer">
+          <a href="#" class="progress-link">See all 14 updates →</a>
+        </div>
+      </div>
+    </section>
+    
+    <!-- SECTION 3: Quick capture -->
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">Quick Thought</h2>
+      </div>
+      
+      <div class="capture-card">
+        <textarea class="capture-input" rows="3" placeholder="Dump a thought before you lose it... Frank will route it."></textarea>
+        <div class="capture-footer">
+          <span class="capture-hint"><kbd>⌘</kbd> + <kbd>Enter</kbd> to send</span>
+          <button class="btn btn-primary">Send to Frank</button>
+        </div>
+      </div>
+    </section>
+    
+    <!-- Projects (minimized) -->
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">Projects</h2>
+      </div>
+      
+      <div class="projects-grid">
+        <div class="project-card">
+          <div class="project-header">
+            <div class="project-status blocked"></div>
+            <span class="project-name">ItsAlive</span>
+          </div>
+          <p class="project-activity">Waiting on deploy approval</p>
+        </div>
+        
+        <div class="project-card">
+          <div class="project-header">
+            <div class="project-status working"></div>
+            <span class="project-name">Pearl</span>
+          </div>
+          <p class="project-activity">Derek pushing commits</p>
+        </div>
+        
+        <div class="project-card">
+          <div class="project-header">
+            <div class="project-status working"></div>
+            <span class="project-name">Otter Camp</span>
+          </div>
+          <p class="project-activity">Design + architecture</p>
+        </div>
+        
+        <div class="project-card">
+          <div class="project-header">
+            <div class="project-status idle"></div>
+            <span class="project-name">Three Stones</span>
+          </div>
+          <p class="project-activity">Shipped · Idle</p>
+        </div>
+      </div>
+    </section>
+    
+    <!-- Otter illustration -->
+    <div class="otter-scene">
+      <div class="otter-scene-placeholder">🦦🦦🦦</div>
+      <p class="otter-scene-text">Your otters holding hands, staying together</p>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="footer">
+      <p>🦦 <a href="#">otter.camp</a> · <a href="#">Settings</a> · <a href="#">OpenClaw Status</a></p>
+    </footer>
+  </div>
+  
+  <script>
+    // Quick capture keyboard shortcut
+    document.querySelector('.capture-input').addEventListener('keydown', function(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        alert('Thought sent to Frank! 🦦');
+        this.value = '';
+      }
+    });
+  </script>
+</body>
+</html>
