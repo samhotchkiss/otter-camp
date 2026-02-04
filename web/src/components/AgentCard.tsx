@@ -1,0 +1,177 @@
+import type { AgentStatus } from "./AgentDM";
+
+/**
+ * Extended agent info for card display.
+ */
+export type AgentCardData = {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  status: AgentStatus;
+  role?: string;
+  currentTask?: string;
+  lastActive?: string;
+};
+
+export type AgentCardProps = {
+  agent: AgentCardData;
+  onClick?: (agent: AgentCardData) => void;
+};
+
+/**
+ * Get initials from a name for avatar fallback.
+ */
+function getInitials(name: string): string {
+  return name
+    .split(" ")
+    .map((part) => part[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
+
+/**
+ * Format relative time for "last active" display.
+ */
+function formatLastActive(isoString?: string): string {
+  if (!isoString) {
+    return "Never";
+  }
+
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffMin < 1) {
+    return "Just now";
+  }
+  if (diffMin < 60) {
+    return `${diffMin}m ago`;
+  }
+  if (diffHour < 24) {
+    return `${diffHour}h ago`;
+  }
+  if (diffDay < 7) {
+    return `${diffDay}d ago`;
+  }
+
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/**
+ * Status indicator dot component.
+ */
+function StatusIndicator({ status }: { status: AgentStatus }) {
+  const statusStyles: Record<AgentStatus, string> = {
+    online: "bg-emerald-500 shadow-emerald-500/50 shadow-lg",
+    busy: "bg-amber-500 shadow-amber-500/50 shadow-lg animate-pulse",
+    offline: "bg-slate-500",
+  };
+
+  const statusLabels: Record<AgentStatus, string> = {
+    online: "Online",
+    busy: "Busy",
+    offline: "Offline",
+  };
+
+  return (
+    <span
+      className={`h-3 w-3 rounded-full ${statusStyles[status]}`}
+      title={statusLabels[status]}
+    />
+  );
+}
+
+/**
+ * AgentCard - Displays agent info in a compact card format.
+ *
+ * Features:
+ * - Avatar with status indicator
+ * - Name and role
+ * - Current task (if any)
+ * - Last active timestamp
+ * - Click to open DM
+ */
+export default function AgentCard({ agent, onClick }: AgentCardProps) {
+  const handleClick = () => {
+    onClick?.(agent);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onClick?.(agent);
+    }
+  };
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      className="group cursor-pointer rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-lg transition-all duration-200 hover:border-emerald-500/50 hover:bg-slate-900 hover:shadow-emerald-500/10 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-slate-950"
+    >
+      {/* Header: Avatar + Status */}
+      <div className="flex items-start justify-between">
+        <div className="relative">
+          {agent.avatarUrl ? (
+            <img
+              src={agent.avatarUrl}
+              alt={agent.name}
+              className="h-14 w-14 rounded-xl object-cover ring-2 ring-emerald-500/30 transition group-hover:ring-emerald-500/50"
+            />
+          ) : (
+            <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-emerald-500/20 text-lg font-semibold text-emerald-300 ring-2 ring-emerald-500/30 transition group-hover:ring-emerald-500/50">
+              {getInitials(agent.name)}
+            </div>
+          )}
+        </div>
+        <StatusIndicator status={agent.status} />
+      </div>
+
+      {/* Name & Role */}
+      <div className="mt-4">
+        <h3 className="font-semibold text-slate-100 transition group-hover:text-emerald-300">
+          {agent.name}
+        </h3>
+        {agent.role && (
+          <p className="mt-0.5 text-sm text-slate-500">{agent.role}</p>
+        )}
+      </div>
+
+      {/* Current Task */}
+      {agent.currentTask && agent.status !== "offline" && (
+        <div className="mt-3 rounded-lg bg-slate-800/80 px-3 py-2">
+          <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+            Current Task
+          </p>
+          <p className="mt-1 line-clamp-2 text-sm text-slate-300">
+            {agent.currentTask}
+          </p>
+        </div>
+      )}
+
+      {/* Footer: Last Active */}
+      <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3">
+        <span className="text-xs text-slate-600">Last active</span>
+        <span
+          className={`text-xs font-medium ${
+            agent.status === "online"
+              ? "text-emerald-400"
+              : agent.status === "busy"
+                ? "text-amber-400"
+                : "text-slate-500"
+          }`}
+        >
+          {agent.status === "online"
+            ? "Now"
+            : formatLastActive(agent.lastActive)}
+        </span>
+      </div>
+    </div>
+  );
+}

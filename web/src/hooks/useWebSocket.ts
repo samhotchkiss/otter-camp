@@ -7,7 +7,9 @@ export type WebSocketMessageType =
   | "TaskCreated"
   | "TaskUpdated"
   | "TaskStatusChanged"
-  | "CommentAdded";
+  | "CommentAdded"
+  | "AgentStatusUpdated"
+  | "DMMessageReceived";
 
 export type WebSocketMessage =
   | {
@@ -34,6 +36,8 @@ const MESSAGE_TYPES: WebSocketMessageType[] = [
   "TaskUpdated",
   "TaskStatusChanged",
   "CommentAdded",
+  "AgentStatusUpdated",
+  "DMMessageReceived",
 ];
 
 const messageTypeSet = new Set<WebSocketMessageType>(MESSAGE_TYPES);
