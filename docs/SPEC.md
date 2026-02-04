@@ -568,7 +568,117 @@ This is enforced by design — if context is insufficient, the task shouldn't di
 
 ---
 
-### F13: External Repository Sync
+### F14: Chat System
+
+**Purpose:** Full chat capability — both DMs with agents and threaded discussions within issues. This replaces Slack as the primary agent communication channel.
+
+#### F14.1: Unified Chat Sidebar
+- **Single sidebar shows ALL chat contexts:**
+  - Direct messages with agents (Derek, Nova, Stone, etc.)
+  - Issue-specific discussions (eng-042, content-015, etc.)
+  - Project-level channels (optional)
+- Unread indicators per context
+- Easy jump between DM and issue discussion
+- Recent/pinned at top, full list scrollable
+
+#### F14.2: Direct Messages
+- DM any agent directly
+- Messages route to that agent's OpenClaw session
+- Real-time via WebSocket
+- History persisted and searchable
+- Can pull in additional agents (group DM)
+
+#### F14.3: Issue Discussions
+- Threaded conversation attached to any task
+- @mention agents to pull them in
+- Rich text, code blocks, file attachments
+- Activity log vs discussion separated (what happened vs what we're talking about)
+
+#### F14.4: Command Bar Integration
+- Type "Derek" + Tab → drafts DM to Derek inline
+- Type "eng-042" + Tab → opens issue discussion
+- Send without leaving current view
+
+#### F14.5: Multi-Agent Conversations
+- Group chat with multiple agents on complex issues
+- Clear indication of who's speaking
+- Can assign "lead agent" for resolution ownership
+
+---
+
+### F15: Command Bar (Superhuman-style)
+
+**Purpose:** Keyboard-driven navigation and actions. Press `/` or `⌘K` and do anything without touching the mouse.
+
+#### F15.1: Core Behavior
+- `/` or `⌘K` opens command bar from anywhere
+- Type to search/filter
+- Arrow keys to navigate, Enter to select
+- Escape to close
+- Stays open after action (quick successive commands)
+
+#### F15.2: Navigation
+- Type agent name → jump to DM ("Derek" + Enter)
+- Type project name → jump to project ("Pearl" + Enter)
+- Type task number → jump to task ("eng-042" + Enter)
+- Fuzzy matching on all entities
+
+#### F15.3: Quick Actions
+- Type agent name + Tab → inline DM draft (don't leave current view)
+- Type thought + `⌘S` → routes to Frank for processing
+- "s [topic]" → routes to Stone for content memory
+- Custom shortcuts user-definable via API
+
+#### F15.4: Extensibility
+- API for registering custom commands
+- Shortcuts like "s" for Stone routing
+- Agents can register their own quick actions
+- User can customize mappings
+
+#### F15.5: Mobile Adaptation
+- Swipe-up or tap search icon
+- Voice input option
+- Simplified action set for touch
+
+---
+
+### F16: Dashboard Layout
+
+**Purpose:** Two-column layout for wide screens. What do I need to do? What's happening?
+
+#### F16.1: Main Column
+- **Action Items**: Tasks needing your input (🔴 blocked items)
+- **Your Feed**: 
+  - Top card: Progress summary since last visit
+  - Stream of agent updates qualifying for attention
+  - Important emails, market summaries, news, etc.
+  - Filterable by project/agent
+
+#### F16.2: Secondary Column
+- **Quick Add**: Otter-themed add button → input box for thoughts/tasks
+- **Projects List**:
+  - Project name
+  - Status indicator (🔵🟢🟡🔴↺)
+  - One-sentence status
+  - Time since last update ("6 minutes ago")
+
+#### F16.3: Progress Summary
+- "Since you were last here..." card
+- What completed
+- What's blocked
+- What's in progress
+- Key highlights (don't make user read whole feed)
+
+#### F16.4: Design Requirements
+- Dark mode by default (toggle available)
+- Draplin/Field Notes aesthetic
+- Woodcut otter illustration somewhere prominent
+- Fun otter fact in footer (100+ facts, rotates)
+- Link to Sea Otter Foundation Trust donation
+
+---
+
+### F17: External Repository Sync
 
 **Purpose:** Link internal AI Hub projects to external public repositories (e.g., GitHub). Agents work in the messy internal repo; when ready, work is squashed and pushed to the clean public repo under the operator's name.
 
