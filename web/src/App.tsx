@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { WebSocketProvider } from "./contexts/WebSocketContext";
 import CommandPalette from "./components/CommandPalette";
+import OtterFactsFooter from "./components/OtterFactsFooter";
 import type { Command } from "./hooks/useCommandPalette";
 
 export default function App() {
@@ -89,8 +90,8 @@ export default function App() {
 
   return (
     <WebSocketProvider>
-      <main className="min-h-screen bg-gradient-to-br from-sky-100 via-white to-emerald-100 px-6 py-16 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
-        <div className="mx-auto max-w-3xl">
+      <main className="flex min-h-screen flex-col bg-gradient-to-br from-sky-100 via-white to-emerald-100 px-6 py-16 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
+        <div className="mx-auto w-full max-w-3xl flex-1">
           <div className="inline-flex items-center gap-3 rounded-full border border-slate-200 bg-white/80 px-5 py-2 text-sm font-medium text-slate-600 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300">
             Camp basecamp is live
           </div>
@@ -125,6 +126,8 @@ export default function App() {
           isOpen={isPaletteOpen}
           onOpenChange={setIsPaletteOpen}
         />
+
+        <OtterFactsFooter />
       </main>
     </WebSocketProvider>
   );
