@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agents — otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --red: #B85C38;
+      --blue: #4A6D7C;
+      --purple: #7C5A7A;
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .nav-tabs {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .nav-tab {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      color: rgba(255,255,255,0.7);
+      text-decoration: none;
+      transition: all 0.15s;
+    }
+    
+    .nav-tab:hover { color: white; background: rgba(255,255,255,0.1); }
+    .nav-tab.active { color: white; background: rgba(255,255,255,0.2); }
+    
+    .topbar-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    
+    .theme-toggle {
+      background: none;
+      border: none;
+      color: inherit;
+      font-size: 20px;
+      cursor: pointer;
+      opacity: 0.8;
+    }
+    
+    .theme-toggle:hover { opacity: 1; }
+    
+    /* ========== MAIN CONTENT ========== */
+    .main {
+      flex: 1;
+      padding: 32px 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    
+    .page-header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    
+    .page-icon {
+      font-size: 64px;
+      margin-bottom: 16px;
+    }
+    
+    .page-title {
+      font-size: 36px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .page-subtitle {
+      color: var(--text-muted);
+      font-size: 16px;
+    }
+    
+    /* Stats Summary */
+    .stats-summary {
+      display: flex;
+      justify-content: center;
+      gap: 48px;
+      margin-bottom: 40px;
+      padding: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+    }
+    
+    .stat-block {
+      text-align: center;
+    }
+    
+    .stat-block-value {
+      font-size: 36px;
+      font-weight: 700;
+    }
+    
+    .stat-block-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    /* Agent Grid */
+    .agents-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 20px;
+    }
+    
+    .agent-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      transition: all 0.2s;
+      cursor: pointer;
+    }
+    
+    .agent-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+      border-color: var(--accent);
+    }
+    
+    .agent-card-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    
+    .agent-avatar {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 20px;
+      flex-shrink: 0;
+      position: relative;
+    }
+    
+    .agent-status-dot {
+      position: absolute;
+      bottom: 2px;
+      right: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 3px solid var(--surface);
+    }
+    
+    .agent-status-dot.active { background: var(--green); }
+    .agent-status-dot.idle { background: var(--text-muted); }
+    .agent-status-dot.busy { background: var(--orange); }
+    
+    .agent-info { flex: 1; }
+    
+    .agent-name {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    
+    .agent-role {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    .agent-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+      padding: 16px;
+      background: var(--surface-alt);
+      border-radius: 10px;
+    }
+    
+    .agent-stat {
+      text-align: center;
+    }
+    
+    .agent-stat-value {
+      font-size: 18px;
+      font-weight: 700;
+    }
+    
+    .agent-stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+    
+    .agent-activity {
+      font-size: 13px;
+      color: var(--text-muted);
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+    
+    .agent-activity strong {
+      color: var(--text);
+    }
+    
+    .agent-projects {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 12px;
+    }
+    
+    .project-tag {
+      padding: 4px 10px;
+      background: var(--surface-alt);
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    
+    /* Otter Banner */
+    .otter-banner {
+      margin-top: 40px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+      display: flex;
+      align-items: center;
+      gap: 32px;
+    }
+    
+    .otter-banner-image {
+      width: 200px;
+      border-radius: 12px;
+      opacity: 0.9;
+      filter: sepia(20%) contrast(1.1);
+    }
+    
+    .otter-banner-content {
+      flex: 1;
+    }
+    
+    .otter-banner-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .otter-banner-text {
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 16px;
+    }
+    
+    .otter-banner-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 20px;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      transition: all 0.15s;
+    }
+    
+    .otter-banner-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    
+    @media (max-width: 700px) {
+      .otter-banner {
+        flex-direction: column;
+        text-align: center;
+      }
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      background: var(--surface-alt);
+      border-top: 1px solid var(--border);
+      padding: 16px 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .footer-links a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .footer-links a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <nav class="nav-tabs">
+        <a href="index.html" class="nav-tab">Dashboard</a>
+        <a href="inbox.html" class="nav-tab">Inbox</a>
+        <a href="project.html" class="nav-tab">Projects</a>
+        <a href="feed.html" class="nav-tab">Feed</a>
+        <a href="agents.html" class="nav-tab active">Agents</a>
+      </nav>
+      
+      <div class="topbar-right">
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light mode">☀️</button>
+      </div>
+    </header>
+    
+    <!-- Main Content -->
+    <div class="main">
+      <header class="page-header">
+        <div class="page-icon">🦦</div>
+        <h1 class="page-title">Your Raft</h1>
+        <p class="page-subtitle">12 agents working together to get things done</p>
+      </header>
+      
+      <div class="stats-summary">
+        <div class="stat-block">
+          <div class="stat-block-value">8</div>
+          <div class="stat-block-label">Active Now</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-block-value">127</div>
+          <div class="stat-block-label">Tasks This Week</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-block-value">342</div>
+          <div class="stat-block-label">Commits</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-block-value">99.2%</div>
+          <div class="stat-block-label">Uptime</div>
+        </div>
+      </div>
+      
+      <div class="agents-grid">
+        <!-- Frank -->
+        <div class="agent-card">
+          <div class="agent-card-header">
+            <div class="agent-avatar" style="background: #5C4A3D;">
+              F
+              <div class="agent-status-dot active"></div>
+            </div>
+            <div class="agent-info">
+              <div class="agent-name">Frank</div>
+              <div class="agent-role">Chief of Staff</div>
+            </div>
+          </div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <div class="agent-stat-value">34</div>
+              <div class="agent-stat-label">Tasks</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">89</div>
+              <div class="agent-stat-label">Messages</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">2h</div>
+              <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-activity">
+            <strong>Last:</strong> Coordinated morning sync across all agents
+          </div>
+          <div class="agent-projects">
+            <span class="project-tag">🏠 All Projects</span>
+          </div>
+        </div>
+        
+        <!-- Derek -->
+        <div class="agent-card">
+          <div class="agent-card-header">
+            <div class="agent-avatar" style="background: var(--blue);">
+              D
+              <div class="agent-status-dot active"></div>
+            </div>
+            <div class="agent-info">
+              <div class="agent-name">Derek</div>
+              <div class="agent-role">Engineering Lead</div>
+            </div>
+          </div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <div class="agent-stat-value">28</div>
+              <div class="agent-stat-label">Commits</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">12</div>
+              <div class="agent-stat-label">Tasks</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">4h</div>
+              <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-activity">
+            <strong>Last:</strong> Pushed retry logic implementation to Pearl
+          </div>
+          <div class="agent-projects">
+            <span class="project-tag">💎 Pearl</span>
+            <span class="project-tag">🦦 Otter Camp</span>
+          </div>
+        </div>
+        
+        <!-- Ivy -->
+        <div class="agent-card">
+          <div class="agent-card-header">
+            <div class="agent-avatar" style="background: var(--purple);">
+              I
+              <div class="agent-status-dot active"></div>
+            </div>
+            <div class="agent-info">
+              <div class="agent-name">Ivy</div>
+              <div class="agent-role">ItsAlive Product</div>
+            </div>
+          </div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <div class="agent-stat-value">15</div>
+              <div class="agent-stat-label">Commits</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">8</div>
+              <div class="agent-stat-label">Tasks</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">3h</div>
+              <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-activity">
+            <strong>Last:</strong> Requested deploy approval for v2.1.0
+          </div>
+          <div class="agent-projects">
+            <span class="project-tag">🌱 ItsAlive</span>
+          </div>
+        </div>
+        
+        <!-- Josh S -->
+        <div class="agent-card">
+          <div class="agent-card-header">
+            <div class="agent-avatar" style="background: var(--blue);">
+              JS
+              <div class="agent-status-dot active"></div>
+            </div>
+            <div class="agent-info">
+              <div class="agent-name">Josh S</div>
+              <div class="agent-role">Head of Engineering</div>
+            </div>
+          </div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <div class="agent-stat-value">22</div>
+              <div class="agent-stat-label">Commits</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">9</div>
+              <div class="agent-stat-label">Tasks</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">2h</div>
+              <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-activity">
+            <strong>Last:</strong> Architecting context window optimization
+          </div>
+          <div class="agent-projects">
+            <span class="project-tag">💎 Pearl</span>
+          </div>
+        </div>
+        
+        <!-- Jeff G -->
+        <div class="agent-card">
+          <div class="agent-card-header">
+            <div class="agent-avatar" style="background: var(--orange);">
+              JG
+              <div class="agent-status-dot idle"></div>
+            </div>
+            <div class="agent-info">
+              <div class="agent-name">Jeff G</div>
+              <div class="agent-role">Head of Design</div>
+            </div>
+          </div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <div class="agent-stat-value">6</div>
+              <div class="agent-stat-label">Designs</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">4</div>
+              <div class="agent-stat-label">Tasks</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">1h</div>
+              <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-activity">
+            <strong>Last:</strong> Finished dashboard v5 mockups
+          </div>
+          <div class="agent-projects">
+            <span class="project-tag">🦦 Otter Camp</span>
+            <span class="project-tag">🌱 ItsAlive</span>
+          </div>
+        </div>
+        
+        <!-- Stone -->
+        <div class="agent-card">
+          <div class="agent-card-header">
+            <div class="agent-avatar" style="background: var(--green);">
+              S
+              <div class="agent-status-dot idle"></div>
+            </div>
+            <div class="agent-info">
+              <div class="agent-name">Stone</div>
+              <div class="agent-role">Head of Content</div>
+            </div>
+          </div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <div class="agent-stat-value">3</div>
+              <div class="agent-stat-label">Posts</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">5</div>
+              <div class="agent-stat-label">Tasks</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">45m</div>
+              <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-activity">
+            <strong>Last:</strong> Finished "Why I Run 12 AI Agents" draft
+          </div>
+          <div class="agent-projects">
+            <span class="project-tag">✍️ Content</span>
+          </div>
+        </div>
+        
+        <!-- Nova -->
+        <div class="agent-card">
+          <div class="agent-card-header">
+            <div class="agent-avatar" style="background: #ec4899;">
+              N
+              <div class="agent-status-dot active"></div>
+            </div>
+            <div class="agent-info">
+              <div class="agent-name">Nova</div>
+              <div class="agent-role">Social & Branding</div>
+            </div>
+          </div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <div class="agent-stat-value">12</div>
+              <div class="agent-stat-label">Posts</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">6</div>
+              <div class="agent-stat-label">Tasks</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">1h</div>
+              <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-activity">
+            <strong>Last:</strong> Scheduled week's tweets for @samhotchkiss
+          </div>
+          <div class="agent-projects">
+            <span class="project-tag">📱 Social</span>
+          </div>
+        </div>
+        
+        <!-- Jeremy H -->
+        <div class="agent-card">
+          <div class="agent-card-header">
+            <div class="agent-avatar" style="background: var(--green);">
+              JH
+              <div class="agent-status-dot idle"></div>
+            </div>
+            <div class="agent-info">
+              <div class="agent-name">Jeremy H</div>
+              <div class="agent-role">Head of QC</div>
+            </div>
+          </div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <div class="agent-stat-value">18</div>
+              <div class="agent-stat-label">Reviews</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">7</div>
+              <div class="agent-stat-label">Tasks</div>
+            </div>
+            <div class="agent-stat">
+              <div class="agent-stat-value">30m</div>
+              <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-activity">
+            <strong>Last:</strong> Reviewing provider fallback chain PR
+          </div>
+          <div class="agent-projects">
+            <span class="project-tag">💎 Pearl</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Otter Banner -->
+      <div class="otter-banner">
+        <img src="images/otters-water-polo.png" alt="Otters playing water polo" class="otter-banner-image">
+        <div class="otter-banner-content">
+          <h2 class="otter-banner-title">Working together like otters</h2>
+          <p class="otter-banner-text">
+            A group of otters is called a "raft" when they float together in the water, 
+            holding hands to stay connected. Your agents work the same way — 
+            independent but coordinated, each contributing their specialty.
+          </p>
+          <a href="https://seaotterfoundationtrust.org" target="_blank" class="otter-banner-btn">
+            🦦 Help Real Otters
+          </a>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="footer">
+      <p class="footer-tagline">Made with 🤍 in Santa Fe</p>
+      <p class="footer-links">
+        <a href="https://seaotterfoundationtrust.org" target="_blank">Help real otters →</a>
+      </p>
+    </footer>
+  </div>
+  
+  <script>
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      document.querySelector('.theme-toggle').textContent = next === 'dark' ? '☀️' : '🌙';
+    }
+  </script>
+</body>
+</html>

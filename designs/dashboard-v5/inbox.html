@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inbox — otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --red: #B85C38;
+      --blue: #4A6D7C;
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .search-trigger {
+      flex: 1;
+      max-width: 400px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .search-trigger:hover { background: rgba(255,255,255,0.2); }
+    .search-trigger-text { flex: 1; opacity: 0.7; font-size: 14px; }
+    
+    .search-trigger kbd {
+      background: rgba(255,255,255,0.2);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: var(--font);
+    }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    
+    .theme-toggle {
+      background: none;
+      border: none;
+      color: inherit;
+      font-size: 20px;
+      cursor: pointer;
+      opacity: 0.8;
+    }
+    
+    .theme-toggle:hover { opacity: 1; }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+    }
+    
+    /* ========== PAGE HEADER ========== */
+    .page-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 24px;
+    }
+    
+    .page-header-content {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    
+    .page-title {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .page-badge {
+      background: var(--red);
+      color: white;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 12px;
+    }
+    
+    .page-desc {
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+    
+    /* ========== FILTERS ========== */
+    .filters {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+    }
+    
+    .filters-inner {
+      max-width: 900px;
+      margin: 0 auto;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    
+    .filter-btn {
+      padding: 8px 16px;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: var(--surface);
+      color: var(--text-muted);
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .filter-btn:hover {
+      background: var(--surface-alt);
+      color: var(--text);
+    }
+    
+    .filter-btn.active {
+      background: var(--accent);
+      color: var(--bg);
+      border-color: var(--accent);
+    }
+    
+    .filter-btn .count {
+      background: rgba(255,255,255,0.2);
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      margin-left: 6px;
+    }
+    
+    .filter-btn.active .count {
+      background: rgba(0,0,0,0.15);
+    }
+    
+    /* ========== INBOX LIST ========== */
+    .inbox-container {
+      flex: 1;
+      padding: 24px;
+    }
+    
+    .inbox-list {
+      max-width: 900px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    
+    .inbox-item {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      transition: all 0.2s;
+    }
+    
+    .inbox-item:hover {
+      border-color: var(--accent);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+    }
+    
+    .inbox-item.urgent {
+      border-color: var(--orange);
+      box-shadow: 0 0 0 1px var(--orange);
+    }
+    
+    .inbox-item.urgent:hover {
+      box-shadow: 0 4px 16px rgba(200, 121, 65, 0.25);
+    }
+    
+    .item-header {
+      padding: 20px 24px;
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+    
+    .item-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+    
+    .item-icon.approval { background: rgba(200, 121, 65, 0.15); }
+    .item-icon.decision { background: rgba(74, 109, 124, 0.15); }
+    .item-icon.review { background: rgba(90, 122, 92, 0.15); }
+    .item-icon.blocked { background: rgba(184, 92, 56, 0.15); }
+    
+    .item-main { flex: 1; }
+    
+    .item-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    
+    .item-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .item-project {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .project-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    
+    .item-urgency {
+      padding: 2px 10px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    
+    .urgency-high {
+      background: rgba(184, 92, 56, 0.2);
+      color: var(--red);
+    }
+    
+    .urgency-medium {
+      background: rgba(200, 121, 65, 0.2);
+      color: var(--orange);
+    }
+    
+    .urgency-low {
+      background: rgba(74, 109, 124, 0.2);
+      color: var(--blue);
+    }
+    
+    .item-time {
+      margin-left: auto;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .item-body {
+      padding: 0 24px 20px;
+    }
+    
+    .item-desc {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      line-height: 1.6;
+    }
+    
+    .item-context {
+      background: var(--surface-alt);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .context-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    
+    .context-text {
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    
+    .item-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    
+    .btn {
+      padding: 12px 24px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      font-family: var(--font);
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--green);
+      color: white;
+    }
+    
+    .btn-primary:hover { filter: brightness(1.1); }
+    
+    .btn-danger {
+      background: var(--red);
+      color: white;
+    }
+    
+    .btn-danger:hover { filter: brightness(1.1); }
+    
+    .btn-secondary {
+      background: var(--surface-alt);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    
+    .btn-secondary:hover { background: var(--border); }
+    
+    /* Decision options */
+    .decision-options {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    
+    .decision-option {
+      padding: 14px 24px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      min-width: 120px;
+      text-align: center;
+    }
+    
+    .decision-option:hover {
+      border-color: var(--accent);
+      background: var(--surface-alt);
+      transform: translateY(-2px);
+    }
+    
+    .decision-option:active {
+      transform: translateY(0);
+    }
+    
+    /* ========== EMPTY STATE ========== */
+    .empty-state {
+      text-align: center;
+      padding: 80px 24px;
+    }
+    
+    .empty-icon {
+      font-size: 64px;
+      margin-bottom: 16px;
+    }
+    
+    .empty-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .empty-desc {
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+    
+    /* ========== OTTER ILLUSTRATION ========== */
+    .inbox-otter {
+      max-width: 900px;
+      margin: 24px auto 0;
+      display: flex;
+      justify-content: center;
+    }
+    
+    .inbox-otter img {
+      max-width: 240px;
+      height: auto;
+      border-radius: 12px;
+      opacity: 0.85;
+      filter: sepia(20%) contrast(1.1);
+      transition: all 0.3s;
+    }
+    
+    .inbox-otter:hover img {
+      opacity: 1;
+      transform: scale(1.02);
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      background: var(--surface-alt);
+      border-top: 1px solid var(--border);
+      padding: 16px 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .otter-fact { margin-bottom: 8px; }
+    .footer-tagline { margin-bottom: 4px; font-weight: 500; }
+    .footer-links a { color: var(--accent); text-decoration: none; }
+    .footer-links a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="search-trigger">
+        <span>🔍</span>
+        <span class="search-trigger-text">Search or type a command...</span>
+        <kbd>/</kbd>
+      </div>
+      
+      <div class="topbar-right">
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light mode">☀️</button>
+        <div class="avatar"></div>
+      </div>
+    </header>
+    
+    <!-- Page Header -->
+    <div class="page-header">
+      <div class="page-header-content">
+        <h1 class="page-title">
+          ⚡ Human Inbox
+          <span class="page-badge">3</span>
+        </h1>
+        <p class="page-desc">Items that need your attention before agents can continue</p>
+      </div>
+    </div>
+    
+    <!-- Filters -->
+    <div class="filters">
+      <div class="filters-inner">
+        <button class="filter-btn active">All<span class="count">3</span></button>
+        <button class="filter-btn">Approvals<span class="count">1</span></button>
+        <button class="filter-btn">Decisions<span class="count">1</span></button>
+        <button class="filter-btn">Reviews<span class="count">1</span></button>
+        <button class="filter-btn">Blockers<span class="count">0</span></button>
+      </div>
+    </div>
+    
+    <!-- Inbox Items -->
+    <div class="inbox-container">
+      <div class="inbox-list">
+        <!-- Urgent Approval -->
+        <div class="inbox-item urgent">
+          <div class="item-header">
+            <div class="item-icon approval">🚀</div>
+            <div class="item-main">
+              <h2 class="item-title">Approve production deploy</h2>
+              <div class="item-meta">
+                <div class="item-project">
+                  <span class="project-dot" style="background: var(--green);"></span>
+                  ItsAlive
+                </div>
+                <span>•</span>
+                <span>From Ivy</span>
+                <span class="item-urgency urgency-high">High</span>
+              </div>
+            </div>
+            <span class="item-time">5 hours waiting</span>
+          </div>
+          <div class="item-body">
+            <p class="item-desc">
+              v2.1.0 is ready for production. This release includes the new onboarding flow, 
+              performance improvements, and bug fixes for mobile users.
+            </p>
+            <div class="item-context">
+              <div class="context-label">Verification</div>
+              <div class="context-text">
+                ✅ All 675 tests passing<br>
+                ✅ Staging verified by Ivy<br>
+                ✅ No breaking API changes<br>
+                ✅ Rollback plan ready
+              </div>
+            </div>
+            <div class="item-actions">
+              <button class="btn btn-primary">✓ Approve Deploy</button>
+              <button class="btn btn-danger">✕ Reject</button>
+              <button class="btn btn-secondary">View Diff</button>
+              <button class="btn btn-secondary">Message Ivy</button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Decision Request -->
+        <div class="inbox-item">
+          <div class="item-header">
+            <div class="item-icon decision">🔀</div>
+            <div class="item-main">
+              <h2 class="item-title">API versioning strategy</h2>
+              <div class="item-meta">
+                <div class="item-project">
+                  <span class="project-dot" style="background: var(--blue);"></span>
+                  Pearl
+                </div>
+                <span>•</span>
+                <span>From Derek</span>
+                <span class="item-urgency urgency-medium">Medium</span>
+              </div>
+            </div>
+            <span class="item-time">2 hours waiting</span>
+          </div>
+          <div class="item-body">
+            <p class="item-desc">
+              We need to decide on an API versioning approach before I can proceed with the 
+              public API launch. This affects how clients integrate with Pearl.
+            </p>
+            <div class="item-context">
+              <div class="context-label">Derek's Analysis</div>
+              <div class="context-text">
+                <strong>URL Path (/v1/...):</strong> More visible, easier to test, clearer in logs. 
+                May lead to some code duplication.<br><br>
+                <strong>Header versioning:</strong> Cleaner URLs, easier deprecation paths. 
+                Less discoverable, harder to test casually.
+              </div>
+            </div>
+            <div class="decision-options">
+              <button class="decision-option">URL Path</button>
+              <button class="decision-option">Header</button>
+              <button class="decision-option">Need More Info</button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Review Request -->
+        <div class="inbox-item">
+          <div class="item-header">
+            <div class="item-icon review">✍️</div>
+            <div class="item-main">
+              <h2 class="item-title">Review blog post: "Why I Run 12 AI Agents"</h2>
+              <div class="item-meta">
+                <div class="item-project">
+                  <span class="project-dot" style="background: #ec4899;"></span>
+                  Content
+                </div>
+                <span>•</span>
+                <span>From Stone</span>
+                <span class="item-urgency urgency-low">Low</span>
+              </div>
+            </div>
+            <span class="item-time">1 hour waiting</span>
+          </div>
+          <div class="item-body">
+            <p class="item-desc">
+              Personal essay about your agent setup (1,400 words). Stone thinks it's ready 
+              for publication but wants your final approval on tone and accuracy.
+            </p>
+            <div class="item-context">
+              <div class="context-label">Preview</div>
+              <div class="context-text">
+                "Most people think running a dozen AI agents sounds like chaos. 
+                They're not wrong — but it's organized chaos, the kind that actually gets things done..."
+              </div>
+            </div>
+            <div class="item-actions">
+              <button class="btn btn-primary">✓ Approve</button>
+              <button class="btn btn-secondary">Open Preview</button>
+              <button class="btn btn-secondary">Request Changes</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="inbox-otter">
+        <img src="images/otters-beach-volleyball.png" alt="Otters playing beach volleyball">
+      </div>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="footer">
+      <p class="otter-fact">🦦 Loading otter fact...</p>
+      <p class="footer-tagline">Made with 🤍 in Santa Fe</p>
+      <p class="footer-links">
+        <a href="https://seaotterfoundationtrust.org" target="_blank">Help real otters →</a>
+      </p>
+    </footer>
+  </div>
+  
+  <script>
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      document.querySelector('.theme-toggle').textContent = next === 'dark' ? '☀️' : '🌙';
+    }
+    
+    const otterFacts = [
+      "Otters hold hands while sleeping so they don't drift apart.",
+      "Sea otters have the densest fur of any mammal — about 1 million hairs per square inch.",
+      "Otters have a favorite rock they keep in a pouch under their arm.",
+      "A group of otters is called a 'romp' on land and a 'raft' in water.",
+      "Otters can close their ears and nostrils while swimming underwater.",
+      "Sea otters eat about 25% of their body weight daily.",
+      "Baby otters are called pups and they can't swim when they're born.",
+      "Otters have been seen juggling rocks for fun."
+    ];
+    
+    document.querySelector('.otter-fact').textContent = 
+      '🦦 ' + otterFacts[Math.floor(Math.random() * otterFacts.length)];
+  </script>
+</body>
+</html>

@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Feed — otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --red: #B85C38;
+      --blue: #4A6D7C;
+      --purple: #7C5A7A;
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .nav-tabs {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .nav-tab {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      color: rgba(255,255,255,0.7);
+      text-decoration: none;
+      transition: all 0.15s;
+    }
+    
+    .nav-tab:hover { color: white; background: rgba(255,255,255,0.1); }
+    .nav-tab.active { color: white; background: rgba(255,255,255,0.2); }
+    
+    .topbar-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    
+    .live-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      opacity: 0.9;
+    }
+    
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background: #5A7A5C;
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.85); }
+    }
+    
+    .theme-toggle {
+      background: none;
+      border: none;
+      color: inherit;
+      font-size: 20px;
+      cursor: pointer;
+      opacity: 0.8;
+    }
+    
+    .theme-toggle:hover { opacity: 1; }
+    
+    /* ========== MAIN CONTENT ========== */
+    .main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 240px 1fr 280px;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    
+    @media (max-width: 1100px) {
+      .main { grid-template-columns: 1fr; }
+      .feed-sidebar, .feed-aside { display: none; }
+    }
+    
+    /* ========== SIDEBAR FILTERS ========== */
+    .feed-sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 20px;
+    }
+    
+    .filter-section {
+      margin-bottom: 24px;
+    }
+    
+    .filter-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    
+    .filter-option {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+      font-size: 14px;
+    }
+    
+    .filter-option:hover { background: var(--surface-alt); }
+    .filter-option.active {
+      background: var(--surface-alt);
+      font-weight: 600;
+    }
+    
+    .filter-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    
+    .filter-count {
+      margin-left: auto;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    /* ========== FEED ========== */
+    .feed-main {
+      padding: 24px;
+      overflow-y: auto;
+    }
+    
+    .feed-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+    }
+    
+    .feed-title {
+      font-size: 24px;
+      font-weight: 700;
+    }
+    
+    .feed-controls {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .feed-btn {
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-family: var(--font);
+      transition: all 0.15s;
+    }
+    
+    .feed-btn:hover { background: var(--surface-alt); }
+    .feed-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+    
+    /* Time Groups */
+    .time-group {
+      margin-bottom: 32px;
+    }
+    
+    .time-group-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .time-group-label {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    
+    .time-group-line {
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    
+    /* Activity Items */
+    .activity-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 12px;
+      transition: all 0.15s;
+      cursor: pointer;
+    }
+    
+    .activity-card:hover {
+      transform: translateX(4px);
+      border-color: var(--accent);
+    }
+    
+    .activity-card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    
+    .activity-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    
+    .activity-meta { flex: 1; }
+    
+    .activity-agent {
+      font-weight: 600;
+      font-size: 15px;
+    }
+    
+    .activity-project {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .activity-time {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .activity-body {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text);
+    }
+    
+    .activity-body code {
+      background: var(--surface-alt);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    
+    .activity-type-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 6px;
+      margin-top: 10px;
+    }
+    
+    .activity-type-badge.commit {
+      background: rgba(90, 122, 92, 0.15);
+      color: var(--green);
+    }
+    
+    .activity-type-badge.task {
+      background: rgba(74, 109, 124, 0.15);
+      color: var(--blue);
+    }
+    
+    .activity-type-badge.message {
+      background: rgba(124, 90, 122, 0.15);
+      color: var(--purple);
+    }
+    
+    .activity-type-badge.deploy {
+      background: rgba(200, 121, 65, 0.15);
+      color: var(--orange);
+    }
+    
+    /* Expandable details */
+    .activity-details {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      display: none;
+    }
+    
+    .activity-card.expanded .activity-details {
+      display: block;
+    }
+    
+    .commit-list {
+      font-size: 13px;
+      font-family: monospace;
+    }
+    
+    .commit-item {
+      padding: 6px 0;
+      display: flex;
+      gap: 10px;
+    }
+    
+    .commit-hash {
+      color: var(--accent);
+    }
+    
+    /* ========== ASIDE ========== */
+    .feed-aside {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      padding: 20px;
+    }
+    
+    .aside-section {
+      margin-bottom: 24px;
+    }
+    
+    .aside-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    
+    /* Stats */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    
+    .stat-card {
+      background: var(--surface-alt);
+      border-radius: 10px;
+      padding: 14px;
+      text-align: center;
+    }
+    
+    .stat-value {
+      font-size: 24px;
+      font-weight: 700;
+    }
+    
+    .stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    
+    /* Agent Status */
+    .agent-status-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 0;
+    }
+    
+    .agent-status-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    
+    .agent-status-name {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    
+    .agent-status-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    
+    .agent-status-indicator.active { background: var(--green); }
+    .agent-status-indicator.idle { background: var(--text-muted); }
+    
+    /* Otter */
+    .otter-aside {
+      text-align: center;
+      margin-top: 24px;
+    }
+    
+    .otter-aside img {
+      width: 100%;
+      max-width: 200px;
+      border-radius: 8px;
+      opacity: 0.9;
+      filter: sepia(20%) contrast(1.1);
+    }
+    
+    .otter-aside-caption {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      background: var(--surface-alt);
+      border-top: 1px solid var(--border);
+      padding: 16px 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .footer-links a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .footer-links a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <nav class="nav-tabs">
+        <a href="index.html" class="nav-tab">Dashboard</a>
+        <a href="inbox.html" class="nav-tab">Inbox</a>
+        <a href="project.html" class="nav-tab">Projects</a>
+        <a href="feed.html" class="nav-tab active">Feed</a>
+        <a href="agents.html" class="nav-tab">Agents</a>
+      </nav>
+      
+      <div class="topbar-right">
+        <div class="live-indicator">
+          <span class="live-dot"></span>
+          Live
+        </div>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light mode">☀️</button>
+      </div>
+    </header>
+    
+    <!-- Main Content -->
+    <div class="main">
+      <!-- Sidebar Filters -->
+      <aside class="feed-sidebar">
+        <div class="filter-section">
+          <div class="filter-title">Activity Type</div>
+          <div class="filter-option active">
+            <span>📋</span> All Activity
+            <span class="filter-count">47</span>
+          </div>
+          <div class="filter-option">
+            <span>💾</span> Commits
+            <span class="filter-count">28</span>
+          </div>
+          <div class="filter-option">
+            <span>📝</span> Tasks
+            <span class="filter-count">12</span>
+          </div>
+          <div class="filter-option">
+            <span>💬</span> Messages
+            <span class="filter-count">5</span>
+          </div>
+          <div class="filter-option">
+            <span>🚀</span> Deploys
+            <span class="filter-count">2</span>
+          </div>
+        </div>
+        
+        <div class="filter-section">
+          <div class="filter-title">Project</div>
+          <div class="filter-option active">
+            <span class="filter-dot" style="background: var(--text-muted);"></span>
+            All Projects
+          </div>
+          <div class="filter-option">
+            <span class="filter-dot" style="background: var(--blue);"></span>
+            Pearl
+            <span class="filter-count">18</span>
+          </div>
+          <div class="filter-option">
+            <span class="filter-dot" style="background: var(--green);"></span>
+            ItsAlive
+            <span class="filter-count">12</span>
+          </div>
+          <div class="filter-option">
+            <span class="filter-dot" style="background: var(--orange);"></span>
+            Otter Camp
+            <span class="filter-count">9</span>
+          </div>
+          <div class="filter-option">
+            <span class="filter-dot" style="background: var(--purple);"></span>
+            Content
+            <span class="filter-count">8</span>
+          </div>
+        </div>
+        
+        <div class="filter-section">
+          <div class="filter-title">Agent</div>
+          <div class="filter-option active">
+            <span class="filter-dot" style="background: var(--text-muted);"></span>
+            All Agents
+          </div>
+          <div class="filter-option">
+            <span class="filter-dot" style="background: var(--blue);"></span>
+            Derek
+            <span class="filter-count">15</span>
+          </div>
+          <div class="filter-option">
+            <span class="filter-dot" style="background: var(--purple);"></span>
+            Ivy
+            <span class="filter-count">10</span>
+          </div>
+          <div class="filter-option">
+            <span class="filter-dot" style="background: var(--green);"></span>
+            Josh S
+            <span class="filter-count">8</span>
+          </div>
+        </div>
+      </aside>
+      
+      <!-- Feed Content -->
+      <main class="feed-main">
+        <div class="feed-header">
+          <h1 class="feed-title">📡 Activity Feed</h1>
+          <div class="feed-controls">
+            <button class="feed-btn active">All</button>
+            <button class="feed-btn">Collapsed</button>
+            <button class="feed-btn">Expanded</button>
+          </div>
+        </div>
+        
+        <!-- Now -->
+        <div class="time-group">
+          <div class="time-group-header">
+            <span class="time-group-label">Just Now</span>
+            <div class="time-group-line"></div>
+          </div>
+          
+          <div class="activity-card">
+            <div class="activity-card-header">
+              <div class="activity-avatar">D</div>
+              <div class="activity-meta">
+                <div class="activity-agent">Derek</div>
+                <div class="activity-project">Pearl</div>
+              </div>
+              <div class="activity-time">2 min ago</div>
+            </div>
+            <div class="activity-body">
+              Pushed 4 commits to <code>main</code> — implementing retry logic for 500 errors
+            </div>
+            <span class="activity-type-badge commit">💾 Commit</span>
+            
+            <div class="activity-details">
+              <div class="commit-list">
+                <div class="commit-item">
+                  <span class="commit-hash">a1b2c3d</span>
+                  <span>Add exponential backoff with jitter</span>
+                </div>
+                <div class="commit-item">
+                  <span class="commit-hash">e4f5g6h</span>
+                  <span>Implement retry counter</span>
+                </div>
+                <div class="commit-item">
+                  <span class="commit-hash">i7j8k9l</span>
+                  <span>Add retry logging to session</span>
+                </div>
+                <div class="commit-item">
+                  <span class="commit-hash">m0n1o2p</span>
+                  <span>Tests for retry logic</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Earlier Today -->
+        <div class="time-group">
+          <div class="time-group-header">
+            <span class="time-group-label">Earlier Today</span>
+            <div class="time-group-line"></div>
+          </div>
+          
+          <div class="activity-card">
+            <div class="activity-card-header">
+              <div class="activity-avatar" style="background: var(--purple);">I</div>
+              <div class="activity-meta">
+                <div class="activity-agent">Ivy</div>
+                <div class="activity-project">ItsAlive</div>
+              </div>
+              <div class="activity-time">1 hour ago</div>
+            </div>
+            <div class="activity-body">
+              Requested approval for <strong>v2.1.0 production deploy</strong> — includes new onboarding flow
+            </div>
+            <span class="activity-type-badge deploy">🚀 Deploy Request</span>
+          </div>
+          
+          <div class="activity-card">
+            <div class="activity-card-header">
+              <div class="activity-avatar" style="background: var(--green);">S</div>
+              <div class="activity-meta">
+                <div class="activity-agent">Stone</div>
+                <div class="activity-project">Content</div>
+              </div>
+              <div class="activity-time">2 hours ago</div>
+            </div>
+            <div class="activity-body">
+              Finished draft: <strong>"Why I Run 12 AI Agents"</strong> — ready for review
+            </div>
+            <span class="activity-type-badge task">📝 Task Complete</span>
+          </div>
+          
+          <div class="activity-card">
+            <div class="activity-card-header">
+              <div class="activity-avatar">D</div>
+              <div class="activity-meta">
+                <div class="activity-agent">Derek</div>
+                <div class="activity-project">Pearl</div>
+              </div>
+              <div class="activity-time">3 hours ago</div>
+            </div>
+            <div class="activity-body">
+              Flagged PRL-012 for decision: <strong>Rate limiting strategy</strong> — needs your input on approach
+            </div>
+            <span class="activity-type-badge message">💬 Decision Request</span>
+          </div>
+          
+          <div class="activity-card">
+            <div class="activity-card-header">
+              <div class="activity-avatar" style="background: var(--orange);">JG</div>
+              <div class="activity-meta">
+                <div class="activity-agent">Jeff G</div>
+                <div class="activity-project">Otter Camp</div>
+              </div>
+              <div class="activity-time">4 hours ago</div>
+            </div>
+            <div class="activity-body">
+              Completed dashboard mockups — v5 design ready for review
+            </div>
+            <span class="activity-type-badge task">📝 Task Complete</span>
+          </div>
+        </div>
+        
+        <!-- Yesterday -->
+        <div class="time-group">
+          <div class="time-group-header">
+            <span class="time-group-label">Yesterday</span>
+            <div class="time-group-line"></div>
+          </div>
+          
+          <div class="activity-card">
+            <div class="activity-card-header">
+              <div class="activity-avatar" style="background: var(--blue);">JS</div>
+              <div class="activity-meta">
+                <div class="activity-agent">Josh S</div>
+                <div class="activity-project">Pearl</div>
+              </div>
+              <div class="activity-time">Yesterday, 4:30 PM</div>
+            </div>
+            <div class="activity-body">
+              Merged PR #47: <code>Context window optimization</code> — 15% memory reduction
+            </div>
+            <span class="activity-type-badge commit">💾 Merge</span>
+          </div>
+          
+          <div class="activity-card">
+            <div class="activity-card-header">
+              <div class="activity-avatar" style="background: var(--purple);">N</div>
+              <div class="activity-meta">
+                <div class="activity-agent">Nova</div>
+                <div class="activity-project">Social</div>
+              </div>
+              <div class="activity-time">Yesterday, 2:15 PM</div>
+            </div>
+            <div class="activity-body">
+              Scheduled 5 tweets for the week — @samhotchkiss content calendar updated
+            </div>
+            <span class="activity-type-badge task">📝 Task Complete</span>
+          </div>
+        </div>
+      </main>
+      
+      <!-- Aside -->
+      <aside class="feed-aside">
+        <div class="aside-section">
+          <div class="aside-title">📊 Today's Stats</div>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-value">47</div>
+              <div class="stat-label">Activities</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">28</div>
+              <div class="stat-label">Commits</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">6</div>
+              <div class="stat-label">Tasks Done</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">2</div>
+              <div class="stat-label">Deploys</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="aside-section">
+          <div class="aside-title">🦦 Agent Status</div>
+          <div class="agent-status-item">
+            <div class="agent-status-avatar">D</div>
+            <span class="agent-status-name">Derek</span>
+            <span class="agent-status-indicator active"></span>
+          </div>
+          <div class="agent-status-item">
+            <div class="agent-status-avatar" style="background: var(--purple);">I</div>
+            <span class="agent-status-name">Ivy</span>
+            <span class="agent-status-indicator active"></span>
+          </div>
+          <div class="agent-status-item">
+            <div class="agent-status-avatar" style="background: var(--blue);">JS</div>
+            <span class="agent-status-name">Josh S</span>
+            <span class="agent-status-indicator active"></span>
+          </div>
+          <div class="agent-status-item">
+            <div class="agent-status-avatar" style="background: var(--orange);">JG</div>
+            <span class="agent-status-name">Jeff G</span>
+            <span class="agent-status-indicator idle"></span>
+          </div>
+          <div class="agent-status-item">
+            <div class="agent-status-avatar" style="background: var(--green);">S</div>
+            <span class="agent-status-name">Stone</span>
+            <span class="agent-status-indicator idle"></span>
+          </div>
+        </div>
+        
+        <div class="otter-aside">
+          <img src="images/otters-tennis.png" alt="Otters playing tennis">
+          <p class="otter-aside-caption">Keeping the rally going</p>
+        </div>
+      </aside>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="footer">
+      <p class="footer-tagline">Made with 🤍 in Santa Fe</p>
+      <p class="footer-links">
+        <a href="https://seaotterfoundationtrust.org" target="_blank">Help real otters →</a>
+      </p>
+    </footer>
+  </div>
+  
+  <script>
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      document.querySelector('.theme-toggle').textContent = next === 'dark' ? '☀️' : '🌙';
+    }
+    
+    // Toggle activity card expansion
+    document.querySelectorAll('.activity-card').forEach(card => {
+      card.addEventListener('click', () => {
+        card.classList.toggle('expanded');
+      });
+    });
+    
+    // Filter selection
+    document.querySelectorAll('.filter-option').forEach(opt => {
+      opt.addEventListener('click', function() {
+        const section = this.closest('.filter-section');
+        section.querySelectorAll('.filter-option').forEach(o => o.classList.remove('active'));
+        this.classList.add('active');
+      });
+    });
+    
+    // Feed control buttons
+    document.querySelectorAll('.feed-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.feed-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>
