@@ -298,7 +298,7 @@ function renderMarkdown(text: string): ReactNode {
 // Sub-Components
 // =============================================================================
 
-function StatusBadge({ status }: { status: TaskStatus }) {
+export function StatusBadge({ status }: { status: TaskStatus }) {
   const option = STATUS_OPTIONS.find((o) => o.value === status);
   if (!option) return null;
 
@@ -316,7 +316,7 @@ function StatusBadge({ status }: { status: TaskStatus }) {
   );
 }
 
-function PriorityBadge({ priority }: { priority: TaskPriority }) {
+export function PriorityBadge({ priority }: { priority: TaskPriority }) {
   const option = PRIORITY_OPTIONS.find((o) => o.value === priority);
   if (!option) return null;
 

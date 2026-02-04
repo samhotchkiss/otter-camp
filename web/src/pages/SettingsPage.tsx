@@ -744,6 +744,7 @@ const DEFAULT_NOTIFICATION_PREFS: NotificationPreferences = {
   weeklyDigest: { email: true, push: false, inApp: false },
 };
 
+// Removed outer layout wrapper - now uses DashboardLayout from router
 export default function SettingsPage() {
   // Profile state
   const [profile, setProfile] = useState<Profile>({
@@ -926,52 +927,50 @@ export default function SettingsPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-sky-100 via-white to-emerald-100 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
-      <div className="mx-auto max-w-3xl px-6 py-12">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">
-            ⚙️ Settings
-          </h1>
-          <p className="mt-2 text-slate-600 dark:text-slate-300">
-            Manage your account, preferences, and integrations
-          </p>
-        </div>
+    <div className="mx-auto max-w-3xl">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">
+          ⚙️ Settings
+        </h1>
+        <p className="mt-2 text-slate-600 dark:text-slate-300">
+          Manage your account, preferences, and integrations
+        </p>
+      </div>
 
-        {/* Settings Sections */}
-        <div className="space-y-8">
-          <ProfileSection
-            profile={profile}
-            onUpdate={setProfile}
-            onSave={handleSaveProfile}
-            saving={savingProfile}
-          />
+      {/* Settings Sections */}
+      <div className="space-y-8">
+        <ProfileSection
+          profile={profile}
+          onUpdate={setProfile}
+          onSave={handleSaveProfile}
+          saving={savingProfile}
+        />
 
-          <NotificationsSection
-            preferences={notifications}
-            onUpdate={setNotifications}
-            onSave={handleSaveNotifications}
-            saving={savingNotifications}
-          />
+        <NotificationsSection
+          preferences={notifications}
+          onUpdate={setNotifications}
+          onSave={handleSaveNotifications}
+          saving={savingNotifications}
+        />
 
-          <WorkspaceSection
-            workspace={workspace}
-            onUpdate={setWorkspace}
-            onSave={handleSaveWorkspace}
-            saving={savingWorkspace}
-          />
+        <WorkspaceSection
+          workspace={workspace}
+          onUpdate={setWorkspace}
+          onSave={handleSaveWorkspace}
+          saving={savingWorkspace}
+        />
 
-          <IntegrationsSection
-            integrations={integrations}
-            onUpdate={setIntegrations}
-            onSave={handleSaveIntegrations}
-            onGenerateApiKey={handleGenerateApiKey}
-            onRevokeApiKey={handleRevokeApiKey}
-            saving={savingIntegrations}
-          />
+        <IntegrationsSection
+          integrations={integrations}
+          onUpdate={setIntegrations}
+          onSave={handleSaveIntegrations}
+          onGenerateApiKey={handleGenerateApiKey}
+          onRevokeApiKey={handleRevokeApiKey}
+          saving={savingIntegrations}
+        />
 
-          <AppearanceSection theme={theme} onUpdate={setTheme} />
-        </div>
+        <AppearanceSection theme={theme} onUpdate={setTheme} />
       </div>
     </div>
   );

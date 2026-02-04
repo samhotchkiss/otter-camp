@@ -1,5 +1,4 @@
 import { useState, useMemo } from "react";
-import DashboardLayout from "../layouts/DashboardLayout";
 import CommandPalette from "../components/CommandPalette";
 import KanbanBoard from "../components/KanbanBoard";
 import ActivityPanel from "../components/ActivityPanel";
@@ -106,10 +105,7 @@ export default function Dashboard() {
   );
 
   return (
-    <DashboardLayout
-      onCommandPaletteOpen={() => setIsPaletteOpen(true)}
-      activeNavId="tasks"
-    >
+    <>
       <div className="space-y-6">
         {/* Page Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -182,6 +178,6 @@ export default function Dashboard() {
         isOpen={isPaletteOpen}
         onOpenChange={setIsPaletteOpen}
       />
-    </DashboardLayout>
+    </>
   );
 }

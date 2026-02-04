@@ -200,8 +200,22 @@ export default function DashboardLayout({
               <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500" />
             </button>
 
-            {/* User menu */}
-            <UserMenu />
+            {/* User avatar */}
+            <button
+              type="button"
+              className="flex items-center gap-2 rounded-xl p-1.5 transition hover:bg-slate-100 dark:hover:bg-slate-800"
+              aria-label="User menu"
+            >
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-sky-400 to-emerald-400 text-sm font-semibold text-white">
+                🦦
+              </div>
+              <span className="hidden text-sm font-medium text-slate-700 dark:text-slate-200 sm:block">
+                Otter
+              </span>
+              <svg className="hidden h-4 w-4 text-slate-400 sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
           </div>
         </header>
 
