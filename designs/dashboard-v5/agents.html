@@ -245,7 +245,7 @@
       display: grid;
       grid-template-columns: repeat(3, 1fr);
       gap: 12px;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
       padding: 16px;
       background: var(--surface-alt);
       border-radius: 10px;
@@ -265,6 +265,41 @@
       color: var(--text-muted);
       text-transform: uppercase;
     }
+    
+    /* Heartbeat & Activity Timestamps */
+    .agent-timestamps {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding: 12px;
+      background: var(--surface-alt);
+      border-radius: 10px;
+      font-size: 13px;
+    }
+    
+    .timestamp-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .timestamp-icon {
+      font-size: 14px;
+      opacity: 0.8;
+    }
+    
+    .timestamp-label {
+      color: var(--text-muted);
+    }
+    
+    .timestamp-value {
+      font-weight: 600;
+    }
+    
+    .timestamp-value.recent { color: var(--green); }
+    .timestamp-value.stale { color: var(--orange); }
+    .timestamp-value.dead { color: var(--red); }
     
     .agent-activity {
       font-size: 13px;
@@ -447,6 +482,18 @@
               <div class="agent-stat-label">Active</div>
             </div>
           </div>
+          <div class="agent-timestamps">
+            <div class="timestamp-item">
+              <span class="timestamp-icon">💓</span>
+              <span class="timestamp-label">Heartbeat</span>
+              <span class="timestamp-value recent">12s</span>
+            </div>
+            <div class="timestamp-item">
+              <span class="timestamp-icon">⚡</span>
+              <span class="timestamp-label">Activity</span>
+              <span class="timestamp-value recent">3m</span>
+            </div>
+          </div>
           <div class="agent-activity">
             <strong>Last:</strong> Coordinated morning sync across all agents
           </div>
@@ -479,6 +526,18 @@
             <div class="agent-stat">
               <div class="agent-stat-value">4h</div>
               <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-timestamps">
+            <div class="timestamp-item">
+              <span class="timestamp-icon">💓</span>
+              <span class="timestamp-label">Heartbeat</span>
+              <span class="timestamp-value recent">8s</span>
+            </div>
+            <div class="timestamp-item">
+              <span class="timestamp-icon">⚡</span>
+              <span class="timestamp-label">Activity</span>
+              <span class="timestamp-value recent">45s</span>
             </div>
           </div>
           <div class="agent-activity">
@@ -516,6 +575,18 @@
               <div class="agent-stat-label">Active</div>
             </div>
           </div>
+          <div class="agent-timestamps">
+            <div class="timestamp-item">
+              <span class="timestamp-icon">💓</span>
+              <span class="timestamp-label">Heartbeat</span>
+              <span class="timestamp-value recent">5s</span>
+            </div>
+            <div class="timestamp-item">
+              <span class="timestamp-icon">⚡</span>
+              <span class="timestamp-label">Activity</span>
+              <span class="timestamp-value recent">2m</span>
+            </div>
+          </div>
           <div class="agent-activity">
             <strong>Last:</strong> Requested deploy approval for v2.1.0
           </div>
@@ -550,6 +621,18 @@
               <div class="agent-stat-label">Active</div>
             </div>
           </div>
+          <div class="agent-timestamps">
+            <div class="timestamp-item">
+              <span class="timestamp-icon">💓</span>
+              <span class="timestamp-label">Heartbeat</span>
+              <span class="timestamp-value recent">15s</span>
+            </div>
+            <div class="timestamp-item">
+              <span class="timestamp-icon">⚡</span>
+              <span class="timestamp-label">Activity</span>
+              <span class="timestamp-value recent">8m</span>
+            </div>
+          </div>
           <div class="agent-activity">
             <strong>Last:</strong> Architecting context window optimization
           </div>
@@ -582,6 +665,18 @@
             <div class="agent-stat">
               <div class="agent-stat-value">1h</div>
               <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-timestamps">
+            <div class="timestamp-item">
+              <span class="timestamp-icon">💓</span>
+              <span class="timestamp-label">Heartbeat</span>
+              <span class="timestamp-value stale">3m</span>
+            </div>
+            <div class="timestamp-item">
+              <span class="timestamp-icon">⚡</span>
+              <span class="timestamp-label">Activity</span>
+              <span class="timestamp-value stale">18m</span>
             </div>
           </div>
           <div class="agent-activity">
@@ -619,6 +714,18 @@
               <div class="agent-stat-label">Active</div>
             </div>
           </div>
+          <div class="agent-timestamps">
+            <div class="timestamp-item">
+              <span class="timestamp-icon">💓</span>
+              <span class="timestamp-label">Heartbeat</span>
+              <span class="timestamp-value stale">5m</span>
+            </div>
+            <div class="timestamp-item">
+              <span class="timestamp-icon">⚡</span>
+              <span class="timestamp-label">Activity</span>
+              <span class="timestamp-value stale">32m</span>
+            </div>
+          </div>
           <div class="agent-activity">
             <strong>Last:</strong> Finished "Why I Run 12 AI Agents" draft
           </div>
@@ -653,6 +760,18 @@
               <div class="agent-stat-label">Active</div>
             </div>
           </div>
+          <div class="agent-timestamps">
+            <div class="timestamp-item">
+              <span class="timestamp-icon">💓</span>
+              <span class="timestamp-label">Heartbeat</span>
+              <span class="timestamp-value recent">10s</span>
+            </div>
+            <div class="timestamp-item">
+              <span class="timestamp-icon">⚡</span>
+              <span class="timestamp-label">Activity</span>
+              <span class="timestamp-value recent">4m</span>
+            </div>
+          </div>
           <div class="agent-activity">
             <strong>Last:</strong> Scheduled week's tweets for @samhotchkiss
           </div>
@@ -685,6 +804,18 @@
             <div class="agent-stat">
               <div class="agent-stat-value">30m</div>
               <div class="agent-stat-label">Active</div>
+            </div>
+          </div>
+          <div class="agent-timestamps">
+            <div class="timestamp-item">
+              <span class="timestamp-icon">💓</span>
+              <span class="timestamp-label">Heartbeat</span>
+              <span class="timestamp-value dead">12m</span>
+            </div>
+            <div class="timestamp-item">
+              <span class="timestamp-icon">⚡</span>
+              <span class="timestamp-label">Activity</span>
+              <span class="timestamp-value dead">47m</span>
             </div>
           </div>
           <div class="agent-activity">
