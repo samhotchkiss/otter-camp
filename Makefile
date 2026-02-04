@@ -1,4 +1,4 @@
-.PHONY: dev run build test migrate clean
+.PHONY: dev run build test migrate migrate-up migrate-down migrate-create clean
 
 # Development
 dev:
@@ -21,13 +21,19 @@ build-web:
 	cd web && npm run build
 
 # Database
-migrate:
-	@echo "Running migrations..."
-	go run ./cmd/migrate
+migrate: migrate-up
+
+migrate-up:
+	@echo "Running migrations up..."
+	go run ./cmd/migrate up
 
 migrate-down:
 	@echo "Rolling back migrations..."
 	go run ./cmd/migrate down
+
+migrate-create:
+	@echo "Creating migration files..."
+	go run ./cmd/migrate create $(name)
 
 # Docker
 up:
