@@ -44,7 +44,10 @@ func NewRouter() http.Handler {
 	r.Get("/api/search", SearchHandler)
 	r.Get("/api/commands/search", CommandSearchHandler)
 	r.Get("/api/feed", FeedHandlerV2)
-	r.Post("/api/webhooks/openclaw", OpenClawWebhookHandler)
+	
+	webhookHandler := &WebhookHandler{Hub: hub}
+	r.Post("/api/webhooks/openclaw", webhookHandler.OpenClawHandler)
+	
 	r.Handle("/ws", &ws.Handler{Hub: hub})
 
 	taskHandler := &TaskHandler{Hub: hub}
@@ -52,6 +55,10 @@ func NewRouter() http.Handler {
 	r.Post("/api/tasks", taskHandler.CreateTask)
 	r.Patch("/api/tasks/{id}", taskHandler.UpdateTask)
 	r.Patch("/api/tasks/{id}/status", taskHandler.UpdateTaskStatus)
+
+	attachmentsHandler := &AttachmentsHandler{}
+	r.Post("/api/messages/attachments", attachmentsHandler.Upload)
+	r.Get("/api/attachments/{id}", attachmentsHandler.GetAttachment)
 
 	return r
 }

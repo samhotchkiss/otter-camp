@@ -14,6 +14,8 @@ import (
 	"sync"
 
 	_ "github.com/lib/pq"
+	"github.com/samhotchkiss/otter-camp/internal/webhook"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 const (
@@ -53,7 +55,140 @@ type openClawWebhookResponse struct {
 	OK bool `json:"ok"`
 }
 
-// OpenClawWebhookHandler handles POST /api/webhooks/openclaw
+// WebhookHandler handles webhook requests with WebSocket broadcasting.
+type WebhookHandler struct {
+	Hub *ws.Hub
+}
+
+// OpenClawHandler handles POST /api/webhooks/openclaw with status updates.
+func (h *WebhookHandler) OpenClawHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	secret := strings.TrimSpace(os.Getenv("OPENCLAW_WEBHOOK_SECRET"))
+	if secret == "" {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "webhook secret not configured"})
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "unable to read request body"})
+		return
+	}
+
+	signature := firstNonEmpty(
+		strings.TrimSpace(r.Header.Get(openClawSignatureHeader)),
+		strings.TrimSpace(r.Header.Get(gitClawSignatureHeader)),
+		strings.TrimSpace(r.Header.Get(aiHubSignatureHeader)),
+	)
+	if signature == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing signature"})
+		return
+	}
+	if !verifyOpenClawSignature(body, signature, secret) {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid signature"})
+		return
+	}
+
+	event, err := webhook.ParseStatusEvent(body)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
+
+	if event.OrgID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing org_id"})
+		return
+	}
+	if !uuidRegex.MatchString(event.OrgID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid org_id"})
+		return
+	}
+
+	if event.Event == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing event"})
+		return
+	}
+
+	// Validate task/agent IDs based on event type
+	if strings.HasPrefix(event.Event, "task.") {
+		taskID := event.TaskID
+		if event.Task != nil && event.Task.ID != "" {
+			taskID = event.Task.ID
+		}
+		if taskID == "" {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing task id"})
+			return
+		}
+		if !uuidRegex.MatchString(taskID) {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid task id"})
+			return
+		}
+	} else if strings.HasPrefix(event.Event, "agent.") {
+		agentID := event.AgentID
+		if event.Agent != nil && event.Agent.ID != "" {
+			agentID = event.Agent.ID
+		}
+		if agentID == "" {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing agent id"})
+			return
+		}
+		if !uuidRegex.MatchString(agentID) {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid agent id"})
+			return
+		}
+	} else {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "unsupported event"})
+		return
+	}
+
+	db, err := getWebhooksDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	// Process status events with updates and broadcasting
+	if webhook.IsSupportedEvent(event.Event) {
+		statusHandler := webhook.NewStatusHandler(db, h.Hub)
+		if err := statusHandler.HandleEvent(r.Context(), *event); err != nil {
+			// Log error but still return OK - activity is logged regardless
+			// The status update may fail if task/agent doesn't exist
+			_ = err
+		}
+	} else {
+		// For unsupported events, just log to activity feed
+		var taskArg interface{}
+		if event.TaskID != "" {
+			taskArg = event.TaskID
+		}
+		var agentArg interface{}
+		if event.AgentID != "" {
+			agentArg = event.AgentID
+		}
+
+		_, err = db.ExecContext(
+			r.Context(),
+			"INSERT INTO activity_log (org_id, task_id, agent_id, action, metadata) VALUES ($1, $2, $3, $4, $5)",
+			event.OrgID,
+			taskArg,
+			agentArg,
+			event.Event,
+			json.RawMessage(body),
+		)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to record webhook"})
+			return
+		}
+	}
+
+	sendJSON(w, http.StatusOK, openClawWebhookResponse{OK: true})
+}
+
+// OpenClawWebhookHandler handles POST /api/webhooks/openclaw (legacy, no WebSocket support)
 func OpenClawWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
