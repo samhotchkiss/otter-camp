@@ -522,6 +522,84 @@
       margin-top: 16px;
     }
     
+    .cta-options {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 32px;
+      max-width: 800px;
+      margin: 48px auto 0;
+    }
+    
+    .cta-option {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: 20px;
+      padding: 40px 32px;
+      text-align: center;
+      position: relative;
+    }
+    
+    .cta-option.featured {
+      border-color: var(--accent);
+      box-shadow: 0 8px 32px rgba(92, 74, 61, 0.15);
+    }
+    
+    .cta-option-badge {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--orange);
+      color: white;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 16px;
+      border-radius: 100px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .cta-option-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    
+    .cta-option h3 {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+    
+    .cta-option p {
+      font-size: 15px;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+    
+    .signup-form-inline {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    .email-input-small {
+      padding: 14px 18px;
+      font-size: 15px;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+      text-align: center;
+    }
+    
+    .email-input-small:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    
     /* ========== FOOTER ========== */
     footer {
       background: var(--surface-alt);
@@ -663,7 +741,7 @@
       <div class="nav-links">
         <a href="#features">Features</a>
         <a href="#how-it-works">How It Works</a>
-        <a href="#signup" class="nav-cta">Get Early Access</a>
+        <a href="https://github.com/samhotchkiss/otter-camp" target="_blank" class="nav-cta">⭐ GitHub</a>
       </div>
     </div>
   </nav>
@@ -673,7 +751,7 @@
     <div class="container">
       <div class="hero-badge">
         <span>🦦</span>
-        <span>Now accepting early access signups</span>
+        <span>Open Source — MIT License</span>
       </div>
       
       <h1>Work management<br>for <span>AI agent teams</span></h1>
@@ -684,8 +762,8 @@
       </p>
       
       <div class="hero-cta">
-        <a href="#signup" class="btn btn-primary">Get Early Access →</a>
-        <a href="#features" class="btn btn-secondary">See Features</a>
+        <a href="https://github.com/samhotchkiss/otter-camp" target="_blank" class="btn btn-primary">⭐ Star on GitHub</a>
+        <a href="#signup" class="btn btn-secondary">Hosted Version →</a>
       </div>
       
       <div class="hero-image">
@@ -880,14 +958,28 @@
   <!-- CTA -->
   <section class="cta" id="signup">
     <div class="container">
-      <h2>Join the raft</h2>
-      <p>Get early access when we launch. Be the first to orchestrate your AI team with otter.camp.</p>
+      <h2>Two ways to get started</h2>
       
-      <form class="signup-form" id="waitlist-form">
-        <input type="email" class="email-input" id="email-input" placeholder="you@email.com" required>
-        <button type="submit" class="btn btn-primary" id="notify-btn">Get Early Access →</button>
-      </form>
-      <p id="form-message" style="display: none;"></p>
+      <div class="cta-options">
+        <div class="cta-option">
+          <div class="cta-option-icon">🔧</div>
+          <h3>Self-Host</h3>
+          <p>Deploy on your own infrastructure. Full control, no limits, forever free.</p>
+          <a href="https://github.com/samhotchkiss/otter-camp" target="_blank" class="btn btn-secondary">View on GitHub →</a>
+        </div>
+        
+        <div class="cta-option featured">
+          <div class="cta-option-badge">Coming Soon</div>
+          <div class="cta-option-icon">☁️</div>
+          <h3>Hosted Version</h3>
+          <p>We run it, you use it. Sign up for early access to the managed cloud version.</p>
+          <form class="signup-form-inline" id="waitlist-form">
+            <input type="email" class="email-input-small" id="email-input" placeholder="you@email.com" required>
+            <button type="submit" class="btn btn-primary" id="notify-btn">Join Waitlist</button>
+          </form>
+          <p id="form-message" style="display: none; margin-top: 12px; font-size: 14px;"></p>
+        </div>
+      </div>
     </div>
   </section>
   
@@ -906,7 +998,8 @@
           <h4>Product</h4>
           <a href="#features">Features</a>
           <a href="#how-it-works">How It Works</a>
-          <a href="#signup">Early Access</a>
+          <a href="https://github.com/samhotchkiss/otter-camp" target="_blank">GitHub →</a>
+          <a href="https://github.com/samhotchkiss/otter-camp/blob/main/docs/SPEC.md" target="_blank">Documentation</a>
         </div>
         <div class="footer-col">
           <h4>Company</h4>
