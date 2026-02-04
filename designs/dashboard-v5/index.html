@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -190,8 +190,15 @@
       background: var(--surface);
       border: 2px solid var(--orange);
       border-radius: 12px;
-      padding: 20px;
+      padding: 24px;
       margin-bottom: 12px;
+      transition: all 0.2s;
+      box-shadow: 0 2px 8px rgba(200, 121, 65, 0.1);
+    }
+    
+    .action-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(200, 121, 65, 0.2);
     }
     
     .action-header {
@@ -335,30 +342,70 @@
       gap: 24px;
     }
     
+    /* Otter Illustration */
+    .otter-illustration {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px;
+      text-align: center;
+      overflow: hidden;
+    }
+    
+    .otter-woodcut {
+      width: 100%;
+      max-width: 280px;
+      height: auto;
+      border-radius: 8px;
+      opacity: 0.9;
+      filter: sepia(20%) contrast(1.1);
+      transition: all 0.3s;
+    }
+    
+    .otter-illustration:hover .otter-woodcut {
+      opacity: 1;
+      transform: scale(1.02);
+    }
+    
+    .otter-caption {
+      margin-top: 12px;
+      font-size: 13px;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+    
     /* Add Button */
     .add-button {
       background: var(--surface);
       border: 2px dashed var(--border);
       border-radius: 12px;
-      padding: 20px;
+      padding: 24px;
       text-align: center;
       cursor: pointer;
-      transition: all 0.15s;
+      transition: all 0.2s;
     }
     
     .add-button:hover {
       border-color: var(--accent);
       border-style: solid;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
     
     .add-otter {
-      font-size: 40px;
+      font-size: 44px;
       margin-bottom: 8px;
+      transition: transform 0.2s;
+    }
+    
+    .add-button:hover .add-otter {
+      transform: scale(1.1);
     }
     
     .add-text {
       font-weight: 600;
       color: var(--text-muted);
+      font-size: 15px;
     }
     
     .add-hint {
@@ -395,7 +442,10 @@
     }
     
     .project-item:last-child { border-bottom: none; }
-    .project-item:hover { background: var(--surface-alt); }
+    .project-item:hover { 
+      background: var(--surface-alt);
+      transform: translateX(4px);
+    }
     
     .project-status {
       width: 10px;
@@ -616,7 +666,7 @@
       </div>
       
       <div class="topbar-right">
-        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode">🌙</button>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light mode">☀️</button>
         <div class="avatar"></div>
       </div>
     </header>
@@ -725,6 +775,12 @@
       
       <!-- Secondary Column -->
       <div class="secondary">
+        <!-- Otter Illustration -->
+        <div class="otter-illustration">
+          <img src="../../branding/illustrations/otters-sailing.png" alt="Otters sailing together" class="otter-woodcut">
+          <p class="otter-caption">Your otters, working together</p>
+        </div>
+        
         <!-- Add Button -->
         <div class="add-button" onclick="openCommand()">
           <div class="add-otter">🦦💭</div>
