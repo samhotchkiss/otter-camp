@@ -40,7 +40,7 @@ var demoUsers = map[string]struct {
 	"demo@ottercamp.io": {
 		ID:           "usr_demo",
 		Name:         "Demo Otter",
-		PasswordHash: "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy", // password: "demo123"
+		PasswordHash: "$2a$10$jgVSDF0roqGP9BJy35coa.77c8/OV1dzQ7Ck9VS2LwO4SiCz12JRi", // password: "demo123"
 	},
 }
 
