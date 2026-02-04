@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import Footer from "../components/Footer";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
+import ThemeToggle from "../components/ThemeToggle";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
 
@@ -214,19 +215,7 @@ export default function TopbarLayout({ children }: TopbarLayoutProps) {
             <kbd className="rounded bg-white/20 px-2 py-0.5 text-xs text-otter-dark-bg">/</kbd>
           </button>
 
-          <button
-            type="button"
-            className="topbar-icon"
-            aria-label="Toggle theme"
-            title="Toggle theme"
-          >
-            <span className="text-lg dark:hidden" aria-hidden="true">
-              ☀️
-            </span>
-            <span className="hidden text-lg dark:block" aria-hidden="true">
-              🌙
-            </span>
-          </button>
+          <ThemeToggle />
 
           <button type="button" className="topbar-avatar" aria-label="User menu">
             <span className="text-sm" aria-hidden="true">
