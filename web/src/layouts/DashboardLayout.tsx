@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import NotificationBell from "../components/NotificationBell";
+import ThemeToggle from "../components/ThemeToggle";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
@@ -328,6 +329,9 @@ export default function DashboardLayout({
           <div className="flex items-center gap-2">
             {/* Notifications */}
             <NotificationBell />
+
+            {/* Theme toggle */}
+            <ThemeToggle />
 
             {/* User avatar */}
             <button
