@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
+import Footer from "../components/Footer";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
@@ -243,6 +244,8 @@ export default function TopbarLayout({ children }: TopbarLayoutProps) {
       >
         {children}
       </main>
+
+      <Footer />
 
       <ShortcutsHelpModal isOpen={isShortcutsHelpOpen} onClose={closeShortcutsHelp} />
     </div>
