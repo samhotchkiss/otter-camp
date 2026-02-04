@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { ErrorFallback } from "../components/ErrorBoundary";
 import { NoProjectsEmpty } from "../components/EmptyState";
@@ -76,18 +77,21 @@ const colorClasses: Record<string, { bg: string; text: string; progress: string 
   },
 };
 
-function ProjectCard({ project }: { project: Project }) {
+function ProjectCard({ project, onClick }: { project: Project; onClick: () => void }) {
   const progress = Math.round((project.completedCount / project.taskCount) * 100);
   const colors = colorClasses[project.color] ?? colorClasses.sky;
 
   return (
-    <div className="group rounded-2xl border border-slate-200 bg-white/80 p-5 shadow-sm backdrop-blur transition hover:border-slate-300 hover:shadow-md dark:border-slate-800 dark:bg-slate-900/80 dark:hover:border-slate-700">
+    <div
+      onClick={onClick}
+      className="group cursor-pointer rounded-2xl border border-slate-200 bg-white/80 p-5 shadow-sm backdrop-blur transition hover:border-slate-300 hover:shadow-md dark:border-slate-800 dark:bg-slate-900/80 dark:hover:border-slate-700">
       <div className="flex items-start justify-between">
         <div className={`flex h-12 w-12 items-center justify-center rounded-xl text-2xl ${colors.bg}`}>
           {project.emoji}
         </div>
         <button
           type="button"
+          onClick={(e) => e.stopPropagation()}
           className="rounded-lg p-2 text-slate-400 opacity-0 transition hover:bg-slate-100 hover:text-slate-600 group-hover:opacity-100 dark:hover:bg-slate-800 dark:hover:text-slate-300"
           aria-label="Project options"
         >
@@ -129,6 +133,7 @@ export type ProjectsPageProps = {
 export default function ProjectsPage({
   apiEndpoint = "/api/projects",
 }: ProjectsPageProps) {
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error] = useState<string | null>(null);
@@ -247,7 +252,11 @@ export default function ProjectsPage({
 
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {projects.map((project) => (
-          <ProjectCard key={project.id} project={project} />
+          <ProjectCard
+            key={project.id}
+            project={project}
+            onClick={() => navigate(`/projects/${project.id}`)}
+          />
         ))}
 
         {/* Empty state placeholder card */}
