@@ -52,6 +52,11 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"name":    "Otter Camp",
 		"tagline": "Work management for AI agent teams",
