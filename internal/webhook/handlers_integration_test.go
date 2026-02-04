@@ -87,6 +87,8 @@ func TestParseStatusEvent_AllEventTypes(t *testing.T) {
 		EventTaskStarted,
 		EventTaskCompleted,
 		EventTaskFailed,
+		EventTaskUpdated,
+		EventTaskProgress,
 		EventAgentStatus,
 	}
 
@@ -205,6 +207,8 @@ func TestEventConstants(t *testing.T) {
 	assert.Equal(t, "task.started", EventTaskStarted)
 	assert.Equal(t, "task.completed", EventTaskCompleted)
 	assert.Equal(t, "task.failed", EventTaskFailed)
+	assert.Equal(t, "task.updated", EventTaskUpdated)
+	assert.Equal(t, "task.progress", EventTaskProgress)
 	assert.Equal(t, "agent.status", EventAgentStatus)
 }
 
@@ -219,6 +223,8 @@ func TestIsSupportedEvent_EdgeCases(t *testing.T) {
 		{EventTaskStarted, true},
 		{EventTaskCompleted, true},
 		{EventTaskFailed, true},
+		{EventTaskUpdated, true},
+		{EventTaskProgress, true},
 		{EventAgentStatus, true},
 
 		// Case sensitivity
