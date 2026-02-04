@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
+import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
+import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
 
 type NavItem = {
   id: string;
@@ -18,16 +21,153 @@ const NAV_ITEMS: NavItem[] = [
 
 type DashboardLayoutProps = {
   children: ReactNode;
-  onCommandPaletteOpen?: () => void;
 };
 
 export default function DashboardLayout({
   children,
-  onCommandPaletteOpen,
 }: DashboardLayoutProps) {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  
+  const {
+    openCommandPalette,
+    isShortcutsHelpOpen,
+    openShortcutsHelp,
+    closeShortcutsHelp,
+    isCommandPaletteOpen,
+    closeCommandPalette,
+    selectedTaskIndex,
+    setSelectedTaskIndex,
+    taskCount,
+    openTaskDetail,
+    closeTaskDetail,
+    selectedTaskId,
+    openNewTask,
+    closeNewTask,
+    isNewTaskOpen,
+  } = useKeyboardShortcutsContext();
+
+  // Define global keyboard shortcuts
+  const shortcuts: Shortcut[] = [
+    // General
+    {
+      key: "k",
+      modifiers: { cmd: true },
+      description: "Open command palette",
+      category: "General",
+      action: openCommandPalette,
+    },
+    {
+      key: "/",
+      modifiers: { cmd: true },
+      description: "Show keyboard shortcuts",
+      category: "General",
+      action: openShortcutsHelp,
+    },
+    {
+      key: "Escape",
+      description: "Close modals/panels",
+      category: "General",
+      action: () => {
+        if (isCommandPaletteOpen) {
+          closeCommandPalette();
+        } else if (isShortcutsHelpOpen) {
+          closeShortcutsHelp();
+        } else if (selectedTaskId) {
+          closeTaskDetail();
+        } else if (isNewTaskOpen) {
+          closeNewTask();
+        } else if (sidebarOpen && isMobile) {
+          setSidebarOpen(false);
+        }
+      },
+    },
+    // Tasks
+    {
+      key: "n",
+      modifiers: { cmd: true },
+      description: "Create new task",
+      category: "Tasks",
+      action: openNewTask,
+    },
+    {
+      key: "j",
+      description: "Move down in task list",
+      category: "Tasks",
+      skipInInput: true,
+      action: () => {
+        if (taskCount > 0) {
+          setSelectedTaskIndex(Math.min(selectedTaskIndex + 1, taskCount - 1));
+        }
+      },
+    },
+    {
+      key: "k",
+      description: "Move up in task list",
+      category: "Tasks",
+      skipInInput: true,
+      action: () => {
+        if (taskCount > 0 && selectedTaskIndex > 0) {
+          setSelectedTaskIndex(selectedTaskIndex - 1);
+        }
+      },
+    },
+    {
+      key: "Enter",
+      description: "Open selected task",
+      category: "Tasks",
+      skipInInput: true,
+      action: () => {
+        // This will be handled by the KanbanBoard which knows the task IDs
+        const event = new CustomEvent("keyboard:open-task");
+        window.dispatchEvent(event);
+      },
+    },
+    // Priority shortcuts (1-4)
+    {
+      key: "1",
+      description: "Set priority: Low",
+      category: "Tasks",
+      skipInInput: true,
+      action: () => {
+        const event = new CustomEvent("keyboard:set-priority", { detail: "low" });
+        window.dispatchEvent(event);
+      },
+    },
+    {
+      key: "2",
+      description: "Set priority: Medium",
+      category: "Tasks",
+      skipInInput: true,
+      action: () => {
+        const event = new CustomEvent("keyboard:set-priority", { detail: "medium" });
+        window.dispatchEvent(event);
+      },
+    },
+    {
+      key: "3",
+      description: "Set priority: High",
+      category: "Tasks",
+      skipInInput: true,
+      action: () => {
+        const event = new CustomEvent("keyboard:set-priority", { detail: "high" });
+        window.dispatchEvent(event);
+      },
+    },
+    {
+      key: "4",
+      description: "Set priority: Critical",
+      category: "Tasks",
+      skipInInput: true,
+      action: () => {
+        const event = new CustomEvent("keyboard:set-priority", { detail: "critical" });
+        window.dispatchEvent(event);
+      },
+    },
+  ];
+
+  useKeyboardShortcuts(shortcuts);
 
   // Determine active nav item from current path
   const getActiveNavId = () => {
@@ -176,6 +316,7 @@ export default function DashboardLayout({
           <button
             type="button"
             onClick={onCommandPaletteOpen}
+            data-tour="command-palette"
             className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-500 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:bg-slate-700 md:flex"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

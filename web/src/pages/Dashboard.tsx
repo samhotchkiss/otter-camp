@@ -3,6 +3,7 @@ import CommandPalette from "../components/CommandPalette";
 import KanbanBoard from "../components/KanbanBoard";
 import ActivityPanel from "../components/ActivityPanel";
 import ProjectFilters from "../components/ProjectFilters";
+import OnboardingTour from "../components/OnboardingTour";
 import type { Command } from "../hooks/useCommandPalette";
 
 // Sample assignees for filters demo
@@ -105,7 +106,7 @@ export default function Dashboard() {
   );
 
   return (
-    <>
+    <OnboardingTour>
       <div className="space-y-6">
         {/* Page Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -145,8 +146,11 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="rounded-2xl border border-slate-200 bg-white/80 p-4 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80 sm:p-6">
+        {/* Filters - includes create task button */}
+        <div
+          className="rounded-2xl border border-slate-200 bg-white/80 p-4 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80 sm:p-6"
+          data-tour="create-task"
+        >
           <ProjectFilters assignees={ASSIGNEES} projects={PROJECTS} />
         </div>
 
@@ -155,7 +159,10 @@ export default function Dashboard() {
           {/* Primary Content */}
           <div className={activeView === "kanban" ? "lg:col-span-2" : "lg:col-span-3"}>
             {activeView === "kanban" ? (
-              <div className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80">
+              <div
+                className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80"
+                data-tour="kanban-board"
+              >
                 <KanbanBoard />
               </div>
             ) : (
@@ -165,7 +172,7 @@ export default function Dashboard() {
 
           {/* Sidebar Activity (only in kanban view) */}
           {activeView === "kanban" && (
-            <div className="lg:col-span-1">
+            <div className="lg:col-span-1" data-tour="agent-chat">
               <ActivityPanel className="h-fit" />
             </div>
           )}
@@ -178,6 +185,6 @@ export default function Dashboard() {
         isOpen={isPaletteOpen}
         onOpenChange={setIsPaletteOpen}
       />
-    </>
+    </OnboardingTour>
   );
 }
