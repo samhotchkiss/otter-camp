@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { Link, useLocation } from "react-router-dom";
 
 type NavItem = {
   id: string;
@@ -9,7 +10,7 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { id: "projects", label: "Projects", icon: "📁", href: "/projects" },
-  { id: "tasks", label: "Tasks", icon: "✅", href: "/tasks" },
+  { id: "tasks", label: "Tasks", icon: "✅", href: "/" },
   { id: "agents", label: "Agents", icon: "🤖", href: "/agents" },
   { id: "feed", label: "Feed", icon: "📡", href: "/feed" },
   { id: "settings", label: "Settings", icon: "⚙️", href: "/settings" },
@@ -18,16 +19,25 @@ const NAV_ITEMS: NavItem[] = [
 type DashboardLayoutProps = {
   children: ReactNode;
   onCommandPaletteOpen?: () => void;
-  activeNavId?: string;
 };
 
 export default function DashboardLayout({
   children,
   onCommandPaletteOpen,
-  activeNavId = "tasks",
 }: DashboardLayoutProps) {
+  const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+
+  // Determine active nav item from current path
+  const getActiveNavId = () => {
+    const path = location.pathname;
+    if (path === "/" || path === "/tasks") return "tasks";
+    const item = NAV_ITEMS.find((item) => item.href === path);
+    return item?.id ?? "tasks";
+  };
+
+  const activeNavId = getActiveNavId();
 
   // Detect mobile viewport
   useEffect(() => {
@@ -60,6 +70,13 @@ export default function DashboardLayout({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onCommandPaletteOpen]);
+
+  // Close sidebar on navigation (mobile)
+  useEffect(() => {
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
+  }, [location.pathname, isMobile]);
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-sky-50 via-white to-emerald-50 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
@@ -107,9 +124,9 @@ export default function DashboardLayout({
           {NAV_ITEMS.map((item) => {
             const isActive = item.id === activeNavId;
             return (
-              <a
+              <Link
                 key={item.id}
-                href={item.href}
+                to={item.href}
                 className={`
                   flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition
                   ${
@@ -118,17 +135,10 @@ export default function DashboardLayout({
                       : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
                   }
                 `}
-                onClick={(e) => {
-                  e.preventDefault();
-                  if (isMobile) {
-                    setSidebarOpen(false);
-                  }
-                  // TODO: Add proper routing
-                }}
               >
                 <span className="text-lg">{item.icon}</span>
                 {item.label}
-              </a>
+              </Link>
             );
           })}
         </nav>
@@ -190,22 +200,8 @@ export default function DashboardLayout({
               <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500" />
             </button>
 
-            {/* User avatar */}
-            <button
-              type="button"
-              className="flex items-center gap-2 rounded-xl p-1.5 transition hover:bg-slate-100 dark:hover:bg-slate-800"
-              aria-label="User menu"
-            >
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-sky-400 to-emerald-400 text-sm font-semibold text-white">
-                🦦
-              </div>
-              <span className="hidden text-sm font-medium text-slate-700 dark:text-slate-200 sm:block">
-                Otter
-              </span>
-              <svg className="hidden h-4 w-4 text-slate-400 sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
+            {/* User menu */}
+            <UserMenu />
           </div>
         </header>
 
