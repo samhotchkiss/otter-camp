@@ -25,6 +25,16 @@ func (m *Mux) Get(pattern string, handler http.HandlerFunc) {
 	})
 }
 
+func (m *Mux) Post(pattern string, handler http.HandlerFunc) {
+	m.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		handler(w, r)
+	})
+}
+
 func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var handler http.Handler = m.mux
 	for i := len(m.middlewares) - 1; i >= 0; i-- {
