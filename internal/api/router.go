@@ -45,13 +45,14 @@ func NewRouter() http.Handler {
 	r.Get("/api/commands/search", CommandSearchHandler)
 	r.Get("/api/feed", FeedHandlerV2)
 	r.Post("/api/auth/login", HandleLogin)
+	r.Post("/api/auth/exchange", HandleAuthExchange)
+	r.Get("/api/auth/exchange", HandleAuthExchange)
 
 	webhookHandler := &WebhookHandler{Hub: hub}
 	r.Post("/api/webhooks/openclaw", webhookHandler.OpenClawHandler)
 
 	feedPushHandler := NewFeedPushHandler(hub)
 	r.Post("/api/feed", feedPushHandler.Handle)
-	r.Post("/api/feed/push", feedPushHandler.Handle)
 
 	r.Handle("/ws", &ws.Handler{Hub: hub})
 
@@ -64,14 +65,6 @@ func NewRouter() http.Handler {
 	attachmentsHandler := &AttachmentsHandler{}
 	r.Post("/api/messages/attachments", attachmentsHandler.Upload)
 	r.Get("/api/attachments/{id}", attachmentsHandler.GetAttachment)
-
-	messageHandler := &MessageHandler{}
-	r.Get("/api/messages", messageHandler.ListMessages)
-	r.Post("/api/messages", messageHandler.CreateMessage)
-	r.Get("/api/messages/{id}", messageHandler.GetMessage)
-	r.Put("/api/messages/{id}", messageHandler.UpdateMessage)
-	r.Delete("/api/messages/{id}", messageHandler.DeleteMessage)
-	r.Get("/api/threads/{id}/messages", messageHandler.ListThreadMessages)
 
 	// Export/Import endpoints
 	r.Get("/api/export", HandleExport)

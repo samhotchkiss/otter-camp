@@ -17,7 +17,8 @@ type AuthContextValue = {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  requestLogin: (orgId: string) => Promise<AuthRequest>;
+  exchangeToken: (requestId: string, token: string) => Promise<void>;
   logout: () => void;
 };
 
@@ -25,27 +26,28 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const TOKEN_KEY = "otter_camp_token";
 const USER_KEY = "otter_camp_user";
+const TOKEN_EXP_KEY = "otter_camp_token_expires_at";
 
-function parseJwt(token: string): { exp: number; sub: string; email: string; name: string } | null {
-  try {
-    const base64Url = token.split(".")[1];
-    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-    const jsonPayload = decodeURIComponent(
-      atob(base64)
-        .split("")
-        .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
-        .join("")
-    );
-    return JSON.parse(jsonPayload);
-  } catch {
-    return null;
-  }
-}
+type AuthRequest = {
+  request_id: string;
+  state: string;
+  expires_at: string;
+  exchange_url: string;
+  openclaw_request: {
+    request_id: string;
+    state: string;
+    org_id: string;
+    callback_url: string;
+    expires_at: string;
+  };
+};
 
-function isTokenExpired(token: string): boolean {
-  const payload = parseJwt(token);
-  if (!payload) return true;
-  return Date.now() >= payload.exp * 1000;
+function isTokenExpired(): boolean {
+  const expiresAt = localStorage.getItem(TOKEN_EXP_KEY);
+  if (!expiresAt) return false;
+  const expiry = Date.parse(expiresAt);
+  if (Number.isNaN(expiry)) return true;
+  return Date.now() >= expiry;
 }
 
 type AuthProviderProps = {
@@ -61,38 +63,63 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const token = localStorage.getItem(TOKEN_KEY);
     const storedUser = localStorage.getItem(USER_KEY);
 
-    if (token && storedUser && !isTokenExpired(token)) {
+    if (token && storedUser && !isTokenExpired()) {
       try {
         setUser(JSON.parse(storedUser));
       } catch {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
+        localStorage.removeItem(TOKEN_EXP_KEY);
       }
     } else if (token) {
       // Token expired, clean up
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(TOKEN_EXP_KEY);
     }
 
     setIsLoading(false);
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const requestLogin = useCallback(async (orgId: string) => {
     const response = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ org_id: orgId }),
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: "Login failed" }));
-      throw new Error(error.message || "Login failed");
+      const error = await response.json().catch(() => ({ error: "Login request failed" }));
+      throw new Error(error.error || "Login request failed");
+    }
+
+    const data = (await response.json()) as AuthRequest;
+    return data;
+  }, []);
+
+  const exchangeToken = useCallback(async (requestId: string, token: string) => {
+    const response = await fetch("/api/auth/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId, token }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Login failed" }));
+      throw new Error(error.error || "Login failed");
     }
 
     const data = await response.json();
-    const { token, user: userData } = data;
+    const { token: sessionToken, user: userData } = data;
 
-    localStorage.setItem(TOKEN_KEY, token);
+    const expiresAt = response.headers.get("X-Session-Expires-At");
+    if (expiresAt) {
+      localStorage.setItem(TOKEN_EXP_KEY, expiresAt);
+    } else {
+      localStorage.removeItem(TOKEN_EXP_KEY);
+    }
+
+    localStorage.setItem(TOKEN_KEY, sessionToken);
     localStorage.setItem(USER_KEY, JSON.stringify(userData));
     setUser(userData);
   }, []);
@@ -100,6 +127,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    localStorage.removeItem(TOKEN_EXP_KEY);
     setUser(null);
   }, []);
 
@@ -107,7 +135,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     user,
     isLoading,
     isAuthenticated: !!user,
-    login,
+    requestLogin,
+    exchangeToken,
     logout,
   };
 
