@@ -31,3 +31,6 @@ npm-debug.log*
 
 # Testing
 coverage/
+web/test-results/
+web/playwright-report/
+web/playwright/.cache/
