@@ -43,7 +43,7 @@ func NewRouter() http.Handler {
 	r.Post("/api/waitlist", HandleWaitlist)
 	r.Get("/api/search", SearchHandler)
 	r.Get("/api/commands/search", CommandSearchHandler)
-	r.Get("/api/feed", FeedHandler)
+	r.Get("/api/feed", FeedHandlerV2)
 	r.Post("/api/webhooks/openclaw", OpenClawWebhookHandler)
 	r.Handle("/ws", &ws.Handler{Hub: hub})
 
