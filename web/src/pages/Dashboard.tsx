@@ -1,0 +1,187 @@
+import { useState, useMemo } from "react";
+import DashboardLayout from "../layouts/DashboardLayout";
+import CommandPalette from "../components/CommandPalette";
+import KanbanBoard from "../components/KanbanBoard";
+import ActivityPanel from "../components/ActivityPanel";
+import ProjectFilters from "../components/ProjectFilters";
+import type { Command } from "../hooks/useCommandPalette";
+
+// Sample assignees for filters demo
+const ASSIGNEES = [
+  { value: "otter-1", label: "🦦 Scout Otter" },
+  { value: "otter-2", label: "🦦 Builder Otter" },
+  { value: "otter-3", label: "🦦 Lead Otter" },
+];
+
+// Sample projects for filters demo
+const PROJECTS = [
+  { value: "camp-setup", label: "Camp Setup" },
+  { value: "expedition", label: "Expedition Planning" },
+  { value: "supplies", label: "Supply Management" },
+];
+
+export default function Dashboard() {
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const [activeView, setActiveView] = useState<"kanban" | "activity">("kanban");
+
+  const commands = useMemo<Command[]>(
+    () => [
+      {
+        id: "nav-projects",
+        label: "Go to Projects",
+        category: "Navigation",
+        keywords: ["projects", "boards"],
+        action: () => window.alert("Projects view coming soon"),
+      },
+      {
+        id: "nav-tasks",
+        label: "Go to Tasks",
+        category: "Navigation",
+        keywords: ["tasks", "todo"],
+        action: () => setActiveView("kanban"),
+      },
+      {
+        id: "nav-agents",
+        label: "Go to Agents",
+        category: "Navigation",
+        keywords: ["agents", "ai"],
+        action: () => window.alert("Agents view coming soon"),
+      },
+      {
+        id: "nav-feed",
+        label: "Go to Feed",
+        category: "Navigation",
+        keywords: ["feed", "activity"],
+        action: () => setActiveView("activity"),
+      },
+      {
+        id: "task-create",
+        label: "Create New Task",
+        category: "Tasks",
+        keywords: ["new", "task", "create"],
+        action: () => window.alert("Task creation coming soon"),
+      },
+      {
+        id: "task-search",
+        label: "Search Tasks",
+        category: "Tasks",
+        keywords: ["search", "find"],
+        action: () => {
+          const searchInput = document.querySelector<HTMLInputElement>(
+            'input[placeholder="Search tasks..."]'
+          );
+          searchInput?.focus();
+        },
+      },
+      {
+        id: "agent-scout",
+        label: "Summon Scout Agent",
+        category: "Agents",
+        keywords: ["scout", "research"],
+        action: () => window.alert("Scout agent incoming!"),
+      },
+      {
+        id: "agent-builder",
+        label: "Summon Builder Agent",
+        category: "Agents",
+        keywords: ["builder", "ship"],
+        action: () => window.alert("Builder agent incoming!"),
+      },
+      {
+        id: "settings-theme",
+        label: "Toggle Dark Mode",
+        category: "Settings",
+        keywords: ["dark", "light", "theme"],
+        action: () => document.documentElement.classList.toggle("dark"),
+      },
+      {
+        id: "settings-profile",
+        label: "Open Profile Settings",
+        category: "Settings",
+        keywords: ["profile", "account"],
+        action: () => window.alert("Profile settings coming soon"),
+      },
+    ],
+    []
+  );
+
+  return (
+    <DashboardLayout
+      onCommandPaletteOpen={() => setIsPaletteOpen(true)}
+      activeNavId="tasks"
+    >
+      <div className="space-y-6">
+        {/* Page Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white sm:text-3xl">
+              Dashboard
+            </h1>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Manage your camp, track tasks, and coordinate with agents.
+            </p>
+          </div>
+
+          {/* View toggle */}
+          <div className="flex rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-700 dark:bg-slate-800">
+            <button
+              type="button"
+              onClick={() => setActiveView("kanban")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                activeView === "kanban"
+                  ? "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+              }`}
+            >
+              📋 Kanban
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveView("activity")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                activeView === "activity"
+                  ? "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+              }`}
+            >
+              📡 Activity
+            </button>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="rounded-2xl border border-slate-200 bg-white/80 p-4 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80 sm:p-6">
+          <ProjectFilters assignees={ASSIGNEES} projects={PROJECTS} />
+        </div>
+
+        {/* Main Content Grid */}
+        <div className="grid gap-6 lg:grid-cols-3">
+          {/* Primary Content */}
+          <div className={activeView === "kanban" ? "lg:col-span-2" : "lg:col-span-3"}>
+            {activeView === "kanban" ? (
+              <div className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80">
+                <KanbanBoard />
+              </div>
+            ) : (
+              <ActivityPanel className="w-full" />
+            )}
+          </div>
+
+          {/* Sidebar Activity (only in kanban view) */}
+          {activeView === "kanban" && (
+            <div className="lg:col-span-1">
+              <ActivityPanel className="h-fit" />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Command Palette */}
+      <CommandPalette
+        commands={commands}
+        isOpen={isPaletteOpen}
+        onOpenChange={setIsPaletteOpen}
+      />
+    </DashboardLayout>
+  );
+}
