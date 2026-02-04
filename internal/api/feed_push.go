@@ -38,12 +38,12 @@ var (
 
 // AgentRateLimiter tracks request counts per agent.
 type AgentRateLimiter struct {
-	mu       sync.Mutex
-	counts   map[string]int
-	resets   map[string]time.Time
-	window   time.Duration
-	maxReqs  int
-	nowFunc  func() time.Time // for testing
+	mu      sync.Mutex
+	counts  map[string]int
+	resets  map[string]time.Time
+	window  time.Duration
+	maxReqs int
+	nowFunc func() time.Time // for testing
 }
 
 // NewAgentRateLimiter creates a new rate limiter.
@@ -89,11 +89,13 @@ type FeedPushItem struct {
 	TaskID   *string         `json:"task_id,omitempty"`
 	Type     string          `json:"type"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
+	Priority bool            `json:"priority,omitempty"`
 }
 
-// FeedPushRequest is the request body for POST /api/feed.
+// FeedPushRequest is the request body for POST /api/feed/push.
 type FeedPushRequest struct {
 	OrgID string         `json:"org_id"`
+	Mode  string         `json:"mode,omitempty"` // "augment" (default) or "replace"
 	Items []FeedPushItem `json:"items"`
 }
 
@@ -124,7 +126,7 @@ func NewFeedPushHandler(hub *ws.Hub) *FeedPushHandler {
 	}
 }
 
-// Handle handles POST /api/feed for agent activity pushes.
+// Handle handles POST /api/feed/push for agent activity pushes.
 func (h *FeedPushHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
@@ -191,6 +193,15 @@ func (h *FeedPushHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if mode == "" {
+		mode = "augment"
+	}
+	if mode != "augment" && mode != "replace" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid mode: must be 'augment' or 'replace'"})
+		return
+	}
+
 	// Validate org_id matches agent's org
 	if req.OrgID != "" && req.OrgID != orgID {
 		sendJSON(w, http.StatusForbidden, errorResponse{Error: "org_id mismatch"})
@@ -207,7 +218,8 @@ func (h *FeedPushHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate each item
+	// Validate and normalize each item
+	normalized := make([]FeedPushItem, 0, len(req.Items))
 	for i, item := range req.Items {
 		if strings.TrimSpace(item.Type) == "" {
 			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "item " + string(rune('0'+i)) + ": missing type"})
@@ -217,10 +229,24 @@ func (h *FeedPushHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "item " + string(rune('0'+i)) + ": invalid task_id"})
 			return
 		}
+		metadata, err := normalizeFeedPushMetadata(item.Metadata, item.Priority)
+		if err != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "item " + string(rune('0'+i)) + ": invalid metadata"})
+			return
+		}
+		item.Metadata = metadata
+		normalized = append(normalized, item)
+	}
+
+	if mode == "replace" {
+		if err := clearAgentFeedItems(r.Context(), db, orgID, agentID); err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to replace feed items"})
+			return
+		}
 	}
 
 	// Insert items
-	ids, err := insertFeedItems(r.Context(), db, orgID, agentID, req.Items)
+	ids, err := insertFeedItems(r.Context(), db, orgID, agentID, normalized)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to insert items"})
 		return
@@ -228,9 +254,9 @@ func (h *FeedPushHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// Broadcast to WebSocket subscribers
 	if h.Hub != nil {
-		items := make([]FeedItem, len(req.Items))
+		items := make([]FeedItem, len(normalized))
 		now := time.Now()
-		for i, item := range req.Items {
+		for i, item := range normalized {
 			items[i] = FeedItem{
 				ID:        ids[i],
 				OrgID:     orgID,
@@ -252,6 +278,40 @@ func (h *FeedPushHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		Inserted: len(ids),
 		IDs:      ids,
 	})
+}
+
+func normalizeFeedPushMetadata(raw json.RawMessage, priority bool) (json.RawMessage, error) {
+	var payload interface{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+	}
+
+	var obj map[string]interface{}
+	switch typed := payload.(type) {
+	case nil:
+		obj = map[string]interface{}{}
+	case map[string]interface{}:
+		obj = typed
+	default:
+		obj = map[string]interface{}{
+			"payload": typed,
+		}
+	}
+
+	obj["source"] = "agent_push"
+	if priority {
+		if _, exists := obj["priority"]; !exists {
+			obj["priority"] = true
+		}
+	}
+
+	normalized, err := json.Marshal(obj)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
 
 // validateAgentAPIKey validates an API key and returns the agent ID and org ID.
@@ -307,6 +367,11 @@ func insertFeedItems(ctx context.Context, db *sql.DB, orgID, agentID string, ite
 	}
 
 	return ids, nil
+}
+
+func clearAgentFeedItems(ctx context.Context, db *sql.DB, orgID, agentID string) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM activity_log WHERE org_id = $1 AND agent_id = $2 AND (metadata->>'source') = 'agent_push'", orgID, agentID)
+	return err
 }
 
 // broadcastFeedItems sends feed items to WebSocket subscribers.
