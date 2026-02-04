@@ -1,27 +1,48 @@
-import { memo, useCallback, useMemo } from "react";
-import type { AgentStatus } from "./AgentDM";
+import { memo, useMemo } from "react";
 
-/**
- * Extended agent info for card display.
- */
+export type AgentStatus = "active" | "busy" | "idle";
+
 export type AgentCardData = {
   id: string;
   name: string;
-  avatarUrl?: string;
+  role: string;
   status: AgentStatus;
-  role?: string;
-  currentTask?: string;
-  lastActive?: string;
+  tasks: number;
+  commits: number;
+  messages: number;
+  activeTime: string;
+  heartbeat: string;
+  activity: string;
+  lastAction: string;
+  projects: string[];
+  avatarUrl?: string;
 };
 
 export type AgentCardProps = {
   agent: AgentCardData;
-  onClick?: (agent: AgentCardData) => void;
 };
 
-/**
- * Get initials from a name for avatar fallback.
- */
+const STATUS_STYLES: Record<AgentStatus, string> = {
+  active: "bg-otter-green",
+  busy: "bg-otter-orange",
+  idle: "bg-otter-dark-text-muted",
+};
+
+const STATUS_LABELS: Record<AgentStatus, string> = {
+  active: "Active",
+  busy: "Busy",
+  idle: "Idle",
+};
+
+const AVATAR_BACKGROUNDS = [
+  "bg-emerald-500/20 text-emerald-300",
+  "bg-sky-500/20 text-sky-300",
+  "bg-amber-500/20 text-amber-300",
+  "bg-rose-500/20 text-rose-300",
+  "bg-indigo-500/20 text-indigo-300",
+  "bg-otter-orange/15 text-otter-orange",
+];
+
 function getInitials(name: string): string {
   return name
     .split(" ")
@@ -31,161 +52,131 @@ function getInitials(name: string): string {
     .toUpperCase();
 }
 
-/**
- * Format relative time for "last active" display.
- */
-function formatLastActive(isoString?: string): string {
-  if (!isoString) {
-    return "Never";
+function getAvatarClass(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
   }
-
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60000);
-  const diffHour = Math.floor(diffMin / 60);
-  const diffDay = Math.floor(diffHour / 24);
-
-  if (diffMin < 1) {
-    return "Just now";
-  }
-  if (diffMin < 60) {
-    return `${diffMin}m ago`;
-  }
-  if (diffHour < 24) {
-    return `${diffHour}h ago`;
-  }
-  if (diffDay < 7) {
-    return `${diffDay}d ago`;
-  }
-
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const index = Math.abs(hash) % AVATAR_BACKGROUNDS.length;
+  return AVATAR_BACKGROUNDS[index];
 }
 
-// Status styles - memoized outside component
-const STATUS_STYLES: Record<AgentStatus, string> = {
-  online: "bg-emerald-500 shadow-emerald-500/50 shadow-lg",
-  busy: "bg-amber-500 shadow-amber-500/50 shadow-lg animate-pulse",
-  offline: "bg-slate-500",
-};
+function parseDurationToSeconds(value: string): number {
+  const match = value.trim().toLowerCase().match(/^(\d+)(s|m|h|d)$/);
+  if (!match) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const amount = Number.parseInt(match[1] ?? "0", 10);
+  const unit = match[2];
+  if (unit === "s") return amount;
+  if (unit === "m") return amount * 60;
+  if (unit === "h") return amount * 3600;
+  return amount * 86400;
+}
 
-const STATUS_LABELS: Record<AgentStatus, string> = {
-  online: "Online",
-  busy: "Busy",
-  offline: "Offline",
-};
+function getPulseClass(value: string): string {
+  const seconds = parseDurationToSeconds(value);
+  if (seconds < 30) {
+    return "text-otter-green";
+  }
+  if (seconds < 300) {
+    return "text-otter-orange";
+  }
+  return "text-red-400";
+}
 
-/**
- * Status indicator dot component - Memoized.
- */
-const StatusIndicator = memo(function StatusIndicator({ status }: { status: AgentStatus }) {
-  return (
-    <span
-      className={`h-3 w-3 rounded-full ${STATUS_STYLES[status]}`}
-      title={STATUS_LABELS[status]}
-    />
-  );
-});
-
-/**
- * AgentCard - Displays agent info in a compact card format.
- * Memoized for performance in large lists.
- *
- * Features:
- * - Avatar with status indicator (lazy loaded images)
- * - Name and role
- * - Current task (if any)
- * - Last active timestamp
- * - Click to open DM
- */
-function AgentCardComponent({ agent, onClick }: AgentCardProps) {
-  const handleClick = useCallback(() => {
-    onClick?.(agent);
-  }, [onClick, agent]);
-
-  const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      onClick?.(agent);
-    }
-  }, [onClick, agent]);
-
-  // Memoize computed values
+function AgentCardComponent({ agent }: AgentCardProps) {
   const initials = useMemo(() => getInitials(agent.name), [agent.name]);
-  const lastActiveText = useMemo(() => {
-    if (agent.status === "online") {
-      return "Now";
-    }
-    return formatLastActive(agent.lastActive);
-  }, [agent.status, agent.lastActive]);
-
-  const lastActiveClassName = useMemo(() => {
-    const baseClass = "text-xs font-medium";
-    if (agent.status === "online") {
-      return `${baseClass} text-emerald-400`;
-    }
-    if (agent.status === "busy") {
-      return `${baseClass} text-amber-400`;
-    }
-    return `${baseClass} text-otter-muted`;
-  }, [agent.status]);
+  const avatarClass = useMemo(() => getAvatarClass(agent.name), [agent.name]);
+  const heartbeatClass = useMemo(() => getPulseClass(agent.heartbeat), [agent.heartbeat]);
+  const activityClass = useMemo(() => getPulseClass(agent.activity), [agent.activity]);
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
-      className="group cursor-pointer rounded-2xl border border-otter-dark-border bg-otter-dark-surface/80 p-5 shadow-lg transition-all duration-200 hover:border-emerald-500/50 hover:bg-otter-dark-surface hover:shadow-emerald-500/10 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-slate-950"
-    >
-      {/* Header: Avatar + Status */}
-      <div className="flex items-start justify-between">
-        <div className="relative">
-          {agent.avatarUrl ? (
-            <img
-              src={agent.avatarUrl}
-              alt={agent.name}
-              loading="lazy"
-              decoding="async"
-              className="h-14 w-14 rounded-xl object-cover ring-2 ring-emerald-500/30 transition group-hover:ring-emerald-500/50"
+    <article className="rounded-2xl border border-otter-dark-border bg-otter-dark-surface p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-otter-green/50 hover:shadow-lg">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            {agent.avatarUrl ? (
+              <img
+                src={agent.avatarUrl}
+                alt={agent.name}
+                loading="lazy"
+                decoding="async"
+                className="h-14 w-14 rounded-2xl object-cover ring-2 ring-otter-dark-border"
+              />
+            ) : (
+              <div
+                className={`flex h-14 w-14 items-center justify-center rounded-2xl text-lg font-semibold ring-2 ring-otter-dark-border ${avatarClass}`}
+              >
+                {initials}
+              </div>
+            )}
+            <span
+              className={`absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full border-2 border-otter-dark-surface ${STATUS_STYLES[agent.status]}`}
+              title={STATUS_LABELS[agent.status]}
             />
-          ) : (
-            <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-emerald-500/20 text-lg font-semibold text-emerald-300 ring-2 ring-emerald-500/30 transition group-hover:ring-emerald-500/50">
-              {initials}
-            </div>
-          )}
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-otter-dark-text">{agent.name}</h3>
+            <p className="text-sm text-otter-dark-text-muted">{agent.role}</p>
+          </div>
         </div>
-        <StatusIndicator status={agent.status} />
+        <span className="rounded-full border border-otter-dark-border bg-otter-dark-bg px-3 py-1 text-xs font-semibold uppercase tracking-wide text-otter-dark-text-muted">
+          {STATUS_LABELS[agent.status]}
+        </span>
       </div>
 
-      {/* Name & Role */}
-      <div className="mt-4">
-        <h3 className="font-semibold text-otter-dark-text transition group-hover:text-emerald-300">
-          {agent.name}
-        </h3>
-        {agent.role && (
-          <p className="mt-0.5 text-sm text-otter-muted">{agent.role}</p>
-        )}
-      </div>
-
-      {/* Current Task */}
-      {agent.currentTask && agent.status !== "offline" && (
-        <div className="mt-3 rounded-lg bg-otter-dark-surface/80 px-3 py-2">
-          <p className="text-xs font-medium uppercase tracking-wider text-otter-muted">
-            Current Task
-          </p>
-          <p className="mt-1 line-clamp-2 text-sm text-slate-300">
-            {agent.currentTask}
-          </p>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-otter-dark-border bg-otter-dark-bg/60 px-3 py-2 text-xs text-otter-dark-text-muted">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-semibold text-otter-dark-text">
+            {agent.tasks} tasks
+          </span>
+          <span>·</span>
+          <span className="font-semibold text-otter-dark-text">
+            {agent.commits} commits
+          </span>
+          <span>·</span>
+          <span className="font-semibold text-otter-dark-text">
+            {agent.messages} messages
+          </span>
         </div>
-      )}
-
-      {/* Footer: Last Active */}
-      <div className="mt-4 flex items-center justify-between border-t border-otter-dark-border pt-3">
-        <span className="text-xs text-otter-muted">Last active</span>
-        <span className={lastActiveClassName}>{lastActiveText}</span>
+        <div className="text-xs">
+          Active {agent.activeTime}
+        </div>
       </div>
-    </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+        <div className="rounded-xl border border-otter-dark-border bg-otter-dark-bg/60 px-3 py-2">
+          <div className="flex items-center gap-2 text-otter-dark-text-muted">
+            <span className={heartbeatClass}>💓</span>
+            Heartbeat
+          </div>
+          <div className={`mt-1 text-sm font-semibold ${heartbeatClass}`}>{agent.heartbeat}</div>
+        </div>
+        <div className="rounded-xl border border-otter-dark-border bg-otter-dark-bg/60 px-3 py-2">
+          <div className="flex items-center gap-2 text-otter-dark-text-muted">
+            <span className={activityClass}>⚡</span>
+            Activity
+          </div>
+          <div className={`mt-1 text-sm font-semibold ${activityClass}`}>{agent.activity}</div>
+        </div>
+      </div>
+
+      <p className="mt-4 text-sm text-otter-dark-text">
+        <span className="text-otter-dark-text-muted">Last:</span> {agent.lastAction}
+      </p>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {agent.projects.map((project) => (
+          <span
+            key={project}
+            className="rounded-full border border-otter-dark-border bg-otter-dark-bg/60 px-3 py-1 text-xs font-medium text-otter-dark-text-muted"
+          >
+            {project}
+          </span>
+        ))}
+      </div>
+    </article>
   );
 }
 
