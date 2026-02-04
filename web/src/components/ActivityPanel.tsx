@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef, memo } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useWS } from "../contexts/WebSocketContext";
 
 // Activity types that can be filtered
@@ -20,8 +21,6 @@ export type Activity = {
   metadata?: Record<string, unknown>;
 };
 
-type TimeGroup = "Today" | "Yesterday" | "This Week" | "Older";
-
 const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
   task: "Tasks",
   message: "Messages",
@@ -36,27 +35,7 @@ const ACTIVITY_TYPE_ICONS: Record<ActivityType, string> = {
   comment: "📝",
 };
 
-const ITEMS_PER_PAGE = 10;
-
-const getTimeGroup = (date: Date): TimeGroup => {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const weekAgo = new Date(today);
-  weekAgo.setDate(weekAgo.getDate() - 7);
-
-  if (date >= today) {
-    return "Today";
-  }
-  if (date >= yesterday) {
-    return "Yesterday";
-  }
-  if (date >= weekAgo) {
-    return "This Week";
-  }
-  return "Older";
-};
+const ESTIMATED_ITEM_HEIGHT = 72;
 
 const formatTimestamp = (date: Date): string => {
   const now = new Date();
@@ -151,23 +130,33 @@ const mapWebSocketToActivity = (
   }
 };
 
+// Activity Item Component - Memoized
 type ActivityItemProps = {
   activity: Activity;
+  style?: React.CSSProperties;
 };
 
-function ActivityItem({ activity }: ActivityItemProps) {
+const ActivityItem = memo(function ActivityItem({ activity, style }: ActivityItemProps) {
+  const initials = useMemo(() => getInitials(activity.actor.name), [activity.actor.name]);
+  const timestamp = useMemo(() => formatTimestamp(activity.timestamp), [activity.timestamp]);
+
   return (
-    <div className="flex items-start gap-3 rounded-xl px-3 py-3 transition hover:bg-slate-100 dark:hover:bg-slate-800/50">
+    <div
+      style={style}
+      className="flex items-start gap-3 rounded-xl px-3 py-3 transition hover:bg-slate-100 dark:hover:bg-slate-800/50"
+    >
       <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-slate-200 text-lg dark:bg-slate-700">
         {activity.actor.avatar ? (
           <img
             src={activity.actor.avatar}
             alt={activity.actor.name}
+            loading="lazy"
+            decoding="async"
             className="h-full w-full rounded-full object-cover"
           />
         ) : (
           <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-            {getInitials(activity.actor.name)}
+            {initials}
           </span>
         )}
       </div>
@@ -180,7 +169,7 @@ function ActivityItem({ activity }: ActivityItemProps) {
             {activity.actor.name}
           </span>
           <span className="text-xs text-slate-500 dark:text-slate-400">
-            {formatTimestamp(activity.timestamp)}
+            {timestamp}
           </span>
         </div>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
@@ -189,17 +178,17 @@ function ActivityItem({ activity }: ActivityItemProps) {
       </div>
     </div>
   );
-}
+});
 
 type ActivityPanelProps = {
   className?: string;
 };
 
-export default function ActivityPanel({ className = "" }: ActivityPanelProps) {
+function ActivityPanelComponent({ className = "" }: ActivityPanelProps) {
   const { connected, lastMessage } = useWS();
   const [activities, setActivities] = useState<Activity[]>([]);
   const [filterType, setFilterType] = useState<ActivityType | "all">("all");
-  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
+  const parentRef = useRef<HTMLDivElement>(null);
 
   // Process incoming WebSocket messages
   useEffect(() => {
@@ -216,7 +205,7 @@ export default function ActivityPanel({ className = "" }: ActivityPanelProps) {
     }
   }, [lastMessage]);
 
-  // Filtered activities based on type filter
+  // Filtered activities based on type filter - memoized
   const filteredActivities = useMemo(() => {
     if (filterType === "all") {
       return activities;
@@ -224,38 +213,22 @@ export default function ActivityPanel({ className = "" }: ActivityPanelProps) {
     return activities.filter((activity) => activity.type === filterType);
   }, [activities, filterType]);
 
-  // Visible activities with pagination
-  const visibleActivities = useMemo(() => {
-    return filteredActivities.slice(0, visibleCount);
-  }, [filteredActivities, visibleCount]);
-
-  // Group activities by time
-  const groupedActivities = useMemo(() => {
-    const groups = new Map<TimeGroup, Activity[]>();
-    const order: TimeGroup[] = ["Today", "Yesterday", "This Week", "Older"];
-    order.forEach((group) => groups.set(group, []));
-
-    visibleActivities.forEach((activity) => {
-      const group = getTimeGroup(activity.timestamp);
-      groups.get(group)?.push(activity);
-    });
-
-    return groups;
-  }, [visibleActivities]);
-
-  const hasMore = visibleCount < filteredActivities.length;
-
-  const handleLoadMore = useCallback(() => {
-    setVisibleCount((count) => count + ITEMS_PER_PAGE);
-  }, []);
+  // Virtual list for long activity feeds
+  const rowVirtualizer = useVirtualizer({
+    count: filteredActivities.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ESTIMATED_ITEM_HEIGHT,
+    overscan: 5,
+  });
 
   const handleFilterChange = useCallback(
     (event: React.ChangeEvent<HTMLSelectElement>) => {
       setFilterType(event.target.value as ActivityType | "all");
-      setVisibleCount(ITEMS_PER_PAGE);
     },
     []
   );
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
     <div
@@ -297,8 +270,11 @@ export default function ActivityPanel({ className = "" }: ActivityPanelProps) {
         </select>
       </div>
 
-      {/* Activity List */}
-      <div className="max-h-[60vh] overflow-y-auto px-3 py-4">
+      {/* Activity List with Virtual Scrolling */}
+      <div
+        ref={parentRef}
+        className="max-h-[60vh] overflow-y-auto px-3 py-4"
+      >
         {filteredActivities.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="text-4xl">🦦</div>
@@ -310,44 +286,37 @@ export default function ActivityPanel({ className = "" }: ActivityPanelProps) {
             </p>
           </div>
         ) : (
-          <div className="space-y-6">
-            {(["Today", "Yesterday", "This Week", "Older"] as TimeGroup[]).map(
-              (group) => {
-                const items = groupedActivities.get(group) ?? [];
-                if (items.length === 0) {
-                  return null;
-                }
-
-                return (
-                  <section key={group}>
-                    <p className="mb-3 px-3 text-xs font-semibold uppercase tracking-[0.25em] text-slate-500 dark:text-slate-400">
-                      {group}
-                    </p>
-                    <div className="space-y-1">
-                      {items.map((activity) => (
-                        <ActivityItem key={activity.id} activity={activity} />
-                      ))}
-                    </div>
-                  </section>
-                );
-              }
-            )}
-          </div>
-        )}
-
-        {/* Load More */}
-        {hasMore && (
-          <div className="mt-6 flex justify-center">
-            <button
-              type="button"
-              onClick={handleLoadMore}
-              className="rounded-full border border-slate-200 bg-white px-5 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:bg-slate-700"
-            >
-              Load more ({filteredActivities.length - visibleCount} remaining)
-            </button>
+          <div
+            style={{
+              height: `${rowVirtualizer.getTotalSize()}px`,
+              width: "100%",
+              position: "relative",
+            }}
+          >
+            {virtualItems.map((virtualRow) => {
+              const activity = filteredActivities[virtualRow.index];
+              return (
+                <ActivityItem
+                  key={activity.id}
+                  activity={activity}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                />
+              );
+            })}
           </div>
         )}
       </div>
     </div>
   );
 }
+
+const ActivityPanel = memo(ActivityPanelComponent);
+
+export default ActivityPanel;

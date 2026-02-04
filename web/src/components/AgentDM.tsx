@@ -143,6 +143,8 @@ function AgentAvatar({
         <img
           src={agent.avatarUrl}
           alt={agent.name}
+          loading="lazy"
+          decoding="async"
           className={`${sizeStyles[size]} rounded-full object-cover ring-2 ring-emerald-500/30`}
         />
       ) : (
@@ -179,6 +181,8 @@ function MessageAvatar({
       <img
         src={avatarUrl}
         alt={name}
+        loading="lazy"
+        decoding="async"
         className="h-8 w-8 rounded-full object-cover ring-2 ring-slate-700"
       />
     );

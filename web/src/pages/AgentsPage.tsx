@@ -1,11 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef, memo } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import AgentCard, { type AgentCardData } from "../components/AgentCard";
 import AgentDM, { type AgentStatus } from "../components/AgentDM";
 import { useWS } from "../contexts/WebSocketContext";
-import LoadingSpinner from "../components/LoadingSpinner";
-import { ErrorFallback } from "../components/ErrorBoundary";
-import { NoAgentsEmpty, NoResultsEmpty } from "../components/EmptyState";
-import { SkeletonList } from "../components/Skeleton";
 
 /**
  * Status filter options including "all".
@@ -19,10 +16,25 @@ export type AgentsPageProps = {
   apiEndpoint?: string;
 };
 
+// Status filter styles - memoized outside component
+const ACTIVE_STYLES: Record<StatusFilter, string> = {
+  all: "bg-slate-700 text-slate-100",
+  online: "bg-emerald-500/20 text-emerald-300 border-emerald-500/50",
+  busy: "bg-amber-500/20 text-amber-300 border-amber-500/50",
+  offline: "bg-slate-700 text-slate-300",
+};
+
+const DOT_STYLES: Record<StatusFilter, string> = {
+  all: "bg-slate-400",
+  online: "bg-emerald-500",
+  busy: "bg-amber-500",
+  offline: "bg-slate-500",
+};
+
 /**
- * Status filter button component.
+ * Status filter button component - Memoized.
  */
-function StatusFilterButton({
+const StatusFilterButton = memo(function StatusFilterButton({
   status,
   label,
   count,
@@ -35,32 +47,18 @@ function StatusFilterButton({
   isActive: boolean;
   onClick: () => void;
 }) {
-  const activeStyles: Record<StatusFilter, string> = {
-    all: "bg-slate-700 text-slate-100",
-    online: "bg-emerald-500/20 text-emerald-300 border-emerald-500/50",
-    busy: "bg-amber-500/20 text-amber-300 border-amber-500/50",
-    offline: "bg-slate-700 text-slate-300",
-  };
-
-  const dotStyles: Record<StatusFilter, string> = {
-    all: "bg-slate-400",
-    online: "bg-emerald-500",
-    busy: "bg-amber-500",
-    offline: "bg-slate-500",
-  };
+  const className = useMemo(() => {
+    const base = "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition";
+    if (isActive) {
+      return `${base} ${ACTIVE_STYLES[status]}`;
+    }
+    return `${base} border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:text-slate-300`;
+  }, [isActive, status]);
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition ${
-        isActive
-          ? activeStyles[status]
-          : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:text-slate-300"
-      }`}
-    >
+    <button type="button" onClick={onClick} className={className}>
       {status !== "all" && (
-        <span className={`h-2 w-2 rounded-full ${dotStyles[status]}`} />
+        <span className={`h-2 w-2 rounded-full ${DOT_STYLES[status]}`} />
       )}
       {label}
       <span
@@ -72,29 +70,58 @@ function StatusFilterButton({
       </span>
     </button>
   );
-}
+});
+
+// Number of columns in the grid
+const GRID_COLUMNS = {
+  sm: 2,
+  lg: 3,
+  xl: 4,
+};
+
+const CARD_HEIGHT = 220; // Estimated height of AgentCard
+const GAP = 16;
 
 /**
  * AgentsPage - Grid view of all agents with filtering and DM modal.
+ * Uses virtual scrolling for performance with large agent lists.
  *
  * Features:
- * - Responsive grid of agent cards
+ * - Responsive grid of agent cards (virtualized)
  * - Filter by status (all/online/busy/offline)
  * - Click card to open AgentDM modal
  * - Real-time status updates via WebSocket
  */
-export default function AgentsPage({
+function AgentsPageComponent({
   apiEndpoint = "/api/agents",
 }: AgentsPageProps) {
   const [agents, setAgents] = useState<AgentCardData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [selectedAgent, setSelectedAgent] = useState<AgentCardData | null>(
-    null
-  );
+  const [selectedAgent, setSelectedAgent] = useState<AgentCardData | null>(null);
+  const [columns, setColumns] = useState(GRID_COLUMNS.lg);
+  const parentRef = useRef<HTMLDivElement>(null);
 
   const { lastMessage, connected } = useWS();
+
+  // Responsive column count
+  useEffect(() => {
+    const updateColumns = () => {
+      const width = window.innerWidth;
+      if (width >= 1280) {
+        setColumns(GRID_COLUMNS.xl);
+      } else if (width >= 1024) {
+        setColumns(GRID_COLUMNS.lg);
+      } else {
+        setColumns(GRID_COLUMNS.sm);
+      }
+    };
+
+    updateColumns();
+    window.addEventListener("resize", updateColumns);
+    return () => window.removeEventListener("resize", updateColumns);
+  }, []);
 
   // Fetch agents from API
   const fetchAgents = useCallback(async () => {
@@ -170,7 +197,7 @@ export default function AgentsPage({
     }
   }, [lastMessage]);
 
-  // Calculate counts for filters
+  // Calculate counts for filters - memoized
   const counts = useMemo(() => {
     const result = { all: agents.length, online: 0, busy: 0, offline: 0 };
     for (const agent of agents) {
@@ -179,7 +206,7 @@ export default function AgentsPage({
     return result;
   }, [agents]);
 
-  // Filter agents by status
+  // Filter agents by status - memoized
   const filteredAgents = useMemo(() => {
     if (statusFilter === "all") {
       return agents;
@@ -187,22 +214,36 @@ export default function AgentsPage({
     return agents.filter((agent) => agent.status === statusFilter);
   }, [agents, statusFilter]);
 
-  // Handle card click
-  const handleAgentClick = (agent: AgentCardData) => {
-    setSelectedAgent(agent);
-  };
+  // Calculate rows for virtualization
+  const rowCount = useMemo(() => 
+    Math.ceil(filteredAgents.length / columns), 
+    [filteredAgents.length, columns]
+  );
 
-  // Close DM modal
-  const handleCloseDM = () => {
+  // Virtual list for rows
+  const rowVirtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => CARD_HEIGHT + GAP,
+    overscan: 2,
+  });
+
+  // Handle card click - memoized
+  const handleAgentClick = useCallback((agent: AgentCardData) => {
+    setSelectedAgent(agent);
+  }, []);
+
+  // Close DM modal - memoized
+  const handleCloseDM = useCallback(() => {
     setSelectedAgent(null);
-  };
+  }, []);
 
   // Handle backdrop click
-  const handleBackdropClick = (event: React.MouseEvent) => {
+  const handleBackdropClick = useCallback((event: React.MouseEvent) => {
     if (event.target === event.currentTarget) {
       handleCloseDM();
     }
-  };
+  }, [handleCloseDM]);
 
   // Handle escape key to close modal
   useEffect(() => {
@@ -214,40 +255,41 @@ export default function AgentsPage({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedAgent]);
+  }, [selectedAgent, handleCloseDM]);
+
+  // Filter button handlers - memoized
+  const handleFilterAll = useCallback(() => setStatusFilter("all"), []);
+  const handleFilterOnline = useCallback(() => setStatusFilter("online"), []);
+  const handleFilterBusy = useCallback(() => setStatusFilter("busy"), []);
+  const handleFilterOffline = useCallback(() => setStatusFilter("offline"), []);
 
   if (isLoading) {
     return (
-      <div className="w-full">
-        {/* Header skeleton */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-semibold text-slate-100">Agents</h1>
-              <p className="mt-1 text-slate-500">Loading agents...</p>
-            </div>
-            <LoadingSpinner size="md" />
-          </div>
+      <div className="flex min-h-[400px] items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-400">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-emerald-500" />
+          <span>Loading agents...</span>
         </div>
-        <SkeletonList count={8} variant="agent" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="w-full">
-        <div className="mb-8">
-          <h1 className="text-3xl font-semibold text-slate-100">Agents</h1>
-        </div>
-        <ErrorFallback
-          error={error}
-          message="Failed to load agents"
-          onRetry={() => window.location.reload()}
-        />
+      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4">
+        <div className="text-red-400">{error}</div>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="rounded-lg bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
+        >
+          Try Again
+        </button>
       </div>
     );
   }
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
     <div className="w-full">
@@ -285,48 +327,81 @@ export default function AgentsPage({
             label="All"
             count={counts.all}
             isActive={statusFilter === "all"}
-            onClick={() => setStatusFilter("all")}
+            onClick={handleFilterAll}
           />
           <StatusFilterButton
             status="online"
             label="Online"
             count={counts.online}
             isActive={statusFilter === "online"}
-            onClick={() => setStatusFilter("online")}
+            onClick={handleFilterOnline}
           />
           <StatusFilterButton
             status="busy"
             label="Busy"
             count={counts.busy}
             isActive={statusFilter === "busy"}
-            onClick={() => setStatusFilter("busy")}
+            onClick={handleFilterBusy}
           />
           <StatusFilterButton
             status="offline"
             label="Offline"
             count={counts.offline}
             isActive={statusFilter === "offline"}
-            onClick={() => setStatusFilter("offline")}
+            onClick={handleFilterOffline}
           />
         </div>
       </div>
 
-      {/* Agent grid */}
+      {/* Agent grid with virtual scrolling */}
       {filteredAgents.length === 0 ? (
-        statusFilter === "all" ? (
-          <NoAgentsEmpty />
-        ) : (
-          <NoResultsEmpty query={`${statusFilter} agents`} />
-        )
+        <div className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-900/50">
+          <p className="text-slate-500">
+            {statusFilter === "all"
+              ? "No agents found"
+              : `No ${statusFilter} agents`}
+          </p>
+        </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {filteredAgents.map((agent) => (
-            <AgentCard
-              key={agent.id}
-              agent={agent}
-              onClick={handleAgentClick}
-            />
-          ))}
+        <div
+          ref={parentRef}
+          className="max-h-[70vh] overflow-y-auto"
+        >
+          <div
+            style={{
+              height: `${rowVirtualizer.getTotalSize()}px`,
+              width: "100%",
+              position: "relative",
+            }}
+          >
+            {virtualItems.map((virtualRow) => {
+              const startIndex = virtualRow.index * columns;
+              const rowAgents = filteredAgents.slice(startIndex, startIndex + columns);
+              
+              return (
+                <div
+                  key={virtualRow.key}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                  className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                >
+                  {rowAgents.map((agent) => (
+                    <AgentCard
+                      key={agent.id}
+                      agent={agent}
+                      onClick={handleAgentClick}
+                    />
+                  ))}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -375,3 +450,7 @@ export default function AgentsPage({
     </div>
   );
 }
+
+const AgentsPage = memo(AgentsPageComponent);
+
+export default AgentsPage;

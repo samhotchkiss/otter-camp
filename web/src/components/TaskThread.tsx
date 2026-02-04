@@ -139,6 +139,8 @@ function AttachmentPreview({ attachment }: { attachment: Attachment }) {
         <img
           src={attachment.thumbnail_url || attachment.url}
           alt={attachment.filename}
+          loading="lazy"
+          decoding="async"
           className="h-32 w-full object-cover transition group-hover:opacity-90"
         />
         <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/20">
@@ -226,6 +228,8 @@ function MessageAvatar({
       <img
         src={avatarUrl}
         alt={name}
+        loading="lazy"
+        decoding="async"
         className="h-8 w-8 rounded-full object-cover ring-2 ring-slate-700"
       />
     );

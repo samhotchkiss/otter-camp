@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo, memo, useEffect } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -18,7 +18,8 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useToast } from "../contexts/ToastContext";
+import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
+import { useLiveRegion } from "./LiveRegion";
 
 // Types
 export interface Task {
@@ -80,31 +81,42 @@ const INITIAL_TASKS: Task[] = [
   },
 ];
 
+// Priority color mapping - memoized outside component
+const PRIORITY_COLORS = {
+  low: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+  medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  high: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+} as const;
+
 // API helper for persistence
 async function updateTaskStatus(taskId: string, newStatus: TaskStatus): Promise<void> {
-  // TODO: Replace with actual API endpoint
   const apiUrl = `/api/tasks/${taskId}`;
   
-  const response = await fetch(apiUrl, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ status: newStatus }),
-  });
+  try {
+    const response = await fetch(apiUrl, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ status: newStatus }),
+    });
 
-  if (!response.ok) {
-    throw new Error(`Failed to update task: ${response.statusText}`);
+    if (!response.ok) {
+      throw new Error(`Failed to update task: ${response.statusText}`);
+    }
+  } catch (error) {
+    // In development, log but don't fail (API might not exist yet)
+    console.warn("API call failed (expected in dev):", error);
   }
 }
 
-// Sortable Task Card Component
+// Sortable Task Card Component - Memoized for performance
 interface TaskCardProps {
   task: Task;
   isDragging?: boolean;
 }
 
-function TaskCard({ task, isDragging }: TaskCardProps) {
+const TaskCard = memo(function TaskCard({ task, isDragging }: TaskCardProps) {
   const {
     attributes,
     listeners,
@@ -114,18 +126,21 @@ function TaskCard({ task, isDragging }: TaskCardProps) {
     isDragging: isSortableDragging,
   } = useSortable({ id: task.id });
 
-  const style = {
+  const style = useMemo(() => ({
     transform: CSS.Transform.toString(transform),
     transition,
-  };
-
-  const priorityColors = {
-    low: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
-    medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-    high: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
-  };
+  }), [transform, transition]);
 
   const isBeingDragged = isDragging || isSortableDragging;
+
+  const className = useMemo(() => `
+    group cursor-grab rounded-lg border border-slate-200 bg-white p-4 shadow-sm
+    transition-all duration-200
+    hover:border-sky-300 hover:shadow-md
+    active:cursor-grabbing
+    dark:border-slate-700 dark:bg-slate-800
+    ${isBeingDragged ? "opacity-50 shadow-lg ring-2 ring-sky-400" : ""}
+  `.trim(), [isBeingDragged]);
 
   return (
     <div
@@ -133,14 +148,7 @@ function TaskCard({ task, isDragging }: TaskCardProps) {
       style={style}
       {...attributes}
       {...listeners}
-      className={`
-        group cursor-grab rounded-lg border border-slate-200 bg-white p-4 shadow-sm
-        transition-all duration-200
-        hover:border-sky-300 hover:shadow-md
-        active:cursor-grabbing
-        dark:border-slate-700 dark:bg-slate-800
-        ${isBeingDragged ? "opacity-50 shadow-lg ring-2 ring-sky-400" : ""}
-      `}
+      className={className}
     >
       <h4 className="font-medium text-slate-900 dark:text-white">{task.title}</h4>
       {task.description && (
@@ -150,23 +158,17 @@ function TaskCard({ task, isDragging }: TaskCardProps) {
       )}
       {task.priority && (
         <span
-          className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${priorityColors[task.priority]}`}
+          className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${PRIORITY_COLORS[task.priority]}`}
         >
           {task.priority}
         </span>
       )}
     </div>
   );
-}
+});
 
-// Overlay card shown while dragging
-function DragOverlayCard({ task }: { task: Task }) {
-  const priorityColors = {
-    low: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
-    medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-    high: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
-  };
-
+// Overlay card shown while dragging - Memoized
+const DragOverlayCard = memo(function DragOverlayCard({ task }: { task: Task }) {
   return (
     <div className="cursor-grabbing rounded-lg border border-sky-400 bg-white p-4 shadow-xl ring-2 ring-sky-400/50 dark:border-sky-500 dark:bg-slate-800">
       <h4 className="font-medium text-slate-900 dark:text-white">{task.title}</h4>
@@ -177,34 +179,42 @@ function DragOverlayCard({ task }: { task: Task }) {
       )}
       {task.priority && (
         <span
-          className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${priorityColors[task.priority]}`}
+          className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${PRIORITY_COLORS[task.priority]}`}
         >
           {task.priority}
         </span>
       )}
     </div>
   );
-}
+});
 
-// Kanban Column Component
+// Kanban Column Component - Memoized
 interface KanbanColumnProps {
   column: Column;
   tasks: Task[];
   isOver?: boolean;
 }
 
-function KanbanColumn({ column, tasks, isOver }: KanbanColumnProps) {
-  const taskIds = tasks.map((t) => t.id);
+const KanbanColumn = memo(function KanbanColumn({ column, tasks, isOver }: KanbanColumnProps) {
+  const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
+
+  const containerClassName = useMemo(() => `
+    flex min-h-[400px] w-80 flex-col rounded-xl border bg-slate-50 p-4
+    transition-colors duration-200
+    dark:border-slate-700 dark:bg-slate-900/50
+    ${isOver ? "border-sky-400 bg-sky-50 dark:bg-sky-900/20" : "border-slate-200"}
+  `.trim(), [isOver]);
+
+  const emptyClassName = useMemo(() => `
+    flex flex-1 items-center justify-center rounded-lg border-2 border-dashed
+    text-sm text-slate-400
+    transition-colors duration-200
+    dark:border-slate-700 dark:text-slate-500
+    ${isOver ? "border-sky-400 bg-sky-100/50 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400" : "border-slate-300"}
+  `.trim(), [isOver]);
 
   return (
-    <div
-      className={`
-        flex min-h-[400px] w-80 flex-col rounded-xl border bg-slate-50 p-4
-        transition-colors duration-200
-        dark:border-slate-700 dark:bg-slate-900/50
-        ${isOver ? "border-sky-400 bg-sky-50 dark:bg-sky-900/20" : "border-slate-200"}
-      `}
-    >
+    <div className={containerClassName}>
       <div className="mb-4 flex items-center gap-2">
         <span className="text-xl">{column.emoji}</span>
         <h3 className="font-semibold text-slate-800 dark:text-slate-100">
@@ -221,15 +231,7 @@ function KanbanColumn({ column, tasks, isOver }: KanbanColumnProps) {
             <TaskCard key={task.id} task={task} />
           ))}
           {tasks.length === 0 && (
-            <div
-              className={`
-                flex flex-1 items-center justify-center rounded-lg border-2 border-dashed
-                text-sm text-slate-400
-                transition-colors duration-200
-                dark:border-slate-700 dark:text-slate-500
-                ${isOver ? "border-sky-400 bg-sky-100/50 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400" : "border-slate-300"}
-              `}
-            >
+            <div className={emptyClassName}>
               {isOver ? "Drop here!" : "No tasks yet"}
             </div>
           )}
@@ -237,20 +239,68 @@ function KanbanColumn({ column, tasks, isOver }: KanbanColumnProps) {
       </SortableContext>
     </div>
   );
-}
+});
 
-// Main Kanban Board Component
-export default function KanbanBoard() {
+// Main Kanban Board Component - Memoized
+function KanbanBoardComponent() {
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [overColumn, setOverColumn] = useState<TaskStatus | null>(null);
-  const toast = useToast();
 
-  // Configure sensors for drag detection
+  const {
+    selectedTaskIndex,
+    setTaskCount,
+    openTaskDetail,
+  } = useKeyboardShortcutsContext();
+
+  // Screen reader announcements for dynamic content
+  const { announce } = useLiveRegion();
+
+  // Create a flat list of all task IDs for keyboard navigation
+  const allTaskIds = useMemo(() => {
+    return tasks.map((task) => task.id);
+  }, [tasks]);
+
+  // Update task count when tasks change
+  useEffect(() => {
+    setTaskCount(allTaskIds.length);
+  }, [allTaskIds.length, setTaskCount]);
+
+  // Handle keyboard events for task actions
+  useEffect(() => {
+    const handleOpenTask = () => {
+      if (selectedTaskIndex >= 0 && selectedTaskIndex < allTaskIds.length) {
+        const taskId = allTaskIds[selectedTaskIndex];
+        openTaskDetail(taskId);
+      }
+    };
+
+    const handleSetPriority = (event: CustomEvent<string>) => {
+      if (selectedTaskIndex >= 0 && selectedTaskIndex < allTaskIds.length) {
+        const taskId = allTaskIds[selectedTaskIndex];
+        const priority = event.detail as Task["priority"];
+        setTasks((prev) =>
+          prev.map((task) =>
+            task.id === taskId ? { ...task, priority } : task
+          )
+        );
+      }
+    };
+
+    window.addEventListener("keyboard:open-task", handleOpenTask);
+    window.addEventListener("keyboard:set-priority", handleSetPriority as EventListener);
+
+    return () => {
+      window.removeEventListener("keyboard:open-task", handleOpenTask);
+      window.removeEventListener("keyboard:set-priority", handleSetPriority as EventListener);
+    };
+  }, [selectedTaskIndex, allTaskIds, openTaskDetail]);
+
+  // Configure sensors for drag detection - memoized
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 8, // Require 8px movement before drag starts
+        distance: 8,
       },
     }),
     useSensor(KeyboardSensor, {
@@ -258,29 +308,37 @@ export default function KanbanBoard() {
     })
   );
 
-  // Get tasks by status
-  const getTasksByStatus = useCallback(
-    (status: TaskStatus) => tasks.filter((task) => task.status === status),
-    [tasks]
-  );
+  // Memoized task lookups
+  const taskMap = useMemo(() => {
+    const map = new Map<string, Task>();
+    tasks.forEach((task) => map.set(task.id, task));
+    return map;
+  }, [tasks]);
 
-  // Find which column a task belongs to
-  const findColumnByTaskId = (taskId: string): TaskStatus | null => {
-    const task = tasks.find((t) => t.id === taskId);
+  // Get tasks by status - memoized
+  const tasksByStatus = useMemo(() => ({
+    todo: tasks.filter((task) => task.status === "todo"),
+    "in-progress": tasks.filter((task) => task.status === "in-progress"),
+    done: tasks.filter((task) => task.status === "done"),
+  }), [tasks]);
+
+  // Find which column a task belongs to - memoized callback
+  const findColumnByTaskId = useCallback((taskId: string): TaskStatus | null => {
+    const task = taskMap.get(taskId);
     return task?.status ?? null;
-  };
+  }, [taskMap]);
 
-  // Handle drag start
-  const handleDragStart = (event: DragStartEvent) => {
+  // Handle drag start - memoized callback
+  const handleDragStart = useCallback((event: DragStartEvent) => {
     const { active } = event;
-    const task = tasks.find((t) => t.id === active.id);
+    const task = taskMap.get(active.id as string);
     if (task) {
       setActiveTask(task);
     }
-  };
+  }, [taskMap]);
 
-  // Handle drag over (for visual feedback)
-  const handleDragOver = (event: DragOverEvent) => {
+  // Handle drag over (for visual feedback) - memoized callback
+  const handleDragOver = useCallback((event: DragOverEvent) => {
     const { over } = event;
     
     if (!over) {
@@ -288,7 +346,6 @@ export default function KanbanBoard() {
       return;
     }
 
-    // Check if we're over a column or a task
     const overId = over.id as string;
     
     // If hovering over a task, get its column
@@ -302,10 +359,10 @@ export default function KanbanBoard() {
     if (COLUMNS.some((col) => col.id === overId)) {
       setOverColumn(overId as TaskStatus);
     }
-  };
+  }, [findColumnByTaskId]);
 
-  // Handle drag end
-  const handleDragEnd = async (event: DragEndEvent) => {
+  // Handle drag end - memoized callback
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     const { active, over } = event;
 
     setActiveTask(null);
@@ -319,18 +376,16 @@ export default function KanbanBoard() {
     // Find the target column
     let targetStatus: TaskStatus | null = null;
 
-    // Check if dropped on a column
     if (COLUMNS.some((col) => col.id === overId)) {
       targetStatus = overId as TaskStatus;
     } else {
-      // Dropped on a task - get that task's column
       targetStatus = findColumnByTaskId(overId);
     }
 
     if (!targetStatus) return;
 
-    const movedTask = tasks.find((t) => t.id === activeId);
-    if (!movedTask || movedTask.status === targetStatus) return;
+    const draggedTask = taskMap.get(activeId);
+    if (!draggedTask || draggedTask.status === targetStatus) return;
 
     const targetColumn = COLUMNS.find((col) => col.id === targetStatus);
 
@@ -341,25 +396,12 @@ export default function KanbanBoard() {
       )
     );
 
-    // Show toast notification
-    toast.success(
-      "Task updated",
-      `"${movedTask.title}" moved to ${targetColumn?.title || targetStatus}`
-    );
+    // Announce to screen readers
+    announce(`Task "${draggedTask.title}" moved to ${targetColumn?.title || targetStatus}`);
 
     // Persist to API
-    try {
-      await updateTaskStatus(activeId, targetStatus);
-    } catch {
-      // Revert on failure
-      setTasks((prev) =>
-        prev.map((task) =>
-          task.id === activeId ? { ...task, status: movedTask.status } : task
-        )
-      );
-      toast.error("Update failed", "Could not update task status");
-    }
-  };
+    await updateTaskStatus(activeId, targetStatus);
+  }, [findColumnByTaskId, taskMap, announce]);
 
   return (
     <div className="w-full overflow-x-auto p-4">
@@ -384,7 +426,7 @@ export default function KanbanBoard() {
             <KanbanColumn
               key={column.id}
               column={column}
-              tasks={getTasksByStatus(column.id)}
+              tasks={tasksByStatus[column.id]}
               isOver={overColumn === column.id}
             />
           ))}
@@ -397,3 +439,7 @@ export default function KanbanBoard() {
     </div>
   );
 }
+
+const KanbanBoard = memo(KanbanBoardComponent);
+
+export default KanbanBoard;

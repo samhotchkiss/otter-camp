@@ -2,12 +2,14 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
   type ReactNode,
 } from "react";
 import TaskThread from "./TaskThread";
 import { useWS } from "../contexts/WebSocketContext";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 // =============================================================================
 // Types
@@ -333,6 +335,8 @@ function AssigneeAvatar({ assignee }: { assignee: TaskAssignee }) {
       <img
         src={assignee.avatarUrl}
         alt={assignee.name}
+        loading="lazy"
+        decoding="async"
         className="h-8 w-8 rounded-full object-cover ring-2 ring-white dark:ring-slate-800"
       />
     );
@@ -439,6 +443,8 @@ function AttachmentCard({
           <img
             src={attachment.thumbnail_url || attachment.url}
             alt={attachment.filename}
+            loading="lazy"
+            decoding="async"
             className="h-32 w-full object-cover"
           />
           <div className="p-3">
@@ -506,6 +512,24 @@ export default function TaskDetail({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const { lastMessage } = useWS();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Focus trap for modal accessibility
+  const { containerRef } = useFocusTrap({
+    isActive: isOpen,
+    onEscape: () => {
+      if (showDeleteConfirm) {
+        setShowDeleteConfirm(false);
+      } else if (isEditing) {
+        setIsEditing(false);
+        setEditedTask({});
+      } else {
+        onClose();
+      }
+    },
+    returnFocusOnClose: true,
+    initialFocusRef: closeButtonRef,
+  });
 
   // Fetch task details
   useEffect(() => {
@@ -556,24 +580,7 @@ export default function TaskDetail({
     }
   }, [isOpen]);
 
-  // Handle escape key to close
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isOpen) {
-        if (showDeleteConfirm) {
-          setShowDeleteConfirm(false);
-        } else if (isEditing) {
-          setIsEditing(false);
-          setEditedTask({});
-        } else {
-          onClose();
-        }
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, isEditing, showDeleteConfirm, onClose]);
+  // Note: Escape key handling is done by useFocusTrap hook
 
   // Save edited task
   const handleSave = useCallback(async () => {
@@ -681,12 +688,18 @@ export default function TaskDetail({
       />
 
       {/* Slide-over panel */}
-      <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col bg-white shadow-2xl dark:bg-slate-900">
+      <div
+        ref={containerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="task-detail-title"
+        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col bg-white shadow-2xl dark:bg-slate-900"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-800">
           <div className="flex items-center gap-3">
-            <span className="text-xl">🦦</span>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+            <span className="text-xl" aria-hidden="true">🦦</span>
+            <h2 id="task-detail-title" className="text-lg font-semibold text-slate-900 dark:text-white">
               Task Details
             </h2>
           </div>
@@ -695,16 +708,18 @@ export default function TaskDetail({
               <button
                 type="button"
                 onClick={() => setIsEditing(true)}
+                aria-label="Edit task"
                 className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
               >
-                ✏️ Edit
+                <span aria-hidden="true">✏️</span> Edit
               </button>
             )}
             <button
+              ref={closeButtonRef}
               type="button"
               onClick={onClose}
               className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-              aria-label="Close"
+              aria-label="Close task details"
             >
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

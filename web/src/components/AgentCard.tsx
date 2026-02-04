@@ -1,3 +1,4 @@
+import { memo, useCallback, useMemo } from "react";
 import type { AgentStatus } from "./AgentDM";
 
 /**
@@ -61,51 +62,73 @@ function formatLastActive(isoString?: string): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+// Status styles - memoized outside component
+const STATUS_STYLES: Record<AgentStatus, string> = {
+  online: "bg-emerald-500 shadow-emerald-500/50 shadow-lg",
+  busy: "bg-amber-500 shadow-amber-500/50 shadow-lg animate-pulse",
+  offline: "bg-slate-500",
+};
+
+const STATUS_LABELS: Record<AgentStatus, string> = {
+  online: "Online",
+  busy: "Busy",
+  offline: "Offline",
+};
+
 /**
- * Status indicator dot component.
+ * Status indicator dot component - Memoized.
  */
-function StatusIndicator({ status }: { status: AgentStatus }) {
-  const statusStyles: Record<AgentStatus, string> = {
-    online: "bg-emerald-500 shadow-emerald-500/50 shadow-lg",
-    busy: "bg-amber-500 shadow-amber-500/50 shadow-lg animate-pulse",
-    offline: "bg-slate-500",
-  };
-
-  const statusLabels: Record<AgentStatus, string> = {
-    online: "Online",
-    busy: "Busy",
-    offline: "Offline",
-  };
-
+const StatusIndicator = memo(function StatusIndicator({ status }: { status: AgentStatus }) {
   return (
     <span
-      className={`h-3 w-3 rounded-full ${statusStyles[status]}`}
-      title={statusLabels[status]}
+      className={`h-3 w-3 rounded-full ${STATUS_STYLES[status]}`}
+      title={STATUS_LABELS[status]}
     />
   );
-}
+});
 
 /**
  * AgentCard - Displays agent info in a compact card format.
+ * Memoized for performance in large lists.
  *
  * Features:
- * - Avatar with status indicator
+ * - Avatar with status indicator (lazy loaded images)
  * - Name and role
  * - Current task (if any)
  * - Last active timestamp
  * - Click to open DM
  */
-export default function AgentCard({ agent, onClick }: AgentCardProps) {
-  const handleClick = () => {
+function AgentCardComponent({ agent, onClick }: AgentCardProps) {
+  const handleClick = useCallback(() => {
     onClick?.(agent);
-  };
+  }, [onClick, agent]);
 
-  const handleKeyDown = (event: React.KeyboardEvent) => {
+  const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onClick?.(agent);
     }
-  };
+  }, [onClick, agent]);
+
+  // Memoize computed values
+  const initials = useMemo(() => getInitials(agent.name), [agent.name]);
+  const lastActiveText = useMemo(() => {
+    if (agent.status === "online") {
+      return "Now";
+    }
+    return formatLastActive(agent.lastActive);
+  }, [agent.status, agent.lastActive]);
+
+  const lastActiveClassName = useMemo(() => {
+    const baseClass = "text-xs font-medium";
+    if (agent.status === "online") {
+      return `${baseClass} text-emerald-400`;
+    }
+    if (agent.status === "busy") {
+      return `${baseClass} text-amber-400`;
+    }
+    return `${baseClass} text-slate-500`;
+  }, [agent.status]);
 
   return (
     <div
@@ -122,11 +145,13 @@ export default function AgentCard({ agent, onClick }: AgentCardProps) {
             <img
               src={agent.avatarUrl}
               alt={agent.name}
+              loading="lazy"
+              decoding="async"
               className="h-14 w-14 rounded-xl object-cover ring-2 ring-emerald-500/30 transition group-hover:ring-emerald-500/50"
             />
           ) : (
             <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-emerald-500/20 text-lg font-semibold text-emerald-300 ring-2 ring-emerald-500/30 transition group-hover:ring-emerald-500/50">
-              {getInitials(agent.name)}
+              {initials}
             </div>
           )}
         </div>
@@ -158,20 +183,12 @@ export default function AgentCard({ agent, onClick }: AgentCardProps) {
       {/* Footer: Last Active */}
       <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3">
         <span className="text-xs text-slate-600">Last active</span>
-        <span
-          className={`text-xs font-medium ${
-            agent.status === "online"
-              ? "text-emerald-400"
-              : agent.status === "busy"
-                ? "text-amber-400"
-                : "text-slate-500"
-          }`}
-        >
-          {agent.status === "online"
-            ? "Now"
-            : formatLastActive(agent.lastActive)}
-        </span>
+        <span className={lastActiveClassName}>{lastActiveText}</span>
       </div>
     </div>
   );
 }
+
+const AgentCard = memo(AgentCardComponent);
+
+export default AgentCard;

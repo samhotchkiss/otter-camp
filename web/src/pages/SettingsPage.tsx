@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import DataManagement from "../components/DataManagement";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -299,6 +300,8 @@ function ProfileSection({
               <img
                 src={profile.avatarUrl}
                 alt="Avatar"
+                loading="lazy"
+                decoding="async"
                 className="h-20 w-20 rounded-full object-cover"
               />
             ) : (
@@ -503,6 +506,8 @@ function WorkspaceSection({
                     <img
                       src={member.avatarUrl}
                       alt={member.name}
+                      loading="lazy"
+                      decoding="async"
                       className="h-10 w-10 rounded-full object-cover"
                     />
                   ) : (
@@ -971,6 +976,9 @@ export default function SettingsPage() {
         />
 
         <AppearanceSection theme={theme} onUpdate={setTheme} />
+
+        {/* Data Management - Export/Import */}
+        <DataManagement orgId={localStorage.getItem("otter-camp-org-id") || ""} />
       </div>
     </div>
   );
