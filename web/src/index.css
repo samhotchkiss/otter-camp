@@ -4,6 +4,7 @@
 
 :root {
   color-scheme: light dark;
+  --otter-dark-accent: #c9a86c;
 }
 
 body {
@@ -36,4 +37,76 @@ body {
 
 .command-palette-panel {
   animation: palette-scale 200ms ease-out;
+}
+
+.topbar {
+  background: var(--otter-dark-accent);
+  color: #1a1918;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.topbar-tab {
+  color: rgba(26, 25, 24, 0.7);
+  padding: 8px 12px;
+  border-radius: 9999px;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.topbar-tab:hover {
+  background: rgba(26, 25, 24, 0.1);
+}
+
+.topbar-tab--active {
+  background: rgba(26, 25, 24, 0.2);
+  color: #1a1918;
+  font-weight: 600;
+}
+
+.topbar-search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 360px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  transition: background 150ms ease, border 150ms ease;
+}
+
+.topbar-search:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.topbar-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  width: 36px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.15);
+  transition: background 150ms ease;
+}
+
+.topbar-icon:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.topbar-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  width: 36px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.25);
 }

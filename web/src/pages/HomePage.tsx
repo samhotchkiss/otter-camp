@@ -104,31 +104,8 @@ export default function HomePage() {
   }, []);
 
   return (
-    <div className="flex min-h-screen flex-col bg-otter-dark-bg">
-      {/* Top Bar */}
-      <header className="sticky top-0 z-50 flex items-center gap-6 bg-otter-dark-accent px-6 py-3">
-        <div className="flex items-center gap-2.5">
-          <span className="text-2xl">🦦</span>
-          <span className="text-lg font-bold text-otter-dark-bg">otter.camp</span>
-        </div>
-
-        <button
-          onClick={openCommandPalette}
-          className="flex flex-1 max-w-md items-center gap-3 rounded-lg border border-white/20 bg-white/15 px-4 py-2.5 transition hover:bg-white/20"
-        >
-          <span>🔍</span>
-          <span className="flex-1 text-left text-sm text-otter-dark-bg/70">Search or type a command...</span>
-          <kbd className="rounded bg-white/20 px-2 py-0.5 text-xs text-otter-dark-bg">/</kbd>
-        </button>
-
-        <div className="ml-auto flex items-center gap-4">
-          <button className="text-xl opacity-80 hover:opacity-100" title="Toggle theme">☀️</button>
-          <div className="h-8 w-8 rounded-full bg-white/20" />
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-6 p-6 lg:grid-cols-[1fr_360px]">
+    <div className="flex flex-col gap-6">
+      <section className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
         {/* Primary Column */}
         <div className="flex flex-col gap-6">
           {/* Needs You Section */}
@@ -284,7 +261,7 @@ export default function HomePage() {
             ))}
           </div>
         </div>
-      </main>
+      </section>
 
       {/* Footer */}
       <footer className="border-t border-otter-dark-border bg-otter-dark-surface-alt px-6 py-4 text-center text-sm text-otter-dark-muted">

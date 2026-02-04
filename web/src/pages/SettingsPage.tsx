@@ -749,7 +749,7 @@ const DEFAULT_NOTIFICATION_PREFS: NotificationPreferences = {
   weeklyDigest: { email: true, push: false, inApp: false },
 };
 
-// Removed outer layout wrapper - now uses DashboardLayout from router
+// Removed outer layout wrapper - now uses layout from router
 export default function SettingsPage() {
   // Profile state
   const [profile, setProfile] = useState<Profile>({

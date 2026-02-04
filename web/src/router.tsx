@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { createBrowserRouter, Outlet } from "react-router-dom";
-import DashboardLayout from "./layouts/DashboardLayout";
+import TopbarLayout from "./layouts/TopbarLayout";
 import LoadingSpinner from "./components/LoadingSpinner";
 import { KeyboardShortcutsProvider } from "./contexts/KeyboardShortcutsContext";
 
@@ -25,35 +25,27 @@ function SuspenseRoute({ children }: { children: React.ReactNode }) {
   );
 }
 
-function DashboardRoot() {
+function AppRoot() {
   return (
     <KeyboardShortcutsProvider>
-      <DashboardLayout>
+      <TopbarLayout>
         <Suspense fallback={<LoadingSpinner message="Loading page..." size="lg" />}>
           <Outlet />
         </Suspense>
-      </DashboardLayout>
+      </TopbarLayout>
     </KeyboardShortcutsProvider>
   );
 }
 
 export const router = createBrowserRouter([
   {
-    // Home page - Jeff's executive dashboard (no sidebar layout)
     path: "/",
-    element: (
-      <KeyboardShortcutsProvider>
-        <Suspense fallback={<LoadingSpinner message="Loading..." size="lg" />}>
-          <HomePage />
-        </Suspense>
-      </KeyboardShortcutsProvider>
-    ),
-  },
-  {
-    // Other pages use the sidebar layout
-    path: "/",
-    element: <DashboardRoot />,
+    element: <AppRoot />,
     children: [
+      {
+        index: true,
+        element: <HomePage />,
+      },
       {
         path: "tasks",
         element: <Dashboard />,
