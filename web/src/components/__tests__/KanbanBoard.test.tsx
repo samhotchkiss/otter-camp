@@ -79,7 +79,8 @@ describe("KanbanBoard", () => {
     it("renders the board header", () => {
       render(<KanbanBoard />);
       
-      expect(screen.getByText("🦦 Camp Tasks")).toBeInTheDocument();
+      // Camp Tasks heading (emoji is aria-hidden)
+      expect(screen.getByRole("heading", { name: /Camp Tasks/i })).toBeInTheDocument();
       expect(screen.getByText(/Drag and drop tasks between columns/)).toBeInTheDocument();
     });
 
@@ -175,8 +176,9 @@ describe("KanbanBoard", () => {
     it("renders task cards with proper attributes for dragging", () => {
       render(<KanbanBoard />);
       
-      const taskCards = screen.getAllByRole("button");
-      // Each task should be draggable via role="button" from useSortable
+      // Task cards are now listitems within lists for better semantics
+      const taskCards = screen.getAllByRole("listitem");
+      // Each task should be rendered as a listitem
       expect(taskCards.length).toBeGreaterThanOrEqual(4);
     });
 
@@ -218,8 +220,8 @@ describe("KanbanBoard", () => {
       
       render(<KanbanBoard />);
       
-      // Board should still render even if API is unavailable
-      expect(screen.getByText("🦦 Camp Tasks")).toBeInTheDocument();
+      // Board should still render even if API is unavailable (emoji is aria-hidden)
+      expect(screen.getByRole("heading", { name: /Camp Tasks/i })).toBeInTheDocument();
       
       consoleSpy.mockRestore();
     });
@@ -237,8 +239,8 @@ describe("KanbanBoard", () => {
     it("makes task cards keyboard accessible", () => {
       render(<KanbanBoard />);
       
-      // Task cards should have role="button" and tabIndex
-      const taskCards = screen.getAllByRole("button");
+      // Task cards should have role="listitem" (for semantic list context) and tabIndex
+      const taskCards = screen.getAllByRole("listitem");
       taskCards.forEach((card) => {
         expect(card).toHaveAttribute("tabindex", "0");
       });
