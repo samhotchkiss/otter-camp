@@ -60,6 +60,13 @@ export default function DashboardLayout({
     },
     {
       key: "/",
+      description: "Open command palette",
+      category: "General",
+      skipInInput: true,
+      action: openCommandPalette,
+    },
+    {
+      key: "/",
       modifiers: { cmd: true },
       description: "Show keyboard shortcuts",
       category: "General",
@@ -227,7 +234,7 @@ export default function DashboardLayout({
         `}
       >
         {/* Sidebar Header */}
-        <div className="flex h-16 items-center gap-3 border-b border-slate-200 px-5 dark:border-slate-800">
+        <Link to="/" className="flex h-16 items-center gap-3 border-b border-slate-200 px-5 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition">
           <span className="text-2xl">🦦</span>
           <span className="text-lg font-semibold text-slate-900 dark:text-white">
             Otter Camp
@@ -244,7 +251,7 @@ export default function DashboardLayout({
               </svg>
             </button>
           )}
-        </div>
+        </Link>
 
         {/* Navigation */}
         <nav aria-label="Main navigation" className="flex-1 space-y-1 px-3 py-4">
@@ -278,7 +285,7 @@ export default function DashboardLayout({
               Pro tip
             </p>
             <p className="mt-1 text-sm text-emerald-600 dark:text-emerald-300">
-              Press <kbd className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-semibold dark:bg-emerald-800">⌘K</kbd> for quick actions
+              Press <kbd className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-semibold dark:bg-emerald-800">/</kbd> for quick actions
             </p>
           </div>
         </div>
@@ -314,7 +321,7 @@ export default function DashboardLayout({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
             <span>Search or command...</span>
-            <kbd className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-400 dark:bg-slate-700">⌘K</kbd>
+            <kbd className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-400 dark:bg-slate-700">/</kbd>
           </button>
 
           {/* Right side actions */}
