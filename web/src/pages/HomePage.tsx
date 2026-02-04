@@ -1,17 +1,4 @@
-import { useState, useEffect } from "react";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
-
-// Otter facts for the footer
-const OTTER_FACTS = [
-  "Otters hold hands while sleeping so they don't drift apart.",
-  "Sea otters have the densest fur of any mammal — about 1 million hairs per square inch.",
-  "Otters have a favorite rock they keep in a pouch under their arm.",
-  "A group of otters is called a 'romp' on land and a 'raft' in water.",
-  "Otters can close their ears and nostrils while swimming underwater.",
-  "Sea otters eat about 25% of their body weight daily.",
-  "Baby otters are called pups and they can't swim when they're born.",
-  "Otters have been seen juggling rocks for fun.",
-];
 
 // Sample data - would come from API
 const NEEDS_YOU = [
@@ -97,11 +84,6 @@ const STATUS_COLORS: Record<ProjectStatus, string> = {
 
 export default function HomePage() {
   const { openCommandPalette } = useKeyboardShortcutsContext();
-  const [otterFact, setOtterFact] = useState("");
-
-  useEffect(() => {
-    setOtterFact(OTTER_FACTS[Math.floor(Math.random() * OTTER_FACTS.length)]);
-  }, []);
 
   return (
     <div className="flex flex-col gap-6">
@@ -262,22 +244,6 @@ export default function HomePage() {
           </div>
         </div>
       </section>
-
-      {/* Footer */}
-      <footer className="border-t border-otter-dark-border bg-otter-dark-surface-alt px-6 py-4 text-center text-sm text-otter-dark-muted">
-        <p className="mb-2">🦦 {otterFact}</p>
-        <p className="mb-1 font-medium">Made with 🤍 in Santa Fe</p>
-        <p>
-          <a
-            href="https://seaotterfoundationtrust.org"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-otter-dark-accent hover:underline"
-          >
-            Help real otters →
-          </a>
-        </p>
-      </footer>
     </div>
   );
 }
