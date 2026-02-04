@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp — Graph Paper</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Oswald:wght@600&display=swap');
+    
+    :root {
+      --cream: #FAF8F5;
+      --brown: #5C4A3D;
+      --blue: #4A6D7C;
+      --orange: #C87941;
+      --red: #B85C38;
+      --green: #5A7A5C;
+      --grid: rgba(74, 109, 124, 0.15);
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: 
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+        linear-gradient(rgba(74, 109, 124, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(74, 109, 124, 0.05) 1px, transparent 1px),
+        var(--cream);
+      background-size: 
+        80px 80px,
+        80px 80px,
+        16px 16px,
+        16px 16px;
+      min-height: 100vh;
+      padding: 40px;
+    }
+    
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    
+    /* Header - blueprint style */
+    .header {
+      border: 2px solid var(--blue);
+      padding: 24px;
+      margin-bottom: 32px;
+      position: relative;
+    }
+    
+    .header::before {
+      content: 'REV. 04';
+      position: absolute;
+      top: 8px;
+      right: 12px;
+      font-size: 10px;
+      color: var(--blue);
+    }
+    
+    .header-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    
+    .logo-box {
+      width: 64px;
+      height: 64px;
+      border: 2px solid var(--brown);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+    }
+    
+    .header-text h1 {
+      font-family: 'Oswald', sans-serif;
+      font-size: 28px;
+      color: var(--brown);
+      letter-spacing: 2px;
+    }
+    
+    .header-text p {
+      font-size: 12px;
+      color: var(--blue);
+      margin-top: 4px;
+    }
+    
+    .header-meta {
+      margin-left: auto;
+      text-align: right;
+      font-size: 11px;
+      color: var(--blue);
+    }
+    
+    /* Section */
+    .section {
+      border: 2px solid var(--blue);
+      margin-bottom: 24px;
+    }
+    
+    .section-header {
+      background: var(--blue);
+      color: var(--cream);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .section-title {
+      font-family: 'Oswald', sans-serif;
+      font-size: 14px;
+      letter-spacing: 2px;
+    }
+    
+    .section-count {
+      background: var(--cream);
+      color: var(--blue);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+    }
+    
+    .section-count.alert {
+      background: var(--red);
+      color: var(--cream);
+    }
+    
+    .section-body {
+      padding: 16px;
+    }
+    
+    /* Items */
+    .item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px dashed var(--blue);
+    }
+    
+    .item:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    
+    .item-check {
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--blue);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    
+    .item-check.urgent {
+      border-color: var(--red);
+      background: rgba(184, 92, 56, 0.1);
+    }
+    
+    .item-content {
+      flex: 1;
+    }
+    
+    .item-label {
+      font-size: 10px;
+      color: var(--red);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    
+    .item-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--brown);
+      margin-top: 2px;
+    }
+    
+    .item-desc {
+      font-size: 12px;
+      color: var(--blue);
+      margin-top: 2px;
+    }
+    
+    .item-btn {
+      background: var(--brown);
+      color: var(--cream);
+      border: none;
+      padding: 8px 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    
+    /* Log entries */
+    .log-entry {
+      padding: 8px 0;
+      border-bottom: 1px dotted var(--blue);
+      font-size: 12px;
+      display: flex;
+      gap: 12px;
+    }
+    
+    .log-entry:last-child {
+      border-bottom: none;
+    }
+    
+    .log-time {
+      color: var(--blue);
+      flex-shrink: 0;
+      width: 50px;
+    }
+    
+    .log-agent {
+      font-weight: 700;
+      color: var(--brown);
+    }
+    
+    .log-text {
+      color: var(--brown);
+    }
+    
+    /* Input */
+    .input-section {
+      display: flex;
+      gap: 0;
+    }
+    
+    .input-field {
+      flex: 1;
+      border: 2px solid var(--blue);
+      border-right: none;
+      padding: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      background: var(--cream);
+    }
+    
+    .input-field:focus {
+      outline: none;
+    }
+    
+    .input-btn {
+      background: var(--orange);
+      color: var(--cream);
+      border: 2px solid var(--orange);
+      padding: 12px 20px;
+      font-family: 'Oswald', sans-serif;
+      font-size: 14px;
+      letter-spacing: 1px;
+      cursor: pointer;
+    }
+    
+    /* Footer */
+    .footer {
+      text-align: center;
+      margin-top: 32px;
+      font-size: 11px;
+      color: var(--blue);
+    }
+    
+    .footer-otter {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="header-row">
+        <div class="logo-box">🦦</div>
+        <div class="header-text">
+          <h1>OTTER CAMP</h1>
+          <p>AGENT WORK MANAGEMENT SYSTEM</p>
+        </div>
+        <div class="header-meta">
+          DATE: 2026.02.03<br>
+          OPERATOR: SAM
+        </div>
+      </div>
+    </header>
+    
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">01. PENDING ACTIONS</span>
+        <span class="section-count alert">2</span>
+      </div>
+      <div class="section-body">
+        <div class="item">
+          <div class="item-check urgent"></div>
+          <div class="item-content">
+            <div class="item-label">APPROVAL REQUIRED</div>
+            <div class="item-title">ItsAlive v2.1.0</div>
+            <div class="item-desc">Ivy awaiting deploy authorization</div>
+          </div>
+          <button class="item-btn">APPROVE →</button>
+        </div>
+        <div class="item">
+          <div class="item-check urgent"></div>
+          <div class="item-content">
+            <div class="item-label">REVIEW REQUIRED</div>
+            <div class="item-title">Blog Post Draft</div>
+            <div class="item-desc">Stone: "Why I Run 12 AI Agents"</div>
+          </div>
+          <button class="item-btn">REVIEW →</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">02. ACTIVITY LOG</span>
+        <span class="section-count">14</span>
+      </div>
+      <div class="section-body">
+        <div class="log-entry">
+          <span class="log-time">14:22</span>
+          <span class="log-agent">DEREK</span>
+          <span class="log-text">— completed retry logic impl</span>
+        </div>
+        <div class="log-entry">
+          <span class="log-time">15:45</span>
+          <span class="log-agent">JEFF_G</span>
+          <span class="log-text">— pushed v4 mockups</span>
+        </div>
+        <div class="log-entry">
+          <span class="log-time">16:30</span>
+          <span class="log-agent">NOVA</span>
+          <span class="log-text">— scheduled 3 tweets</span>
+        </div>
+        <div class="log-entry">
+          <span class="log-time">13:00</span>
+          <span class="log-agent">STONE</span>
+          <span class="log-text">— draft complete (1400w)</span>
+        </div>
+      </div>
+    </div>
+    
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">03. QUICK NOTE</span>
+      </div>
+      <div class="section-body">
+        <div class="input-section">
+          <input type="text" class="input-field" placeholder="Enter note...">
+          <button class="input-btn">SEND</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="footer">
+      <div class="footer-otter">🦦</div>
+      OTTER.CAMP // REVISION 04 // CONFIDENTIAL
+    </div>
+  </div>
+</body>
+</html>

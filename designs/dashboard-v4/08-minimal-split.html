@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp — Minimal</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap');
+    
+    :root {
+      --cream: #FAF8F5;
+      --brown: #5C4A3D;
+      --bark: #8B7355;
+      --sand: #E8E2D9;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --red: #B85C38;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--cream);
+      min-height: 100vh;
+    }
+    
+    /* Split layout */
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 100vh;
+    }
+    
+    /* Left side - urgent */
+    .left {
+      background: var(--brown);
+      color: var(--cream);
+      padding: 60px 48px;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .left-header {
+      margin-bottom: 40px;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+    
+    .logo-icon {
+      font-size: 36px;
+    }
+    
+    .logo-text {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    
+    .greeting {
+      font-size: 32px;
+      font-weight: 700;
+      line-height: 1.3;
+      max-width: 300px;
+    }
+    
+    .urgent-count {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--red);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 700;
+      margin-top: 20px;
+    }
+    
+    .urgent-list {
+      flex: 1;
+    }
+    
+    .urgent-item {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    
+    .urgent-project {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      opacity: 0.7;
+      margin-bottom: 8px;
+    }
+    
+    .urgent-action {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+    
+    .urgent-btn {
+      background: var(--orange);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 700;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: 'DM Sans', sans-serif;
+    }
+    
+    .urgent-btn:hover {
+      background: #b86d35;
+    }
+    
+    /* Right side - info */
+    .right {
+      padding: 60px 48px;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .right-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 32px;
+    }
+    
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--bark);
+    }
+    
+    .update-count {
+      background: var(--green);
+      color: white;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 12px;
+    }
+    
+    .log-list {
+      flex: 1;
+      margin-bottom: 40px;
+    }
+    
+    .log-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--sand);
+    }
+    
+    .log-item:last-child {
+      border-bottom: none;
+    }
+    
+    .log-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: var(--brown);
+      color: var(--cream);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    
+    .log-content {
+      flex: 1;
+    }
+    
+    .log-text {
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--brown);
+    }
+    
+    .log-text strong {
+      font-weight: 700;
+    }
+    
+    .log-time {
+      font-size: 13px;
+      color: var(--bark);
+      margin-top: 4px;
+    }
+    
+    /* Quick thought */
+    .quick-thought {
+      background: var(--sand);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    
+    .thought-label {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--bark);
+      margin-bottom: 12px;
+    }
+    
+    .thought-input {
+      width: 100%;
+      padding: 14px;
+      border: 2px solid var(--cream);
+      border-radius: 8px;
+      font-size: 15px;
+      font-family: 'DM Sans', sans-serif;
+      background: var(--cream);
+      resize: none;
+    }
+    
+    .thought-input:focus {
+      outline: none;
+      border-color: var(--brown);
+    }
+    
+    .thought-btn {
+      margin-top: 12px;
+      background: var(--brown);
+      color: var(--cream);
+      border: none;
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 700;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: 'DM Sans', sans-serif;
+    }
+    
+    /* Otter footer */
+    .otter-footer {
+      text-align: center;
+      font-size: 32px;
+      margin-top: 32px;
+      opacity: 0.5;
+    }
+    
+    @media (max-width: 900px) {
+      .split {
+        grid-template-columns: 1fr;
+      }
+      
+      .left, .right {
+        padding: 40px 24px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="split">
+    <div class="left">
+      <div class="left-header">
+        <div class="logo">
+          <span class="logo-icon">🦦</span>
+          <span class="logo-text">otter.camp</span>
+        </div>
+        <h1 class="greeting">Good evening, Sam</h1>
+        <div class="urgent-count">
+          <span>⚠️</span>
+          <span>2 items need you</span>
+        </div>
+      </div>
+      
+      <div class="urgent-list">
+        <div class="urgent-item">
+          <div class="urgent-project">ItsAlive</div>
+          <div class="urgent-action">Ivy needs deploy approval</div>
+          <button class="urgent-btn">Approve →</button>
+        </div>
+        
+        <div class="urgent-item">
+          <div class="urgent-project">Content</div>
+          <div class="urgent-action">Stone's blog post ready</div>
+          <button class="urgent-btn">Review →</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="right">
+      <div class="right-header">
+        <span class="section-title">Since You Left</span>
+        <span class="update-count">14</span>
+      </div>
+      
+      <div class="log-list">
+        <div class="log-item">
+          <div class="log-avatar">D</div>
+          <div class="log-content">
+            <div class="log-text"><strong>Derek</strong> finished retry logic for Pearl</div>
+            <div class="log-time">2 hours ago</div>
+          </div>
+        </div>
+        
+        <div class="log-item">
+          <div class="log-avatar">J</div>
+          <div class="log-content">
+            <div class="log-text"><strong>Jeff G</strong> completed v4 mockups</div>
+            <div class="log-time">1 hour ago</div>
+          </div>
+        </div>
+        
+        <div class="log-item">
+          <div class="log-avatar">N</div>
+          <div class="log-content">
+            <div class="log-text"><strong>Nova</strong> scheduled 3 tweets</div>
+            <div class="log-time">45 min ago</div>
+          </div>
+        </div>
+        
+        <div class="log-item">
+          <div class="log-avatar">S</div>
+          <div class="log-content">
+            <div class="log-text"><strong>Stone</strong> finished draft</div>
+            <div class="log-time">3 hours ago</div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="quick-thought">
+        <div class="thought-label">💭 Quick thought</div>
+        <textarea class="thought-input" rows="2" placeholder="Capture something before you forget..."></textarea>
+        <button class="thought-btn">Send to Frank</button>
+      </div>
+      
+      <div class="otter-footer">🦦🦦🦦</div>
+    </div>
+  </div>
+</body>
+</html>

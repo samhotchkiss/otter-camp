@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp — Park Signage</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Source+Sans+3:wght@400;600;700&display=swap');
+    
+    :root {
+      --brown: #5C4A3D;
+      --cream: #FAF8F5;
+      --forest: #3D5A4C;
+      --gold: #C9A86C;
+      --orange: #C87941;
+      --wood: #8B6914;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Source Sans 3', sans-serif;
+      background: linear-gradient(180deg, #87CEEB 0%, #B0C4DE 50%, #8B9F83 100%);
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    
+    /* Park entrance sign */
+    .entrance-sign {
+      background: var(--brown);
+      border-radius: 8px 8px 0 0;
+      padding: 32px;
+      text-align: center;
+      position: relative;
+    }
+    
+    .entrance-sign::before,
+    .entrance-sign::after {
+      content: '';
+      position: absolute;
+      bottom: -40px;
+      width: 20px;
+      height: 40px;
+      background: var(--wood);
+    }
+    
+    .entrance-sign::before { left: 40px; }
+    .entrance-sign::after { right: 40px; }
+    
+    .park-name {
+      font-family: 'Archivo Black', sans-serif;
+      font-size: 36px;
+      color: var(--cream);
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+    
+    .park-otter {
+      font-size: 48px;
+      margin-bottom: 8px;
+    }
+    
+    .park-tagline {
+      color: var(--gold);
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+    
+    /* Trail sign posts */
+    .signpost {
+      margin-top: 60px;
+      position: relative;
+      padding-left: 60px;
+    }
+    
+    .signpost::before {
+      content: '';
+      position: absolute;
+      left: 24px;
+      top: 0;
+      bottom: 0;
+      width: 8px;
+      background: var(--wood);
+      border-radius: 4px;
+    }
+    
+    .trail-sign {
+      background: var(--brown);
+      color: var(--cream);
+      padding: 20px 24px;
+      margin-bottom: 16px;
+      position: relative;
+      border-radius: 4px;
+      box-shadow: 4px 4px 0 rgba(0,0,0,0.2);
+    }
+    
+    .trail-sign::before {
+      content: '';
+      position: absolute;
+      left: -20px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 0;
+      height: 0;
+      border-right: 20px solid var(--brown);
+      border-top: 15px solid transparent;
+      border-bottom: 15px solid transparent;
+    }
+    
+    .trail-sign.alert {
+      background: var(--orange);
+    }
+    
+    .trail-sign.alert::before {
+      border-right-color: var(--orange);
+    }
+    
+    .sign-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    
+    .sign-title {
+      font-family: 'Archivo Black', sans-serif;
+      font-size: 18px;
+      letter-spacing: 1px;
+    }
+    
+    .sign-count {
+      background: var(--cream);
+      color: var(--brown);
+      font-weight: 700;
+      font-size: 14px;
+      padding: 4px 12px;
+      border-radius: 12px;
+    }
+    
+    .sign-items {
+      margin-top: 16px;
+    }
+    
+    .sign-item {
+      background: rgba(255,255,255,0.1);
+      padding: 12px 16px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .sign-item:last-child {
+      margin-bottom: 0;
+    }
+    
+    .item-icon {
+      font-size: 20px;
+    }
+    
+    .item-text {
+      flex: 1;
+    }
+    
+    .item-title {
+      font-weight: 700;
+    }
+    
+    .item-desc {
+      font-size: 13px;
+      opacity: 0.9;
+      margin-top: 2px;
+    }
+    
+    .item-btn {
+      background: var(--cream);
+      color: var(--brown);
+      border: none;
+      padding: 8px 16px;
+      font-weight: 700;
+      font-size: 12px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    /* Info board */
+    .info-board {
+      background: var(--cream);
+      border: 8px solid var(--wood);
+      padding: 24px;
+      margin-top: 40px;
+      border-radius: 4px;
+    }
+    
+    .info-title {
+      font-family: 'Archivo Black', sans-serif;
+      font-size: 16px;
+      color: var(--brown);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .thought-input {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid var(--brown);
+      border-radius: 4px;
+      font-family: 'Source Sans 3', sans-serif;
+      font-size: 14px;
+      resize: none;
+    }
+    
+    .thought-btn {
+      margin-top: 12px;
+      width: 100%;
+      background: var(--forest);
+      color: var(--cream);
+      border: none;
+      padding: 12px;
+      font-weight: 700;
+      font-size: 14px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    /* Otter ranger */
+    .ranger {
+      text-align: center;
+      margin-top: 40px;
+      font-size: 64px;
+    }
+    
+    .ranger-text {
+      font-size: 13px;
+      color: var(--brown);
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="entrance-sign">
+      <div class="park-otter">🦦</div>
+      <div class="park-name">OTTER CAMP</div>
+      <div class="park-tagline">Est. 2026 • Santa Fe, NM</div>
+    </div>
+    
+    <div class="signpost">
+      <div class="trail-sign alert">
+        <div class="sign-header">
+          <span class="sign-title">⚠️ NEEDS ATTENTION</span>
+          <span class="sign-count">2</span>
+        </div>
+        <div class="sign-items">
+          <div class="sign-item">
+            <span class="item-icon">🚀</span>
+            <div class="item-text">
+              <div class="item-title">ItsAlive Deploy</div>
+              <div class="item-desc">Ivy waiting for approval</div>
+            </div>
+            <button class="item-btn">APPROVE</button>
+          </div>
+          <div class="sign-item">
+            <span class="item-icon">✍️</span>
+            <div class="item-text">
+              <div class="item-title">Blog Post Review</div>
+              <div class="item-desc">Stone's draft ready</div>
+            </div>
+            <button class="item-btn">REVIEW</button>
+          </div>
+        </div>
+      </div>
+      
+      <div class="trail-sign">
+        <div class="sign-header">
+          <span class="sign-title">📋 TRAIL LOG</span>
+          <span class="sign-count">14 updates</span>
+        </div>
+        <div class="sign-items">
+          <div class="sign-item">
+            <span class="item-icon">🔧</span>
+            <div class="item-text">
+              <div class="item-title">Derek</div>
+              <div class="item-desc">Finished retry logic for Pearl • 2h ago</div>
+            </div>
+          </div>
+          <div class="sign-item">
+            <span class="item-icon">🎨</span>
+            <div class="item-text">
+              <div class="item-title">Jeff G</div>
+              <div class="item-desc">Completed v4 mockups • 1h ago</div>
+            </div>
+          </div>
+          <div class="sign-item">
+            <span class="item-icon">📱</span>
+            <div class="item-text">
+              <div class="item-title">Nova</div>
+              <div class="item-desc">Scheduled 3 tweets • 45m ago</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="info-board">
+      <div class="info-title">✏️ RANGER NOTES</div>
+      <textarea class="thought-input" rows="2" placeholder="Leave a note for your otters..."></textarea>
+      <button class="thought-btn">SEND TO FRANK →</button>
+    </div>
+    
+    <div class="ranger">
+      🦦
+      <div class="ranger-text">Your friendly camp ranger</div>
+    </div>
+  </div>
+</body>
+</html>

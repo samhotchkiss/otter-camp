@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp — Field Notes</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=Oswald:wght@500;700&display=swap');
+    
+    :root {
+      --kraft: #C9A86C;
+      --kraft-dark: #A68B4B;
+      --brown: #5C4A3D;
+      --black: #2D2A26;
+      --cream: #FAF8F5;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --red: #B85C38;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Courier Prime', monospace;
+      background: var(--kraft);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+    
+    .notebook {
+      width: 100%;
+      max-width: 500px;
+      background: var(--kraft);
+      border: 3px solid var(--brown);
+      border-radius: 2px;
+      padding: 0;
+      box-shadow: 
+        4px 4px 0 var(--brown),
+        inset 0 0 60px rgba(0,0,0,0.05);
+    }
+    
+    .cover {
+      background: var(--brown);
+      color: var(--cream);
+      padding: 24px;
+      text-align: center;
+    }
+    
+    .cover-title {
+      font-family: 'Oswald', sans-serif;
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    
+    .cover-sub {
+      font-size: 12px;
+      letter-spacing: 2px;
+      opacity: 0.8;
+    }
+    
+    .cover-otter {
+      font-size: 40px;
+      margin-bottom: 8px;
+    }
+    
+    .page {
+      padding: 24px;
+      border-bottom: 1px dashed var(--kraft-dark);
+    }
+    
+    .page:last-child {
+      border-bottom: none;
+    }
+    
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--brown);
+    }
+    
+    .page-title {
+      font-family: 'Oswald', sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--brown);
+    }
+    
+    .page-count {
+      background: var(--red);
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 2px;
+    }
+    
+    .page-count.success {
+      background: var(--green);
+    }
+    
+    /* Checklist items */
+    .check-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(92, 74, 61, 0.2);
+    }
+    
+    .check-item:last-child {
+      border-bottom: none;
+    }
+    
+    .checkbox {
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--brown);
+      flex-shrink: 0;
+      margin-top: 2px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .checkbox.urgent {
+      border-color: var(--red);
+      background: rgba(184, 92, 56, 0.1);
+    }
+    
+    .check-content {
+      flex: 1;
+    }
+    
+    .check-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--red);
+      margin-bottom: 4px;
+    }
+    
+    .check-text {
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--black);
+    }
+    
+    .check-text strong {
+      font-weight: 700;
+    }
+    
+    .check-meta {
+      font-size: 11px;
+      color: var(--kraft-dark);
+      margin-top: 4px;
+    }
+    
+    /* Log entries */
+    .log-entry {
+      padding: 8px 0;
+      border-bottom: 1px dotted var(--kraft-dark);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    
+    .log-entry:last-child {
+      border-bottom: none;
+    }
+    
+    .log-time {
+      color: var(--kraft-dark);
+      font-size: 11px;
+    }
+    
+    .log-agent {
+      font-weight: 700;
+      color: var(--brown);
+    }
+    
+    /* Note area */
+    .note-area {
+      background: rgba(255,255,255,0.3);
+      border: 2px solid var(--brown);
+      padding: 16px;
+      margin-top: 8px;
+    }
+    
+    .note-input {
+      width: 100%;
+      border: none;
+      background: transparent;
+      font-family: 'Courier Prime', monospace;
+      font-size: 14px;
+      resize: none;
+      min-height: 60px;
+    }
+    
+    .note-input:focus {
+      outline: none;
+    }
+    
+    .note-btn {
+      margin-top: 12px;
+      background: var(--brown);
+      color: var(--cream);
+      border: none;
+      padding: 10px 20px;
+      font-family: 'Oswald', sans-serif;
+      font-size: 14px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      width: 100%;
+    }
+    
+    /* Footer */
+    .footer {
+      background: var(--brown);
+      color: var(--cream);
+      padding: 16px 24px;
+      font-size: 11px;
+      text-align: center;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+  <div class="notebook">
+    <div class="cover">
+      <div class="cover-otter">🦦</div>
+      <div class="cover-title">OTTER CAMP</div>
+      <div class="cover-sub">Field Notes • Feb 3, 2026</div>
+    </div>
+    
+    <div class="page">
+      <div class="page-header">
+        <span class="page-title">⬜ Needs You</span>
+        <span class="page-count">2</span>
+      </div>
+      
+      <div class="check-item">
+        <div class="checkbox urgent"></div>
+        <div class="check-content">
+          <div class="check-label">Approval</div>
+          <div class="check-text"><strong>ItsAlive</strong> — Ivy waiting to deploy v2.1.0</div>
+          <div class="check-meta">New onboarding flow ready</div>
+        </div>
+      </div>
+      
+      <div class="check-item">
+        <div class="checkbox urgent"></div>
+        <div class="check-content">
+          <div class="check-label">Review</div>
+          <div class="check-text"><strong>Content</strong> — Stone's blog post ready</div>
+          <div class="check-meta">"Why I Run 12 AI Agents" • 1,400 words</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="page">
+      <div class="page-header">
+        <span class="page-title">📋 Activity Log</span>
+        <span class="page-count success">14</span>
+      </div>
+      
+      <div class="log-entry">
+        <span class="log-time">14:22</span> —
+        <span class="log-agent">Derek</span> finished retry logic, pushed 4 commits to Pearl
+      </div>
+      <div class="log-entry">
+        <span class="log-time">15:45</span> —
+        <span class="log-agent">Jeff G</span> completed v4 mockups for Otter Camp
+      </div>
+      <div class="log-entry">
+        <span class="log-time">16:30</span> —
+        <span class="log-agent">Nova</span> scheduled 3 tweets, handled 5 mentions
+      </div>
+      <div class="log-entry">
+        <span class="log-time">13:00</span> —
+        <span class="log-agent">Stone</span> finished first draft, 1,400 words
+      </div>
+    </div>
+    
+    <div class="page">
+      <div class="page-header">
+        <span class="page-title">✏️ Quick Note</span>
+      </div>
+      
+      <div class="note-area">
+        <textarea class="note-input" placeholder="Jot something down..."></textarea>
+        <button class="note-btn">SEND TO FRANK →</button>
+      </div>
+    </div>
+    
+    <div class="footer">
+      🦦 OTTER.CAMP • MADE IN SANTA FE
+    </div>
+  </div>
+</body>
+</html>

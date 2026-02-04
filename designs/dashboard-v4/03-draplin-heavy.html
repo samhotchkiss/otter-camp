@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp — DRAPLIN</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@800;900&display=swap');
+    
+    :root {
+      --cream: #FAF8F5;
+      --brown: #5C4A3D;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --red: #B85C38;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--brown);
+      min-height: 100vh;
+      padding: 32px;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    
+    /* HEADER - MASSIVE */
+    .header {
+      text-align: center;
+      margin-bottom: 48px;
+      color: var(--cream);
+    }
+    
+    .logo {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 80px;
+      letter-spacing: 8px;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+    
+    .logo-otter {
+      font-size: 72px;
+    }
+    
+    .tagline {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 4px;
+      margin-top: 8px;
+      opacity: 0.7;
+    }
+    
+    /* BLOCKS - THICK BORDERS */
+    .block {
+      background: var(--cream);
+      border: 6px solid var(--brown);
+      margin-bottom: 24px;
+      box-shadow: 8px 8px 0 rgba(0,0,0,0.2);
+    }
+    
+    .block-header {
+      background: var(--brown);
+      color: var(--cream);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .block-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 28px;
+      letter-spacing: 3px;
+    }
+    
+    .block-count {
+      background: var(--red);
+      color: white;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 24px;
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+    }
+    
+    .block-count.success {
+      background: var(--green);
+    }
+    
+    .block-body {
+      padding: 24px;
+    }
+    
+    /* URGENT ITEMS - BIG BUTTONS */
+    .urgent-item {
+      background: var(--cream);
+      border: 4px solid var(--red);
+      padding: 20px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    
+    .urgent-item:last-child {
+      margin-bottom: 0;
+    }
+    
+    .urgent-icon {
+      font-size: 40px;
+    }
+    
+    .urgent-content {
+      flex: 1;
+    }
+    
+    .urgent-label {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 24px;
+      letter-spacing: 2px;
+      color: var(--brown);
+    }
+    
+    .urgent-desc {
+      font-size: 14px;
+      color: #666;
+      margin-top: 4px;
+    }
+    
+    .urgent-btn {
+      background: var(--brown);
+      color: var(--cream);
+      border: none;
+      padding: 16px 32px;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 20px;
+      letter-spacing: 2px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .urgent-btn:hover {
+      background: var(--orange);
+      transform: translateY(-2px);
+    }
+    
+    /* LOG - SIMPLE LIST */
+    .log-item {
+      padding: 16px 0;
+      border-bottom: 3px solid var(--brown);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    
+    .log-item:last-child {
+      border-bottom: none;
+    }
+    
+    .log-avatar {
+      width: 48px;
+      height: 48px;
+      background: var(--brown);
+      color: var(--cream);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 24px;
+    }
+    
+    .log-text {
+      flex: 1;
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--brown);
+    }
+    
+    .log-time {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 18px;
+      color: #999;
+    }
+    
+    /* INPUT - CHUNKY */
+    .input-row {
+      display: flex;
+      gap: 0;
+    }
+    
+    .input-field {
+      flex: 1;
+      border: 4px solid var(--brown);
+      border-right: none;
+      padding: 16px 20px;
+      font-size: 16px;
+      font-family: 'Inter', sans-serif;
+      font-weight: 800;
+    }
+    
+    .input-field:focus {
+      outline: none;
+      background: #fff;
+    }
+    
+    .input-btn {
+      background: var(--orange);
+      color: var(--cream);
+      border: 4px solid var(--brown);
+      padding: 16px 32px;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 22px;
+      letter-spacing: 2px;
+      cursor: pointer;
+    }
+    
+    .input-btn:hover {
+      background: var(--brown);
+    }
+    
+    /* FOOTER */
+    .footer {
+      text-align: center;
+      color: var(--cream);
+      margin-top: 48px;
+      font-size: 64px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="logo">
+        <span class="logo-otter">🦦</span>
+        OTTER CAMP
+      </div>
+      <div class="tagline">YOUR AGENTS ARE WORKING</div>
+    </header>
+    
+    <div class="block">
+      <div class="block-header">
+        <span class="block-title">NEEDS YOU</span>
+        <span class="block-count">2</span>
+      </div>
+      <div class="block-body">
+        <div class="urgent-item">
+          <span class="urgent-icon">🚀</span>
+          <div class="urgent-content">
+            <div class="urgent-label">ITSALIVE</div>
+            <div class="urgent-desc">Ivy waiting to deploy v2.1.0</div>
+          </div>
+          <button class="urgent-btn">APPROVE</button>
+        </div>
+        <div class="urgent-item">
+          <span class="urgent-icon">✍️</span>
+          <div class="urgent-content">
+            <div class="urgent-label">CONTENT</div>
+            <div class="urgent-desc">Stone's blog post ready for review</div>
+          </div>
+          <button class="urgent-btn">REVIEW</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="block">
+      <div class="block-header">
+        <span class="block-title">SINCE YOU LEFT</span>
+        <span class="block-count success">14</span>
+      </div>
+      <div class="block-body">
+        <div class="log-item">
+          <div class="log-avatar">D</div>
+          <div class="log-text">DEREK finished retry logic for Pearl</div>
+          <div class="log-time">2H AGO</div>
+        </div>
+        <div class="log-item">
+          <div class="log-avatar">J</div>
+          <div class="log-text">JEFF G completed v4 mockups</div>
+          <div class="log-time">1H AGO</div>
+        </div>
+        <div class="log-item">
+          <div class="log-avatar">N</div>
+          <div class="log-text">NOVA scheduled tweets + responses</div>
+          <div class="log-time">45M AGO</div>
+        </div>
+        <div class="log-item">
+          <div class="log-avatar">S</div>
+          <div class="log-text">STONE finished first draft</div>
+          <div class="log-time">3H AGO</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="block">
+      <div class="block-header">
+        <span class="block-title">QUICK THOUGHT</span>
+      </div>
+      <div class="block-body">
+        <div class="input-row">
+          <input type="text" class="input-field" placeholder="TYPE SOMETHING...">
+          <button class="input-btn">SEND →</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="footer">🦦🦦🦦</div>
+  </div>
+</body>
+</html>

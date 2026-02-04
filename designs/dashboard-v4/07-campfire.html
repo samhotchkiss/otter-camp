@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp — Campfire</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Source+Sans+3:wght@400;600&display=swap');
+    
+    :root {
+      --night: #1a1a2e;
+      --dark: #16213e;
+      --ember: #C87941;
+      --ember-glow: #E8A87C;
+      --cream: #FAF8F5;
+      --gold: #C9A86C;
+      --red: #B85C38;
+      --star: #ffffff;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Source Sans 3', sans-serif;
+      background: 
+        radial-gradient(ellipse at 50% 100%, rgba(200, 121, 65, 0.15) 0%, transparent 50%),
+        var(--night);
+      min-height: 100vh;
+      padding: 60px 20px;
+      color: var(--cream);
+      position: relative;
+      overflow-x: hidden;
+    }
+    
+    /* Stars */
+    .stars {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 60%;
+      pointer-events: none;
+    }
+    
+    .star {
+      position: absolute;
+      width: 2px;
+      height: 2px;
+      background: var(--star);
+      border-radius: 50%;
+      opacity: 0.6;
+      animation: twinkle 3s infinite;
+    }
+    
+    @keyframes twinkle {
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 0.2; }
+    }
+    
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      position: relative;
+      z-index: 1;
+    }
+    
+    /* Header */
+    .header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+    
+    .campfire-emoji {
+      font-size: 80px;
+      margin-bottom: 16px;
+      animation: flicker 2s infinite;
+    }
+    
+    @keyframes flicker {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.9; transform: scale(0.98); }
+    }
+    
+    .logo {
+      font-family: 'Playfair Display', serif;
+      font-size: 48px;
+      color: var(--ember-glow);
+      letter-spacing: 2px;
+      text-shadow: 0 0 40px rgba(200, 121, 65, 0.5);
+    }
+    
+    .greeting {
+      color: var(--gold);
+      font-size: 18px;
+      margin-top: 12px;
+    }
+    
+    /* Cards */
+    .card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(200, 121, 65, 0.3);
+      border-radius: 16px;
+      padding: 28px;
+      margin-bottom: 24px;
+      backdrop-filter: blur(10px);
+    }
+    
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    
+    .card-title {
+      font-family: 'Playfair Display', serif;
+      font-size: 20px;
+      color: var(--ember-glow);
+    }
+    
+    .card-count {
+      background: var(--red);
+      color: white;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 12px;
+    }
+    
+    .card-count.success {
+      background: rgba(90, 122, 92, 0.8);
+    }
+    
+    /* Urgent items */
+    .urgent-item {
+      background: rgba(184, 92, 56, 0.15);
+      border: 1px solid rgba(184, 92, 56, 0.4);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 12px;
+    }
+    
+    .urgent-item:last-child {
+      margin-bottom: 0;
+    }
+    
+    .urgent-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    
+    .urgent-icon {
+      font-size: 24px;
+    }
+    
+    .urgent-project {
+      font-weight: 600;
+      font-size: 18px;
+      color: var(--ember-glow);
+    }
+    
+    .urgent-desc {
+      color: rgba(250, 248, 245, 0.8);
+      margin-bottom: 16px;
+    }
+    
+    .urgent-btn {
+      background: var(--ember);
+      color: var(--cream);
+      border: none;
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .urgent-btn:hover {
+      background: var(--ember-glow);
+      color: var(--night);
+    }
+    
+    /* Log items */
+    .log-item {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 0;
+      border-bottom: 1px solid rgba(200, 121, 65, 0.15);
+    }
+    
+    .log-item:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    
+    .log-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--ember);
+      color: var(--cream);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+    }
+    
+    .log-content {
+      flex: 1;
+    }
+    
+    .log-text {
+      color: var(--cream);
+    }
+    
+    .log-text strong {
+      color: var(--ember-glow);
+    }
+    
+    .log-time {
+      font-size: 12px;
+      color: var(--gold);
+      opacity: 0.7;
+      margin-top: 4px;
+    }
+    
+    /* Input */
+    .input-wrap {
+      display: flex;
+      gap: 12px;
+    }
+    
+    .input-field {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(200, 121, 65, 0.3);
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: 15px;
+      color: var(--cream);
+      font-family: 'Source Sans 3', sans-serif;
+    }
+    
+    .input-field::placeholder {
+      color: rgba(250, 248, 245, 0.4);
+    }
+    
+    .input-field:focus {
+      outline: none;
+      border-color: var(--ember);
+    }
+    
+    .input-btn {
+      background: var(--ember);
+      color: var(--cream);
+      border: none;
+      padding: 14px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    
+    /* Footer */
+    .footer {
+      text-align: center;
+      margin-top: 48px;
+    }
+    
+    .footer-otters {
+      font-size: 48px;
+      margin-bottom: 12px;
+    }
+    
+    .footer-text {
+      color: var(--gold);
+      font-size: 14px;
+      opacity: 0.7;
+    }
+  </style>
+</head>
+<body>
+  <div class="stars">
+    <div class="star" style="top: 10%; left: 15%;"></div>
+    <div class="star" style="top: 5%; left: 45%; animation-delay: 0.5s;"></div>
+    <div class="star" style="top: 15%; left: 75%; animation-delay: 1s;"></div>
+    <div class="star" style="top: 25%; left: 25%; animation-delay: 1.5s;"></div>
+    <div class="star" style="top: 8%; left: 85%; animation-delay: 0.3s;"></div>
+    <div class="star" style="top: 20%; left: 55%; animation-delay: 0.8s;"></div>
+    <div class="star" style="top: 12%; left: 35%; animation-delay: 1.2s;"></div>
+  </div>
+  
+  <div class="container">
+    <header class="header">
+      <div class="campfire-emoji">🏕️</div>
+      <h1 class="logo">otter camp</h1>
+      <p class="greeting">Good evening, Sam. Gather 'round the fire.</p>
+    </header>
+    
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">🔥 Needs You</span>
+        <span class="card-count">2</span>
+      </div>
+      
+      <div class="urgent-item">
+        <div class="urgent-header">
+          <span class="urgent-icon">🚀</span>
+          <span class="urgent-project">ItsAlive</span>
+        </div>
+        <p class="urgent-desc">Ivy is waiting to deploy the new onboarding flow.</p>
+        <button class="urgent-btn">Approve Deploy →</button>
+      </div>
+      
+      <div class="urgent-item">
+        <div class="urgent-header">
+          <span class="urgent-icon">✍️</span>
+          <span class="urgent-project">Content</span>
+        </div>
+        <p class="urgent-desc">Stone finished a blog post for you to review.</p>
+        <button class="urgent-btn">Read Post →</button>
+      </div>
+    </div>
+    
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">✨ While You Were Away</span>
+        <span class="card-count success">14</span>
+      </div>
+      
+      <div class="log-item">
+        <div class="log-avatar">D</div>
+        <div class="log-content">
+          <div class="log-text"><strong>Derek</strong> finished retry logic for Pearl</div>
+          <div class="log-time">2 hours ago</div>
+        </div>
+      </div>
+      
+      <div class="log-item">
+        <div class="log-avatar">J</div>
+        <div class="log-content">
+          <div class="log-text"><strong>Jeff G</strong> completed v4 mockups</div>
+          <div class="log-time">1 hour ago</div>
+        </div>
+      </div>
+      
+      <div class="log-item">
+        <div class="log-avatar">N</div>
+        <div class="log-content">
+          <div class="log-text"><strong>Nova</strong> scheduled tweets and handled mentions</div>
+          <div class="log-time">45 minutes ago</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">💭 Quick Thought</span>
+      </div>
+      
+      <div class="input-wrap">
+        <input type="text" class="input-field" placeholder="What's on your mind?">
+        <button class="input-btn">Send</button>
+      </div>
+    </div>
+    
+    <footer class="footer">
+      <div class="footer-otters">🦦🦦🦦</div>
+      <p class="footer-text">Your otters keeping watch tonight</p>
+    </footer>
+  </div>
+</body>
+</html>

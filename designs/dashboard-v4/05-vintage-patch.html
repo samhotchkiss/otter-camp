@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp — Vintage Patch</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@500;700&display=swap');
+    
+    :root {
+      --cream: #FAF8F5;
+      --brown: #5C4A3D;
+      --navy: #2C3E50;
+      --gold: #C9A86C;
+      --orange: #C87941;
+      --red: #B85C38;
+      --green: #3D5A4C;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Barlow Condensed', sans-serif;
+      background: var(--navy);
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    
+    /* Main badge/patch */
+    .main-badge {
+      width: 200px;
+      height: 200px;
+      margin: 0 auto 40px;
+      background: var(--brown);
+      border-radius: 50%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border: 8px solid var(--gold);
+      box-shadow: 
+        0 0 0 4px var(--brown),
+        0 0 0 8px var(--gold),
+        0 8px 24px rgba(0,0,0,0.4);
+      position: relative;
+    }
+    
+    .main-badge::before {
+      content: 'EST. 2026';
+      position: absolute;
+      bottom: 30px;
+      font-size: 10px;
+      letter-spacing: 2px;
+      color: var(--gold);
+    }
+    
+    .badge-otter {
+      font-size: 56px;
+      margin-bottom: 4px;
+    }
+    
+    .badge-text {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 28px;
+      color: var(--cream);
+      letter-spacing: 4px;
+    }
+    
+    /* Greeting */
+    .greeting {
+      text-align: center;
+      color: var(--cream);
+      margin-bottom: 40px;
+    }
+    
+    .greeting-text {
+      font-size: 24px;
+      font-weight: 700;
+    }
+    
+    .greeting-sub {
+      color: var(--gold);
+      font-size: 16px;
+      margin-top: 4px;
+    }
+    
+    /* Badge rows */
+    .badge-row {
+      display: flex;
+      gap: 20px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 32px;
+    }
+    
+    /* Small badges for actions */
+    .action-badge {
+      width: 160px;
+      background: var(--cream);
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      border: 4px solid var(--brown);
+      box-shadow: 4px 4px 0 rgba(0,0,0,0.3);
+      cursor: pointer;
+      transition: transform 0.15s;
+    }
+    
+    .action-badge:hover {
+      transform: translateY(-4px) rotate(-2deg);
+    }
+    
+    .action-badge.urgent {
+      border-color: var(--red);
+      background: linear-gradient(180deg, var(--cream) 0%, #FFE5DE 100%);
+    }
+    
+    .action-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    
+    .action-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 20px;
+      color: var(--brown);
+      letter-spacing: 1px;
+    }
+    
+    .action-desc {
+      font-size: 12px;
+      color: #666;
+      margin-top: 4px;
+    }
+    
+    .action-btn {
+      margin-top: 12px;
+      background: var(--brown);
+      color: var(--cream);
+      border: none;
+      padding: 8px 16px;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 14px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    
+    /* Merit badges - activity */
+    .merit-section {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    
+    .section-label {
+      color: var(--gold);
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 18px;
+      letter-spacing: 3px;
+      margin-bottom: 20px;
+    }
+    
+    .merit-row {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    
+    .merit-badge {
+      width: 100px;
+      height: 100px;
+      background: var(--green);
+      border-radius: 50%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border: 4px solid var(--gold);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    
+    .merit-icon {
+      font-size: 28px;
+    }
+    
+    .merit-name {
+      font-size: 10px;
+      color: var(--cream);
+      font-weight: 700;
+      margin-top: 4px;
+      letter-spacing: 0.5px;
+    }
+    
+    /* Note card */
+    .note-card {
+      background: var(--cream);
+      max-width: 400px;
+      margin: 0 auto;
+      padding: 24px;
+      border-radius: 8px;
+      border: 4px solid var(--brown);
+      box-shadow: 4px 4px 0 rgba(0,0,0,0.3);
+    }
+    
+    .note-header {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 20px;
+      color: var(--brown);
+      letter-spacing: 2px;
+      margin-bottom: 12px;
+      text-align: center;
+    }
+    
+    .note-input {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid var(--brown);
+      border-radius: 4px;
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 16px;
+      resize: none;
+    }
+    
+    .note-btn {
+      width: 100%;
+      margin-top: 12px;
+      background: var(--orange);
+      color: var(--cream);
+      border: none;
+      padding: 12px;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 18px;
+      letter-spacing: 2px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    
+    /* Footer otters */
+    .footer-otters {
+      text-align: center;
+      margin-top: 40px;
+      font-size: 48px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="main-badge">
+      <div class="badge-otter">🦦</div>
+      <div class="badge-text">OTTER CAMP</div>
+    </div>
+    
+    <div class="greeting">
+      <div class="greeting-text">Good evening, Sam</div>
+      <div class="greeting-sub">Your otters earned 14 merit badges today</div>
+    </div>
+    
+    <div class="merit-section">
+      <div class="section-label">⚠️ NEEDS YOUR ATTENTION</div>
+      <div class="badge-row">
+        <div class="action-badge urgent">
+          <div class="action-icon">🚀</div>
+          <div class="action-title">ITSALIVE</div>
+          <div class="action-desc">Deploy waiting</div>
+          <button class="action-btn">APPROVE</button>
+        </div>
+        <div class="action-badge urgent">
+          <div class="action-icon">✍️</div>
+          <div class="action-title">CONTENT</div>
+          <div class="action-desc">Post to review</div>
+          <button class="action-btn">READ</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="merit-section">
+      <div class="section-label">🏅 BADGES EARNED TODAY</div>
+      <div class="merit-row">
+        <div class="merit-badge">
+          <div class="merit-icon">🔧</div>
+          <div class="merit-name">DEREK</div>
+        </div>
+        <div class="merit-badge">
+          <div class="merit-icon">🎨</div>
+          <div class="merit-name">JEFF G</div>
+        </div>
+        <div class="merit-badge">
+          <div class="merit-icon">📱</div>
+          <div class="merit-name">NOVA</div>
+        </div>
+        <div class="merit-badge">
+          <div class="merit-icon">✏️</div>
+          <div class="merit-name">STONE</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="note-card">
+      <div class="note-header">📝 CAMPFIRE NOTE</div>
+      <textarea class="note-input" rows="2" placeholder="Write a message..."></textarea>
+      <button class="note-btn">SEND TO FRANK →</button>
+    </div>
+    
+    <div class="footer-otters">🦦🦦🦦</div>
+  </div>
+</body>
+</html>
