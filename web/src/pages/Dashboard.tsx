@@ -1,10 +1,16 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback, Suspense } from "react";
 import CommandPalette from "../components/CommandPalette";
 import KanbanBoard from "../components/KanbanBoard";
 import ActivityPanel from "../components/ActivityPanel";
 import ProjectFilters from "../components/ProjectFilters";
 import OnboardingTour from "../components/OnboardingTour";
+import TaskDetail from "../components/TaskDetail";
+import NewTaskModal from "../components/NewTaskModal";
+import ErrorBoundary from "../components/ErrorBoundary";
+import LoadingSpinner from "../components/LoadingSpinner";
+import { SkeletonKanbanColumn } from "../components/Skeleton";
 import type { Command } from "../hooks/useCommandPalette";
+import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 
 // Sample assignees for filters demo
 const ASSIGNEES = [
@@ -21,8 +27,16 @@ const PROJECTS = [
 ];
 
 export default function Dashboard() {
-  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [activeView, setActiveView] = useState<"kanban" | "activity">("kanban");
+  
+  const {
+    isCommandPaletteOpen,
+    closeCommandPalette,
+    selectedTaskId,
+    closeTaskDetail,
+    isNewTaskOpen,
+    closeNewTask,
+  } = useKeyboardShortcutsContext();
 
   const commands = useMemo<Command[]>(
     () => [
@@ -158,22 +172,52 @@ export default function Dashboard() {
         <div className="grid gap-6 lg:grid-cols-3">
           {/* Primary Content */}
           <div className={activeView === "kanban" ? "lg:col-span-2" : "lg:col-span-3"}>
-            {activeView === "kanban" ? (
-              <div
-                className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80"
-                data-tour="kanban-board"
-              >
-                <KanbanBoard />
-              </div>
-            ) : (
-              <ActivityPanel className="w-full" />
-            )}
+            <ErrorBoundary errorMessage="Failed to load content">
+              {activeView === "kanban" ? (
+                <div
+                  className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80"
+                  data-tour="kanban-board"
+                >
+                  <Suspense
+                    fallback={
+                      <div className="flex gap-4 overflow-x-auto p-4">
+                        <SkeletonKanbanColumn />
+                        <SkeletonKanbanColumn />
+                        <SkeletonKanbanColumn />
+                      </div>
+                    }
+                  >
+                    <KanbanBoard />
+                  </Suspense>
+                </div>
+              ) : (
+                <Suspense
+                  fallback={
+                    <div className="flex min-h-[300px] items-center justify-center">
+                      <LoadingSpinner size="lg" message="Loading activity..." />
+                    </div>
+                  }
+                >
+                  <ActivityPanel className="w-full" />
+                </Suspense>
+              )}
+            </ErrorBoundary>
           </div>
 
           {/* Sidebar Activity (only in kanban view) */}
           {activeView === "kanban" && (
             <div className="lg:col-span-1" data-tour="agent-chat">
-              <ActivityPanel className="h-fit" />
+              <ErrorBoundary errorMessage="Failed to load activity">
+                <Suspense
+                  fallback={
+                    <div className="flex min-h-[200px] items-center justify-center rounded-2xl border border-slate-200 bg-white/80 dark:border-slate-800 dark:bg-slate-900/80">
+                      <LoadingSpinner size="md" message="Loading..." />
+                    </div>
+                  }
+                >
+                  <ActivityPanel className="h-fit" />
+                </Suspense>
+              </ErrorBoundary>
             </div>
           )}
         </div>
@@ -182,9 +226,21 @@ export default function Dashboard() {
       {/* Command Palette */}
       <CommandPalette
         commands={commands}
-        isOpen={isPaletteOpen}
-        onOpenChange={setIsPaletteOpen}
+        isOpen={isCommandPaletteOpen}
+        onOpenChange={(open) => !open && closeCommandPalette()}
       />
+
+      {/* Task Detail Slide-over */}
+      {selectedTaskId && (
+        <TaskDetail
+          taskId={selectedTaskId}
+          isOpen={!!selectedTaskId}
+          onClose={closeTaskDetail}
+        />
+      )}
+
+      {/* New Task Modal */}
+      <NewTaskModal isOpen={isNewTaskOpen} onClose={closeNewTask} />
     </OnboardingTour>
   );
 }

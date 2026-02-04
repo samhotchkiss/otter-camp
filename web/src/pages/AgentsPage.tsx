@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import AgentCard, { type AgentCardData } from "../components/AgentCard";
 import AgentDM, { type AgentStatus } from "../components/AgentDM";
 import { useWS } from "../contexts/WebSocketContext";
+import LoadingSpinner from "../components/LoadingSpinner";
+import { ErrorFallback } from "../components/ErrorBoundary";
+import { NoAgentsEmpty, NoResultsEmpty } from "../components/EmptyState";
+import { SkeletonList } from "../components/Skeleton";
 
 /**
  * Status filter options including "all".
@@ -214,26 +218,33 @@ export default function AgentsPage({
 
   if (isLoading) {
     return (
-      <div className="flex min-h-[400px] items-center justify-center">
-        <div className="flex items-center gap-3 text-slate-400">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-emerald-500" />
-          <span>Loading agents...</span>
+      <div className="w-full">
+        {/* Header skeleton */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-semibold text-slate-100">Agents</h1>
+              <p className="mt-1 text-slate-500">Loading agents...</p>
+            </div>
+            <LoadingSpinner size="md" />
+          </div>
         </div>
+        <SkeletonList count={8} variant="agent" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4">
-        <div className="text-red-400">{error}</div>
-        <button
-          type="button"
-          onClick={() => window.location.reload()}
-          className="rounded-lg bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
-        >
-          Try Again
-        </button>
+      <div className="w-full">
+        <div className="mb-8">
+          <h1 className="text-3xl font-semibold text-slate-100">Agents</h1>
+        </div>
+        <ErrorFallback
+          error={error}
+          message="Failed to load agents"
+          onRetry={() => window.location.reload()}
+        />
       </div>
     );
   }
@@ -302,13 +313,11 @@ export default function AgentsPage({
 
       {/* Agent grid */}
       {filteredAgents.length === 0 ? (
-        <div className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-900/50">
-          <p className="text-slate-500">
-            {statusFilter === "all"
-              ? "No agents found"
-              : `No ${statusFilter} agents`}
-          </p>
-        </div>
+        statusFilter === "all" ? (
+          <NoAgentsEmpty />
+        ) : (
+          <NoResultsEmpty query={`${statusFilter} agents`} />
+        )
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filteredAgents.map((agent) => (

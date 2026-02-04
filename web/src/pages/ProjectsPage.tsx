@@ -1,4 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import LoadingSpinner from "../components/LoadingSpinner";
+import { ErrorFallback } from "../components/ErrorBoundary";
+import { NoProjectsEmpty } from "../components/EmptyState";
+import { SkeletonList } from "../components/Skeleton";
 
 type Project = {
   id: string;
@@ -118,8 +122,105 @@ function ProjectCard({ project }: { project: Project }) {
   );
 }
 
-export default function ProjectsPage() {
-  const [projects] = useState<Project[]>(SAMPLE_PROJECTS);
+export type ProjectsPageProps = {
+  apiEndpoint?: string;
+};
+
+export default function ProjectsPage({
+  apiEndpoint = "/api/projects",
+}: ProjectsPageProps) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error] = useState<string | null>(null);
+
+  // Fetch projects from API
+  const fetchProjects = useCallback(async () => {
+    try {
+      const response = await fetch(apiEndpoint);
+      if (!response.ok) {
+        throw new Error("Failed to fetch projects");
+      }
+      const data = await response.json();
+      return (data.projects || data || []) as Project[];
+    } catch (err) {
+      throw err instanceof Error ? err : new Error("Failed to load projects");
+    }
+  }, [apiEndpoint]);
+
+  // Initial fetch
+  useEffect(() => {
+    const loadProjects = async () => {
+      setIsLoading(true);
+      try {
+        const fetchedProjects = await fetchProjects();
+        // If API returns empty, fall back to sample data for demo
+        setProjects(fetchedProjects.length > 0 ? fetchedProjects : SAMPLE_PROJECTS);
+      } catch {
+        // On error, use sample data for demo purposes
+        setProjects(SAMPLE_PROJECTS);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadProjects();
+  }, [fetchProjects]);
+
+  const handleCreateProject = () => {
+    window.alert("Project creation coming soon!");
+  };
+
+  if (isLoading) {
+    return (
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+              Projects
+            </h1>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              Loading projects...
+            </p>
+          </div>
+          <LoadingSpinner size="md" />
+        </div>
+        <SkeletonList count={4} variant="project" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-6">
+          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+            Projects
+          </h1>
+        </div>
+        <ErrorFallback
+          error={error}
+          message="Failed to load projects"
+          onRetry={() => window.location.reload()}
+        />
+      </div>
+    );
+  }
+
+  if (projects.length === 0) {
+    return (
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-6">
+          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+            Projects
+          </h1>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            Manage your workspaces and track progress
+          </p>
+        </div>
+        <NoProjectsEmpty onCreate={handleCreateProject} />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -134,6 +235,7 @@ export default function ProjectsPage() {
         </div>
         <button
           type="button"
+          onClick={handleCreateProject}
           className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
         >
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -151,6 +253,7 @@ export default function ProjectsPage() {
         {/* Empty state placeholder card */}
         <button
           type="button"
+          onClick={handleCreateProject}
           className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-white/50 p-5 text-slate-500 transition hover:border-emerald-400 hover:bg-emerald-50/50 hover:text-emerald-600 dark:border-slate-700 dark:bg-slate-900/50 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-400"
         >
           <svg className="h-10 w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
