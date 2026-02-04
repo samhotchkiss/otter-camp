@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In · otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --green: #5A7A5C;
+      --red: #B85C38;
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .login-page {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    
+    .login-container {
+      width: 100%;
+      max-width: 420px;
+    }
+    
+    /* ========== LOGO SECTION ========== */
+    .login-header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    
+    .login-logo {
+      font-size: 64px;
+      margin-bottom: 16px;
+    }
+    
+    .login-title {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .login-subtitle {
+      font-size: 16px;
+      color: var(--text-muted);
+    }
+    
+    /* ========== LOGIN CARD ========== */
+    .login-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+    }
+    
+    .login-card-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+    
+    /* ========== FORM ========== */
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+    
+    .form-input {
+      width: 100%;
+      padding: 14px 16px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-family: var(--font);
+      font-size: 15px;
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    
+    .form-input::placeholder {
+      color: var(--text-muted);
+    }
+    
+    .form-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(201, 168, 108, 0.2);
+    }
+    
+    .form-hint {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 8px;
+    }
+    
+    /* ========== BUTTONS ========== */
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 14px 24px;
+      border-radius: 10px;
+      font-family: var(--font);
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+    
+    .btn-primary:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    
+    .btn-secondary {
+      background: var(--surface-alt);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    
+    .btn-secondary:hover {
+      background: var(--border);
+    }
+    
+    /* ========== DIVIDER ========== */
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin: 24px 0;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    
+    .divider::before,
+    .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    
+    /* ========== ALTERNATIVE LOGIN ========== */
+    .alt-login {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    .btn-oauth {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    
+    .btn-oauth:hover {
+      background: var(--surface-alt);
+    }
+    
+    .oauth-icon {
+      width: 20px;
+      height: 20px;
+    }
+    
+    /* ========== STATES ========== */
+    .login-state {
+      display: none;
+    }
+    
+    .login-state.active {
+      display: block;
+    }
+    
+    /* ========== SUCCESS STATE ========== */
+    .success-icon {
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 24px;
+      background: rgba(90, 122, 92, 0.15);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 40px;
+    }
+    
+    .success-title {
+      font-size: 20px;
+      font-weight: 600;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    
+    .success-message {
+      text-align: center;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+    }
+    
+    .email-highlight {
+      display: inline-block;
+      background: var(--surface-alt);
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-weight: 500;
+      color: var(--text);
+      margin-top: 8px;
+    }
+    
+    /* ========== OPENCLAW TOKEN STATE ========== */
+    .token-box {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .token-input {
+      flex: 1;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      letter-spacing: 1px;
+    }
+    
+    .token-hint {
+      background: var(--surface-alt);
+      border-radius: 8px;
+      padding: 16px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    
+    .token-hint code {
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--surface);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    
+    /* ========== FOOTER ========== */
+    .login-footer {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .login-footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .login-footer a:hover {
+      text-decoration: underline;
+    }
+    
+    /* ========== PAGE FOOTER ========== */
+    .page-footer {
+      padding: 20px 24px;
+      text-align: center;
+    }
+    
+    .footer-fact {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .footer-fact strong {
+      color: var(--accent);
+    }
+    
+    /* ========== LOADING SPINNER ========== */
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid transparent;
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 480px) {
+      .login-container {
+        max-width: 100%;
+      }
+      
+      .login-card {
+        padding: 24px;
+        border-radius: 12px;
+      }
+      
+      .login-logo {
+        font-size: 48px;
+      }
+      
+      .login-title {
+        font-size: 24px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="login-page">
+    <div class="login-container">
+      <!-- Header -->
+      <header class="login-header">
+        <div class="login-logo">🦦</div>
+        <h1 class="login-title">otter.camp</h1>
+        <p class="login-subtitle">Mission control for your AI agents</p>
+      </header>
+      
+      <!-- Login Card -->
+      <div class="login-card">
+        <!-- State 1: Initial (Email) -->
+        <div class="login-state active" id="state-email">
+          <h2 class="login-card-title">Sign in to your workspace</h2>
+          
+          <form id="email-form">
+            <div class="form-group">
+              <label class="form-label" for="email">Email address</label>
+              <input 
+                type="email" 
+                id="email" 
+                class="form-input" 
+                placeholder="you@example.com"
+                required
+              >
+            </div>
+            
+            <button type="submit" class="btn btn-primary">
+              Continue with Email
+            </button>
+          </form>
+          
+          <div class="divider">or</div>
+          
+          <div class="alt-login">
+            <button class="btn btn-oauth" onclick="showState('state-token')">
+              <span>🔗</span>
+              Sign in with OpenClaw Token
+            </button>
+            
+            <button class="btn btn-oauth" disabled style="opacity: 0.5;">
+              <svg class="oauth-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+              </svg>
+              Sign in with GitHub
+              <span style="font-size: 11px; opacity: 0.6;">(Coming soon)</span>
+            </button>
+          </div>
+        </div>
+        
+        <!-- State 2: OpenClaw Token -->
+        <div class="login-state" id="state-token">
+          <h2 class="login-card-title">Sign in with OpenClaw</h2>
+          
+          <form id="token-form">
+            <div class="form-group">
+              <label class="form-label" for="token">Auth Token</label>
+              <div class="token-box">
+                <input 
+                  type="text" 
+                  id="token" 
+                  class="form-input token-input" 
+                  placeholder="oc_auth_..."
+                  required
+                >
+              </div>
+              <div class="token-hint">
+                <p>Get your token from OpenClaw:</p>
+                <code>/ottercamp auth</code>
+                <p style="margin-top: 8px;">Or check your OpenClaw config for the auth token.</p>
+              </div>
+            </div>
+            
+            <button type="submit" class="btn btn-primary">
+              Sign In
+            </button>
+          </form>
+          
+          <div class="login-footer" style="margin-top: 16px;">
+            <a href="#" onclick="showState('state-email'); return false;">← Back to email sign in</a>
+          </div>
+        </div>
+        
+        <!-- State 3: Magic Link Sent -->
+        <div class="login-state" id="state-sent">
+          <div class="success-icon">✉️</div>
+          <h2 class="success-title">Check your email</h2>
+          <p class="success-message">
+            We sent a sign-in link to
+            <span class="email-highlight" id="sent-email">you@example.com</span>
+          </p>
+          
+          <button class="btn btn-secondary" onclick="showState('state-email')">
+            ← Use a different email
+          </button>
+          
+          <div class="login-footer">
+            Didn't receive it? <a href="#" onclick="resendEmail(); return false;">Resend email</a>
+          </div>
+        </div>
+        
+        <!-- State 4: Verifying -->
+        <div class="login-state" id="state-verifying">
+          <div class="success-icon">
+            <div class="spinner" style="width: 40px; height: 40px; border-width: 3px;"></div>
+          </div>
+          <h2 class="success-title">Verifying...</h2>
+          <p class="success-message">
+            Hang tight, we're logging you in.
+          </p>
+        </div>
+        
+        <!-- State 5: Success -->
+        <div class="login-state" id="state-success">
+          <div class="success-icon">✓</div>
+          <h2 class="success-title">You're in!</h2>
+          <p class="success-message">
+            Redirecting to your dashboard...
+          </p>
+        </div>
+      </div>
+      
+      <!-- Footer Links -->
+      <div class="login-footer">
+        New to OtterCamp? <a href="#">Learn more</a> · <a href="#">Documentation</a>
+      </div>
+    </div>
+  </main>
+  
+  <footer class="page-footer">
+    <div class="footer-fact">
+      <span>🦦</span>
+      <span><strong>Otter fact:</strong> Sea otters hold hands while sleeping to keep from drifting apart.</span>
+    </div>
+  </footer>
+  
+  <script>
+    // State management
+    function showState(stateId) {
+      document.querySelectorAll('.login-state').forEach(el => {
+        el.classList.remove('active');
+      });
+      document.getElementById(stateId).classList.add('active');
+    }
+    
+    // Email form submission
+    document.getElementById('email-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      const email = document.getElementById('email').value;
+      document.getElementById('sent-email').textContent = email;
+      showState('state-sent');
+    });
+    
+    // Token form submission
+    document.getElementById('token-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      showState('state-verifying');
+      
+      // Simulate verification
+      setTimeout(() => {
+        showState('state-success');
+        // Redirect after success
+        setTimeout(() => {
+          window.location.href = 'index.html';
+        }, 1500);
+      }, 2000);
+    });
+    
+    // Resend email
+    function resendEmail() {
+      alert('Magic link resent!');
+    }
+    
+    // Check for token in URL (callback handling)
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('token')) {
+      showState('state-verifying');
+      setTimeout(() => {
+        showState('state-success');
+        setTimeout(() => {
+          window.location.href = 'index.html';
+        }, 1500);
+      }, 2000);
+    }
+  </script>
+</body>
+</html>

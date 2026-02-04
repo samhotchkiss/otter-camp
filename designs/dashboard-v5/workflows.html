@@ -1,0 +1,1009 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Workflows · otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+      
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --green-bg: rgba(90, 122, 92, 0.15);
+      --red: #B85C38;
+      --red-bg: rgba(184, 92, 56, 0.15);
+      --blue: #4A6D7C;
+      --blue-bg: rgba(74, 109, 124, 0.15);
+      --yellow: #C4A03C;
+      --yellow-bg: rgba(196, 160, 60, 0.15);
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+      --green-bg: rgba(90, 122, 92, 0.2);
+      --red-bg: rgba(184, 92, 56, 0.2);
+      --blue-bg: rgba(74, 109, 124, 0.2);
+      --yellow-bg: rgba(196, 160, 60, 0.2);
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .search-trigger {
+      flex: 1;
+      max-width: 400px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+    }
+    
+    .search-trigger-text { flex: 1; opacity: 0.7; font-size: 14px; }
+    .kbd { font-size: 12px; opacity: 0.6; font-family: var(--mono); }
+    
+    .topbar-nav {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .nav-link {
+      color: inherit;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0.8;
+      transition: all 0.15s;
+    }
+    
+    .nav-link:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+    .nav-link.active { opacity: 1; background: rgba(255,255,255,0.15); }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-left: auto;
+    }
+    
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    
+    /* ========== MAIN ========== */
+    .main {
+      flex: 1;
+      display: flex;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    
+    .content {
+      flex: 1;
+      padding: 24px;
+    }
+    
+    .sidebar {
+      width: 380px;
+      border-left: 1px solid var(--border);
+      background: var(--surface-alt);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    /* ========== PAGE HEADER ========== */
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+    }
+    
+    .page-title {
+      font-size: 24px;
+      font-weight: 700;
+    }
+    
+    .page-subtitle {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary { background: var(--accent); color: var(--bg); }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--surface-alt); }
+    .btn-ghost { background: transparent; color: var(--text-muted); padding: 8px 12px; }
+    .btn-ghost:hover { background: var(--surface-alt); color: var(--text); }
+    
+    /* ========== WORKFLOW CARDS ========== */
+    .workflows-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+    
+    .workflow-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      transition: all 0.15s;
+    }
+    
+    .workflow-card:hover {
+      border-color: var(--accent);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    
+    .workflow-card-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .workflow-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+    }
+    
+    .workflow-icon.twitter { background: var(--blue-bg); }
+    .workflow-icon.email { background: var(--yellow-bg); }
+    .workflow-icon.markets { background: var(--green-bg); }
+    .workflow-icon.content { background: var(--red-bg); }
+    
+    .workflow-info {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .workflow-name {
+      font-weight: 600;
+      font-size: 15px;
+      margin-bottom: 2px;
+    }
+    
+    .workflow-agent {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .workflow-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: 20px;
+    }
+    
+    .workflow-status.active {
+      background: var(--green-bg);
+      color: var(--green);
+    }
+    
+    .workflow-status.paused {
+      background: var(--surface-alt);
+      color: var(--text-muted);
+    }
+    
+    .workflow-card-body {
+      padding: 16px 20px;
+    }
+    
+    .workflow-latest {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text);
+    }
+    
+    .workflow-latest-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    
+    .workflow-card-footer {
+      padding: 12px 20px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    
+    .workflow-schedule {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .workflow-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    /* ========== ESCALATION BADGE ========== */
+    .escalation-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 4px;
+      margin-left: 8px;
+    }
+    
+    .escalation-badge.urgent {
+      background: var(--red-bg);
+      color: var(--red);
+    }
+    
+    .escalation-badge.high {
+      background: var(--yellow-bg);
+      color: var(--yellow);
+    }
+    
+    .escalation-badge.action {
+      background: var(--blue-bg);
+      color: var(--blue);
+    }
+    
+    /* ========== STACKED ITEMS ========== */
+    .stacked-items {
+      margin-top: 12px;
+      border-top: 1px dashed var(--border);
+      padding-top: 12px;
+    }
+    
+    .stacked-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      background: var(--surface-alt);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    
+    .stacked-item:last-child { margin-bottom: 0; }
+    
+    .stacked-item-icon {
+      font-size: 14px;
+      margin-top: 2px;
+    }
+    
+    .stacked-item-content {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .stacked-item-text {
+      line-height: 1.5;
+    }
+    
+    .stacked-item-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    
+    .stacked-item-dismiss {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+      font-size: 14px;
+    }
+    
+    .stacked-item-dismiss:hover { color: var(--text); }
+    
+    /* ========== SIDEBAR: WORKFLOW CHAT ========== */
+    .sidebar-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .sidebar-workflow-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      background: var(--blue-bg);
+    }
+    
+    .sidebar-workflow-name {
+      font-weight: 600;
+      font-size: 15px;
+    }
+    
+    .sidebar-workflow-status {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .sidebar-close {
+      margin-left: auto;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 18px;
+    }
+    
+    .sidebar-close:hover { color: var(--text); }
+    
+    .workflow-chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
+    
+    .chat-message {
+      margin-bottom: 16px;
+    }
+    
+    .chat-message-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    
+    .chat-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+    }
+    
+    .chat-author {
+      font-weight: 600;
+      font-size: 13px;
+    }
+    
+    .chat-time {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    
+    .chat-message-body {
+      font-size: 14px;
+      line-height: 1.6;
+      padding-left: 36px;
+    }
+    
+    .chat-escalation {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-left: 8px;
+    }
+    
+    .chat-escalation.high {
+      background: var(--yellow-bg);
+      color: var(--yellow);
+    }
+    
+    .chat-escalation.action {
+      background: var(--red-bg);
+      color: var(--red);
+    }
+    
+    .chat-action-buttons {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      padding-left: 36px;
+    }
+    
+    .chat-action-btn {
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .chat-action-btn:hover { background: var(--surface-alt); }
+    .chat-action-btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+    
+    .workflow-chat-input {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+    }
+    
+    .chat-input-wrap {
+      display: flex;
+      gap: 12px;
+    }
+    
+    .chat-input {
+      flex: 1;
+      padding: 12px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--text);
+      resize: none;
+    }
+    
+    .chat-input::placeholder { color: var(--text-muted); }
+    .chat-input:focus { outline: none; border-color: var(--accent); }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      padding: 20px 24px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+      text-align: center;
+    }
+    
+    .footer-fact {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .footer-fact strong { color: var(--accent); }
+    
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 1200px) {
+      .sidebar { display: none; }
+    }
+    
+    @media (max-width: 768px) {
+      .workflows-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    @media (max-width: 640px) {
+      .topbar {
+        padding: 12px 16px;
+        flex-wrap: wrap;
+      }
+      
+      .search-trigger {
+        order: 3;
+        max-width: 100%;
+        flex-basis: 100%;
+      }
+      
+      .topbar-nav { display: none; }
+      
+      .content { padding: 16px; }
+      
+      .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- ========== TOP BAR ========== -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="search-trigger">
+        <span>🔍</span>
+        <span class="search-trigger-text">Search or command...</span>
+        <span class="kbd">⌘K</span>
+      </div>
+      
+      <nav class="topbar-nav">
+        <a href="index.html" class="nav-link">Dashboard</a>
+        <a href="inbox.html" class="nav-link">Inbox</a>
+        <a href="project.html" class="nav-link">Projects</a>
+        <a href="agents.html" class="nav-link">Agents</a>
+        <a href="workflows.html" class="nav-link active">Workflows</a>
+        <a href="feed.html" class="nav-link">Feed</a>
+      </nav>
+      
+      <div class="topbar-right">
+        <div class="connection-status">
+          <span class="status-dot"></span>
+          <span>Live</span>
+        </div>
+        <div class="avatar">S</div>
+      </div>
+    </header>
+    
+    <!-- ========== MAIN ========== -->
+    <main class="main">
+      <div class="content">
+        <!-- Page Header -->
+        <header class="page-header">
+          <div>
+            <h1 class="page-title">Workflows</h1>
+            <p class="page-subtitle">Ongoing agent processes — monitoring, engagement, and recurring tasks</p>
+          </div>
+          <button class="btn btn-primary">+ New Workflow</button>
+        </header>
+        
+        <!-- Workflows Grid -->
+        <div class="workflows-grid">
+          <!-- Twitter Engagement -->
+          <div class="workflow-card">
+            <div class="workflow-card-header">
+              <div class="workflow-icon twitter">🐦</div>
+              <div class="workflow-info">
+                <div class="workflow-name">Twitter Engagement</div>
+                <div class="workflow-agent">
+                  <span>🎨</span> Nova
+                </div>
+              </div>
+              <div class="workflow-status active">
+                <span class="status-dot"></span>
+                Active
+              </div>
+            </div>
+            <div class="workflow-card-body">
+              <div class="workflow-latest-label">Latest (replace mode)</div>
+              <div class="workflow-latest">
+                Posted thread on AI agent workflows — 847 impressions, 23 likes, 5 replies in first hour. Engagement rate above average.
+              </div>
+            </div>
+            <div class="workflow-card-footer">
+              <div class="workflow-schedule">
+                <span>🔄</span> Every 15m
+              </div>
+              <div class="workflow-actions">
+                <button class="btn btn-ghost">⏸️</button>
+                <button class="btn btn-ghost">💬</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Email Monitoring -->
+          <div class="workflow-card">
+            <div class="workflow-card-header">
+              <div class="workflow-icon email">📧</div>
+              <div class="workflow-info">
+                <div class="workflow-name">Email Monitoring</div>
+                <div class="workflow-agent">
+                  <span>📬</span> Penny
+                </div>
+              </div>
+              <div class="workflow-status active">
+                <span class="status-dot"></span>
+                Active
+              </div>
+            </div>
+            <div class="workflow-card-body">
+              <div class="workflow-latest-label">Stacked items (3)</div>
+              
+              <div class="stacked-items">
+                <div class="stacked-item">
+                  <span class="stacked-item-icon">🔴</span>
+                  <div class="stacked-item-content">
+                    <div class="stacked-item-text">
+                      <strong>Investor email</strong> from sarah@vcfund.com — wants to schedule a call re: OtterCamp
+                      <span class="escalation-badge urgent">Urgent</span>
+                    </div>
+                    <div class="stacked-item-meta">12m ago</div>
+                  </div>
+                  <button class="stacked-item-dismiss">✕</button>
+                </div>
+                
+                <div class="stacked-item">
+                  <span class="stacked-item-icon">🟡</span>
+                  <div class="stacked-item-content">
+                    <div class="stacked-item-text">
+                      <strong>AWS bill</strong> — $847.23 (up 15% from last month)
+                      <span class="escalation-badge high">Review</span>
+                    </div>
+                    <div class="stacked-item-meta">2h ago</div>
+                  </div>
+                  <button class="stacked-item-dismiss">✕</button>
+                </div>
+                
+                <div class="stacked-item">
+                  <span class="stacked-item-icon">📄</span>
+                  <div class="stacked-item-content">
+                    <div class="stacked-item-text">
+                      Newsletter digest: 14 new emails processed, 2 flagged for review
+                    </div>
+                    <div class="stacked-item-meta">4h ago</div>
+                  </div>
+                  <button class="stacked-item-dismiss">✕</button>
+                </div>
+              </div>
+            </div>
+            <div class="workflow-card-footer">
+              <div class="workflow-schedule">
+                <span>🔄</span> Every 5m
+              </div>
+              <div class="workflow-actions">
+                <button class="btn btn-ghost">⏸️</button>
+                <button class="btn btn-ghost">💬</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Market Watch -->
+          <div class="workflow-card">
+            <div class="workflow-card-header">
+              <div class="workflow-icon markets">📈</div>
+              <div class="workflow-info">
+                <div class="workflow-name">Market Watch</div>
+                <div class="workflow-agent">
+                  <span>📊</span> Beau H
+                </div>
+              </div>
+              <div class="workflow-status active">
+                <span class="status-dot"></span>
+                Active
+              </div>
+            </div>
+            <div class="workflow-card-body">
+              <div class="workflow-latest-label">Latest (replace mode)</div>
+              <div class="workflow-latest">
+                <strong>Market Summary (2:00 PM MST)</strong><br>
+                SPY +0.4% | QQQ +0.6% | BTC $67,420 (+2.1%)<br>
+                Portfolio: +$1,247 today (+0.8%)
+              </div>
+            </div>
+            <div class="workflow-card-footer">
+              <div class="workflow-schedule">
+                <span>🔄</span> Market hours only
+              </div>
+              <div class="workflow-actions">
+                <button class="btn btn-ghost">⏸️</button>
+                <button class="btn btn-ghost">💬</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Content Calendar -->
+          <div class="workflow-card">
+            <div class="workflow-card-header">
+              <div class="workflow-icon content">📝</div>
+              <div class="workflow-info">
+                <div class="workflow-name">Content Calendar</div>
+                <div class="workflow-agent">
+                  <span>🪨</span> Stone
+                </div>
+              </div>
+              <div class="workflow-status paused">
+                ⏸️ Paused
+              </div>
+            </div>
+            <div class="workflow-card-body">
+              <div class="workflow-latest-label">Last update</div>
+              <div class="workflow-latest">
+                Blog post "Building with AI Agents" ready for review. Next: Substack newsletter draft due Thursday.
+              </div>
+            </div>
+            <div class="workflow-card-footer">
+              <div class="workflow-schedule">
+                <span>📅</span> Daily at 9 AM
+              </div>
+              <div class="workflow-actions">
+                <button class="btn btn-ghost">▶️</button>
+                <button class="btn btn-ghost">💬</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Health Check -->
+          <div class="workflow-card">
+            <div class="workflow-card-header">
+              <div class="workflow-icon" style="background: var(--green-bg);">💚</div>
+              <div class="workflow-info">
+                <div class="workflow-name">Health & Wellness</div>
+                <div class="workflow-agent">
+                  <span>🏃</span> Max
+                </div>
+              </div>
+              <div class="workflow-status active">
+                <span class="status-dot"></span>
+                Active
+              </div>
+            </div>
+            <div class="workflow-card-body">
+              <div class="workflow-latest-label">Latest (replace mode)</div>
+              <div class="workflow-latest">
+                <strong>Daily Summary</strong><br>
+                Sleep: 7h 23m (good) | Steps: 4,821 | Water: 5 glasses<br>
+                Reminder: Take a walk — you've been at the desk for 3 hours.
+              </div>
+            </div>
+            <div class="workflow-card-footer">
+              <div class="workflow-schedule">
+                <span>🔄</span> Every 2h
+              </div>
+              <div class="workflow-actions">
+                <button class="btn btn-ghost">⏸️</button>
+                <button class="btn btn-ghost">💬</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- System Health -->
+          <div class="workflow-card">
+            <div class="workflow-card-header">
+              <div class="workflow-icon" style="background: var(--blue-bg);">🖥️</div>
+              <div class="workflow-info">
+                <div class="workflow-name">System Health</div>
+                <div class="workflow-agent">
+                  <span>🦪</span> Pearl
+                </div>
+              </div>
+              <div class="workflow-status active">
+                <span class="status-dot"></span>
+                Active
+              </div>
+            </div>
+            <div class="workflow-card-body">
+              <div class="workflow-latest-label">Latest (replace mode)</div>
+              <div class="workflow-latest">
+                All systems operational. 13 agents active. Memory usage healthy. Last backup: 2h ago.
+              </div>
+            </div>
+            <div class="workflow-card-footer">
+              <div class="workflow-schedule">
+                <span>🔄</span> Every 10m
+              </div>
+              <div class="workflow-actions">
+                <button class="btn btn-ghost">⏸️</button>
+                <button class="btn btn-ghost">💬</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Sidebar: Workflow Chat -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-workflow-icon">🐦</div>
+          <div>
+            <div class="sidebar-workflow-name">Twitter Engagement</div>
+            <div class="sidebar-workflow-status">Nova · Active</div>
+          </div>
+          <button class="sidebar-close">✕</button>
+        </div>
+        
+        <div class="workflow-chat">
+          <div class="chat-message">
+            <div class="chat-message-header">
+              <div class="chat-avatar">🎨</div>
+              <span class="chat-author">Nova</span>
+              <span class="chat-time">2:15 PM</span>
+            </div>
+            <div class="chat-message-body">
+              Posted thread on AI agent workflows — 847 impressions, 23 likes, 5 replies in first hour. Engagement rate above average. Should I draft a follow-up thread for tomorrow?
+            </div>
+          </div>
+          
+          <div class="chat-message">
+            <div class="chat-message-header">
+              <div class="chat-avatar">S</div>
+              <span class="chat-author">Sam</span>
+              <span class="chat-time">2:18 PM</span>
+            </div>
+            <div class="chat-message-body">
+              Yes, follow up on the most engaged replies. What's the sentiment like?
+            </div>
+          </div>
+          
+          <div class="chat-message">
+            <div class="chat-message-header">
+              <div class="chat-avatar">🎨</div>
+              <span class="chat-author">Nova</span>
+              <span class="chat-time">2:20 PM</span>
+            </div>
+            <div class="chat-message-body">
+              Sentiment is mostly positive (78%). Main themes in replies:
+              <br><br>
+              • "How do you handle context limits?" (3 replies)<br>
+              • "What models are you using?" (2 replies)<br>
+              • "This is exactly what I've been building!" (positive)<br>
+              <br>
+              I'll draft replies to the questions and a follow-up thread addressing context management.
+            </div>
+          </div>
+          
+          <div class="chat-message">
+            <div class="chat-message-header">
+              <div class="chat-avatar">🎨</div>
+              <span class="chat-author">Nova</span>
+              <span class="chat-time">2:35 PM</span>
+              <span class="chat-escalation high">Review</span>
+            </div>
+            <div class="chat-message-body">
+              Drafted follow-up thread (5 tweets). Ready for your review before posting.
+            </div>
+            <div class="chat-action-buttons">
+              <button class="chat-action-btn primary">Review Draft</button>
+              <button class="chat-action-btn">Post Now</button>
+              <button class="chat-action-btn">Schedule</button>
+            </div>
+          </div>
+          
+          <div class="chat-message">
+            <div class="chat-message-header">
+              <div class="chat-avatar">🎨</div>
+              <span class="chat-author">Nova</span>
+              <span class="chat-time">2:50 PM</span>
+            </div>
+            <div class="chat-message-body">
+              Update: Thread now at 1,247 impressions. One reply from @paulg with 50k followers — should I engage? His comment was supportive.
+              <span class="chat-escalation action">Action</span>
+            </div>
+            <div class="chat-action-buttons">
+              <button class="chat-action-btn primary">Yes, Reply</button>
+              <button class="chat-action-btn">Show Context</button>
+              <button class="chat-action-btn">Skip</button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="workflow-chat-input">
+          <div class="chat-input-wrap">
+            <input type="text" class="chat-input" placeholder="Message Nova...">
+            <button class="btn btn-primary" style="padding: 10px 16px;">Send</button>
+          </div>
+        </div>
+      </aside>
+    </main>
+    
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+      <div class="footer-fact">
+        <span>🦦</span>
+        <span><strong>Otter fact:</strong> Otters are one of the few animals that use tools — they use rocks to crack open shellfish.</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

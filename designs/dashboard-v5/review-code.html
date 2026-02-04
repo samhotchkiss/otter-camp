@@ -1,0 +1,1266 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Review: Implement retry logic · otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+      
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --green-bg: rgba(90, 122, 92, 0.15);
+      --red: #B85C38;
+      --red-bg: rgba(184, 92, 56, 0.15);
+      --blue: #4A6D7C;
+      --yellow: #C4A03C;
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+      --green-bg: rgba(90, 122, 92, 0.2);
+      --red-bg: rgba(184, 92, 56, 0.2);
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .search-trigger {
+      flex: 1;
+      max-width: 400px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .search-trigger:hover { background: rgba(255,255,255,0.2); }
+    .search-trigger-text { flex: 1; opacity: 0.7; font-size: 14px; }
+    .kbd { font-size: 12px; opacity: 0.6; font-family: var(--mono); }
+    
+    .topbar-nav {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .nav-link {
+      color: inherit;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0.8;
+      transition: all 0.15s;
+    }
+    
+    .nav-link:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-left: auto;
+    }
+    
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    
+    /* ========== REVIEW HEADER ========== */
+    .review-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 24px;
+    }
+    
+    .review-header-top {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .review-title {
+      flex: 1;
+    }
+    
+    .review-title h1 {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    
+    .review-meta {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .review-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    
+    .btn-primary:hover { background: var(--accent-hover); }
+    
+    .btn-success {
+      background: var(--green);
+      color: white;
+    }
+    
+    .btn-success:hover { opacity: 0.9; }
+    
+    .btn-danger {
+      background: var(--red);
+      color: white;
+    }
+    
+    .btn-danger:hover { opacity: 0.9; }
+    
+    .btn-secondary {
+      background: var(--surface-alt);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    
+    .btn-secondary:hover { background: var(--border); }
+    
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-muted);
+    }
+    
+    .btn-ghost:hover { background: var(--surface-alt); color: var(--text); }
+    
+    .review-stats {
+      display: flex;
+      gap: 24px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+    
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+    
+    .stat-label { color: var(--text-muted); }
+    .stat-value { font-weight: 600; }
+    .stat-add { color: var(--green); }
+    .stat-del { color: var(--red); }
+    
+    /* ========== MAIN LAYOUT ========== */
+    .review-main {
+      display: flex;
+      flex: 1;
+    }
+    
+    .file-tree {
+      width: 280px;
+      background: var(--surface-alt);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+    }
+    
+    .diff-view {
+      flex: 1;
+      overflow-y: auto;
+    }
+    
+    /* ========== FILE TREE ========== */
+    .file-tree-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    
+    .file-list {
+      padding: 8px 0;
+    }
+    
+    .file-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    
+    .file-item:hover { background: var(--surface); }
+    .file-item.active { background: var(--surface); border-left: 3px solid var(--accent); }
+    
+    .file-icon { font-size: 14px; }
+    
+    .file-name {
+      flex: 1;
+      font-size: 13px;
+      font-family: var(--mono);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    .file-status {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    
+    .file-status.added {
+      background: var(--green-bg);
+      color: var(--green);
+    }
+    
+    .file-status.modified {
+      background: rgba(196, 160, 60, 0.2);
+      color: var(--yellow);
+    }
+    
+    .file-status.deleted {
+      background: var(--red-bg);
+      color: var(--red);
+    }
+    
+    .file-changes {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: var(--mono);
+    }
+    
+    .file-changes .add { color: var(--green); }
+    .file-changes .del { color: var(--red); }
+    
+    /* ========== DIFF VIEW ========== */
+    .diff-file {
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .diff-file-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    
+    .diff-file-path {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 500;
+    }
+    
+    .diff-file-actions {
+      margin-left: auto;
+      display: flex;
+      gap: 8px;
+    }
+    
+    .view-toggle {
+      display: flex;
+      background: var(--surface-alt);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    
+    .view-toggle-btn {
+      padding: 6px 12px;
+      border: none;
+      background: none;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .view-toggle-btn:hover { color: var(--text); }
+    .view-toggle-btn.active { background: var(--accent); color: var(--bg); }
+    
+    /* ========== DIFF TABLE ========== */
+    .diff-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    
+    .diff-table td {
+      padding: 0;
+      vertical-align: top;
+    }
+    
+    .diff-line-num {
+      width: 50px;
+      text-align: right;
+      padding: 0 12px;
+      color: var(--text-muted);
+      background: var(--surface-alt);
+      user-select: none;
+      border-right: 1px solid var(--border);
+    }
+    
+    .diff-line-content {
+      padding: 0 16px;
+      white-space: pre;
+      overflow-x: auto;
+    }
+    
+    .diff-line-add {
+      background: var(--green-bg);
+    }
+    
+    .diff-line-add .diff-line-num {
+      background: rgba(90, 122, 92, 0.3);
+      color: var(--green);
+    }
+    
+    .diff-line-del {
+      background: var(--red-bg);
+    }
+    
+    .diff-line-del .diff-line-num {
+      background: rgba(184, 92, 56, 0.3);
+      color: var(--red);
+    }
+    
+    .diff-line-context {
+      background: var(--surface);
+    }
+    
+    .diff-hunk-header {
+      background: var(--surface-alt);
+      color: var(--text-muted);
+      padding: 8px 16px;
+      font-size: 12px;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    
+    /* ========== SYNTAX HIGHLIGHTING ========== */
+    .token-keyword { color: #c678dd; }
+    .token-string { color: #98c379; }
+    .token-number { color: #d19a66; }
+    .token-comment { color: #5c6370; font-style: italic; }
+    .token-function { color: #61afef; }
+    .token-type { color: #e5c07b; }
+    .token-operator { color: #56b6c2; }
+    
+    /* ========== INLINE COMMENT ========== */
+    .inline-comment-trigger {
+      position: absolute;
+      left: 4px;
+      opacity: 0;
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: opacity 0.1s;
+    }
+    
+    .diff-table tr:hover .inline-comment-trigger {
+      opacity: 1;
+    }
+    
+    .inline-comment {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 8px 16px;
+    }
+    
+    .inline-comment-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .comment-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+    }
+    
+    .comment-author {
+      font-weight: 600;
+      font-size: 14px;
+      font-family: var(--font);
+    }
+    
+    .comment-time {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-family: var(--font);
+    }
+    
+    .inline-comment-body {
+      padding: 16px;
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    
+    .inline-comment-actions {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+    }
+    
+    .comment-resolved {
+      opacity: 0.6;
+      border-left: 3px solid var(--green);
+    }
+    
+    .comment-resolved .inline-comment-header::after {
+      content: "Resolved";
+      font-size: 11px;
+      padding: 2px 8px;
+      background: var(--green-bg);
+      color: var(--green);
+      border-radius: 4px;
+      margin-left: auto;
+      font-family: var(--font);
+    }
+    
+    /* ========== REVIEW SIDEBAR ========== */
+    .review-sidebar {
+      width: 320px;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .review-sidebar-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    
+    .review-sidebar-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
+    
+    .review-summary {
+      margin-bottom: 24px;
+    }
+    
+    .review-summary-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    
+    .review-summary textarea {
+      width: 100%;
+      min-height: 120px;
+      padding: 12px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--text);
+      resize: vertical;
+    }
+    
+    .review-summary textarea::placeholder {
+      color: var(--text-muted);
+    }
+    
+    .review-summary textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    
+    .comments-list {
+      margin-bottom: 24px;
+    }
+    
+    .comment-summary {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: var(--surface-alt);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    
+    .comment-summary:hover { background: var(--border); }
+    
+    .comment-summary-file {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--accent);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    .comment-summary-line {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    
+    .comment-summary-status {
+      font-size: 14px;
+    }
+    
+    .review-sidebar-footer {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .review-sidebar-footer .btn {
+      justify-content: center;
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      padding: 20px 24px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+      text-align: center;
+    }
+    
+    .footer-fact {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .footer-fact strong {
+      color: var(--accent);
+    }
+    
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 1200px) {
+      .review-sidebar {
+        display: none;
+      }
+    }
+    
+    @media (max-width: 900px) {
+      .file-tree {
+        display: none;
+      }
+    }
+    
+    @media (max-width: 640px) {
+      .topbar {
+        padding: 12px 16px;
+        flex-wrap: wrap;
+      }
+      
+      .search-trigger {
+        order: 3;
+        max-width: 100%;
+        flex-basis: 100%;
+      }
+      
+      .topbar-nav {
+        display: none;
+      }
+      
+      .review-header {
+        padding: 16px;
+      }
+      
+      .review-header-top {
+        flex-direction: column;
+      }
+      
+      .review-actions {
+        width: 100%;
+      }
+      
+      .review-actions .btn {
+        flex: 1;
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- ========== TOP BAR ========== -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="search-trigger">
+        <span>🔍</span>
+        <span class="search-trigger-text">Search or command...</span>
+        <span class="kbd">⌘K</span>
+      </div>
+      
+      <nav class="topbar-nav">
+        <a href="index.html" class="nav-link">Dashboard</a>
+        <a href="inbox.html" class="nav-link">Inbox <span style="opacity:0.6">(3)</span></a>
+        <a href="project.html" class="nav-link">Projects</a>
+        <a href="agents.html" class="nav-link">Agents</a>
+        <a href="feed.html" class="nav-link">Feed</a>
+      </nav>
+      
+      <div class="topbar-right">
+        <div class="connection-status">
+          <span class="status-dot"></span>
+          <span>Live</span>
+        </div>
+        <div class="avatar">S</div>
+      </div>
+    </header>
+    
+    <!-- ========== REVIEW HEADER ========== -->
+    <div class="review-header">
+      <div class="review-header-top">
+        <div class="review-title">
+          <h1>Review: Implement retry logic for 500 errors</h1>
+          <div class="review-meta">
+            <span>🔧 Derek</span>
+            <span>•</span>
+            <span>ENG-042</span>
+            <span>•</span>
+            <span>Requested 10m ago</span>
+          </div>
+        </div>
+        <div class="review-actions">
+          <button class="btn btn-secondary">💬 Comment</button>
+          <button class="btn btn-danger">✗ Request Changes</button>
+          <button class="btn btn-success">✓ Approve</button>
+        </div>
+      </div>
+      
+      <div class="review-stats">
+        <div class="stat">
+          <span class="stat-label">Files:</span>
+          <span class="stat-value">3</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Changes:</span>
+          <span class="stat-value stat-add">+127</span>
+          <span class="stat-value stat-del">-14</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Comments:</span>
+          <span class="stat-value">2</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Commits:</span>
+          <span class="stat-value">4</span>
+        </div>
+      </div>
+    </div>
+    
+    <!-- ========== MAIN CONTENT ========== -->
+    <div class="review-main">
+      <!-- File Tree -->
+      <aside class="file-tree">
+        <div class="file-tree-header">Changed Files (3)</div>
+        <div class="file-list">
+          <div class="file-item active">
+            <span class="file-icon">📄</span>
+            <span class="file-name">src/core/retry.ts</span>
+            <span class="file-status added">A</span>
+          </div>
+          <div class="file-item">
+            <span class="file-icon">📄</span>
+            <span class="file-name">src/providers/anthropic.ts</span>
+            <span class="file-status modified">M</span>
+          </div>
+          <div class="file-item">
+            <span class="file-icon">📄</span>
+            <span class="file-name">src/core/provider-client.ts</span>
+            <span class="file-status modified">M</span>
+          </div>
+        </div>
+      </aside>
+      
+      <!-- Diff View -->
+      <main class="diff-view">
+        <!-- File 1: retry.ts (New File) -->
+        <div class="diff-file">
+          <div class="diff-file-header">
+            <span class="file-status added" style="font-size: 12px;">NEW</span>
+            <span class="diff-file-path">src/core/retry.ts</span>
+            <div class="diff-file-actions">
+              <div class="view-toggle">
+                <button class="view-toggle-btn active">Unified</button>
+                <button class="view-toggle-btn">Split</button>
+              </div>
+              <button class="btn btn-ghost" style="padding: 6px 10px;">📋</button>
+            </div>
+          </div>
+          
+          <table class="diff-table">
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">1</td>
+              <td class="diff-line-content"><span class="token-keyword">import</span> { ProviderError } <span class="token-keyword">from</span> <span class="token-string">'./errors'</span>;</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">2</td>
+              <td class="diff-line-content"></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">3</td>
+              <td class="diff-line-content"><span class="token-keyword">interface</span> <span class="token-type">RetryConfig</span> {</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">4</td>
+              <td class="diff-line-content">  maxRetries: <span class="token-type">number</span>;</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">5</td>
+              <td class="diff-line-content">  baseDelayMs: <span class="token-type">number</span>;</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">6</td>
+              <td class="diff-line-content">  maxJitterMs: <span class="token-type">number</span>;</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">7</td>
+              <td class="diff-line-content">}</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">8</td>
+              <td class="diff-line-content"></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">9</td>
+              <td class="diff-line-content"><span class="token-keyword">const</span> DEFAULT_CONFIG: <span class="token-type">RetryConfig</span> = {</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">10</td>
+              <td class="diff-line-content">  maxRetries: <span class="token-number">3</span>,</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">11</td>
+              <td class="diff-line-content">  baseDelayMs: <span class="token-number">1000</span>,</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">12</td>
+              <td class="diff-line-content">  maxJitterMs: <span class="token-number">500</span>,</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">13</td>
+              <td class="diff-line-content">};</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">14</td>
+              <td class="diff-line-content"></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">15</td>
+              <td class="diff-line-content"><span class="token-comment">/**</span></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">16</td>
+              <td class="diff-line-content"><span class="token-comment"> * Calculate delay with exponential backoff and jitter</span></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">17</td>
+              <td class="diff-line-content"><span class="token-comment"> */</span></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">18</td>
+              <td class="diff-line-content"><span class="token-keyword">function</span> <span class="token-function">calculateDelay</span>(attempt: <span class="token-type">number</span>, config: <span class="token-type">RetryConfig</span>): <span class="token-type">number</span> {</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">19</td>
+              <td class="diff-line-content">  <span class="token-keyword">const</span> exponentialDelay = config.baseDelayMs * Math.<span class="token-function">pow</span>(<span class="token-number">2</span>, attempt);</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">20</td>
+              <td class="diff-line-content">  <span class="token-keyword">const</span> jitter = Math.<span class="token-function">random</span>() * config.maxJitterMs * (attempt + <span class="token-number">1</span>);</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">21</td>
+              <td class="diff-line-content">  <span class="token-keyword">return</span> exponentialDelay + jitter;</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">22</td>
+              <td class="diff-line-content">}</td>
+            </tr>
+          </table>
+          
+          <!-- Inline Comment -->
+          <div class="inline-comment" style="margin: 0 16px 16px 16px;">
+            <div class="inline-comment-header">
+              <div class="comment-avatar">S</div>
+              <span class="comment-author">Sam</span>
+              <span class="comment-time">5m ago</span>
+            </div>
+            <div class="inline-comment-body">
+              Nice — the jitter scaling with attempt number is a good touch. Prevents thundering herd on retries.
+            </div>
+            <div class="inline-comment-actions">
+              <button class="btn btn-ghost" style="font-size: 12px;">Reply</button>
+              <button class="btn btn-ghost" style="font-size: 12px;">✓ Resolve</button>
+            </div>
+          </div>
+          
+          <table class="diff-table">
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">23</td>
+              <td class="diff-line-content"></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">24</td>
+              <td class="diff-line-content"><span class="token-comment">/**</span></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">25</td>
+              <td class="diff-line-content"><span class="token-comment"> * Wrap an async function with retry logic</span></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">26</td>
+              <td class="diff-line-content"><span class="token-comment"> */</span></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">27</td>
+              <td class="diff-line-content"><span class="token-keyword">export async function</span> <span class="token-function">withRetry</span>&lt;T&gt;(</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">28</td>
+              <td class="diff-line-content">  fn: () =&gt; <span class="token-type">Promise</span>&lt;T&gt;,</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">29</td>
+              <td class="diff-line-content">  config: <span class="token-type">Partial</span>&lt;<span class="token-type">RetryConfig</span>&gt; = {}</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">30</td>
+              <td class="diff-line-content">): <span class="token-type">Promise</span>&lt;T&gt; {</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">31</td>
+              <td class="diff-line-content">  <span class="token-keyword">const</span> cfg = { ...DEFAULT_CONFIG, ...config };</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">32</td>
+              <td class="diff-line-content">  <span class="token-keyword">let</span> lastError: <span class="token-type">Error</span>;</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">33</td>
+              <td class="diff-line-content"></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">34</td>
+              <td class="diff-line-content">  <span class="token-keyword">for</span> (<span class="token-keyword">let</span> attempt = <span class="token-number">0</span>; attempt &lt; cfg.maxRetries; attempt++) {</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">35</td>
+              <td class="diff-line-content">    <span class="token-keyword">try</span> {</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">36</td>
+              <td class="diff-line-content">      <span class="token-keyword">return await</span> <span class="token-function">fn</span>();</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">37</td>
+              <td class="diff-line-content">    } <span class="token-keyword">catch</span> (error) {</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">38</td>
+              <td class="diff-line-content">      <span class="token-keyword">if</span> (!<span class="token-function">isRetryable</span>(error)) <span class="token-keyword">throw</span> error;</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">39</td>
+              <td class="diff-line-content">      lastError = error;</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">40</td>
+              <td class="diff-line-content">      <span class="token-keyword">const</span> delay = <span class="token-function">calculateDelay</span>(attempt, cfg);</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">41</td>
+              <td class="diff-line-content">      <span class="token-keyword">await</span> <span class="token-function">sleep</span>(delay);</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">42</td>
+              <td class="diff-line-content">    }</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">43</td>
+              <td class="diff-line-content">  }</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">44</td>
+              <td class="diff-line-content"></td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">45</td>
+              <td class="diff-line-content">  <span class="token-keyword">throw</span> lastError!;</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">46</td>
+              <td class="diff-line-content">}</td>
+            </tr>
+          </table>
+        </div>
+        
+        <!-- File 2: anthropic.ts (Modified) -->
+        <div class="diff-file">
+          <div class="diff-file-header">
+            <span class="file-status modified" style="font-size: 12px;">MOD</span>
+            <span class="diff-file-path">src/providers/anthropic.ts</span>
+            <div class="diff-file-actions">
+              <div class="view-toggle">
+                <button class="view-toggle-btn active">Unified</button>
+                <button class="view-toggle-btn">Split</button>
+              </div>
+              <button class="btn btn-ghost" style="padding: 6px 10px;">📋</button>
+            </div>
+          </div>
+          
+          <div class="diff-hunk-header">@@ -1,6 +1,7 @@</div>
+          
+          <table class="diff-table">
+            <tr class="diff-line-context">
+              <td class="diff-line-num">1</td>
+              <td class="diff-line-num">1</td>
+              <td class="diff-line-content"><span class="token-keyword">import</span> Anthropic <span class="token-keyword">from</span> <span class="token-string">'@anthropic-ai/sdk'</span>;</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">2</td>
+              <td class="diff-line-content"><span class="token-keyword">import</span> { withRetry } <span class="token-keyword">from</span> <span class="token-string">'../core/retry'</span>;</td>
+            </tr>
+            <tr class="diff-line-context">
+              <td class="diff-line-num">2</td>
+              <td class="diff-line-num">3</td>
+              <td class="diff-line-content"><span class="token-keyword">import</span> { ProviderClient } <span class="token-keyword">from</span> <span class="token-string">'../core/provider-client'</span>;</td>
+            </tr>
+            <tr class="diff-line-context">
+              <td class="diff-line-num">3</td>
+              <td class="diff-line-num">4</td>
+              <td class="diff-line-content"></td>
+            </tr>
+          </table>
+          
+          <div class="diff-hunk-header">@@ -42,10 +43,14 @@</div>
+          
+          <table class="diff-table">
+            <tr class="diff-line-context">
+              <td class="diff-line-num">42</td>
+              <td class="diff-line-num">43</td>
+              <td class="diff-line-content">  <span class="token-keyword">async</span> <span class="token-function">complete</span>(messages: <span class="token-type">Message</span>[]): <span class="token-type">Promise</span>&lt;<span class="token-type">Response</span>&gt; {</td>
+            </tr>
+            <tr class="diff-line-del">
+              <td class="diff-line-num">43</td>
+              <td class="diff-line-num"></td>
+              <td class="diff-line-content">    <span class="token-keyword">const</span> response = <span class="token-keyword">await</span> <span class="token-keyword">this</span>.client.messages.<span class="token-function">create</span>({</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">44</td>
+              <td class="diff-line-content">    <span class="token-keyword">const</span> response = <span class="token-keyword">await</span> <span class="token-function">withRetry</span>(<span class="token-keyword">async</span> () =&gt; {</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">45</td>
+              <td class="diff-line-content">      <span class="token-keyword">return</span> <span class="token-keyword">this</span>.client.messages.<span class="token-function">create</span>({</td>
+            </tr>
+            <tr class="diff-line-context">
+              <td class="diff-line-num">44</td>
+              <td class="diff-line-num">46</td>
+              <td class="diff-line-content">        model: <span class="token-keyword">this</span>.model,</td>
+            </tr>
+            <tr class="diff-line-context">
+              <td class="diff-line-num">45</td>
+              <td class="diff-line-num">47</td>
+              <td class="diff-line-content">        messages: <span class="token-function">formatMessages</span>(messages),</td>
+            </tr>
+            <tr class="diff-line-context">
+              <td class="diff-line-num">46</td>
+              <td class="diff-line-num">48</td>
+              <td class="diff-line-content">        max_tokens: <span class="token-keyword">this</span>.maxTokens,</td>
+            </tr>
+            <tr class="diff-line-del">
+              <td class="diff-line-num">47</td>
+              <td class="diff-line-num"></td>
+              <td class="diff-line-content">    });</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">49</td>
+              <td class="diff-line-content">      });</td>
+            </tr>
+            <tr class="diff-line-add">
+              <td class="diff-line-num"></td>
+              <td class="diff-line-num">50</td>
+              <td class="diff-line-content">    });</td>
+            </tr>
+            <tr class="diff-line-context">
+              <td class="diff-line-num">48</td>
+              <td class="diff-line-num">51</td>
+              <td class="diff-line-content"></td>
+            </tr>
+            <tr class="diff-line-context">
+              <td class="diff-line-num">49</td>
+              <td class="diff-line-num">52</td>
+              <td class="diff-line-content">    <span class="token-keyword">return</span> <span class="token-keyword">this</span>.<span class="token-function">formatResponse</span>(response);</td>
+            </tr>
+          </table>
+          
+          <!-- Resolved Comment -->
+          <div class="inline-comment comment-resolved" style="margin: 0 16px 16px 16px;">
+            <div class="inline-comment-header">
+              <div class="comment-avatar">🔧</div>
+              <span class="comment-author">Derek</span>
+              <span class="comment-time">8m ago</span>
+            </div>
+            <div class="inline-comment-body">
+              Should we add logging for retry attempts? Would help with debugging production issues.
+              <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+                <div style="display: flex; gap: 8px; align-items: flex-start;">
+                  <div class="comment-avatar">S</div>
+                  <div>
+                    <div style="font-weight: 600; font-size: 13px;">Sam <span style="color: var(--text-muted); font-weight: 400;">3m ago</span></div>
+                    <div style="margin-top: 4px;">Yes — add it to the acceptance criteria. Can be a follow-up task.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+      
+      <!-- Review Sidebar -->
+      <aside class="review-sidebar">
+        <div class="review-sidebar-header">Review Summary</div>
+        <div class="review-sidebar-body">
+          <div class="review-summary">
+            <div class="review-summary-title">Add a summary (optional)</div>
+            <textarea placeholder="LGTM! Clean implementation..."></textarea>
+          </div>
+          
+          <div class="comments-list">
+            <div class="review-summary-title">Comments (2)</div>
+            
+            <div class="comment-summary">
+              <span class="comment-summary-status">💬</span>
+              <span class="comment-summary-file">retry.ts</span>
+              <span class="comment-summary-line">L20</span>
+            </div>
+            
+            <div class="comment-summary">
+              <span class="comment-summary-status">✅</span>
+              <span class="comment-summary-file">anthropic.ts</span>
+              <span class="comment-summary-line">L44</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="review-sidebar-footer">
+          <button class="btn btn-success">✓ Approve</button>
+          <button class="btn btn-danger">✗ Request Changes</button>
+          <button class="btn btn-secondary">💬 Comment Only</button>
+        </div>
+      </aside>
+    </div>
+    
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+      <div class="footer-fact">
+        <span>🦦</span>
+        <span><strong>Otter fact:</strong> Sea otters can live their entire lives without ever leaving the water.</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

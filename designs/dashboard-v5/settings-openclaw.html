@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw Settings · otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+      
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --green: #5A7A5C;
+      --green-bg: rgba(90, 122, 92, 0.15);
+      --red: #B85C38;
+      --red-bg: rgba(184, 92, 56, 0.15);
+      --blue: #4A6D7C;
+      --blue-bg: rgba(74, 109, 124, 0.15);
+      --yellow: #C4A03C;
+      --yellow-bg: rgba(196, 160, 60, 0.15);
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+      --green-bg: rgba(90, 122, 92, 0.2);
+      --red-bg: rgba(184, 92, 56, 0.2);
+      --blue-bg: rgba(74, 109, 124, 0.2);
+      --yellow-bg: rgba(196, 160, 60, 0.2);
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .search-trigger {
+      flex: 1;
+      max-width: 400px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+    }
+    
+    .search-trigger-text { flex: 1; opacity: 0.7; font-size: 14px; }
+    .kbd { font-size: 12px; opacity: 0.6; font-family: var(--mono); }
+    
+    .topbar-nav {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .nav-link {
+      color: inherit;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0.8;
+    }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-left: auto;
+    }
+    
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    
+    /* ========== MAIN ========== */
+    .main {
+      flex: 1;
+      display: flex;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    
+    /* ========== SIDEBAR NAV ========== */
+    .settings-nav {
+      width: 240px;
+      padding: 24px;
+      border-right: 1px solid var(--border);
+    }
+    
+    .settings-nav-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      padding: 0 12px;
+    }
+    
+    .settings-nav-list {
+      list-style: none;
+    }
+    
+    .settings-nav-item {
+      margin-bottom: 4px;
+    }
+    
+    .settings-nav-link {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 14px;
+      transition: all 0.15s;
+    }
+    
+    .settings-nav-link:hover { background: var(--surface-alt); }
+    .settings-nav-link.active { background: var(--surface); font-weight: 500; }
+    .settings-nav-icon { font-size: 18px; }
+    
+    /* ========== CONTENT ========== */
+    .settings-content {
+      flex: 1;
+      padding: 32px;
+      max-width: 720px;
+    }
+    
+    .settings-header {
+      margin-bottom: 32px;
+    }
+    
+    .settings-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .settings-desc {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    /* ========== SECTIONS ========== */
+    .settings-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+    
+    .section-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .section-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .section-body {
+      padding: 24px;
+    }
+    
+    /* ========== INSTANCE CARD ========== */
+    .instance-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+      padding: 20px;
+      background: var(--surface-alt);
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+    
+    .instance-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 12px;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      flex-shrink: 0;
+    }
+    
+    .instance-info {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .instance-name {
+      font-weight: 700;
+      font-size: 18px;
+      margin-bottom: 4px;
+    }
+    
+    .instance-meta {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    
+    .instance-meta-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .instance-status {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+    }
+    
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 20px;
+    }
+    
+    .status-badge.connected {
+      background: var(--green-bg);
+      color: var(--green);
+    }
+    
+    .status-badge.disconnected {
+      background: var(--red-bg);
+      color: var(--red);
+    }
+    
+    .status-badge.warning {
+      background: var(--yellow-bg);
+      color: var(--yellow);
+    }
+    
+    /* ========== STATS GRID ========== */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    
+    .stat-card {
+      background: var(--surface-alt);
+      border-radius: 10px;
+      padding: 16px;
+      text-align: center;
+    }
+    
+    .stat-value {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    
+    .stat-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    /* ========== BUTTONS ========== */
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary { background: var(--accent); color: var(--bg); }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-secondary { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--border); }
+    .btn-danger { background: var(--red); color: white; }
+    .btn-danger:hover { opacity: 0.9; }
+    .btn-warning { background: var(--yellow); color: var(--bg); }
+    .btn-warning:hover { opacity: 0.9; }
+    
+    .btn-group {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    
+    /* ========== ACTION CARDS ========== */
+    .action-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    
+    .action-card {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      transition: all 0.15s;
+      cursor: pointer;
+    }
+    
+    .action-card:hover {
+      border-color: var(--accent);
+    }
+    
+    .action-card-icon {
+      font-size: 24px;
+      margin-bottom: 12px;
+    }
+    
+    .action-card-title {
+      font-weight: 600;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }
+    
+    .action-card-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    /* ========== LOGS ========== */
+    .logs-container {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    
+    .log-entry {
+      padding: 10px 14px;
+      font-family: var(--mono);
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+    }
+    
+    .log-entry:last-child { border-bottom: none; }
+    
+    .log-time {
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    
+    .log-level {
+      font-weight: 600;
+      flex-shrink: 0;
+      width: 50px;
+    }
+    
+    .log-level.info { color: var(--blue); }
+    .log-level.warn { color: var(--yellow); }
+    .log-level.error { color: var(--red); }
+    
+    .log-message {
+      flex: 1;
+      word-break: break-all;
+    }
+    
+    .logs-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    
+    .logs-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    
+    .logs-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    /* ========== DIAGNOSTICS ========== */
+    .diagnostic-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    .diagnostic-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      background: var(--surface-alt);
+      border-radius: 8px;
+    }
+    
+    .diagnostic-status {
+      font-size: 18px;
+    }
+    
+    .diagnostic-info {
+      flex: 1;
+    }
+    
+    .diagnostic-name {
+      font-weight: 500;
+      font-size: 14px;
+    }
+    
+    .diagnostic-detail {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .diagnostic-action {
+      font-size: 12px;
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .diagnostic-action:hover { text-decoration: underline; }
+    
+    /* ========== CONFIG EDITOR ========== */
+    .config-editor {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    
+    .config-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: var(--surface-alt);
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .config-filename {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .config-content {
+      padding: 14px;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.6;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    
+    .config-content pre {
+      margin: 0;
+      white-space: pre-wrap;
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      padding: 20px 24px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+      text-align: center;
+    }
+    
+    .footer-fact {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .footer-fact strong { color: var(--accent); }
+    
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 900px) {
+      .main { flex-direction: column; }
+      .settings-nav { width: 100%; border-right: none; border-bottom: 1px solid var(--border); padding: 16px; }
+      .settings-nav-list { display: flex; flex-wrap: wrap; gap: 8px; }
+      .settings-nav-item { margin-bottom: 0; }
+      .settings-content { padding: 24px; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .action-grid { grid-template-columns: 1fr; }
+    }
+    
+    @media (max-width: 640px) {
+      .topbar { padding: 12px 16px; flex-wrap: wrap; }
+      .search-trigger { order: 3; max-width: 100%; flex-basis: 100%; }
+      .topbar-nav { display: none; }
+      .instance-card { flex-direction: column; }
+      .instance-status { align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- ========== TOP BAR ========== -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="search-trigger">
+        <span>🔍</span>
+        <span class="search-trigger-text">Search or command...</span>
+        <span class="kbd">⌘K</span>
+      </div>
+      
+      <nav class="topbar-nav">
+        <a href="index.html" class="nav-link">Dashboard</a>
+        <a href="inbox.html" class="nav-link">Inbox</a>
+        <a href="project.html" class="nav-link">Projects</a>
+        <a href="agents.html" class="nav-link">Agents</a>
+        <a href="feed.html" class="nav-link">Feed</a>
+      </nav>
+      
+      <div class="topbar-right">
+        <div class="connection-status">
+          <span class="status-dot"></span>
+          <span>Live</span>
+        </div>
+        <div class="avatar">S</div>
+      </div>
+    </header>
+    
+    <!-- ========== MAIN ========== -->
+    <main class="main">
+      <!-- Settings Nav -->
+      <nav class="settings-nav">
+        <div class="settings-nav-title">Settings</div>
+        <ul class="settings-nav-list">
+          <li class="settings-nav-item">
+            <a href="settings.html" class="settings-nav-link">
+              <span class="settings-nav-icon">👤</span>
+              Profile
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="settings-openclaw.html" class="settings-nav-link active">
+              <span class="settings-nav-icon">🦦</span>
+              OpenClaw
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="settings-github.html" class="settings-nav-link">
+              <span class="settings-nav-icon">🐙</span>
+              GitHub
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🔔</span>
+              Notifications
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🎨</span>
+              Appearance
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🔑</span>
+              API Keys
+            </a>
+          </li>
+        </ul>
+      </nav>
+      
+      <!-- Settings Content -->
+      <div class="settings-content">
+        <header class="settings-header">
+          <h1 class="settings-title">OpenClaw Instance</h1>
+          <p class="settings-desc">Manage your connected OpenClaw gateway and agent sessions.</p>
+        </header>
+        
+        <!-- Instance Status -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Connection Status</h2>
+            <p class="section-desc">Your linked OpenClaw instance.</p>
+          </div>
+          <div class="section-body">
+            <div class="instance-card">
+              <div class="instance-icon">🦦</div>
+              <div class="instance-info">
+                <div class="instance-name">sam-openclaw</div>
+                <div class="instance-meta">
+                  <span class="instance-meta-item">
+                    <span>📦</span> v1.2.3
+                  </span>
+                  <span class="instance-meta-item">
+                    <span>💻</span> Mac Studio
+                  </span>
+                  <span class="instance-meta-item">
+                    <span>⏱️</span> Uptime: 4d 12h
+                  </span>
+                </div>
+              </div>
+              <div class="instance-status">
+                <div class="status-badge connected">
+                  <span class="status-dot"></span>
+                  Connected
+                </div>
+                <span style="font-size: 12px; color: var(--text-muted);">Last ping: 2s ago</span>
+              </div>
+            </div>
+            
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="stat-value">13</div>
+                <div class="stat-label">Active Agents</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value">847</div>
+                <div class="stat-label">Tasks Today</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value">$42.18</div>
+                <div class="stat-label">API Cost Today</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value">99.9%</div>
+                <div class="stat-label">Uptime</div>
+              </div>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Quick Actions -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Quick Actions</h2>
+            <p class="section-desc">Control your OpenClaw gateway.</p>
+          </div>
+          <div class="section-body">
+            <div class="action-grid">
+              <div class="action-card">
+                <div class="action-card-icon">🔄</div>
+                <div class="action-card-title">Reload Config</div>
+                <div class="action-card-desc">Apply config changes without restart (SIGUSR1)</div>
+              </div>
+              <div class="action-card">
+                <div class="action-card-icon">🔁</div>
+                <div class="action-card-title">Restart Gateway</div>
+                <div class="action-card-desc">Full restart of the OpenClaw gateway</div>
+              </div>
+              <div class="action-card">
+                <div class="action-card-icon">📋</div>
+                <div class="action-card-title">View Full Logs</div>
+                <div class="action-card-desc">Stream gateway logs in real-time</div>
+              </div>
+              <div class="action-card">
+                <div class="action-card-icon">⬆️</div>
+                <div class="action-card-title">Check for Updates</div>
+                <div class="action-card-desc">Check for new OpenClaw versions</div>
+              </div>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Diagnostics -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Diagnostics</h2>
+            <p class="section-desc">Connection health and service status.</p>
+          </div>
+          <div class="section-body">
+            <div class="diagnostic-list">
+              <div class="diagnostic-item">
+                <span class="diagnostic-status">✅</span>
+                <div class="diagnostic-info">
+                  <div class="diagnostic-name">WebSocket Connection</div>
+                  <div class="diagnostic-detail">Connected to wss://gateway.openclaw.ai</div>
+                </div>
+                <a href="#" class="diagnostic-action">Test</a>
+              </div>
+              
+              <div class="diagnostic-item">
+                <span class="diagnostic-status">✅</span>
+                <div class="diagnostic-info">
+                  <div class="diagnostic-name">Anthropic API</div>
+                  <div class="diagnostic-detail">API key valid, 847 calls today</div>
+                </div>
+                <a href="#" class="diagnostic-action">Test</a>
+              </div>
+              
+              <div class="diagnostic-item">
+                <span class="diagnostic-status">✅</span>
+                <div class="diagnostic-info">
+                  <div class="diagnostic-name">OpenAI API</div>
+                  <div class="diagnostic-detail">API key valid, 156 calls today</div>
+                </div>
+                <a href="#" class="diagnostic-action">Test</a>
+              </div>
+              
+              <div class="diagnostic-item">
+                <span class="diagnostic-status">⚠️</span>
+                <div class="diagnostic-info">
+                  <div class="diagnostic-name">GitHub API</div>
+                  <div class="diagnostic-detail">Rate limited — resets in 47m</div>
+                </div>
+                <a href="#" class="diagnostic-action">Details</a>
+              </div>
+              
+              <div class="diagnostic-item">
+                <span class="diagnostic-status">✅</span>
+                <div class="diagnostic-info">
+                  <div class="diagnostic-name">Webhook Delivery</div>
+                  <div class="diagnostic-detail">All webhooks delivered successfully</div>
+                </div>
+                <a href="#" class="diagnostic-action">Test</a>
+              </div>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Recent Logs -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Recent Logs</h2>
+            <p class="section-desc">Latest gateway activity.</p>
+          </div>
+          <div class="section-body">
+            <div class="logs-header">
+              <span class="logs-title">Last 10 entries</span>
+              <div class="logs-actions">
+                <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">🔄 Refresh</button>
+                <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">📋 Copy</button>
+              </div>
+            </div>
+            <div class="logs-container">
+              <div class="log-entry">
+                <span class="log-time">14:08:42</span>
+                <span class="log-level info">INFO</span>
+                <span class="log-message">Session agent:2b:main heartbeat OK</span>
+              </div>
+              <div class="log-entry">
+                <span class="log-time">14:08:38</span>
+                <span class="log-level info">INFO</span>
+                <span class="log-message">Webhook delivered to OtterCamp: task.completed</span>
+              </div>
+              <div class="log-entry">
+                <span class="log-time">14:08:35</span>
+                <span class="log-level info">INFO</span>
+                <span class="log-message">Sub-agent vivid-tidepool completed, cleaning up</span>
+              </div>
+              <div class="log-entry">
+                <span class="log-time">14:08:21</span>
+                <span class="log-level warn">WARN</span>
+                <span class="log-message">GitHub API rate limit at 80% (4000/5000)</span>
+              </div>
+              <div class="log-entry">
+                <span class="log-time">14:08:15</span>
+                <span class="log-level info">INFO</span>
+                <span class="log-message">Spawned sub-agent warm-mist for issue #73</span>
+              </div>
+              <div class="log-entry">
+                <span class="log-time">14:07:58</span>
+                <span class="log-level info">INFO</span>
+                <span class="log-message">Config reloaded successfully</span>
+              </div>
+              <div class="log-entry">
+                <span class="log-time">14:07:42</span>
+                <span class="log-level error">ERROR</span>
+                <span class="log-message">Anthropic API 500 — retrying (attempt 1/3)</span>
+              </div>
+              <div class="log-entry">
+                <span class="log-time">14:07:44</span>
+                <span class="log-level info">INFO</span>
+                <span class="log-message">Anthropic API retry successful</span>
+              </div>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Config Preview -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Configuration</h2>
+            <p class="section-desc">Current gateway configuration (read-only preview).</p>
+          </div>
+          <div class="section-body">
+            <div class="config-editor">
+              <div class="config-toolbar">
+                <span class="config-filename">~/.openclaw/config.yaml</span>
+                <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">✏️ Edit</button>
+              </div>
+              <div class="config-content">
+<pre>gateway:
+  host: "0.0.0.0"
+  port: 3000
+  
+sessions:
+  main:
+    model: "claude-sonnet-4-20250514"
+    heartbeat: "*/5 * * * *"
+    channels:
+      - slack
+      - telegram
+
+agents:
+  - name: "Frank"
+    session: "main"
+    role: "Chief of Staff"
+  - name: "Derek"
+    session: "2b"
+    role: "Engineering Lead"
+  # ... 11 more agents
+
+providers:
+  anthropic:
+    apiKey: "${ANTHROPIC_API_KEY}"
+  openai:
+    apiKey: "${OPENAI_API_KEY}"</pre>
+              </div>
+            </div>
+            
+            <div class="btn-group" style="margin-top: 20px;">
+              <button class="btn btn-primary">✏️ Edit Configuration</button>
+              <button class="btn btn-secondary">📥 Export</button>
+              <button class="btn btn-secondary">🔍 Validate</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+    
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+      <div class="footer-fact">
+        <span>🦦</span>
+        <span><strong>Otter fact:</strong> A group of otters is called a "raft" when in water and a "romp" when on land.</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
