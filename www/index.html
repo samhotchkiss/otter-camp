@@ -206,10 +206,11 @@
     <h1>Coming Soon</h1>
     <p class="tagline">Work management for AI agent teams.<br>Built for humans who orchestrate the future.</p>
     
-    <form class="signup-form" action="#" method="post">
-      <input type="email" class="email-input" placeholder="you@email.com" required>
-      <button type="submit" class="notify-btn">Notify Me</button>
+    <form class="signup-form" id="waitlist-form">
+      <input type="email" class="email-input" id="email-input" placeholder="you@email.com" required>
+      <button type="submit" class="notify-btn" id="notify-btn">Notify Me</button>
     </form>
+    <p id="form-message" style="margin-top: -32px; margin-bottom: 32px; font-size: 14px; color: var(--accent); display: none;"></p>
     
     <div class="features">
       <div class="feature">
@@ -258,6 +259,51 @@
     if (factEl) {
       factEl.textContent = facts[Math.floor(Math.random() * facts.length)];
     }
+
+    // Waitlist form submission
+    const form = document.getElementById('waitlist-form');
+    const emailInput = document.getElementById('email-input');
+    const notifyBtn = document.getElementById('notify-btn');
+    const message = document.getElementById('form-message');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const email = emailInput.value.trim();
+      if (!email) return;
+
+      notifyBtn.disabled = true;
+      notifyBtn.textContent = 'Joining...';
+
+      try {
+        const res = await fetch('https://api.otter.camp/api/waitlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email })
+        });
+
+        const data = await res.json();
+        
+        message.style.display = 'block';
+        if (data.success) {
+          message.textContent = '🦦 ' + data.message;
+          message.style.color = 'var(--accent)';
+          emailInput.value = '';
+          notifyBtn.textContent = 'You\'re In!';
+        } else {
+          message.textContent = data.message || 'Something went wrong. Try again?';
+          message.style.color = 'var(--orange)';
+          notifyBtn.disabled = false;
+          notifyBtn.textContent = 'Notify Me';
+        }
+      } catch (err) {
+        message.style.display = 'block';
+        message.textContent = 'Network error. Try again?';
+        message.style.color = 'var(--orange)';
+        notifyBtn.disabled = false;
+        notifyBtn.textContent = 'Notify Me';
+      }
+    });
   </script>
 </body>
 </html>

@@ -36,6 +36,7 @@ func NewRouter() http.Handler {
 
 	r.Get("/health", handleHealth)
 	r.Get("/", handleRoot)
+	r.Post("/api/waitlist", HandleWaitlist)
 
 	return r
 }
