@@ -13,60 +13,78 @@ test.describe("Authentication", () => {
     test("should display login form when not authenticated", async ({ page }) => {
       await page.goto("/");
 
-      // Check for login elements (adjust selectors based on actual UI)
-      const loginButton = page.getByRole("button", { name: /log\s*in|sign\s*in/i });
+      // Check for login elements
+      const loginButton = page.getByRole("button", { name: /request\s*login/i });
       await expect(loginButton).toBeVisible();
     });
 
-    test("should show error message for invalid credentials", async ({ page }) => {
+    test("should show error message for invalid org id", async ({ page }) => {
       await page.goto("/");
 
-      // Fill in invalid credentials
-      const emailInput = page.getByLabel(/email/i);
-      const passwordInput = page.getByLabel(/password/i);
+      await page.route("**/api/auth/login", async (route) => {
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "invalid org_id" }),
+        });
+      });
 
-      if (await emailInput.isVisible()) {
-        await emailInput.fill("invalid@example.com");
-        await passwordInput.fill("wrongpassword");
+      const orgInput = page.getByLabel(/organization id/i);
+      await orgInput.fill("invalid");
+      await page.getByRole("button", { name: /request\s*login/i }).click();
 
-        await page.getByRole("button", { name: /log\s*in|sign\s*in/i }).click();
-
-        // Expect error message
-        await expect(page.getByText(/invalid|error|failed/i)).toBeVisible();
-      }
+      await expect(page.getByText(/invalid|error|failed/i)).toBeVisible();
     });
 
     test("should successfully login with valid credentials", async ({ page }) => {
       await page.goto("/");
 
-      // Mock the auth API
+      // Mock the auth request API
       await page.route("**/api/auth/login", async (route) => {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
-            token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwiZW1haWwiOiJ0ZXN0QGV4YW1wbGUuY29tIiwibmFtZSI6IlRlc3QgVXNlciIsImV4cCI6OTk5OTk5OTk5OX0.test",
-            user: {
-              id: "1",
-              email: "test@example.com",
-              name: "Test User",
+            request_id: "req-1",
+            state: "state-1",
+            expires_at: new Date(Date.now() + 600000).toISOString(),
+            exchange_url: "/api/auth/exchange",
+            openclaw_request: {
+              request_id: "req-1",
+              state: "state-1",
+              org_id: "org-1",
+              callback_url: "http://localhost/api/auth/exchange",
+              expires_at: new Date(Date.now() + 600000).toISOString(),
             },
           }),
         });
       });
 
-      const emailInput = page.getByLabel(/email/i);
-      const passwordInput = page.getByLabel(/password/i);
+      await page.route("**/api/auth/exchange", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          headers: { "X-Session-Expires-At": new Date(Date.now() + 3600000).toISOString() },
+          body: JSON.stringify({
+            token: "oc_sess_token",
+            user: {
+              id: "1",
+              email: "",
+              name: "OpenClaw User",
+            },
+          }),
+        });
+      });
 
-      if (await emailInput.isVisible()) {
-        await emailInput.fill("test@example.com");
-        await passwordInput.fill("password123");
+      const orgInput = page.getByLabel(/organization id/i);
+      await orgInput.fill("org-1");
+      await page.getByRole("button", { name: /request\s*login/i }).click();
 
-        await page.getByRole("button", { name: /log\s*in|sign\s*in/i }).click();
+      const tokenInput = page.getByLabel(/openclaw token/i);
+      await tokenInput.fill("oc_auth_token");
+      await page.getByRole("button", { name: /exchange token/i }).click();
 
-        // Should be redirected to dashboard or show authenticated UI
-        await expect(page).toHaveURL(/\/(dashboard|tasks)?$/);
-      }
+      await expect(page).toHaveURL(/\/(dashboard|tasks)?$/);
     });
   });
 
