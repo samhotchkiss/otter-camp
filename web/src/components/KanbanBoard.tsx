@@ -18,6 +18,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useToast } from "../contexts/ToastContext";
 
 // Types
 export interface Task {
@@ -84,21 +85,16 @@ async function updateTaskStatus(taskId: string, newStatus: TaskStatus): Promise<
   // TODO: Replace with actual API endpoint
   const apiUrl = `/api/tasks/${taskId}`;
   
-  try {
-    const response = await fetch(apiUrl, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ status: newStatus }),
-    });
+  const response = await fetch(apiUrl, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status: newStatus }),
+  });
 
-    if (!response.ok) {
-      throw new Error(`Failed to update task: ${response.statusText}`);
-    }
-  } catch (error) {
-    // In development, log but don't fail (API might not exist yet)
-    console.warn("API call failed (expected in dev):", error);
+  if (!response.ok) {
+    throw new Error(`Failed to update task: ${response.statusText}`);
   }
 }
 
@@ -248,6 +244,7 @@ export default function KanbanBoard() {
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [overColumn, setOverColumn] = useState<TaskStatus | null>(null);
+  const toast = useToast();
 
   // Configure sensors for drag detection
   const sensors = useSensors(
@@ -332,8 +329,10 @@ export default function KanbanBoard() {
 
     if (!targetStatus) return;
 
-    const activeTask = tasks.find((t) => t.id === activeId);
-    if (!activeTask || activeTask.status === targetStatus) return;
+    const movedTask = tasks.find((t) => t.id === activeId);
+    if (!movedTask || movedTask.status === targetStatus) return;
+
+    const targetColumn = COLUMNS.find((col) => col.id === targetStatus);
 
     // Update local state optimistically
     setTasks((prev) =>
@@ -342,8 +341,24 @@ export default function KanbanBoard() {
       )
     );
 
+    // Show toast notification
+    toast.success(
+      "Task updated",
+      `"${movedTask.title}" moved to ${targetColumn?.title || targetStatus}`
+    );
+
     // Persist to API
-    await updateTaskStatus(activeId, targetStatus);
+    try {
+      await updateTaskStatus(activeId, targetStatus);
+    } catch {
+      // Revert on failure
+      setTasks((prev) =>
+        prev.map((task) =>
+          task.id === activeId ? { ...task, status: movedTask.status } : task
+        )
+      );
+      toast.error("Update failed", "Could not update task status");
+    }
   };
 
   return (

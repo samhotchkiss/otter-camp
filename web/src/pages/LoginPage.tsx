@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import { useToast } from "../contexts/ToastContext";
 
 type LoginPageProps = {
   onLoginSuccess?: () => void;
@@ -7,6 +8,7 @@ type LoginPageProps = {
 
 export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
   const { login } = useAuth();
+  const toast = useToast();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -19,9 +21,12 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
 
     try {
       await login(email, password);
+      toast.success("Welcome back!", "You have successfully signed in");
       onLoginSuccess?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      const message = err instanceof Error ? err.message : "Login failed";
+      setError(message);
+      toast.error("Sign in failed", message);
     } finally {
       setIsSubmitting(false);
     }
