@@ -7,6 +7,8 @@ require (
 	github.com/go-chi/cors v1.0.0
 	github.com/golang-migrate/migrate/v4 v4.17.0
 	github.com/gorilla/websocket v1.5.1
+	github.com/stretchr/testify v1.8.3
+	github.com/testcontainers/testcontainers-go v0.27.0
 )
 
 require (
