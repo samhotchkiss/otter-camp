@@ -4,6 +4,7 @@ import NotificationBell from "../components/NotificationBell";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
+import Footer from "../components/Footer";
 
 type NavItem = {
   id: string;
@@ -357,6 +358,8 @@ export default function DashboardLayout({
         >
           {children}
         </main>
+
+        <Footer />
       </div>
 
       {/* Keyboard Shortcuts Help Modal */}
