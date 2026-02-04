@@ -1,452 +1,211 @@
-import { useCallback, useEffect, useMemo, useState, useRef, memo } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { memo } from "react";
 import AgentCard, { type AgentCardData } from "../components/AgentCard";
-import AgentDM, { type AgentStatus } from "../components/AgentDM";
-import { useWS } from "../contexts/WebSocketContext";
 
-/**
- * Status filter options including "all".
- */
-type StatusFilter = AgentStatus | "all";
+const agents: AgentCardData[] = [
+  {
+    id: "1",
+    name: "Frank",
+    role: "Chief of Staff",
+    status: "active",
+    tasks: 34,
+    commits: 89,
+    messages: 132,
+    activeTime: "4h 18m",
+    heartbeat: "12s",
+    activity: "3m",
+    lastAction: "Sent update to Sam",
+    projects: ["Onboarding", "Weekly Sync", "Ops"],
+  },
+  {
+    id: "2",
+    name: "Derek",
+    role: "Engineering Lead",
+    status: "active",
+    tasks: 28,
+    commits: 42,
+    messages: 98,
+    activeTime: "6h 02m",
+    heartbeat: "8s",
+    activity: "45s",
+    lastAction: "Pushed 3 commits to Pearl",
+    projects: ["Pearl", "Edge API"],
+  },
+  {
+    id: "3",
+    name: "Mina",
+    role: "Product Strategist",
+    status: "busy",
+    tasks: 19,
+    commits: 12,
+    messages: 74,
+    activeTime: "3h 44m",
+    heartbeat: "2m",
+    activity: "4m",
+    lastAction: "Drafted Q2 roadmap brief",
+    projects: ["Raft", "Insights"],
+  },
+  {
+    id: "4",
+    name: "Priya",
+    role: "Design Systems",
+    status: "active",
+    tasks: 22,
+    commits: 31,
+    messages: 120,
+    activeTime: "5h 11m",
+    heartbeat: "20s",
+    activity: "1m",
+    lastAction: "Shared updated token palette",
+    projects: ["UI Kit", "Docs"],
+  },
+  {
+    id: "5",
+    name: "Leo",
+    role: "Data Analyst",
+    status: "idle",
+    tasks: 11,
+    commits: 7,
+    messages: 56,
+    activeTime: "1h 09m",
+    heartbeat: "9m",
+    activity: "12m",
+    lastAction: "Queued weekly retention report",
+    projects: ["Metrics", "Growth"],
+  },
+  {
+    id: "6",
+    name: "Sasha",
+    role: "Customer Success",
+    status: "busy",
+    tasks: 27,
+    commits: 5,
+    messages: 186,
+    activeTime: "7h 33m",
+    heartbeat: "40s",
+    activity: "6m",
+    lastAction: "Escalated priority ticket",
+    projects: ["Support", "Playbooks"],
+  },
+  {
+    id: "7",
+    name: "Andre",
+    role: "Infrastructure",
+    status: "active",
+    tasks: 16,
+    commits: 54,
+    messages: 64,
+    activeTime: "8h 21m",
+    heartbeat: "15s",
+    activity: "55s",
+    lastAction: "Rolled out cluster patch",
+    projects: ["Core", "SRE"],
+  },
+  {
+    id: "8",
+    name: "Jules",
+    role: "Research",
+    status: "idle",
+    tasks: 9,
+    commits: 3,
+    messages: 44,
+    activeTime: "52m",
+    heartbeat: "14m",
+    activity: "18m",
+    lastAction: "Summarized user interviews",
+    projects: ["Discovery", "Labs"],
+  },
+];
 
-/**
- * Props for the AgentsPage component.
- */
-export type AgentsPageProps = {
-  apiEndpoint?: string;
-};
+const stats = [
+  {
+    label: "Active Now",
+    value: agents.filter((agent) => agent.status === "active").length.toString(),
+    caption: "currently in motion",
+  },
+  {
+    label: "Tasks This Week",
+    value: agents.reduce((sum, agent) => sum + agent.tasks, 0).toString(),
+    caption: "in flight across teams",
+  },
+  {
+    label: "Commits",
+    value: agents.reduce((sum, agent) => sum + agent.commits, 0).toString(),
+    caption: "merged in the last 7d",
+  },
+  {
+    label: "Uptime %",
+    value: "99.8",
+    caption: "last 30 days",
+  },
+];
 
-// Status filter styles - memoized outside component
-const ACTIVE_STYLES: Record<StatusFilter, string> = {
-  all: "bg-slate-700 text-otter-dark-text",
-  online: "bg-emerald-500/20 text-emerald-300 border-emerald-500/50",
-  busy: "bg-amber-500/20 text-amber-300 border-amber-500/50",
-  offline: "bg-slate-700 text-slate-300",
-};
-
-const DOT_STYLES: Record<StatusFilter, string> = {
-  all: "bg-slate-400",
-  online: "bg-emerald-500",
-  busy: "bg-amber-500",
-  offline: "bg-slate-500",
-};
-
-/**
- * Status filter button component - Memoized.
- */
-const StatusFilterButton = memo(function StatusFilterButton({
-  status,
-  label,
-  count,
-  isActive,
-  onClick,
-}: {
-  status: StatusFilter;
-  label: string;
-  count: number;
-  isActive: boolean;
-  onClick: () => void;
-}) {
-  const className = useMemo(() => {
-    const base = "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition";
-    if (isActive) {
-      return `${base} ${ACTIVE_STYLES[status]}`;
-    }
-    return `${base} border-otter-dark-border bg-otter-dark-surface/50 text-otter-muted hover:border-slate-600 hover:text-slate-300`;
-  }, [isActive, status]);
-
-  return (
-    <button type="button" onClick={onClick} className={className}>
-      {status !== "all" && (
-        <span className={`h-2 w-2 rounded-full ${DOT_STYLES[status]}`} />
-      )}
-      {label}
-      <span
-        className={`rounded-full px-2 py-0.5 text-xs ${
-          isActive ? "bg-black/20" : "bg-slate-700"
-        }`}
-      >
-        {count}
-      </span>
-    </button>
-  );
-});
-
-// Number of columns in the grid
-const GRID_COLUMNS = {
-  sm: 2,
-  lg: 3,
-  xl: 4,
-};
-
-const CARD_HEIGHT = 220; // Estimated height of AgentCard
-const GAP = 16;
-
-/**
- * AgentsPage - Grid view of all agents with filtering and DM modal.
- * Uses virtual scrolling for performance with large agent lists.
- *
- * Features:
- * - Responsive grid of agent cards (virtualized)
- * - Filter by status (all/online/busy/offline)
- * - Click card to open AgentDM modal
- * - Real-time status updates via WebSocket
- */
-function AgentsPageComponent({
-  apiEndpoint = "/api/agents",
-}: AgentsPageProps) {
-  const [agents, setAgents] = useState<AgentCardData[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [selectedAgent, setSelectedAgent] = useState<AgentCardData | null>(null);
-  const [columns, setColumns] = useState(GRID_COLUMNS.lg);
-  const parentRef = useRef<HTMLDivElement>(null);
-
-  const { lastMessage, connected } = useWS();
-
-  // Responsive column count
-  useEffect(() => {
-    const updateColumns = () => {
-      const width = window.innerWidth;
-      if (width >= 1280) {
-        setColumns(GRID_COLUMNS.xl);
-      } else if (width >= 1024) {
-        setColumns(GRID_COLUMNS.lg);
-      } else {
-        setColumns(GRID_COLUMNS.sm);
-      }
-    };
-
-    updateColumns();
-    window.addEventListener("resize", updateColumns);
-    return () => window.removeEventListener("resize", updateColumns);
-  }, []);
-
-  // Fetch agents from API
-  const fetchAgents = useCallback(async () => {
-    try {
-      const response = await fetch(apiEndpoint);
-      if (!response.ok) {
-        throw new Error("Failed to fetch agents");
-      }
-      const data = await response.json();
-      return (data.agents || data || []) as AgentCardData[];
-    } catch (err) {
-      throw err instanceof Error ? err : new Error("Failed to load agents");
-    }
-  }, [apiEndpoint]);
-
-  // Initial fetch
-  useEffect(() => {
-    const loadAgents = async () => {
-      setIsLoading(true);
-      try {
-        const fetchedAgents = await fetchAgents();
-        setAgents(fetchedAgents);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load agents");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadAgents();
-  }, [fetchAgents]);
-
-  // Handle WebSocket messages for real-time status updates
-  useEffect(() => {
-    if (!lastMessage) {
-      return;
-    }
-
-    if (lastMessage.type === "AgentStatusUpdated") {
-      const data = lastMessage.data as {
-        agentId?: string;
-        status?: AgentStatus;
-        currentTask?: string;
-        lastActive?: string;
-      };
-
-      if (data.agentId) {
-        setAgents((prev) =>
-          prev.map((agent) =>
-            agent.id === data.agentId
-              ? {
-                  ...agent,
-                  status: data.status ?? agent.status,
-                  currentTask: data.currentTask ?? agent.currentTask,
-                  lastActive: data.lastActive ?? agent.lastActive,
-                }
-              : agent
-          )
-        );
-
-        // Update selected agent if it's the one that changed
-        setSelectedAgent((prev) =>
-          prev && prev.id === data.agentId
-            ? {
-                ...prev,
-                status: data.status ?? prev.status,
-                currentTask: data.currentTask ?? prev.currentTask,
-                lastActive: data.lastActive ?? prev.lastActive,
-              }
-            : prev
-        );
-      }
-    }
-  }, [lastMessage]);
-
-  // Calculate counts for filters - memoized
-  const counts = useMemo(() => {
-    const result = { all: agents.length, online: 0, busy: 0, offline: 0 };
-    for (const agent of agents) {
-      result[agent.status]++;
-    }
-    return result;
-  }, [agents]);
-
-  // Filter agents by status - memoized
-  const filteredAgents = useMemo(() => {
-    if (statusFilter === "all") {
-      return agents;
-    }
-    return agents.filter((agent) => agent.status === statusFilter);
-  }, [agents, statusFilter]);
-
-  // Calculate rows for virtualization
-  const rowCount = useMemo(() => 
-    Math.ceil(filteredAgents.length / columns), 
-    [filteredAgents.length, columns]
-  );
-
-  // Virtual list for rows
-  const rowVirtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => CARD_HEIGHT + GAP,
-    overscan: 2,
-  });
-
-  // Handle card click - memoized
-  const handleAgentClick = useCallback((agent: AgentCardData) => {
-    setSelectedAgent(agent);
-  }, []);
-
-  // Close DM modal - memoized
-  const handleCloseDM = useCallback(() => {
-    setSelectedAgent(null);
-  }, []);
-
-  // Handle backdrop click
-  const handleBackdropClick = useCallback((event: React.MouseEvent) => {
-    if (event.target === event.currentTarget) {
-      handleCloseDM();
-    }
-  }, [handleCloseDM]);
-
-  // Handle escape key to close modal
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && selectedAgent) {
-        handleCloseDM();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedAgent, handleCloseDM]);
-
-  // Filter button handlers - memoized
-  const handleFilterAll = useCallback(() => setStatusFilter("all"), []);
-  const handleFilterOnline = useCallback(() => setStatusFilter("online"), []);
-  const handleFilterBusy = useCallback(() => setStatusFilter("busy"), []);
-  const handleFilterOffline = useCallback(() => setStatusFilter("offline"), []);
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-[400px] items-center justify-center">
-        <div className="flex items-center gap-3 text-otter-muted">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-emerald-500" />
-          <span>Loading agents...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4">
-        <div className="text-red-400">{error}</div>
-        <button
-          type="button"
-          onClick={() => window.location.reload()}
-          className="rounded-lg bg-otter-dark-surface-alt px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
-        >
-          Try Again
-        </button>
-      </div>
-    );
-  }
-
-  const virtualItems = rowVirtualizer.getVirtualItems();
-
+function AgentsPageComponent() {
   return (
     <div className="w-full">
-      {/* Header */}
-      <div className="mb-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-semibold text-otter-dark-text">Agents</h1>
-            <p className="mt-1 text-otter-muted">
-              {counts.all} agents • {counts.online} online
-            </p>
-          </div>
-
-          {/* Connection status */}
-          <div
-            className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${
-              connected
-                ? "bg-emerald-500/20 text-emerald-400"
-                : "bg-red-500/20 text-red-400"
-            }`}
-          >
-            <span
-              className={`h-2 w-2 rounded-full ${
-                connected ? "bg-emerald-500 animate-pulse" : "bg-red-500"
-              }`}
-            />
-            {connected ? "Live" : "Disconnected"}
-          </div>
-        </div>
-
-        {/* Status filters */}
-        <div className="mt-6 flex flex-wrap gap-2">
-          <StatusFilterButton
-            status="all"
-            label="All"
-            count={counts.all}
-            isActive={statusFilter === "all"}
-            onClick={handleFilterAll}
-          />
-          <StatusFilterButton
-            status="online"
-            label="Online"
-            count={counts.online}
-            isActive={statusFilter === "online"}
-            onClick={handleFilterOnline}
-          />
-          <StatusFilterButton
-            status="busy"
-            label="Busy"
-            count={counts.busy}
-            isActive={statusFilter === "busy"}
-            onClick={handleFilterBusy}
-          />
-          <StatusFilterButton
-            status="offline"
-            label="Offline"
-            count={counts.offline}
-            isActive={statusFilter === "offline"}
-            onClick={handleFilterOffline}
-          />
-        </div>
-      </div>
-
-      {/* Agent grid with virtual scrolling */}
-      {filteredAgents.length === 0 ? (
-        <div className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border border-dashed border-otter-dark-border bg-otter-dark-surface/50">
-          <p className="text-otter-muted">
-            {statusFilter === "all"
-              ? "No agents found"
-              : `No ${statusFilter} agents`}
-          </p>
-        </div>
-      ) : (
-        <div
-          ref={parentRef}
-          className="max-h-[70vh] overflow-y-auto"
-        >
-          <div
-            style={{
-              height: `${rowVirtualizer.getTotalSize()}px`,
-              width: "100%",
-              position: "relative",
-            }}
-          >
-            {virtualItems.map((virtualRow) => {
-              const startIndex = virtualRow.index * columns;
-              const rowAgents = filteredAgents.slice(startIndex, startIndex + columns);
-              
-              return (
-                <div
-                  key={virtualRow.key}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    height: `${virtualRow.size}px`,
-                    transform: `translateY(${virtualRow.start}px)`,
-                  }}
-                  className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-                >
-                  {rowAgents.map((agent) => (
-                    <AgentCard
-                      key={agent.id}
-                      agent={agent}
-                      onClick={handleAgentClick}
-                    />
-                  ))}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* DM Modal */}
-      {selectedAgent && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-          onClick={handleBackdropClick}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="dm-modal-title"
-        >
-          <div className="w-full max-w-2xl">
-            {/* Close button */}
-            <div className="mb-2 flex justify-end">
-              <button
-                type="button"
-                onClick={handleCloseDM}
-                className="rounded-full bg-otter-dark-surface-alt p-2 text-otter-muted transition hover:bg-slate-700 hover:text-slate-200"
-                aria-label="Close"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                  className="h-5 w-5"
-                >
-                  <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
-                </svg>
-              </button>
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 pb-12 sm:px-6 lg:px-8">
+        <section className="mt-6 rounded-3xl border border-otter-dark-border bg-otter-dark-surface p-6 sm:p-8">
+          <div className="flex flex-wrap items-center justify-between gap-6">
+            <div>
+              <div className="flex items-center gap-3 text-3xl font-semibold text-otter-dark-text">
+                <span className="text-3xl" aria-hidden="true">
+                  🦦
+                </span>
+                <h1>Your Raft</h1>
+              </div>
+              <p className="mt-2 text-sm text-otter-dark-text-muted">
+                {agents.length} agents working together
+              </p>
             </div>
-
-            {/* DM Component */}
-            <AgentDM
-              agent={{
-                id: selectedAgent.id,
-                name: selectedAgent.name,
-                avatarUrl: selectedAgent.avatarUrl,
-                status: selectedAgent.status,
-                role: selectedAgent.role,
-              }}
-            />
+            <div className="rounded-2xl border border-otter-dark-border bg-otter-dark-bg/80 px-4 py-3 text-sm text-otter-dark-text-muted">
+              Last sync: 2 minutes ago
+            </div>
           </div>
-        </div>
-      )}
+        </section>
+
+        <section className="grid gap-4 rounded-3xl border border-otter-dark-border bg-otter-dark-surface p-6 sm:grid-cols-2 lg:grid-cols-4">
+          {stats.map((stat) => (
+            <div
+              key={stat.label}
+              className="flex flex-col gap-2 rounded-2xl border border-otter-dark-border bg-otter-dark-bg/70 p-4"
+            >
+              <div className="text-xs font-semibold uppercase tracking-wide text-otter-dark-text-muted">
+                {stat.label}
+              </div>
+              <div className="text-2xl font-semibold text-otter-dark-text">{stat.value}</div>
+              <div className="text-xs text-otter-dark-text-muted">{stat.caption}</div>
+            </div>
+          ))}
+        </section>
+
+        <section>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-6">
+            {agents.map((agent) => (
+              <AgentCard key={agent.id} agent={agent} />
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-otter-dark-border bg-gradient-to-r from-otter-dark-surface via-otter-dark-bg to-otter-dark-surface p-6 text-otter-dark-text">
+          <div className="flex flex-wrap items-center justify-between gap-6">
+            <div>
+              <p className="text-sm uppercase tracking-[0.3em] text-otter-dark-text-muted">
+                Raft Status
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold">All paws on deck.</h2>
+              <p className="mt-1 text-sm text-otter-dark-text-muted">
+                Your agents are coordinating in real time to keep projects moving.
+              </p>
+            </div>
+            <div className="flex items-center gap-3 rounded-2xl border border-otter-dark-border bg-otter-dark-bg/70 px-5 py-4">
+              <span className="text-4xl">🦦</span>
+              <div>
+                <div className="text-sm font-semibold">Otter banner</div>
+                <div className="text-xs text-otter-dark-text-muted">Floating together since 2024.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
