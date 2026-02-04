@@ -27,18 +27,29 @@ type EnrichedFeedItem struct {
 
 	// Computed summary
 	Summary string `json:"summary,omitempty"`
+
+	// Ranking fields
+	Score    float64 `json:"score,omitempty"`
+	Priority string  `json:"priority,omitempty"`
 }
+
+// FeedMode constants for feed type selection.
+const (
+	FeedModeAll    = "all_activity"
+	FeedModeForYou = "for_you"
+)
 
 // PaginatedFeedResponse includes total count for pagination.
 type PaginatedFeedResponse struct {
-	OrgID  string             `json:"org_id"`
-	Types  []string           `json:"types,omitempty"`
-	From   *time.Time         `json:"from,omitempty"`
-	To     *time.Time         `json:"to,omitempty"`
-	Limit  int                `json:"limit"`
-	Offset int                `json:"offset"`
-	Total  int                `json:"total"`
-	Items  []EnrichedFeedItem `json:"items"`
+	OrgID    string             `json:"org_id"`
+	FeedMode string             `json:"feed_mode,omitempty"`
+	Types    []string           `json:"types,omitempty"`
+	From     *time.Time         `json:"from,omitempty"`
+	To       *time.Time         `json:"to,omitempty"`
+	Limit    int                `json:"limit"`
+	Offset   int                `json:"offset"`
+	Total    int                `json:"total"`
+	Items    []EnrichedFeedItem `json:"items"`
 }
 
 // FeedHandlerV2 handles GET /api/feed with enhanced features:
@@ -47,6 +58,9 @@ type PaginatedFeedResponse struct {
 // - Total count for pagination
 // - Related entities (task title, agent name)
 // - Generated summaries
+// - Feed mode: "for_you" (personalized) or "all_activity" (everything)
+// - Priority-based ranking with time decay
+// - Agent boost for preferred agents
 func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
@@ -62,6 +76,30 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 	if !uuidRegex.MatchString(orgID) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid org_id"})
 		return
+	}
+
+	// Parse feed_mode (optional, defaults to "all_activity")
+	feedMode := strings.TrimSpace(r.URL.Query().Get("feed_mode"))
+	if feedMode == "" {
+		feedMode = FeedModeAll
+	}
+	if feedMode != FeedModeAll && feedMode != FeedModeForYou {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid feed_mode: must be 'all_activity' or 'for_you'"})
+		return
+	}
+
+	// Parse user_id (optional, used for personalization)
+	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+
+	// Parse preferred_agents (comma-separated, optional)
+	var preferredAgents []string
+	if agentsParam := strings.TrimSpace(r.URL.Query().Get("preferred_agents")); agentsParam != "" {
+		for _, a := range strings.Split(agentsParam, ",") {
+			a = strings.TrimSpace(a)
+			if a != "" {
+				preferredAgents = append(preferredAgents, a)
+			}
+		}
 	}
 
 	// Parse types (comma-separated, optional)
@@ -114,6 +152,15 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Initialize ranker for scoring
+	ranker := feed.NewRanker()
+	if userID != "" {
+		ranker.SetCurrentUser(userID)
+	}
+	if len(preferredAgents) > 0 {
+		ranker.SetPreferredAgents(preferredAgents)
+	}
+
 	// Get database connection
 	db, err := getFeedDB()
 	if err != nil {
@@ -129,8 +176,15 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// For ranking, we need to fetch more items than requested, then rank and slice
+	// This is because ranking may filter items (for_you mode) or reorder them
+	fetchLimit := limit * 3 // Fetch 3x to have enough for filtering/ranking
+	if fetchLimit > 500 {
+		fetchLimit = 500
+	}
+
 	// Get feed items with related entities
-	query, args := buildEnrichedFeedQuery(orgID, types, from, to, limit, offset)
+	query, args := buildEnrichedFeedQuery(orgID, types, from, to, fetchLimit, 0)
 	rows, err := db.QueryContext(r.Context(), query, args...)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load feed"})
@@ -138,7 +192,9 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	items := make([]EnrichedFeedItem, 0)
+	// Convert to feed.Item for ranking
+	feedItems := make([]*feed.Item, 0)
+	itemMap := make(map[string]EnrichedFeedItem)
 	summarizer := feed.NewSummarizer()
 
 	for rows.Next() {
@@ -148,7 +204,6 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Generate summary
 		feedItem := &feed.Item{
 			ID:        item.ID,
 			OrgID:     item.OrgID,
@@ -160,24 +215,61 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 			TaskTitle: item.TaskTitle,
 			AgentName: item.AgentName,
 		}
-		item.Summary = summarizer.Summarize(feedItem)
+		feedItems = append(feedItems, feedItem)
 
-		items = append(items, item)
+		// Generate summary
+		item.Summary = summarizer.Summarize(feedItem)
+		itemMap[item.ID] = item
 	}
 	if err := rows.Err(); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read feed"})
 		return
 	}
 
+	// Apply ranking based on feed mode
+	var rankedItems []*feed.RankedItem
+	if feedMode == FeedModeForYou {
+		rankedItems = ranker.ForYouFeed(feedItems)
+	} else {
+		rankedItems = ranker.AllActivityFeed(feedItems)
+	}
+
+	// Apply pagination to ranked results
+	start := offset
+	if start > len(rankedItems) {
+		start = len(rankedItems)
+	}
+	end := start + limit
+	if end > len(rankedItems) {
+		end = len(rankedItems)
+	}
+	paginatedRanked := rankedItems[start:end]
+
+	// Convert back to EnrichedFeedItem with scores
+	items := make([]EnrichedFeedItem, len(paginatedRanked))
+	for i, ranked := range paginatedRanked {
+		item := itemMap[ranked.ID]
+		item.Score = ranked.Score
+		item.Priority = ranked.Priority
+		items[i] = item
+	}
+
+	// Update total for "for_you" mode (filtered count)
+	responseTotal := total
+	if feedMode == FeedModeForYou {
+		responseTotal = len(rankedItems)
+	}
+
 	sendJSON(w, http.StatusOK, PaginatedFeedResponse{
-		OrgID:  orgID,
-		Types:  types,
-		From:   from,
-		To:     to,
-		Limit:  limit,
-		Offset: offset,
-		Total:  total,
-		Items:  items,
+		OrgID:    orgID,
+		FeedMode: feedMode,
+		Types:    types,
+		From:     from,
+		To:       to,
+		Limit:    limit,
+		Offset:   offset,
+		Total:    responseTotal,
+		Items:    items,
 	})
 }
 

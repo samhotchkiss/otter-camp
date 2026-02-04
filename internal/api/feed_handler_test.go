@@ -364,3 +364,151 @@ func TestFeedHandlerV2EmptyResult(t *testing.T) {
 	require.Equal(t, 0, resp.Total)
 	require.Empty(t, resp.Items)
 }
+
+func TestFeedHandlerV2InvalidFeedMode(t *testing.T) {
+	orgID := "00000000-0000-0000-0000-000000000000"
+
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID+"&feed_mode=invalid", nil)
+	rec := httptest.NewRecorder()
+
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Contains(t, resp.Error, "feed_mode")
+}
+
+func TestFeedHandlerV2FeedModeDefaults(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	orgID := insertFeedOrganization(t, db, "feed-mode-org")
+
+	// Without feed_mode, should default to all_activity
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp PaginatedFeedResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, FeedModeAll, resp.FeedMode)
+}
+
+func TestFeedHandlerV2ForYouMode(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	orgID := insertFeedOrganization(t, db, "feed-foryou-org")
+
+	// Request with for_you mode
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID+"&feed_mode=for_you", nil)
+	rec := httptest.NewRecorder()
+
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp PaginatedFeedResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, FeedModeForYou, resp.FeedMode)
+}
+
+func TestFeedHandlerV2WithRanking(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	orgID := insertFeedOrganization(t, db, "feed-rank-org")
+	agentID := insertFeedAgent(t, db, orgID, "frank", "Frank")
+
+	base := time.Date(2026, 2, 3, 10, 0, 0, 0, time.UTC)
+
+	// Insert items with different priorities
+	insertFeedActivityWithRefs(t, db, orgID, nil, &agentID, "task_created", json.RawMessage(`{"priority":"P3"}`), base)
+	insertFeedActivityWithRefs(t, db, orgID, nil, &agentID, "task_created", json.RawMessage(`{"priority":"P0"}`), base.Add(-1*time.Hour))
+	insertFeedActivityWithRefs(t, db, orgID, nil, &agentID, "insight", json.RawMessage(`{}`), base.Add(-2*time.Hour))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp PaginatedFeedResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Items, 3)
+
+	// Verify items have scores
+	for _, item := range resp.Items {
+		require.Greater(t, item.Score, 0.0, "item %s should have a score", item.ID)
+	}
+
+	// Verify items are ranked (scores should be descending)
+	for i := 1; i < len(resp.Items); i++ {
+		require.GreaterOrEqual(t, resp.Items[i-1].Score, resp.Items[i].Score,
+			"items should be sorted by score descending")
+	}
+}
+
+func TestFeedHandlerV2PreferredAgents(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	orgID := insertFeedOrganization(t, db, "feed-pref-org")
+	frankID := insertFeedAgent(t, db, orgID, "frank", "Frank")
+	otherID := insertFeedAgent(t, db, orgID, "other", "Other Agent")
+
+	base := time.Date(2026, 2, 3, 10, 0, 0, 0, time.UTC)
+
+	// Insert items from different agents at the same time
+	insertFeedActivityWithRefs(t, db, orgID, nil, &otherID, "commit", json.RawMessage(`{}`), base)
+	insertFeedActivityWithRefs(t, db, orgID, nil, &frankID, "commit", json.RawMessage(`{}`), base)
+
+	// Request with preferred_agents
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID+"&preferred_agents="+frankID, nil)
+	rec := httptest.NewRecorder()
+
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp PaginatedFeedResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Items, 2)
+
+	// Frank's item should be ranked higher due to preferred agent boost
+	require.NotNil(t, resp.Items[0].AgentID)
+	require.Equal(t, frankID, *resp.Items[0].AgentID)
+}
