@@ -11,6 +11,7 @@ const AgentsPage = lazy(() => import("./pages/AgentsPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const FeedPage = lazy(() => import("./pages/FeedPage"));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
+const ProjectPage = lazy(() => import("./pages/ProjectPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
@@ -65,6 +66,10 @@ export const router = createBrowserRouter([
       {
         path: "projects",
         element: <ProjectsPage />,
+      },
+      {
+        path: "projects/:id",
+        element: <ProjectPage />,
       },
       {
         path: "notifications",
