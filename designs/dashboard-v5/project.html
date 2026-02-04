@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ItsAlive — otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --red: #B85C38;
+      --blue: #4A6D7C;
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      opacity: 0.8;
+    }
+    
+    .breadcrumb a {
+      color: inherit;
+      text-decoration: none;
+    }
+    
+    .breadcrumb a:hover { text-decoration: underline; }
+    
+    .breadcrumb-separator { opacity: 0.5; }
+    
+    .breadcrumb-current { font-weight: 600; opacity: 1; }
+    
+    .search-trigger {
+      flex: 1;
+      max-width: 400px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-left: auto;
+    }
+    
+    .search-trigger:hover { background: rgba(255,255,255,0.2); }
+    
+    .search-trigger-text {
+      flex: 1;
+      opacity: 0.7;
+      font-size: 14px;
+    }
+    
+    .search-trigger kbd {
+      background: rgba(255,255,255,0.2);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: var(--font);
+    }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    
+    .theme-toggle {
+      background: none;
+      border: none;
+      color: inherit;
+      font-size: 20px;
+      cursor: pointer;
+      opacity: 0.8;
+    }
+    
+    .theme-toggle:hover { opacity: 1; }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+    }
+    
+    /* ========== PROJECT HEADER ========== */
+    .project-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 24px;
+    }
+    
+    .project-header-content {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    
+    .project-icon {
+      font-size: 48px;
+    }
+    
+    .project-info { flex: 1; }
+    
+    .project-title {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    
+    .project-meta {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    .project-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    
+    .status-dot.green { background: var(--green); }
+    .status-dot.yellow { background: var(--orange); }
+    .status-dot.red { background: var(--red); }
+    
+    .project-actions {
+      display: flex;
+      gap: 12px;
+    }
+    
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      font-family: var(--font);
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    
+    .btn-primary:hover { background: var(--accent-hover); }
+    
+    .btn-secondary {
+      background: var(--surface-alt);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    
+    .btn-secondary:hover {
+      background: var(--border);
+    }
+    
+    /* ========== TABS ========== */
+    .project-tabs {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+    }
+    
+    .tabs-inner {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      gap: 4px;
+    }
+    
+    .tab {
+      padding: 14px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: all 0.15s;
+    }
+    
+    .tab:hover {
+      color: var(--text);
+    }
+    
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    
+    .tab-badge {
+      background: var(--red);
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-left: 6px;
+    }
+    
+    /* ========== KANBAN BOARD ========== */
+    .board-container {
+      flex: 1;
+      padding: 24px;
+      overflow-x: auto;
+    }
+    
+    .board {
+      display: flex;
+      gap: 20px;
+      min-width: fit-content;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    
+    .board-column {
+      background: var(--surface-alt);
+      border-radius: 12px;
+      width: 320px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      max-height: calc(100vh - 240px);
+    }
+    
+    .column-header {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .column-title {
+      font-weight: 700;
+      font-size: 14px;
+    }
+    
+    .column-count {
+      background: var(--surface);
+      padding: 2px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    
+    .column-cards {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    .task-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .task-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    
+    .task-card.blocked {
+      border-left: 3px solid var(--orange);
+    }
+    
+    .task-title {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    
+    .task-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .task-agent {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .agent-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: white;
+    }
+    
+    .task-priority {
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    
+    .priority-p0 { background: rgba(184, 92, 56, 0.2); color: var(--red); }
+    .priority-p1 { background: rgba(200, 121, 65, 0.2); color: var(--orange); }
+    .priority-p2 { background: rgba(74, 109, 124, 0.2); color: var(--blue); }
+    
+    .add-task-btn {
+      margin: 0 12px 12px;
+      padding: 12px;
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: var(--font);
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .add-task-btn:hover {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+    
+    /* ========== ACTIVITY SIDEBAR ========== */
+    .layout-with-sidebar {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 0;
+      flex: 1;
+      overflow: hidden;
+    }
+    
+    .activity-sidebar {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .sidebar-header {
+      padding: 20px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 700;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .sidebar-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+    
+    .activity-item {
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      transition: background 0.15s;
+    }
+    
+    .activity-item:hover {
+      background: var(--surface-alt);
+    }
+    
+    .activity-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    
+    .activity-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: white;
+    }
+    
+    .activity-agent { font-weight: 600; font-size: 13px; }
+    .activity-time { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+    
+    .activity-text {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    
+    .activity-text strong { color: var(--text); }
+    
+    /* ========== OTTER ILLUSTRATION ========== */
+    .sidebar-otter {
+      padding: 16px;
+      text-align: center;
+      border-top: 1px solid var(--border);
+    }
+    
+    .otter-img {
+      width: 100%;
+      max-width: 180px;
+      height: auto;
+      border-radius: 8px;
+      opacity: 0.85;
+      filter: sepia(20%) contrast(1.1);
+      transition: all 0.3s;
+    }
+    
+    .sidebar-otter:hover .otter-img {
+      opacity: 1;
+      transform: scale(1.02);
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      background: var(--surface-alt);
+      border-top: 1px solid var(--border);
+      padding: 16px 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .otter-fact { margin-bottom: 8px; }
+    .footer-tagline { margin-bottom: 4px; font-weight: 500; }
+    .footer-links a { color: var(--accent); text-decoration: none; }
+    .footer-links a:hover { text-decoration: underline; }
+    
+    @media (max-width: 1000px) {
+      .layout-with-sidebar {
+        grid-template-columns: 1fr;
+      }
+      .activity-sidebar { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="breadcrumb">
+        <a href="index.html">Projects</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current">ItsAlive</span>
+      </div>
+      
+      <div class="search-trigger">
+        <span>🔍</span>
+        <span class="search-trigger-text">Search or type a command...</span>
+        <kbd>/</kbd>
+      </div>
+      
+      <div class="topbar-right">
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light mode">☀️</button>
+        <div class="avatar"></div>
+      </div>
+    </header>
+    
+    <!-- Project Header -->
+    <div class="project-header">
+      <div class="project-header-content">
+        <div class="project-icon">🚀</div>
+        <div class="project-info">
+          <h1 class="project-title">ItsAlive</h1>
+          <div class="project-meta">
+            <div class="project-status">
+              <span class="status-dot yellow"></span>
+              <span>1 item waiting on you</span>
+            </div>
+            <span>•</span>
+            <span>8 active tasks</span>
+            <span>•</span>
+            <span>Lead: Ivy</span>
+          </div>
+        </div>
+        <div class="project-actions">
+          <button class="btn btn-secondary">Settings</button>
+          <button class="btn btn-primary">+ New Task</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Tabs -->
+    <div class="project-tabs">
+      <div class="tabs-inner">
+        <div class="tab active">Board</div>
+        <div class="tab">List</div>
+        <div class="tab">Activity</div>
+        <div class="tab">Files</div>
+        <div class="tab">Human Items<span class="tab-badge">1</span></div>
+      </div>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="layout-with-sidebar">
+      <!-- Kanban Board -->
+      <div class="board-container">
+        <div class="board">
+          <!-- Queued Column -->
+          <div class="board-column">
+            <div class="column-header">
+              <span class="column-title">📋 Queued</span>
+              <span class="column-count">3</span>
+            </div>
+            <div class="column-cards">
+              <div class="task-card">
+                <div class="task-title">Add email notification system</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: var(--green);">I</div>
+                    <span>Ivy</span>
+                  </div>
+                  <span class="task-priority priority-p2">P2</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-title">Improve error handling in deploy flow</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: var(--blue);">D</div>
+                    <span>Derek</span>
+                  </div>
+                  <span class="task-priority priority-p2">P2</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-title">Write user documentation for API</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: #ec4899;">S</div>
+                    <span>Stone</span>
+                  </div>
+                  <span class="task-priority priority-p2">P2</span>
+                </div>
+              </div>
+            </div>
+            <button class="add-task-btn">+ Add Task</button>
+          </div>
+          
+          <!-- In Progress Column -->
+          <div class="board-column">
+            <div class="column-header">
+              <span class="column-title">🔨 In Progress</span>
+              <span class="column-count">3</span>
+            </div>
+            <div class="column-cards">
+              <div class="task-card blocked">
+                <div class="task-title">Deploy v2.1.0 to production</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: var(--green);">I</div>
+                    <span>Ivy</span>
+                  </div>
+                  <span class="task-priority priority-p0">P0 • Blocked</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-title">Implement onboarding flow redesign</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: var(--blue);">D</div>
+                    <span>Derek</span>
+                  </div>
+                  <span class="task-priority priority-p1">P1</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-title">Design new dashboard components</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: var(--orange);">J</div>
+                    <span>Jeff G</span>
+                  </div>
+                  <span class="task-priority priority-p1">P1</span>
+                </div>
+              </div>
+            </div>
+            <button class="add-task-btn">+ Add Task</button>
+          </div>
+          
+          <!-- Review Column -->
+          <div class="board-column">
+            <div class="column-header">
+              <span class="column-title">👀 Review</span>
+              <span class="column-count">2</span>
+            </div>
+            <div class="column-cards">
+              <div class="task-card">
+                <div class="task-title">Landing page copy update</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: #ec4899;">S</div>
+                    <span>Stone</span>
+                  </div>
+                  <span class="task-priority priority-p2">P2</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-title">API endpoint refactor</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: var(--blue);">D</div>
+                    <span>Derek</span>
+                  </div>
+                  <span class="task-priority priority-p2">P2</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Done Column -->
+          <div class="board-column">
+            <div class="column-header">
+              <span class="column-title">✅ Done</span>
+              <span class="column-count">5</span>
+            </div>
+            <div class="column-cards">
+              <div class="task-card" style="opacity: 0.7;">
+                <div class="task-title">Set up staging environment</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: var(--green);">I</div>
+                    <span>Ivy</span>
+                  </div>
+                </div>
+              </div>
+              <div class="task-card" style="opacity: 0.7;">
+                <div class="task-title">Write test suite for auth</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: var(--blue);">J</div>
+                    <span>Josh S</span>
+                  </div>
+                </div>
+              </div>
+              <div class="task-card" style="opacity: 0.7;">
+                <div class="task-title">Fix mobile responsive issues</div>
+                <div class="task-meta">
+                  <div class="task-agent">
+                    <div class="agent-avatar" style="background: var(--orange);">J</div>
+                    <span>Jeff G</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Activity Sidebar -->
+      <aside class="activity-sidebar">
+        <div class="sidebar-header">
+          📡 Recent Activity
+        </div>
+        <div class="sidebar-content">
+          <div class="activity-item">
+            <div class="activity-header">
+              <div class="activity-avatar" style="background: var(--green);">I</div>
+              <span class="activity-agent">Ivy</span>
+              <span class="activity-time">5m ago</span>
+            </div>
+            <p class="activity-text">Waiting on <strong>your approval</strong> to deploy v2.1.0</p>
+          </div>
+          
+          <div class="activity-item">
+            <div class="activity-header">
+              <div class="activity-avatar" style="background: var(--blue);">D</div>
+              <span class="activity-agent">Derek</span>
+              <span class="activity-time">23m ago</span>
+            </div>
+            <p class="activity-text">Pushed <strong>3 commits</strong> to feature/onboarding</p>
+          </div>
+          
+          <div class="activity-item">
+            <div class="activity-header">
+              <div class="activity-avatar" style="background: var(--orange);">J</div>
+              <span class="activity-agent">Jeff G</span>
+              <span class="activity-time">1h ago</span>
+            </div>
+            <p class="activity-text">Completed <strong>dashboard components</strong> design</p>
+          </div>
+          
+          <div class="activity-item">
+            <div class="activity-header">
+              <div class="activity-avatar" style="background: #ec4899;">S</div>
+              <span class="activity-agent">Stone</span>
+              <span class="activity-time">2h ago</span>
+            </div>
+            <p class="activity-text">Moved <strong>Landing page copy</strong> to Review</p>
+          </div>
+          
+          <div class="activity-item">
+            <div class="activity-header">
+              <div class="activity-avatar" style="background: var(--blue);">J</div>
+              <span class="activity-agent">Josh S</span>
+              <span class="activity-time">3h ago</span>
+            </div>
+            <p class="activity-text">Completed <strong>auth test suite</strong> — all passing</p>
+          </div>
+        </div>
+        
+        <div class="sidebar-otter">
+          <img src="images/otters-water-polo.png" alt="Otters playing water polo" class="otter-img">
+        </div>
+      </aside>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="footer">
+      <p class="otter-fact">🦦 Loading otter fact...</p>
+      <p class="footer-tagline">Made with 🤍 in Santa Fe</p>
+      <p class="footer-links">
+        <a href="https://seaotterfoundationtrust.org" target="_blank">Help real otters →</a>
+      </p>
+    </footer>
+  </div>
+  
+  <script>
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      document.querySelector('.theme-toggle').textContent = next === 'dark' ? '☀️' : '🌙';
+    }
+    
+    const otterFacts = [
+      "Otters hold hands while sleeping so they don't drift apart.",
+      "Sea otters have the densest fur of any mammal — about 1 million hairs per square inch.",
+      "Otters have a favorite rock they keep in a pouch under their arm.",
+      "A group of otters is called a 'romp' on land and a 'raft' in water.",
+      "Otters can close their ears and nostrils while swimming underwater.",
+      "Sea otters eat about 25% of their body weight daily.",
+      "Baby otters are called pups and they can't swim when they're born.",
+      "Otters have been seen juggling rocks for fun."
+    ];
+    
+    document.querySelector('.otter-fact').textContent = 
+      '🦦 ' + otterFacts[Math.floor(Math.random() * otterFacts.length)];
+  </script>
+</body>
+</html>
