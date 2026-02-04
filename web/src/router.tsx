@@ -12,6 +12,7 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const FeedPage = lazy(() => import("./pages/FeedPage"));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
+const ChatPage = lazy(() => import("./pages/ChatPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
 /**
@@ -69,6 +70,14 @@ export const router = createBrowserRouter([
       {
         path: "notifications",
         element: <NotificationsPage />,
+      },
+      {
+        path: "chat",
+        element: <ChatPage />,
+      },
+      {
+        path: "chat/:agentId",
+        element: <ChatPage />,
       },
     ],
   },
