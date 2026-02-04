@@ -1,0 +1,1298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp — Dashboard v3</title>
+  <style>
+    /* ========== OTTER.CAMP DESIGN SYSTEM v3 ========== */
+    :root {
+      /* Primary */
+      --otter-brown: #5c4a3d;
+      --warm-cream: #faf8f5;
+      --bark: #8b7355;
+      --driftwood: #c4b5a4;
+      
+      /* Secondary */
+      --river-blue: #4a6d7c;
+      --forest-green: #5a7a5c;
+      --sunset-orange: #c87941;
+      --campfire: #b85c38;
+      
+      /* Neutrals */
+      --deep-earth: #2d2a26;
+      --stone: #6b6560;
+      --pebble: #a69582;
+      --sand: #e8e2d9;
+      --foam: #f5f2ed;
+      
+      /* Accents */
+      --kelp: #3d5a4c;
+      --shell-pink: #d4a59a;
+      --tide-pool: #6b8f9c;
+      
+      /* Status - Semantic */
+      --status-idle: var(--river-blue);
+      --status-scheduled: var(--tide-pool);
+      --status-working: var(--forest-green);
+      --status-feedback: var(--sunset-orange);
+      --status-blocked: var(--campfire);
+      
+      /* Spacing */
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --space-xl: 32px;
+      --space-2xl: 48px;
+      
+      /* Typography */
+      --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+      --font-display: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'SF Mono', Monaco, 'Courier New', monospace;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font-sans);
+      background: var(--warm-cream);
+      color: var(--deep-earth);
+      line-height: 1.5;
+      font-size: 14px;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      grid-template-rows: 60px 1fr;
+      min-height: 100vh;
+    }
+    
+    /* ========== TOP BAR ========== */
+    .topbar {
+      grid-column: 1 / -1;
+      background: var(--otter-brown);
+      color: var(--warm-cream);
+      display: flex;
+      align-items: center;
+      padding: 0 var(--space-lg);
+      gap: var(--space-lg);
+    }
+    
+    .logo {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      text-decoration: none;
+      color: var(--warm-cream);
+    }
+    
+    .logo-icon {
+      font-size: 28px;
+    }
+    
+    .topbar-center {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: var(--space-xl);
+    }
+    
+    .quick-stats {
+      display: flex;
+      gap: var(--space-lg);
+      font-size: 13px;
+      opacity: 0.9;
+    }
+    
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: var(--space-xs);
+    }
+    
+    .stat-value {
+      font-weight: 700;
+    }
+    
+    .needs-you-badge {
+      background: var(--campfire);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s, background 0.15s;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .needs-you-badge:hover {
+      transform: scale(1.05);
+      background: #a54d2c;
+    }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+    }
+    
+    .search-box {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 13px;
+      color: var(--driftwood);
+      width: 220px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .avatar {
+      width: 36px;
+      height: 36px;
+      background: var(--bark);
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.3);
+    }
+    
+    /* ========== SIDEBAR ========== */
+    .sidebar {
+      background: var(--foam);
+      border-right: 1px solid var(--sand);
+      padding: var(--space-md) 0;
+      overflow-y: auto;
+    }
+    
+    .nav-section {
+      margin-bottom: var(--space-lg);
+    }
+    
+    .nav-label {
+      padding: var(--space-sm) var(--space-md);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--bark);
+    }
+    
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: 10px var(--space-md);
+      color: var(--stone);
+      text-decoration: none;
+      cursor: pointer;
+      transition: all 0.15s;
+      border-left: 3px solid transparent;
+    }
+    
+    .nav-item:hover {
+      background: var(--sand);
+      color: var(--deep-earth);
+    }
+    
+    .nav-item.active {
+      background: rgba(92, 74, 61, 0.08);
+      color: var(--otter-brown);
+      border-left-color: var(--otter-brown);
+      font-weight: 500;
+    }
+    
+    .nav-icon {
+      width: 20px;
+      text-align: center;
+      font-size: 16px;
+    }
+    
+    .nav-item .badge {
+      margin-left: auto;
+      background: var(--campfire);
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    
+    .status-dot.idle { background: var(--status-idle); }
+    .status-dot.scheduled { background: var(--status-scheduled); }
+    .status-dot.working { background: var(--status-working); }
+    .status-dot.feedback { background: var(--status-feedback); }
+    .status-dot.blocked { background: var(--status-blocked); }
+    
+    /* ========== MAIN CONTENT ========== */
+    .main {
+      padding: var(--space-lg) var(--space-xl);
+      overflow-y: auto;
+      background: var(--warm-cream);
+    }
+    
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: var(--space-xl);
+    }
+    
+    .page-title {
+      font-family: var(--font-display);
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--otter-brown);
+    }
+    
+    .page-subtitle {
+      color: var(--stone);
+      font-size: 15px;
+      margin-top: var(--space-xs);
+    }
+    
+    .header-actions {
+      display: flex;
+      gap: var(--space-sm);
+    }
+    
+    .btn {
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--otter-brown);
+      color: var(--warm-cream);
+    }
+    
+    .btn-primary:hover {
+      background: #4a3c31;
+    }
+    
+    .btn-secondary {
+      background: white;
+      border: 1px solid var(--sand);
+      color: var(--stone);
+    }
+    
+    .btn-secondary:hover {
+      background: var(--foam);
+      border-color: var(--driftwood);
+    }
+    
+    /* ========== SECTION ========== */
+    .section {
+      margin-bottom: var(--space-xl);
+    }
+    
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: var(--space-md);
+    }
+    
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--bark);
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .section-title .count {
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--sand);
+      color: var(--stone);
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    
+    .section-link {
+      font-size: 13px;
+      color: var(--river-blue);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    
+    .section-link:hover {
+      text-decoration: underline;
+    }
+    
+    /* ========== PROJECT CARDS ========== */
+    .projects-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: var(--space-md);
+    }
+    
+    .project-card {
+      background: white;
+      border: 1px solid var(--sand);
+      border-radius: 12px;
+      padding: var(--space-md);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .project-card:hover {
+      border-color: var(--otter-brown);
+      box-shadow: 0 4px 16px rgba(92, 74, 61, 0.12);
+      transform: translateY(-2px);
+    }
+    
+    .project-card.status-blocked {
+      border-color: var(--campfire);
+      border-width: 2px;
+    }
+    
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      margin-bottom: var(--space-sm);
+    }
+    
+    .pulse {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    
+    .pulse.idle { background: var(--status-idle); }
+    .pulse.scheduled { background: var(--status-scheduled); }
+    .pulse.working { background: var(--status-working); animation: pulse-glow 2s infinite; }
+    .pulse.feedback { background: var(--status-feedback); }
+    .pulse.blocked { background: var(--status-blocked); animation: pulse-urgent 1.5s infinite; }
+    
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(90, 122, 92, 0.4); }
+      50% { box-shadow: 0 0 0 6px rgba(90, 122, 92, 0); }
+    }
+    
+    @keyframes pulse-urgent {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+    
+    .working-indicator {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--forest-green);
+      font-weight: 600;
+    }
+    
+    .working-indicator .spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--forest-green);
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .card-title {
+      font-weight: 600;
+      font-size: 16px;
+      flex: 1;
+    }
+    
+    .card-time {
+      font-size: 12px;
+      color: var(--pebble);
+    }
+    
+    .blocked-alert {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      background: rgba(184, 92, 56, 0.1);
+      border: 1px solid rgba(184, 92, 56, 0.3);
+      color: var(--campfire);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: var(--space-sm);
+    }
+    
+    .card-status {
+      font-size: 14px;
+      color: var(--stone);
+      margin-bottom: var(--space-sm);
+      line-height: 1.5;
+    }
+    
+    .card-status strong {
+      color: var(--deep-earth);
+      font-weight: 500;
+    }
+    
+    .card-footer {
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+      font-size: 12px;
+      color: var(--pebble);
+      padding-top: var(--space-sm);
+      border-top: 1px solid var(--sand);
+    }
+    
+    .issue-counts {
+      display: flex;
+      gap: var(--space-md);
+    }
+    
+    .issue-count {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .issue-count .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+    
+    .issue-count .dot.queue { background: var(--tide-pool); }
+    .issue-count .dot.progress { background: var(--forest-green); }
+    .issue-count .dot.review { background: var(--sunset-orange); }
+    .issue-count .dot.done { background: var(--pebble); }
+    
+    .agent-stack {
+      display: flex;
+      margin-left: auto;
+    }
+    
+    .agent-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 2px solid white;
+      margin-left: -8px;
+      font-size: 10px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+    }
+    
+    .agent-avatar:first-child { margin-left: 0; }
+    .agent-avatar.ivy { background: var(--forest-green); }
+    .agent-avatar.derek { background: var(--river-blue); }
+    .agent-avatar.stone { background: #8b5cf6; }
+    .agent-avatar.nova { background: #ec4899; }
+    .agent-avatar.jeff { background: var(--sunset-orange); }
+    .agent-avatar.frank { background: var(--otter-brown); }
+    
+    /* ========== WORKFLOWS ========== */
+    .workflows-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: var(--space-md);
+    }
+    
+    .workflow-card {
+      background: white;
+      border: 1px solid var(--sand);
+      border-radius: 12px;
+      padding: var(--space-md);
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .workflow-card:hover {
+      border-color: var(--river-blue);
+      box-shadow: 0 2px 8px rgba(74, 109, 124, 0.12);
+    }
+    
+    .workflow-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    
+    .workflow-icon.social { background: rgba(236, 72, 153, 0.1); }
+    .workflow-icon.email { background: rgba(74, 109, 124, 0.1); }
+    .workflow-icon.markets { background: rgba(200, 121, 65, 0.1); }
+    
+    .workflow-info {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .workflow-name {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 2px;
+    }
+    
+    .workflow-meta {
+      font-size: 12px;
+      color: var(--pebble);
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .workflow-status {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+    
+    .workflow-status.active {
+      background: rgba(90, 122, 92, 0.1);
+      color: var(--forest-green);
+    }
+    
+    .workflow-status.paused {
+      background: rgba(166, 149, 130, 0.2);
+      color: var(--pebble);
+    }
+    
+    /* ========== OPENCLAW PANEL ========== */
+    .control-panel {
+      background: white;
+      border: 1px solid var(--sand);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    
+    .control-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-md);
+      background: var(--foam);
+      border-bottom: 1px solid var(--sand);
+    }
+    
+    .control-title {
+      font-weight: 600;
+      font-size: 15px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--forest-green);
+    }
+    
+    .connection-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--forest-green);
+      animation: pulse-glow 2s infinite;
+    }
+    
+    .control-body {
+      padding: var(--space-md);
+    }
+    
+    .control-stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--space-md);
+      margin-bottom: var(--space-md);
+    }
+    
+    .control-stat {
+      text-align: center;
+      padding: var(--space-sm);
+      background: var(--foam);
+      border-radius: 8px;
+    }
+    
+    .control-stat-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--otter-brown);
+    }
+    
+    .control-stat-label {
+      font-size: 11px;
+      color: var(--pebble);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .control-actions {
+      display: flex;
+      gap: var(--space-sm);
+      padding-top: var(--space-sm);
+      border-top: 1px solid var(--sand);
+    }
+    
+    .control-btn {
+      flex: 1;
+      padding: 10px;
+      border: 1px solid var(--sand);
+      border-radius: 8px;
+      background: white;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--stone);
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    
+    .control-btn:hover {
+      background: var(--foam);
+      border-color: var(--driftwood);
+    }
+    
+    .control-btn.danger:hover {
+      background: rgba(184, 92, 56, 0.1);
+      border-color: var(--campfire);
+      color: var(--campfire);
+    }
+    
+    /* ========== KNOWLEDGE BASE ========== */
+    .knowledge-panel {
+      background: white;
+      border: 1px solid var(--sand);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    
+    .knowledge-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-md);
+      background: var(--foam);
+      border-bottom: 1px solid var(--sand);
+    }
+    
+    .knowledge-search {
+      flex: 1;
+      margin-left: var(--space-md);
+      padding: 8px 12px;
+      border: 1px solid var(--sand);
+      border-radius: 6px;
+      font-size: 13px;
+      background: white;
+    }
+    
+    .knowledge-list {
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .knowledge-item {
+      padding: var(--space-md);
+      border-bottom: 1px solid var(--sand);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    
+    .knowledge-item:last-child {
+      border-bottom: none;
+    }
+    
+    .knowledge-item:hover {
+      background: var(--foam);
+    }
+    
+    .knowledge-item-title {
+      font-weight: 500;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    
+    .knowledge-item-meta {
+      font-size: 12px;
+      color: var(--pebble);
+      display: flex;
+      gap: var(--space-md);
+    }
+    
+    .knowledge-tag {
+      font-size: 11px;
+      padding: 2px 6px;
+      background: rgba(74, 109, 124, 0.1);
+      color: var(--river-blue);
+      border-radius: 4px;
+    }
+    
+    /* ========== TWO COLUMN LAYOUT ========== */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: var(--space-lg);
+    }
+    
+    /* ========== LEGEND ========== */
+    .status-legend {
+      display: flex;
+      gap: var(--space-lg);
+      padding: var(--space-md);
+      background: var(--foam);
+      border-radius: 8px;
+      font-size: 12px;
+      color: var(--stone);
+      margin-bottom: var(--space-lg);
+    }
+    
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    
+    .legend-dot.idle { background: var(--status-idle); }
+    .legend-dot.scheduled { background: var(--status-scheduled); }
+    .legend-dot.working { background: var(--status-working); }
+    .legend-dot.feedback { background: var(--status-feedback); }
+    .legend-dot.blocked { background: var(--status-blocked); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <a class="logo" href="#">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="topbar-center">
+        <div class="quick-stats">
+          <div class="stat">
+            <span class="stat-value">12</span>
+            <span>agents</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value">23</span>
+            <span>active tasks</span>
+          </div>
+        </div>
+        
+        <div class="needs-you-badge">
+          <span>⚠️</span>
+          <span>2 need you</span>
+        </div>
+      </div>
+      
+      <div class="topbar-right">
+        <div class="search-box">
+          <span>⌘K</span>
+          <span>Search...</span>
+        </div>
+        <div class="avatar"></div>
+      </div>
+    </header>
+    
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="nav-section">
+        <div class="nav-label">Overview</div>
+        <a class="nav-item active">
+          <span class="nav-icon">📊</span>
+          Dashboard
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">📥</span>
+          Inbox
+          <span class="badge">2</span>
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">🔄</span>
+          Workflows
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">🧠</span>
+          Knowledge
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">⚙️</span>
+          OpenClaw
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Projects</div>
+        <a class="nav-item">
+          <div class="status-dot blocked"></div>
+          ItsAlive
+        </a>
+        <a class="nav-item">
+          <div class="status-dot working"></div>
+          Pearl
+        </a>
+        <a class="nav-item">
+          <div class="status-dot working"></div>
+          Otter Camp
+        </a>
+        <a class="nav-item">
+          <div class="status-dot feedback"></div>
+          sam.blog
+        </a>
+        <a class="nav-item">
+          <div class="status-dot idle"></div>
+          Three Stones
+        </a>
+        <a class="nav-item">
+          <div class="status-dot scheduled"></div>
+          Content
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Agents</div>
+        <a class="nav-item">
+          <span class="nav-icon">🤖</span>
+          All Agents
+        </a>
+        <a class="nav-item">
+          <span class="nav-icon">📡</span>
+          Activity Feed
+        </a>
+      </div>
+    </nav>
+    
+    <!-- Main Content -->
+    <main class="main">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Command Center</h1>
+          <p class="page-subtitle">2 items need attention · 6 projects active · 3 workflows running</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-secondary">Filter</button>
+          <button class="btn btn-primary">+ New Task</button>
+        </div>
+      </div>
+      
+      <!-- Status Legend -->
+      <div class="status-legend">
+        <div class="legend-item">
+          <div class="legend-dot idle"></div>
+          <span>Idle, No Work</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot scheduled"></div>
+          <span>Idle, Work Scheduled</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot working"></div>
+          <span>Working</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot feedback"></div>
+          <span>Needs Feedback</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot blocked"></div>
+          <span>Blocked — Needs You</span>
+        </div>
+      </div>
+      
+      <div class="two-col">
+        <div class="main-col">
+          <!-- Blocked / Needs You -->
+          <div class="section">
+            <div class="section-header">
+              <h2 class="section-title">
+                🔴 Needs Your Input
+                <span class="count">1</span>
+              </h2>
+            </div>
+            
+            <div class="projects-grid">
+              <div class="project-card status-blocked">
+                <div class="card-header">
+                  <div class="pulse blocked"></div>
+                  <span class="card-title">ItsAlive</span>
+                  <span class="card-time">5m ago</span>
+                </div>
+                <div class="blocked-alert">
+                  ⚠️ Approve production deploy
+                </div>
+                <div class="card-status">
+                  <strong>Ivy</strong> waiting on your approval to ship v2.1.0 with new onboarding flow.
+                </div>
+                <div class="card-footer">
+                  <div class="issue-counts">
+                    <div class="issue-count"><div class="dot queue"></div> 2</div>
+                    <div class="issue-count"><div class="dot progress"></div> 3</div>
+                    <div class="issue-count"><div class="dot review"></div> 1</div>
+                  </div>
+                  <div class="agent-stack">
+                    <div class="agent-avatar ivy">I</div>
+                    <div class="agent-avatar derek">D</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Working -->
+          <div class="section">
+            <div class="section-header">
+              <h2 class="section-title">
+                ↺ Currently Working
+                <span class="count">3</span>
+              </h2>
+            </div>
+            
+            <div class="projects-grid">
+              <div class="project-card">
+                <div class="card-header">
+                  <div class="working-indicator">
+                    <div class="spinner"></div>
+                    Working
+                  </div>
+                  <span class="card-title" style="margin-left: 8px;">Pearl</span>
+                  <span class="card-time">2m ago</span>
+                </div>
+                <div class="card-status">
+                  <strong>Derek</strong> implementing retry logic for API errors. <strong>Josh S</strong> running test suite (675 passing).
+                </div>
+                <div class="card-footer">
+                  <div class="issue-counts">
+                    <div class="issue-count"><div class="dot queue"></div> 4</div>
+                    <div class="issue-count"><div class="dot progress"></div> 2</div>
+                    <div class="issue-count"><div class="dot done"></div> 28</div>
+                  </div>
+                  <div class="agent-stack">
+                    <div class="agent-avatar derek">D</div>
+                    <div class="agent-avatar" style="background: #8b5cf6;">J</div>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="project-card">
+                <div class="card-header">
+                  <div class="working-indicator">
+                    <div class="spinner"></div>
+                    Working
+                  </div>
+                  <span class="card-title" style="margin-left: 8px;">Otter Camp</span>
+                  <span class="card-time">now</span>
+                </div>
+                <div class="card-status">
+                  <strong>Jeff G</strong> creating v3 dashboard mockups. <strong>Derek</strong> reviewing architecture.
+                </div>
+                <div class="card-footer">
+                  <div class="issue-counts">
+                    <div class="issue-count"><div class="dot queue"></div> 8</div>
+                    <div class="issue-count"><div class="dot progress"></div> 3</div>
+                    <div class="issue-count"><div class="dot review"></div> 1</div>
+                  </div>
+                  <div class="agent-stack">
+                    <div class="agent-avatar jeff">J</div>
+                    <div class="agent-avatar derek">D</div>
+                    <div class="agent-avatar frank">F</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Needs Feedback -->
+          <div class="section">
+            <div class="section-header">
+              <h2 class="section-title">
+                🟡 Needs Feedback (Still Working)
+                <span class="count">1</span>
+              </h2>
+            </div>
+            
+            <div class="projects-grid">
+              <div class="project-card">
+                <div class="card-header">
+                  <div class="pulse feedback"></div>
+                  <span class="card-title">sam.blog</span>
+                  <span class="card-time">15m ago</span>
+                </div>
+                <div class="card-status">
+                  <strong>Stone</strong> has 2 posts ready for review. <strong>Jeff G</strong> continuing design work.
+                </div>
+                <div class="card-footer">
+                  <div class="issue-counts">
+                    <div class="issue-count"><div class="dot queue"></div> 1</div>
+                    <div class="issue-count"><div class="dot progress"></div> 2</div>
+                    <div class="issue-count"><div class="dot review"></div> 2</div>
+                  </div>
+                  <div class="agent-stack">
+                    <div class="agent-avatar stone">S</div>
+                    <div class="agent-avatar jeff">J</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Idle -->
+          <div class="section">
+            <div class="section-header">
+              <h2 class="section-title">
+                ⚪ Idle
+                <span class="count">2</span>
+              </h2>
+            </div>
+            
+            <div class="projects-grid">
+              <div class="project-card" style="opacity: 0.8;">
+                <div class="card-header">
+                  <div class="pulse idle"></div>
+                  <span class="card-title">Three Stones</span>
+                  <span class="card-time">3h ago</span>
+                </div>
+                <div class="card-status">
+                  Presentation shipped. No active work scheduled.
+                </div>
+                <div class="card-footer">
+                  <div class="issue-counts">
+                    <div class="issue-count"><div class="dot done"></div> 14 this week</div>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="project-card" style="opacity: 0.8;">
+                <div class="card-header">
+                  <div class="pulse scheduled"></div>
+                  <span class="card-title">Content</span>
+                  <span class="card-time">1h ago</span>
+                </div>
+                <div class="card-status">
+                  <strong>Nova</strong> has 3 tweets scheduled for tomorrow. Waiting for schedule.
+                </div>
+                <div class="card-footer">
+                  <div class="issue-counts">
+                    <div class="issue-count"><div class="dot queue"></div> 2 queued</div>
+                  </div>
+                  <div class="agent-stack">
+                    <div class="agent-avatar nova">N</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Workflows -->
+          <div class="section">
+            <div class="section-header">
+              <h2 class="section-title">
+                🔄 Active Workflows
+                <span class="count">3</span>
+              </h2>
+              <a href="#" class="section-link">Manage →</a>
+            </div>
+            
+            <div class="workflows-grid">
+              <div class="workflow-card">
+                <div class="workflow-icon social">📱</div>
+                <div class="workflow-info">
+                  <div class="workflow-name">Twitter Engagement</div>
+                  <div class="workflow-meta">
+                    <span>Nova</span>
+                    <span>·</span>
+                    <span>Every 5m</span>
+                    <span>·</span>
+                    <span>Last: 2m ago</span>
+                  </div>
+                </div>
+                <div class="workflow-status active">
+                  <span>●</span>
+                  Active
+                </div>
+              </div>
+              
+              <div class="workflow-card">
+                <div class="workflow-icon email">📧</div>
+                <div class="workflow-info">
+                  <div class="workflow-name">Email Triage</div>
+                  <div class="workflow-meta">
+                    <span>Penny</span>
+                    <span>·</span>
+                    <span>Event-driven</span>
+                    <span>·</span>
+                    <span>12 today</span>
+                  </div>
+                </div>
+                <div class="workflow-status active">
+                  <span>●</span>
+                  Active
+                </div>
+              </div>
+              
+              <div class="workflow-card">
+                <div class="workflow-icon markets">📈</div>
+                <div class="workflow-info">
+                  <div class="workflow-name">Market Analysis</div>
+                  <div class="workflow-meta">
+                    <span>Beau H</span>
+                    <span>·</span>
+                    <span>Daily 6am</span>
+                    <span>·</span>
+                    <span>Next: 6h</span>
+                  </div>
+                </div>
+                <div class="workflow-status paused">
+                  <span>○</span>
+                  Waiting
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="side-col">
+          <!-- OpenClaw Control Panel -->
+          <div class="section">
+            <div class="control-panel">
+              <div class="control-header">
+                <div class="control-title">
+                  <span>⚙️</span>
+                  OpenClaw
+                </div>
+                <div class="connection-status">
+                  <div class="connection-dot"></div>
+                  Connected
+                </div>
+              </div>
+              <div class="control-body">
+                <div class="control-stats">
+                  <div class="control-stat">
+                    <div class="control-stat-value">12</div>
+                    <div class="control-stat-label">Agents</div>
+                  </div>
+                  <div class="control-stat">
+                    <div class="control-stat-value">8</div>
+                    <div class="control-stat-label">Active</div>
+                  </div>
+                  <div class="control-stat">
+                    <div class="control-stat-value">14h</div>
+                    <div class="control-stat-label">Uptime</div>
+                  </div>
+                  <div class="control-stat">
+                    <div class="control-stat-value">$12</div>
+                    <div class="control-stat-label">Today</div>
+                  </div>
+                </div>
+                <div class="control-actions">
+                  <button class="control-btn">
+                    <span>🔄</span>
+                    Reload
+                  </button>
+                  <button class="control-btn danger">
+                    <span>⟳</span>
+                    Restart
+                  </button>
+                  <button class="control-btn">
+                    <span>👥</span>
+                    Sessions
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Knowledge Base -->
+          <div class="section">
+            <div class="knowledge-panel">
+              <div class="knowledge-header">
+                <div class="control-title">
+                  <span>🧠</span>
+                  Knowledge
+                </div>
+                <input type="text" class="knowledge-search" placeholder="Search knowledge...">
+              </div>
+              <div class="knowledge-list">
+                <div class="knowledge-item">
+                  <div class="knowledge-item-title">API Versioning Decision</div>
+                  <div class="knowledge-item-meta">
+                    <span>Derek · 2h ago</span>
+                    <span class="knowledge-tag">architecture</span>
+                  </div>
+                </div>
+                <div class="knowledge-item">
+                  <div class="knowledge-item-title">Sam's Email Preferences</div>
+                  <div class="knowledge-item-meta">
+                    <span>Penny · yesterday</span>
+                    <span class="knowledge-tag">preferences</span>
+                  </div>
+                </div>
+                <div class="knowledge-item">
+                  <div class="knowledge-item-title">GitHub Workflow Standard</div>
+                  <div class="knowledge-item-meta">
+                    <span>Frank · 3d ago</span>
+                    <span class="knowledge-tag">procedure</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

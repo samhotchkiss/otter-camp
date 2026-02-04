@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pearl — otter.camp</title>
+  <style>
+    /* ========== OTTER.CAMP DESIGN SYSTEM v3 ========== */
+    :root {
+      --otter-brown: #5c4a3d;
+      --warm-cream: #faf8f5;
+      --bark: #8b7355;
+      --driftwood: #c4b5a4;
+      --river-blue: #4a6d7c;
+      --forest-green: #5a7a5c;
+      --sunset-orange: #c87941;
+      --campfire: #b85c38;
+      --deep-earth: #2d2a26;
+      --stone: #6b6560;
+      --pebble: #a69582;
+      --sand: #e8e2d9;
+      --foam: #f5f2ed;
+      --kelp: #3d5a4c;
+      --shell-pink: #d4a59a;
+      --tide-pool: #6b8f9c;
+      
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --space-xl: 32px;
+      
+      --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      --font-display: 'SF Pro Display', -apple-system, sans-serif;
+      --font-mono: 'SF Mono', Monaco, monospace;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font-sans);
+      background: var(--warm-cream);
+      color: var(--deep-earth);
+      line-height: 1.5;
+      font-size: 14px;
+    }
+    
+    .app {
+      display: grid;
+      grid-template-columns: 240px 1fr 380px;
+      min-height: 100vh;
+    }
+    
+    /* Sidebar */
+    .sidebar {
+      background: var(--foam);
+      border-right: 1px solid var(--sand);
+      padding: var(--space-md) 0;
+    }
+    
+    .logo {
+      padding: var(--space-md);
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      text-decoration: none;
+      color: var(--otter-brown);
+      border-bottom: 1px solid var(--sand);
+      margin-bottom: var(--space-md);
+    }
+    
+    .nav-section { margin-bottom: var(--space-lg); }
+    
+    .nav-label {
+      padding: var(--space-sm) var(--space-md);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--bark);
+    }
+    
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: 10px var(--space-md);
+      color: var(--stone);
+      text-decoration: none;
+      cursor: pointer;
+      border-left: 3px solid transparent;
+    }
+    
+    .nav-item:hover { background: var(--sand); }
+    .nav-item.active {
+      background: rgba(92, 74, 61, 0.08);
+      color: var(--otter-brown);
+      border-left-color: var(--otter-brown);
+      font-weight: 500;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    
+    .status-dot.working { background: var(--forest-green); }
+    .status-dot.blocked { background: var(--campfire); }
+    .status-dot.idle { background: var(--river-blue); }
+    
+    /* Main Content */
+    .main {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    
+    /* Project Header */
+    .project-header {
+      padding: var(--space-lg) var(--space-xl);
+      background: white;
+      border-bottom: 1px solid var(--sand);
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+    }
+    
+    .project-icon {
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, var(--river-blue), var(--tide-pool));
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+    
+    .project-info h1 {
+      font-family: var(--font-display);
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--otter-brown);
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .project-info .meta {
+      color: var(--stone);
+      font-size: 14px;
+    }
+    
+    .working-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(90, 122, 92, 0.15);
+      color: var(--forest-green);
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    
+    .working-badge .spinner {
+      width: 10px;
+      height: 10px;
+      border: 2px solid var(--forest-green);
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin { to { transform: rotate(360deg); } }
+    
+    .project-actions {
+      margin-left: auto;
+      display: flex;
+      gap: var(--space-sm);
+    }
+    
+    .btn {
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+    }
+    
+    .btn-primary { background: var(--otter-brown); color: var(--warm-cream); }
+    .btn-secondary { background: white; border: 1px solid var(--sand); color: var(--stone); }
+    
+    /* Stats Bar */
+    .stats-bar {
+      display: flex;
+      gap: var(--space-xl);
+      padding: var(--space-md) var(--space-xl);
+      background: var(--foam);
+      border-bottom: 1px solid var(--sand);
+    }
+    
+    .stat {
+      text-align: center;
+    }
+    
+    .stat-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--otter-brown);
+    }
+    
+    .stat-value.green { color: var(--forest-green); }
+    .stat-value.orange { color: var(--sunset-orange); }
+    
+    .stat-label {
+      font-size: 11px;
+      color: var(--pebble);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 0 var(--space-xl);
+      background: white;
+      border-bottom: 1px solid var(--sand);
+    }
+    
+    .tab {
+      padding: 14px 18px;
+      font-size: 14px;
+      color: var(--stone);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      font-weight: 500;
+    }
+    
+    .tab:hover { color: var(--deep-earth); }
+    .tab.active { color: var(--otter-brown); border-bottom-color: var(--otter-brown); }
+    
+    /* Board */
+    .board-container {
+      flex: 1;
+      overflow-x: auto;
+      padding: var(--space-lg) var(--space-xl);
+      background: var(--warm-cream);
+    }
+    
+    .board {
+      display: grid;
+      grid-template-columns: repeat(5, 280px);
+      gap: var(--space-md);
+      min-height: calc(100vh - 280px);
+    }
+    
+    .column {
+      background: var(--foam);
+      border-radius: 12px;
+      padding: var(--space-md);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .column-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--space-md);
+      padding-bottom: var(--space-sm);
+      border-bottom: 1px solid var(--sand);
+    }
+    
+    .column-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--bark);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    
+    .column-count {
+      background: var(--sand);
+      color: var(--stone);
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+    }
+    
+    .column-add {
+      background: none;
+      border: none;
+      color: var(--pebble);
+      font-size: 18px;
+      cursor: pointer;
+    }
+    
+    .column-add:hover { color: var(--otter-brown); }
+    
+    .column-body {
+      flex: 1;
+      overflow-y: auto;
+    }
+    
+    /* Task Cards */
+    .task-card {
+      background: white;
+      border: 1px solid var(--sand);
+      border-radius: 10px;
+      padding: var(--space-md);
+      margin-bottom: var(--space-sm);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .task-card:hover {
+      border-color: var(--river-blue);
+      box-shadow: 0 2px 8px rgba(74, 109, 124, 0.12);
+      transform: translateY(-1px);
+    }
+    
+    .task-id {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--pebble);
+      margin-bottom: 4px;
+    }
+    
+    .task-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--deep-earth);
+      margin-bottom: var(--space-sm);
+      line-height: 1.4;
+    }
+    
+    .task-meta {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      flex-wrap: wrap;
+    }
+    
+    .agent-badge {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--foam);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--stone);
+    }
+    
+    .priority-badge {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    
+    .priority-badge.p1 { background: rgba(184, 92, 56, 0.15); color: var(--campfire); }
+    .priority-badge.p2 { background: rgba(200, 121, 65, 0.15); color: var(--sunset-orange); }
+    .priority-badge.p3 { background: rgba(74, 109, 124, 0.15); color: var(--river-blue); }
+    
+    .label {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      background: rgba(139, 115, 85, 0.15);
+      color: var(--bark);
+    }
+    
+    /* Done cards fade */
+    .column.done .task-card {
+      opacity: 0.7;
+    }
+    
+    /* Activity Panel */
+    .activity-panel {
+      background: white;
+      border-left: 1px solid var(--sand);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .panel-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--sand);
+    }
+    
+    .panel-tab {
+      flex: 1;
+      padding: var(--space-md);
+      text-align: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--stone);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+    }
+    
+    .panel-tab.active {
+      color: var(--otter-brown);
+      border-bottom-color: var(--otter-brown);
+    }
+    
+    .panel-content {
+      flex: 1;
+      overflow-y: auto;
+    }
+    
+    /* Activity List */
+    .activity-list {
+      padding: var(--space-md);
+    }
+    
+    .activity-item {
+      display: flex;
+      gap: var(--space-sm);
+      padding: var(--space-sm) 0;
+      border-bottom: 1px solid var(--sand);
+    }
+    
+    .activity-item:last-child { border-bottom: none; }
+    
+    .activity-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--river-blue);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    
+    .activity-content {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .activity-text {
+      font-size: 13px;
+      color: var(--stone);
+    }
+    
+    .activity-text strong { color: var(--deep-earth); }
+    
+    .activity-time {
+      font-size: 11px;
+      color: var(--pebble);
+      margin-top: 2px;
+    }
+    
+    /* Chat */
+    .chat-container {
+      display: none;
+      flex-direction: column;
+      height: 100%;
+    }
+    
+    .chat-container.active { display: flex; }
+    
+    .chat-header {
+      padding: var(--space-md);
+      border-bottom: 1px solid var(--sand);
+      background: var(--foam);
+    }
+    
+    .chat-header-title {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    
+    .chat-header-meta {
+      font-size: 12px;
+      color: var(--pebble);
+    }
+    
+    .chat-agents {
+      display: flex;
+      gap: 4px;
+      margin-top: var(--space-sm);
+    }
+    
+    .chat-agent {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      background: white;
+      border: 1px solid var(--sand);
+      border-radius: 16px;
+      font-size: 11px;
+    }
+    
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: var(--space-md);
+    }
+    
+    .message {
+      display: flex;
+      gap: var(--space-sm);
+      margin-bottom: var(--space-md);
+    }
+    
+    .message-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--river-blue);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    
+    .message-avatar.human { background: var(--otter-brown); }
+    
+    .message-content {
+      flex: 1;
+    }
+    
+    .message-header {
+      display: flex;
+      align-items: baseline;
+      gap: var(--space-sm);
+      margin-bottom: 4px;
+    }
+    
+    .message-author {
+      font-weight: 600;
+      font-size: 13px;
+    }
+    
+    .message-time {
+      font-size: 11px;
+      color: var(--pebble);
+    }
+    
+    .message-text {
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--stone);
+    }
+    
+    .message-text code {
+      background: var(--foam);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+    }
+    
+    .chat-input-area {
+      padding: var(--space-md);
+      border-top: 1px solid var(--sand);
+      background: var(--foam);
+    }
+    
+    .chat-input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid var(--sand);
+      border-radius: 8px;
+      font-size: 14px;
+      resize: none;
+      font-family: var(--font-sans);
+    }
+    
+    .chat-input:focus {
+      outline: none;
+      border-color: var(--river-blue);
+    }
+    
+    .chat-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: var(--space-sm);
+    }
+    
+    .chat-actions-left {
+      display: flex;
+      gap: var(--space-sm);
+    }
+    
+    .chat-action-btn {
+      background: none;
+      border: none;
+      color: var(--pebble);
+      font-size: 16px;
+      cursor: pointer;
+    }
+    
+    .chat-action-btn:hover { color: var(--stone); }
+    
+    .chat-send {
+      padding: 8px 16px;
+      background: var(--otter-brown);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    
+    .chat-send:hover { background: #4a3c31; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <a class="logo" href="index.html">
+        <span>🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="nav-section">
+        <div class="nav-label">Overview</div>
+        <a class="nav-item" href="index.html">
+          <span>📊</span>
+          Dashboard
+        </a>
+        <a class="nav-item">
+          <span>📥</span>
+          Inbox
+        </a>
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-label">Projects</div>
+        <a class="nav-item">
+          <div class="status-dot blocked"></div>
+          ItsAlive
+        </a>
+        <a class="nav-item active">
+          <div class="status-dot working"></div>
+          Pearl
+        </a>
+        <a class="nav-item">
+          <div class="status-dot working"></div>
+          Otter Camp
+        </a>
+        <a class="nav-item">
+          <div class="status-dot idle"></div>
+          Three Stones
+        </a>
+      </div>
+    </nav>
+    
+    <!-- Main Content -->
+    <main class="main">
+      <div class="project-header">
+        <div class="project-icon">💎</div>
+        <div class="project-info">
+          <h1>
+            Pearl
+            <span class="working-badge">
+              <span class="spinner"></span>
+              Working
+            </span>
+          </h1>
+          <div class="meta">Memory layer + model router for OpenClaw</div>
+        </div>
+        <div class="project-actions">
+          <button class="btn btn-secondary">Settings</button>
+          <button class="btn btn-primary">+ New Task</button>
+        </div>
+      </div>
+      
+      <div class="stats-bar">
+        <div class="stat">
+          <div class="stat-value">6</div>
+          <div class="stat-label">Queued</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value green">3</div>
+          <div class="stat-label">In Progress</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value orange">1</div>
+          <div class="stat-label">Review</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">28</div>
+          <div class="stat-label">Done This Week</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">675</div>
+          <div class="stat-label">Tests Passing</div>
+        </div>
+      </div>
+      
+      <div class="tabs">
+        <div class="tab active">Board</div>
+        <div class="tab">List</div>
+        <div class="tab">Activity</div>
+        <div class="tab">Files</div>
+        <div class="tab">Settings</div>
+      </div>
+      
+      <div class="board-container">
+        <div class="board">
+          <!-- Consideration -->
+          <div class="column">
+            <div class="column-header">
+              <div class="column-title">
+                Consideration
+                <span class="column-count">2</span>
+              </div>
+              <button class="column-add">+</button>
+            </div>
+            <div class="column-body">
+              <div class="task-card">
+                <div class="task-id">PEARL-048</div>
+                <div class="task-title">Add support for multi-modal context</div>
+                <div class="task-meta">
+                  <span class="label">research</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-id">PEARL-047</div>
+                <div class="task-title">Explore vector DB for semantic search</div>
+                <div class="task-meta">
+                  <span class="label">research</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Queued -->
+          <div class="column">
+            <div class="column-header">
+              <div class="column-title">
+                Queued
+                <span class="column-count">4</span>
+              </div>
+              <button class="column-add">+</button>
+            </div>
+            <div class="column-body">
+              <div class="task-card">
+                <div class="task-id">PEARL-046</div>
+                <div class="task-title">Add rate limit headers to responses</div>
+                <div class="task-meta">
+                  <span class="priority-badge p3">P3</span>
+                  <span class="label">API</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-id">PEARL-045</div>
+                <div class="task-title">Document memory extraction process</div>
+                <div class="task-meta">
+                  <span class="priority-badge p3">P3</span>
+                  <span class="label">docs</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-id">PEARL-044</div>
+                <div class="task-title">Optimize token counting for context</div>
+                <div class="task-meta">
+                  <span class="priority-badge p2">P2</span>
+                  <span class="label">perf</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-id">PEARL-043</div>
+                <div class="task-title">Add Gemini 2.0 Flash as routing option</div>
+                <div class="task-meta">
+                  <span class="priority-badge p2">P2</span>
+                  <span class="label">models</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- In Progress -->
+          <div class="column">
+            <div class="column-header">
+              <div class="column-title">
+                In Progress
+                <span class="column-count">3</span>
+              </div>
+            </div>
+            <div class="column-body">
+              <div class="task-card" onclick="showChat()">
+                <div class="task-id">PEARL-042</div>
+                <div class="task-title">Implement retry logic for 500 errors</div>
+                <div class="task-meta">
+                  <span class="agent-badge">🔧 Derek</span>
+                  <span class="priority-badge p1">P1</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-id">PEARL-041</div>
+                <div class="task-title">Add Ollama memory extraction</div>
+                <div class="task-meta">
+                  <span class="agent-badge">🔧 Derek</span>
+                  <span class="priority-badge p2">P2</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-id">PEARL-040</div>
+                <div class="task-title">Fix account 2 refresh token</div>
+                <div class="task-meta">
+                  <span class="agent-badge">📐 Josh S</span>
+                  <span class="priority-badge p2">P2</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Review -->
+          <div class="column">
+            <div class="column-header">
+              <div class="column-title">
+                Needs Review
+                <span class="column-count">1</span>
+              </div>
+            </div>
+            <div class="column-body">
+              <div class="task-card">
+                <div class="task-id">PEARL-039</div>
+                <div class="task-title">Add streaming support for responses</div>
+                <div class="task-meta">
+                  <span class="agent-badge">🔍 Jeremy H</span>
+                  <span class="priority-badge p2">P2</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Done -->
+          <div class="column done">
+            <div class="column-header">
+              <div class="column-title">
+                Done
+                <span class="column-count">28</span>
+              </div>
+            </div>
+            <div class="column-body">
+              <div class="task-card">
+                <div class="task-id">PEARL-038</div>
+                <div class="task-title">Fix mock infrastructure issues</div>
+                <div class="task-meta">
+                  <span class="agent-badge">Derek</span>
+                  <span style="color: var(--forest-green); font-size: 11px;">✓ 2h ago</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-id">PEARL-037</div>
+                <div class="task-title">Wire up memory extraction</div>
+                <div class="task-meta">
+                  <span class="agent-badge">Derek</span>
+                  <span style="color: var(--forest-green); font-size: 11px;">✓ 5h ago</span>
+                </div>
+              </div>
+              <div class="task-card">
+                <div class="task-id">PEARL-036</div>
+                <div class="task-title">Clean test suite (86 → 0 failing)</div>
+                <div class="task-meta">
+                  <span class="agent-badge">TDD Factory</span>
+                  <span style="color: var(--forest-green); font-size: 11px;">✓ yesterday</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    
+    <!-- Activity/Chat Panel -->
+    <aside class="activity-panel">
+      <div class="panel-tabs">
+        <div class="panel-tab active" onclick="showActivity()">Activity</div>
+        <div class="panel-tab" onclick="showChat()">Chat</div>
+      </div>
+      
+      <div class="panel-content">
+        <!-- Activity View -->
+        <div class="activity-list" id="activity-view">
+          <div class="activity-item">
+            <div class="activity-avatar" style="background: var(--river-blue);">D</div>
+            <div class="activity-content">
+              <div class="activity-text"><strong>Derek</strong> pushed 3 commits to main</div>
+              <div class="activity-time">2 minutes ago</div>
+            </div>
+          </div>
+          <div class="activity-item">
+            <div class="activity-avatar" style="background: #8b5cf6;">J</div>
+            <div class="activity-content">
+              <div class="activity-text"><strong>Josh S</strong> started PEARL-040</div>
+              <div class="activity-time">15 minutes ago</div>
+            </div>
+          </div>
+          <div class="activity-item">
+            <div class="activity-avatar" style="background: var(--sunset-orange);">JH</div>
+            <div class="activity-content">
+              <div class="activity-text"><strong>Jeremy H</strong> moved PEARL-039 to Review</div>
+              <div class="activity-time">1 hour ago</div>
+            </div>
+          </div>
+          <div class="activity-item">
+            <div class="activity-avatar" style="background: var(--river-blue);">D</div>
+            <div class="activity-content">
+              <div class="activity-text"><strong>Derek</strong> completed PEARL-038</div>
+              <div class="activity-time">2 hours ago</div>
+            </div>
+          </div>
+          <div class="activity-item">
+            <div class="activity-avatar" style="background: var(--forest-green);">T</div>
+            <div class="activity-content">
+              <div class="activity-text"><strong>TDD Factory</strong> ran test suite: 675 passing</div>
+              <div class="activity-time">3 hours ago</div>
+            </div>
+          </div>
+          <div class="activity-item">
+            <div class="activity-avatar" style="background: var(--river-blue);">D</div>
+            <div class="activity-content">
+              <div class="activity-text"><strong>Derek</strong> completed PEARL-037</div>
+              <div class="activity-time">5 hours ago</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Chat View -->
+        <div class="chat-container" id="chat-view">
+          <div class="chat-header">
+            <div class="chat-header-title">PEARL-042: Implement retry logic for 500 errors</div>
+            <div class="chat-header-meta">Started 2 hours ago · P1 Priority</div>
+            <div class="chat-agents">
+              <div class="chat-agent">🔧 Derek</div>
+              <div class="chat-agent">📐 Josh S</div>
+              <button class="chat-agent" style="border-style: dashed; color: var(--pebble);">+ Add agent</button>
+            </div>
+          </div>
+          
+          <div class="chat-messages">
+            <div class="message">
+              <div class="message-avatar human">S</div>
+              <div class="message-content">
+                <div class="message-header">
+                  <span class="message-author">Sam</span>
+                  <span class="message-time">2h ago</span>
+                </div>
+                <div class="message-text">
+                  When Anthropic returns HTTP 500, we currently fail over immediately. We should retry 2-3 times with backoff first, since 500s are often transient.
+                </div>
+              </div>
+            </div>
+            
+            <div class="message">
+              <div class="message-avatar" style="background: var(--river-blue);">D</div>
+              <div class="message-content">
+                <div class="message-header">
+                  <span class="message-author">Derek</span>
+                  <span class="message-time">2h ago</span>
+                </div>
+                <div class="message-text">
+                  On it. I'll use exponential backoff with jitter — starting at 1s, doubling each retry, max 3 attempts. Should handle transient 500s without hammering the API.
+                </div>
+              </div>
+            </div>
+            
+            <div class="message">
+              <div class="message-avatar" style="background: var(--river-blue);">D</div>
+              <div class="message-content">
+                <div class="message-header">
+                  <span class="message-author">Derek</span>
+                  <span class="message-time">1h ago</span>
+                </div>
+                <div class="message-text">
+                  Implementation done in <code>src/core/retry.ts</code>. Added tests covering retry scenarios. Question: should we log retry attempts to the session, or just the final outcome?
+                </div>
+              </div>
+            </div>
+            
+            <div class="message">
+              <div class="message-avatar human">S</div>
+              <div class="message-content">
+                <div class="message-header">
+                  <span class="message-author">Sam</span>
+                  <span class="message-time">45m ago</span>
+                </div>
+                <div class="message-text">
+                  Log each retry attempt — useful for debugging. Include the attempt number and delay used.
+                </div>
+              </div>
+            </div>
+            
+            <div class="message">
+              <div class="message-avatar" style="background: var(--river-blue);">D</div>
+              <div class="message-content">
+                <div class="message-header">
+                  <span class="message-author">Derek</span>
+                  <span class="message-time">30m ago</span>
+                </div>
+                <div class="message-text">
+                  Done. Each retry now logs: <code>[retry 1/3] waiting 1.2s before retrying...</code> with the jittered delay. Tests updated. Ready for review.
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="chat-input-area">
+            <textarea class="chat-input" rows="2" placeholder="Message Derek, Josh S..."></textarea>
+            <div class="chat-actions">
+              <div class="chat-actions-left">
+                <button class="chat-action-btn" title="Attach file">📎</button>
+                <button class="chat-action-btn" title="Add code">💻</button>
+                <button class="chat-action-btn" title="Mention agent">@</button>
+              </div>
+              <button class="chat-send">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+  
+  <script>
+    function showActivity() {
+      document.getElementById('activity-view').style.display = 'block';
+      document.getElementById('chat-view').classList.remove('active');
+      document.querySelectorAll('.panel-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel-tab')[0].classList.add('active');
+    }
+    
+    function showChat() {
+      document.getElementById('activity-view').style.display = 'none';
+      document.getElementById('chat-view').classList.add('active');
+      document.querySelectorAll('.panel-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel-tab')[1].classList.add('active');
+    }
+  </script>
+</body>
+</html>
