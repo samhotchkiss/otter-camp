@@ -42,6 +42,7 @@ func NewRouter() http.Handler {
 	r.Get("/", handleRoot)
 	r.Post("/api/waitlist", HandleWaitlist)
 	r.Get("/api/search", SearchHandler)
+	r.Get("/api/feed", FeedHandler)
 	r.Handle("/ws", &ws.Handler{Hub: hub})
 
 	taskHandler := &TaskHandler{Hub: hub}
