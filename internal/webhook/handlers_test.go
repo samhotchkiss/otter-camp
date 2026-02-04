@@ -78,6 +78,8 @@ func TestIsSupportedEvent(t *testing.T) {
 		{EventTaskStarted, true},
 		{EventTaskCompleted, true},
 		{EventTaskFailed, true},
+		{EventTaskUpdated, true},
+		{EventTaskProgress, true},
 		{EventAgentStatus, true},
 		{"task.unknown", false},
 		{"agent.unknown", false},
@@ -236,6 +238,41 @@ func TestTaskPayload(t *testing.T) {
 	assert.Equal(t, "task-1", event.Task.ID)
 	assert.Equal(t, "done", event.Task.Status)
 	assert.Equal(t, "in_progress", event.Task.PreviousStatus)
+}
+
+func TestIsValidTaskTransition(t *testing.T) {
+	tests := []struct {
+		name     string
+		from     string
+		to       string
+		expected bool
+	}{
+		{name: "queued to dispatched", from: "queued", to: "dispatched", expected: true},
+		{name: "queued to in_progress", from: "queued", to: "in_progress", expected: true},
+		{name: "queued to cancelled", from: "queued", to: "cancelled", expected: true},
+		{name: "dispatched to in_progress", from: "dispatched", to: "in_progress", expected: true},
+		{name: "dispatched to queued", from: "dispatched", to: "queued", expected: true},
+		{name: "in_progress to review", from: "in_progress", to: "review", expected: true},
+		{name: "in_progress to done", from: "in_progress", to: "done", expected: true},
+		{name: "in_progress to blocked", from: "in_progress", to: "blocked", expected: true},
+		{name: "review to in_progress", from: "review", to: "in_progress", expected: true},
+		{name: "review to done", from: "review", to: "done", expected: true},
+		{name: "blocked to queued", from: "blocked", to: "queued", expected: true},
+		{name: "done to queued", from: "done", to: "queued", expected: true},
+		{name: "cancelled to queued", from: "cancelled", to: "queued", expected: true},
+		{name: "invalid transition", from: "done", to: "in_progress", expected: false},
+		{name: "unknown from", from: "unknown", to: "queued", expected: false},
+		{name: "unknown to", from: "queued", to: "unknown", expected: false},
+		{name: "empty from", from: "", to: "queued", expected: false},
+		{name: "empty to", from: "queued", to: "", expected: false},
+		{name: "same status", from: "queued", to: "queued", expected: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isValidTaskTransition(tt.from, tt.to))
+		})
+	}
 }
 
 func TestAgentPayload(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	_ "github.com/lib/pq"
+	"github.com/samhotchkiss/otter-camp/internal/integration"
 	"github.com/samhotchkiss/otter-camp/internal/webhook"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
@@ -153,7 +154,7 @@ func (h *WebhookHandler) OpenClawHandler(w http.ResponseWriter, r *http.Request)
 
 	// Process status events with updates and broadcasting
 	if webhook.IsSupportedEvent(event.Event) {
-		statusHandler := webhook.NewStatusHandler(db, h.Hub)
+		statusHandler := integration.NewOpenClawStatusHandler(db, h.Hub)
 		if err := statusHandler.HandleEvent(r.Context(), *event); err != nil {
 			// Log error but still return OK - activity is logged regardless
 			// The status update may fail if task/agent doesn't exist

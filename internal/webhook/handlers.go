@@ -20,6 +20,8 @@ const (
 	EventTaskStarted   = "task.started"
 	EventTaskCompleted = "task.completed"
 	EventTaskFailed    = "task.failed"
+	EventTaskUpdated   = "task.updated"
+	EventTaskProgress  = "task.progress"
 	EventAgentStatus   = "agent.status"
 )
 
@@ -31,6 +33,8 @@ type StatusEvent struct {
 	AgentID string           `json:"agent_id,omitempty"`
 	Task    *TaskPayload     `json:"task,omitempty"`
 	Agent   *AgentPayload    `json:"agent,omitempty"`
+	Percent *int             `json:"percent,omitempty"`
+	Message string           `json:"message,omitempty"`
 	RawBody json.RawMessage  `json:"-"`
 }
 
@@ -39,6 +43,8 @@ type TaskPayload struct {
 	ID             string `json:"id"`
 	Status         string `json:"status,omitempty"`
 	PreviousStatus string `json:"previous_status,omitempty"`
+	Percent        *int   `json:"percent,omitempty"`
+	Message        string `json:"message,omitempty"`
 }
 
 // AgentPayload contains agent details from the webhook.
@@ -52,6 +58,45 @@ type StatusHandler struct {
 	db  *sql.DB
 	hub *ws.Hub
 }
+
+var validTaskTransitions = map[string]map[string]struct{}{
+	models.TaskStatusQueued: {
+		models.TaskStatusDispatched: {},
+		models.TaskStatusInProgress: {}, // Allow direct claim when dispatch state is skipped.
+		models.TaskStatusCancelled:  {},
+	},
+	models.TaskStatusDispatched: {
+		models.TaskStatusInProgress: {},
+		models.TaskStatusQueued:     {},
+		models.TaskStatusCancelled:  {},
+	},
+	models.TaskStatusInProgress: {
+		models.TaskStatusDone:       {},
+		models.TaskStatusReview:     {},
+		models.TaskStatusBlocked:    {},
+		models.TaskStatusQueued:     {},
+		models.TaskStatusCancelled:  {},
+	},
+	models.TaskStatusBlocked: {
+		models.TaskStatusQueued:    {},
+		models.TaskStatusInProgress: {},
+		models.TaskStatusCancelled:  {},
+	},
+	models.TaskStatusReview: {
+		models.TaskStatusDone:       {},
+		models.TaskStatusInProgress: {},
+		models.TaskStatusCancelled:  {},
+	},
+	models.TaskStatusDone: {
+		models.TaskStatusQueued:    {},
+		models.TaskStatusCancelled: {},
+	},
+	models.TaskStatusCancelled: {
+		models.TaskStatusQueued: {},
+	},
+}
+
+var errInvalidTaskTransition = errors.New("invalid task status transition")
 
 // NewStatusHandler creates a new StatusHandler.
 func NewStatusHandler(db *sql.DB, hub *ws.Hub) *StatusHandler {
@@ -70,6 +115,8 @@ func (h *StatusHandler) HandleEvent(ctx context.Context, event StatusEvent) erro
 		return h.handleTaskCompleted(ctx, event)
 	case EventTaskFailed:
 		return h.handleTaskFailed(ctx, event)
+	case EventTaskUpdated, EventTaskProgress:
+		return h.handleTaskUpdated(ctx, event)
 	case EventAgentStatus:
 		return h.handleAgentStatus(ctx, event)
 	default:
@@ -84,12 +131,7 @@ func (h *StatusHandler) handleTaskStarted(ctx context.Context, event StatusEvent
 		return errors.New("missing task ID")
 	}
 
-	prevStatus := ""
-	if event.Task != nil {
-		prevStatus = event.Task.PreviousStatus
-	}
-
-	task, err := h.updateTaskStatus(ctx, event.OrgID, taskID, models.TaskStatusInProgress)
+	task, prevStatus, err := h.updateTaskStatus(ctx, event.OrgID, taskID, models.TaskStatusInProgress)
 	if err != nil {
 		return fmt.Errorf("failed to update task status: %w", err)
 	}
@@ -110,12 +152,7 @@ func (h *StatusHandler) handleTaskCompleted(ctx context.Context, event StatusEve
 		return errors.New("missing task ID")
 	}
 
-	prevStatus := ""
-	if event.Task != nil {
-		prevStatus = event.Task.PreviousStatus
-	}
-
-	task, err := h.updateTaskStatus(ctx, event.OrgID, taskID, models.TaskStatusDone)
+	task, prevStatus, err := h.updateTaskStatus(ctx, event.OrgID, taskID, models.TaskStatusDone)
 	if err != nil {
 		return fmt.Errorf("failed to update task status: %w", err)
 	}
@@ -135,12 +172,7 @@ func (h *StatusHandler) handleTaskFailed(ctx context.Context, event StatusEvent)
 		return errors.New("missing task ID")
 	}
 
-	prevStatus := ""
-	if event.Task != nil {
-		prevStatus = event.Task.PreviousStatus
-	}
-
-	task, err := h.updateTaskStatus(ctx, event.OrgID, taskID, models.TaskStatusBlocked)
+	task, prevStatus, err := h.updateTaskStatus(ctx, event.OrgID, taskID, models.TaskStatusBlocked)
 	if err != nil {
 		return fmt.Errorf("failed to update task status: %w", err)
 	}
@@ -181,6 +213,56 @@ func (h *StatusHandler) handleAgentStatus(ctx context.Context, event StatusEvent
 	return nil
 }
 
+func (h *StatusHandler) handleTaskUpdated(ctx context.Context, event StatusEvent) error {
+	taskID := h.resolveTaskID(event)
+	if taskID == "" {
+		return errors.New("missing task ID")
+	}
+
+	var (
+		updatedTask *store.Task
+		prevStatus  string
+	)
+
+	status := ""
+	if event.Task != nil {
+		status = strings.TrimSpace(event.Task.Status)
+	}
+
+	if status != "" {
+		task, prev, err := h.updateTaskStatus(ctx, event.OrgID, taskID, status)
+		if err != nil {
+			return fmt.Errorf("failed to update task status: %w", err)
+		}
+		updatedTask = task
+		prevStatus = prev
+	}
+
+	if percent, ok := h.extractProgressPercent(event); ok {
+		task, err := h.updateTaskProgress(ctx, event.OrgID, taskID, percent)
+		if err != nil {
+			return fmt.Errorf("failed to update task progress: %w", err)
+		}
+		updatedTask = task
+	}
+
+	if err := h.logActivity(ctx, event); err != nil {
+		fmt.Printf("failed to log activity: %v\n", err)
+	}
+
+	if updatedTask == nil {
+		return nil
+	}
+
+	if status != "" {
+		h.broadcastTaskStatusChanged(updatedTask, prevStatus)
+		return nil
+	}
+
+	h.broadcastTaskUpdated(updatedTask)
+	return nil
+}
+
 // resolveTaskID extracts the task ID from the event.
 func (h *StatusHandler) resolveTaskID(event StatusEvent) string {
 	if event.Task != nil && event.Task.ID != "" {
@@ -198,12 +280,24 @@ func (h *StatusHandler) resolveAgentID(event StatusEvent) string {
 }
 
 // updateTaskStatus updates a task's status in the database.
-func (h *StatusHandler) updateTaskStatus(ctx context.Context, orgID, taskID, status string) (*store.Task, error) {
+func (h *StatusHandler) updateTaskStatus(ctx context.Context, orgID, taskID, status string) (*store.Task, string, error) {
 	conn, err := store.WithWorkspaceID(ctx, h.db, orgID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer conn.Close()
+
+	var currentStatus string
+	if err := conn.QueryRowContext(ctx, "SELECT status FROM tasks WHERE id = $1 AND org_id = $2", taskID, orgID).Scan(&currentStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, "", store.ErrNotFound
+		}
+		return nil, "", err
+	}
+
+	if !isValidTaskTransition(currentStatus, status) {
+		return nil, currentStatus, fmt.Errorf("%w: %s -> %s", errInvalidTaskTransition, currentStatus, status)
+	}
 
 	query := `UPDATE tasks SET status = $1, updated_at = NOW() 
 		WHERE id = $2 AND org_id = $3 
@@ -233,6 +327,84 @@ func (h *StatusHandler) updateTaskStatus(ctx context.Context, orgID, taskID, sta
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			return nil, currentStatus, store.ErrNotFound
+		}
+		return nil, currentStatus, err
+	}
+
+	if projectID.Valid {
+		task.ProjectID = &projectID.String
+	}
+	if description.Valid {
+		task.Description = &description.String
+	}
+	if assignedAgentID.Valid {
+		task.AssignedAgentID = &assignedAgentID.String
+	}
+	if parentTaskID.Valid {
+		task.ParentTaskID = &parentTaskID.String
+	}
+	if len(contextBytes) > 0 {
+		task.Context = json.RawMessage(contextBytes)
+	} else {
+		task.Context = json.RawMessage("{}")
+	}
+
+	return &task, currentStatus, nil
+}
+
+func (h *StatusHandler) updateTaskProgress(ctx context.Context, orgID, taskID string, percent int) (*store.Task, error) {
+	if percent < 0 || percent > 100 {
+		return nil, fmt.Errorf("progress percent out of range: %d", percent)
+	}
+
+	conn, err := store.WithWorkspaceID(ctx, h.db, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	var contextBytes []byte
+	if err := conn.QueryRowContext(ctx, "SELECT context FROM tasks WHERE id = $1 AND org_id = $2", taskID, orgID).Scan(&contextBytes); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, err
+	}
+
+	mergedContext, err := mergeProgressContext(contextBytes, percent)
+	if err != nil {
+		return nil, err
+	}
+
+	query := `UPDATE tasks SET context = $1, updated_at = NOW()
+		WHERE id = $2 AND org_id = $3
+		RETURNING id, org_id, project_id, number, title, description, status, priority, context, assigned_agent_id, parent_task_id, created_at, updated_at`
+
+	var task store.Task
+	var projectID sql.NullString
+	var description sql.NullString
+	var assignedAgentID sql.NullString
+	var parentTaskID sql.NullString
+	var updatedContextBytes []byte
+
+	err = conn.QueryRowContext(ctx, query, mergedContext, taskID, orgID).Scan(
+		&task.ID,
+		&task.OrgID,
+		&projectID,
+		&task.Number,
+		&task.Title,
+		&description,
+		&task.Status,
+		&task.Priority,
+		&updatedContextBytes,
+		&assignedAgentID,
+		&parentTaskID,
+		&task.CreatedAt,
+		&task.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, err
@@ -250,8 +422,8 @@ func (h *StatusHandler) updateTaskStatus(ctx context.Context, orgID, taskID, sta
 	if parentTaskID.Valid {
 		task.ParentTaskID = &parentTaskID.String
 	}
-	if len(contextBytes) > 0 {
-		task.Context = json.RawMessage(contextBytes)
+	if len(updatedContextBytes) > 0 {
+		task.Context = json.RawMessage(updatedContextBytes)
 	} else {
 		task.Context = json.RawMessage("{}")
 	}
@@ -350,6 +522,12 @@ type taskStatusBroadcast struct {
 	Timestamp      time.Time      `json:"timestamp"`
 }
 
+type taskUpdatedBroadcast struct {
+	Type      ws.MessageType `json:"type"`
+	Task      *store.Task    `json:"task"`
+	Timestamp time.Time      `json:"timestamp"`
+}
+
 // agentStatusBroadcast is the WebSocket payload for agent status changes.
 type agentStatusBroadcast struct {
 	Type      ws.MessageType `json:"type"`
@@ -368,6 +546,23 @@ func (h *StatusHandler) broadcastTaskStatusChanged(task *store.Task, previousSta
 		Task:           task,
 		PreviousStatus: previousStatus,
 		Timestamp:      time.Now().UTC(),
+	})
+	if err != nil {
+		return
+	}
+
+	h.hub.Broadcast(task.OrgID, payload)
+}
+
+func (h *StatusHandler) broadcastTaskUpdated(task *store.Task) {
+	if h.hub == nil || task == nil {
+		return
+	}
+
+	payload, err := json.Marshal(taskUpdatedBroadcast{
+		Type:      ws.MessageTaskUpdated,
+		Task:      task,
+		Timestamp: time.Now().UTC(),
 	})
 	if err != nil {
 		return
@@ -417,9 +612,56 @@ func ParseStatusEvent(body []byte) (*StatusEvent, error) {
 // IsSupportedEvent returns true if the event type is supported.
 func IsSupportedEvent(eventType string) bool {
 	switch eventType {
-	case EventTaskStarted, EventTaskCompleted, EventTaskFailed, EventAgentStatus:
+	case EventTaskStarted, EventTaskCompleted, EventTaskFailed, EventTaskUpdated, EventTaskProgress, EventAgentStatus:
 		return true
 	default:
 		return false
 	}
+}
+
+func (h *StatusHandler) extractProgressPercent(event StatusEvent) (int, bool) {
+	if event.Task != nil && event.Task.Percent != nil {
+		return *event.Task.Percent, true
+	}
+	if event.Percent != nil {
+		return *event.Percent, true
+	}
+	return 0, false
+}
+
+func isValidTaskTransition(from, to string) bool {
+	if from == "" || to == "" {
+		return false
+	}
+	if from == to {
+		return true
+	}
+	allowed, ok := validTaskTransitions[from]
+	if !ok {
+		return false
+	}
+	_, ok = allowed[to]
+	return ok
+}
+
+func mergeProgressContext(raw []byte, percent int) (json.RawMessage, error) {
+	if percent < 0 || percent > 100 {
+		return nil, fmt.Errorf("progress percent out of range: %d", percent)
+	}
+
+	context := map[string]interface{}{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &context); err != nil {
+			return nil, err
+		}
+	}
+
+	context["progress_percent"] = percent
+
+	updated, err := json.Marshal(context)
+	if err != nil {
+		return nil, err
+	}
+
+	return json.RawMessage(updated), nil
 }
