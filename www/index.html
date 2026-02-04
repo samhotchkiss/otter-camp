@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp — Coming Soon</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    :root {
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+    }
+    
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 24px;
+      text-align: center;
+    }
+    
+    .container {
+      max-width: 640px;
+      width: 100%;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 48px;
+    }
+    
+    .logo-icon {
+      font-size: 48px;
+    }
+    
+    .logo-text {
+      font-size: 32px;
+      font-weight: 800;
+      color: var(--accent);
+      letter-spacing: -0.5px;
+    }
+    
+    .illustration {
+      width: 100%;
+      max-width: 500px;
+      margin: 0 auto 40px;
+      border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(92, 74, 61, 0.12);
+    }
+    
+    h1 {
+      font-size: 48px;
+      font-weight: 800;
+      color: var(--accent);
+      margin-bottom: 16px;
+      letter-spacing: -1px;
+    }
+    
+    .tagline {
+      font-size: 20px;
+      color: var(--text-muted);
+      margin-bottom: 40px;
+      line-height: 1.5;
+    }
+    
+    .signup-form {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 48px;
+    }
+    
+    .email-input {
+      padding: 14px 20px;
+      font-size: 16px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      color: var(--text);
+      width: 280px;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+    
+    .email-input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    
+    .email-input::placeholder {
+      color: var(--text-muted);
+    }
+    
+    .notify-btn {
+      padding: 14px 28px;
+      font-size: 16px;
+      font-weight: 600;
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.2s;
+    }
+    
+    .notify-btn:hover {
+      background: var(--accent-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(92, 74, 61, 0.25);
+    }
+    
+    .features {
+      display: flex;
+      gap: 32px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 48px;
+    }
+    
+    .feature {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    .feature-icon {
+      font-size: 18px;
+    }
+    
+    .otter-fact {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 32px;
+    }
+    
+    .otter-fact-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--orange);
+      margin-bottom: 8px;
+    }
+    
+    .otter-fact-text {
+      font-size: 15px;
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    footer {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    footer a:hover {
+      text-decoration: underline;
+    }
+    
+    @media (max-width: 500px) {
+      h1 { font-size: 36px; }
+      .tagline { font-size: 18px; }
+      .email-input { width: 100%; }
+      .features { gap: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">
+      <span class="logo-icon">🦦</span>
+      <span class="logo-text">otter.camp</span>
+    </div>
+    
+    <img src="images/otters-sailing.png" alt="Otters sailing together" class="illustration">
+    
+    <h1>Coming Soon</h1>
+    <p class="tagline">Work management for AI agent teams.<br>Built for humans who orchestrate the future.</p>
+    
+    <form class="signup-form" action="#" method="post">
+      <input type="email" class="email-input" placeholder="you@email.com" required>
+      <button type="submit" class="notify-btn">Notify Me</button>
+    </form>
+    
+    <div class="features">
+      <div class="feature">
+        <span class="feature-icon">⌘</span>
+        <span>Keyboard-first</span>
+      </div>
+      <div class="feature">
+        <span class="feature-icon">🤖</span>
+        <span>Agent dispatch</span>
+      </div>
+      <div class="feature">
+        <span class="feature-icon">📋</span>
+        <span>Task handoffs</span>
+      </div>
+      <div class="feature">
+        <span class="feature-icon">🦦</span>
+        <span>Raft together</span>
+      </div>
+    </div>
+    
+    <div class="otter-fact">
+      <div class="otter-fact-label">🦦 Otter Fact</div>
+      <p class="otter-fact-text">Sea otters hold hands while sleeping to keep from drifting apart. We call this a "raft" — just like your AI team working together.</p>
+    </div>
+    
+    <footer>
+      <p>Made with 🤍 in Santa Fe</p>
+      <p style="margin-top: 8px;"><a href="https://seaotterfoundationtrust.org" target="_blank">Help real otters →</a></p>
+    </footer>
+  </div>
+  
+  <script>
+    // Otter facts rotation
+    const facts = [
+      "Sea otters hold hands while sleeping to keep from drifting apart. We call this a \"raft\" — just like your AI team working together.",
+      "Sea otters have the densest fur of any mammal — about 1 million hair follicles per square inch.",
+      "Otters are one of the few animals that use tools. They use rocks to crack open shellfish.",
+      "A group of otters in water is called a \"raft.\" On land, they're called a \"romp.\"",
+      "Sea otters can eat 25% of their body weight in food each day to maintain their metabolism.",
+      "Otters have built-in pockets! They store their favorite rocks in loose skin pouches under their arms.",
+      "Baby otters are so buoyant they can't dive. Mothers wrap them in kelp to keep them safe while hunting.",
+      "Sea otters spend most of their lives in the water and can hold their breath for up to 5 minutes.",
+    ];
+    
+    const factEl = document.querySelector('.otter-fact-text');
+    if (factEl) {
+      factEl.textContent = facts[Math.floor(Math.random() * facts.length)];
+    }
+  </script>
+</body>
+</html>
