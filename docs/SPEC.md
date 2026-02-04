@@ -347,7 +347,228 @@ Direct integration with agent memory:
 - Task management from agent sessions
 - Automatic attribution
 
-### F8: External Repository Sync
+### F8: Ongoing Workflows
+
+**Purpose:** Not all agent work is task-based. Some agents run continuous workflows — Nova posting to Twitter, Penny monitoring email, periodic health checks. These need first-class support.
+
+#### F8.1: Workflow Definition
+```yaml
+workflow:
+  id: "nova-twitter-engagement"
+  name: "Twitter Engagement Cycle"
+  agent: "nova"
+  schedule:
+    kind: "every"
+    interval: "5m"
+  status: "active" | "paused" | "disabled"
+  last_run: timestamp
+  next_run: timestamp
+  config:
+    # Workflow-specific settings
+    feed_check: true
+    max_posts_per_cycle: 3
+```
+
+#### F8.2: Workflow Types
+- **Scheduled**: Run on interval (every 5m, hourly, daily)
+- **Event-driven**: Triggered by external webhook (new email, mention, etc.)
+- **Continuous**: Always-on with internal polling (monitoring)
+
+#### F8.3: Workflow Dashboard
+- List all workflows with status
+- Last run / next run timestamps
+- Error rate and recent failures
+- Quick pause/resume controls
+- Run history with logs
+
+#### F8.4: Workflow vs Task
+- **Tasks** are discrete units of work that complete
+- **Workflows** are ongoing processes that run indefinitely
+- A workflow can *create* tasks (e.g., Penny flags an important email → task for review)
+
+---
+
+### F9: Second Brain / Knowledge Base
+
+**Purpose:** Centralized knowledge management for the operator and all agents. Not just task history — actual knowledge: decisions, preferences, context, learned patterns.
+
+#### F9.1: Knowledge Entries
+```yaml
+entry:
+  id: "kb-042"
+  title: "Sam's email preferences"
+  content: |
+    - Never auto-reply to anything
+    - Financial emails always flagged
+    - Newsletter digests on Sundays
+  tags: ["preferences", "email", "penny"]
+  created_by: "frank"
+  created_at: timestamp
+  updated_at: timestamp
+  references:
+    - task: "ops-015"
+    - workflow: "penny-email-triage"
+```
+
+#### F9.2: Knowledge Types
+- **Decisions**: "We decided X because Y" — linked to tasks where decided
+- **Preferences**: Operator preferences agents should follow
+- **Context**: Background info (project history, relationships, etc.)
+- **Procedures**: How to do recurring tasks
+- **Lessons**: What we learned from mistakes
+
+#### F9.3: Knowledge Search
+- Full-text search across all entries
+- Semantic search (find related knowledge)
+- Filter by tag, agent, date range
+- Auto-suggest relevant knowledge when creating tasks
+
+#### F9.4: Knowledge Injection
+- When task is dispatched, relevant knowledge auto-included
+- Agents can query knowledge base mid-task
+- Knowledge references in task context fields
+
+#### F9.5: Knowledge Capture
+- Manual entry via UI or API
+- Auto-extract from task completions (agent summaries)
+- Import from existing docs (markdown, notion, etc.)
+
+---
+
+### F10: OpenClaw Control Panel
+
+**Purpose:** Direct control over the connected OpenClaw installation. Troubleshooting, restarts, session management — all from the Otter Camp UI.
+
+#### F10.1: Gateway Status
+- Connection status (live WebSocket indicator)
+- Gateway version
+- Uptime
+- Current load (active sessions, queue depth)
+
+#### F10.2: Gateway Controls
+- **Restart Gateway**: Full restart with confirmation
+- **Reload Config**: SIGUSR1 equivalent
+- **View Logs**: Stream recent gateway logs
+
+#### F10.3: Session Management
+- List all agent sessions with status
+- Per-session controls:
+  - **Reset**: Clear session history, fresh start
+  - **Pause**: Stop heartbeats, hold work
+  - **Resume**: Restart paused session
+  - **Kill**: Force terminate
+- Bulk operations: Reset all, pause all
+
+#### F10.4: Agent Health
+- Heartbeat status per agent
+- Error rate (last hour, day)
+- Token usage
+- Crash detection (repeated errors)
+- Auto-recovery options
+
+#### F10.5: Diagnostics
+- Connection test to all configured services
+- Token/API key validation
+- Webhook delivery test
+- Memory usage, disk space
+
+---
+
+### F11: Task Context Model
+
+**Purpose:** Tasks must be self-contained for sub-agent handoff. When Derek receives a task, he immediately spawns a sub-agent — that sub-agent needs everything on a platter.
+
+#### F11.1: Context Layers
+```yaml
+task:
+  # Human-visible summary (shown in UI)
+  summary: "Add retry logic for API 500 errors"
+  
+  # Full context (for agents, hidden from default UI)
+  context:
+    # What files to look at
+    files:
+      - path: "src/providers/anthropic.ts"
+        reason: "Main provider implementation"
+      - path: "src/core/retry.ts"  
+        reason: "Existing retry utilities"
+    
+    # Decisions already made
+    decisions:
+      - "Use exponential backoff with jitter"
+      - "Max 3 retries before failover"
+      - "Log retry attempts to session"
+    
+    # What "done" looks like
+    acceptance:
+      - "500 errors trigger retry before failover"
+      - "Retry count appears in session logs"
+      - "Tests cover retry scenarios"
+    
+    # Related knowledge (auto-linked)
+    knowledge:
+      - "kb-015"  # Error handling standards
+      - "kb-022"  # Anthropic API quirks
+    
+    # Dependencies context
+    depends_on:
+      - task: "eng-041"
+        summary: "Why this blocks us"
+```
+
+#### F11.2: Context Expansion
+- When dispatching, full context is assembled
+- Knowledge entries are fetched and inlined
+- File contents can be optionally included
+- Previous task activity summarized
+
+#### F11.3: UI Display
+- **Operator view**: Summary + status + quick actions
+- **Detail view**: Full context available but collapsed
+- **Agent view**: Everything expanded, ready for handoff
+
+#### F11.4: Sub-Agent Contract
+A sub-agent should be able to complete the task with ONLY:
+1. The task's `context` block
+2. Access to the codebase
+3. No conversation history required
+
+This is enforced by design — if context is insufficient, the task shouldn't dispatch.
+
+---
+
+### F12: Native Applications
+
+**Purpose:** While web is v1, native apps for Mac and iOS follow immediately. The operator should be able to monitor and intervene from anywhere.
+
+#### F12.1: Mac App
+- Menu bar presence (quick status glance)
+- Native notifications for 🔴 blocked items
+- Quick actions: pause all, resume, view dashboard
+- Keyboard shortcuts for common operations
+- Offline indicator + reconnection handling
+
+#### F12.2: iOS App
+- Dashboard view (project statuses at a glance)
+- Push notifications for blocks and completions
+- Quick approve/reject for review items
+- Voice input for adding tasks
+- Widget for home screen status
+
+#### F12.3: Shared Features
+- Real-time sync via WebSocket
+- Consistent UI language (same status colors, icons)
+- Deep links (open specific task from notification)
+- Biometric auth for sensitive operations
+
+#### F12.4: Priority
+- Web: v1.0
+- Mac app: v1.1
+- iOS app: v1.2
+
+---
+
+### F13: External Repository Sync
 
 **Purpose:** Link internal AI Hub projects to external public repositories (e.g., GitHub). Agents work in the messy internal repo; when ready, work is squashed and pushed to the clean public repo under the operator's name.
 
@@ -706,23 +927,29 @@ gitclaw task create --title "..." --agent derek --priority 1
 - [ ] Agent registry
 - [ ] Repository CRUD & git protocol
 - [ ] Task CRUD with structured fields
-- [ ] Basic web UI
+- [ ] Basic web UI (Dashboard → Projects → Tasks)
 - [ ] REST API
 - [ ] Webhook dispatch
+- [ ] Live WebSocket connection to OpenClaw
 
 ### Phase 2: Integration
 - [ ] OpenClaw channel plugin
 - [ ] OpenClaw skill
 - [ ] CLI tool
 - [ ] GitHub import
+- [ ] OpenClaw Control Panel (restart, reset sessions)
+- [ ] Ongoing Workflows (scheduled/event-driven agents)
 
 ### Phase 3: Intelligence
+- [ ] Second Brain / Knowledge Base
+- [ ] Knowledge injection into task dispatch
 - [ ] Dependency auto-detection from code
 - [ ] Smart task suggestions
 - [ ] Agent workload balancing
-- [ ] Memory integration
 
-### Phase 4: Scale
+### Phase 4: Native + Scale
+- [ ] Mac native app (menu bar + notifications)
+- [ ] iOS app (dashboard + push notifications)
 - [ ] Multi-Installation (agencies)
 - [ ] Self-hosted option
 - [ ] Advanced analytics
