@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitHub Settings · otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+      
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --green: #5A7A5C;
+      --green-bg: rgba(90, 122, 92, 0.15);
+      --red: #B85C38;
+      --red-bg: rgba(184, 92, 56, 0.15);
+      --blue: #4A6D7C;
+      --yellow: #C4A03C;
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+      --green-bg: rgba(90, 122, 92, 0.2);
+      --red-bg: rgba(184, 92, 56, 0.2);
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .search-trigger {
+      flex: 1;
+      max-width: 400px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+    }
+    
+    .search-trigger-text { flex: 1; opacity: 0.7; font-size: 14px; }
+    .kbd { font-size: 12px; opacity: 0.6; font-family: var(--mono); }
+    
+    .topbar-nav {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .nav-link {
+      color: inherit;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0.8;
+    }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-left: auto;
+    }
+    
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    
+    /* ========== MAIN ========== */
+    .main {
+      flex: 1;
+      display: flex;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    
+    /* ========== SIDEBAR NAV ========== */
+    .settings-nav {
+      width: 240px;
+      padding: 24px;
+      border-right: 1px solid var(--border);
+    }
+    
+    .settings-nav-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      padding: 0 12px;
+    }
+    
+    .settings-nav-list {
+      list-style: none;
+    }
+    
+    .settings-nav-item {
+      margin-bottom: 4px;
+    }
+    
+    .settings-nav-link {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 14px;
+      transition: all 0.15s;
+    }
+    
+    .settings-nav-link:hover { background: var(--surface-alt); }
+    .settings-nav-link.active { background: var(--surface); font-weight: 500; }
+    .settings-nav-icon { font-size: 18px; }
+    
+    /* ========== CONTENT ========== */
+    .settings-content {
+      flex: 1;
+      padding: 32px;
+      max-width: 720px;
+    }
+    
+    .settings-header {
+      margin-bottom: 32px;
+    }
+    
+    .settings-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .settings-desc {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    /* ========== SECTIONS ========== */
+    .settings-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+    
+    .section-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .section-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .section-body {
+      padding: 24px;
+    }
+    
+    /* ========== FORM ELEMENTS ========== */
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-group:last-child { margin-bottom: 0; }
+    
+    .form-label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+    
+    .form-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+    
+    .form-input {
+      width: 100%;
+      padding: 12px 14px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    
+    .form-input::placeholder { color: var(--text-muted); }
+    .form-input:focus { outline: none; border-color: var(--accent); }
+    
+    .form-select {
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%23A69582' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 40px;
+    }
+    
+    /* ========== TOGGLE ========== */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .toggle-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .toggle-row:first-child { padding-top: 0; }
+    
+    .toggle-info { flex: 1; }
+    .toggle-label { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+    .toggle-desc { font-size: 13px; color: var(--text-muted); }
+    
+    .toggle-switch {
+      position: relative;
+      width: 48px;
+      height: 28px;
+    }
+    
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--border);
+      border-radius: 28px;
+      transition: 0.2s;
+    }
+    
+    .toggle-slider::before {
+      position: absolute;
+      content: "";
+      height: 22px;
+      width: 22px;
+      left: 3px;
+      bottom: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: 0.2s;
+    }
+    
+    .toggle-switch input:checked + .toggle-slider { background: var(--green); }
+    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(20px); }
+    
+    /* ========== BUTTONS ========== */
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary { background: var(--accent); color: var(--bg); }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-secondary { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--border); }
+    .btn-danger { background: var(--red); color: white; }
+    .btn-danger:hover { opacity: 0.9; }
+    .btn-success { background: var(--green); color: white; }
+    .btn-success:hover { opacity: 0.9; }
+    
+    .btn-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+    
+    /* ========== GITHUB ACCOUNT ========== */
+    .github-account {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 20px;
+      background: var(--surface-alt);
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+    
+    .github-avatar {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+    }
+    
+    .github-info { flex: 1; }
+    .github-name { font-weight: 600; font-size: 16px; margin-bottom: 2px; }
+    .github-username { font-size: 13px; color: var(--text-muted); font-family: var(--mono); }
+    
+    .github-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--green);
+      font-weight: 500;
+    }
+    
+    /* ========== REPO LIST ========== */
+    .linked-repos {
+      margin-top: 16px;
+    }
+    
+    .repo-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 12px;
+    }
+    
+    .repo-icon {
+      font-size: 20px;
+      width: 40px;
+      height: 40px;
+      background: var(--surface);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .repo-details { flex: 1; }
+    
+    .repo-name {
+      font-weight: 600;
+      font-size: 14px;
+      font-family: var(--mono);
+      margin-bottom: 2px;
+    }
+    
+    .repo-name a {
+      color: var(--text);
+      text-decoration: none;
+    }
+    
+    .repo-name a:hover { color: var(--accent); }
+    
+    .repo-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .repo-project {
+      background: var(--surface);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    
+    .repo-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .sync-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      background: var(--surface);
+      padding: 6px 12px;
+      border-radius: 6px;
+    }
+    
+    .sync-indicator.pending { color: var(--yellow); }
+    
+    /* ========== LINK NEW REPO ========== */
+    .repo-picker {
+      margin-top: 16px;
+    }
+    
+    .repo-search {
+      position: relative;
+      margin-bottom: 12px;
+    }
+    
+    .repo-search input {
+      padding-left: 40px;
+    }
+    
+    .repo-search-icon {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    .repo-list {
+      max-height: 280px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    
+    .repo-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    
+    .repo-item:last-child { border-bottom: none; }
+    .repo-item:hover { background: var(--surface-alt); }
+    .repo-item.selected { background: var(--green-bg); }
+    .repo-item input[type="radio"] { accent-color: var(--accent); }
+    
+    .repo-item-name {
+      flex: 1;
+      font-weight: 500;
+      font-size: 14px;
+      font-family: var(--mono);
+    }
+    
+    .repo-item-visibility {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: var(--surface);
+      color: var(--text-muted);
+    }
+    
+    .repo-item-linked {
+      font-size: 11px;
+      color: var(--green);
+      font-weight: 500;
+    }
+    
+    /* ========== BRANCH CONFIG ========== */
+    .branch-config {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    
+    .branch-arrow {
+      font-size: 20px;
+      color: var(--text-muted);
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      padding: 20px 24px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+      text-align: center;
+    }
+    
+    .footer-fact {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .footer-fact strong { color: var(--accent); }
+    
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 900px) {
+      .main { flex-direction: column; }
+      .settings-nav { width: 100%; border-right: none; border-bottom: 1px solid var(--border); padding: 16px; }
+      .settings-nav-list { display: flex; flex-wrap: wrap; gap: 8px; }
+      .settings-nav-item { margin-bottom: 0; }
+      .settings-content { padding: 24px; }
+    }
+    
+    @media (max-width: 640px) {
+      .topbar { padding: 12px 16px; flex-wrap: wrap; }
+      .search-trigger { order: 3; max-width: 100%; flex-basis: 100%; }
+      .topbar-nav { display: none; }
+      .github-account { flex-direction: column; text-align: center; }
+      .repo-card { flex-direction: column; align-items: flex-start; gap: 12px; }
+      .repo-actions { width: 100%; }
+      .repo-actions .btn { flex: 1; justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- ========== TOP BAR ========== -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="search-trigger">
+        <span>🔍</span>
+        <span class="search-trigger-text">Search or command...</span>
+        <span class="kbd">⌘K</span>
+      </div>
+      
+      <nav class="topbar-nav">
+        <a href="index.html" class="nav-link">Dashboard</a>
+        <a href="inbox.html" class="nav-link">Inbox</a>
+        <a href="project.html" class="nav-link">Projects</a>
+        <a href="agents.html" class="nav-link">Agents</a>
+        <a href="feed.html" class="nav-link">Feed</a>
+      </nav>
+      
+      <div class="topbar-right">
+        <div class="connection-status">
+          <span class="status-dot"></span>
+          <span>Live</span>
+        </div>
+        <div class="avatar">S</div>
+      </div>
+    </header>
+    
+    <!-- ========== MAIN ========== -->
+    <main class="main">
+      <!-- Settings Nav -->
+      <nav class="settings-nav">
+        <div class="settings-nav-title">Settings</div>
+        <ul class="settings-nav-list">
+          <li class="settings-nav-item">
+            <a href="settings.html" class="settings-nav-link">
+              <span class="settings-nav-icon">👤</span>
+              Profile
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🦦</span>
+              OpenClaw
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="settings-github.html" class="settings-nav-link active">
+              <span class="settings-nav-icon">🐙</span>
+              GitHub
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🔔</span>
+              Notifications
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🎨</span>
+              Appearance
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🔑</span>
+              API Keys
+            </a>
+          </li>
+        </ul>
+      </nav>
+      
+      <!-- Settings Content -->
+      <div class="settings-content">
+        <header class="settings-header">
+          <h1 class="settings-title">GitHub Connection</h1>
+          <p class="settings-desc">Link GitHub repositories to OtterCamp projects for the publish flow.</p>
+        </header>
+        
+        <!-- GitHub Account -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Connected Account</h2>
+            <p class="section-desc">Your GitHub account used for repository access.</p>
+          </div>
+          <div class="section-body">
+            <div class="github-account">
+              <div class="github-avatar">🐙</div>
+              <div class="github-info">
+                <div class="github-name">Sam Hotchkiss</div>
+                <div class="github-username">@samhotchkiss</div>
+              </div>
+              <div class="github-status">
+                <span class="status-dot"></span>
+                Connected
+              </div>
+            </div>
+            
+            <div style="display: flex; gap: 12px;">
+              <button class="btn btn-secondary">🔄 Refresh Permissions</button>
+              <button class="btn btn-danger">Disconnect</button>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Linked Repositories -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Linked Repositories</h2>
+            <p class="section-desc">GitHub repos connected to OtterCamp projects.</p>
+          </div>
+          <div class="section-body">
+            <div class="linked-repos">
+              <div class="repo-card">
+                <div class="repo-icon">📦</div>
+                <div class="repo-details">
+                  <div class="repo-name">
+                    <a href="#">samhotchkiss/otter-camp</a>
+                  </div>
+                  <div class="repo-meta">
+                    <span class="repo-project">🦦 OtterCamp</span>
+                    <span>Branch: main</span>
+                  </div>
+                </div>
+                <div class="sync-indicator pending">
+                  <span>14 commits</span>
+                  ready to sync
+                </div>
+                <div class="repo-actions">
+                  <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">Configure</button>
+                </div>
+              </div>
+              
+              <div class="repo-card">
+                <div class="repo-icon">📦</div>
+                <div class="repo-details">
+                  <div class="repo-name">
+                    <a href="#">samhotchkiss/pearl</a>
+                  </div>
+                  <div class="repo-meta">
+                    <span class="repo-project">🦪 Pearl</span>
+                    <span>Branch: main</span>
+                  </div>
+                </div>
+                <div class="sync-indicator">
+                  <span>✓</span>
+                  In sync
+                </div>
+                <div class="repo-actions">
+                  <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">Configure</button>
+                </div>
+              </div>
+              
+              <div class="repo-card">
+                <div class="repo-icon">📦</div>
+                <div class="repo-details">
+                  <div class="repo-name">
+                    <a href="#">The-Trawl/three-stones-app</a>
+                  </div>
+                  <div class="repo-meta">
+                    <span class="repo-project">🪨 Three Stones</span>
+                    <span>Branch: develop</span>
+                  </div>
+                </div>
+                <div class="sync-indicator">
+                  <span>✓</span>
+                  In sync
+                </div>
+                <div class="repo-actions">
+                  <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">Configure</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Link New Repo -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Link New Repository</h2>
+            <p class="section-desc">Connect a GitHub repository to an OtterCamp project.</p>
+          </div>
+          <div class="section-body">
+            <div class="form-group">
+              <label class="form-label">Select Project</label>
+              <select class="form-input form-select">
+                <option>Choose a project...</option>
+                <option>🦦 OtterCamp</option>
+                <option>🦪 Pearl</option>
+                <option>🪨 Three Stones</option>
+                <option>🌐 ItsAlive</option>
+                <option>📝 Technonymous</option>
+              </select>
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label">Select Repository</label>
+              <div class="repo-picker">
+                <div class="repo-search">
+                  <span class="repo-search-icon">🔍</span>
+                  <input type="text" class="form-input" placeholder="Search repositories...">
+                </div>
+                <div class="repo-list">
+                  <div class="repo-item">
+                    <input type="radio" name="repo" id="repo-1">
+                    <label class="repo-item-name" for="repo-1">samhotchkiss/otter-camp</label>
+                    <span class="repo-item-linked">✓ Linked</span>
+                  </div>
+                  <div class="repo-item selected">
+                    <input type="radio" name="repo" id="repo-2" checked>
+                    <label class="repo-item-name" for="repo-2">samhotchkiss/itsalive-web</label>
+                    <span class="repo-item-visibility">Private</span>
+                  </div>
+                  <div class="repo-item">
+                    <input type="radio" name="repo" id="repo-3">
+                    <label class="repo-item-name" for="repo-3">samhotchkiss/technonymous</label>
+                    <span class="repo-item-visibility">Public</span>
+                  </div>
+                  <div class="repo-item">
+                    <input type="radio" name="repo" id="repo-4">
+                    <label class="repo-item-name" for="repo-4">The-Trawl/agent-skills</label>
+                    <span class="repo-item-visibility">Private</span>
+                  </div>
+                  <div class="repo-item">
+                    <input type="radio" name="repo" id="repo-5">
+                    <label class="repo-item-name" for="repo-5">The-Trawl/dispatch</label>
+                    <span class="repo-item-visibility">Private</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label">Branch Mapping</label>
+              <div class="branch-config">
+                <div style="flex: 1;">
+                  <input type="text" class="form-input" value="internal" placeholder="Internal branch">
+                  <div class="form-hint">OtterCamp will track this branch</div>
+                </div>
+                <span class="branch-arrow">→</span>
+                <div style="flex: 1;">
+                  <input type="text" class="form-input" value="main" placeholder="External branch">
+                  <div class="form-hint">Publish commits here</div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="btn-group">
+              <button class="btn btn-success">Link Repository</button>
+              <button class="btn btn-secondary">Cancel</button>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Sync Settings -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Sync Behavior</h2>
+            <p class="section-desc">Configure how OtterCamp interacts with GitHub.</p>
+          </div>
+          <div class="section-body">
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="toggle-label">Auto-close GitHub Issues</div>
+                <div class="toggle-desc">Automatically close linked GitHub issues when OtterCamp tasks complete.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="toggle-label">Sync Issue Comments</div>
+                <div class="toggle-desc">Mirror comments between OtterCamp and GitHub issues.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="toggle-label">Squash on Publish</div>
+                <div class="toggle-desc">Combine multiple internal commits into one when publishing to GitHub.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="toggle-label">Human Author Attribution</div>
+                <div class="toggle-desc">Set the human operator as the commit author (agent as co-author).</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+    
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+      <div class="footer-fact">
+        <span>🦦</span>
+        <span><strong>Otter fact:</strong> Giant river otters can grow up to 6 feet long, making them the longest members of the weasel family.</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings · otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+      
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --green-bg: rgba(90, 122, 92, 0.15);
+      --red: #B85C38;
+      --red-bg: rgba(184, 92, 56, 0.15);
+      --blue: #4A6D7C;
+      --yellow: #C4A03C;
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+      --green-bg: rgba(90, 122, 92, 0.2);
+      --red-bg: rgba(184, 92, 56, 0.2);
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .search-trigger {
+      flex: 1;
+      max-width: 400px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .search-trigger:hover { background: rgba(255,255,255,0.2); }
+    .search-trigger-text { flex: 1; opacity: 0.7; font-size: 14px; }
+    .kbd { font-size: 12px; opacity: 0.6; font-family: var(--mono); }
+    
+    .topbar-nav {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .nav-link {
+      color: inherit;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0.8;
+      transition: all 0.15s;
+    }
+    
+    .nav-link:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-left: auto;
+    }
+    
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    
+    /* ========== MAIN ========== */
+    .main {
+      flex: 1;
+      display: flex;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    
+    /* ========== SIDEBAR NAV ========== */
+    .settings-nav {
+      width: 240px;
+      padding: 24px;
+      border-right: 1px solid var(--border);
+    }
+    
+    .settings-nav-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      padding: 0 12px;
+    }
+    
+    .settings-nav-list {
+      list-style: none;
+    }
+    
+    .settings-nav-item {
+      margin-bottom: 4px;
+    }
+    
+    .settings-nav-link {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 14px;
+      transition: all 0.15s;
+    }
+    
+    .settings-nav-link:hover {
+      background: var(--surface-alt);
+    }
+    
+    .settings-nav-link.active {
+      background: var(--surface);
+      font-weight: 500;
+    }
+    
+    .settings-nav-icon {
+      font-size: 18px;
+    }
+    
+    /* ========== CONTENT ========== */
+    .settings-content {
+      flex: 1;
+      padding: 32px;
+      max-width: 720px;
+    }
+    
+    .settings-header {
+      margin-bottom: 32px;
+    }
+    
+    .settings-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .settings-desc {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    /* ========== SECTIONS ========== */
+    .settings-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+    
+    .section-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .section-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .section-body {
+      padding: 24px;
+    }
+    
+    /* ========== FORM ELEMENTS ========== */
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-group:last-child {
+      margin-bottom: 0;
+    }
+    
+    .form-label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+    
+    .form-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+    
+    .form-input {
+      width: 100%;
+      padding: 12px 14px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    
+    .form-input::placeholder { color: var(--text-muted); }
+    .form-input:focus { outline: none; border-color: var(--accent); }
+    
+    .form-input-mono {
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+    
+    .form-select {
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%23A69582' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 40px;
+    }
+    
+    .form-row {
+      display: flex;
+      gap: 16px;
+    }
+    
+    .form-row .form-group {
+      flex: 1;
+    }
+    
+    /* ========== TOGGLE ========== */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .toggle-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    
+    .toggle-row:first-child {
+      padding-top: 0;
+    }
+    
+    .toggle-info {
+      flex: 1;
+    }
+    
+    .toggle-label {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 2px;
+    }
+    
+    .toggle-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .toggle-switch {
+      position: relative;
+      width: 48px;
+      height: 28px;
+    }
+    
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--border);
+      border-radius: 28px;
+      transition: 0.2s;
+    }
+    
+    .toggle-slider::before {
+      position: absolute;
+      content: "";
+      height: 22px;
+      width: 22px;
+      left: 3px;
+      bottom: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: 0.2s;
+    }
+    
+    .toggle-switch input:checked + .toggle-slider {
+      background: var(--green);
+    }
+    
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(20px);
+    }
+    
+    /* ========== BUTTONS ========== */
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary { background: var(--accent); color: var(--bg); }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-secondary { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--border); }
+    .btn-danger { background: var(--red); color: white; }
+    .btn-danger:hover { opacity: 0.9; }
+    .btn-ghost { background: transparent; color: var(--text-muted); }
+    .btn-ghost:hover { background: var(--surface-alt); color: var(--text); }
+    
+    .btn-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+    
+    /* ========== CONNECTION CARD ========== */
+    .connection-card {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 16px;
+    }
+    
+    .connection-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 10px;
+      background: var(--surface);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+    
+    .connection-info {
+      flex: 1;
+    }
+    
+    .connection-name {
+      font-weight: 600;
+      font-size: 15px;
+      margin-bottom: 2px;
+    }
+    
+    .connection-meta {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    
+    .connection-status.connected {
+      color: var(--green);
+    }
+    
+    .connection-status.disconnected {
+      color: var(--text-muted);
+    }
+    
+    /* ========== GITHUB SECTION ========== */
+    .repo-picker {
+      margin-top: 16px;
+    }
+    
+    .repo-list {
+      max-height: 300px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-top: 12px;
+    }
+    
+    .repo-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    
+    .repo-item:last-child { border-bottom: none; }
+    .repo-item:hover { background: var(--surface-alt); }
+    .repo-item.selected { background: var(--green-bg); }
+    
+    .repo-item input[type="radio"] {
+      accent-color: var(--accent);
+    }
+    
+    .repo-name {
+      font-weight: 500;
+      font-size: 14px;
+    }
+    
+    .repo-visibility {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: var(--surface-alt);
+      color: var(--text-muted);
+      margin-left: auto;
+    }
+    
+    /* ========== DANGER ZONE ========== */
+    .danger-zone {
+      border-color: var(--red);
+    }
+    
+    .danger-zone .section-header {
+      background: var(--red-bg);
+    }
+    
+    .danger-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .danger-item:last-child { border-bottom: none; padding-bottom: 0; }
+    .danger-item:first-child { padding-top: 0; }
+    
+    .danger-info {
+      flex: 1;
+    }
+    
+    .danger-title {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 2px;
+    }
+    
+    .danger-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      padding: 20px 24px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+      text-align: center;
+    }
+    
+    .footer-fact {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .footer-fact strong { color: var(--accent); }
+    
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 900px) {
+      .main {
+        flex-direction: column;
+      }
+      
+      .settings-nav {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding: 16px;
+      }
+      
+      .settings-nav-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      
+      .settings-nav-item {
+        margin-bottom: 0;
+      }
+      
+      .settings-content {
+        padding: 24px;
+      }
+    }
+    
+    @media (max-width: 640px) {
+      .topbar {
+        padding: 12px 16px;
+        flex-wrap: wrap;
+      }
+      
+      .search-trigger {
+        order: 3;
+        max-width: 100%;
+        flex-basis: 100%;
+      }
+      
+      .topbar-nav { display: none; }
+      
+      .form-row {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- ========== TOP BAR ========== -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="search-trigger">
+        <span>🔍</span>
+        <span class="search-trigger-text">Search or command...</span>
+        <span class="kbd">⌘K</span>
+      </div>
+      
+      <nav class="topbar-nav">
+        <a href="index.html" class="nav-link">Dashboard</a>
+        <a href="inbox.html" class="nav-link">Inbox</a>
+        <a href="project.html" class="nav-link">Projects</a>
+        <a href="agents.html" class="nav-link">Agents</a>
+        <a href="feed.html" class="nav-link">Feed</a>
+      </nav>
+      
+      <div class="topbar-right">
+        <div class="connection-status">
+          <span class="status-dot"></span>
+          <span>Live</span>
+        </div>
+        <div class="avatar">S</div>
+      </div>
+    </header>
+    
+    <!-- ========== MAIN ========== -->
+    <main class="main">
+      <!-- Settings Nav -->
+      <nav class="settings-nav">
+        <div class="settings-nav-title">Settings</div>
+        <ul class="settings-nav-list">
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link active">
+              <span class="settings-nav-icon">👤</span>
+              Profile
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🦦</span>
+              OpenClaw
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="settings-github.html" class="settings-nav-link">
+              <span class="settings-nav-icon">🐙</span>
+              GitHub
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🔔</span>
+              Notifications
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🎨</span>
+              Appearance
+            </a>
+          </li>
+          <li class="settings-nav-item">
+            <a href="#" class="settings-nav-link">
+              <span class="settings-nav-icon">🔑</span>
+              API Keys
+            </a>
+          </li>
+        </ul>
+      </nav>
+      
+      <!-- Settings Content -->
+      <div class="settings-content">
+        <header class="settings-header">
+          <h1 class="settings-title">Profile</h1>
+          <p class="settings-desc">Manage your account settings and preferences.</p>
+        </header>
+        
+        <!-- Profile Section -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Account Information</h2>
+            <p class="section-desc">Your basic account details.</p>
+          </div>
+          <div class="section-body">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Name</label>
+                <input type="text" class="form-input" value="Sam Hotchkiss">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Email</label>
+                <input type="email" class="form-input" value="sam@example.com">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Timezone</label>
+              <select class="form-input form-select">
+                <option>America/Denver (MST)</option>
+                <option>America/Los_Angeles (PST)</option>
+                <option>America/New_York (EST)</option>
+                <option>UTC</option>
+              </select>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-primary">Save Changes</button>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Preferences Section -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Preferences</h2>
+            <p class="section-desc">Customize your OtterCamp experience.</p>
+          </div>
+          <div class="section-body">
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="toggle-label">Dark Mode</div>
+                <div class="toggle-desc">Use dark theme across the interface.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="toggle-label">Sound Effects</div>
+                <div class="toggle-desc">Play sounds for notifications and events.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="toggle-label">Keyboard Shortcuts</div>
+                <div class="toggle-desc">Enable vim-style navigation (j/k, g+i, etc.)</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="toggle-label">Compact Mode</div>
+                <div class="toggle-desc">Reduce spacing and font sizes for more density.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Connected Services -->
+        <section class="settings-section">
+          <div class="section-header">
+            <h2 class="section-title">Connected Services</h2>
+            <p class="section-desc">External accounts linked to OtterCamp.</p>
+          </div>
+          <div class="section-body">
+            <div class="connection-card">
+              <div class="connection-icon">🦦</div>
+              <div class="connection-info">
+                <div class="connection-name">OpenClaw</div>
+                <div class="connection-meta">sam-openclaw · v1.2.3</div>
+              </div>
+              <div class="connection-status connected">
+                <span class="status-dot"></span>
+                Connected
+              </div>
+            </div>
+            
+            <div class="connection-card">
+              <div class="connection-icon">🐙</div>
+              <div class="connection-info">
+                <div class="connection-name">GitHub</div>
+                <div class="connection-meta">samhotchkiss</div>
+              </div>
+              <div class="connection-status connected">
+                <span class="status-dot"></span>
+                Connected
+              </div>
+            </div>
+            
+            <div class="connection-card" style="opacity: 0.6;">
+              <div class="connection-icon">📧</div>
+              <div class="connection-info">
+                <div class="connection-name">Email (SMTP)</div>
+                <div class="connection-meta">Not configured</div>
+              </div>
+              <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">Connect</button>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Danger Zone -->
+        <section class="settings-section danger-zone">
+          <div class="section-header">
+            <h2 class="section-title">⚠️ Danger Zone</h2>
+            <p class="section-desc">Irreversible and destructive actions.</p>
+          </div>
+          <div class="section-body">
+            <div class="danger-item">
+              <div class="danger-info">
+                <div class="danger-title">Export All Data</div>
+                <div class="danger-desc">Download a copy of all your tasks, projects, and activity.</div>
+              </div>
+              <button class="btn btn-secondary">Export</button>
+            </div>
+            
+            <div class="danger-item">
+              <div class="danger-info">
+                <div class="danger-title">Delete Account</div>
+                <div class="danger-desc">Permanently delete your account and all associated data.</div>
+              </div>
+              <button class="btn btn-danger">Delete Account</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+    
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+      <div class="footer-fact">
+        <span>🦦</span>
+        <span><strong>Otter fact:</strong> River otters can hold their breath for up to 8 minutes while hunting underwater.</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
