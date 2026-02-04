@@ -1,18 +1,26 @@
 import { RouterProvider } from "react-router-dom";
 import { ToastProvider } from "./contexts/ToastContext";
 import { WebSocketProvider } from "./contexts/WebSocketContext";
+import { NotificationProvider } from "./contexts/NotificationContext";
 import ToastContainer from "./components/ToastContainer";
 import WebSocketToastHandler from "./components/WebSocketToastHandler";
+import SkipLink from "./components/SkipLink";
+import { LiveRegionProvider } from "./components/LiveRegion";
 import { router } from "./router";
 
 export default function App() {
   return (
-    <ToastProvider>
-      <WebSocketProvider>
-        <RouterProvider router={router} />
-        <WebSocketToastHandler />
-        <ToastContainer />
-      </WebSocketProvider>
-    </ToastProvider>
+    <LiveRegionProvider>
+      <ToastProvider>
+        <WebSocketProvider>
+          <NotificationProvider>
+            <SkipLink targetId="main-content" />
+            <RouterProvider router={router} />
+            <WebSocketToastHandler />
+            <ToastContainer />
+          </NotificationProvider>
+        </WebSocketProvider>
+      </ToastProvider>
+    </LiveRegionProvider>
   );
 }

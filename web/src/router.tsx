@@ -1,16 +1,34 @@
+import { lazy, Suspense } from "react";
 import { createBrowserRouter, Outlet } from "react-router-dom";
 import DashboardLayout from "./layouts/DashboardLayout";
-import Dashboard from "./pages/Dashboard";
-import AgentsPage from "./pages/AgentsPage";
-import SettingsPage from "./pages/SettingsPage";
-import FeedPage from "./pages/FeedPage";
-import ProjectsPage from "./pages/ProjectsPage";
-import NotFoundPage from "./pages/NotFoundPage";
+import LoadingSpinner from "./components/LoadingSpinner";
+
+// Lazy load all page components for code splitting
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const AgentsPage = lazy(() => import("./pages/AgentsPage"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const FeedPage = lazy(() => import("./pages/FeedPage"));
+const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
+const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
+const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
+
+/**
+ * Suspense wrapper for lazy-loaded routes with loading fallback.
+ */
+function SuspenseRoute({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense fallback={<LoadingSpinner message="Loading page..." size="lg" />}>
+      {children}
+    </Suspense>
+  );
+}
 
 function DashboardRoot() {
   return (
     <DashboardLayout>
-      <Outlet />
+      <Suspense fallback={<LoadingSpinner message="Loading page..." size="lg" />}>
+        <Outlet />
+      </Suspense>
     </DashboardLayout>
   );
 }
@@ -44,10 +62,18 @@ export const router = createBrowserRouter([
         path: "projects",
         element: <ProjectsPage />,
       },
+      {
+        path: "notifications",
+        element: <NotificationsPage />,
+      },
     ],
   },
   {
     path: "*",
-    element: <NotFoundPage />,
+    element: (
+      <SuspenseRoute>
+        <NotFoundPage />
+      </SuspenseRoute>
+    ),
   },
 ]);
