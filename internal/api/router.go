@@ -44,6 +44,7 @@ func NewRouter() http.Handler {
 	r.Get("/api/search", SearchHandler)
 	r.Get("/api/commands/search", CommandSearchHandler)
 	r.Get("/api/feed", FeedHandler)
+	r.Post("/api/webhooks/openclaw", OpenClawWebhookHandler)
 	r.Handle("/ws", &ws.Handler{Hub: hub})
 
 	taskHandler := &TaskHandler{Hub: hub}
