@@ -5,6 +5,7 @@ import LoadingSpinner from "./components/LoadingSpinner";
 import { KeyboardShortcutsProvider } from "./contexts/KeyboardShortcutsContext";
 
 // Lazy load all page components for code splitting
+const HomePage = lazy(() => import("./pages/HomePage"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const AgentsPage = lazy(() => import("./pages/AgentsPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
@@ -38,13 +39,21 @@ function DashboardRoot() {
 
 export const router = createBrowserRouter([
   {
+    // Home page - Jeff's executive dashboard (no sidebar layout)
+    path: "/",
+    element: (
+      <KeyboardShortcutsProvider>
+        <Suspense fallback={<LoadingSpinner message="Loading..." size="lg" />}>
+          <HomePage />
+        </Suspense>
+      </KeyboardShortcutsProvider>
+    ),
+  },
+  {
+    // Other pages use the sidebar layout
     path: "/",
     element: <DashboardRoot />,
     children: [
-      {
-        index: true,
-        element: <Dashboard />,
-      },
       {
         path: "tasks",
         element: <Dashboard />,
