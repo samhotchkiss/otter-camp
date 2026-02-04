@@ -45,13 +45,14 @@ func NewRouter() http.Handler {
 	r.Get("/api/commands/search", CommandSearchHandler)
 	r.Get("/api/feed", FeedHandlerV2)
 	r.Post("/api/auth/login", HandleLogin)
-	
+
 	webhookHandler := &WebhookHandler{Hub: hub}
 	r.Post("/api/webhooks/openclaw", webhookHandler.OpenClawHandler)
 
 	feedPushHandler := NewFeedPushHandler(hub)
 	r.Post("/api/feed", feedPushHandler.Handle)
-	
+	r.Post("/api/feed/push", feedPushHandler.Handle)
+
 	r.Handle("/ws", &ws.Handler{Hub: hub})
 
 	taskHandler := &TaskHandler{Hub: hub}

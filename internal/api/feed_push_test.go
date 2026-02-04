@@ -115,7 +115,7 @@ func TestAgentPushInsight(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/feed", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/feed/push", bytes.NewReader(body))
 	req.Header.Set("X-API-Key", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -175,6 +175,16 @@ func TestAgentPushValidation(t *testing.T) {
 		wantError  string
 	}{
 		{
+			name: "invalid mode",
+			body: FeedPushRequest{
+				OrgID: orgID,
+				Mode:  "bad",
+				Items: []FeedPushItem{{Type: "insight"}},
+			},
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid mode",
+		},
+		{
 			name:       "empty items",
 			body:       FeedPushRequest{OrgID: orgID, Items: []FeedPushItem{}},
 			wantStatus: http.StatusBadRequest,
@@ -215,7 +225,7 @@ func TestAgentPushValidation(t *testing.T) {
 				body, _ = json.Marshal(tc.body)
 			}
 
-			req := httptest.NewRequest(http.MethodPost, "/api/feed", bytes.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/feed/push", bytes.NewReader(body))
 			req.Header.Set("X-API-Key", apiKey)
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
@@ -284,7 +294,7 @@ func TestAgentPushAuth(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/feed", bytes.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/feed/push", bytes.NewReader(body))
 			if tc.apiKey != "" {
 				req.Header.Set("X-API-Key", tc.apiKey)
 			}
@@ -336,7 +346,7 @@ func TestAgentPushRateLimit(t *testing.T) {
 
 	// First 3 requests should succeed
 	for i := 0; i < 3; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/api/feed", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/feed/push", bytes.NewReader(body))
 		req.Header.Set("X-API-Key", apiKey)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -346,7 +356,7 @@ func TestAgentPushRateLimit(t *testing.T) {
 	}
 
 	// 4th request should be rate limited
-	req := httptest.NewRequest(http.MethodPost, "/api/feed", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/feed/push", bytes.NewReader(body))
 	req.Header.Set("X-API-Key", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -382,7 +392,7 @@ func TestAgentPushOrgMismatch(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/feed", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/feed/push", bytes.NewReader(body))
 	req.Header.Set("X-API-Key", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -422,7 +432,7 @@ func TestAgentPushBatch(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/feed", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/feed/push", bytes.NewReader(body))
 	req.Header.Set("X-API-Key", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -446,6 +456,133 @@ func TestAgentPushBatch(t *testing.T) {
 	).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 3, count)
+}
+
+// TestAgentPushReplaceMode verifies replace mode clears prior agent push items.
+func TestAgentPushReplaceMode(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedPushDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	orgID := insertTestOrganization(t, db, "replace-org")
+	apiKey := "replace-key"
+	agentID := insertTestAgent(t, db, orgID, "Replace Agent", apiKey)
+
+	// Insert a non-agent-push activity to ensure it is retained.
+	_, err = db.Exec(
+		"INSERT INTO activity_log (org_id, agent_id, action, metadata) VALUES ($1, $2, $3, $4)",
+		orgID,
+		agentID,
+		"webhook_event",
+		json.RawMessage(`{"source":"webhook"}`),
+	)
+	require.NoError(t, err)
+
+	hub := ws.NewHub()
+	go hub.Run()
+	handler := NewFeedPushHandler(hub)
+
+	// First push (augment)
+	firstBody, _ := json.Marshal(FeedPushRequest{
+		OrgID: orgID,
+		Mode:  "augment",
+		Items: []FeedPushItem{
+			{Type: "commit"},
+			{Type: "comment"},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/feed/push", bytes.NewReader(firstBody))
+	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Second push (replace)
+	secondBody, _ := json.Marshal(FeedPushRequest{
+		OrgID: orgID,
+		Mode:  "replace",
+		Items: []FeedPushItem{
+			{Type: "insight"},
+		},
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/feed/push", bytes.NewReader(secondBody))
+	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var agentPushCount int
+	err = db.QueryRow(
+		"SELECT COUNT(*) FROM activity_log WHERE org_id = $1 AND agent_id = $2 AND (metadata->>'source') = 'agent_push'",
+		orgID,
+		agentID,
+	).Scan(&agentPushCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, agentPushCount)
+
+	var totalCount int
+	err = db.QueryRow(
+		"SELECT COUNT(*) FROM activity_log WHERE org_id = $1 AND agent_id = $2",
+		orgID,
+		agentID,
+	).Scan(&totalCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, totalCount)
+}
+
+// TestAgentPushPriorityFlag verifies priority flag is stored in metadata.
+func TestAgentPushPriorityFlag(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedPushDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	orgID := insertTestOrganization(t, db, "priority-org")
+	apiKey := "priority-key"
+	_ = insertTestAgent(t, db, orgID, "Priority Agent", apiKey)
+
+	hub := ws.NewHub()
+	go hub.Run()
+	handler := NewFeedPushHandler(hub)
+
+	reqBody := FeedPushRequest{
+		OrgID: orgID,
+		Items: []FeedPushItem{
+			{
+				Type:     "insight",
+				Priority: true,
+			},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/feed/push", bytes.NewReader(body))
+	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var metadata json.RawMessage
+	err = db.QueryRow(
+		"SELECT metadata FROM activity_log WHERE org_id = $1 AND action = 'insight'",
+		orgID,
+	).Scan(&metadata)
+	require.NoError(t, err)
+
+	var decoded map[string]interface{}
+	require.NoError(t, json.Unmarshal(metadata, &decoded))
+	require.Equal(t, true, decoded["priority"])
+	require.Equal(t, "agent_push", decoded["source"])
 }
 
 func strPtr(s string) *string {
