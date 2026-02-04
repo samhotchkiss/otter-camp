@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 var startTime = time.Now()
@@ -22,6 +23,9 @@ type HealthResponse struct {
 
 func NewRouter() http.Handler {
 	r := chi.NewRouter()
+
+	hub := ws.NewHub()
+	go hub.Run()
 
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
@@ -38,6 +42,13 @@ func NewRouter() http.Handler {
 	r.Get("/", handleRoot)
 	r.Post("/api/waitlist", HandleWaitlist)
 	r.Get("/api/search", SearchHandler)
+	r.Handle("/ws", &ws.Handler{Hub: hub})
+
+	taskHandler := &TaskHandler{Hub: hub}
+	r.Get("/api/tasks", taskHandler.ListTasks)
+	r.Post("/api/tasks", taskHandler.CreateTask)
+	r.Patch("/api/tasks/{id}", taskHandler.UpdateTask)
+	r.Patch("/api/tasks/{id}/status", taskHandler.UpdateTaskStatus)
 
 	return r
 }
