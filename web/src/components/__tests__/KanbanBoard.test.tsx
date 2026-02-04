@@ -8,6 +8,9 @@ vi.mock("../../contexts/KeyboardShortcutsContext", () => ({
   useKeyboardShortcutsContext: vi.fn(() => ({
     registerShortcut: vi.fn(),
     unregisterShortcut: vi.fn(),
+    selectedTaskIndex: 0,
+    setTaskCount: vi.fn(),
+    openTaskDetail: vi.fn(),
   })),
 }));
 

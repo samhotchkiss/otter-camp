@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { createBrowserRouter, Outlet } from "react-router-dom";
 import DashboardLayout from "./layouts/DashboardLayout";
 import LoadingSpinner from "./components/LoadingSpinner";
+import { KeyboardShortcutsProvider } from "./contexts/KeyboardShortcutsContext";
 
 // Lazy load all page components for code splitting
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -25,11 +26,13 @@ function SuspenseRoute({ children }: { children: React.ReactNode }) {
 
 function DashboardRoot() {
   return (
-    <DashboardLayout>
-      <Suspense fallback={<LoadingSpinner message="Loading page..." size="lg" />}>
-        <Outlet />
-      </Suspense>
-    </DashboardLayout>
+    <KeyboardShortcutsProvider>
+      <DashboardLayout>
+        <Suspense fallback={<LoadingSpinner message="Loading page..." size="lg" />}>
+          <Outlet />
+        </Suspense>
+      </DashboardLayout>
+    </KeyboardShortcutsProvider>
   );
 }
 
