@@ -25,7 +25,7 @@ export default function OtterFactsFooter() {
   }, []);
 
   return (
-    <footer className="border-t border-slate-200 bg-white/90 px-6 py-10 text-slate-700 shadow-inner backdrop-blur dark:border-slate-800 dark:bg-slate-950/80 dark:text-slate-200">
+    <footer className="border-t border-otter-border bg-white/90 px-6 py-10 text-otter-text shadow-inner backdrop-blur dark:border-otter-dark-border dark:bg-slate-950/80 dark:text-otter-dark-text">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
         <div className="flex flex-wrap items-center gap-3 text-sm font-semibold uppercase tracking-[0.3em] text-emerald-600 dark:text-emerald-300">
           <span className="text-2xl" aria-hidden="true">
@@ -33,7 +33,7 @@ export default function OtterFactsFooter() {
           </span>
           Otter facts
         </div>
-        <p className="text-lg font-medium text-slate-800 dark:text-slate-100">
+        <p className="text-lg font-medium text-otter-text dark:text-otter-dark-text">
           {fact}
         </p>
         <div className="flex flex-wrap items-center gap-4">
@@ -44,7 +44,7 @@ export default function OtterFactsFooter() {
           >
             New fact
           </button>
-          <span className="text-sm text-slate-500 dark:text-slate-400">
+          <span className="text-sm text-otter-muted dark:text-otter-dark-muted">
             Tap for another splash of otter trivia.
           </span>
         </div>

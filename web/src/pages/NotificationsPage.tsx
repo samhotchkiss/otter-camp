@@ -123,7 +123,7 @@ function NotificationCard({
     <div
       className={`group relative overflow-hidden rounded-xl border transition hover:shadow-md ${
         notification.read
-          ? "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
+          ? "border-otter-border bg-white dark:border-otter-dark-border dark:bg-otter-dark-bg"
           : "border-sky-200 bg-sky-50/50 dark:border-sky-800/50 dark:bg-sky-900/10"
       }`}
     >
@@ -137,7 +137,7 @@ function NotificationCard({
           <div
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg ${
               notification.read
-                ? "bg-slate-100 dark:bg-slate-800"
+                ? "bg-otter-surface-alt dark:bg-otter-dark-surface"
                 : "bg-sky-100 dark:bg-sky-900/50"
             }`}
           >
@@ -150,8 +150,8 @@ function NotificationCard({
               <h3
                 className={`font-medium ${
                   notification.read
-                    ? "text-slate-700 dark:text-slate-200"
-                    : "text-slate-900 dark:text-white"
+                    ? "text-otter-text dark:text-otter-dark-text"
+                    : "text-otter-text dark:text-white"
                 }`}
               >
                 {notification.title}
@@ -161,11 +161,11 @@ function NotificationCard({
               )}
             </div>
 
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
               {notification.message}
             </p>
 
-            <div className="mt-2 flex items-center gap-3 text-xs text-slate-400 dark:text-slate-500">
+            <div className="mt-2 flex items-center gap-3 text-xs text-otter-muted dark:text-otter-dark-muted">
               <span>{formatDateTime(notification.createdAt)}</span>
               <span>•</span>
               <span className="capitalize">
@@ -188,7 +188,7 @@ function NotificationCard({
           <button
             type="button"
             onClick={onMarkAsUnread}
-            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+            className="rounded-lg p-1.5 text-otter-muted transition hover:bg-otter-surface-alt hover:text-otter-muted dark:hover:bg-otter-dark-surface-alt dark:hover:text-otter-dark-muted"
             title="Mark as unread"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -199,7 +199,7 @@ function NotificationCard({
           <button
             type="button"
             onClick={onMarkAsRead}
-            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+            className="rounded-lg p-1.5 text-otter-muted transition hover:bg-otter-surface-alt hover:text-otter-muted dark:hover:bg-otter-dark-surface-alt dark:hover:text-otter-dark-muted"
             title="Mark as read"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -210,7 +210,7 @@ function NotificationCard({
         <button
           type="button"
           onClick={onDelete}
-          className="rounded-lg p-1.5 text-slate-400 transition hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
+          className="rounded-lg p-1.5 text-otter-muted transition hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
           title="Delete notification"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -259,10 +259,10 @@ export default function NotificationsPage() {
       {/* Header */}
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+          <h1 className="text-2xl font-semibold text-otter-text dark:text-white">
             🔔 Notifications
           </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
             {unreadCount > 0
               ? `You have ${unreadCount} unread notification${unreadCount !== 1 ? "s" : ""}`
               : "You're all caught up!"}
@@ -273,7 +273,7 @@ export default function NotificationsPage() {
           <button
             type="button"
             onClick={markAllAsRead}
-            className="inline-flex items-center gap-2 rounded-xl bg-sky-100 px-4 py-2 text-sm font-medium text-sky-700 transition hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300 dark:hover:bg-sky-900/50"
+            className="inline-flex items-center gap-2 rounded-xl bg-sky-100 px-4 py-2 text-sm font-medium text-sky-700 transition hover:bg-sky-200 dark:bg-otter-dark-accent/15 dark:text-sky-300 dark:hover:bg-sky-900/50"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -292,8 +292,8 @@ export default function NotificationsPage() {
             onClick={() => setFilter(option.value)}
             className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
               filter === option.value
-                ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-                : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                ? "bg-otter-dark-surface text-white dark:bg-white dark:text-otter-text"
+                : "bg-otter-surface-alt text-otter-muted hover:bg-otter-surface-alt dark:bg-otter-dark-surface dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
             }`}
           >
             {option.label}
@@ -304,15 +304,15 @@ export default function NotificationsPage() {
       {/* Notifications List */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-sky-500" />
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-otter-border border-t-sky-500" />
         </div>
       ) : filteredNotifications.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-2xl border border-otter-border bg-white p-12 text-center dark:border-otter-dark-border dark:bg-otter-dark-bg">
           <span className="text-5xl">🦦</span>
-          <h3 className="mt-4 text-lg font-medium text-slate-900 dark:text-white">
+          <h3 className="mt-4 text-lg font-medium text-otter-text dark:text-white">
             No notifications
           </h3>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
             {filter !== "all"
               ? "Try selecting a different filter"
               : "When something happens, you'll see it here"}
@@ -322,7 +322,7 @@ export default function NotificationsPage() {
         <div className="space-y-8">
           {Array.from(groupedNotifications.entries()).map(([group, notifications]) => (
             <div key={group}>
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-otter-muted dark:text-otter-dark-muted">
                 {group}
               </h2>
               <div className="space-y-3">

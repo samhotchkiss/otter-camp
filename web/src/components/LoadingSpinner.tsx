@@ -18,11 +18,11 @@ function LoadingSpinnerComponent({ message = "Loading...", size = "md" }: Loadin
   return (
     <div className="flex min-h-[200px] flex-col items-center justify-center gap-3">
       <div
-        className={`animate-spin rounded-full border-slate-300 border-t-emerald-500 dark:border-slate-600 dark:border-t-emerald-400 ${sizeClasses[size]}`}
+        className={`animate-spin rounded-full border-otter-border border-t-emerald-500 dark:border-otter-dark-border dark:border-t-emerald-400 ${sizeClasses[size]}`}
         role="status"
         aria-label="Loading"
       />
-      <span className="text-sm text-slate-500 dark:text-slate-400">{message}</span>
+      <span className="text-sm text-otter-muted dark:text-otter-dark-muted">{message}</span>
     </div>
   );
 }

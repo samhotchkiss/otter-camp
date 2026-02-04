@@ -97,7 +97,7 @@ function Input({
 }: InputProps) {
   return (
     <label className="block">
-      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+      <span className="text-sm font-medium text-otter-text dark:text-otter-dark-muted">
         {label}
       </span>
       <input
@@ -107,7 +107,7 @@ function Input({
         placeholder={placeholder}
         disabled={disabled}
         readOnly={readOnly}
-        className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-emerald-500 dark:disabled:bg-slate-900"
+        className="mt-1 block w-full rounded-lg border border-otter-border bg-white px-4 py-2.5 text-otter-text shadow-sm transition placeholder:text-otter-muted focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-otter-surface-alt disabled:text-otter-muted dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-text dark:placeholder:text-otter-muted dark:focus:border-emerald-500 dark:disabled:bg-otter-dark-surface"
       />
     </label>
   );
@@ -132,7 +132,7 @@ function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
         className={`relative h-6 w-11 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-slate-900 ${
           checked
             ? "bg-emerald-500"
-            : "bg-slate-200 dark:bg-slate-700"
+            : "bg-otter-surface-alt dark:bg-otter-dark-surface-alt"
         }`}
       >
         <span
@@ -142,7 +142,7 @@ function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
         />
       </button>
       {label && (
-        <span className="text-sm text-slate-700 dark:text-slate-300">
+        <span className="text-sm text-otter-text dark:text-otter-dark-muted">
           {label}
         </span>
       )}
@@ -174,7 +174,7 @@ function Button({
     primary:
       "bg-emerald-500 text-white hover:bg-emerald-600 focus:ring-emerald-500",
     secondary:
-      "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus:ring-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700",
+      "border border-otter-border bg-white text-otter-text hover:bg-otter-surface-alt focus:ring-slate-500 dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-text dark:hover:bg-otter-dark-surface-alt",
     danger:
       "bg-red-500 text-white hover:bg-red-600 focus:ring-red-500",
   };
@@ -221,8 +221,8 @@ type SectionCardProps = {
 
 function SectionCard({ title, description, icon, children }: SectionCardProps) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
-      <div className="border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+    <section className="overflow-hidden rounded-2xl border border-otter-border bg-white/90 shadow-sm backdrop-blur dark:border-otter-dark-border dark:bg-otter-dark-bg/90">
+      <div className="border-b border-otter-border px-6 py-4 dark:border-otter-dark-border">
         <div className="flex items-center gap-3">
           {icon && (
             <span className="text-2xl" aria-hidden="true">
@@ -230,11 +230,11 @@ function SectionCard({ title, description, icon, children }: SectionCardProps) {
             </span>
           )}
           <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+            <h2 className="text-lg font-semibold text-otter-text dark:text-white">
               {title}
             </h2>
             {description && (
-              <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+              <p className="mt-0.5 text-sm text-otter-muted dark:text-otter-dark-muted">
                 {description}
               </p>
             )}
@@ -309,9 +309,9 @@ function ProfileSection({
                 {getInitials(profile.name || "OC")}
               </div>
             )}
-            <label className="absolute -bottom-1 -right-1 cursor-pointer rounded-full bg-white p-2 shadow-md transition hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700">
+            <label className="absolute -bottom-1 -right-1 cursor-pointer rounded-full bg-white p-2 shadow-md transition hover:bg-otter-surface-alt dark:bg-otter-dark-surface dark:hover:bg-otter-dark-surface-alt">
               <svg
-                className="h-4 w-4 text-slate-600 dark:text-slate-300"
+                className="h-4 w-4 text-otter-muted dark:text-otter-dark-muted"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -337,7 +337,7 @@ function ProfileSection({
               />
             </label>
           </div>
-          <div className="text-sm text-slate-500 dark:text-slate-400">
+          <div className="text-sm text-otter-muted dark:text-otter-dark-muted">
             <p>Upload a new avatar</p>
             <p className="mt-1 text-xs">JPG, PNG, GIF. Max 2MB.</p>
           </div>
@@ -409,14 +409,14 @@ function NotificationsSection({
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700">
-                <th className="pb-3 text-left text-sm font-medium text-slate-500 dark:text-slate-400">
+              <tr className="border-b border-otter-border dark:border-otter-dark-border">
+                <th className="pb-3 text-left text-sm font-medium text-otter-muted dark:text-otter-dark-muted">
                   Event Type
                 </th>
                 {channels.map((channel) => (
                   <th
                     key={channel}
-                    className="pb-3 text-center text-sm font-medium text-slate-500 dark:text-slate-400"
+                    className="pb-3 text-center text-sm font-medium text-otter-muted dark:text-otter-dark-muted"
                   >
                     {NOTIFICATION_CHANNEL_LABELS[channel]}
                   </th>
@@ -426,7 +426,7 @@ function NotificationsSection({
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {events.map((event) => (
                 <tr key={event}>
-                  <td className="py-4 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <td className="py-4 text-sm font-medium text-otter-text dark:text-otter-dark-muted">
                     {NOTIFICATION_EVENT_LABELS[event]}
                   </td>
                   {channels.map((channel) => (
@@ -492,10 +492,10 @@ function WorkspaceSection({
 
         {/* Members List */}
         <div>
-          <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">
+          <h3 className="text-sm font-medium text-otter-text dark:text-otter-dark-muted">
             Members ({workspace.members.length})
           </h3>
-          <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-700">
+          <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-otter-border dark:divide-slate-800 dark:border-otter-dark-border">
             {workspace.members.map((member) => (
               <div
                 key={member.id}
@@ -511,15 +511,15 @@ function WorkspaceSection({
                       className="h-10 w-10 rounded-full object-cover"
                     />
                   ) : (
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-200 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-otter-surface-alt text-sm font-semibold text-otter-muted dark:bg-otter-dark-surface-alt dark:text-otter-dark-muted">
                       {getInitials(member.name)}
                     </div>
                   )}
                   <div>
-                    <p className="font-medium text-slate-900 dark:text-white">
+                    <p className="font-medium text-otter-text dark:text-white">
                       {member.name}
                     </p>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                    <p className="text-sm text-otter-muted dark:text-otter-dark-muted">
                       {member.email}
                     </p>
                   </div>
@@ -530,7 +530,7 @@ function WorkspaceSection({
                       ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-200"
                       : member.role === "admin"
                         ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-200"
-                        : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                        : "bg-otter-surface-alt text-otter-muted dark:bg-otter-dark-surface dark:text-otter-dark-muted"
                   }`}
                 >
                   {ROLE_LABELS[member.role]}
@@ -613,7 +613,7 @@ function IntegrationsSection({
             }
             placeholder="https://your-openclaw-instance.com/webhook"
           />
-          <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+          <p className="mt-1.5 text-xs text-otter-muted dark:text-otter-dark-muted">
             Events will be sent to this URL when triggered
           </p>
         </div>
@@ -621,7 +621,7 @@ function IntegrationsSection({
         {/* API Keys */}
         <div>
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">
+            <h3 className="text-sm font-medium text-otter-text dark:text-otter-dark-muted">
               API Keys
             </h3>
             <Button
@@ -634,20 +634,20 @@ function IntegrationsSection({
           </div>
 
           {integrations.apiKeys.length > 0 ? (
-            <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-700">
+            <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-otter-border dark:divide-slate-800 dark:border-otter-dark-border">
               {integrations.apiKeys.map((key) => (
                 <div
                   key={key.id}
                   className="flex items-center justify-between px-4 py-3"
                 >
                   <div>
-                    <p className="font-medium text-slate-900 dark:text-white">
+                    <p className="font-medium text-otter-text dark:text-white">
                       {key.name}
                     </p>
-                    <p className="mt-0.5 font-mono text-sm text-slate-500 dark:text-slate-400">
+                    <p className="mt-0.5 font-mono text-sm text-otter-muted dark:text-otter-dark-muted">
                       {key.prefix}••••••••
                     </p>
-                    <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                    <p className="mt-1 text-xs text-otter-muted dark:text-otter-dark-muted">
                       Created {formatDate(key.createdAt)}
                     </p>
                   </div>
@@ -662,11 +662,11 @@ function IntegrationsSection({
               ))}
             </div>
           ) : (
-            <div className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-6 py-8 text-center dark:border-slate-700 dark:bg-slate-800/50">
-              <p className="text-sm text-slate-500 dark:text-slate-400">
+            <div className="mt-3 rounded-lg border border-dashed border-otter-border bg-otter-surface-alt px-6 py-8 text-center dark:border-otter-dark-border dark:bg-otter-dark-surface/50">
+              <p className="text-sm text-otter-muted dark:text-otter-dark-muted">
                 No API keys yet
               </p>
-              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+              <p className="mt-1 text-xs text-otter-muted dark:text-otter-dark-muted">
                 Generate a key to access the API programmatically
               </p>
             </div>
@@ -702,7 +702,7 @@ function AppearanceSection({ theme, onUpdate }: AppearanceSectionProps) {
       icon="🎨"
     >
       <div className="space-y-4">
-        <p className="text-sm text-slate-600 dark:text-slate-300">
+        <p className="text-sm text-otter-muted dark:text-otter-dark-muted">
           Choose your preferred theme
         </p>
 
@@ -715,7 +715,7 @@ function AppearanceSection({ theme, onUpdate }: AppearanceSectionProps) {
               className={`flex flex-col items-center gap-2 rounded-xl border-2 px-6 py-4 transition ${
                 theme === value
                   ? "border-emerald-500 bg-emerald-50 dark:border-emerald-500 dark:bg-emerald-900/20"
-                  : "border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600"
+                  : "border-otter-border bg-white hover:border-otter-border dark:border-otter-dark-border dark:bg-otter-dark-surface dark:hover:border-slate-600"
               }`}
             >
               <span className="text-2xl">{icon}</span>
@@ -723,7 +723,7 @@ function AppearanceSection({ theme, onUpdate }: AppearanceSectionProps) {
                 className={`text-sm font-medium ${
                   theme === value
                     ? "text-emerald-700 dark:text-emerald-200"
-                    : "text-slate-700 dark:text-slate-300"
+                    : "text-otter-text dark:text-otter-dark-muted"
                 }`}
               >
                 {label}
@@ -935,10 +935,10 @@ export default function SettingsPage() {
     <div className="mx-auto max-w-3xl">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">
+        <h1 className="text-3xl font-semibold tracking-tight text-otter-text dark:text-white">
           ⚙️ Settings
         </h1>
-        <p className="mt-2 text-slate-600 dark:text-slate-300">
+        <p className="mt-2 text-otter-muted dark:text-otter-dark-muted">
           Manage your account, preferences, and integrations
         </p>
       </div>

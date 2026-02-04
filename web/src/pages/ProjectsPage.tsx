@@ -56,7 +56,7 @@ const SAMPLE_PROJECTS: Project[] = [
 
 const colorClasses: Record<string, { bg: string; text: string; progress: string }> = {
   sky: {
-    bg: "bg-sky-100 dark:bg-sky-900/30",
+    bg: "bg-sky-100 dark:bg-otter-dark-accent/15",
     text: "text-sky-700 dark:text-sky-300",
     progress: "bg-sky-500",
   },
@@ -84,7 +84,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
   return (
     <div
       onClick={onClick}
-      className="group cursor-pointer rounded-2xl border border-slate-200 bg-white/80 p-5 shadow-sm backdrop-blur transition hover:border-slate-300 hover:shadow-md dark:border-slate-800 dark:bg-slate-900/80 dark:hover:border-slate-700">
+      className="group cursor-pointer rounded-2xl border border-otter-border bg-white/80 p-5 shadow-sm backdrop-blur transition hover:border-otter-border hover:shadow-md dark:border-otter-dark-border dark:bg-otter-dark-bg/80 dark:hover:border-otter-dark-border">
       <div className="flex items-start justify-between">
         <div className={`flex h-12 w-12 items-center justify-center rounded-xl text-2xl ${colors.bg}`}>
           {project.emoji}
@@ -92,7 +92,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
         <button
           type="button"
           onClick={(e) => e.stopPropagation()}
-          className="rounded-lg p-2 text-slate-400 opacity-0 transition hover:bg-slate-100 hover:text-slate-600 group-hover:opacity-100 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+          className="rounded-lg p-2 text-otter-muted opacity-0 transition hover:bg-otter-surface-alt hover:text-otter-muted group-hover:opacity-100 dark:hover:bg-otter-dark-surface-alt dark:hover:text-otter-dark-muted"
           aria-label="Project options"
         >
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -101,21 +101,21 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
         </button>
       </div>
 
-      <h3 className="mt-4 text-lg font-semibold text-slate-900 dark:text-white">
+      <h3 className="mt-4 text-lg font-semibold text-otter-text dark:text-white">
         {project.name}
       </h3>
-      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+      <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
         {project.description}
       </p>
 
       <div className="mt-4">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-600 dark:text-slate-400">Progress</span>
+          <span className="text-otter-muted dark:text-otter-dark-muted">Progress</span>
           <span className={`font-medium ${colors.text}`}>
             {project.completedCount}/{project.taskCount} tasks
           </span>
         </div>
-        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-otter-surface-alt dark:bg-otter-dark-surface-alt">
           <div
             className={`h-full rounded-full transition-all ${colors.progress}`}
             style={{ width: `${progress}%` }}
@@ -180,10 +180,10 @@ export default function ProjectsPage({
       <div className="mx-auto max-w-6xl">
         <div className="mb-6 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+            <h1 className="text-2xl font-semibold text-otter-text dark:text-white">
               Projects
             </h1>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
               Loading projects...
             </p>
           </div>
@@ -198,7 +198,7 @@ export default function ProjectsPage({
     return (
       <div className="mx-auto max-w-6xl">
         <div className="mb-6">
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+          <h1 className="text-2xl font-semibold text-otter-text dark:text-white">
             Projects
           </h1>
         </div>
@@ -215,10 +215,10 @@ export default function ProjectsPage({
     return (
       <div className="mx-auto max-w-6xl">
         <div className="mb-6">
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+          <h1 className="text-2xl font-semibold text-otter-text dark:text-white">
             Projects
           </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
             Manage your workspaces and track progress
           </p>
         </div>
@@ -231,10 +231,10 @@ export default function ProjectsPage({
     <div className="mx-auto max-w-6xl">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+          <h1 className="text-2xl font-semibold text-otter-text dark:text-white">
             Projects
           </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
             Manage your workspaces and track progress
           </p>
         </div>
@@ -263,7 +263,7 @@ export default function ProjectsPage({
         <button
           type="button"
           onClick={handleCreateProject}
-          className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-white/50 p-5 text-slate-500 transition hover:border-emerald-400 hover:bg-emerald-50/50 hover:text-emerald-600 dark:border-slate-700 dark:bg-slate-900/50 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-400"
+          className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-otter-border bg-white/50 p-5 text-otter-muted transition hover:border-emerald-400 hover:bg-emerald-50/50 hover:text-emerald-600 dark:border-otter-dark-border dark:bg-otter-dark-bg/50 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-400"
         >
           <svg className="h-10 w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />

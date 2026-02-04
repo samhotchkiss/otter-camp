@@ -14,7 +14,7 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-sky-100 via-white to-emerald-100 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
         <div className="flex flex-col items-center gap-4">
           <span className="text-5xl animate-bounce">🦦</span>
-          <div className="text-lg font-medium text-slate-600 dark:text-slate-300">
+          <div className="text-lg font-medium text-otter-muted dark:text-otter-dark-muted">
             Loading...
           </div>
         </div>

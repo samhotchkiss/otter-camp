@@ -23,7 +23,7 @@ export default function Skeleton({
   style,
   ...props
 }: SkeletonProps) {
-  const baseClasses = "bg-slate-200 dark:bg-slate-700";
+  const baseClasses = "bg-otter-surface-alt dark:bg-otter-dark-surface-alt";
   const shapeClasses = circle ? "rounded-full" : "rounded-lg";
   const animationClasses =
     animation === "pulse"
@@ -93,7 +93,7 @@ export function SkeletonAvatar({
 export function SkeletonCard({ className = "" }: { className?: string }) {
   return (
     <div
-      className={`rounded-2xl border border-slate-200 bg-white/80 p-5 dark:border-slate-800 dark:bg-slate-900/80 ${className}`}
+      className={`rounded-2xl border border-otter-border bg-white/80 p-5 dark:border-otter-dark-border dark:bg-otter-dark-bg/80 ${className}`}
     >
       {/* Header */}
       <div className="flex items-start justify-between">
@@ -125,7 +125,7 @@ export function SkeletonCard({ className = "" }: { className?: string }) {
 export function SkeletonAgentCard({ className = "" }: { className?: string }) {
   return (
     <div
-      className={`rounded-2xl border border-slate-800 bg-slate-900/80 p-5 ${className}`}
+      className={`rounded-2xl border border-otter-dark-border bg-otter-dark-surface/80 p-5 ${className}`}
     >
       {/* Header: Avatar + Status */}
       <div className="flex items-start justify-between">
@@ -140,14 +140,14 @@ export function SkeletonAgentCard({ className = "" }: { className?: string }) {
       </div>
 
       {/* Current Task box */}
-      <div className="mt-3 rounded-lg bg-slate-800/80 p-3">
+      <div className="mt-3 rounded-lg bg-otter-dark-surface/80 p-3">
         <Skeleton height="0.625rem" className="mb-2 w-20" />
         <Skeleton height="0.875rem" className="w-full" />
         <Skeleton height="0.875rem" className="mt-1 w-3/4" />
       </div>
 
       {/* Footer */}
-      <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3">
+      <div className="mt-4 flex items-center justify-between border-t border-otter-dark-border pt-3">
         <Skeleton height="0.75rem" className="w-16" />
         <Skeleton height="0.75rem" className="w-12" />
       </div>
@@ -161,7 +161,7 @@ export function SkeletonAgentCard({ className = "" }: { className?: string }) {
 export function SkeletonProjectCard({ className = "" }: { className?: string }) {
   return (
     <div
-      className={`rounded-2xl border border-slate-200 bg-white/80 p-5 dark:border-slate-800 dark:bg-slate-900/80 ${className}`}
+      className={`rounded-2xl border border-otter-border bg-white/80 p-5 dark:border-otter-dark-border dark:bg-otter-dark-bg/80 ${className}`}
     >
       {/* Header */}
       <div className="flex items-start justify-between">
@@ -216,7 +216,7 @@ export function SkeletonList({
         return (
           <div
             key={index}
-            className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+            className="flex items-center gap-4 rounded-xl border border-otter-border bg-white p-4 dark:border-otter-dark-border dark:bg-otter-dark-bg"
           >
             <SkeletonAvatar size="md" />
             <div className="flex-1 space-y-2">
@@ -243,7 +243,7 @@ export function SkeletonList({
  */
 export function SkeletonKanbanColumn() {
   return (
-    <div className="w-80 flex-shrink-0 rounded-xl bg-slate-100 p-3 dark:bg-slate-800/50">
+    <div className="w-80 flex-shrink-0 rounded-xl bg-otter-surface-alt p-3 dark:bg-otter-dark-surface/50">
       {/* Column header */}
       <div className="mb-3 flex items-center justify-between">
         <Skeleton height="1rem" className="w-24" />
@@ -255,7 +255,7 @@ export function SkeletonKanbanColumn() {
         {Array.from({ length: 3 }).map((_, i) => (
           <div
             key={i}
-            className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800"
+            className="rounded-lg border border-otter-border bg-white p-3 dark:border-otter-dark-border dark:bg-otter-dark-surface"
           >
             <Skeleton height="0.875rem" className="w-3/4" />
             <Skeleton height="0.75rem" className="mt-2 w-1/2" />

@@ -18,7 +18,7 @@ export type AgentsPageProps = {
 
 // Status filter styles - memoized outside component
 const ACTIVE_STYLES: Record<StatusFilter, string> = {
-  all: "bg-slate-700 text-slate-100",
+  all: "bg-slate-700 text-otter-dark-text",
   online: "bg-emerald-500/20 text-emerald-300 border-emerald-500/50",
   busy: "bg-amber-500/20 text-amber-300 border-amber-500/50",
   offline: "bg-slate-700 text-slate-300",
@@ -52,7 +52,7 @@ const StatusFilterButton = memo(function StatusFilterButton({
     if (isActive) {
       return `${base} ${ACTIVE_STYLES[status]}`;
     }
-    return `${base} border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:text-slate-300`;
+    return `${base} border-otter-dark-border bg-otter-dark-surface/50 text-otter-muted hover:border-slate-600 hover:text-slate-300`;
   }, [isActive, status]);
 
   return (
@@ -266,7 +266,7 @@ function AgentsPageComponent({
   if (isLoading) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
-        <div className="flex items-center gap-3 text-slate-400">
+        <div className="flex items-center gap-3 text-otter-muted">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-emerald-500" />
           <span>Loading agents...</span>
         </div>
@@ -281,7 +281,7 @@ function AgentsPageComponent({
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="rounded-lg bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
+          className="rounded-lg bg-otter-dark-surface-alt px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
         >
           Try Again
         </button>
@@ -297,8 +297,8 @@ function AgentsPageComponent({
       <div className="mb-8">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-semibold text-slate-100">Agents</h1>
-            <p className="mt-1 text-slate-500">
+            <h1 className="text-3xl font-semibold text-otter-dark-text">Agents</h1>
+            <p className="mt-1 text-otter-muted">
               {counts.all} agents • {counts.online} online
             </p>
           </div>
@@ -355,8 +355,8 @@ function AgentsPageComponent({
 
       {/* Agent grid with virtual scrolling */}
       {filteredAgents.length === 0 ? (
-        <div className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-900/50">
-          <p className="text-slate-500">
+        <div className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border border-dashed border-otter-dark-border bg-otter-dark-surface/50">
+          <p className="text-otter-muted">
             {statusFilter === "all"
               ? "No agents found"
               : `No ${statusFilter} agents`}
@@ -420,7 +420,7 @@ function AgentsPageComponent({
               <button
                 type="button"
                 onClick={handleCloseDM}
-                className="rounded-full bg-slate-800 p-2 text-slate-400 transition hover:bg-slate-700 hover:text-slate-200"
+                className="rounded-full bg-otter-dark-surface-alt p-2 text-otter-muted transition hover:bg-slate-700 hover:text-slate-200"
                 aria-label="Close"
               >
                 <svg

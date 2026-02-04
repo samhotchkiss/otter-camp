@@ -5,13 +5,13 @@ export default function NotFoundPage() {
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-br from-sky-100 via-white to-emerald-100 px-6 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
       <div className="text-center">
         <div className="text-8xl">🦦</div>
-        <h1 className="mt-6 text-6xl font-bold text-slate-900 dark:text-white">
+        <h1 className="mt-6 text-6xl font-bold text-otter-text dark:text-white">
           404
         </h1>
-        <p className="mt-4 text-xl text-slate-600 dark:text-slate-300">
+        <p className="mt-4 text-xl text-otter-muted dark:text-otter-dark-muted">
           This otter couldn't find that page
         </p>
-        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+        <p className="mt-2 text-sm text-otter-muted dark:text-otter-dark-muted">
           The page you're looking for doesn't exist or has been moved.
         </p>
         <Link

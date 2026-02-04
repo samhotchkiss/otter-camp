@@ -61,7 +61,7 @@ function Button({
     primary:
       "bg-emerald-500 text-white hover:bg-emerald-600 focus:ring-emerald-500",
     secondary:
-      "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus:ring-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700",
+      "border border-otter-border bg-white text-otter-text hover:bg-otter-surface-alt focus:ring-slate-500 dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-text dark:hover:bg-otter-dark-surface-alt",
     danger: "bg-red-500 text-white hover:bg-red-600 focus:ring-red-500",
   };
 
@@ -108,13 +108,13 @@ function ProgressBar({ progress, label }: ProgressBarProps) {
     <div className="w-full">
       {label && (
         <div className="mb-1 flex justify-between text-sm">
-          <span className="text-slate-600 dark:text-slate-400">{label}</span>
-          <span className="text-slate-600 dark:text-slate-400">
+          <span className="text-otter-muted dark:text-otter-dark-muted">{label}</span>
+          <span className="text-otter-muted dark:text-otter-dark-muted">
             {Math.round(progress)}%
           </span>
         </div>
       )}
-      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+      <div className="h-2 w-full overflow-hidden rounded-full bg-otter-surface-alt dark:bg-otter-dark-surface-alt">
         <div
           className="h-full rounded-full bg-emerald-500 transition-all duration-300"
           style={{ width: `${progress}%` }}
@@ -147,8 +147,8 @@ function ImportPreview({
   return (
     <div className="space-y-4">
       {/* Summary */}
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
-        <h4 className="mb-3 font-medium text-slate-900 dark:text-white">
+      <div className="rounded-lg border border-otter-border bg-otter-surface-alt p-4 dark:border-otter-dark-border dark:bg-otter-dark-surface/50">
+        <h4 className="mb-3 font-medium text-otter-text dark:text-white">
           Import Preview
         </h4>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -156,7 +156,7 @@ function ImportPreview({
             <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
               {validation.task_count}
             </div>
-            <div className="text-sm text-slate-500 dark:text-slate-400">
+            <div className="text-sm text-otter-muted dark:text-otter-dark-muted">
               Tasks
             </div>
           </div>
@@ -164,7 +164,7 @@ function ImportPreview({
             <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
               {validation.project_count}
             </div>
-            <div className="text-sm text-slate-500 dark:text-slate-400">
+            <div className="text-sm text-otter-muted dark:text-otter-dark-muted">
               Projects
             </div>
           </div>
@@ -172,7 +172,7 @@ function ImportPreview({
             <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
               {validation.agent_count}
             </div>
-            <div className="text-sm text-slate-500 dark:text-slate-400">
+            <div className="text-sm text-otter-muted dark:text-otter-dark-muted">
               Agents
             </div>
           </div>
@@ -180,13 +180,13 @@ function ImportPreview({
             <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
               {validation.activity_count}
             </div>
-            <div className="text-sm text-slate-500 dark:text-slate-400">
+            <div className="text-sm text-otter-muted dark:text-otter-dark-muted">
               Activities
             </div>
           </div>
         </div>
         {validation.exported_at && (
-          <p className="mt-3 text-center text-xs text-slate-500 dark:text-slate-400">
+          <p className="mt-3 text-center text-xs text-otter-muted dark:text-otter-dark-muted">
             Exported on{" "}
             {new Date(validation.exported_at).toLocaleDateString("en-US", {
               dateStyle: "medium",
@@ -231,7 +231,7 @@ function ImportPreview({
       {validation.valid && (
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+            <label className="block text-sm font-medium text-otter-text dark:text-otter-dark-muted">
               Import Mode
             </label>
             <div className="mt-2 space-y-2">
@@ -242,13 +242,13 @@ function ImportPreview({
                   value="merge"
                   checked={mode === "merge"}
                   onChange={() => setMode("merge")}
-                  className="h-4 w-4 border-slate-300 text-emerald-500 focus:ring-emerald-500 dark:border-slate-600"
+                  className="h-4 w-4 border-otter-border text-emerald-500 focus:ring-emerald-500 dark:border-otter-dark-border"
                 />
                 <div>
-                  <span className="font-medium text-slate-900 dark:text-white">
+                  <span className="font-medium text-otter-text dark:text-white">
                     Merge
                   </span>
-                  <span className="ml-2 text-sm text-slate-500 dark:text-slate-400">
+                  <span className="ml-2 text-sm text-otter-muted dark:text-otter-dark-muted">
                     Add new items, skip existing
                   </span>
                 </div>
@@ -260,13 +260,13 @@ function ImportPreview({
                   value="replace"
                   checked={mode === "replace"}
                   onChange={() => setMode("replace")}
-                  className="h-4 w-4 border-slate-300 text-emerald-500 focus:ring-emerald-500 dark:border-slate-600"
+                  className="h-4 w-4 border-otter-border text-emerald-500 focus:ring-emerald-500 dark:border-otter-dark-border"
                 />
                 <div>
-                  <span className="font-medium text-slate-900 dark:text-white">
+                  <span className="font-medium text-otter-text dark:text-white">
                     Replace
                   </span>
-                  <span className="ml-2 text-sm text-slate-500 dark:text-slate-400">
+                  <span className="ml-2 text-sm text-otter-muted dark:text-otter-dark-muted">
                     Delete existing data and import fresh
                   </span>
                 </div>
@@ -279,13 +279,13 @@ function ImportPreview({
               type="checkbox"
               checked={dryRun}
               onChange={(e) => setDryRun(e.target.checked)}
-              className="h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-500 dark:border-slate-600"
+              className="h-4 w-4 rounded border-otter-border text-emerald-500 focus:ring-emerald-500 dark:border-otter-dark-border"
             />
             <div>
-              <span className="font-medium text-slate-900 dark:text-white">
+              <span className="font-medium text-otter-text dark:text-white">
                 Dry Run
               </span>
-              <span className="ml-2 text-sm text-slate-500 dark:text-slate-400">
+              <span className="ml-2 text-sm text-otter-muted dark:text-otter-dark-muted">
                 Preview changes without actually importing
               </span>
             </div>
@@ -360,41 +360,41 @@ function ImportResults({ result, onClose, onConfirmImport }: ImportResultsProps)
 
       {/* Results Summary */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="rounded-lg border border-slate-200 p-3 text-center dark:border-slate-700">
+        <div className="rounded-lg border border-otter-border p-3 text-center dark:border-otter-dark-border">
           <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400">
             {result.tasks_imported}
           </div>
-          <div className="text-xs text-slate-500 dark:text-slate-400">
+          <div className="text-xs text-otter-muted dark:text-otter-dark-muted">
             Tasks Imported
           </div>
           {result.tasks_skipped > 0 && (
-            <div className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+            <div className="mt-1 text-xs text-otter-muted dark:text-otter-dark-muted">
               ({result.tasks_skipped} skipped)
             </div>
           )}
         </div>
-        <div className="rounded-lg border border-slate-200 p-3 text-center dark:border-slate-700">
+        <div className="rounded-lg border border-otter-border p-3 text-center dark:border-otter-dark-border">
           <div className="text-xl font-bold text-blue-600 dark:text-blue-400">
             {result.projects_imported}
           </div>
-          <div className="text-xs text-slate-500 dark:text-slate-400">
+          <div className="text-xs text-otter-muted dark:text-otter-dark-muted">
             Projects Imported
           </div>
           {result.projects_skipped > 0 && (
-            <div className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+            <div className="mt-1 text-xs text-otter-muted dark:text-otter-dark-muted">
               ({result.projects_skipped} skipped)
             </div>
           )}
         </div>
-        <div className="rounded-lg border border-slate-200 p-3 text-center dark:border-slate-700">
+        <div className="rounded-lg border border-otter-border p-3 text-center dark:border-otter-dark-border">
           <div className="text-xl font-bold text-purple-600 dark:text-purple-400">
             {result.agents_imported}
           </div>
-          <div className="text-xs text-slate-500 dark:text-slate-400">
+          <div className="text-xs text-otter-muted dark:text-otter-dark-muted">
             Agents Imported
           </div>
           {result.agents_skipped > 0 && (
-            <div className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+            <div className="mt-1 text-xs text-otter-muted dark:text-otter-dark-muted">
               ({result.agents_skipped} skipped)
             </div>
           )}
@@ -605,17 +605,17 @@ export default function DataManagement({ orgId }: DataManagementProps) {
   }, []);
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
-      <div className="border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+    <section className="overflow-hidden rounded-2xl border border-otter-border bg-white/90 shadow-sm backdrop-blur dark:border-otter-dark-border dark:bg-otter-dark-bg/90">
+      <div className="border-b border-otter-border px-6 py-4 dark:border-otter-dark-border">
         <div className="flex items-center gap-3">
           <span className="text-2xl" aria-hidden="true">
             💾
           </span>
           <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+            <h2 className="text-lg font-semibold text-otter-text dark:text-white">
               Data Management
             </h2>
-            <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+            <p className="mt-0.5 text-sm text-otter-muted dark:text-otter-dark-muted">
               Export and import your workspace data
             </p>
           </div>
@@ -643,10 +643,10 @@ export default function DataManagement({ orgId }: DataManagementProps) {
           <div className="space-y-6">
             {/* Export Section */}
             <div className="space-y-3">
-              <h3 className="font-medium text-slate-900 dark:text-white">
+              <h3 className="font-medium text-otter-text dark:text-white">
                 Export Data
               </h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400">
+              <p className="text-sm text-otter-muted dark:text-otter-dark-muted">
                 Download all your workspace data as a JSON file. Includes tasks,
                 projects, agents, and recent activity.
               </p>
@@ -675,14 +675,14 @@ export default function DataManagement({ orgId }: DataManagementProps) {
               </Button>
             </div>
 
-            <hr className="border-slate-200 dark:border-slate-700" />
+            <hr className="border-otter-border dark:border-otter-dark-border" />
 
             {/* Import Section */}
             <div className="space-y-3">
-              <h3 className="font-medium text-slate-900 dark:text-white">
+              <h3 className="font-medium text-otter-text dark:text-white">
                 Import Data
               </h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400">
+              <p className="text-sm text-otter-muted dark:text-otter-dark-muted">
                 Restore data from a previous export. You can choose to merge
                 with existing data or replace it entirely.
               </p>

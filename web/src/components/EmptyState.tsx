@@ -24,7 +24,7 @@ export type EmptyStateProps = {
 function DefaultIcon() {
   return (
     <svg
-      className="h-12 w-12 text-slate-300 dark:text-slate-600"
+      className="h-12 w-12 text-slate-300 dark:text-otter-muted"
       fill="none"
       stroke="currentColor"
       viewBox="0 0 24 24"
@@ -62,11 +62,11 @@ export default function EmptyState({
         className={`flex flex-col items-center justify-center py-8 text-center ${className}`}
       >
         <div className="mb-3">{icon || <DefaultIcon />}</div>
-        <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+        <p className="text-sm font-medium text-otter-muted dark:text-otter-dark-muted">
           {title}
         </p>
         {description && (
-          <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+          <p className="mt-1 text-xs text-otter-muted dark:text-otter-dark-muted">
             {description}
           </p>
         )}
@@ -85,18 +85,18 @@ export default function EmptyState({
 
   return (
     <div
-      className={`flex min-h-[200px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/50 p-8 text-center dark:border-slate-700 dark:bg-slate-900/50 ${className}`}
+      className={`flex min-h-[200px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-otter-border bg-slate-50/50 p-8 text-center dark:border-otter-dark-border dark:bg-otter-dark-bg/50 ${className}`}
     >
-      <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800">
+      <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-2xl bg-otter-surface-alt dark:bg-otter-dark-surface">
         {icon || <DefaultIcon />}
       </div>
 
-      <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-300">
+      <h3 className="text-lg font-semibold text-otter-text dark:text-otter-dark-muted">
         {title}
       </h3>
 
       {description && (
-        <p className="mt-2 max-w-sm text-sm text-slate-500 dark:text-slate-400">
+        <p className="mt-2 max-w-sm text-sm text-otter-muted dark:text-otter-dark-muted">
           {description}
         </p>
       )}
@@ -152,7 +152,7 @@ export function NoProjectsEmpty({ onCreate }: { onCreate?: () => void }) {
       description="Create your first project to start organizing tasks."
       icon={
         <svg
-          className="h-12 w-12 text-slate-300 dark:text-slate-600"
+          className="h-12 w-12 text-slate-300 dark:text-otter-muted"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -177,7 +177,7 @@ export function NoTasksEmpty({ onCreate }: { onCreate?: () => void }) {
       description="Get started by creating your first task."
       icon={
         <svg
-          className="h-12 w-12 text-slate-300 dark:text-slate-600"
+          className="h-12 w-12 text-slate-300 dark:text-otter-muted"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -206,7 +206,7 @@ export function NoResultsEmpty({ query }: { query?: string }) {
       }
       icon={
         <svg
-          className="h-12 w-12 text-slate-300 dark:text-slate-600"
+          className="h-12 w-12 text-slate-300 dark:text-otter-muted"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"

@@ -86,7 +86,7 @@ const STATUS_OPTIONS: { value: TaskStatus; label: string; emoji: string }[] = [
 ];
 
 const PRIORITY_OPTIONS: { value: TaskPriority; label: string; color: string }[] = [
-  { value: "low", label: "Low", color: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300" },
+  { value: "low", label: "Low", color: "bg-otter-surface-alt text-otter-muted dark:bg-otter-dark-surface-alt dark:text-otter-dark-muted" },
   { value: "medium", label: "Medium", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
   { value: "high", label: "High", color: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300" },
 ];
@@ -174,7 +174,7 @@ function renderMarkdown(text: string): ReactNode {
         parts.push(
           <code
             key={`${key}-${partKey++}`}
-            className="rounded bg-slate-200 px-1.5 py-0.5 text-sm dark:bg-slate-700"
+            className="rounded bg-otter-surface-alt px-1.5 py-0.5 text-sm dark:bg-otter-dark-surface-alt"
           >
             {codeMatch[1]}
           </code>
@@ -244,10 +244,10 @@ function renderMarkdown(text: string): ReactNode {
       const level = headerMatch[1].length;
       const content = processInline(headerMatch[2], key);
       const className = level === 1
-        ? "text-xl font-bold text-slate-900 dark:text-white"
+        ? "text-xl font-bold text-otter-text dark:text-white"
         : level === 2
-        ? "text-lg font-semibold text-slate-900 dark:text-white"
-        : "text-base font-medium text-slate-900 dark:text-white";
+        ? "text-lg font-semibold text-otter-text dark:text-white"
+        : "text-base font-medium text-otter-text dark:text-white";
       elements.push(
         <p key={key} className={`${className} mt-3 first:mt-0`}>
           {content}
@@ -260,7 +260,7 @@ function renderMarkdown(text: string): ReactNode {
     if (line.match(/^[-*]\s+/)) {
       const content = processInline(line.replace(/^[-*]\s+/, ""), key);
       elements.push(
-        <li key={key} className="ml-4 text-slate-700 dark:text-slate-300">
+        <li key={key} className="ml-4 text-otter-text dark:text-otter-dark-muted">
           {content}
         </li>
       );
@@ -272,7 +272,7 @@ function renderMarkdown(text: string): ReactNode {
     if (orderedMatch) {
       const content = processInline(orderedMatch[2], key);
       elements.push(
-        <li key={key} className="ml-4 list-decimal text-slate-700 dark:text-slate-300">
+        <li key={key} className="ml-4 list-decimal text-otter-text dark:text-otter-dark-muted">
           {content}
         </li>
       );
@@ -287,7 +287,7 @@ function renderMarkdown(text: string): ReactNode {
 
     // Regular paragraph
     elements.push(
-      <p key={key} className="text-slate-700 dark:text-slate-300">
+      <p key={key} className="text-otter-text dark:text-otter-dark-muted">
         {processInline(line, key)}
       </p>
     );
@@ -305,7 +305,7 @@ export function StatusBadge({ status }: { status: TaskStatus }) {
   if (!option) return null;
 
   const colors = {
-    todo: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+    todo: "bg-otter-surface-alt text-otter-text dark:bg-otter-dark-surface dark:text-otter-dark-muted",
     "in-progress": "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300",
     done: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
   };
@@ -408,13 +408,13 @@ function ActivityItem({ activity }: { activity: TaskActivity }) {
     <div className="flex items-start gap-3 py-2">
       <span className="mt-0.5 text-base">{getActivityIcon()}</span>
       <div className="min-w-0 flex-1">
-        <p className="text-sm text-slate-700 dark:text-slate-300">
-          <span className="font-medium text-slate-900 dark:text-white">
+        <p className="text-sm text-otter-text dark:text-otter-dark-muted">
+          <span className="font-medium text-otter-text dark:text-white">
             {activity.actor}
           </span>{" "}
           {getActivityDescription()}
         </p>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
+        <p className="text-xs text-otter-muted dark:text-otter-dark-muted">
           {formatRelativeTime(activity.timestamp)}
         </p>
       </div>
@@ -432,7 +432,7 @@ function AttachmentCard({
   const isImage = attachment.mime_type.startsWith("image/");
 
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600">
+    <div className="group relative overflow-hidden rounded-xl border border-otter-border bg-white transition hover:border-otter-border dark:border-otter-dark-border dark:bg-otter-dark-surface dark:hover:border-slate-600">
       {isImage ? (
         <a
           href={attachment.url}
@@ -448,10 +448,10 @@ function AttachmentCard({
             className="h-32 w-full object-cover"
           />
           <div className="p-3">
-            <p className="truncate text-sm font-medium text-slate-900 dark:text-white">
+            <p className="truncate text-sm font-medium text-otter-text dark:text-white">
               {attachment.filename}
             </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+            <p className="text-xs text-otter-muted dark:text-otter-dark-muted">
               {formatFileSize(attachment.size_bytes)}
             </p>
           </div>
@@ -465,10 +465,10 @@ function AttachmentCard({
         >
           <span className="text-2xl">{getFileIcon(attachment.mime_type)}</span>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-slate-900 dark:text-white">
+            <p className="truncate text-sm font-medium text-otter-text dark:text-white">
               {attachment.filename}
             </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+            <p className="text-xs text-otter-muted dark:text-otter-dark-muted">
               {formatFileSize(attachment.size_bytes)} • {formatRelativeTime(attachment.uploadedAt)}
             </p>
           </div>
@@ -479,7 +479,7 @@ function AttachmentCard({
         <button
           type="button"
           onClick={() => onDelete(attachment.id)}
-          className="absolute right-2 top-2 rounded-lg bg-white/90 p-1.5 text-slate-500 opacity-0 shadow-sm transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 dark:bg-slate-900/90 dark:hover:bg-red-900/50 dark:hover:text-red-400"
+          className="absolute right-2 top-2 rounded-lg bg-white/90 p-1.5 text-otter-muted opacity-0 shadow-sm transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 dark:bg-otter-dark-bg/90 dark:hover:bg-red-900/50 dark:hover:text-red-400"
         >
           <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -682,7 +682,7 @@ export default function TaskDetail({
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-sm transition-opacity"
+        className="fixed inset-0 z-40 bg-otter-dark-bg/50 backdrop-blur-sm transition-opacity"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -693,13 +693,13 @@ export default function TaskDetail({
         role="dialog"
         aria-modal="true"
         aria-labelledby="task-detail-title"
-        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col bg-white shadow-2xl dark:bg-slate-900"
+        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col bg-white shadow-2xl dark:bg-otter-dark-bg"
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+        <div className="flex items-center justify-between border-b border-otter-border px-6 py-4 dark:border-otter-dark-border">
           <div className="flex items-center gap-3">
             <span className="text-xl" aria-hidden="true">🦦</span>
-            <h2 id="task-detail-title" className="text-lg font-semibold text-slate-900 dark:text-white">
+            <h2 id="task-detail-title" className="text-lg font-semibold text-otter-text dark:text-white">
               Task Details
             </h2>
           </div>
@@ -709,7 +709,7 @@ export default function TaskDetail({
                 type="button"
                 onClick={() => setIsEditing(true)}
                 aria-label="Edit task"
-                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-otter-muted transition hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
               >
                 <span aria-hidden="true">✏️</span> Edit
               </button>
@@ -718,7 +718,7 @@ export default function TaskDetail({
               ref={closeButtonRef}
               type="button"
               onClick={onClose}
-              className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+              className="rounded-lg p-2 text-otter-muted transition hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
               aria-label="Close task details"
             >
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -732,8 +732,8 @@ export default function TaskDetail({
         <div className="flex-1 overflow-y-auto">
           {isLoading ? (
             <div className="flex h-64 items-center justify-center">
-              <div className="flex items-center gap-3 text-slate-500">
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500" />
+              <div className="flex items-center gap-3 text-otter-muted">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-otter-border border-t-sky-500" />
                 <span>Loading task...</span>
               </div>
             </div>
@@ -759,11 +759,11 @@ export default function TaskDetail({
                     onChange={(e: ChangeEvent<HTMLInputElement>) =>
                       setEditedTask((prev) => ({ ...prev, title: e.target.value }))
                     }
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xl font-semibold text-slate-900 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                    className="w-full rounded-lg border border-otter-border bg-white px-3 py-2 text-xl font-semibold text-otter-text focus:border-otter-dark-accent focus:outline-none focus:ring-1 focus:ring-otter-dark-accent dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-white"
                     placeholder="Task title"
                   />
                 ) : (
-                  <h1 className="text-xl font-semibold text-slate-900 dark:text-white">
+                  <h1 className="text-xl font-semibold text-otter-text dark:text-white">
                     {task.title}
                   </h1>
                 )}
@@ -776,7 +776,7 @@ export default function TaskDetail({
                   <select
                     value={task.status}
                     onChange={(e) => updateTask("status", e.target.value as TaskStatus)}
-                    className="appearance-none rounded-full border border-slate-200 bg-white py-1 pl-3 pr-8 text-sm font-medium text-slate-700 transition hover:border-slate-300 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                    className="appearance-none rounded-full border border-otter-border bg-white py-1 pl-3 pr-8 text-sm font-medium text-otter-text transition hover:border-otter-border focus:border-otter-dark-accent focus:outline-none focus:ring-1 focus:ring-otter-dark-accent dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-text"
                   >
                     {STATUS_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -785,7 +785,7 @@ export default function TaskDetail({
                     ))}
                   </select>
                   <svg
-                    className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                    className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-otter-muted"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -801,7 +801,7 @@ export default function TaskDetail({
                     onChange={(e) =>
                       updateTask("priority", e.target.value as TaskPriority || undefined)
                     }
-                    className="appearance-none rounded-full border border-slate-200 bg-white py-1 pl-3 pr-8 text-sm font-medium text-slate-700 transition hover:border-slate-300 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                    className="appearance-none rounded-full border border-otter-border bg-white py-1 pl-3 pr-8 text-sm font-medium text-otter-text transition hover:border-otter-border focus:border-otter-dark-accent focus:outline-none focus:ring-1 focus:ring-otter-dark-accent dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-text"
                   >
                     <option value="">No priority</option>
                     {PRIORITY_OPTIONS.map((opt) => (
@@ -811,7 +811,7 @@ export default function TaskDetail({
                     ))}
                   </select>
                   <svg
-                    className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                    className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-otter-muted"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -824,14 +824,14 @@ export default function TaskDetail({
                 {task.assignee ? (
                   <div className="flex items-center gap-2">
                     <AssigneeAvatar assignee={task.assignee} />
-                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span className="text-sm font-medium text-otter-text dark:text-otter-dark-muted">
                       {task.assignee.name}
                     </span>
                   </div>
                 ) : (
                   <button
                     type="button"
-                    className="rounded-full border border-dashed border-slate-300 px-3 py-1 text-sm text-slate-500 transition hover:border-slate-400 hover:text-slate-600 dark:border-slate-600 dark:text-slate-400"
+                    className="rounded-full border border-dashed border-otter-border px-3 py-1 text-sm text-otter-muted transition hover:border-slate-400 hover:text-otter-muted dark:border-otter-dark-border dark:text-otter-dark-muted"
                   >
                     + Assign
                   </button>
@@ -841,7 +841,7 @@ export default function TaskDetail({
               {/* Due Date & Labels */}
               <div className="mb-6 flex flex-wrap items-center gap-4 text-sm">
                 {task.dueDate && (
-                  <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
+                  <div className="flex items-center gap-2 text-otter-muted dark:text-otter-dark-muted">
                     <span>📅</span>
                     <span>Due {formatDate(task.dueDate)}</span>
                   </div>
@@ -858,7 +858,7 @@ export default function TaskDetail({
 
               {/* Description */}
               <div className="mb-6">
-                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-otter-muted dark:text-otter-dark-muted">
                   Description
                 </h3>
                 {isEditing ? (
@@ -868,7 +868,7 @@ export default function TaskDetail({
                       setEditedTask((prev) => ({ ...prev, description: e.target.value }))
                     }
                     rows={6}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                    className="w-full rounded-lg border border-otter-border bg-white px-3 py-2 text-sm text-otter-text focus:border-otter-dark-accent focus:outline-none focus:ring-1 focus:ring-otter-dark-accent dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-muted"
                     placeholder="Add a description... (Markdown supported)"
                   />
                 ) : task.description ? (
@@ -876,7 +876,7 @@ export default function TaskDetail({
                     {renderMarkdown(task.description)}
                   </div>
                 ) : (
-                  <p className="text-sm italic text-slate-400 dark:text-slate-500">
+                  <p className="text-sm italic text-otter-muted dark:text-otter-dark-muted">
                     No description provided.
                   </p>
                 )}
@@ -889,7 +889,7 @@ export default function TaskDetail({
                     type="button"
                     onClick={handleSave}
                     disabled={isSaving}
-                    className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:opacity-50 dark:focus:ring-offset-slate-900"
+                    className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-500 focus:outline-none focus:ring-2 focus:ring-otter-dark-accent focus:ring-offset-2 disabled:opacity-50 dark:focus:ring-offset-slate-900"
                   >
                     {isSaving ? "Saving..." : "Save Changes"}
                   </button>
@@ -899,7 +899,7 @@ export default function TaskDetail({
                       setIsEditing(false);
                       setEditedTask({});
                     }}
-                    className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                    className="rounded-lg px-4 py-2 text-sm font-medium text-otter-muted transition hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
                   >
                     Cancel
                   </button>
@@ -907,8 +907,8 @@ export default function TaskDetail({
               )}
 
               {/* Tabs */}
-              <div className="border-t border-slate-200 pt-6 dark:border-slate-800">
-                <div className="mb-4 flex gap-1 border-b border-slate-200 dark:border-slate-800">
+              <div className="border-t border-otter-border pt-6 dark:border-otter-dark-border">
+                <div className="mb-4 flex gap-1 border-b border-otter-border dark:border-otter-dark-border">
                   {TABS.map((tab) => (
                     <button
                       key={tab.id}
@@ -916,14 +916,14 @@ export default function TaskDetail({
                       onClick={() => setActiveTab(tab.id)}
                       className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition ${
                         activeTab === tab.id
-                          ? "border-sky-500 text-sky-600 dark:text-sky-400"
-                          : "border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300"
+                          ? "border-otter-dark-accent text-sky-600 dark:text-sky-400"
+                          : "border-transparent text-otter-muted hover:text-otter-text dark:text-otter-dark-muted dark:hover:text-otter-dark-muted"
                       }`}
                     >
                       <span>{tab.icon}</span>
                       {tab.label}
                       {tab.id === "attachments" && task.attachments && (
-                        <span className="ml-1 rounded-full bg-slate-200 px-1.5 text-xs dark:bg-slate-700">
+                        <span className="ml-1 rounded-full bg-otter-surface-alt px-1.5 text-xs dark:bg-otter-dark-surface-alt">
                           {task.attachments.length}
                         </span>
                       )}
@@ -949,7 +949,7 @@ export default function TaskDetail({
                       ) : (
                         <div className="flex flex-col items-center justify-center py-12 text-center">
                           <span className="text-3xl">📜</span>
-                          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                          <p className="mt-2 text-sm text-otter-muted dark:text-otter-dark-muted">
                             No activity yet
                           </p>
                         </div>
@@ -971,12 +971,12 @@ export default function TaskDetail({
                       ) : (
                         <div className="flex flex-col items-center justify-center py-12 text-center">
                           <span className="text-3xl">📎</span>
-                          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                          <p className="mt-2 text-sm text-otter-muted dark:text-otter-dark-muted">
                             No attachments yet
                           </p>
                           <button
                             type="button"
-                            className="mt-3 rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+                            className="mt-3 rounded-lg border border-otter-border px-4 py-2 text-sm font-medium text-otter-muted transition hover:border-otter-border hover:bg-otter-surface-alt dark:border-otter-dark-border dark:text-otter-dark-muted dark:hover:border-slate-600 dark:hover:bg-otter-dark-surface-alt"
                           >
                             Upload files
                           </button>
@@ -992,9 +992,9 @@ export default function TaskDetail({
 
         {/* Footer with actions */}
         {task && !isEditing && (
-          <div className="border-t border-slate-200 px-6 py-4 dark:border-slate-800">
+          <div className="border-t border-otter-border px-6 py-4 dark:border-otter-dark-border">
             <div className="flex items-center justify-between">
-              <div className="text-xs text-slate-500 dark:text-slate-400">
+              <div className="text-xs text-otter-muted dark:text-otter-dark-muted">
                 Created {formatRelativeTime(task.createdAt)}
                 {task.updatedAt && task.updatedAt !== task.createdAt && (
                   <> • Updated {formatRelativeTime(task.updatedAt)}</>
@@ -1004,7 +1004,7 @@ export default function TaskDetail({
               <div className="flex items-center gap-2">
                 {showDeleteConfirm ? (
                   <>
-                    <span className="text-sm text-slate-600 dark:text-slate-400">
+                    <span className="text-sm text-otter-muted dark:text-otter-dark-muted">
                       Delete this task?
                     </span>
                     <button
@@ -1017,7 +1017,7 @@ export default function TaskDetail({
                     <button
                       type="button"
                       onClick={() => setShowDeleteConfirm(false)}
-                      className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                      className="rounded-lg px-3 py-1.5 text-sm font-medium text-otter-muted transition hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
                     >
                       Cancel
                     </button>

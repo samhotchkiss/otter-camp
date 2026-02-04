@@ -143,9 +143,9 @@ const ActivityItem = memo(function ActivityItem({ activity, style }: ActivityIte
   return (
     <div
       style={style}
-      className="flex items-start gap-3 rounded-xl px-3 py-3 transition hover:bg-slate-100 dark:hover:bg-slate-800/50"
+      className="flex items-start gap-3 rounded-xl px-3 py-3 transition hover:bg-otter-surface-alt dark:hover:bg-otter-dark-surface-alt/50"
     >
-      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-slate-200 text-lg dark:bg-slate-700">
+      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-otter-surface-alt text-lg dark:bg-otter-dark-surface-alt">
         {activity.actor.avatar ? (
           <img
             src={activity.actor.avatar}
@@ -155,7 +155,7 @@ const ActivityItem = memo(function ActivityItem({ activity, style }: ActivityIte
             className="h-full w-full rounded-full object-cover"
           />
         ) : (
-          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+          <span className="text-xs font-semibold text-otter-muted dark:text-otter-dark-muted">
             {initials}
           </span>
         )}
@@ -165,14 +165,14 @@ const ActivityItem = memo(function ActivityItem({ activity, style }: ActivityIte
           <span className="text-base" aria-hidden="true">
             {ACTIVITY_TYPE_ICONS[activity.type]}
           </span>
-          <span className="font-medium text-slate-900 dark:text-slate-100">
+          <span className="font-medium text-otter-text dark:text-otter-dark-text">
             {activity.actor.name}
           </span>
-          <span className="text-xs text-slate-500 dark:text-slate-400">
+          <span className="text-xs text-otter-muted dark:text-otter-dark-muted">
             {timestamp}
           </span>
         </div>
-        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+        <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
           {activity.description}
         </p>
       </div>
@@ -232,19 +232,19 @@ function ActivityPanelComponent({ className = "" }: ActivityPanelProps) {
 
   return (
     <div
-      className={`overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-lg backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 ${className}`}
+      className={`overflow-hidden rounded-2xl border border-otter-border bg-white/90 shadow-lg backdrop-blur dark:border-otter-dark-border dark:bg-otter-dark-bg/90 ${className}`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+      <div className="flex items-center justify-between border-b border-otter-border px-5 py-4 dark:border-otter-dark-border">
         <div className="flex items-center gap-3">
           <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100 text-lg dark:bg-emerald-900/50">
             🦦
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+            <h2 className="text-lg font-semibold text-otter-text dark:text-white">
               Activity Feed
             </h2>
-            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <div className="flex items-center gap-2 text-xs text-otter-muted dark:text-otter-dark-muted">
               <span
                 className={`inline-block h-2 w-2 rounded-full ${
                   connected ? "bg-emerald-500" : "bg-slate-400"
@@ -259,7 +259,7 @@ function ActivityPanelComponent({ className = "" }: ActivityPanelProps) {
         <select
           value={filterType}
           onChange={handleFilterChange}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-slate-600"
+          className="rounded-lg border border-otter-border bg-white px-3 py-2 text-sm font-medium text-otter-text shadow-sm transition hover:border-otter-border focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-text dark:hover:border-slate-600"
         >
           <option value="all">All Activity</option>
           {(Object.keys(ACTIVITY_TYPE_LABELS) as ActivityType[]).map((type) => (
@@ -278,10 +278,10 @@ function ActivityPanelComponent({ className = "" }: ActivityPanelProps) {
         {filteredActivities.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="text-4xl">🦦</div>
-            <p className="mt-3 text-sm font-medium text-slate-600 dark:text-slate-300">
+            <p className="mt-3 text-sm font-medium text-otter-muted dark:text-otter-dark-muted">
               No activity yet
             </p>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            <p className="mt-1 text-xs text-otter-muted dark:text-otter-dark-muted">
               Activity will appear here as it happens.
             </p>
           </div>

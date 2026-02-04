@@ -29,13 +29,13 @@ const FilterDropdown = ({
 
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+      <label className="text-xs font-medium uppercase tracking-wide text-otter-muted dark:text-otter-dark-muted">
         {label}
       </label>
       <select
         value={value ?? ''}
         onChange={handleChange}
-        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm transition focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+        className="rounded-lg border border-otter-border bg-white px-3 py-2 text-sm text-otter-text shadow-sm transition focus:border-otter-dark-accent focus:outline-none focus:ring-2 focus:ring-otter-dark-accent/20 dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-text"
       >
         <option value="">{placeholder}</option>
         {options.map((opt) => (
@@ -169,12 +169,12 @@ export default function ProjectFilters({
       <div className="flex flex-wrap items-end gap-3">
         {/* Search Input */}
         <div className="min-w-[200px] flex-1">
-          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-otter-muted dark:text-otter-dark-muted">
             Search
           </label>
           <div className="relative">
             <svg
-              className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+              className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-otter-muted"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -191,7 +191,7 @@ export default function ProjectFilters({
               value={filters.search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search tasks..."
-              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-700 shadow-sm transition placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:placeholder:text-slate-500"
+              className="w-full rounded-lg border border-otter-border bg-white py-2 pl-10 pr-3 text-sm text-otter-text shadow-sm transition placeholder:text-otter-muted focus:border-otter-dark-accent focus:outline-none focus:ring-2 focus:ring-otter-dark-accent/20 dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-text dark:placeholder:text-otter-muted"
             />
           </div>
         </div>
@@ -251,7 +251,7 @@ export default function ProjectFilters({
           <button
             type="button"
             onClick={clearAllFilters}
-            className="rounded-full px-3 py-1 text-sm font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+            className="rounded-full px-3 py-1 text-sm font-medium text-otter-muted transition hover:bg-otter-surface-alt hover:text-otter-text dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt dark:hover:text-otter-dark-text"
           >
             Clear all
           </button>

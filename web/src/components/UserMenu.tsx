@@ -44,7 +44,7 @@ export default function UserMenu() {
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 rounded-xl p-1.5 transition hover:bg-slate-100 dark:hover:bg-slate-800"
+        className="flex items-center gap-2 rounded-xl p-1.5 transition hover:bg-otter-surface-alt dark:hover:bg-otter-dark-surface-alt"
         aria-label="User menu"
         aria-expanded={isOpen}
         aria-haspopup="true"
@@ -52,11 +52,11 @@ export default function UserMenu() {
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-sky-400 to-emerald-400 text-sm font-semibold text-white">
           {initials}
         </div>
-        <span className="hidden text-sm font-medium text-slate-700 dark:text-slate-200 sm:block">
+        <span className="hidden text-sm font-medium text-otter-text dark:text-otter-dark-text sm:block">
           {user.name}
         </span>
         <svg
-          className={`hidden h-4 w-4 text-slate-400 transition-transform sm:block ${isOpen ? "rotate-180" : ""}`}
+          className={`hidden h-4 w-4 text-otter-muted transition-transform sm:block ${isOpen ? "rotate-180" : ""}`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -72,12 +72,12 @@ export default function UserMenu() {
 
       {/* Dropdown menu */}
       {isOpen && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-56 origin-top-right rounded-xl border border-slate-200 bg-white shadow-lg ring-1 ring-black/5 dark:border-slate-700 dark:bg-slate-800">
-          <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
-            <p className="text-sm font-medium text-slate-900 dark:text-white">
+        <div className="absolute right-0 top-full z-50 mt-2 w-56 origin-top-right rounded-xl border border-otter-border bg-white shadow-lg ring-1 ring-black/5 dark:border-otter-dark-border dark:bg-otter-dark-surface">
+          <div className="border-b border-otter-border px-4 py-3 dark:border-otter-dark-border">
+            <p className="text-sm font-medium text-otter-text dark:text-white">
               {user.name}
             </p>
-            <p className="truncate text-sm text-slate-500 dark:text-slate-400">
+            <p className="truncate text-sm text-otter-muted dark:text-otter-dark-muted">
               {user.email}
             </p>
           </div>
@@ -85,7 +85,7 @@ export default function UserMenu() {
           <div className="p-1">
             <a
               href="/settings"
-              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-700 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-otter-text transition hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
               onClick={() => setIsOpen(false)}
             >
               <svg
@@ -111,7 +111,7 @@ export default function UserMenu() {
             </a>
           </div>
 
-          <div className="border-t border-slate-200 p-1 dark:border-slate-700">
+          <div className="border-t border-otter-border p-1 dark:border-otter-dark-border">
             <button
               type="button"
               onClick={() => {

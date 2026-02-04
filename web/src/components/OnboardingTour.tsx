@@ -280,7 +280,7 @@ export default function OnboardingTour({
         {/* Spotlight border glow */}
         {spotlightPosition && (
           <div
-            className="pointer-events-none absolute rounded-xl ring-4 ring-sky-400/50 ring-offset-2 ring-offset-transparent transition-all duration-300"
+            className="pointer-events-none absolute rounded-xl ring-4 ring-otter-dark-accent/50 ring-offset-2 ring-offset-transparent transition-all duration-300"
             style={{
               top: spotlightPosition.top,
               left: spotlightPosition.left,
@@ -300,7 +300,7 @@ export default function OnboardingTour({
         aria-labelledby="onboarding-title"
         aria-describedby="onboarding-description"
       >
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
+        <div className="overflow-hidden rounded-2xl border border-otter-border bg-white shadow-2xl dark:border-otter-dark-border dark:bg-otter-dark-surface">
           {/* Header */}
           <div className="bg-gradient-to-r from-sky-500 to-emerald-500 px-6 py-4">
             <div className="flex items-center gap-3">
@@ -323,7 +323,7 @@ export default function OnboardingTour({
           <div className="px-6 py-4">
             <p
               id="onboarding-description"
-              className="text-sm leading-relaxed text-slate-600 dark:text-slate-300"
+              className="text-sm leading-relaxed text-otter-muted dark:text-otter-dark-muted"
             >
               {step.description}
             </p>
@@ -347,11 +347,11 @@ export default function OnboardingTour({
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-3 dark:border-slate-700 dark:bg-slate-900/50">
+          <div className="flex items-center justify-between border-t border-otter-border bg-otter-surface-alt px-6 py-3 dark:border-otter-dark-border dark:bg-otter-dark-bg/50">
             <button
               type="button"
               onClick={handleSkip}
-              className="text-sm font-medium text-slate-500 transition hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+              className="text-sm font-medium text-otter-muted transition hover:text-otter-text dark:text-otter-dark-muted dark:hover:text-otter-dark-text"
             >
               Skip tour
             </button>
@@ -361,7 +361,7 @@ export default function OnboardingTour({
                 <button
                   type="button"
                   onClick={handleBack}
-                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                  className="rounded-lg border border-otter-border bg-white px-4 py-2 text-sm font-medium text-otter-text transition hover:bg-otter-surface-alt dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-text dark:hover:bg-otter-dark-surface-alt"
                 >
                   Back
                 </button>

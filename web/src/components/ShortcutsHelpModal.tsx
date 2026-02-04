@@ -39,7 +39,7 @@ export default function ShortcutsHelpModal({ isOpen, onClose }: ShortcutsHelpMod
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 text-slate-100 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-otter-dark-bg/70 px-4 py-6 text-otter-dark-text backdrop-blur-sm"
       onClick={onClose}
       aria-hidden="true"
     >
@@ -49,24 +49,24 @@ export default function ShortcutsHelpModal({ isOpen, onClose }: ShortcutsHelpMod
         aria-modal="true"
         aria-labelledby="shortcuts-modal-title"
         aria-describedby="shortcuts-modal-description"
-        className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/95 shadow-2xl shadow-slate-950/40 outline-none"
+        className="w-full max-w-2xl overflow-hidden rounded-2xl border border-otter-dark-border bg-otter-dark-surface/95 shadow-2xl shadow-otter-dark-bg/40 outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+        <div className="flex items-center justify-between border-b border-otter-dark-border px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-800 text-lg">
+            <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-otter-dark-surface-alt text-lg">
               ⌨️
             </div>
             <div>
               <h2 id="shortcuts-modal-title" className="text-lg font-semibold text-white">Keyboard Shortcuts</h2>
-              <p id="shortcuts-modal-description" className="text-sm text-slate-400">Navigate faster with these shortcuts</p>
+              <p id="shortcuts-modal-description" className="text-sm text-otter-muted">Navigate faster with these shortcuts</p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white"
+            className="rounded-lg p-2 text-otter-muted transition hover:bg-otter-dark-surface-alt hover:text-white"
             aria-label="Close"
           >
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -84,17 +84,17 @@ export default function ShortcutsHelpModal({ isOpen, onClose }: ShortcutsHelpMod
 
               return (
                 <div key={category}>
-                  <h3 id={`shortcuts-category-${category.toLowerCase()}`} className="mb-3 text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
+                  <h3 id={`shortcuts-category-${category.toLowerCase()}`} className="mb-3 text-xs font-semibold uppercase tracking-[0.25em] text-otter-muted">
                     {category}
                   </h3>
                   <div className="space-y-2">
                     {shortcuts.map((shortcut, index) => (
                       <div
                         key={`${category}-${index}`}
-                        className="flex items-center justify-between rounded-lg px-3 py-2 transition hover:bg-slate-800/50"
+                        className="flex items-center justify-between rounded-lg px-3 py-2 transition hover:bg-otter-dark-surface/50"
                       >
                         <span className="text-sm text-slate-300">{shortcut.description}</span>
-                        <kbd className="ml-4 inline-flex min-w-[2.5rem] items-center justify-center rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300">
+                        <kbd className="ml-4 inline-flex min-w-[2.5rem] items-center justify-center rounded-md border border-otter-dark-border bg-otter-dark-surface-alt px-2 py-1 text-xs font-medium text-slate-300">
                           {formatShortcut(shortcut)}
                         </kbd>
                       </div>
@@ -107,9 +107,9 @@ export default function ShortcutsHelpModal({ isOpen, onClose }: ShortcutsHelpMod
         </div>
 
         {/* Footer */}
-        <div className="border-t border-slate-800 px-6 py-4">
-          <p className="text-center text-xs text-slate-500">
-            Press <kbd className="rounded bg-slate-800 px-1.5 py-0.5 text-xs">Esc</kbd> to close
+        <div className="border-t border-otter-dark-border px-6 py-4">
+          <p className="text-center text-xs text-otter-muted">
+            Press <kbd className="rounded bg-otter-dark-surface-alt px-1.5 py-0.5 text-xs">Esc</kbd> to close
           </p>
         </div>
       </div>

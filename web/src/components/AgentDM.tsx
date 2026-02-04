@@ -113,7 +113,7 @@ function StatusIndicator({ status }: { status: AgentStatus }) {
 
   return (
     <span
-      className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-slate-900 shadow-lg ${statusStyles[status]}`}
+      className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-otter-dark-border shadow-lg ${statusStyles[status]}`}
       title={status.charAt(0).toUpperCase() + status.slice(1)}
     />
   );
@@ -211,7 +211,7 @@ function MessageBubble({
     ? "bg-sky-600 text-white"
     : message.senderType === "agent"
     ? "bg-emerald-900/50 text-emerald-100 border border-emerald-700/50"
-    : "bg-slate-800 text-slate-200";
+    : "bg-otter-dark-surface-alt text-slate-200";
 
   return (
     <div
@@ -226,7 +226,7 @@ function MessageBubble({
         className={`flex max-w-[75%] flex-col ${isOwnMessage ? "items-end" : "items-start"}`}
       >
         <div className="mb-1 flex items-center gap-2">
-          <span className="text-xs font-medium text-slate-400">
+          <span className="text-xs font-medium text-otter-muted">
             {message.senderName}
           </span>
           {message.senderType === "agent" && (
@@ -240,7 +240,7 @@ function MessageBubble({
             {message.content}
           </p>
         </div>
-        <span className="mt-1 text-[10px] text-slate-500">
+        <span className="mt-1 text-[10px] text-otter-muted">
           {formatTimestamp(message.createdAt)}
         </span>
       </div>
@@ -263,7 +263,7 @@ function LoadMoreButton({
       type="button"
       onClick={onClick}
       disabled={isLoading}
-      className="mx-auto flex items-center gap-2 rounded-full bg-slate-800 px-4 py-1.5 text-xs text-slate-400 transition hover:bg-slate-700 hover:text-slate-300 disabled:opacity-50"
+      className="mx-auto flex items-center gap-2 rounded-full bg-otter-dark-surface-alt px-4 py-1.5 text-xs text-otter-muted transition hover:bg-slate-700 hover:text-slate-300 disabled:opacity-50"
     >
       {isLoading ? (
         <>
@@ -547,8 +547,8 @@ export default function AgentDM({
 
   if (isLoading) {
     return (
-      <div className="flex h-96 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900/95">
-        <div className="flex items-center gap-3 text-slate-400">
+      <div className="flex h-96 items-center justify-center rounded-2xl border border-otter-dark-border bg-otter-dark-surface/95">
+        <div className="flex items-center gap-3 text-otter-muted">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-emerald-500" />
           <span>Loading conversation...</span>
         </div>
@@ -557,15 +557,15 @@ export default function AgentDM({
   }
 
   return (
-    <div className="flex h-[500px] flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/95 shadow-xl">
+    <div className="flex h-[500px] flex-col overflow-hidden rounded-2xl border border-otter-dark-border bg-otter-dark-surface/95 shadow-xl">
       {/* Header with agent info */}
-      <div className="flex items-center gap-4 border-b border-slate-800 px-5 py-3">
+      <div className="flex items-center gap-4 border-b border-otter-dark-border px-5 py-3">
         <AgentAvatar agent={agent} size="md" />
         <div className="flex-1">
           <h3 className="font-semibold text-slate-200">{agent.name}</h3>
           <div className="flex items-center gap-2">
             {agent.role && (
-              <span className="text-xs text-slate-500">{agent.role}</span>
+              <span className="text-xs text-otter-muted">{agent.role}</span>
             )}
             <span
               className={`text-xs capitalize ${
@@ -573,14 +573,14 @@ export default function AgentDM({
                   ? "text-emerald-400"
                   : agent.status === "busy"
                   ? "text-amber-400"
-                  : "text-slate-500"
+                  : "text-otter-muted"
               }`}
             >
               {agent.status}
             </span>
           </div>
         </div>
-        <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-400">
+        <span className="rounded-full bg-otter-dark-surface-alt px-2 py-0.5 text-xs text-otter-muted">
           {pagination.totalCount ?? messages.length}{" "}
           {(pagination.totalCount ?? messages.length) === 1
             ? "message"
@@ -604,7 +604,7 @@ export default function AgentDM({
         )}
 
         {messages.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center text-slate-500">
+          <div className="flex h-full flex-col items-center justify-center text-otter-muted">
             <AgentAvatar agent={agent} size="lg" showStatus={false} />
             <p className="mt-3 text-sm">
               Start a conversation with {agent.name}
@@ -634,7 +634,7 @@ export default function AgentDM({
       {/* Input area */}
       <form
         onSubmit={handleSubmit}
-        className="flex items-end gap-3 border-t border-slate-800 px-5 py-4"
+        className="flex items-end gap-3 border-t border-otter-dark-border px-5 py-4"
       >
         <textarea
           ref={inputRef}
@@ -645,7 +645,7 @@ export default function AgentDM({
           placeholder={`Message ${agent.name}...`}
           rows={1}
           disabled={isSending}
-          className="flex-1 resize-none rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
+          className="flex-1 resize-none rounded-xl border border-otter-dark-border bg-otter-dark-surface-alt px-4 py-2.5 text-sm text-slate-200 placeholder:text-otter-muted focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
         />
         <button
           type="submit"
@@ -668,8 +668,8 @@ export default function AgentDM({
       </form>
 
       {/* Keyboard hint */}
-      <div className="border-t border-slate-800/50 bg-slate-950/50 px-5 py-1.5">
-        <p className="text-[10px] text-slate-600">
+      <div className="border-t border-otter-dark-border/50 bg-otter-dark-bg/50 px-5 py-1.5">
+        <p className="text-[10px] text-otter-muted">
           Press <span className="font-medium">Cmd/Ctrl + Enter</span> to send
         </p>
       </div>

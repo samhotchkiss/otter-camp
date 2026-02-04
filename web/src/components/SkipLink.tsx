@@ -47,7 +47,7 @@ export default function SkipLink({
         bg-sky-600 px-4 py-2 text-sm font-medium text-white
         shadow-lg transition-transform duration-200
         focus:translate-y-0 focus:outline-none focus:ring-2
-        focus:ring-sky-500 focus:ring-offset-2
+        focus:ring-otter-dark-accent focus:ring-offset-2
         dark:bg-sky-500 dark:focus:ring-offset-slate-900
       "
     >

@@ -483,19 +483,19 @@ export default function GlobalSearch({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/70 px-4 pt-[15vh] backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-otter-dark-bg/70 px-4 pt-[15vh] backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label="Global search"
       onClick={() => onOpenChange(false)}
     >
       <div
-        className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/95 shadow-2xl shadow-slate-950/40"
+        className="w-full max-w-2xl overflow-hidden rounded-2xl border border-otter-dark-border bg-otter-dark-surface/95 shadow-2xl shadow-otter-dark-bg/40"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Search Input */}
-        <div className="flex items-center gap-3 border-b border-slate-800 px-5 py-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-800 text-lg">
+        <div className="flex items-center gap-3 border-b border-otter-dark-border px-5 py-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-otter-dark-surface-alt text-lg">
             🔍
           </div>
           <div className="flex-1">
@@ -506,7 +506,7 @@ export default function GlobalSearch({
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Search tasks, projects, agents, messages…"
-              className="w-full bg-transparent text-lg font-medium text-slate-100 outline-none placeholder:text-slate-500"
+              className="w-full bg-transparent text-lg font-medium text-otter-dark-text outline-none placeholder:text-otter-muted"
               aria-label="Search"
               autoComplete="off"
               autoCorrect="off"
@@ -516,7 +516,7 @@ export default function GlobalSearch({
           {isLoading && (
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-slate-300" />
           )}
-          <kbd className="hidden rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-400 sm:block">
+          <kbd className="hidden rounded-lg border border-otter-dark-border bg-otter-dark-surface-alt px-2 py-1 text-xs text-otter-muted sm:block">
             ESC
           </kbd>
         </div>
@@ -527,13 +527,13 @@ export default function GlobalSearch({
           {showRecent && (
             <div className="px-5 py-4">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
+                <p className="text-xs font-semibold uppercase tracking-widest text-otter-muted">
                   Recent Searches
                 </p>
                 <button
                   type="button"
                   onClick={handleClearRecent}
-                  className="text-xs text-slate-500 hover:text-slate-300"
+                  className="text-xs text-otter-muted hover:text-slate-300"
                 >
                   Clear
                 </button>
@@ -544,9 +544,9 @@ export default function GlobalSearch({
                     key={recent.query}
                     type="button"
                     onClick={() => handleRecentClick(recent.query)}
-                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-slate-300 transition hover:bg-slate-800"
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-slate-300 transition hover:bg-otter-dark-surface-alt"
                   >
-                    <span className="text-slate-500">🕐</span>
+                    <span className="text-otter-muted">🕐</span>
                     <span className="truncate">{recent.query}</span>
                   </button>
                 ))}
@@ -556,7 +556,7 @@ export default function GlobalSearch({
 
           {/* Loading State */}
           {isLoading && query.trim() && (
-            <div className="px-5 py-8 text-center text-slate-500">
+            <div className="px-5 py-8 text-center text-otter-muted">
               Searching…
             </div>
           )}
@@ -564,8 +564,8 @@ export default function GlobalSearch({
           {/* Empty State */}
           {showEmpty && (
             <div className="px-5 py-8 text-center">
-              <p className="text-slate-400">No results found for "{query}"</p>
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="text-otter-muted">No results found for "{query}"</p>
+              <p className="mt-1 text-sm text-otter-muted">
                 Try a different search term
               </p>
             </div>
@@ -576,7 +576,7 @@ export default function GlobalSearch({
             <div className="py-2">
               {groupedResults.map((group) => (
                 <div key={group.type} className="px-5 py-2">
-                  <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-slate-500">
+                  <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-otter-muted">
                     <span>{group.icon}</span>
                     {group.label}
                   </p>
@@ -594,8 +594,8 @@ export default function GlobalSearch({
                           onMouseEnter={() => setActiveIndex(globalIndex)}
                           className={`flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition ${
                             isActive
-                              ? "bg-slate-800 text-white"
-                              : "text-slate-200 hover:bg-slate-800/50"
+                              ? "bg-otter-dark-surface-alt text-white"
+                              : "text-slate-200 hover:bg-otter-dark-surface/50"
                           }`}
                         >
                           <div className="min-w-0 flex-1">
@@ -609,7 +609,7 @@ export default function GlobalSearch({
                             />
                             {result.subtitleHighlight && (
                               <p
-                                className="mt-0.5 truncate text-xs text-slate-400"
+                                className="mt-0.5 truncate text-xs text-otter-muted"
                                 dangerouslySetInnerHTML={{
                                   __html: result.subtitleHighlight,
                                 }}
@@ -617,7 +617,7 @@ export default function GlobalSearch({
                             )}
                           </div>
                           {result.meta && (
-                            <span className="shrink-0 text-xs text-slate-500">
+                            <span className="shrink-0 text-xs text-otter-muted">
                               {result.meta}
                             </span>
                           )}
@@ -632,18 +632,18 @@ export default function GlobalSearch({
 
           {/* Keyboard Hints */}
           {(showResults || showRecent) && (
-            <div className="flex items-center justify-center gap-4 border-t border-slate-800 px-5 py-3 text-xs text-slate-500">
+            <div className="flex items-center justify-center gap-4 border-t border-otter-dark-border px-5 py-3 text-xs text-otter-muted">
               <span>
-                <kbd className="mr-1 rounded bg-slate-800 px-1.5 py-0.5">↑</kbd>
-                <kbd className="mr-1 rounded bg-slate-800 px-1.5 py-0.5">↓</kbd>
+                <kbd className="mr-1 rounded bg-otter-dark-surface-alt px-1.5 py-0.5">↑</kbd>
+                <kbd className="mr-1 rounded bg-otter-dark-surface-alt px-1.5 py-0.5">↓</kbd>
                 Navigate
               </span>
               <span>
-                <kbd className="mr-1 rounded bg-slate-800 px-1.5 py-0.5">↵</kbd>
+                <kbd className="mr-1 rounded bg-otter-dark-surface-alt px-1.5 py-0.5">↵</kbd>
                 Select
               </span>
               <span>
-                <kbd className="mr-1 rounded bg-slate-800 px-1.5 py-0.5">esc</kbd>
+                <kbd className="mr-1 rounded bg-otter-dark-surface-alt px-1.5 py-0.5">esc</kbd>
                 Close
               </span>
             </div>

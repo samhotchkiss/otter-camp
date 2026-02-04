@@ -125,23 +125,23 @@ export default function Dashboard() {
         {/* Page Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white sm:text-3xl">
+            <h1 className="text-2xl font-bold text-otter-text dark:text-white sm:text-3xl">
               Dashboard
             </h1>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
               Manage your camp, track tasks, and coordinate with agents.
             </p>
           </div>
 
           {/* View toggle */}
-          <div className="flex rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-700 dark:bg-slate-800">
+          <div className="flex rounded-xl border border-otter-border bg-white p-1 dark:border-otter-dark-border dark:bg-otter-dark-surface">
             <button
               type="button"
               onClick={() => setActiveView("kanban")}
               className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
                 activeView === "kanban"
                   ? "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                  : "text-otter-muted hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
               }`}
             >
               📋 Kanban
@@ -152,7 +152,7 @@ export default function Dashboard() {
               className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
                 activeView === "activity"
                   ? "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                  : "text-otter-muted hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
               }`}
             >
               📡 Activity
@@ -162,7 +162,7 @@ export default function Dashboard() {
 
         {/* Filters - includes create task button */}
         <div
-          className="rounded-2xl border border-slate-200 bg-white/80 p-4 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80 sm:p-6"
+          className="rounded-2xl border border-otter-border bg-white/80 p-4 backdrop-blur-sm dark:border-otter-dark-border dark:bg-otter-dark-bg/80 sm:p-6"
           data-tour="create-task"
         >
           <ProjectFilters assignees={ASSIGNEES} projects={PROJECTS} />
@@ -175,7 +175,7 @@ export default function Dashboard() {
             <ErrorBoundary errorMessage="Failed to load content">
               {activeView === "kanban" ? (
                 <div
-                  className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80"
+                  className="rounded-2xl border border-otter-border bg-white/80 backdrop-blur-sm dark:border-otter-dark-border dark:bg-otter-dark-bg/80"
                   data-tour="kanban-board"
                 >
                   <Suspense
@@ -210,7 +210,7 @@ export default function Dashboard() {
               <ErrorBoundary errorMessage="Failed to load activity">
                 <Suspense
                   fallback={
-                    <div className="flex min-h-[200px] items-center justify-center rounded-2xl border border-slate-200 bg-white/80 dark:border-slate-800 dark:bg-slate-900/80">
+                    <div className="flex min-h-[200px] items-center justify-center rounded-2xl border border-otter-border bg-white/80 dark:border-otter-dark-border dark:bg-otter-dark-bg/80">
                       <LoadingSpinner size="md" message="Loading..." />
                     </div>
                   }

@@ -145,7 +145,7 @@ export default function CommandPalette({
 
   return (
     <div
-      className="command-palette-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 text-slate-100 backdrop-blur-sm"
+      className="command-palette-overlay fixed inset-0 z-50 flex items-center justify-center bg-otter-dark-bg/70 px-4 py-6 text-otter-dark-text backdrop-blur-sm"
       onClick={() => onOpenChange(false)}
       aria-hidden="true"
     >
@@ -155,18 +155,18 @@ export default function CommandPalette({
         aria-modal="true"
         aria-label="Command palette"
         aria-describedby="command-palette-description"
-        className="command-palette-panel w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/95 shadow-2xl shadow-slate-950/40"
+        className="command-palette-panel w-full max-w-2xl overflow-hidden rounded-2xl border border-otter-dark-border bg-otter-dark-surface/95 shadow-2xl shadow-otter-dark-bg/40"
         onClick={(event) => event.stopPropagation()}
       >
         <span id="command-palette-description" className="sr-only">
           Search for commands, pages, and tasks. Use arrow keys to navigate, Enter to select.
         </span>
-        <div className="flex items-center gap-3 border-b border-slate-800 px-5 py-4">
-          <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-800 text-lg">
+        <div className="flex items-center gap-3 border-b border-otter-dark-border px-5 py-4">
+          <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-otter-dark-surface-alt text-lg">
             ⌘
           </div>
           <div className="flex-1">
-            <p className="text-sm uppercase tracking-[0.2em] text-slate-400">
+            <p className="text-sm uppercase tracking-[0.2em] text-otter-muted">
               Command Palette
             </p>
             <input
@@ -182,10 +182,10 @@ export default function CommandPalette({
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Search commands, pages, tasks…"
-              className="mt-1 w-full bg-transparent text-lg font-semibold text-slate-100 outline-none placeholder:text-slate-500"
+              className="mt-1 w-full bg-transparent text-lg font-semibold text-otter-dark-text outline-none placeholder:text-otter-muted"
             />
           </div>
-          <div className="hidden rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-400 sm:block">
+          <div className="hidden rounded-full border border-otter-dark-border px-3 py-1 text-xs text-otter-muted sm:block">
             Ctrl/Cmd + K
           </div>
         </div>
@@ -198,7 +198,7 @@ export default function CommandPalette({
         >
           {!query.trim() && recentCommands.length > 0 ? (
             <section className="mb-6" aria-labelledby="recent-commands-heading">
-              <p id="recent-commands-heading" className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
+              <p id="recent-commands-heading" className="text-xs font-semibold uppercase tracking-[0.25em] text-otter-muted">
                 Recent
               </p>
               <div className="mt-3 space-y-2" role="group">
@@ -210,17 +210,17 @@ export default function CommandPalette({
                     role="option"
                     aria-selected={activeIndex === commandIndexMap.get(command.id)}
                     onClick={() => handleSelect(command)}
-                    className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-slate-800/80 ${
+                    className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-otter-dark-surface/80 ${
                       activeIndex === commandIndexMap.get(command.id)
-                        ? "bg-slate-800 text-white"
+                        ? "bg-otter-dark-surface-alt text-white"
                         : "text-slate-200"
                     }`}
                   >
                     <div>
                       <p className="text-sm font-semibold">{command.label}</p>
-                      <p className="text-xs text-slate-500">{command.category}</p>
+                      <p className="text-xs text-otter-muted">{command.category}</p>
                     </div>
-                    <span className="text-xs text-slate-500" aria-hidden="true">Recent</span>
+                    <span className="text-xs text-otter-muted" aria-hidden="true">Recent</span>
                   </button>
                 ))}
               </div>
@@ -229,12 +229,12 @@ export default function CommandPalette({
 
           {query.trim() ? (
             <section aria-labelledby="search-results-heading">
-              <p id="search-results-heading" className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
+              <p id="search-results-heading" className="text-xs font-semibold uppercase tracking-[0.25em] text-otter-muted">
                 Results
               </p>
               <div className="mt-3 space-y-2" role="group">
                 {filteredCommands.length === 0 ? (
-                  <div role="status" className="rounded-xl border border-dashed border-slate-800 px-4 py-6 text-center text-sm text-slate-500">
+                  <div role="status" className="rounded-xl border border-dashed border-otter-dark-border px-4 py-6 text-center text-sm text-otter-muted">
                     No matches. Try a different keyword.
                   </div>
                 ) : (
@@ -246,19 +246,19 @@ export default function CommandPalette({
                       role="option"
                       aria-selected={activeIndex === commandIndexMap.get(command.id)}
                       onClick={() => handleSelect(command)}
-                      className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-slate-800/80 ${
+                      className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-otter-dark-surface/80 ${
                         activeIndex === commandIndexMap.get(command.id)
-                          ? "bg-slate-800 text-white"
+                          ? "bg-otter-dark-surface-alt text-white"
                           : "text-slate-200"
                       }`}
                     >
                       <div>
                         <p className="text-sm font-semibold">{command.label}</p>
-                        <p className="text-xs text-slate-500">
+                        <p className="text-xs text-otter-muted">
                           {command.category}
                         </p>
                       </div>
-                      <span className="text-xs text-slate-500" aria-hidden="true">Enter</span>
+                      <span className="text-xs text-otter-muted" aria-hidden="true">Enter</span>
                     </button>
                   ))
                 )}
@@ -276,7 +276,7 @@ export default function CommandPalette({
 
                 return (
                   <div key={category} role="group" aria-labelledby={categoryId}>
-                    <p id={categoryId} className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
+                    <p id={categoryId} className="text-xs font-semibold uppercase tracking-[0.25em] text-otter-muted">
                       {category}
                     </p>
                     <div className="mt-3 space-y-2">
@@ -292,9 +292,9 @@ export default function CommandPalette({
                             role="option"
                             aria-selected={isActive}
                             onClick={() => handleSelect(command)}
-                            className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-slate-800/80 ${
+                            className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-otter-dark-surface/80 ${
                               isActive
-                                ? "bg-slate-800 text-white"
+                                ? "bg-otter-dark-surface-alt text-white"
                                 : "text-slate-200"
                             }`}
                           >
@@ -302,11 +302,11 @@ export default function CommandPalette({
                               <p className="text-sm font-semibold">
                                 {command.label}
                               </p>
-                              <p className="text-xs text-slate-500">
+                              <p className="text-xs text-otter-muted">
                                 {command.category}
                               </p>
                             </div>
-                            <span className="text-xs text-slate-500" aria-hidden="true">Enter</span>
+                            <span className="text-xs text-otter-muted" aria-hidden="true">Enter</span>
                           </button>
                         );
                       })}

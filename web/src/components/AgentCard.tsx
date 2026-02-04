@@ -127,7 +127,7 @@ function AgentCardComponent({ agent, onClick }: AgentCardProps) {
     if (agent.status === "busy") {
       return `${baseClass} text-amber-400`;
     }
-    return `${baseClass} text-slate-500`;
+    return `${baseClass} text-otter-muted`;
   }, [agent.status]);
 
   return (
@@ -136,7 +136,7 @@ function AgentCardComponent({ agent, onClick }: AgentCardProps) {
       tabIndex={0}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
-      className="group cursor-pointer rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-lg transition-all duration-200 hover:border-emerald-500/50 hover:bg-slate-900 hover:shadow-emerald-500/10 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-slate-950"
+      className="group cursor-pointer rounded-2xl border border-otter-dark-border bg-otter-dark-surface/80 p-5 shadow-lg transition-all duration-200 hover:border-emerald-500/50 hover:bg-otter-dark-surface hover:shadow-emerald-500/10 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-slate-950"
     >
       {/* Header: Avatar + Status */}
       <div className="flex items-start justify-between">
@@ -160,18 +160,18 @@ function AgentCardComponent({ agent, onClick }: AgentCardProps) {
 
       {/* Name & Role */}
       <div className="mt-4">
-        <h3 className="font-semibold text-slate-100 transition group-hover:text-emerald-300">
+        <h3 className="font-semibold text-otter-dark-text transition group-hover:text-emerald-300">
           {agent.name}
         </h3>
         {agent.role && (
-          <p className="mt-0.5 text-sm text-slate-500">{agent.role}</p>
+          <p className="mt-0.5 text-sm text-otter-muted">{agent.role}</p>
         )}
       </div>
 
       {/* Current Task */}
       {agent.currentTask && agent.status !== "offline" && (
-        <div className="mt-3 rounded-lg bg-slate-800/80 px-3 py-2">
-          <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+        <div className="mt-3 rounded-lg bg-otter-dark-surface/80 px-3 py-2">
+          <p className="text-xs font-medium uppercase tracking-wider text-otter-muted">
             Current Task
           </p>
           <p className="mt-1 line-clamp-2 text-sm text-slate-300">
@@ -181,8 +181,8 @@ function AgentCardComponent({ agent, onClick }: AgentCardProps) {
       )}
 
       {/* Footer: Last Active */}
-      <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3">
-        <span className="text-xs text-slate-600">Last active</span>
+      <div className="mt-4 flex items-center justify-between border-t border-otter-dark-border pt-3">
+        <span className="text-xs text-otter-muted">Last active</span>
         <span className={lastActiveClassName}>{lastActiveText}</span>
       </div>
     </div>

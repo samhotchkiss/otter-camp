@@ -83,7 +83,7 @@ const INITIAL_TASKS: Task[] = [
 
 // Priority color mapping - memoized outside component
 const PRIORITY_COLORS = {
-  low: "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+  low: "bg-otter-surface-alt text-otter-muted dark:bg-otter-dark-surface-alt dark:text-otter-dark-muted",
   medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   high: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
 } as const;
@@ -137,11 +137,11 @@ const TaskCard = memo(function TaskCard({ task, isDragging, isSelected }: TaskCa
   const className = useMemo(() => `
     group cursor-grab rounded-lg border bg-white p-4 shadow-sm
     transition-all duration-200
-    hover:border-sky-300 hover:shadow-md
+    hover:border-otter-dark-accent/50 hover:shadow-md
     active:cursor-grabbing
-    dark:bg-slate-800
-    ${isBeingDragged ? "opacity-50 shadow-lg ring-2 ring-sky-400 border-slate-200 dark:border-slate-700" : ""}
-    ${isSelected && !isBeingDragged ? "border-sky-500 ring-2 ring-sky-500/30 dark:border-sky-400" : "border-slate-200 dark:border-slate-700"}
+    dark:bg-otter-dark-surface
+    ${isBeingDragged ? "opacity-50 shadow-lg ring-2 ring-otter-dark-accent border-otter-border dark:border-otter-dark-border" : ""}
+    ${isSelected && !isBeingDragged ? "border-otter-dark-accent ring-2 ring-otter-dark-accent/30 dark:border-otter-dark-accent" : "border-otter-border dark:border-otter-dark-border"}
   `.trim(), [isBeingDragged, isSelected]);
 
   return (
@@ -155,9 +155,9 @@ const TaskCard = memo(function TaskCard({ task, isDragging, isSelected }: TaskCa
       aria-grabbed={isBeingDragged}
       className={className}
     >
-      <h4 className="font-medium text-slate-900 dark:text-white">{task.title}</h4>
+      <h4 className="font-medium text-otter-text dark:text-white">{task.title}</h4>
       {task.description && (
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+        <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
           {task.description}
         </p>
       )}
@@ -176,10 +176,10 @@ const TaskCard = memo(function TaskCard({ task, isDragging, isSelected }: TaskCa
 // Overlay card shown while dragging - Memoized
 const DragOverlayCard = memo(function DragOverlayCard({ task }: { task: Task }) {
   return (
-    <div className="cursor-grabbing rounded-lg border border-sky-400 bg-white p-4 shadow-xl ring-2 ring-sky-400/50 dark:border-sky-500 dark:bg-slate-800">
-      <h4 className="font-medium text-slate-900 dark:text-white">{task.title}</h4>
+    <div className="cursor-grabbing rounded-lg border border-otter-dark-accent bg-white p-4 shadow-xl ring-2 ring-otter-dark-accent/50 dark:border-otter-dark-accent dark:bg-otter-dark-surface">
+      <h4 className="font-medium text-otter-text dark:text-white">{task.title}</h4>
       {task.description && (
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+        <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
           {task.description}
         </p>
       )}
@@ -206,18 +206,18 @@ const KanbanColumn = memo(function KanbanColumn({ column, tasks, isOver, selecte
   const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
 
   const containerClassName = useMemo(() => `
-    flex min-h-[400px] w-80 flex-col rounded-xl border bg-slate-50 p-4
+    flex min-h-[400px] w-80 flex-col rounded-xl border bg-otter-surface-alt p-4
     transition-colors duration-200
-    dark:border-slate-700 dark:bg-slate-900/50
-    ${isOver ? "border-sky-400 bg-sky-50 dark:bg-sky-900/20" : "border-slate-200"}
+    dark:border-otter-dark-border dark:bg-otter-dark-bg/50
+    ${isOver ? "border-otter-dark-accent bg-sky-50 dark:bg-otter-dark-accent/10" : "border-otter-border"}
   `.trim(), [isOver]);
 
   const emptyClassName = useMemo(() => `
     flex flex-1 items-center justify-center rounded-lg border-2 border-dashed
-    text-sm text-slate-400
+    text-sm text-otter-muted
     transition-colors duration-200
-    dark:border-slate-700 dark:text-slate-500
-    ${isOver ? "border-sky-400 bg-sky-100/50 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400" : "border-slate-300"}
+    dark:border-otter-dark-border dark:text-otter-dark-muted
+    ${isOver ? "border-otter-dark-accent bg-sky-100/50 text-sky-600 dark:bg-otter-dark-accent/15 dark:text-sky-400" : "border-otter-border"}
   `.trim(), [isOver]);
 
   return (
@@ -228,12 +228,12 @@ const KanbanColumn = memo(function KanbanColumn({ column, tasks, isOver, selecte
     >
       <div className="mb-4 flex items-center gap-2">
         <span className="text-xl" aria-hidden="true">{column.emoji}</span>
-        <h3 id={`column-${column.id}-heading`} className="font-semibold text-slate-800 dark:text-slate-100">
+        <h3 id={`column-${column.id}-heading`} className="font-semibold text-otter-text dark:text-otter-dark-text">
           {column.title}
         </h3>
         <span
           id={`column-${column.id}-count`}
-          className="ml-auto rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+          className="ml-auto rounded-full bg-otter-surface-alt px-2 py-0.5 text-xs font-medium text-otter-muted dark:bg-otter-dark-surface-alt dark:text-otter-dark-muted"
           aria-label={`${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}`}
         >
           {tasks.length}
@@ -425,10 +425,10 @@ function KanbanBoardComponent() {
   return (
     <div className="w-full overflow-x-auto p-4" role="region" aria-labelledby="kanban-heading">
       <div className="mb-6">
-        <h1 id="kanban-heading" className="text-2xl font-bold text-slate-900 dark:text-white">
+        <h1 id="kanban-heading" className="text-2xl font-bold text-otter-text dark:text-white">
           <span aria-hidden="true">🦦 </span>Camp Tasks
         </h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
+        <p className="text-sm text-otter-muted dark:text-otter-dark-muted">
           Drag and drop tasks between columns to update their status. Use keyboard to navigate.
         </p>
       </div>

@@ -7,7 +7,7 @@
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+  @apply bg-otter-bg text-otter-text dark:bg-otter-dark-bg dark:text-otter-dark-text;
 }
 
 @keyframes palette-fade {

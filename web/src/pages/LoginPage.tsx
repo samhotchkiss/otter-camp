@@ -38,16 +38,16 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
         {/* Logo */}
         <div className="mb-8 text-center">
           <span className="text-6xl">🦦</span>
-          <h1 className="mt-4 text-3xl font-bold text-slate-900 dark:text-white">
+          <h1 className="mt-4 text-3xl font-bold text-otter-text dark:text-white">
             Otter Camp
           </h1>
-          <p className="mt-2 text-slate-600 dark:text-slate-400">
+          <p className="mt-2 text-otter-muted dark:text-otter-dark-muted">
             Sign in to your account
           </p>
         </div>
 
         {/* Login Form */}
-        <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 shadow-xl backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80">
+        <div className="rounded-2xl border border-otter-border bg-white/80 p-8 shadow-xl backdrop-blur-sm dark:border-otter-dark-border dark:bg-otter-dark-bg/80">
           <form onSubmit={handleSubmit} className="space-y-6">
             {error && (
               <div className="rounded-xl bg-red-50 p-4 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
@@ -58,7 +58,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
             <div>
               <label
                 htmlFor="email"
-                className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+                className="block text-sm font-medium text-otter-text dark:text-otter-dark-muted"
               >
                 Email
               </label>
@@ -69,7 +69,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500 dark:focus:border-sky-400"
+                className="mt-2 block w-full rounded-xl border border-otter-border bg-white px-4 py-3 text-otter-text placeholder-slate-400 shadow-sm transition focus:border-otter-dark-accent focus:outline-none focus:ring-2 focus:ring-otter-dark-accent/20 dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-white dark:placeholder-slate-500 dark:focus:border-otter-dark-accent"
                 placeholder="you@example.com"
               />
             </div>
@@ -77,7 +77,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
             <div>
               <label
                 htmlFor="password"
-                className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+                className="block text-sm font-medium text-otter-text dark:text-otter-dark-muted"
               >
                 Password
               </label>
@@ -88,7 +88,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500 dark:focus:border-sky-400"
+                className="mt-2 block w-full rounded-xl border border-otter-border bg-white px-4 py-3 text-otter-text placeholder-slate-400 shadow-sm transition focus:border-otter-dark-accent focus:outline-none focus:ring-2 focus:ring-otter-dark-accent/20 dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-white dark:placeholder-slate-500 dark:focus:border-otter-dark-accent"
                 placeholder="••••••••"
               />
             </div>
@@ -96,7 +96,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-emerald-500 px-4 py-3 font-semibold text-white shadow-lg transition hover:from-sky-600 hover:to-emerald-600 focus:outline-none focus:ring-2 focus:ring-sky-500/50 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-emerald-500 px-4 py-3 font-semibold text-white shadow-lg transition hover:from-sky-600 hover:to-emerald-600 focus:outline-none focus:ring-2 focus:ring-otter-dark-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting ? (
                 <>
@@ -127,7 +127,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
             </button>
           </form>
 
-          <div className="mt-6 text-center text-sm text-slate-500 dark:text-slate-400">
+          <div className="mt-6 text-center text-sm text-otter-muted dark:text-otter-dark-muted">
             Don't have an account?{" "}
             <a
               href="#"
@@ -139,7 +139,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
         </div>
 
         {/* Footer */}
-        <p className="mt-8 text-center text-xs text-slate-500 dark:text-slate-400">
+        <p className="mt-8 text-center text-xs text-otter-muted dark:text-otter-dark-muted">
           Cozy, collaborative, and ready for the next adventure.
         </p>
       </div>

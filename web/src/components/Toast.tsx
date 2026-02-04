@@ -31,7 +31,7 @@ const COLORS: Record<
     progress: "bg-amber-500",
   },
   info: {
-    bg: "bg-sky-50 dark:bg-sky-900/20",
+    bg: "bg-sky-50 dark:bg-otter-dark-accent/10",
     border: "border-sky-200 dark:border-sky-800",
     text: "text-sky-800 dark:text-sky-200",
     progress: "bg-sky-500",
@@ -100,7 +100,7 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
         <div className="min-w-0 flex-1">
           <p className={`font-medium ${colors.text}`}>{toast.title}</p>
           {toast.message && (
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+            <p className="mt-1 text-sm text-otter-muted dark:text-otter-dark-muted">
               {toast.message}
             </p>
           )}
@@ -119,7 +119,7 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
         <button
           type="button"
           onClick={handleDismiss}
-          className="flex-shrink-0 rounded-lg p-1 text-slate-400 transition hover:bg-slate-200/50 hover:text-slate-600 dark:hover:bg-slate-700/50 dark:hover:text-slate-300"
+          className="flex-shrink-0 rounded-lg p-1 text-otter-muted transition hover:bg-slate-200/50 hover:text-otter-muted dark:hover:bg-otter-dark-surface-alt/50 dark:hover:text-otter-dark-muted"
           aria-label="Dismiss notification"
         >
           <svg
@@ -140,7 +140,7 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
 
       {/* Progress bar */}
       {toast.duration && toast.duration > 0 && (
-        <div className="absolute bottom-0 left-0 h-1 w-full bg-slate-200/50 dark:bg-slate-700/50">
+        <div className="absolute bottom-0 left-0 h-1 w-full bg-slate-200/50 dark:bg-otter-dark-surface-alt/50">
           <div
             className={`h-full transition-none ${colors.progress}`}
             style={{ width: `${progress}%` }}

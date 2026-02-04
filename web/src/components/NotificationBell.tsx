@@ -54,13 +54,13 @@ function NotificationItem({
     <button
       type="button"
       onClick={onClick}
-      className={`w-full text-left px-4 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-800 ${
+      className={`w-full text-left px-4 py-3 transition hover:bg-otter-surface-alt dark:hover:bg-otter-dark-surface-alt ${
         !notification.read ? "bg-sky-50/50 dark:bg-sky-900/10" : ""
       }`}
     >
       <div className="flex items-start gap-3">
         {/* Icon */}
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm dark:bg-slate-700">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-otter-surface-alt text-sm dark:bg-otter-dark-surface-alt">
           {NOTIFICATION_ICONS[notification.type]}
         </span>
 
@@ -70,8 +70,8 @@ function NotificationItem({
             <p
               className={`text-sm font-medium truncate ${
                 notification.read
-                  ? "text-slate-600 dark:text-slate-300"
-                  : "text-slate-900 dark:text-white"
+                  ? "text-otter-muted dark:text-otter-dark-muted"
+                  : "text-otter-text dark:text-white"
               }`}
             >
               {notification.title}
@@ -80,10 +80,10 @@ function NotificationItem({
               <span className="h-2 w-2 shrink-0 rounded-full bg-sky-500" />
             )}
           </div>
-          <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400 truncate">
+          <p className="mt-0.5 text-sm text-otter-muted dark:text-otter-dark-muted truncate">
             {notification.message}
           </p>
-          <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+          <p className="mt-1 text-xs text-otter-muted dark:text-otter-dark-muted">
             {formatTimeAgo(notification.createdAt)}
           </p>
         </div>
@@ -96,7 +96,7 @@ function NotificationItem({
               e.stopPropagation();
               onMarkAsRead();
             }}
-            className="shrink-0 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-200 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+            className="shrink-0 rounded-lg p-1.5 text-otter-muted transition hover:bg-otter-surface-alt hover:text-otter-muted dark:hover:bg-otter-dark-surface-alt dark:hover:text-otter-dark-muted"
             title="Mark as read"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -192,7 +192,7 @@ export default function NotificationBell() {
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="relative rounded-xl p-2.5 text-slate-500 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+        className="relative rounded-xl p-2.5 text-otter-muted transition hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
         aria-expanded={isOpen}
         aria-haspopup="true"
@@ -216,10 +216,10 @@ export default function NotificationBell() {
 
       {/* Dropdown */}
       {isOpen && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900 sm:w-96">
+        <div className="absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-2xl border border-otter-border bg-white shadow-xl dark:border-otter-dark-border dark:bg-otter-dark-bg sm:w-96">
           {/* Header */}
-          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
-            <h3 className="font-semibold text-slate-900 dark:text-white">
+          <div className="flex items-center justify-between border-b border-otter-border px-4 py-3 dark:border-otter-dark-border">
+            <h3 className="font-semibold text-otter-text dark:text-white">
               Notifications
             </h3>
             {unreadCount > 0 && (
@@ -247,10 +247,10 @@ export default function NotificationBell() {
             ) : (
               <div className="px-4 py-8 text-center">
                 <span className="text-3xl">🦦</span>
-                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                <p className="mt-2 text-sm text-otter-muted dark:text-otter-dark-muted">
                   No notifications yet
                 </p>
-                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                <p className="mt-1 text-xs text-otter-muted dark:text-otter-dark-muted">
                   You're all caught up!
                 </p>
               </div>
@@ -259,11 +259,11 @@ export default function NotificationBell() {
 
           {/* Footer */}
           {notifications.length > 0 && (
-            <div className="border-t border-slate-200 dark:border-slate-700">
+            <div className="border-t border-otter-border dark:border-otter-dark-border">
               <Link
                 to="/notifications"
                 onClick={handleViewAll}
-                className="block px-4 py-3 text-center text-sm font-medium text-sky-600 transition hover:bg-slate-50 dark:text-sky-400 dark:hover:bg-slate-800"
+                className="block px-4 py-3 text-center text-sm font-medium text-sky-600 transition hover:bg-otter-surface-alt dark:text-sky-400 dark:hover:bg-otter-dark-surface-alt"
               >
                 View all notifications
               </Link>
