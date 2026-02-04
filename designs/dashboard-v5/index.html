@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      
+      /* Light theme */
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --red: #B85C38;
+      --blue: #4A6D7C;
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .search-trigger {
+      flex: 1;
+      max-width: 400px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .search-trigger:hover {
+      background: rgba(255,255,255,0.2);
+    }
+    
+    .search-trigger-text {
+      flex: 1;
+      opacity: 0.7;
+      font-size: 14px;
+    }
+    
+    .search-trigger kbd {
+      background: rgba(255,255,255,0.2);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: var(--font);
+    }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    
+    .theme-toggle {
+      background: none;
+      border: none;
+      color: inherit;
+      font-size: 20px;
+      cursor: pointer;
+      opacity: 0.8;
+    }
+    
+    .theme-toggle:hover { opacity: 1; }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+    }
+    
+    /* ========== MAIN CONTENT ========== */
+    .main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 24px;
+      padding: 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    
+    @media (max-width: 900px) {
+      .main {
+        grid-template-columns: 1fr;
+      }
+      .secondary { display: none; }
+    }
+    
+    /* ========== PRIMARY COLUMN ========== */
+    .primary {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+    }
+    
+    .section-count {
+      background: var(--red);
+      color: white;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 2px 10px;
+      border-radius: 10px;
+    }
+    
+    .section-count.muted {
+      background: var(--text-muted);
+    }
+    
+    /* Action Items */
+    .action-card {
+      background: var(--surface);
+      border: 2px solid var(--orange);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 12px;
+    }
+    
+    .action-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    
+    .action-icon { font-size: 24px; }
+    
+    .action-project {
+      font-weight: 700;
+      font-size: 18px;
+    }
+    
+    .action-time {
+      margin-left: auto;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .action-text {
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    
+    .action-text strong {
+      color: var(--text);
+    }
+    
+    .action-buttons {
+      display: flex;
+      gap: 12px;
+    }
+    
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      font-family: var(--font);
+      transition: all 0.15s;
+    }
+    
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+    
+    .btn-secondary {
+      background: var(--surface-alt);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    
+    /* Feed */
+    .feed-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    
+    .feed-header {
+      background: var(--surface-alt);
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .feed-title {
+      font-weight: 700;
+      font-size: 15px;
+    }
+    
+    .feed-item {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 14px;
+      transition: background 0.15s;
+      cursor: pointer;
+    }
+    
+    .feed-item:last-child { border-bottom: none; }
+    .feed-item:hover { background: var(--surface-alt); }
+    
+    .feed-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    
+    .feed-content { flex: 1; }
+    
+    .feed-text {
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    
+    .feed-text strong { font-weight: 600; }
+    
+    .feed-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    
+    .feed-type {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: var(--surface-alt);
+      color: var(--text-muted);
+    }
+    
+    .feed-type.insight { background: rgba(74, 109, 124, 0.15); color: var(--blue); }
+    .feed-type.progress { background: rgba(90, 122, 92, 0.15); color: var(--green); }
+    
+    /* ========== SECONDARY COLUMN ========== */
+    .secondary {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    
+    /* Add Button */
+    .add-button {
+      background: var(--surface);
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .add-button:hover {
+      border-color: var(--accent);
+      border-style: solid;
+    }
+    
+    .add-otter {
+      font-size: 40px;
+      margin-bottom: 8px;
+    }
+    
+    .add-text {
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    
+    .add-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      opacity: 0.7;
+    }
+    
+    /* Projects List */
+    .projects-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    
+    .projects-header {
+      background: var(--surface-alt);
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 700;
+      font-size: 14px;
+    }
+    
+    .project-item {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    
+    .project-item:last-child { border-bottom: none; }
+    .project-item:hover { background: var(--surface-alt); }
+    
+    .project-status {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    
+    .project-status.blocked { background: var(--red); }
+    .project-status.working { background: var(--green); }
+    .project-status.idle { background: var(--text-muted); }
+    
+    .project-info { flex: 1; min-width: 0; }
+    
+    .project-name {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    
+    .project-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .project-time {
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      background: var(--surface-alt);
+      border-top: 1px solid var(--border);
+      padding: 16px 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .otter-fact {
+      margin-bottom: 8px;
+    }
+    
+    .footer-links a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .footer-links a:hover { text-decoration: underline; }
+    
+    /* ========== COMMAND PALETTE ========== */
+    .command-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 15vh;
+      z-index: 1000;
+    }
+    
+    .command-overlay.open { display: flex; }
+    
+    .command-palette {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      width: 100%;
+      max-width: 560px;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.2);
+      overflow: hidden;
+    }
+    
+    .command-input-wrap {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .command-input-wrap .icon {
+      font-size: 20px;
+      color: var(--text-muted);
+    }
+    
+    .command-input {
+      flex: 1;
+      border: none;
+      background: none;
+      font-size: 18px;
+      font-family: var(--font);
+      color: var(--text);
+      outline: none;
+    }
+    
+    .command-input::placeholder {
+      color: var(--text-muted);
+    }
+    
+    .command-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .command-hint kbd {
+      background: var(--surface-alt);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    
+    .command-results {
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    
+    .command-section {
+      padding: 8px 0;
+    }
+    
+    .command-section-title {
+      padding: 8px 20px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    
+    .command-item {
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    
+    .command-item:hover,
+    .command-item.selected {
+      background: var(--surface-alt);
+    }
+    
+    .command-item-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--surface-alt);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+    }
+    
+    .command-item-text {
+      flex: 1;
+    }
+    
+    .command-item-title {
+      font-weight: 500;
+    }
+    
+    .command-item-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .command-item-shortcut {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .command-footer {
+      padding: 12px 20px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      gap: 16px;
+    }
+    
+    .command-footer span {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .command-footer kbd {
+      background: var(--surface);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      font-family: var(--font);
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <div class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </div>
+      
+      <div class="search-trigger" onclick="openCommand()">
+        <span>🔍</span>
+        <span class="search-trigger-text">Search or type a command...</span>
+        <kbd>/</kbd>
+      </div>
+      
+      <div class="topbar-right">
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode">🌙</button>
+        <div class="avatar"></div>
+      </div>
+    </header>
+    
+    <!-- Main Content -->
+    <div class="main">
+      <!-- Primary Column -->
+      <div class="primary">
+        <!-- Action Items -->
+        <section>
+          <div class="section-header">
+            <span class="section-title">⚡ Needs You</span>
+            <span class="section-count">2</span>
+          </div>
+          
+          <div class="action-card">
+            <div class="action-header">
+              <span class="action-icon">🚀</span>
+              <span class="action-project">ItsAlive</span>
+              <span class="action-time">5 min ago</span>
+            </div>
+            <p class="action-text">
+              <strong>Ivy</strong> is waiting on your approval to deploy v2.1.0 with the new onboarding flow.
+            </p>
+            <div class="action-buttons">
+              <button class="btn btn-primary">Approve Deploy</button>
+              <button class="btn btn-secondary">View Details</button>
+            </div>
+          </div>
+          
+          <div class="action-card">
+            <div class="action-header">
+              <span class="action-icon">✍️</span>
+              <span class="action-project">Content</span>
+              <span class="action-time">1 hour ago</span>
+            </div>
+            <p class="action-text">
+              <strong>Stone</strong> finished a blog post for you to review: "Why I Run 12 AI Agents"
+            </p>
+            <div class="action-buttons">
+              <button class="btn btn-primary">Review Post</button>
+              <button class="btn btn-secondary">Later</button>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Your Feed -->
+        <section>
+          <div class="section-header">
+            <span class="section-title">📡 Your Feed</span>
+            <span class="section-count muted">6</span>
+          </div>
+          
+          <div class="feed-card">
+            <div class="feed-header">
+              <span class="feed-title">📊 Project Progress</span>
+            </div>
+            <div class="feed-item">
+              <div class="feed-avatar" style="background: var(--green);">✓</div>
+              <div class="feed-content">
+                <p class="feed-text">
+                  <strong>4 projects active</strong> • Derek pushed 4 commits to Pearl, Jeff G finished mockups, Nova scheduled tweets
+                </p>
+                <p class="feed-meta">Last 6 hours • 14 updates total</p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="feed-card" style="margin-top: 12px;">
+            <div class="feed-item">
+              <div class="feed-avatar" style="background: var(--blue);">P</div>
+              <div class="feed-content">
+                <p class="feed-text">
+                  <strong>Important email</strong> from investor@example.com — "Follow up on our conversation"
+                </p>
+                <p class="feed-meta">
+                  <span class="feed-type insight">Penny • Email</span> • 30 min ago
+                </p>
+              </div>
+            </div>
+            <div class="feed-item">
+              <div class="feed-avatar" style="background: var(--orange);">B</div>
+              <div class="feed-content">
+                <p class="feed-text">
+                  <strong>Market Summary</strong> — S&P up 0.8%, your watchlist +1.2%. No alerts triggered.
+                </p>
+                <p class="feed-meta">
+                  <span class="feed-type progress">Beau H • Markets</span> • 2 hours ago
+                </p>
+              </div>
+            </div>
+            <div class="feed-item">
+              <div class="feed-avatar" style="background: #ec4899;">N</div>
+              <div class="feed-content">
+                <p class="feed-text">
+                  <strong>@samhotchkiss</strong> got 3 replies worth reading. One potential lead.
+                </p>
+                <p class="feed-meta">
+                  <span class="feed-type insight">Nova • Twitter</span> • 45 min ago
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+      
+      <!-- Secondary Column -->
+      <div class="secondary">
+        <!-- Add Button -->
+        <div class="add-button" onclick="openCommand()">
+          <div class="add-otter">🦦💭</div>
+          <div class="add-text">Drop a thought</div>
+          <div class="add-hint">Press / to open command bar</div>
+        </div>
+        
+        <!-- Projects List -->
+        <div class="projects-card">
+          <div class="projects-header">Projects</div>
+          
+          <div class="project-item">
+            <div class="project-status blocked"></div>
+            <div class="project-info">
+              <div class="project-name">ItsAlive</div>
+              <div class="project-desc">Waiting on deploy approval</div>
+            </div>
+            <div class="project-time">5m</div>
+          </div>
+          
+          <div class="project-item">
+            <div class="project-status working"></div>
+            <div class="project-info">
+              <div class="project-name">Pearl</div>
+              <div class="project-desc">Derek pushing commits</div>
+            </div>
+            <div class="project-time">2m</div>
+          </div>
+          
+          <div class="project-item">
+            <div class="project-status working"></div>
+            <div class="project-info">
+              <div class="project-name">Otter Camp</div>
+              <div class="project-desc">Design + architecture in progress</div>
+            </div>
+            <div class="project-time">now</div>
+          </div>
+          
+          <div class="project-item">
+            <div class="project-status idle"></div>
+            <div class="project-info">
+              <div class="project-name">Three Stones</div>
+              <div class="project-desc">Presentation shipped</div>
+            </div>
+            <div class="project-time">3h</div>
+          </div>
+          
+          <div class="project-item">
+            <div class="project-status idle"></div>
+            <div class="project-info">
+              <div class="project-name">Content</div>
+              <div class="project-desc">Tweets scheduled</div>
+            </div>
+            <div class="project-time">1h</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="footer">
+      <p class="otter-fact">🦦 Otters hold hands while sleeping so they don't drift apart.</p>
+      <p class="footer-links">
+        <a href="https://seaotterfoundationtrust.org" target="_blank">Help real otters →</a>
+      </p>
+    </footer>
+  </div>
+  
+  <!-- Command Palette -->
+  <div class="command-overlay" id="commandOverlay" onclick="closeCommand(event)">
+    <div class="command-palette" onclick="event.stopPropagation()">
+      <div class="command-input-wrap">
+        <span class="icon">🔍</span>
+        <input 
+          type="text" 
+          class="command-input" 
+          id="commandInput"
+          placeholder="Type a command or search..."
+          autocomplete="off"
+        >
+        <span class="command-hint"><kbd>esc</kbd> to close</span>
+      </div>
+      
+      <div class="command-results">
+        <div class="command-section">
+          <div class="command-section-title">Quick Actions</div>
+          <div class="command-item selected">
+            <div class="command-item-icon">💭</div>
+            <div class="command-item-text">
+              <div class="command-item-title">Send thought to Frank</div>
+              <div class="command-item-desc">Type anything, then ⌘S to send</div>
+            </div>
+          </div>
+          <div class="command-item">
+            <div class="command-item-icon">➕</div>
+            <div class="command-item-text">
+              <div class="command-item-title">Create new task</div>
+              <div class="command-item-desc">Add a task to any project</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="command-section">
+          <div class="command-section-title">Jump to Agent</div>
+          <div class="command-item">
+            <div class="command-item-icon">🔧</div>
+            <div class="command-item-text">
+              <div class="command-item-title">Derek</div>
+              <div class="command-item-desc">Engineering Lead</div>
+            </div>
+            <span class="command-item-shortcut">↵</span>
+          </div>
+          <div class="command-item">
+            <div class="command-item-icon">🎨</div>
+            <div class="command-item-text">
+              <div class="command-item-title">Jeff G</div>
+              <div class="command-item-desc">Head of Design</div>
+            </div>
+            <span class="command-item-shortcut">↵</span>
+          </div>
+          <div class="command-item">
+            <div class="command-item-icon">✏️</div>
+            <div class="command-item-text">
+              <div class="command-item-title">Stone</div>
+              <div class="command-item-desc">Head of Content</div>
+            </div>
+            <span class="command-item-shortcut">↵</span>
+          </div>
+        </div>
+        
+        <div class="command-section">
+          <div class="command-section-title">Jump to Project</div>
+          <div class="command-item">
+            <div class="command-item-icon">💎</div>
+            <div class="command-item-text">
+              <div class="command-item-title">Pearl</div>
+              <div class="command-item-desc">4 active tasks</div>
+            </div>
+            <span class="command-item-shortcut">↵</span>
+          </div>
+          <div class="command-item">
+            <div class="command-item-icon">🦦</div>
+            <div class="command-item-text">
+              <div class="command-item-title">Otter Camp</div>
+              <div class="command-item-desc">Design phase</div>
+            </div>
+            <span class="command-item-shortcut">↵</span>
+          </div>
+        </div>
+      </div>
+      
+      <div class="command-footer">
+        <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+        <span><kbd>↵</kbd> select</span>
+        <span><kbd>⌘S</kbd> send to Frank</span>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    // Theme toggle
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      document.querySelector('.theme-toggle').textContent = next === 'dark' ? '☀️' : '🌙';
+    }
+    
+    // Command palette
+    function openCommand() {
+      document.getElementById('commandOverlay').classList.add('open');
+      document.getElementById('commandInput').focus();
+    }
+    
+    function closeCommand(event) {
+      if (event.target === document.getElementById('commandOverlay')) {
+        document.getElementById('commandOverlay').classList.remove('open');
+      }
+    }
+    
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      // Open with /
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        openCommand();
+      }
+      
+      // Close with Escape
+      if (e.key === 'Escape') {
+        document.getElementById('commandOverlay').classList.remove('open');
+      }
+      
+      // Send with Cmd+S
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        const overlay = document.getElementById('commandOverlay');
+        const input = document.getElementById('commandInput');
+        if (overlay.classList.contains('open') && input.value.trim()) {
+          e.preventDefault();
+          alert(`Sending to Frank: "${input.value}"`);
+          input.value = '';
+          overlay.classList.remove('open');
+        }
+      }
+    });
+    
+    // Otter facts
+    const otterFacts = [
+      "Otters hold hands while sleeping so they don't drift apart.",
+      "Sea otters have the densest fur of any mammal — about 1 million hairs per square inch.",
+      "Otters have a favorite rock they keep in a pouch under their arm.",
+      "A group of otters is called a 'romp' on land and a 'raft' in water.",
+      "Otters can close their ears and nostrils while swimming underwater.",
+      "Sea otters eat about 25% of their body weight daily.",
+      "Baby otters are called pups and they can't swim when they're born.",
+      "Otters have been seen juggling rocks for fun."
+    ];
+    
+    document.querySelector('.otter-fact').textContent = 
+      '🦦 ' + otterFacts[Math.floor(Math.random() * otterFacts.length)];
+  </script>
+</body>
+</html>
