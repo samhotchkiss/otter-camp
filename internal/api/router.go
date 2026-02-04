@@ -47,6 +47,9 @@ func NewRouter() http.Handler {
 	
 	webhookHandler := &WebhookHandler{Hub: hub}
 	r.Post("/api/webhooks/openclaw", webhookHandler.OpenClawHandler)
+
+	feedPushHandler := NewFeedPushHandler(hub)
+	r.Post("/api/feed", feedPushHandler.Handle)
 	
 	r.Handle("/ws", &ws.Handler{Hub: hub})
 
