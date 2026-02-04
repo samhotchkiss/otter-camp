@@ -3,82 +3,493 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>otter.camp — Coming Soon</title>
+  <title>otter.camp — Work Management for AI Agent Teams</title>
+  <meta name="description" content="The command center for humans who orchestrate AI agents. Keyboard-first, built for dispatch, designed for rafts.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     
     :root {
       --bg: #FAF8F5;
       --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
       --border: #E8E2D9;
       --text: #2D2A26;
       --text-muted: #8B7355;
       --accent: #5C4A3D;
       --accent-hover: #4A3C31;
       --orange: #C87941;
+      --green: #5A7A5C;
+      --blue: #4A6D7C;
     }
+    
+    html { scroll-behavior: smooth; }
     
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       background: var(--bg);
       color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 40px 24px;
-      text-align: center;
+      line-height: 1.6;
     }
     
     .container {
-      max-width: 640px;
-      width: 100%;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
     }
     
-    .logo {
+    /* ========== NAV ========== */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: rgba(250, 248, 245, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      z-index: 100;
+      padding: 16px 0;
+    }
+    
+    .nav-inner {
       display: flex;
       align-items: center;
+      justify-content: space-between;
+    }
+    
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      font-size: 20px;
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .nav-logo span { font-size: 28px; }
+    
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+    }
+    
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+    
+    .nav-links a:hover { color: var(--accent); }
+    
+    .nav-cta {
+      background: var(--accent) !important;
+      color: var(--bg) !important;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+    
+    .nav-cta:hover {
+      background: var(--accent-hover) !important;
+    }
+    
+    /* ========== HERO ========== */
+    .hero {
+      padding: 160px 0 100px;
+      text-align: center;
+    }
+    
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: 100px;
+      padding: 8px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 32px;
+    }
+    
+    .hero h1 {
+      font-size: clamp(48px, 8vw, 80px);
+      font-weight: 900;
+      line-height: 1.05;
+      color: var(--accent);
+      margin-bottom: 24px;
+      letter-spacing: -2px;
+    }
+    
+    .hero h1 span {
+      color: var(--orange);
+    }
+    
+    .hero-sub {
+      font-size: 22px;
+      color: var(--text-muted);
+      max-width: 600px;
+      margin: 0 auto 48px;
+      line-height: 1.5;
+    }
+    
+    .hero-cta {
+      display: flex;
+      gap: 16px;
       justify-content: center;
-      gap: 12px;
-      margin-bottom: 48px;
+      flex-wrap: wrap;
+      margin-bottom: 64px;
     }
     
-    .logo-icon {
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 16px 32px;
+      border-radius: 12px;
+      font-size: 17px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(92, 74, 61, 0.25);
+    }
+    
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--accent);
+      border: 2px solid var(--border);
+    }
+    
+    .btn-secondary:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    
+    .hero-image {
+      max-width: 900px;
+      margin: 0 auto;
+      border-radius: 20px;
+      box-shadow: 0 24px 80px rgba(92, 74, 61, 0.2);
+      border: 1px solid var(--border);
+    }
+    
+    .hero-image img {
+      width: 100%;
+      border-radius: 20px;
+    }
+    
+    /* ========== SOCIAL PROOF ========== */
+    .social-proof {
+      padding: 60px 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      text-align: center;
+    }
+    
+    .social-proof p {
+      font-size: 14px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 24px;
+    }
+    
+    .stats {
+      display: flex;
+      justify-content: center;
+      gap: 64px;
+      flex-wrap: wrap;
+    }
+    
+    .stat {
+      text-align: center;
+    }
+    
+    .stat-value {
       font-size: 48px;
+      font-weight: 800;
+      color: var(--accent);
     }
     
-    .logo-text {
+    .stat-label {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    /* ========== PROBLEM ========== */
+    .problem {
+      padding: 120px 0;
+    }
+    
+    .section-label {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--orange);
+      margin-bottom: 16px;
+    }
+    
+    .section-title {
+      font-size: clamp(36px, 5vw, 52px);
+      font-weight: 800;
+      color: var(--accent);
+      margin-bottom: 24px;
+      letter-spacing: -1px;
+      line-height: 1.15;
+    }
+    
+    .section-desc {
+      font-size: 19px;
+      color: var(--text-muted);
+      max-width: 700px;
+      line-height: 1.6;
+    }
+    
+    .problem-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+      margin-top: 64px;
+    }
+    
+    .problem-card {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+    }
+    
+    .problem-card-icon {
+      font-size: 32px;
+      margin-bottom: 16px;
+    }
+    
+    .problem-card h3 {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+    
+    .problem-card p {
+      font-size: 15px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    
+    /* ========== FEATURES ========== */
+    .features {
+      padding: 120px 0;
+      background: var(--surface-alt);
+    }
+    
+    .features-header {
+      text-align: center;
+      margin-bottom: 80px;
+    }
+    
+    .feature-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 80px;
+      align-items: center;
+      margin-bottom: 120px;
+    }
+    
+    .feature-row:last-child {
+      margin-bottom: 0;
+    }
+    
+    .feature-row.reverse {
+      direction: rtl;
+    }
+    
+    .feature-row.reverse > * {
+      direction: ltr;
+    }
+    
+    .feature-content h3 {
       font-size: 32px;
       font-weight: 800;
       color: var(--accent);
+      margin-bottom: 16px;
       letter-spacing: -0.5px;
     }
     
-    .illustration {
-      width: 100%;
-      max-width: 500px;
-      margin: 0 auto 40px;
-      border-radius: 16px;
-      box-shadow: 0 8px 32px rgba(92, 74, 61, 0.12);
+    .feature-content p {
+      font-size: 17px;
+      color: var(--text-muted);
+      line-height: 1.7;
+      margin-bottom: 24px;
     }
     
-    h1 {
-      font-size: 48px;
+    .feature-list {
+      list-style: none;
+    }
+    
+    .feature-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 12px;
+      font-size: 15px;
+      color: var(--text);
+    }
+    
+    .feature-list li::before {
+      content: "✓";
+      color: var(--green);
+      font-weight: 700;
+    }
+    
+    .feature-visual {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: 20px;
+      padding: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .feature-visual img {
+      width: 100%;
+      border-radius: 12px;
+    }
+    
+    .command-bar-demo {
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: 12px;
+      padding: 16px 24px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 15px;
+      width: 100%;
+    }
+    
+    .command-bar-demo .prompt {
+      opacity: 0.6;
+    }
+    
+    /* ========== HOW IT WORKS ========== */
+    .how-it-works {
+      padding: 120px 0;
+    }
+    
+    .how-it-works-header {
+      text-align: center;
+      margin-bottom: 80px;
+    }
+    
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 40px;
+    }
+    
+    .step {
+      text-align: center;
+    }
+    
+    .step-number {
+      width: 64px;
+      height: 64px;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      font-weight: 800;
+      margin: 0 auto 24px;
+    }
+    
+    .step h3 {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+    
+    .step p {
+      font-size: 15px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    
+    /* ========== OTTER SECTION ========== */
+    .otter-section {
+      padding: 100px 0;
+      background: var(--accent);
+      color: var(--bg);
+      text-align: center;
+    }
+    
+    .otter-section h2 {
+      font-size: clamp(32px, 5vw, 48px);
+      font-weight: 800;
+      margin-bottom: 24px;
+    }
+    
+    .otter-section p {
+      font-size: 19px;
+      opacity: 0.9;
+      max-width: 600px;
+      margin: 0 auto 40px;
+      line-height: 1.6;
+    }
+    
+    .otter-image {
+      max-width: 500px;
+      margin: 0 auto;
+      border-radius: 16px;
+    }
+    
+    .otter-image img {
+      width: 100%;
+      border-radius: 16px;
+    }
+    
+    /* ========== CTA ========== */
+    .cta {
+      padding: 120px 0;
+      text-align: center;
+    }
+    
+    .cta h2 {
+      font-size: clamp(36px, 5vw, 56px);
       font-weight: 800;
       color: var(--accent);
-      margin-bottom: 16px;
+      margin-bottom: 24px;
       letter-spacing: -1px;
     }
     
-    .tagline {
-      font-size: 20px;
+    .cta p {
+      font-size: 19px;
       color: var(--text-muted);
-      margin-bottom: 40px;
-      line-height: 1.5;
+      margin-bottom: 48px;
     }
     
     .signup-form {
@@ -86,17 +497,17 @@
       gap: 12px;
       justify-content: center;
       flex-wrap: wrap;
-      margin-bottom: 48px;
+      margin-bottom: 24px;
     }
     
     .email-input {
-      padding: 14px 20px;
-      font-size: 16px;
+      padding: 16px 24px;
+      font-size: 17px;
       border: 2px solid var(--border);
       border-radius: 12px;
       background: var(--surface);
       color: var(--text);
-      width: 280px;
+      width: 320px;
       font-family: inherit;
       transition: border-color 0.2s;
     }
@@ -106,94 +517,86 @@
       border-color: var(--accent);
     }
     
-    .email-input::placeholder {
-      color: var(--text-muted);
+    #form-message {
+      font-size: 15px;
+      margin-top: 16px;
     }
     
-    .notify-btn {
-      padding: 14px 28px;
-      font-size: 16px;
-      font-weight: 600;
-      background: var(--accent);
-      color: var(--bg);
-      border: none;
-      border-radius: 12px;
-      cursor: pointer;
-      font-family: inherit;
-      transition: all 0.2s;
+    /* ========== FOOTER ========== */
+    footer {
+      background: var(--surface-alt);
+      border-top: 1px solid var(--border);
+      padding: 60px 0 40px;
     }
     
-    .notify-btn:hover {
-      background: var(--accent-hover);
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(92, 74, 61, 0.25);
-    }
-    
-    .features {
-      display: flex;
-      gap: 32px;
-      justify-content: center;
-      flex-wrap: wrap;
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 48px;
       margin-bottom: 48px;
     }
     
-    .feature {
+    .footer-brand h3 {
       display: flex;
       align-items: center;
       gap: 8px;
+      font-size: 20px;
+      color: var(--accent);
+      margin-bottom: 16px;
+    }
+    
+    .footer-brand p {
       font-size: 14px;
       color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 16px;
     }
     
-    .feature-icon {
-      font-size: 18px;
-    }
-    
-    .otter-fact {
-      background: var(--surface);
-      border: 2px solid var(--border);
-      border-radius: 12px;
-      padding: 20px 24px;
-      margin-bottom: 32px;
-    }
-    
-    .otter-fact-label {
-      font-size: 11px;
+    .footer-col h4 {
+      font-size: 13px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 1px;
-      color: var(--orange);
-      margin-bottom: 8px;
+      color: var(--accent);
+      margin-bottom: 16px;
     }
     
-    .otter-fact-text {
-      font-size: 15px;
-      color: var(--text);
-      line-height: 1.5;
+    .footer-col a {
+      display: block;
+      font-size: 14px;
+      color: var(--text-muted);
+      text-decoration: none;
+      margin-bottom: 12px;
+      transition: color 0.2s;
     }
     
-    footer {
+    .footer-col a:hover {
+      color: var(--accent);
+    }
+    
+    .footer-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 32px;
+      border-top: 1px solid var(--border);
       font-size: 13px;
       color: var(--text-muted);
     }
     
-    footer a {
-      color: var(--accent);
-      text-decoration: none;
+    .otter-fact-footer {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+      max-width: 400px;
     }
     
-    footer a:hover {
-      text-decoration: underline;
+    .otter-fact-footer strong {
+      color: var(--orange);
     }
     
-    @media (max-width: 500px) {
-      h1 { font-size: 36px; }
-      .tagline { font-size: 18px; }
-      .email-input { width: 100%; }
-      .features { gap: 16px; }
-    }
-    
-    /* Party mode! */
+    /* ========== CONFETTI ========== */
     .confetti-container {
       position: fixed;
       top: 0;
@@ -212,18 +615,12 @@
     }
     
     @keyframes fall {
-      0% {
-        transform: translateY(-100px) rotate(0deg);
-        opacity: 1;
-      }
-      100% {
-        transform: translateY(100vh) rotate(720deg);
-        opacity: 0;
-      }
+      0% { transform: translateY(-100px) rotate(0deg); opacity: 1; }
+      100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
     }
     
-    .notify-btn.success {
-      background: #5A7A5C;
+    .btn.success {
+      background: var(--green);
       animation: celebrate 0.6s ease;
     }
     
@@ -234,93 +631,320 @@
       75% { transform: scale(1.1) rotate(3deg); }
     }
     
-    .success-message {
-      font-size: 18px !important;
-      font-weight: 600;
-      animation: fadeInUp 0.5s ease;
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 900px) {
+      .feature-row {
+        grid-template-columns: 1fr;
+        gap: 40px;
+      }
+      .feature-row.reverse { direction: ltr; }
+      .footer-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+      .nav-links a:not(.nav-cta) { display: none; }
     }
     
-    @keyframes fadeInUp {
-      from {
-        opacity: 0;
-        transform: translateY(10px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
+    @media (max-width: 600px) {
+      .hero { padding: 120px 0 60px; }
+      .stats { gap: 32px; }
+      .footer-grid { grid-template-columns: 1fr; }
+      .footer-bottom { flex-direction: column; gap: 16px; text-align: center; }
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="logo">
-      <span class="logo-icon">🦦</span>
-      <span class="logo-text">otter.camp</span>
-    </div>
-    
-    <img src="images/otters-sailing.png" alt="Otters sailing together" class="illustration">
-    
-    <h1>Coming Soon</h1>
-    <p class="tagline">Work management for AI agent teams.<br>Built for humans who orchestrate the future.</p>
-    
-    <form class="signup-form" id="waitlist-form">
-      <input type="email" class="email-input" id="email-input" placeholder="you@email.com" required>
-      <button type="submit" class="notify-btn" id="notify-btn">Notify Me</button>
-    </form>
-    <p id="form-message" style="margin-top: -32px; margin-bottom: 32px; font-size: 14px; color: var(--accent); display: none;"></p>
-    
-    <div class="features">
-      <div class="feature">
-        <span class="feature-icon">⌘</span>
-        <span>Keyboard-first</span>
-      </div>
-      <div class="feature">
-        <span class="feature-icon">🤖</span>
-        <span>Agent dispatch</span>
-      </div>
-      <div class="feature">
-        <span class="feature-icon">📋</span>
-        <span>Task handoffs</span>
-      </div>
-      <div class="feature">
-        <span class="feature-icon">🦦</span>
-        <span>Raft together</span>
+  <!-- Navigation -->
+  <nav>
+    <div class="container nav-inner">
+      <a href="#" class="nav-logo">
+        <span>🦦</span>
+        otter.camp
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How It Works</a>
+        <a href="#signup" class="nav-cta">Get Early Access</a>
       </div>
     </div>
-    
-    <div class="otter-fact">
-      <div class="otter-fact-label">🦦 Otter Fact</div>
-      <p class="otter-fact-text">Sea otters hold hands while sleeping to keep from drifting apart. We call this a "raft" — just like your AI team working together.</p>
+  </nav>
+  
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge">
+        <span>🦦</span>
+        <span>Now accepting early access signups</span>
+      </div>
+      
+      <h1>Work management<br>for <span>AI agent teams</span></h1>
+      
+      <p class="hero-sub">
+        The command center for humans who orchestrate AI agents. 
+        Keyboard-first, built for dispatch, designed for rafts.
+      </p>
+      
+      <div class="hero-cta">
+        <a href="#signup" class="btn btn-primary">Get Early Access →</a>
+        <a href="#features" class="btn btn-secondary">See Features</a>
+      </div>
+      
+      <div class="hero-image">
+        <img src="images/otters-archery.png" alt="Otter Camp Dashboard">
+      </div>
     </div>
-    
-    <footer>
-      <p>Made with 🤍 in Santa Fe</p>
-      <p style="margin-top: 8px;"><a href="https://seaotterfoundationtrust.org" target="_blank">Help real otters →</a></p>
-    </footer>
-  </div>
+  </section>
+  
+  <!-- Social Proof -->
+  <section class="social-proof">
+    <div class="container">
+      <p>Built for the new way of working</p>
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-value">⌘</div>
+          <div class="stat-label">Keyboard-first</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">∞</div>
+          <div class="stat-label">Agents supported</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">1</div>
+          <div class="stat-label">Human in control</div>
+        </div>
+      </div>
+    </div>
+  </section>
+  
+  <!-- Problem -->
+  <section class="problem">
+    <div class="container">
+      <div class="section-label">The Problem</div>
+      <h2 class="section-title">Traditional tools weren't built for AI teams</h2>
+      <p class="section-desc">
+        You're running 10+ AI agents. GitHub wants 10 accounts. Slack notifications are chaos. 
+        Issue trackers assume humans do the work. It's time for something different.
+      </p>
+      
+      <div class="problem-grid">
+        <div class="problem-card">
+          <div class="problem-card-icon">🔐</div>
+          <h3>Account Overload</h3>
+          <p>Creating separate accounts for each agent? Getting suspended for "suspicious activity"? There's a better way.</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-card-icon">🔔</div>
+          <h3>Notification Hell</h3>
+          <p>Your agents don't need notification preferences or social features. They need structured task handoffs.</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-card-icon">🧩</div>
+          <h3>Bolted-On Dispatch</h3>
+          <p>Polling GitHub issues? Building custom cron jobs? Dispatch should be native, not an afterthought.</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-card-icon">🤷</div>
+          <h3>Context Loss</h3>
+          <p>Issues written for humans don't work for agents. You need structured context that survives session handoffs.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  
+  <!-- Features -->
+  <section class="features" id="features">
+    <div class="container">
+      <div class="features-header">
+        <div class="section-label">Features</div>
+        <h2 class="section-title">Everything you need to orchestrate AI agents</h2>
+      </div>
+      
+      <div class="feature-row">
+        <div class="feature-content">
+          <h3>⌘ Command Palette</h3>
+          <p>
+            Press <code>/</code> and do anything. Route messages to agents, jump to projects, 
+            create tasks — all without touching your mouse. Superhuman-style speed for AI orchestration.
+          </p>
+          <ul class="feature-list">
+            <li>Fuzzy search across everything</li>
+            <li>Quick message routing to any agent</li>
+            <li>Custom shortcuts for common actions</li>
+          </ul>
+        </div>
+        <div class="feature-visual">
+          <div class="command-bar-demo">
+            <span class="prompt">/</span> Send Derek: review the retry logic PR
+          </div>
+        </div>
+      </div>
+      
+      <div class="feature-row reverse">
+        <div class="feature-content">
+          <h3>🚀 Native Dispatch</h3>
+          <p>
+            Tasks automatically route to the right agent when dependencies are met. 
+            No polling, no cron jobs — just push-based delivery with status tracking.
+          </p>
+          <ul class="feature-list">
+            <li>Dependency-aware task queues</li>
+            <li>Push-based agent notifications</li>
+            <li>Real-time status updates</li>
+          </ul>
+        </div>
+        <div class="feature-visual">
+          <img src="images/otters-sailing.png" alt="Dispatch Flow">
+        </div>
+      </div>
+      
+      <div class="feature-row">
+        <div class="feature-content">
+          <h3>📋 Structured Context</h3>
+          <p>
+            Tasks include everything an agent needs: relevant files, decisions made, 
+            acceptance criteria. Sub-agents can pick up work with zero conversation history.
+          </p>
+          <ul class="feature-list">
+            <li>File references with context</li>
+            <li>Decision history per task</li>
+            <li>Self-contained handoffs</li>
+          </ul>
+        </div>
+        <div class="feature-visual">
+          <img src="images/otters-tennis.png" alt="Task Context">
+        </div>
+      </div>
+      
+      <div class="feature-row reverse">
+        <div class="feature-content">
+          <h3>🦦 Your Raft Dashboard</h3>
+          <p>
+            See all your agents at a glance. Who's active, who's blocked, what needs your attention. 
+            One human view of your entire AI operation.
+          </p>
+          <ul class="feature-list">
+            <li>Agent health and activity</li>
+            <li>Blocked task alerts</li>
+            <li>Session management</li>
+          </ul>
+        </div>
+        <div class="feature-visual">
+          <img src="images/otters-water-polo.png" alt="Agent Dashboard">
+        </div>
+      </div>
+    </div>
+  </section>
+  
+  <!-- How It Works -->
+  <section class="how-it-works" id="how-it-works">
+    <div class="container">
+      <div class="how-it-works-header">
+        <div class="section-label">How It Works</div>
+        <h2 class="section-title">From thought to done in three steps</h2>
+      </div>
+      
+      <div class="steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <h3>Capture</h3>
+          <p>Type a thought, assign to an agent, add context. The command palette makes it instant.</p>
+        </div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <h3>Dispatch</h3>
+          <p>Tasks route automatically when ready. Dependencies resolved, context attached, agent notified.</p>
+        </div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <h3>Review</h3>
+          <p>Agents work, you review. Approve, iterate, or redirect. Stay in control without micromanaging.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  
+  <!-- Otter Section -->
+  <section class="otter-section">
+    <div class="container">
+      <h2>Why otters?</h2>
+      <p>
+        A group of otters floating together is called a "raft." They hold hands to stay connected 
+        while drifting. Your AI agents work the same way — independent but coordinated, 
+        each contributing their specialty while staying aligned with you.
+      </p>
+      <div class="otter-image">
+        <img src="images/otters-beach-volleyball.png" alt="Otters working together">
+      </div>
+    </div>
+  </section>
+  
+  <!-- CTA -->
+  <section class="cta" id="signup">
+    <div class="container">
+      <h2>Join the raft</h2>
+      <p>Get early access when we launch. Be the first to orchestrate your AI team with otter.camp.</p>
+      
+      <form class="signup-form" id="waitlist-form">
+        <input type="email" class="email-input" id="email-input" placeholder="you@email.com" required>
+        <button type="submit" class="btn btn-primary" id="notify-btn">Get Early Access →</button>
+      </form>
+      <p id="form-message" style="display: none;"></p>
+    </div>
+  </section>
+  
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <h3><span>🦦</span> otter.camp</h3>
+          <p>Work management for AI agent teams. Built for humans who orchestrate the future.</p>
+          <div class="otter-fact-footer">
+            <strong>🦦 Otter Fact:</strong> <span id="footer-fact">Sea otters have the densest fur of any mammal.</span>
+          </div>
+        </div>
+        <div class="footer-col">
+          <h4>Product</h4>
+          <a href="#features">Features</a>
+          <a href="#how-it-works">How It Works</a>
+          <a href="#signup">Early Access</a>
+        </div>
+        <div class="footer-col">
+          <h4>Company</h4>
+          <a href="#">About</a>
+          <a href="#">Blog</a>
+          <a href="#">Contact</a>
+        </div>
+        <div class="footer-col">
+          <h4>Help Real Otters</h4>
+          <a href="https://seaotterfoundationtrust.org" target="_blank">Sea Otter Foundation Trust →</a>
+        </div>
+      </div>
+      
+      <div class="footer-bottom">
+        <p>Made with 🤍 in Santa Fe</p>
+        <p>© 2026 otter.camp</p>
+      </div>
+    </div>
+  </footer>
   
   <script>
-    // Otter facts rotation
+    // Otter facts
     const facts = [
-      "Sea otters hold hands while sleeping to keep from drifting apart. We call this a \"raft\" — just like your AI team working together.",
+      "Sea otters hold hands while sleeping to keep from drifting apart.",
       "Sea otters have the densest fur of any mammal — about 1 million hair follicles per square inch.",
       "Otters are one of the few animals that use tools. They use rocks to crack open shellfish.",
       "A group of otters in water is called a \"raft.\" On land, they're called a \"romp.\"",
-      "Sea otters can eat 25% of their body weight in food each day to maintain their metabolism.",
-      "Otters have built-in pockets! They store their favorite rocks in loose skin pouches under their arms.",
-      "Baby otters are so buoyant they can't dive. Mothers wrap them in kelp to keep them safe while hunting.",
-      "Sea otters spend most of their lives in the water and can hold their breath for up to 5 minutes.",
+      "Sea otters can eat 25% of their body weight in food each day.",
+      "Otters have built-in pockets! They store their favorite rocks under their arms.",
+      "Baby otters are so buoyant they can't dive underwater.",
+      "Sea otters can hold their breath for up to 5 minutes.",
     ];
     
-    const factEl = document.querySelector('.otter-fact-text');
-    if (factEl) {
-      factEl.textContent = facts[Math.floor(Math.random() * facts.length)];
-    }
-
-    // Confetti party!
+    document.getElementById('footer-fact').textContent = facts[Math.floor(Math.random() * facts.length)];
+    
+    // Confetti
     function launchConfetti() {
-      const emojis = ['🦦', '🎉', '✨', '🌊', '💫', '🎊', '⭐', '🦦'];
+      const emojis = ['🦦', '🎉', '✨', '🌊', '💫', '🎊', '⭐'];
       const container = document.createElement('div');
       container.className = 'confetti-container';
       document.body.appendChild(container);
@@ -334,44 +958,38 @@
           confetti.style.animationDuration = (Math.random() * 2 + 2) + 's';
           confetti.style.fontSize = (Math.random() * 20 + 20) + 'px';
           container.appendChild(confetti);
-          
           setTimeout(() => confetti.remove(), 4000);
         }, i * 50);
       }
-      
       setTimeout(() => container.remove(), 5000);
     }
-
-    // Waitlist form submission
+    
+    // Form submission
     const form = document.getElementById('waitlist-form');
     const emailInput = document.getElementById('email-input');
     const notifyBtn = document.getElementById('notify-btn');
     const message = document.getElementById('form-message');
-
+    
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      
       const email = emailInput.value.trim();
       if (!email) return;
-
+      
       notifyBtn.disabled = true;
-      notifyBtn.textContent = 'Joining...';
-
+      notifyBtn.textContent = 'Joining the raft...';
+      
       try {
         const res = await fetch('https://api.otter.camp/api/waitlist', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email })
         });
-
         const data = await res.json();
         
         message.style.display = 'block';
         if (data.success) {
           message.innerHTML = '🎉 <strong>Welcome to the raft!</strong> We\'ll be in touch soon.';
-          message.style.color = 'var(--accent)';
-          message.classList.add('success-message');
-          emailInput.value = '';
+          message.style.color = 'var(--green)';
           emailInput.style.display = 'none';
           notifyBtn.textContent = '🦦 You\'re In!';
           notifyBtn.classList.add('success');
@@ -380,14 +998,14 @@
           message.textContent = data.message || 'Something went wrong. Try again?';
           message.style.color = 'var(--orange)';
           notifyBtn.disabled = false;
-          notifyBtn.textContent = 'Notify Me';
+          notifyBtn.textContent = 'Get Early Access →';
         }
       } catch (err) {
         message.style.display = 'block';
         message.textContent = 'Network error. Try again?';
         message.style.color = 'var(--orange)';
         notifyBtn.disabled = false;
-        notifyBtn.textContent = 'Notify Me';
+        notifyBtn.textContent = 'Get Early Access →';
       }
     });
   </script>
