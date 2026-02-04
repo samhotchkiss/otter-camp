@@ -14,7 +14,7 @@ type NavTab = {
 
 const NAV_TABS: NavTab[] = [
   { id: "dashboard", label: "Dashboard", href: "/" },
-  { id: "inbox", label: "Inbox", href: "/notifications" },
+  { id: "inbox", label: "Inbox", href: "/inbox" },
   { id: "projects", label: "Projects", href: "/projects" },
   { id: "feed", label: "Feed", href: "/feed" },
   { id: "agents", label: "Agents", href: "/agents" },
@@ -167,7 +167,7 @@ export default function TopbarLayout({ children }: TopbarLayoutProps) {
   const getActiveTabId = () => {
     const path = location.pathname;
     if (path === "/" || path.startsWith("/tasks")) return "dashboard";
-    if (path.startsWith("/notifications")) return "inbox";
+    if (path.startsWith("/notifications") || path.startsWith("/inbox")) return "inbox";
     const item = NAV_TABS.find((tab) => tab.href === path);
     return item?.id ?? "dashboard";
   };

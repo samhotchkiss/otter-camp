@@ -13,7 +13,11 @@ const FeedPage = lazy(() => import("./pages/FeedPage"));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
 const ProjectPage = lazy(() => import("./pages/ProjectPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
+
 const ChatPage = lazy(() => import("./pages/ChatPage"));
+
+const InboxPage = lazy(() => import("./pages/InboxPage"));
+
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
 /**
@@ -77,12 +81,17 @@ export const router = createBrowserRouter([
         element: <NotificationsPage />,
       },
       {
+
         path: "chat",
         element: <ChatPage />,
       },
       {
         path: "chat/:agentId",
         element: <ChatPage />,
+
+        path: "inbox",
+        element: <InboxPage />,
+
       },
     ],
   },
