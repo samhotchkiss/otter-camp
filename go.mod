@@ -1,6 +1,6 @@
 module github.com/samhotchkiss/otter-camp
 
-go 1.25.6
+go 1.24.0
 
 require (
 	github.com/go-chi/chi/v5 v5.2.4
@@ -9,7 +9,6 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/lib/pq v1.10.9
 	github.com/stretchr/testify v1.8.4
-	golang.org/x/crypto v0.47.0
 )
 
 require (
@@ -21,6 +20,8 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rogpeppe/go-internal v1.8.1 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
+	golang.org/x/net v0.48.0 // indirect
+	golang.org/x/sys v0.40.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
