@@ -53,7 +53,7 @@ describe("TaskDetailPage", () => {
 
     expect(screen.getByLabelText("Status")).toHaveValue("todo");
     expect(screen.getByLabelText("Priority")).toHaveValue("high");
-    expect(screen.getByLabelText("Assignee")).toHaveValue("otter-1");
+    expect(screen.getByLabelText("Assignee")).toHaveValue("derek");
 
     // Markdown description renders.
     expect(screen.getByText("Checklist")).toBeInTheDocument();

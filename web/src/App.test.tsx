@@ -9,8 +9,8 @@ describe("App", () => {
     expect(container).toBeTruthy();
   });
 
-  it("shows Otter Camp heading", () => {
+  it("shows login branding", () => {
     render(<App />);
-    expect(screen.getByText(/Otter Camp/i)).toBeTruthy();
+    expect(screen.getByText(/otter\.camp/i)).toBeTruthy();
   });
 });

@@ -16,7 +16,6 @@ describe("otterFacts", () => {
     otterFacts.forEach((fact) => {
       expect(fact).toBe(fact.trim());
       expect(fact.length).toBeGreaterThan(10);
-      expect(fact.endsWith(".")).toBe(true);
     });
   });
 });

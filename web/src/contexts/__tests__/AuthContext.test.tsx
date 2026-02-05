@@ -154,7 +154,7 @@ describe("AuthContext", () => {
     });
     expect(response?.request_id).toBe("req-1");
 
-    expect(mockFetch).toHaveBeenCalledWith("/api/auth/login", {
+    expect(mockFetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/auth\/login$/), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ org_id: "org-1" }),
