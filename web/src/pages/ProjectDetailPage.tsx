@@ -123,7 +123,7 @@ function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
           : "border-[var(--border)] hover:border-[#C9A86C]/50"
       } ${task.status === "done" ? "opacity-70" : ""}`}
     >
-      <h4 className="mb-3 text-sm font-semibold text-slate-900 dark:text-white">
+      <h4 className="mb-3 text-sm font-semibold text-[var(--text)]">
         {task.title}
       </h4>
       <div className="flex items-center justify-between text-xs">
@@ -134,7 +134,7 @@ function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
           >
             {task.assignee[0]}
           </div>
-          <span className="text-slate-600 dark:text-slate-400">{task.assignee}</span>
+          <span className="text-[var(--text-muted)]">{task.assignee}</span>
         </div>
         {task.status !== "done" && (
           <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${priorityClasses[task.priority]}`}>
@@ -228,10 +228,10 @@ export default function ProjectDetailPage() {
     return (
       <div className="flex flex-col items-center justify-center py-20">
         <div className="text-6xl">🦦</div>
-        <h1 className="mt-4 text-2xl font-bold text-slate-900 dark:text-white">
+        <h1 className="mt-4 text-2xl font-bold text-[var(--text)]">
           Project Not Found
         </h1>
-        <p className="mt-2 text-slate-600 dark:text-slate-400">
+        <p className="mt-2 text-[var(--text-muted)]">
           This project doesn't exist or may have been deleted.
         </p>
         <button
@@ -268,12 +268,12 @@ export default function ProjectDetailPage() {
   return (
     <div className="flex min-h-full flex-col">
       {/* Breadcrumb */}
-      <nav className="mb-4 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-        <Link to="/projects" className="hover:text-slate-700 dark:hover:text-slate-200">
+      <nav className="mb-4 flex items-center gap-2 text-sm text-[var(--text-muted)]">
+        <Link to="/projects" className="hover:text-[var(--text)]">
           Projects
         </Link>
         <span>›</span>
-        <span className="font-medium text-slate-900 dark:text-white">{project.name}</span>
+        <span className="font-medium text-[var(--text)]">{project.name}</span>
       </nav>
 
       {/* Project Header */}
@@ -283,10 +283,10 @@ export default function ProjectDetailPage() {
             {project.emoji}
           </div>
           <div className="flex-1">
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
+            <h1 className="text-2xl font-bold text-[var(--text)]">
               {project.name}
             </h1>
-            <div className="mt-1 flex flex-wrap items-center gap-4 text-sm text-slate-600 dark:text-slate-400">
+            <div className="mt-1 flex flex-wrap items-center gap-4 text-sm text-[var(--text-muted)]">
               <div className="flex items-center gap-1.5">
                 <span className={`h-2.5 w-2.5 rounded-full ${status.dot}`} />
                 {waitingCount > 0 ? (
@@ -319,7 +319,7 @@ export default function ProjectDetailPage() {
       </header>
 
       {/* Tabs */}
-      <div className="mb-6 flex gap-1 border-b border-slate-200 dark:border-slate-700">
+      <div className="mb-6 flex gap-1 border-b border-[var(--border)]">
         {tabs.map((tab) => (
           <button
             key={tab.key}
@@ -328,7 +328,7 @@ export default function ProjectDetailPage() {
             className={`relative px-5 py-3 text-sm font-medium transition ${
               activeTab === tab.key
                 ? "text-amber-600 dark:text-amber-400"
-                : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                : "text-[var(--text-muted)] hover:text-[var(--text)]"
             }`}
           >
             {tab.label}

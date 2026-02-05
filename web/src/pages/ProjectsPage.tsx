@@ -163,10 +163,10 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
         </button>
       </div>
 
-      <h3 className="mt-4 text-lg font-semibold text-slate-900 dark:text-white">
+      <h3 className="mt-4 text-lg font-semibold text-[var(--text)]">
         {project.name}
       </h3>
-      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+      <p className="mt-1 text-sm text-[var(--text-muted)]">
         {project.description ?? ""}
       </p>
 
@@ -192,7 +192,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
 
       <div className="mt-4">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-600 dark:text-slate-400">Progress</span>
+          <span className="text-[var(--text-muted)]">Progress</span>
           <span className={`font-medium ${colors.text}`}>
             {completedCount}/{taskCount} tasks
           </span>
@@ -204,7 +204,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
           />
         </div>
         {updatedAt && (
-          <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+          <p className="mt-3 text-xs text-[var(--text-muted)]">
             Updated {new Date(updatedAt).toLocaleString()}
           </p>
         )}
@@ -272,10 +272,10 @@ export default function ProjectsPage({
       <div className="w-full">
         <div className="mb-6 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+            <h1 className="text-2xl font-semibold text-[var(--text)]">
               Projects
             </h1>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
               Loading projects...
             </p>
           </div>
@@ -290,7 +290,7 @@ export default function ProjectsPage({
     return (
       <div className="w-full">
         <div className="mb-6">
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+          <h1 className="text-2xl font-semibold text-[var(--text)]">
             Projects
           </h1>
         </div>
@@ -307,10 +307,10 @@ export default function ProjectsPage({
     return (
       <div className="w-full">
         <div className="mb-6">
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+          <h1 className="text-2xl font-semibold text-[var(--text)]">
             Projects
           </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-sm text-[var(--text-muted)]">
             Manage your workspaces and track progress
           </p>
         </div>
@@ -323,10 +323,10 @@ export default function ProjectsPage({
     <div className="w-full">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+          <h1 className="text-2xl font-semibold text-[var(--text)]">
             Projects
           </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-sm text-[var(--text-muted)]">
             Manage your workspaces and track progress
           </p>
         </div>
@@ -344,7 +344,7 @@ export default function ProjectsPage({
 
       {/* Use Cmd+K (magic bar) to search projects */}
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-slate-600 dark:text-slate-400">
+        <p className="text-sm text-[var(--text-muted)]">
           {projects.length} projects • Press <kbd className="rounded bg-[var(--surface-alt)] px-1.5 py-0.5 text-xs">⌘K</kbd> to search
         </p>
       </div>
