@@ -126,7 +126,12 @@ describe('useProjectListFilters', () => {
       result.current.setPriority('high');
     });
 
-    const preset = result.current.savePreset('Saved')!;
+    let presetId = '';
+    act(() => {
+      const preset = result.current.savePreset('Saved');
+      expect(preset).not.toBeNull();
+      presetId = preset?.id ?? '';
+    });
 
     act(() => {
       result.current.setStatus('archived');
@@ -136,7 +141,7 @@ describe('useProjectListFilters', () => {
     expect(result.current.isActivePresetDirty).toBe(true);
 
     act(() => {
-      result.current.applyPreset(preset.id);
+      result.current.applyPreset(presetId);
     });
 
     expect(result.current.filters.status).toBe('active');
