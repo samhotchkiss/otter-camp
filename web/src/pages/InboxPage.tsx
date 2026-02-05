@@ -194,6 +194,9 @@ export default function InboxPage() {
                     {item.type} — {item.agent}
                   </h3>
                   <div className="item-meta">
+                    <span className={`badge-type badge-${item.itemType}`}>
+                      {item.itemType}
+                    </span>
                     <span className={`item-status ${item.status}`}>
                       {item.status}
                     </span>

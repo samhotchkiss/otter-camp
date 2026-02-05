@@ -288,7 +288,8 @@ body {
 
 .btn-primary {
   background: var(--accent);
-  color: var(--bg);
+  color: #1a1a1a; /* dark text for contrast on gold */
+  font-weight: 600;
 }
 
 .btn-primary:hover {
@@ -999,5 +1000,50 @@ body.has-demo-banner .topbar {
 /* Agent card padding */
 .agent-card {
   padding: 20px;
+}
+
+
+/* ========================================
+   INBOX TYPE BADGES (#85)
+   ======================================== */
+
+.badge-type {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 20px;
+  text-transform: lowercase;
+}
+
+.badge-review {
+  background: rgba(138, 180, 248, 0.15);
+  color: #8AB4F8;
+}
+
+.badge-exec {
+  background: rgba(255, 183, 77, 0.15);
+  color: #FFB74D;
+}
+
+.badge-deploy {
+  background: rgba(129, 199, 132, 0.15);
+  color: #81C784;
+}
+
+.badge-task {
+  background: rgba(201, 168, 108, 0.15);
+  color: var(--accent);
+}
+
+.badge-decision {
+  background: rgba(186, 104, 200, 0.15);
+  color: #BA68C8;
+}
+
+.badge-blocked {
+  background: rgba(184, 92, 56, 0.15);
+  color: var(--red);
 }
 
