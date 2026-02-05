@@ -103,6 +103,7 @@ export default function Dashboard() {
   const [actionItems, setActionItems] = useState<ActionItem[]>(isDemoMode() ? DEMO_ACTION_ITEMS : []);
   const [feedItems, setFeedItems] = useState<FeedItem[]>(isDemoMode() ? DEMO_FEED_ITEMS : []);
   const [projects, setProjects] = useState<Project[]>(isDemoMode() ? (DEMO_PROJECTS as unknown as Project[]) : []);
+  const [lastSync, setLastSync] = useState<Date | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -114,14 +115,18 @@ export default function Dashboard() {
       try {
         setIsLoading(true);
         setError(null);
-        const [data, projectsResponse] = await Promise.all([
+        const [data, projectsResponse, syncResponse] = await Promise.all([
           api.feed(),
           api.projects(),
+          api.syncAgents(),
         ]);
         if (!cancelled) {
           setActionItems(data.actionItems || []);
           setFeedItems(data.feedItems || []);
           setProjects(projectsResponse.projects || []);
+          if (syncResponse?.last_sync) {
+            setLastSync(new Date(syncResponse.last_sync));
+          }
         }
       } catch (err) {
         if (!cancelled) {
@@ -131,6 +136,7 @@ export default function Dashboard() {
             setActionItems([]);
             setFeedItems([]);
             setProjects([]);
+            setLastSync(null);
           }
         }
       } finally {
@@ -188,6 +194,12 @@ export default function Dashboard() {
       <div className="two-column-layout">
       {/* ========== PRIMARY COLUMN ========== */}
       <div className="primary">
+        {lastSync && (
+          <div className="last-sync">Last updated {lastSync.toLocaleString()}</div>
+        )}
+        {!lastSync && !isLoading && (
+          <div className="last-sync">No data here yet.</div>
+        )}
         {/* NEEDS YOU Section */}
         <section className="section" data-tour="needs-you">
           <header className="section-header">
@@ -365,6 +377,12 @@ export default function Dashboard() {
           color: var(--text-muted);
           font-size: 13px;
           padding: 12px;
+        }
+
+        .last-sync {
+          color: var(--text-muted);
+          font-size: 12px;
+          margin-bottom: 10px;
         }
         
         /* Otter illustration */

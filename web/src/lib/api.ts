@@ -107,6 +107,11 @@ export interface FeedResponse {
   feedItems: FeedItem[];
 }
 
+export interface SyncAgentsResponse {
+  last_sync?: string;
+  sync_healthy?: boolean;
+}
+
 export interface ApprovalResponse {
   success: boolean;
   message?: string;
@@ -136,6 +141,7 @@ export const api = {
   tasks: () => apiFetch<Task[]>(`/api/tasks${getOrgQueryParam()}`),
   approvals: () => apiFetch<Approval[]>(`/api/approvals/exec${getOrgQueryParam()}`),
   projects: () => apiFetch<{ projects: Project[] }>(`/api/projects${getOrgQueryParam()}`),
+  syncAgents: () => apiFetch<SyncAgentsResponse>(`/api/sync/agents`),
   
   // Approval actions
   approveItem: (id: string) => apiFetch<ApprovalResponse>(`/api/approvals/exec/${id}/respond`, {
