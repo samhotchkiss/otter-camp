@@ -68,7 +68,7 @@ export type ActivityPanelProps = {
 function ActivityPanelComponent({
   className = "",
   orgId,
-  apiEndpoint = "/api/feed",
+  apiEndpoint = "https://api.otter.camp/api/feed",
   limit = 100,
 }: ActivityPanelProps) {
   const { connected, lastMessage, sendMessage } = useWS();

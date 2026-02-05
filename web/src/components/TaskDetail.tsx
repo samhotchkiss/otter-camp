@@ -500,7 +500,7 @@ export default function TaskDetail({
   onClose,
   onTaskUpdated,
   onTaskDeleted,
-  apiEndpoint = "/api/tasks",
+  apiEndpoint = "https://api.otter.camp/api/tasks",
 }: TaskDetailProps) {
   const [task, setTask] = useState<TaskDetailData | null>(null);
   const [isLoading, setIsLoading] = useState(true);

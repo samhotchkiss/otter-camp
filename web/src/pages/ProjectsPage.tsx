@@ -217,7 +217,7 @@ export type ProjectsPageProps = {
 };
 
 export default function ProjectsPage({
-  apiEndpoint = "/api/projects",
+  apiEndpoint = "https://api.otter.camp/api/projects",
 }: ProjectsPageProps) {
   const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
