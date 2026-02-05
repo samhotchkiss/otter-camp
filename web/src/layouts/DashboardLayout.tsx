@@ -17,6 +17,7 @@ import { useWS } from "../contexts/WebSocketContext";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
 import DemoBanner from "../components/DemoBanner";
 import GlobalSearch from "../components/GlobalSearch";
+import { isDemoMode } from "../lib/demo";
 
 type NavItem = {
   id: string;
@@ -42,7 +43,9 @@ type DashboardLayoutProps = {
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { connected } = useWS();
+  const { connected: wsConnected } = useWS();
+  // In demo mode, always show as connected for better UX
+  const connected = isDemoMode() || wsConnected;
   
   const {
     openCommandPalette,
