@@ -15,7 +15,7 @@ import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContex
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
 import { useWS } from "../contexts/WebSocketContext";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
-import { DemoBanner, isDemoMode } from "../components/DemoBanner";
+import DemoBanner from "../components/DemoBanner";
 
 type NavItem = {
   id: string;
@@ -29,6 +29,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "inbox", label: "Inbox", href: "/inbox", badge: 3 },
   { id: "projects", label: "Projects", href: "/projects" },
   { id: "agents", label: "Agents", href: "/agents" },
+  { id: "workflows", label: "Workflows", href: "/workflows" },
   { id: "feed", label: "Feed", href: "/feed" },
 ];
 
@@ -153,7 +154,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
     <div className="app">
       {/* ========== DEMO BANNER ========== */}
-      {isDemoMode() && <DemoBanner />}
+      <DemoBanner />
       
       {/* ========== TOPBAR ========== */}
       <header className="topbar">

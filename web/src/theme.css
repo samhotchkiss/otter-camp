@@ -731,3 +731,228 @@ body.has-demo-banner .topbar {
   top: 36px;
 }
 
+
+/* ========================================
+   WORKFLOWS PAGE
+   ======================================== */
+
+.workflows-page {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.workflows-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.workflow-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.15s;
+}
+
+.workflow-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+
+.workflow-card-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.workflow-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+.workflow-icon.twitter { background: var(--blue-bg, rgba(74, 109, 124, 0.2)); }
+.workflow-icon.email { background: var(--yellow-bg, rgba(196, 160, 60, 0.2)); }
+.workflow-icon.markets { background: var(--green-bg, rgba(90, 122, 92, 0.2)); }
+.workflow-icon.content { background: var(--red-bg, rgba(184, 92, 56, 0.2)); }
+
+.workflow-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.workflow-name {
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 2px;
+}
+
+.workflow-agent {
+  font-size: 13px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workflow-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 20px;
+}
+
+.workflow-status .status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.workflow-status.active {
+  background: var(--green-bg, rgba(90, 122, 92, 0.2));
+  color: var(--green);
+}
+
+.workflow-status.active .status-dot {
+  background: var(--green);
+}
+
+.workflow-status.paused {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+}
+
+.workflow-status.paused .status-dot {
+  background: var(--text-muted);
+}
+
+.workflow-card-body {
+  padding: 16px 20px;
+}
+
+.workflow-latest {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.workflow-latest-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workflow-card-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-alt);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.workflow-schedule {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workflow-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Escalation badges */
+.escalation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.escalation-badge.urgent {
+  background: var(--red-bg, rgba(184, 92, 56, 0.2));
+  color: var(--red);
+}
+
+.escalation-badge.high {
+  background: var(--yellow-bg, rgba(196, 160, 60, 0.2));
+  color: var(--yellow);
+}
+
+.escalation-badge.action {
+  background: var(--blue-bg, rgba(74, 109, 124, 0.2));
+  color: var(--blue);
+}
+
+/* Stacked items */
+.stacked-items {
+  margin-top: 12px;
+  border-top: 1px dashed var(--border);
+  padding-top: 12px;
+}
+
+.stacked-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface-alt);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.stacked-item:last-child { margin-bottom: 0; }
+
+.stacked-item-icon {
+  font-size: 14px;
+  margin-top: 2px;
+}
+
+.stacked-item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.stacked-item-text {
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.stacked-item-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.workflows-loading,
+.workflows-error {
+  text-align: center;
+  padding: 48px;
+  color: var(--text-muted);
+}
+
