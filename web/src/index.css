@@ -1,13 +1,17 @@
+@import './theme.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark light;
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+  background-color: var(--otter-bg);
+  color: var(--otter-text);
+  font-family: var(--otter-font);
 }
 
 @keyframes palette-fade {

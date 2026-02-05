@@ -1,0 +1,463 @@
+/**
+ * OtterCamp Design Theme
+ * Extracted from Jeff G's dashboard-v5 mockups
+ * 
+ * Apply these CSS variables to align the React app with the design specs.
+ * Import this file in index.css or main.tsx
+ */
+
+/* ========================================
+   COLOR TOKENS
+   ======================================== */
+
+:root {
+  /* Light theme */
+  --otter-bg: #FAF8F5;
+  --otter-surface: #FFFFFF;
+  --otter-surface-alt: #F5F2ED;
+  --otter-border: #E8E2D9;
+  --otter-text: #2D2A26;
+  --otter-text-muted: #8B7355;
+  --otter-accent: #5C4A3D;
+  --otter-accent-hover: #4A3C31;
+  
+  /* Semantic colors */
+  --otter-green: #5A7A5C;
+  --otter-green-bg: rgba(90, 122, 92, 0.15);
+  --otter-red: #B85C38;
+  --otter-red-bg: rgba(184, 92, 56, 0.15);
+  --otter-yellow: #C4A03C;
+  --otter-yellow-bg: rgba(196, 160, 60, 0.15);
+  --otter-blue: #4A6D7C;
+  --otter-blue-bg: rgba(74, 109, 124, 0.15);
+  --otter-orange: #C87941;
+  
+  /* Typography */
+  --otter-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --otter-font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+  
+  /* Spacing */
+  --otter-radius-sm: 6px;
+  --otter-radius-md: 10px;
+  --otter-radius-lg: 12px;
+  --otter-radius-xl: 16px;
+  
+  /* Shadows */
+  --otter-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --otter-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --otter-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+/* Dark theme (DEFAULT) */
+[data-theme="dark"],
+.dark,
+:root {
+  --otter-bg: #1A1918;
+  --otter-surface: #252422;
+  --otter-surface-alt: #2D2B28;
+  --otter-border: #3D3A36;
+  --otter-text: #FAF8F5;
+  --otter-text-muted: #A69582;
+  --otter-accent: #C9A86C;
+  --otter-accent-hover: #D4B87A;
+  
+  --otter-green-bg: rgba(90, 122, 92, 0.2);
+  --otter-red-bg: rgba(184, 92, 56, 0.2);
+  --otter-yellow-bg: rgba(196, 160, 60, 0.2);
+  --otter-blue-bg: rgba(74, 109, 124, 0.2);
+  
+  --otter-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --otter-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --otter-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+/* Light theme override */
+[data-theme="light"] {
+  --otter-bg: #FAF8F5;
+  --otter-surface: #FFFFFF;
+  --otter-surface-alt: #F5F2ED;
+  --otter-border: #E8E2D9;
+  --otter-text: #2D2A26;
+  --otter-text-muted: #8B7355;
+  --otter-accent: #5C4A3D;
+  --otter-accent-hover: #4A3C31;
+  
+  --otter-green-bg: rgba(90, 122, 92, 0.15);
+  --otter-red-bg: rgba(184, 92, 56, 0.15);
+  --otter-yellow-bg: rgba(196, 160, 60, 0.15);
+  --otter-blue-bg: rgba(74, 109, 124, 0.15);
+}
+
+
+/* ========================================
+   BASE STYLES
+   ======================================== */
+
+body {
+  font-family: var(--otter-font);
+  background-color: var(--otter-bg);
+  color: var(--otter-text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ========================================
+   TOPBAR
+   ======================================== */
+
+.topbar,
+[class*="topbar"],
+header[class*="nav"],
+.navbar {
+  background-color: var(--otter-accent) !important;
+  color: var(--otter-bg) !important;
+  padding: 12px 24px;
+}
+
+.topbar a,
+.navbar a {
+  color: inherit !important;
+  opacity: 0.85;
+}
+
+.topbar a:hover,
+.navbar a:hover {
+  opacity: 1;
+}
+
+/* Logo */
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 18px;
+}
+
+/* Search trigger */
+.search-trigger,
+[class*="search"] input,
+[class*="command-palette"] {
+  background: rgba(255, 255, 255, 0.15) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  border-radius: var(--otter-radius-md);
+  color: inherit;
+}
+
+.search-trigger:hover,
+[class*="search"] input:hover {
+  background: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* ========================================
+   CARDS
+   ======================================== */
+
+.card,
+[class*="card"],
+[class*="Card"] {
+  background-color: var(--otter-surface);
+  border: 1px solid var(--otter-border);
+  border-radius: var(--otter-radius-lg);
+  overflow: hidden;
+}
+
+.card:hover,
+[class*="card"]:hover {
+  border-color: var(--otter-accent);
+  box-shadow: var(--otter-shadow-md);
+}
+
+/* ========================================
+   BUTTONS
+   ======================================== */
+
+.btn,
+button[class*="btn"],
+[class*="button"] {
+  border-radius: var(--otter-radius-md);
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.btn-primary,
+[class*="primary"] {
+  background-color: var(--otter-accent) !important;
+  color: var(--otter-bg) !important;
+  border: none;
+}
+
+.btn-primary:hover,
+[class*="primary"]:hover {
+  background-color: var(--otter-accent-hover) !important;
+}
+
+.btn-secondary,
+[class*="secondary"] {
+  background-color: var(--otter-surface-alt);
+  color: var(--otter-text);
+  border: 1px solid var(--otter-border);
+}
+
+.btn-secondary:hover,
+[class*="secondary"]:hover {
+  background-color: var(--otter-border);
+}
+
+/* ========================================
+   STATUS INDICATORS
+   ======================================== */
+
+/* Status dots */
+.status-dot,
+[class*="status-dot"],
+[class*="indicator"] {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.active,
+.status-dot.online,
+.status-dot.success,
+[class*="green"] .status-dot {
+  background-color: var(--otter-green);
+}
+
+.status-dot.warning,
+.status-dot.pending,
+[class*="yellow"] .status-dot {
+  background-color: var(--otter-yellow);
+}
+
+.status-dot.error,
+.status-dot.offline,
+[class*="red"] .status-dot {
+  background-color: var(--otter-red);
+}
+
+/* Status badges */
+.badge,
+[class*="badge"],
+.status-badge {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge-success,
+[class*="success"] {
+  background-color: var(--otter-green-bg);
+  color: var(--otter-green);
+}
+
+.badge-warning,
+[class*="warning"] {
+  background-color: var(--otter-yellow-bg);
+  color: var(--otter-yellow);
+}
+
+.badge-error,
+.badge-danger,
+[class*="error"],
+[class*="danger"] {
+  background-color: var(--otter-red-bg);
+  color: var(--otter-red);
+}
+
+.badge-info,
+[class*="info"] {
+  background-color: var(--otter-blue-bg);
+  color: var(--otter-blue);
+}
+
+/* ========================================
+   FORMS
+   ======================================== */
+
+input,
+textarea,
+select {
+  background-color: var(--otter-surface-alt);
+  border: 1px solid var(--otter-border);
+  border-radius: var(--otter-radius-md);
+  color: var(--otter-text);
+  padding: 12px 14px;
+  font-family: var(--otter-font);
+  font-size: 14px;
+  transition: border-color 0.15s ease;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--otter-accent);
+  box-shadow: 0 0 0 3px rgba(201, 168, 108, 0.2);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--otter-text-muted);
+}
+
+/* ========================================
+   SIDEBAR / NAVIGATION
+   ======================================== */
+
+.sidebar,
+[class*="sidebar"],
+aside {
+  background-color: var(--otter-surface-alt);
+  border-right: 1px solid var(--otter-border);
+}
+
+.nav-link,
+[class*="nav-item"],
+.sidebar a {
+  color: var(--otter-text);
+  padding: 10px 12px;
+  border-radius: var(--otter-radius-md);
+  transition: background-color 0.15s ease;
+}
+
+.nav-link:hover,
+[class*="nav-item"]:hover,
+.sidebar a:hover {
+  background-color: var(--otter-surface);
+}
+
+.nav-link.active,
+[class*="nav-item"].active,
+.sidebar a.active {
+  background-color: var(--otter-surface);
+  font-weight: 500;
+}
+
+/* ========================================
+   FOOTER
+   ======================================== */
+
+footer,
+.footer,
+[class*="footer"] {
+  background-color: var(--otter-surface-alt);
+  border-top: 1px solid var(--otter-border);
+  padding: 20px 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--otter-text-muted);
+}
+
+.footer-fact strong,
+.otter-fact strong {
+  color: var(--otter-accent);
+}
+
+/* ========================================
+   TYPOGRAPHY
+   ======================================== */
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--otter-text);
+  font-weight: 600;
+}
+
+.text-muted,
+[class*="muted"],
+.secondary-text {
+  color: var(--otter-text-muted);
+}
+
+code,
+pre,
+.mono,
+[class*="code"] {
+  font-family: var(--otter-font-mono);
+  background-color: var(--otter-surface-alt);
+  border-radius: var(--otter-radius-sm);
+}
+
+code {
+  padding: 2px 6px;
+  font-size: 0.9em;
+}
+
+pre {
+  padding: 16px;
+  overflow-x: auto;
+  border: 1px solid var(--otter-border);
+}
+
+/* ========================================
+   UTILITY CLASSES
+   ======================================== */
+
+.surface {
+  background-color: var(--otter-surface);
+}
+
+.surface-alt {
+  background-color: var(--otter-surface-alt);
+}
+
+.border {
+  border-color: var(--otter-border);
+}
+
+.accent {
+  color: var(--otter-accent);
+}
+
+.accent-bg {
+  background-color: var(--otter-accent);
+  color: var(--otter-bg);
+}
+
+/* ========================================
+   TAILWIND OVERRIDES
+   Map Tailwind's default colors to Otter palette
+   ======================================== */
+
+/* Override Tailwind's default dark mode colors */
+.dark {
+  --tw-bg-opacity: 1;
+  background-color: var(--otter-bg);
+}
+
+/* Override primary colors */
+.bg-primary,
+.bg-blue-500,
+.bg-blue-600 {
+  background-color: var(--otter-accent) !important;
+}
+
+.text-primary,
+.text-blue-500,
+.text-blue-600 {
+  color: var(--otter-accent) !important;
+}
+
+.border-primary,
+.border-blue-500 {
+  border-color: var(--otter-accent) !important;
+}
+
+/* Override gray scale to warm tones */
+.bg-gray-50 { background-color: var(--otter-bg) !important; }
+.bg-gray-100 { background-color: var(--otter-surface-alt) !important; }
+.bg-gray-200 { background-color: var(--otter-surface) !important; }
+.bg-gray-800 { background-color: var(--otter-surface) !important; }
+.bg-gray-900 { background-color: var(--otter-bg) !important; }
+
+.text-gray-400,
+.text-gray-500 { color: var(--otter-text-muted) !important; }
+.text-gray-900,
+.text-white { color: var(--otter-text) !important; }
+
+.border-gray-200,
+.border-gray-700 { border-color: var(--otter-border) !important; }
