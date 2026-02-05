@@ -1,6 +1,6 @@
 import { useState, useMemo, Suspense } from "react";
 import CommandPalette from "../components/CommandPalette";
-import KanbanBoard from "../components/KanbanBoard";
+import KanbanBoard from "../components/kanban";
 import ActivityPanel from "../components/ActivityPanel";
 import ProjectFilters from "../components/ProjectFilters";
 import OnboardingTour from "../components/OnboardingTour";
@@ -181,6 +181,7 @@ export default function Dashboard() {
                   <Suspense
                     fallback={
                       <div className="flex gap-4 overflow-x-auto p-4">
+                        <SkeletonKanbanColumn />
                         <SkeletonKanbanColumn />
                         <SkeletonKanbanColumn />
                         <SkeletonKanbanColumn />
