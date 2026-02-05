@@ -2,7 +2,12 @@ package ws
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -18,10 +23,10 @@ const (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+	CheckOrigin:     isWebSocketOriginAllowed,
 }
+
+var orgIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
 
 // Handler upgrades HTTP connections to websocket clients.
 type Handler struct {
@@ -73,8 +78,9 @@ func (c *Client) ReadPump() {
 
 		switch payload.Type {
 		case "subscribe":
-			if payload.OrgID != "" {
-				c.SetOrgID(payload.OrgID)
+			orgID := strings.TrimSpace(payload.OrgID)
+			if isAllowedSubscriptionOrgID(orgID) {
+				c.SetOrgID(orgID)
 			}
 		}
 	}
@@ -106,5 +112,103 @@ func (c *Client) WritePump() {
 				return
 			}
 		}
+	}
+}
+
+func isAllowedSubscriptionOrgID(orgID string) bool {
+	if orgID == "" {
+		return false
+	}
+	if orgID == "demo" || orgID == "default" {
+		return true
+	}
+	return orgIDPattern.MatchString(orgID)
+}
+
+func isWebSocketOriginAllowed(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		// Non-browser clients may omit Origin.
+		return true
+	}
+
+	parsedOrigin, err := url.Parse(origin)
+	if err != nil || parsedOrigin.Host == "" {
+		return false
+	}
+
+	if allowed := parseAllowedOrigins(os.Getenv("WS_ALLOWED_ORIGINS")); len(allowed) > 0 {
+		for _, candidate := range allowed {
+			if strings.EqualFold(origin, candidate) {
+				return true
+			}
+		}
+		return false
+	}
+
+	originHost, originPort := splitHostPort(parsedOrigin.Host, parsedOrigin.Scheme)
+	requestScheme := "http"
+	if r.TLS != nil {
+		requestScheme = "https"
+	}
+	requestHost, requestPort := splitHostPort(strings.TrimSpace(r.Host), requestScheme)
+	if originHost == "" || requestHost == "" {
+		return false
+	}
+	if !strings.EqualFold(originPort, requestPort) {
+		return false
+	}
+	if strings.EqualFold(originHost, requestHost) {
+		return true
+	}
+
+	// Treat loopback aliases as equivalent when port matches.
+	return isLoopbackHost(originHost) && isLoopbackHost(requestHost)
+}
+
+func parseAllowedOrigins(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	out := make([]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		candidate := strings.TrimSpace(strings.TrimRight(part, "/"))
+		if candidate != "" {
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+func splitHostPort(hostport, scheme string) (string, string) {
+	hostport = strings.TrimSpace(hostport)
+	if hostport == "" {
+		return "", ""
+	}
+
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = hostport
+		switch strings.ToLower(scheme) {
+		case "http", "ws":
+			port = "80"
+		case "https", "wss":
+			port = "443"
+		default:
+			port = ""
+		}
+	}
+
+	host = strings.Trim(host, "[]")
+	return strings.ToLower(host), port
+}
+
+func isLoopbackHost(host string) bool {
+	switch strings.ToLower(strings.Trim(host, "[]")) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
 	}
 }
