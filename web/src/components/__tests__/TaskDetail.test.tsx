@@ -3,8 +3,6 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import TaskDetail, {
   type TaskDetailData,
-  type TaskStatus,
-  type TaskPriority,
   StatusBadge,
   PriorityBadge,
 } from "../TaskDetail";

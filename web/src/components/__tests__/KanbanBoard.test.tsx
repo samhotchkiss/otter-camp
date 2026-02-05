@@ -274,14 +274,14 @@ describe("KanbanBoard Task Types", () => {
     const task: Task = {
       id: "test-1",
       title: "Test Task",
-      status: "backlog",
+      status: "todo",
       priority: "medium",
       createdAt: new Date().toISOString(),
     };
 
     expect(task.id).toBe("test-1");
     expect(task.title).toBe("Test Task");
-    expect(task.status).toBe("backlog");
+    expect(task.status).toBe("todo");
   });
 
   it("allows optional fields in Task", () => {
@@ -296,10 +296,10 @@ describe("KanbanBoard Task Types", () => {
   });
 
   it("validates TaskStatus union type", () => {
-    const validStatuses: TaskStatus[] = ["backlog", "in-progress", "review", "done"];
+    const validStatuses: TaskStatus[] = ["todo", "in-progress", "done"];
     
     validStatuses.forEach((status) => {
-      expect(["backlog", "in-progress", "review", "done"]).toContain(status);
+      expect(["todo", "in-progress", "done"]).toContain(status);
     });
   });
 });
