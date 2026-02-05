@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import CommandPalette from "../components/CommandPalette";
 import OnboardingTour from "../components/OnboardingTour";
 import TaskDetail from "../components/TaskDetail";
 import NewTaskModal from "../components/NewTaskModal";
 import type { Command } from "../hooks/useCommandPalette";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
+import { api, type ActionItem, type FeedItem } from "../lib/api";
 
 /**
  * Dashboard - Two-column layout matching Jeff G's mockups
@@ -14,8 +15,8 @@ import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContex
  * - Secondary (right): Quick actions + Projects list
  */
 
-// Sample action items for demo
-const ACTION_ITEMS = [
+// Fallback data when API is unavailable
+const FALLBACK_ACTION_ITEMS: ActionItem[] = [
   {
     id: "1",
     icon: "🚀",
@@ -38,8 +39,7 @@ const ACTION_ITEMS = [
   },
 ];
 
-// Sample feed items for demo
-const FEED_ITEMS = [
+const FALLBACK_FEED_ITEMS: FeedItem[] = [
   {
     id: "summary",
     avatar: "✓",
@@ -98,6 +98,40 @@ export default function Dashboard() {
     closeNewTask,
   } = useKeyboardShortcutsContext();
 
+  // API state
+  const [actionItems, setActionItems] = useState<ActionItem[]>(FALLBACK_ACTION_ITEMS);
+  const [feedItems, setFeedItems] = useState<FeedItem[]>(FALLBACK_FEED_ITEMS);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch feed data from API
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchFeed() {
+      try {
+        setIsLoading(true);
+        setError(null);
+        const data = await api.feed();
+        if (!cancelled) {
+          if (data.actionItems?.length) setActionItems(data.actionItems);
+          if (data.feedItems?.length) setFeedItems(data.feedItems);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('API unavailable, using fallback data:', err);
+          setError('Unable to connect to API');
+          // Keep fallback data
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    fetchFeed();
+    return () => { cancelled = true; };
+  }, []);
+
   const commands = useMemo<Command[]>(
     () => [
       {
@@ -147,10 +181,17 @@ export default function Dashboard() {
         <section className="section" data-tour="needs-you">
           <header className="section-header">
             <h2 className="section-title">⚡ NEEDS YOU</h2>
-            <span className="section-count">{ACTION_ITEMS.length}</span>
+            <span className="section-count">{actionItems.length}</span>
+            {isLoading && <span className="loading-indicator">⏳</span>}
           </header>
 
-          {ACTION_ITEMS.map((item) => (
+          {error && (
+            <div className="api-notice">
+              <span>📡 Using cached data</span>
+            </div>
+          )}
+
+          {actionItems.map((item) => (
             <div key={item.id} className="action-card">
               <div className="action-header">
                 <span className="action-icon">{item.icon}</span>
@@ -176,11 +217,11 @@ export default function Dashboard() {
         <section className="section" data-tour="your-feed">
           <header className="section-header">
             <h2 className="section-title">📡 YOUR FEED</h2>
-            <span className="section-count muted">{FEED_ITEMS.length}</span>
+            <span className="section-count muted">{feedItems.length}</span>
           </header>
 
           <div className="card">
-            {FEED_ITEMS.map((item, index) => (
+            {feedItems.map((item) => (
               <div key={item.id} className="feed-item">
                 <div 
                   className="feed-avatar" 
@@ -269,6 +310,30 @@ export default function Dashboard() {
       <NewTaskModal isOpen={isNewTaskOpen} onClose={closeNewTask} />
 
       <style>{`
+        /* Loading and API states */
+        .loading-indicator {
+          margin-left: 8px;
+          animation: pulse 1s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
+        
+        .api-notice {
+          background: var(--surface-alt);
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          padding: 8px 12px;
+          margin-bottom: 12px;
+          font-size: 12px;
+          color: var(--text-muted);
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        
         /* Otter illustration */
         .otter-illustration {
           background: var(--surface);
