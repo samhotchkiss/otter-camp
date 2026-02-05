@@ -53,6 +53,7 @@ func NewRouter() http.Handler {
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
 	taskHandler := &TaskHandler{Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
+	agentsHandler := &AgentsHandler{}
 	
 	// All API routes under /api prefix
 	r.Route("/api", func(r chi.Router) {
@@ -73,6 +74,7 @@ func NewRouter() http.Handler {
 		r.Post("/approvals/exec/{id}/respond", execApprovalsHandler.Respond)
 		r.Get("/tasks", taskHandler.ListTasks)
 		r.Post("/tasks", taskHandler.CreateTask)
+		r.Get("/agents", agentsHandler.List)
 		r.Patch("/tasks/{id}", taskHandler.UpdateTask)
 		r.Patch("/tasks/{id}/status", taskHandler.UpdateTaskStatus)
 		r.Post("/messages/attachments", attachmentsHandler.Upload)

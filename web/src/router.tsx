@@ -13,6 +13,7 @@ const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
 const TaskDetailPage = lazy(() => import("./pages/TaskDetailPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
+const InboxPage = lazy(() => import("./pages/InboxPage"));
 
 /**
  * Suspense wrapper for lazy-loaded routes with loading fallback.
@@ -73,6 +74,10 @@ export const router = createBrowserRouter([
       {
         path: "notifications",
         element: <NotificationsPage />,
+      },
+      {
+        path: "inbox",
+        element: <InboxPage />,
       },
     ],
   },

@@ -92,8 +92,10 @@ const GAP = 16;
  * - Click card to open AgentDM modal
  * - Real-time status updates via WebSocket
  */
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
+
 function AgentsPageComponent({
-  apiEndpoint = "/api/agents",
+  apiEndpoint = `${API_URL}/api/agents?demo=true`,
 }: AgentsPageProps) {
   const [agents, setAgents] = useState<AgentCardData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
