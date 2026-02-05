@@ -11,6 +11,7 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const FeedPage = lazy(() => import("./pages/FeedPage"));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
+const TaskDetailPage = lazy(() => import("./pages/TaskDetailPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
 /**
@@ -48,6 +49,10 @@ export const router = createBrowserRouter([
       {
         path: "tasks",
         element: <Dashboard />,
+      },
+      {
+        path: "tasks/:taskId",
+        element: <TaskDetailPage />,
       },
       {
         path: "agents",
