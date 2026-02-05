@@ -154,7 +154,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
         <button
           type="button"
           onClick={(e) => e.stopPropagation()}
-          className="rounded-lg p-2 text-slate-400 opacity-0 transition hover:bg-slate-100 hover:text-slate-600 group-hover:opacity-100 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+          className="rounded-lg p-2 text-[var(--text-muted)] opacity-0 transition hover:bg-[var(--surface-alt)] hover:text-[var(--text)] group-hover:opacity-100"
           aria-label="Project options"
         >
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -173,7 +173,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
       {(project.status || project.priority || project.assignee) && (
         <div className="mt-3 flex flex-wrap gap-2">
           {project.status && (
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+            <span className="rounded-full bg-[var(--surface-alt)] px-3 py-1 text-xs font-medium text-[var(--text-muted)]">
               Status: {project.status}
             </span>
           )}
@@ -197,7 +197,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
             {completedCount}/{taskCount} tasks
           </span>
         </div>
-        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--surface-alt)]">
           <div
             className={`h-full rounded-full transition-all ${colors.progress}`}
             style={{ width: `${progress}%` }}
@@ -345,7 +345,7 @@ export default function ProjectsPage({
       {/* Use Cmd+K (magic bar) to search projects */}
       <div className="mb-4 flex items-center justify-between">
         <p className="text-sm text-slate-600 dark:text-slate-400">
-          {projects.length} projects • Press <kbd className="rounded bg-slate-200 px-1.5 py-0.5 text-xs dark:bg-slate-700">⌘K</kbd> to search
+          {projects.length} projects • Press <kbd className="rounded bg-[var(--surface-alt)] px-1.5 py-0.5 text-xs">⌘K</kbd> to search
         </p>
       </div>
 

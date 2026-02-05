@@ -246,9 +246,9 @@ export default function ProjectDetailPage() {
   }
 
   const statusColors: Record<string, { dot: string; text: string }> = {
-    active: { dot: "bg-emerald-500", text: "Active" },
-    completed: { dot: "bg-slate-400", text: "Completed" },
-    archived: { dot: "bg-slate-400", text: "Archived" },
+    active: { dot: "bg-[var(--green)]", text: "Active" },
+    completed: { dot: "bg-[var(--text-muted)]", text: "Completed" },
+    archived: { dot: "bg-[var(--text-muted)]", text: "Archived" },
     blocked: { dot: "bg-amber-500", text: "Blocked" },
   };
 
