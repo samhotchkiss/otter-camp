@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import DataManagement from "../components/DataManagement";
+import GitHubSettings from "./settings/GitHubSettings";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -974,6 +975,8 @@ export default function SettingsPage() {
           onRevokeApiKey={handleRevokeApiKey}
           saving={savingIntegrations}
         />
+
+        <GitHubSettings />
 
         <AppearanceSection theme={theme} onUpdate={setTheme} />
 
