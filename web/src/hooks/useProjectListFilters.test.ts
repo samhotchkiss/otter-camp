@@ -86,11 +86,14 @@ describe('useProjectListFilters', () => {
     expect(localStorage.getItem(ACTIVE_KEY)).toBe(presetId);
   });
 
-  it('marks a preset as modified and can update it', () => {
+  it('marks a preset as modified and can update it', async () => {
     const { result } = renderHook(() => useProjectListFilters());
 
     act(() => {
       result.current.setStatus('active');
+    });
+
+    act(() => {
       result.current.savePreset('Active');
     });
 
@@ -109,7 +112,9 @@ describe('useProjectListFilters', () => {
       expect(updated).not.toBeNull();
     });
 
-    expect(result.current.isActivePresetDirty).toBe(false);
+    await waitFor(() => {
+      expect(result.current.isActivePresetDirty).toBe(false);
+    });
     expect(result.current.activePreset?.filters.priority).toBe('urgent');
   });
 
@@ -168,4 +173,3 @@ describe('useProjectListFilters', () => {
     expect(result.current.filters.sort).toBe('name');
   });
 });
-
