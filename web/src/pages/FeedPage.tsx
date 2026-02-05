@@ -2,7 +2,7 @@ import ActivityPanel from "../components/ActivityPanel";
 
 export default function FeedPage() {
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="w-full">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
           Activity Feed

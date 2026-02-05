@@ -659,7 +659,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
 
   if (isLoading) {
     return (
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         <LoadingSpinner message="Loading task..." size="lg" />
       </div>
     );
@@ -667,7 +667,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
 
   if (error) {
     return (
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
           <h1 className="text-lg font-semibold">Couldn’t load task</h1>
           <p className="mt-1 text-sm">{error}</p>
@@ -690,7 +690,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
 
   if (!task) {
     return (
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         <div className="rounded-2xl border border-slate-200 bg-white/80 p-6 dark:border-slate-800 dark:bg-slate-900/80">
           <h1 className="text-lg font-semibold text-slate-900 dark:text-white">Task not found</h1>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
@@ -707,7 +707,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="w-full space-y-6">
       {/* Header */}
       <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">

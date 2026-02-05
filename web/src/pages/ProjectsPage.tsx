@@ -373,7 +373,7 @@ export default function ProjectsPage({
 
   if (error) {
     return (
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         <div className="mb-6">
           <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
             Projects
@@ -390,7 +390,7 @@ export default function ProjectsPage({
 
   if (projects.length === 0) {
     return (
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         <div className="mb-6">
           <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
             Projects
@@ -405,7 +405,7 @@ export default function ProjectsPage({
   }
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="w-full">
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
