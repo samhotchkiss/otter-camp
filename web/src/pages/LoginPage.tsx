@@ -33,7 +33,7 @@ export default function LoginPage() {
 
   // Quick login for testing (Sam's request: simple magic link)
   const handleQuickLogin = () => {
-    login("sam@hotchkiss.me", "demo-org");
+    login("sam@hotchkiss.me", "Sam");
   };
 
   return (

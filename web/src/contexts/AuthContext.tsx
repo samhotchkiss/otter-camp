@@ -19,6 +19,7 @@ type AuthContextValue = {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  login: (email: string, name?: string) => void;
   requestLogin: (orgId: string) => Promise<AuthRequest>;
   exchangeToken: (requestId: string, token: string) => Promise<void>;
   logout: () => void;
@@ -156,10 +157,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setUser(null);
   }, []);
 
+  // Simple login for MVP - just sets the user directly
+  const login = useCallback((email: string, name?: string) => {
+    const newUser: User = {
+      id: email.split('@')[0] || 'user',
+      email,
+      name: name || email.split('@')[0] || 'User',
+    };
+    localStorage.setItem(TOKEN_KEY, 'magic-link-token');
+    localStorage.setItem(USER_KEY, JSON.stringify(newUser));
+    setUser(newUser);
+  }, []);
+
   const value: AuthContextValue = {
     user,
     isLoading,
     isAuthenticated: !!user,
+    login,
     requestLogin,
     exchangeToken,
     logout,
