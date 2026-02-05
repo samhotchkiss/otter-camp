@@ -1,11 +1,33 @@
-# Dockerfile - Go Backend (Multi-stage build)
-# Build: docker build -t otter-camp-api .
-# Run: docker run -p 8080:8080 --env-file .env otter-camp-api
+# Dockerfile - Combined Frontend + Backend Build
+# Build: docker build -t otter-camp .
+# Run: docker run -p 8080:8080 --env-file .env otter-camp
 
 # =============================================================================
-# Stage 1: Build
+# Stage 1: Build Frontend
 # =============================================================================
-FROM golang:1.24-alpine AS builder
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /app
+
+# Copy package files first (better caching)
+COPY web/package.json web/package-lock.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY web/ ./
+
+# Build for production
+ARG VITE_API_URL=/api
+ENV VITE_API_URL=$VITE_API_URL
+
+RUN npm run build
+
+# =============================================================================
+# Stage 2: Build Backend
+# =============================================================================
+FROM golang:1.24-alpine AS backend-builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -26,7 +48,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     ./cmd/server
 
 # =============================================================================
-# Stage 2: Runtime
+# Stage 3: Runtime
 # =============================================================================
 FROM alpine:3.19
 
@@ -40,10 +62,16 @@ RUN addgroup -g 1000 otter && \
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/server /app/server
+COPY --from=backend-builder /app/server /app/server
 
 # Copy migrations (needed for runtime migration)
-COPY --from=builder /app/migrations /app/migrations
+COPY --from=backend-builder /app/migrations /app/migrations
+
+# Copy frontend build
+COPY --from=frontend-builder /app/dist /app/static
+
+# Set environment variable for static directory
+ENV STATIC_DIR=/app/static
 
 # Set ownership
 RUN chown -R otter:otter /app

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
@@ -36,50 +35,73 @@ func NewRouter() http.Handler {
 		MaxAge:           300,
 	}))
 
-	r.Use(middleware.SetHeader("Content-Type", "application/json"))
+	// Only set Content-Type for API routes
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Set JSON content-type only for API routes
+			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" || r.URL.Path == "/health" || r.URL.Path == "/ws" {
+				w.Header().Set("Content-Type", "application/json")
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	r.Get("/health", handleHealth)
-	r.Get("/", handleRoot)
-	r.Post("/api/waitlist", HandleWaitlist)
-	r.Get("/api/search", SearchHandler)
-	r.Get("/api/commands/search", CommandSearchHandler)
-	r.Post("/api/commands/execute", CommandExecuteHandler)
-	r.Get("/api/feed", FeedHandlerV2)
-	r.Post("/api/auth/login", HandleLogin)
-	r.Post("/api/auth/exchange", HandleAuthExchange)
-	r.Get("/api/auth/exchange", HandleAuthExchange)
-
-	// User settings endpoints
-	r.Get("/api/user/prefixes", HandleUserCommandPrefixesList)
-	r.Post("/api/user/prefixes", HandleUserCommandPrefixesCreate)
-	r.Delete("/api/user/prefixes/{id}", HandleUserCommandPrefixesDelete)
-
+	
+	// API routes first
+	r.Route("/api", func(r chi.Router) {
+		r.Post("/waitlist", HandleWaitlist)
+		r.Get("/search", SearchHandler)
+		r.Get("/commands/search", CommandSearchHandler)
+		r.Post("/commands/execute", CommandExecuteHandler)
+		r.Get("/feed", FeedHandlerV2)
+		r.Post("/auth/login", HandleLogin)
+		r.Post("/auth/exchange", HandleAuthExchange)
+		r.Get("/auth/exchange", HandleAuthExchange)
+		r.Get("/user/prefixes", HandleUserCommandPrefixesList)
+		r.Post("/user/prefixes", HandleUserCommandPrefixesCreate)
+		r.Delete("/user/prefixes/{id}", HandleUserCommandPrefixesDelete)
+	})
+	
 	webhookHandler := &WebhookHandler{Hub: hub}
-	r.Post("/api/webhooks/openclaw", webhookHandler.OpenClawHandler)
-
 	feedPushHandler := NewFeedPushHandler(hub)
-	r.Post("/api/feed", feedPushHandler.Handle)
-
-	r.Handle("/ws", &ws.Handler{Hub: hub})
-
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
-	r.Get("/api/approvals/exec", execApprovalsHandler.List)
-	r.Post("/api/approvals/exec/{id}/respond", execApprovalsHandler.Respond)
-
 	taskHandler := &TaskHandler{Hub: hub}
-	r.Get("/api/tasks", taskHandler.ListTasks)
-	r.Post("/api/tasks", taskHandler.CreateTask)
-	r.Patch("/api/tasks/{id}", taskHandler.UpdateTask)
-	r.Patch("/api/tasks/{id}/status", taskHandler.UpdateTaskStatus)
-
 	attachmentsHandler := &AttachmentsHandler{}
-	r.Post("/api/messages/attachments", attachmentsHandler.Upload)
-	r.Get("/api/attachments/{id}", attachmentsHandler.GetAttachment)
-
-	// Export/Import endpoints
-	r.Get("/api/export", HandleExport)
-	r.Post("/api/import", HandleImport)
-	r.Post("/api/import/validate", HandleImportValidate)
+	
+	// All API routes under /api prefix
+	r.Route("/api", func(r chi.Router) {
+		r.Post("/waitlist", HandleWaitlist)
+		r.Get("/search", SearchHandler)
+		r.Get("/commands/search", CommandSearchHandler)
+		r.Post("/commands/execute", CommandExecuteHandler)
+		r.Get("/feed", FeedHandlerV2)
+		r.Post("/feed", feedPushHandler.Handle)
+		r.Post("/auth/login", HandleLogin)
+		r.Post("/auth/exchange", HandleAuthExchange)
+		r.Get("/auth/exchange", HandleAuthExchange)
+		r.Get("/user/prefixes", HandleUserCommandPrefixesList)
+		r.Post("/user/prefixes", HandleUserCommandPrefixesCreate)
+		r.Delete("/user/prefixes/{id}", HandleUserCommandPrefixesDelete)
+		r.Post("/webhooks/openclaw", webhookHandler.OpenClawHandler)
+		r.Get("/approvals/exec", execApprovalsHandler.List)
+		r.Post("/approvals/exec/{id}/respond", execApprovalsHandler.Respond)
+		r.Get("/tasks", taskHandler.ListTasks)
+		r.Post("/tasks", taskHandler.CreateTask)
+		r.Patch("/tasks/{id}", taskHandler.UpdateTask)
+		r.Patch("/tasks/{id}/status", taskHandler.UpdateTaskStatus)
+		r.Post("/messages/attachments", attachmentsHandler.Upload)
+		r.Get("/attachments/{id}", attachmentsHandler.GetAttachment)
+		r.Get("/export", HandleExport)
+		r.Post("/import", HandleImport)
+		r.Post("/import/validate", HandleImportValidate)
+	})
+	
+	// WebSocket handler
+	r.Handle("/ws", &ws.Handler{Hub: hub})
+	
+	// Static file fallback for frontend SPA (must be last)
+	r.Get("/*", handleRoot)
 
 	return r
 }
@@ -96,6 +118,20 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
+	// Check if we should serve the frontend
+	staticDir := os.Getenv("STATIC_DIR")
+	if staticDir == "" {
+		staticDir = "./static"
+	}
+	
+	// Check if static directory exists
+	if _, err := os.Stat(staticDir); err == nil {
+		// Serve index.html for root and non-API paths
+		serveStatic(staticDir, w, r)
+		return
+	}
+	
+	// Fall back to JSON response if no static files
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
@@ -107,6 +143,31 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 		"docs":    "/docs",
 		"health":  "/health",
 	})
+}
+
+func serveStatic(dir string, w http.ResponseWriter, r *http.Request) {
+	// Remove Content-Type: application/json header for static files
+	w.Header().Del("Content-Type")
+	
+	path := r.URL.Path
+	if path == "/" {
+		path = "/index.html"
+	}
+	
+	// Try to serve the exact file
+	filePath := dir + path
+	if _, err := os.Stat(filePath); err == nil {
+		http.ServeFile(w, r, filePath)
+		return
+	}
+	
+	// For SPA: serve index.html for all non-asset routes
+	if _, err := os.Stat(dir + "/index.html"); err == nil {
+		http.ServeFile(w, r, dir+"/index.html")
+		return
+	}
+	
+	http.NotFound(w, r)
 }
 
 func getVersion() string {
