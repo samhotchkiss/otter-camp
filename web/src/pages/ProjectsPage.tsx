@@ -26,29 +26,29 @@ type Project = {
 const SAMPLE_PROJECTS: Project[] = [
   {
     id: "1",
-    name: "Otter Camp",
-    description: "Task management for AI-assisted workflows",
-    taskCount: 24,
-    completedCount: 18,
-    color: "sky",
-    emoji: "🦦",
-    status: "active",
-    assignee: "🦦 Scout Otter",
-    priority: "high",
-    updatedAt: "2026-02-03T18:12:00Z",
-  },
-  {
-    id: "2",
     name: "Pearl Proxy",
     description: "Memory and routing infrastructure",
     taskCount: 12,
     completedCount: 5,
-    color: "emerald",
+    color: "amber",
     emoji: "🔮",
     status: "active",
-    assignee: "🦦 Builder Otter",
+    assignee: "Derek",
     priority: "urgent",
     updatedAt: "2026-02-04T01:30:00Z",
+  },
+  {
+    id: "2",
+    name: "Otter Camp",
+    description: "Task management for AI-assisted workflows",
+    taskCount: 24,
+    completedCount: 18,
+    color: "amber",
+    emoji: "🦦",
+    status: "active",
+    assignee: "Derek",
+    priority: "high",
+    updatedAt: "2026-02-03T18:12:00Z",
   },
   {
     id: "3",
@@ -59,7 +59,7 @@ const SAMPLE_PROJECTS: Project[] = [
     color: "amber",
     emoji: "⚡",
     status: "completed",
-    assignee: "🦦 Lead Otter",
+    assignee: "Ivy",
     priority: "medium",
     updatedAt: "2026-01-29T10:00:00Z",
   },
@@ -69,35 +69,36 @@ const SAMPLE_PROJECTS: Project[] = [
     description: "Educational content and presentations",
     taskCount: 15,
     completedCount: 10,
-    color: "violet",
+    color: "amber",
     emoji: "🪨",
     status: "archived",
-    assignee: null,
+    assignee: "Stone",
     priority: "low",
     updatedAt: "2025-12-18T15:45:00Z",
   },
 ];
 
+// All projects use gold/amber accent color per DESIGN-SPEC.md
 const colorClasses: Record<string, { bg: string; text: string; progress: string }> = {
   sky: {
-    bg: "bg-sky-100 dark:bg-sky-900/30",
-    text: "text-sky-700 dark:text-sky-300",
-    progress: "bg-sky-500",
+    bg: "bg-amber-100/50 dark:bg-amber-900/20",
+    text: "text-amber-700 dark:text-amber-300",
+    progress: "bg-[#C9A86C]",
   },
   emerald: {
-    bg: "bg-emerald-100 dark:bg-emerald-900/30",
-    text: "text-emerald-700 dark:text-emerald-300",
-    progress: "bg-emerald-500",
+    bg: "bg-amber-100/50 dark:bg-amber-900/20",
+    text: "text-amber-700 dark:text-amber-300",
+    progress: "bg-[#C9A86C]",
   },
   amber: {
-    bg: "bg-amber-100 dark:bg-amber-900/30",
+    bg: "bg-amber-100/50 dark:bg-amber-900/20",
     text: "text-amber-700 dark:text-amber-300",
-    progress: "bg-amber-500",
+    progress: "bg-[#C9A86C]",
   },
   violet: {
-    bg: "bg-violet-100 dark:bg-violet-900/30",
-    text: "text-violet-700 dark:text-violet-300",
-    progress: "bg-violet-500",
+    bg: "bg-amber-100/50 dark:bg-amber-900/20",
+    text: "text-amber-700 dark:text-amber-300",
+    progress: "bg-[#C9A86C]",
   },
 };
 
@@ -145,7 +146,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
   return (
     <div
       onClick={onClick}
-      className="group cursor-pointer rounded-2xl border border-slate-200 bg-white/80 p-5 shadow-sm backdrop-blur transition hover:border-slate-300 hover:shadow-md dark:border-slate-800 dark:bg-slate-900/80 dark:hover:border-slate-700">
+      className="group cursor-pointer rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm backdrop-blur transition hover:border-[var(--accent)]/30 hover:shadow-md">
       <div className="flex items-start justify-between">
         <div className={`flex h-12 w-12 items-center justify-center rounded-xl text-2xl ${colors.bg}`}>
           {project.emoji}
@@ -332,7 +333,7 @@ export default function ProjectsPage({
         <button
           type="button"
           onClick={handleCreateProject}
-          className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
+          className="inline-flex items-center gap-2 rounded-xl bg-[#C9A86C] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-[#B8975B] focus:outline-none focus:ring-2 focus:ring-[#C9A86C] focus:ring-offset-2 focus:ring-offset-[var(--bg)]"
         >
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -361,7 +362,7 @@ export default function ProjectsPage({
         <button
           type="button"
           onClick={handleCreateProject}
-          className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-white/50 p-5 text-slate-500 transition hover:border-amber-400 hover:bg-amber-50/50 hover:text-amber-600 dark:border-slate-700 dark:bg-slate-900/50 dark:hover:border-amber-600 dark:hover:bg-amber-900/20 dark:hover:text-amber-400"
+          className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[var(--border)] bg-[var(--surface)]/50 p-5 text-[var(--text-muted)] transition hover:border-[#C9A86C] hover:bg-[#C9A86C]/10 hover:text-[#C9A86C]"
         >
           <svg className="h-10 w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />

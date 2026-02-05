@@ -15,25 +15,25 @@ const DEMO_PROJECTS: Record<string, {
 }> = {
   "1": {
     id: "1",
-    name: "Otter Camp",
-    description: "Task management for AI-assisted workflows",
-    emoji: "🦦",
-    color: "sky",
-    status: "active",
-    lead: "Scout Otter",
-    taskCount: 24,
-    completedCount: 18,
-  },
-  "2": {
-    id: "2",
     name: "Pearl Proxy",
     description: "Memory and routing infrastructure",
     emoji: "🔮",
-    color: "emerald",
+    color: "amber",
     status: "active",
-    lead: "Builder Otter",
+    lead: "Derek",
     taskCount: 12,
     completedCount: 5,
+  },
+  "2": {
+    id: "2",
+    name: "Otter Camp",
+    description: "Task management for AI-assisted workflows",
+    emoji: "🦦",
+    color: "amber",
+    status: "active",
+    lead: "Derek",
+    taskCount: 24,
+    completedCount: 18,
   },
   "3": {
     id: "3",
@@ -51,7 +51,7 @@ const DEMO_PROJECTS: Record<string, {
     name: "Three Stones",
     description: "Educational content and presentations",
     emoji: "🪨",
-    color: "violet",
+    color: "amber",
     status: "archived",
     lead: "Stone",
     taskCount: 15,
@@ -117,10 +117,10 @@ function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
   return (
     <div
       onClick={onClick}
-      className={`cursor-pointer rounded-xl border bg-white p-4 transition hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900 ${
+      className={`cursor-pointer rounded-xl border bg-[var(--surface)] p-4 transition hover:-translate-y-0.5 hover:shadow-md ${
         task.blocked
-          ? "border-l-4 border-l-amber-500 border-t-slate-200 border-r-slate-200 border-b-slate-200 dark:border-t-slate-700 dark:border-r-slate-700 dark:border-b-slate-700"
-          : "border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-600"
+          ? "border-l-4 border-l-[#C9A86C] border-t-[var(--border)] border-r-[var(--border)] border-b-[var(--border)]"
+          : "border-[var(--border)] hover:border-[#C9A86C]/50"
       } ${task.status === "done" ? "opacity-70" : ""}`}
     >
       <h4 className="mb-3 text-sm font-semibold text-slate-900 dark:text-white">
@@ -156,10 +156,10 @@ function BoardColumn({
   onTaskClick?: (task: Task) => void;
 }) {
   return (
-    <div className="flex w-80 flex-shrink-0 flex-col rounded-xl bg-slate-100 dark:bg-slate-800/50">
-      <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-700">
-        <span className="text-sm font-bold text-slate-900 dark:text-white">{title}</span>
-        <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-slate-500 dark:bg-slate-700 dark:text-slate-300">
+    <div className="flex w-80 flex-shrink-0 flex-col rounded-xl bg-[var(--surface-alt)]">
+      <div className="flex items-center gap-3 border-b border-[var(--border)] px-5 py-4">
+        <span className="text-sm font-bold text-[var(--text)]">{title}</span>
+        <span className="rounded-full bg-[var(--surface)] px-2.5 py-0.5 text-xs font-semibold text-[var(--text-muted)]">
           {tasks.length}
         </span>
       </div>
@@ -170,7 +170,7 @@ function BoardColumn({
       </div>
       <button
         type="button"
-        className="mx-3 mb-3 rounded-lg border-2 border-dashed border-slate-300 bg-transparent py-3 text-sm text-slate-500 transition hover:border-amber-500 hover:text-slate-700 dark:border-slate-600 dark:hover:border-amber-400 dark:hover:text-slate-300"
+        className="mx-3 mb-3 rounded-lg border-2 border-dashed border-[var(--border)] bg-transparent py-3 text-sm text-[var(--text-muted)] transition hover:border-[#C9A86C] hover:text-[#C9A86C]"
       >
         + Add Task
       </button>
@@ -180,7 +180,7 @@ function BoardColumn({
 
 function ActivityItem({ activity }: { activity: Activity }) {
   return (
-    <div className="rounded-lg p-3 transition hover:bg-slate-100 dark:hover:bg-slate-800">
+    <div className="rounded-lg p-3 transition hover:bg-[var(--surface-alt)]">
       <div className="mb-1.5 flex items-center gap-2.5">
         <div
           className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold text-white"
@@ -188,16 +188,16 @@ function ActivityItem({ activity }: { activity: Activity }) {
         >
           {activity.agent[0]}
         </div>
-        <span className="text-sm font-semibold text-slate-900 dark:text-white">
+        <span className="text-sm font-semibold text-[var(--text)]">
           {activity.agent}
         </span>
-        <span className="ml-auto text-xs text-slate-500 dark:text-slate-400">
+        <span className="ml-auto text-xs text-[var(--text-muted)]">
           {activity.timeAgo}
         </span>
       </div>
-      <p className="text-sm text-slate-600 dark:text-slate-400">
+      <p className="text-sm text-[var(--text-muted)]">
         {activity.text}
-        <strong className="text-slate-900 dark:text-white">{activity.highlight}</strong>
+        <strong className="text-[var(--text)]">{activity.highlight}</strong>
       </p>
     </div>
   );
@@ -277,9 +277,9 @@ export default function ProjectDetailPage() {
       </nav>
 
       {/* Project Header */}
-      <header className="mb-6 rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+      <header className="mb-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
         <div className="flex items-center gap-5">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-4xl dark:bg-slate-800">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--surface-alt)] text-4xl">
             {project.emoji}
           </div>
           <div className="flex-1">
@@ -304,13 +304,13 @@ export default function ProjectDetailPage() {
           <div className="flex gap-3">
             <button
               type="button"
-              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-medium text-[var(--text)] transition hover:bg-[var(--surface-alt)]"
             >
               Settings
             </button>
             <button
               type="button"
-              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-700"
+              className="rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#B8975B]"
             >
               + New Task
             </button>
@@ -360,10 +360,10 @@ export default function ProjectDetailPage() {
           </div>
 
           {/* Activity Sidebar */}
-          <aside className="hidden w-80 flex-shrink-0 rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 xl:flex xl:flex-col">
-            <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+          <aside className="hidden w-80 flex-shrink-0 rounded-2xl border border-[var(--border)] bg-[var(--surface)] xl:flex xl:flex-col">
+            <div className="flex items-center gap-2 border-b border-[var(--border)] px-5 py-4">
               <span className="text-sm">📡</span>
-              <span className="text-sm font-bold text-slate-900 dark:text-white">
+              <span className="text-sm font-bold text-[var(--text)]">
                 Recent Activity
               </span>
             </div>
@@ -377,19 +377,19 @@ export default function ProjectDetailPage() {
       )}
 
       {activeTab === "list" && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
           <div className="space-y-3">
             {DEMO_TASKS.filter(t => t.status !== "done").map((task) => (
               <div
                 key={task.id}
                 onClick={() => handleTaskClick(task)}
-                className="flex cursor-pointer items-center gap-4 rounded-xl border border-slate-200 p-4 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+                className="flex cursor-pointer items-center gap-4 rounded-xl border border-[var(--border)] p-4 transition hover:border-[#C9A86C]/50 hover:bg-[var(--surface-alt)]"
               >
-                <input type="checkbox" className="h-5 w-5 rounded border-slate-300 dark:border-slate-600" readOnly />
-                <span className="flex-1 text-sm font-medium text-slate-900 dark:text-white">
+                <input type="checkbox" className="h-5 w-5 rounded border-[var(--border)]" readOnly />
+                <span className="flex-1 text-sm font-medium text-[var(--text)]">
                   {task.title}
                 </span>
-                <span className="text-xs text-slate-500 dark:text-slate-400">
+                <span className="text-xs text-[var(--text-muted)]">
                   {task.assignee}
                 </span>
                 <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
@@ -406,7 +406,7 @@ export default function ProjectDetailPage() {
       )}
 
       {activeTab === "activity" && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
           <div className="space-y-2">
             {DEMO_ACTIVITY.map((activity) => (
               <ActivityItem key={activity.id} activity={activity} />
@@ -416,11 +416,11 @@ export default function ProjectDetailPage() {
       )}
 
       {activeTab === "settings" && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+          <h2 className="mb-4 text-lg font-semibold text-[var(--text)]">
             Project Settings
           </h2>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
+          <p className="text-sm text-[var(--text-muted)]">
             Project settings coming soon...
           </p>
         </div>
