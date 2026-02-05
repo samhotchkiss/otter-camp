@@ -214,11 +214,17 @@ type ApiSearchResponse = {
 
 const fetchSearchResults = async (
   query: string,
-  orgId: string
+  orgId?: string
 ): Promise<SearchResult[]> => {
   const url = new URL(`${API_BASE}/api/search`, window.location.origin);
   url.searchParams.set("q", query);
-  url.searchParams.set("org_id", orgId);
+  
+  // Use demo mode if no orgId or on demo subdomain
+  if (!orgId || isDemoMode()) {
+    url.searchParams.set("demo", "true");
+  } else {
+    url.searchParams.set("org_id", orgId);
+  }
 
   const response = await fetch(url.toString());
   if (!response.ok) {
@@ -299,7 +305,7 @@ export default function GlobalSearch({
   const [isLoading, setIsLoading] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
-  const [useLocalFuzzy, setUseLocalFuzzy] = useState(!orgId);
+  const [useLocalFuzzy] = useState(false); // Always use API (supports demo mode)
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -339,8 +345,8 @@ export default function GlobalSearch({
       return;
     }
 
-    if (useLocalFuzzy || !orgId) {
-      // Client-side fuzzy matching (demo mode without backend)
+    if (useLocalFuzzy) {
+      // Client-side fuzzy matching only
       setIsLoading(false);
       return;
     }
@@ -349,6 +355,7 @@ export default function GlobalSearch({
 
     debounceRef.current = setTimeout(async () => {
       try {
+        // Will use demo mode if no orgId
         const apiResults = await fetchSearchResults(trimmed, orgId);
         setResults(apiResults);
       } catch (err) {
