@@ -81,8 +81,7 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Query database directly (bypassing RLS for reliability)
 	query := `SELECT id, org_id, name, COALESCE(description, '') as description, 
-		COALESCE(repo_url, '') as repo_url, COALESCE(status, 'active') as status, 
-		COALESCE(lead, '') as lead, created_at 
+		COALESCE(repo_url, '') as repo_url, COALESCE(status, 'active') as status, created_at 
 		FROM projects WHERE org_id = $1 ORDER BY created_at DESC`
 	
 	rows, err := h.DB.QueryContext(r.Context(), query, workspaceID)
@@ -102,7 +101,6 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description,omitempty"`
 		RepoURL     string `json:"repo_url,omitempty"`
 		Status      string `json:"status"`
-		Lead        string `json:"lead,omitempty"`
 		CreatedAt   string `json:"created_at,omitempty"`
 	}
 
@@ -110,7 +108,7 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p Project
 		var createdAt interface{}
-		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &p.Lead, &createdAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt); err != nil {
 			continue
 		}
 		projects = append(projects, p)
@@ -163,8 +161,7 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	// Query database directly (bypassing RLS for reliability)
 	query := `SELECT id, org_id, name, COALESCE(description, '') as description, 
-		COALESCE(repo_url, '') as repo_url, COALESCE(status, 'active') as status, 
-		COALESCE(lead, '') as lead, created_at 
+		COALESCE(repo_url, '') as repo_url, COALESCE(status, 'active') as status, created_at 
 		FROM projects WHERE id = $1 AND org_id = $2`
 	
 	type Project struct {
@@ -174,14 +171,13 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description,omitempty"`
 		RepoURL     string `json:"repo_url,omitempty"`
 		Status      string `json:"status"`
-		Lead        string `json:"lead,omitempty"`
 		CreatedAt   string `json:"created_at,omitempty"`
 	}
 
 	var p Project
 	var createdAt interface{}
 	err := h.DB.QueryRowContext(r.Context(), query, projectID, workspaceID).Scan(
-		&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &p.Lead, &createdAt)
+		&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt)
 	
 	if err != nil {
 		if err == sql.ErrNoRows {
