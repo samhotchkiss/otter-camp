@@ -60,8 +60,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Initialize auth state from localStorage
+  // Initialize auth state from localStorage or magic link
   useEffect(() => {
+    // Check for magic link auth param FIRST
+    const params = new URLSearchParams(window.location.search);
+    const magicToken = params.get('auth');
+    
+    // Simple magic link auth - any ?auth= param logs you in as Sam
+    if (magicToken) {
+      const samUser: User = {
+        id: 'sam',
+        email: 'sam@otter.camp',
+        name: 'Sam',
+      };
+      localStorage.setItem(TOKEN_KEY, magicToken);
+      localStorage.setItem(USER_KEY, JSON.stringify(samUser));
+      setUser(samUser);
+      
+      // Remove auth param from URL
+      params.delete('auth');
+      const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+      window.history.replaceState({}, '', newUrl);
+      setIsLoading(false);
+      return;
+    }
+    
     const token = localStorage.getItem(TOKEN_KEY);
     const storedUser = localStorage.getItem(USER_KEY);
 
