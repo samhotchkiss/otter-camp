@@ -48,21 +48,6 @@ func NewRouter() http.Handler {
 
 	r.Get("/health", handleHealth)
 	
-	// API routes first
-	r.Route("/api", func(r chi.Router) {
-		r.Post("/waitlist", HandleWaitlist)
-		r.Get("/search", SearchHandler)
-		r.Get("/commands/search", CommandSearchHandler)
-		r.Post("/commands/execute", CommandExecuteHandler)
-		r.Get("/feed", FeedHandlerV2)
-		r.Post("/auth/login", HandleLogin)
-		r.Post("/auth/exchange", HandleAuthExchange)
-		r.Get("/auth/exchange", HandleAuthExchange)
-		r.Get("/user/prefixes", HandleUserCommandPrefixesList)
-		r.Post("/user/prefixes", HandleUserCommandPrefixesCreate)
-		r.Delete("/user/prefixes/{id}", HandleUserCommandPrefixesDelete)
-	})
-	
 	webhookHandler := &WebhookHandler{Hub: hub}
 	feedPushHandler := NewFeedPushHandler(hub)
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
