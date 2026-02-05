@@ -68,12 +68,19 @@ Two WebSocket connections create a real-time pipeline:
 
 ## Implementation Status
 
-- [ ] WebSocket server endpoint on api.otter.camp
-- [ ] OpenClaw outbound connector (cron job or always-on process)
-- [ ] Browser WebSocket client in React
+### WS#2 (Browser ↔ API) — DONE ✅
+- [x] WebSocket server endpoint on api.otter.camp (`/ws` route)
+- [x] Browser WebSocket client in React (`useWebSocket` hook)
+- [x] Hub + broadcast infrastructure (`internal/ws/hub.go`, `handler.go`)
+- [x] Frontend connects to api.otter.camp (not same-origin) — fixed in 5fdef40
+- [x] Live indicator reflects connection state — fixed in 8f8d854
+
+### WS#1 (OpenClaw → API) — TODO
+- [ ] Dedicated endpoint for OpenClaw connections (`/ws/openclaw`?)
+- [ ] OpenClaw outbound connector (needs Sam's input on OpenClaw hooks/config)
+- [ ] Auth handshake (shared secret or signed token)
 - [ ] Event schema (what JSON payloads look like)
-- [ ] Reconnection + sync logic
-- [ ] Auth handshake for both connections
+- [ ] Reconnection + sync logic on OpenClaw side
 
 ---
 
