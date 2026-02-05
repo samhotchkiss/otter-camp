@@ -67,8 +67,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const params = new URLSearchParams(window.location.search);
     const magicToken = params.get('auth');
     
-    // Simple magic link auth - any ?auth= param logs you in as Sam
-    if (magicToken) {
+    // Valid magic link tokens (MVP: hardcoded, will be replaced with DB)
+    const VALID_TOKENS = [
+      'otter-sam-2026',      // Sam's magic link
+      'sam',                  // Short alias
+    ];
+    
+    // Magic link auth - validate token before allowing login
+    if (magicToken && VALID_TOKENS.includes(magicToken)) {
       const samUser: User = {
         id: 'sam',
         email: 'sam@otter.camp',

@@ -1,18 +1,22 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
+	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 // OpenClawSyncHandler handles real-time sync from OpenClaw
 type OpenClawSyncHandler struct {
 	Hub *ws.Hub
+	DB  *sql.DB
 }
 
 // OpenClawSession represents a session from OpenClaw's sessions_list
@@ -58,11 +62,11 @@ type SyncPayload struct {
 
 // SyncResponse is returned after processing sync
 type SyncResponse struct {
-	OK             bool      `json:"ok"`
-	ProcessedAt    time.Time `json:"processed_at"`
-	AgentsReceived int       `json:"agents_received"`
-	SessionsReceived int     `json:"sessions_received"`
-	Message        string    `json:"message,omitempty"`
+	OK               bool      `json:"ok"`
+	ProcessedAt      time.Time `json:"processed_at"`
+	AgentsReceived   int       `json:"agents_received"`
+	SessionsReceived int       `json:"sessions_received"`
+	Message          string    `json:"message,omitempty"`
 }
 
 // AgentState represents the current state of an agent for the frontend
@@ -82,11 +86,54 @@ type AgentState struct {
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
-// In-memory store for now (will be replaced with DB)
-var (
-	currentAgentStates = make(map[string]*AgentState)
-	lastSyncTime       time.Time
-)
+// Agent metadata mappings
+var agentRoles = map[string]string{
+	"main":           "Chief of Staff",
+	"2b":             "Engineering Lead",
+	"avatar-design":  "Head of Design",
+	"ai-updates":     "Social Media",
+	"three-stones":   "Content",
+	"itsalive":       "ItsAlive Product",
+	"personal":       "Personal Ops",
+	"email-mgmt":     "Email Manager",
+	"trading":        "Markets & Trading",
+	"technonymous":   "Head of Engineering",
+	"personal-brand": "Head of QC",
+	"essie":          "Essie's Assistant",
+	"pearl":          "Infrastructure",
+}
+
+var agentNames = map[string]string{
+	"main":           "Frank",
+	"2b":             "Derek",
+	"avatar-design":  "Jeff G",
+	"ai-updates":     "Nova",
+	"three-stones":   "Stone",
+	"itsalive":       "Ivy",
+	"personal":       "Max",
+	"email-mgmt":     "Penny",
+	"trading":        "Beau H",
+	"technonymous":   "Josh S",
+	"personal-brand": "Jeremy H",
+	"essie":          "Claudette",
+	"pearl":          "Pearl",
+}
+
+var agentAvatars = map[string]string{
+	"main":           "🎯",
+	"2b":             "🏗️",
+	"avatar-design":  "🎨",
+	"ai-updates":     "✨",
+	"three-stones":   "🪨",
+	"itsalive":       "🌿",
+	"personal":       "🏠",
+	"email-mgmt":     "📧",
+	"trading":        "📈",
+	"technonymous":   "⚙️",
+	"personal-brand": "🔍",
+	"essie":          "💜",
+	"pearl":          "🔮",
+}
 
 // Handle processes incoming sync data from OpenClaw
 func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
@@ -94,9 +141,6 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
 		return
 	}
-
-	// TODO: Add auth token validation
-	// token := r.Header.Get("Authorization")
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -111,123 +155,106 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Process agents
-	agentRoles := map[string]string{
-		"main":           "Chief of Staff",
-		"2b":             "Engineering Lead",
-		"avatar-design":  "Head of Design",
-		"ai-updates":     "Social Media",
-		"three-stones":   "Content",
-		"itsalive":       "ItsAlive Product",
-		"personal":       "Personal Ops",
-		"email-mgmt":     "Email Manager",
-		"trading":        "Markets & Trading",
-		"technonymous":   "Head of Engineering",
-		"personal-brand": "Head of QC",
-		"essie":          "Essie's Assistant",
-		"pearl":          "Infrastructure",
+	// Get database - use store's DB() for connection pooling
+	db := h.DB
+	if db == nil {
+		if dbConn, err := store.DB(); err == nil {
+			db = dbConn
+		}
 	}
 
-	agentNames := map[string]string{
-		"main":           "Frank",
-		"2b":             "Derek",
-		"avatar-design":  "Jeff G",
-		"ai-updates":     "Nova",
-		"three-stones":   "Stone",
-		"itsalive":       "Ivy",
-		"personal":       "Max",
-		"email-mgmt":     "Penny",
-		"trading":        "Beau H",
-		"technonymous":   "Josh S",
-		"personal-brand": "Jeremy H",
-		"essie":          "Claudette",
-		"pearl":          "Pearl",
-	}
+	processedCount := 0
+	now := time.Now()
 
-	agentAvatars := map[string]string{
-		"main":           "🎯",
-		"2b":             "🏗️",
-		"avatar-design":  "🎨",
-		"ai-updates":     "✨",
-		"three-stones":   "🪨",
-		"itsalive":       "🌿",
-		"personal":       "🏠",
-		"email-mgmt":     "📧",
-		"trading":        "📈",
-		"technonymous":   "⚙️",
-		"personal-brand": "🔍",
-		"essie":          "💜",
-		"pearl":          "🔮",
-	}
-
-	// Build agent states from sessions
+	// Process sessions into agent states
 	for _, session := range payload.Sessions {
-		// Extract agent ID from session key (e.g., "agent:main:slack:..." -> "main")
 		agentID := extractAgentID(session.Key)
 		if agentID == "" {
 			continue
 		}
 
-		state, exists := currentAgentStates[agentID]
-		if !exists {
-			state = &AgentState{
-				ID:     agentID,
-				Name:   agentNames[agentID],
-				Role:   agentRoles[agentID],
-				Avatar: agentAvatars[agentID],
-			}
-			if state.Name == "" {
-				state.Name = agentID
-			}
-			currentAgentStates[agentID] = state
+		name := agentNames[agentID]
+		if name == "" {
+			name = agentID
 		}
+		role := agentRoles[agentID]
+		avatar := agentAvatars[agentID]
 
-		// Update with session data
-		state.Model = session.Model
-		state.TotalTokens = session.TotalTokens
-		state.ContextTokens = session.ContextTokens
-		state.Channel = session.Channel
-		state.SessionKey = session.Key
-		state.UpdatedAt = time.Unix(session.UpdatedAt/1000, 0)
-
-		// Determine status based on activity
-		timeSinceUpdate := time.Since(state.UpdatedAt)
+		// Calculate status based on activity
+		updatedAt := time.Unix(session.UpdatedAt/1000, 0)
+		timeSinceUpdate := time.Since(updatedAt)
+		var status, lastSeen string
 		if timeSinceUpdate < 5*time.Minute {
-			state.Status = "online"
+			status = "online"
 		} else if timeSinceUpdate < 30*time.Minute {
-			state.Status = "busy"
+			status = "busy"
 		} else {
-			state.Status = "offline"
-			state.LastSeen = formatTimeSince(state.UpdatedAt)
+			status = "offline"
+			lastSeen = formatTimeSince(updatedAt)
 		}
 
-		// Extract current task from display name if available
-		if session.DisplayName != "" {
-			state.CurrentTask = session.DisplayName
+		currentTask := session.DisplayName
+
+		if db != nil {
+			// Upsert to database
+			_, err := db.Exec(`
+				INSERT INTO agent_sync_state 
+					(id, name, role, status, avatar, current_task, last_seen, model, 
+					 total_tokens, context_tokens, channel, session_key, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+				ON CONFLICT (id) DO UPDATE SET
+					name = EXCLUDED.name,
+					role = EXCLUDED.role,
+					status = EXCLUDED.status,
+					avatar = EXCLUDED.avatar,
+					current_task = EXCLUDED.current_task,
+					last_seen = EXCLUDED.last_seen,
+					model = EXCLUDED.model,
+					total_tokens = EXCLUDED.total_tokens,
+					context_tokens = EXCLUDED.context_tokens,
+					channel = EXCLUDED.channel,
+					session_key = EXCLUDED.session_key,
+					updated_at = EXCLUDED.updated_at
+			`, agentID, name, role, status, avatar, currentTask, lastSeen,
+				session.Model, session.TotalTokens, session.ContextTokens,
+				session.Channel, session.Key, updatedAt)
+
+			if err != nil {
+				log.Printf("Failed to upsert agent %s: %v", agentID, err)
+			} else {
+				processedCount++
+			}
 		}
 	}
 
-	lastSyncTime = time.Now()
+	// Update sync metadata
+	if db != nil {
+		_, _ = db.Exec(`
+			INSERT INTO sync_metadata (key, value, updated_at)
+			VALUES ('last_sync', $1, $2)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+		`, now.Format(time.RFC3339), now)
+	}
 
 	// Broadcast to connected WebSocket clients
 	if h.Hub != nil {
+		agents, _ := h.getAgentsFromDB(db)
 		broadcastPayload := map[string]interface{}{
 			"type":      "agents_updated",
-			"agents":    getAgentStateList(),
-			"timestamp": lastSyncTime,
+			"agents":    agents,
+			"timestamp": now,
 		}
 		if data, err := json.Marshal(broadcastPayload); err == nil {
-			// Broadcast to all orgs for now (single-user MVP)
 			h.Hub.Broadcast("default", data)
 		}
 	}
 
 	sendJSON(w, http.StatusOK, SyncResponse{
 		OK:               true,
-		ProcessedAt:      lastSyncTime,
+		ProcessedAt:      now,
 		AgentsReceived:   len(payload.Agents),
-		SessionsReceived: len(payload.Sessions),
-		Message:          "Sync processed successfully",
+		SessionsReceived: processedCount,
+		Message:          fmt.Sprintf("Synced %d agents to database", processedCount),
 	})
 }
 
@@ -238,27 +265,102 @@ func (h *OpenClawSyncHandler) GetAgents(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	agents := getAgentStateList()
+	db := h.DB
+	if db == nil {
+		if dbConn, err := store.DB(); err == nil {
+			db = dbConn
+		}
+	}
+
+	agents, err := h.getAgentsFromDB(db)
+	if err != nil {
+		log.Printf("Failed to get agents from DB: %v", err)
+	}
+
+	// Get last sync time
+	var lastSync time.Time
+	var syncHealthy bool
+	if db != nil {
+		var lastSyncStr string
+		err := db.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'last_sync'`).Scan(&lastSyncStr)
+		if err == nil {
+			lastSync, _ = time.Parse(time.RFC3339, lastSyncStr)
+			syncHealthy = time.Since(lastSync) < 2*time.Minute
+		}
+	}
 
 	sendJSON(w, http.StatusOK, map[string]interface{}{
 		"agents":       agents,
 		"total":        len(agents),
-		"last_sync":    lastSyncTime,
-		"sync_healthy": time.Since(lastSyncTime) < 2*time.Minute,
+		"last_sync":    lastSync,
+		"sync_healthy": syncHealthy,
 	})
 }
 
-func getAgentStateList() []AgentState {
-	agents := make([]AgentState, 0, len(currentAgentStates))
-	for _, state := range currentAgentStates {
-		agents = append(agents, *state)
+func (h *OpenClawSyncHandler) getAgentsFromDB(db *sql.DB) ([]AgentState, error) {
+	if db == nil {
+		return []AgentState{}, nil
 	}
-	return agents
+
+	rows, err := db.Query(`
+		SELECT id, name, role, status, avatar, current_task, last_seen, 
+		       model, total_tokens, context_tokens, channel, session_key, updated_at
+		FROM agent_sync_state
+		ORDER BY name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	agents := []AgentState{}
+	for rows.Next() {
+		var a AgentState
+		var role, avatar, currentTask, lastSeen, model, channel, sessionKey sql.NullString
+		var totalTokens, contextTokens sql.NullInt64
+
+		err := rows.Scan(&a.ID, &a.Name, &role, &a.Status, &avatar, &currentTask,
+			&lastSeen, &model, &totalTokens, &contextTokens, &channel, &sessionKey, &a.UpdatedAt)
+		if err != nil {
+			continue
+		}
+
+		if role.Valid {
+			a.Role = role.String
+		}
+		if avatar.Valid {
+			a.Avatar = avatar.String
+		}
+		if currentTask.Valid {
+			a.CurrentTask = currentTask.String
+		}
+		if lastSeen.Valid {
+			a.LastSeen = lastSeen.String
+		}
+		if model.Valid {
+			a.Model = model.String
+		}
+		if channel.Valid {
+			a.Channel = channel.String
+		}
+		if sessionKey.Valid {
+			a.SessionKey = sessionKey.String
+		}
+		if totalTokens.Valid {
+			a.TotalTokens = int(totalTokens.Int64)
+		}
+		if contextTokens.Valid {
+			a.ContextTokens = int(contextTokens.Int64)
+		}
+
+		agents = append(agents, a)
+	}
+
+	return agents, rows.Err()
 }
 
 func extractAgentID(sessionKey string) string {
 	// Session keys look like: "agent:main:slack:channel:..." or "agent:2b:main"
-	// We want to extract the agent ID (e.g., "main", "2b")
 	if len(sessionKey) < 7 || sessionKey[:6] != "agent:" {
 		return ""
 	}

@@ -50,10 +50,47 @@ func DB() (*sql.DB, error) {
 			return
 		}
 
+		// Auto-run sync state migrations
+		runSyncStateMigrations(db)
+
 		globalDB = db
 	})
 
 	return globalDB, globalDBErr
+}
+
+// runSyncStateMigrations ensures the sync state tables exist
+func runSyncStateMigrations(db *sql.DB) {
+	migrations := []string{
+		`CREATE TABLE IF NOT EXISTS agent_sync_state (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			role TEXT,
+			status TEXT NOT NULL DEFAULT 'offline',
+			avatar TEXT,
+			current_task TEXT,
+			last_seen TEXT,
+			model TEXT,
+			total_tokens INTEGER DEFAULT 0,
+			context_tokens INTEGER DEFAULT 0,
+			channel TEXT,
+			session_key TEXT,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS sync_metadata (
+			key TEXT PRIMARY KEY,
+			value TEXT,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_sync_state_status ON agent_sync_state(status)`,
+	}
+
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil {
+			// Log but don't fail - tables might already exist
+			fmt.Fprintf(os.Stderr, "Migration note: %v\n", err)
+		}
+	}
 }
 
 // WithWorkspace sets the app.org_id session variable for RLS policies.

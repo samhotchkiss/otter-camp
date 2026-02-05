@@ -71,7 +71,7 @@ func NewRouter() http.Handler {
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
 	workflowsHandler := &WorkflowsHandler{}
-	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub}
+	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
 	
 	// All API routes under /api prefix
 	r.Route("/api", func(r chi.Router) {
