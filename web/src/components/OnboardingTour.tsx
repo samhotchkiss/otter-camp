@@ -300,7 +300,7 @@ export default function OnboardingTour({
         aria-labelledby="onboarding-title"
         aria-describedby="onboarding-description"
       >
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
+        <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl">
           {/* Header */}
           <div className="bg-otter-dark-accent px-6 py-4">
             <div className="flex items-center gap-3">
@@ -338,8 +338,8 @@ export default function OnboardingTour({
                 onClick={() => setCurrentStep(index)}
                 className={`h-2 rounded-full transition-all ${
                   index === currentStep
-                    ? "w-6 bg-otter-dark-accent"
-                    : "w-2 bg-slate-300 hover:bg-slate-400 dark:bg-slate-600 dark:hover:bg-slate-500"
+                    ? "w-6 bg-[var(--accent)]"
+                    : "w-2 bg-[var(--surface-alt)] hover:bg-[var(--border)]"
                 }`}
                 aria-label={`Go to step ${index + 1}`}
               />
@@ -347,11 +347,11 @@ export default function OnboardingTour({
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-3 dark:border-slate-700 dark:bg-slate-900/50">
+          <div className="flex items-center justify-between border-t border-[var(--border)] bg-[var(--surface-alt)] px-6 py-3">
             <button
               type="button"
               onClick={handleSkip}
-              className="text-sm font-medium text-slate-500 transition hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+              className="text-sm font-medium text-[var(--text-muted)] transition hover:text-[var(--text)]"
             >
               Skip tour
             </button>
@@ -361,7 +361,7 @@ export default function OnboardingTour({
                 <button
                   type="button"
                   onClick={handleBack}
-                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                  className="btn-secondary rounded-lg px-4 py-2 text-sm font-medium transition"
                 >
                   Back
                 </button>
@@ -369,7 +369,7 @@ export default function OnboardingTour({
               <button
                 type="button"
                 onClick={handleNext}
-                className="rounded-lg bg-gradient-to-r from-sky-500 to-emerald-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:from-sky-600 hover:to-emerald-600"
+                className="btn-primary rounded-lg px-4 py-2 text-sm font-medium shadow-sm transition"
               >
                 {isLastStep ? "Get started" : "Next"}
               </button>
