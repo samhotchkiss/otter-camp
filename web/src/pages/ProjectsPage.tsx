@@ -4,8 +4,7 @@ import LoadingSpinner from "../components/LoadingSpinner";
 import { ErrorFallback } from "../components/ErrorBoundary";
 import { NoProjectsEmpty } from "../components/EmptyState";
 import { SkeletonList } from "../components/Skeleton";
-import ProjectsListFilters from "../components/ProjectsListFilters";
-import { useProjectListFilters } from "../hooks/useProjectListFilters";
+// Filters removed - use magic bar (Cmd+K) for search
 
 type Project = {
   id: string;
@@ -224,8 +223,6 @@ export default function ProjectsPage({
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error] = useState<string | null>(null);
-  const filterState = useProjectListFilters();
-  const { filters, debouncedSearch } = filterState;
 
   // Fetch projects from API
   const fetchProjects = useCallback(async () => {
@@ -264,93 +261,10 @@ export default function ProjectsPage({
     window.alert("Project creation coming soon!");
   };
 
-  const statusOptions = useMemo(() => {
-    const unique = Array.from(
-      new Set(projects.map((p) => p.status).filter(Boolean) as string[])
-    );
-    unique.sort((a, b) => a.localeCompare(b));
-    return unique.map((value) => ({ value, label: formatLabel(value) }));
+  // Simple sort by updated date (most recent first)
+  const sortedProjects = useMemo(() => {
+    return [...projects].sort((a, b) => getUpdatedAtMs(b) - getUpdatedAtMs(a));
   }, [projects]);
-
-  const assigneeOptions = useMemo(() => {
-    const unique = Array.from(
-      new Set(projects.map((p) => p.assignee).filter(Boolean) as string[])
-    );
-    unique.sort((a, b) => a.localeCompare(b));
-    return unique.map((value) => ({ value, label: value }));
-  }, [projects]);
-
-  const priorityOptions = useMemo(() => {
-    const unique = Array.from(
-      new Set(projects.map((p) => p.priority).filter(Boolean) as string[])
-    );
-
-    unique.sort((a, b) => {
-      const rankA = getPriorityRank(a);
-      const rankB = getPriorityRank(b);
-      if (rankA !== rankB) return rankB - rankA;
-      return a.localeCompare(b);
-    });
-
-    return unique.map((value) => ({ value, label: formatLabel(value) }));
-  }, [projects]);
-
-  const filteredProjects = useMemo(() => {
-    const trimmedQuery = debouncedSearch.trim().toLowerCase();
-    const terms = trimmedQuery ? trimmedQuery.split(/\\s+/).filter(Boolean) : [];
-
-    const matchesSearch = (project: Project) => {
-      if (terms.length === 0) return true;
-      const haystack = `${project.name ?? ""} ${project.description ?? ""}`.toLowerCase();
-      return terms.every((term) => haystack.includes(term));
-    };
-
-    const matchesStatus = (project: Project) => {
-      if (!filters.status) return true;
-      return (project.status ?? null) === filters.status;
-    };
-
-    const matchesAssignee = (project: Project) => {
-      if (!filters.assignee) return true;
-      return (project.assignee ?? null) === filters.assignee;
-    };
-
-    const matchesPriority = (project: Project) => {
-      if (!filters.priority) return true;
-      return (project.priority ?? null) === filters.priority;
-    };
-
-    const next = projects.filter(
-      (project) =>
-        matchesSearch(project) &&
-        matchesStatus(project) &&
-        matchesAssignee(project) &&
-        matchesPriority(project)
-    );
-
-    const sorted = [...next].sort((a, b) => {
-      if (filters.sort === "name") {
-        const cmp = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-        if (cmp !== 0) return cmp;
-        return getUpdatedAtMs(b) - getUpdatedAtMs(a);
-      }
-
-      if (filters.sort === "priority") {
-        const rankDiff = getPriorityRank(b.priority) - getPriorityRank(a.priority);
-        if (rankDiff !== 0) return rankDiff;
-        const updatedDiff = getUpdatedAtMs(b) - getUpdatedAtMs(a);
-        if (updatedDiff !== 0) return updatedDiff;
-        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-      }
-
-      // updated
-      const updatedDiff = getUpdatedAtMs(b) - getUpdatedAtMs(a);
-      if (updatedDiff !== 0) return updatedDiff;
-      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-    });
-
-    return sorted;
-  }, [projects, filters.status, filters.assignee, filters.priority, filters.sort, debouncedSearch]);
 
   if (isLoading) {
     return (
@@ -427,62 +341,34 @@ export default function ProjectsPage({
         </button>
       </div>
 
-      <div className="mb-6 rounded-2xl border border-slate-200 bg-white/80 p-4 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80 sm:p-6">
-        <ProjectsListFilters
-          statusOptions={statusOptions}
-          assigneeOptions={assigneeOptions}
-          priorityOptions={priorityOptions}
-          filterState={filterState}
-        />
-      </div>
-
+      {/* Use Cmd+K (magic bar) to search projects */}
       <div className="mb-4 flex items-center justify-between">
         <p className="text-sm text-slate-600 dark:text-slate-400">
-          Showing {filteredProjects.length} of {projects.length} projects
+          {projects.length} projects • Press <kbd className="rounded bg-slate-200 px-1.5 py-0.5 text-xs dark:bg-slate-700">⌘K</kbd> to search
         </p>
       </div>
 
-      {filteredProjects.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white/80 p-10 text-center backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
-            No projects match your filters
-          </h2>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            Try adjusting your search or clearing filters.
-          </p>
-          {filterState.hasActiveFilters && (
-            <button
-              type="button"
-              onClick={filterState.clearAllFilters}
-              className="mt-4 inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200 dark:focus:ring-offset-slate-900"
-            >
-              Clear filters
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {filteredProjects.map((project) => (
-            <ProjectCard
-              key={project.id}
-              project={project}
-              onClick={() => navigate(`/projects/${project.id}`)}
-            />
-          ))}
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {sortedProjects.map((project) => (
+          <ProjectCard
+            key={project.id}
+            project={project}
+            onClick={() => navigate(`/projects/${project.id}`)}
+          />
+        ))}
 
-          {/* Empty state placeholder card */}
-          <button
-            type="button"
-            onClick={handleCreateProject}
-            className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-white/50 p-5 text-slate-500 transition hover:border-emerald-400 hover:bg-emerald-50/50 hover:text-emerald-600 dark:border-slate-700 dark:bg-slate-900/50 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-400"
-          >
-            <svg className="h-10 w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
-            </svg>
-            <span className="mt-3 text-sm font-medium">Create a new project</span>
-          </button>
-        </div>
-      )}
+        {/* Empty state placeholder card */}
+        <button
+          type="button"
+          onClick={handleCreateProject}
+          className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-white/50 p-5 text-slate-500 transition hover:border-emerald-400 hover:bg-emerald-50/50 hover:text-emerald-600 dark:border-slate-700 dark:bg-slate-900/50 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-400"
+        >
+          <svg className="h-10 w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+          </svg>
+          <span className="mt-3 text-sm font-medium">Create a new project</span>
+        </button>
+      </div>
     </div>
   );
 }
