@@ -48,6 +48,11 @@ func NewRouter() http.Handler {
 	r.Post("/api/auth/exchange", HandleAuthExchange)
 	r.Get("/api/auth/exchange", HandleAuthExchange)
 
+	// User settings endpoints
+	r.Get("/api/user/prefixes", HandleUserCommandPrefixesList)
+	r.Post("/api/user/prefixes", HandleUserCommandPrefixesCreate)
+	r.Delete("/api/user/prefixes/{id}", HandleUserCommandPrefixesDelete)
+
 	webhookHandler := &WebhookHandler{Hub: hub}
 	r.Post("/api/webhooks/openclaw", webhookHandler.OpenClawHandler)
 
