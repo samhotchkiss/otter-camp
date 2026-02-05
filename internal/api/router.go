@@ -54,6 +54,7 @@ func NewRouter() http.Handler {
 	taskHandler := &TaskHandler{Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{}
+	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub}
 	
 	// All API routes under /api prefix
 	r.Route("/api", func(r chi.Router) {
@@ -77,6 +78,8 @@ func NewRouter() http.Handler {
 		r.Get("/tasks", taskHandler.ListTasks)
 		r.Post("/tasks", taskHandler.CreateTask)
 		r.Get("/agents", agentsHandler.List)
+		r.Post("/sync/openclaw", openclawSyncHandler.Handle)
+		r.Get("/sync/agents", openclawSyncHandler.GetAgents)
 		r.Patch("/tasks/{id}", taskHandler.UpdateTask)
 		r.Patch("/tasks/{id}/status", taskHandler.UpdateTaskStatus)
 		r.Post("/messages/attachments", attachmentsHandler.Upload)
