@@ -35,3 +35,6 @@ export function getInitials(name: string): string {
     .toUpperCase();
 }
 
+// Alias for backwards compatibility
+export const formatMessageTimestamp = formatTimestamp;
+
