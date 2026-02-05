@@ -23,9 +23,6 @@ type OpenClawHandler struct {
 // NewOpenClawHandler creates a handler for OpenClaw connections.
 func NewOpenClawHandler(hub *Hub) *OpenClawHandler {
 	secret := os.Getenv("OPENCLAW_WS_SECRET")
-	if secret == "" {
-		secret = "dev-secret" // Allow dev mode without secret
-	}
 	return &OpenClawHandler{
 		Hub:        hub,
 		authSecret: secret,
@@ -63,13 +60,19 @@ type FeedItemEvent struct {
 
 // ServeHTTP handles WebSocket upgrade for OpenClaw connections.
 func (h *OpenClawHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.authSecret == "" {
+		log.Printf("[openclaw-ws] OPENCLAW_WS_SECRET is not configured")
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	// Validate auth token
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		token = r.Header.Get("X-OpenClaw-Token")
 	}
 
-	if h.authSecret != "dev-secret" && token != h.authSecret {
+	if token != h.authSecret {
 		log.Printf("[openclaw-ws] Auth failed: invalid token")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
