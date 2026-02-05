@@ -8,6 +8,6 @@ type RawFact = {
 
 const parsedFacts = rawFacts as RawFact[];
 
-export const otterFacts = parsedFacts.map((entry) => entry.fact) as const;
+export const otterFacts = parsedFacts.map((entry) => entry.fact);
 
 export type OtterFact = (typeof otterFacts)[number];
