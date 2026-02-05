@@ -91,11 +91,31 @@ func (h *ExecApprovalsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
-	if orgID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing query parameter: org_id"})
+	// Demo mode: return sample approvals without auth (for MVP testing)
+	if r.URL.Query().Get("demo") == "true" || r.URL.Query().Get("org_id") == "" {
+		demoApprovals := []map[string]interface{}{
+			{
+				"id":        "demo-approval-1",
+				"type":      "exec",
+				"command":   "railway up --service frontend",
+				"agent":     "Derek",
+				"status":    "pending",
+				"createdAt": "2026-02-04T20:00:00Z",
+			},
+			{
+				"id":        "demo-approval-2",
+				"type":      "exec",
+				"command":   "npm publish",
+				"agent":     "Ivy",
+				"status":    "pending",
+				"createdAt": "2026-02-04T19:30:00Z",
+			},
+		}
+		sendJSON(w, http.StatusOK, demoApprovals)
 		return
 	}
+
+	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 	if !uuidRegex.MatchString(orgID) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid org_id"})
 		return

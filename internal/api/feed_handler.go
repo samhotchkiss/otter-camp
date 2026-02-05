@@ -61,18 +61,78 @@ type PaginatedFeedResponse struct {
 // - Feed mode: "for_you" (personalized) or "all_activity" (everything)
 // - Priority-based ranking with time decay
 // - Agent boost for preferred agents
+// DemoFeedResponse is the response format for demo mode
+type DemoFeedResponse struct {
+	ActionItems []map[string]interface{} `json:"actionItems"`
+	FeedItems   []map[string]interface{} `json:"feedItems"`
+}
+
 func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
 		return
 	}
 
-	// Parse org_id (required)
-	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
-	if orgID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing query parameter: org_id"})
+	// Demo mode: return sample data without auth (for MVP testing)
+	if r.URL.Query().Get("demo") == "true" || r.URL.Query().Get("org_id") == "" {
+		sendJSON(w, http.StatusOK, DemoFeedResponse{
+			ActionItems: []map[string]interface{}{
+				{
+					"id":              "1",
+					"icon":            "🚀",
+					"project":         "ItsAlive",
+					"time":            "5 min ago",
+					"agent":           "Ivy",
+					"message":         "is waiting on your approval to deploy v2.1.0 with the new onboarding flow.",
+					"primaryAction":   "Approve Deploy",
+					"secondaryAction": "View Details",
+				},
+				{
+					"id":              "2",
+					"icon":            "✍️",
+					"project":         "Content",
+					"time":            "1 hour ago",
+					"agent":           "Stone",
+					"message":         "finished a blog post for you to review: \"Why I Run 12 AI Agents\"",
+					"primaryAction":   "Review Post",
+					"secondaryAction": "Later",
+				},
+			},
+			FeedItems: []map[string]interface{}{
+				{
+					"id":       "summary",
+					"avatar":   "✓",
+					"avatarBg": "var(--green)",
+					"title":    "4 projects active",
+					"text":     "Derek pushed 4 commits to Pearl, Jeff G finished mockups, Nova scheduled tweets",
+					"meta":     "Last 6 hours • 14 updates total",
+					"type":     nil,
+				},
+				{
+					"id":       "email",
+					"avatar":   "P",
+					"avatarBg": "var(--blue)",
+					"title":    "Important email",
+					"text":     "from investor@example.com — \"Follow up on our conversation\"",
+					"meta":     "30 min ago",
+					"type":     map[string]string{"label": "Penny • Email", "className": "insight"},
+				},
+				{
+					"id":       "markets",
+					"avatar":   "B",
+					"avatarBg": "var(--orange)",
+					"title":    "Market Summary",
+					"text":     "S&P up 0.8%, your watchlist +1.2%. No alerts triggered.",
+					"meta":     "2 hours ago",
+					"type":     map[string]string{"label": "Beau H • Markets", "className": "progress"},
+				},
+			},
+		})
 		return
 	}
+
+	// Parse org_id (required for non-demo mode)
+	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 	if !uuidRegex.MatchString(orgID) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid org_id"})
 		return

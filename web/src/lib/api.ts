@@ -85,9 +85,10 @@ export interface FeedResponse {
 // API methods
 export const api = {
   health: () => apiFetch<HealthResponse>('/health'),
-  feed: () => apiFetch<FeedResponse>('/feed'),
-  tasks: () => apiFetch<Task[]>('/tasks'),
-  approvals: () => apiFetch<Approval[]>('/approvals/exec'),
+  // Use demo mode for MVP until auth is implemented
+  feed: () => apiFetch<FeedResponse>('/api/feed?demo=true'),
+  tasks: () => apiFetch<Task[]>('/api/tasks?demo=true'),
+  approvals: () => apiFetch<Approval[]>('/api/approvals/exec?demo=true'),
 };
 
 export default api;
