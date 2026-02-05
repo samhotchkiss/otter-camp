@@ -71,12 +71,18 @@ type Activity = {
 // Agent ID to name mapping (from database)
 const agentIdToName: Record<string, string> = {};
 
-const COLUMNS = [
+type TaskColumn = {
+  key: string;
+  title: string;
+  statuses: Task["status"][];
+};
+
+const COLUMNS: TaskColumn[] = [
   { key: "queued", title: "📋 Queued", statuses: ["queued", "dispatched"] },
   { key: "in_progress", title: "🔨 In Progress", statuses: ["in_progress"] },
   { key: "review", title: "👀 Review", statuses: ["review", "blocked"] },
   { key: "done", title: "✅ Done", statuses: ["done", "cancelled"] },
-] as const;
+];
 
 function formatTimeAgo(dateStr: string): string {
   const date = new Date(dateStr);

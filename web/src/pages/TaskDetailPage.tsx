@@ -611,23 +611,19 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
 
   const toggleSubtask = (subtaskId: string) => {
     const now = new Date().toISOString();
-    let changed: Subtask | null = null;
+    const current = subtasks.find((s) => s.id === subtaskId);
+    if (!current) return;
 
-    const next = subtasks.map((s) => {
-      if (s.id !== subtaskId) return s;
-      changed = { ...s, completed: !s.completed };
-      return changed;
-    });
+    const changed: Subtask = { ...current, completed: !current.completed };
+    const next = subtasks.map((s) => (s.id === subtaskId ? changed : s));
 
     persistSubtasks(next);
-    if (changed) {
-      appendActivity({
-        type: "subtask_completed",
-        actor: "You",
-        timestamp: now,
-        description: `${changed.completed ? "completed" : "reopened"} subtask “${changed.title}”`,
-      });
-    }
+    appendActivity({
+      type: "subtask_completed",
+      actor: "You",
+      timestamp: now,
+      description: `${changed.completed ? "completed" : "reopened"} subtask “${changed.title}”`,
+    });
   };
 
   const deleteSubtask = (subtaskId: string) => {
