@@ -136,7 +136,7 @@ function AgentCardComponent({ agent, onClick }: AgentCardProps) {
       tabIndex={0}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
-      className="group cursor-pointer rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-lg transition-all duration-200 hover:border-emerald-500/50 hover:bg-slate-900 hover:shadow-emerald-500/10 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-slate-950"
+      className="group cursor-pointer rounded-2xl border border-slate-700 bg-slate-900/80 p-5 shadow-lg transition-all duration-200 hover:border-amber-600/50 hover:bg-slate-900 hover:shadow-amber-600/10 focus:outline-none focus:ring-2 focus:ring-amber-600 focus:ring-offset-2 focus:ring-offset-slate-950"
     >
       {/* Header: Avatar + Status */}
       <div className="flex items-start justify-between">
@@ -147,10 +147,10 @@ function AgentCardComponent({ agent, onClick }: AgentCardProps) {
               alt={agent.name}
               loading="lazy"
               decoding="async"
-              className="h-14 w-14 rounded-xl object-cover ring-2 ring-emerald-500/30 transition group-hover:ring-emerald-500/50"
+              className="h-14 w-14 rounded-xl object-cover ring-2 ring-slate-700 transition group-hover:ring-amber-600/50"
             />
           ) : (
-            <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-emerald-500/20 text-lg font-semibold text-emerald-300 ring-2 ring-emerald-500/30 transition group-hover:ring-emerald-500/50">
+            <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-slate-800 text-lg font-semibold text-amber-200 ring-2 ring-slate-700 transition group-hover:ring-amber-600/50">
               {initials}
             </div>
           )}
@@ -160,7 +160,7 @@ function AgentCardComponent({ agent, onClick }: AgentCardProps) {
 
       {/* Name & Role */}
       <div className="mt-4">
-        <h3 className="font-semibold text-slate-100 transition group-hover:text-emerald-300">
+        <h3 className="font-semibold text-slate-100 transition group-hover:text-amber-200">
           {agent.name}
         </h3>
         {agent.role && (
@@ -170,7 +170,7 @@ function AgentCardComponent({ agent, onClick }: AgentCardProps) {
 
       {/* Current Task */}
       {agent.currentTask && agent.status !== "offline" && (
-        <div className="mt-3 rounded-lg bg-slate-800/80 px-3 py-2">
+        <div className="mt-3 rounded-lg border border-slate-700 bg-slate-800/50 px-3 py-2">
           <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
             Current Task
           </p>
