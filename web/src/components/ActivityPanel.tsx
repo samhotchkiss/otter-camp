@@ -233,7 +233,7 @@ function ActivityPanelComponent({ className = "" }: ActivityPanelProps) {
 
   return (
     <div
-      className={`overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-lg backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 ${className}`}
+      className={`w-full overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-lg backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 ${className}`}
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
