@@ -14,9 +14,10 @@ test.describe("Kanban Board", () => {
   });
 
   test.describe("Board Display", () => {
-    test("should display all three kanban columns", async ({ page }) => {
-      await expect(page.getByRole("heading", { name: /to do/i })).toBeVisible();
+    test("should display all four kanban columns", async ({ page }) => {
+      await expect(page.getByRole("heading", { name: /backlog/i })).toBeVisible();
       await expect(page.getByRole("heading", { name: /in progress/i })).toBeVisible();
+      await expect(page.getByRole("heading", { name: /review/i })).toBeVisible();
       await expect(page.getByRole("heading", { name: /done/i })).toBeVisible();
     });
 
@@ -33,12 +34,14 @@ test.describe("Kanban Board", () => {
 
     test("should show task count badges on columns", async ({ page }) => {
       // Each column should have a count badge
-      const todoCount = page.locator("#column-todo-count");
+      const backlogCount = page.locator("#column-backlog-count");
       const inProgressCount = page.locator("#column-in-progress-count");
+      const reviewCount = page.locator("#column-review-count");
       const doneCount = page.locator("#column-done-count");
 
-      await expect(todoCount).toBeVisible();
+      await expect(backlogCount).toBeVisible();
       await expect(inProgressCount).toBeVisible();
+      await expect(reviewCount).toBeVisible();
       await expect(doneCount).toBeVisible();
     });
   });
@@ -71,7 +74,7 @@ test.describe("Kanban Board", () => {
         const submitButton = page.getByRole("button", { name: /create|save|add/i });
         await submitButton.click();
 
-        // New task should appear in To Do column
+        // New task should appear in Backlog column
         await expect(page.getByText("New E2E Test Task")).toBeVisible();
       }
     });
@@ -102,10 +105,10 @@ test.describe("Kanban Board", () => {
   });
 
   test.describe("Drag and Drop", () => {
-    test("should drag task from To Do to In Progress", async ({ page }) => {
-      // Find a task in the To Do column
-      const todoColumn = page.locator("section").filter({ hasText: /to do/i });
-      const taskCard = todoColumn.locator("article[role='listitem']").first();
+    test("should drag task from Backlog to In Progress", async ({ page }) => {
+      // Find a task in the Backlog column
+      const backlogColumn = page.locator("section").filter({ hasText: /backlog/i });
+      const taskCard = backlogColumn.locator("article[role='listitem']").first();
 
       if (await taskCard.isVisible()) {
         const taskTitle = await taskCard.locator("h4").textContent();
@@ -143,11 +146,11 @@ test.describe("Kanban Board", () => {
     });
 
     test("should update column task counts after drag", async ({ page }) => {
-      const todoColumn = page.locator("section").filter({ hasText: /to do/i });
-      const todoCountBadge = todoColumn.locator("[aria-label*='task']");
-      const initialCount = await todoCountBadge.textContent();
+      const backlogColumn = page.locator("section").filter({ hasText: /backlog/i });
+      const backlogCountBadge = backlogColumn.locator("[aria-label*='task']");
+      const initialCount = await backlogCountBadge.textContent();
 
-      const taskCard = todoColumn.locator("article[role='listitem']").first();
+      const taskCard = backlogColumn.locator("article[role='listitem']").first();
 
       if (await taskCard.isVisible()) {
         const inProgressColumn = page.locator("section").filter({ hasText: /in progress/i });
@@ -156,14 +159,14 @@ test.describe("Kanban Board", () => {
         // Wait for count to update
         await page.waitForTimeout(500);
 
-        const newCount = await todoCountBadge.textContent();
+        const newCount = await backlogCountBadge.textContent();
         expect(Number(newCount)).toBeLessThan(Number(initialCount));
       }
     });
 
     test("should show visual feedback during drag", async ({ page }) => {
-      const todoColumn = page.locator("section").filter({ hasText: /to do/i });
-      const taskCard = todoColumn.locator("article[role='listitem']").first();
+      const backlogColumn = page.locator("section").filter({ hasText: /backlog/i });
+      const taskCard = backlogColumn.locator("article[role='listitem']").first();
 
       if (await taskCard.isVisible()) {
         // Start dragging

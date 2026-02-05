@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, within } from "@testing-library/react";
 import KanbanBoard, { type Task, type TaskStatus } from "../KanbanBoard";
 
 // Mock KeyboardShortcutsContext
@@ -36,6 +35,14 @@ vi.mock("@dnd-kit/core", async () => {
     DragOverlay: ({ children }: { children: React.ReactNode }) => (
       <div data-testid="drag-overlay">{children}</div>
     ),
+    useDroppable: vi.fn(() => ({
+      setNodeRef: vi.fn(),
+      isOver: false,
+      active: null,
+      over: null,
+      rect: null,
+      node: { current: null },
+    })),
     useSensor: vi.fn(),
     useSensors: vi.fn(() => []),
     closestCorners: vi.fn(),
@@ -76,27 +83,27 @@ describe("KanbanBoard", () => {
   });
 
   describe("rendering", () => {
-    it("renders the board header", () => {
+    it("renders the board region", () => {
       render(<KanbanBoard />);
       
-      // Camp Tasks heading (emoji is aria-hidden)
-      expect(screen.getByRole("heading", { name: /Camp Tasks/i })).toBeInTheDocument();
-      expect(screen.getByText(/Drag and drop tasks between columns/)).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: /kanban task board/i })).toBeInTheDocument();
     });
 
-    it("renders all three columns", () => {
+    it("renders all four columns", () => {
       render(<KanbanBoard />);
       
-      expect(screen.getByText("To Do")).toBeInTheDocument();
+      expect(screen.getByText("Backlog")).toBeInTheDocument();
       expect(screen.getByText("In Progress")).toBeInTheDocument();
+      expect(screen.getByText("Review")).toBeInTheDocument();
       expect(screen.getByText("Done")).toBeInTheDocument();
     });
 
     it("renders column emojis", () => {
       render(<KanbanBoard />);
       
-      expect(screen.getByText("📋")).toBeInTheDocument();
+      expect(screen.getByText("🗂️")).toBeInTheDocument();
       expect(screen.getByText("🚀")).toBeInTheDocument();
+      expect(screen.getByText("👀")).toBeInTheDocument();
       expect(screen.getByText("✅")).toBeInTheDocument();
     });
 
@@ -104,37 +111,41 @@ describe("KanbanBoard", () => {
       render(<KanbanBoard />);
       
       // Tasks should be visible
-      expect(screen.getByText("Set up camp perimeter")).toBeInTheDocument();
-      expect(screen.getByText("Gather firewood")).toBeInTheDocument();
-      expect(screen.getByText("Check supplies")).toBeInTheDocument();
-      expect(screen.getByText("Set up tents")).toBeInTheDocument();
+      expect(screen.getByText("Collect requirements for tasks board")).toBeInTheDocument();
+      expect(screen.getByText("Implement Kanban columns + cards")).toBeInTheDocument();
+      expect(screen.getByText("Review responsive layout on mobile")).toBeInTheDocument();
+      expect(screen.getByText("Ship Kanban board component")).toBeInTheDocument();
     });
 
-    it("displays task descriptions", () => {
+    it("displays task assignees", () => {
       render(<KanbanBoard />);
       
-      expect(screen.getByText("Mark boundaries and secure the area")).toBeInTheDocument();
-      expect(screen.getByText("Collect dry wood for the campfire")).toBeInTheDocument();
+      expect(screen.getByText("🦦 Scout Otter")).toBeInTheDocument();
+      expect(screen.getAllByText("🦦 Builder Otter").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText("🦦 Lead Otter")).toBeInTheDocument();
     });
 
     it("displays task priorities", () => {
       render(<KanbanBoard />);
       
-      // High priority tasks
-      const highPriorityBadges = screen.getAllByText("high");
-      expect(highPriorityBadges.length).toBeGreaterThanOrEqual(2);
-      
-      // Medium priority tasks
-      const mediumPriorityBadges = screen.getAllByText("medium");
-      expect(mediumPriorityBadges.length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText("high")).toBeInTheDocument();
+      expect(screen.getByText("medium")).toBeInTheDocument();
+      expect(screen.getByText("low")).toBeInTheDocument();
+      expect(screen.getByText("critical")).toBeInTheDocument();
     });
 
     it("displays task counts in columns", () => {
       render(<KanbanBoard />);
       
-      // Find task count badges (numbers)
-      const todoCount = screen.getByText("2"); // Two tasks in todo
-      expect(todoCount).toBeInTheDocument();
+      expect(screen.getByText("Backlog")).toBeInTheDocument();
+      expect(screen.getByText("In Progress")).toBeInTheDocument();
+      expect(screen.getByText("Review")).toBeInTheDocument();
+      expect(screen.getByText("Done")).toBeInTheDocument();
+
+      expect(screen.getByText("1", { selector: "#column-backlog-count" })).toBeInTheDocument();
+      expect(screen.getByText("1", { selector: "#column-in-progress-count" })).toBeInTheDocument();
+      expect(screen.getByText("1", { selector: "#column-review-count" })).toBeInTheDocument();
+      expect(screen.getByText("1", { selector: "#column-done-count" })).toBeInTheDocument();
     });
   });
 
@@ -155,7 +166,7 @@ describe("KanbanBoard", () => {
       render(<KanbanBoard />);
       
       const sortableContexts = screen.getAllByTestId("sortable-context");
-      expect(sortableContexts.length).toBe(3); // One per column
+      expect(sortableContexts.length).toBe(4); // One per column
     });
   });
 
@@ -220,8 +231,8 @@ describe("KanbanBoard", () => {
       
       render(<KanbanBoard />);
       
-      // Board should still render even if API is unavailable (emoji is aria-hidden)
-      expect(screen.getByRole("heading", { name: /Camp Tasks/i })).toBeInTheDocument();
+      // Board should still render even if API is unavailable
+      expect(screen.getByRole("region", { name: /kanban task board/i })).toBeInTheDocument();
       
       consoleSpy.mockRestore();
     });
@@ -233,7 +244,7 @@ describe("KanbanBoard", () => {
       
       // Column titles are rendered as h3
       const columnHeadings = screen.getAllByRole("heading", { level: 3 });
-      expect(columnHeadings.length).toBe(3);
+      expect(columnHeadings.length).toBe(4);
     });
 
     it("makes task cards keyboard accessible", () => {
@@ -248,16 +259,16 @@ describe("KanbanBoard", () => {
   });
 
   describe("responsive layout", () => {
-    it("renders columns in a horizontal flex layout", () => {
+    it("renders one sortable context per column", () => {
       render(<KanbanBoard />);
       
       // Find the container with all columns
       const dndContext = screen.getByTestId("dnd-context");
       expect(dndContext).toBeInTheDocument();
       
-      // All three columns should be children
+      // All columns should be children
       const sortableContexts = within(dndContext).getAllByTestId("sortable-context");
-      expect(sortableContexts.length).toBe(3);
+      expect(sortableContexts.length).toBe(4);
     });
   });
 });
@@ -267,15 +278,14 @@ describe("KanbanBoard Task Types", () => {
     const task: Task = {
       id: "test-1",
       title: "Test Task",
-      description: "Test description",
-      status: "todo",
+      status: "backlog",
       priority: "medium",
       createdAt: new Date().toISOString(),
     };
 
     expect(task.id).toBe("test-1");
     expect(task.title).toBe("Test Task");
-    expect(task.status).toBe("todo");
+    expect(task.status).toBe("backlog");
   });
 
   it("allows optional fields in Task", () => {
@@ -286,15 +296,14 @@ describe("KanbanBoard Task Types", () => {
       createdAt: new Date().toISOString(),
     };
 
-    expect(minimalTask.description).toBeUndefined();
     expect(minimalTask.priority).toBeUndefined();
   });
 
   it("validates TaskStatus union type", () => {
-    const validStatuses: TaskStatus[] = ["todo", "in-progress", "done"];
+    const validStatuses: TaskStatus[] = ["backlog", "in-progress", "review", "done"];
     
     validStatuses.forEach((status) => {
-      expect(["todo", "in-progress", "done"]).toContain(status);
+      expect(["backlog", "in-progress", "review", "done"]).toContain(status);
     });
   });
 });
