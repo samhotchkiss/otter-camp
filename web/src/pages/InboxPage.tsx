@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import api, { Approval } from "../lib/api";
 
 type ItemType = "approval" | "review" | "decision" | "blocked";
@@ -84,15 +84,39 @@ export default function InboxPage() {
     fetchApprovals();
   }, []);
 
-  const handleApprove = (id: string) => {
-    // TODO: Implement approval action
-    console.log("Approve:", id);
-  };
+  const [processingId, setProcessingId] = useState<string | null>(null);
 
-  const handleReject = (id: string) => {
-    // TODO: Implement rejection action
-    console.log("Reject:", id);
-  };
+  const handleApprove = useCallback(async (id: string) => {
+    if (processingId) return; // Prevent double-click
+    
+    setProcessingId(id);
+    try {
+      await api.approveItem(id);
+      // Remove item from list with smooth transition
+      setItems((prev) => prev.filter((item) => item.id !== id));
+    } catch (err) {
+      console.error("Approve failed:", err);
+      setError(err instanceof Error ? err.message : "Failed to approve");
+    } finally {
+      setProcessingId(null);
+    }
+  }, [processingId]);
+
+  const handleReject = useCallback(async (id: string) => {
+    if (processingId) return; // Prevent double-click
+    
+    setProcessingId(id);
+    try {
+      await api.rejectItem(id);
+      // Remove item from list with smooth transition
+      setItems((prev) => prev.filter((item) => item.id !== id));
+    } catch (err) {
+      console.error("Reject failed:", err);
+      setError(err instanceof Error ? err.message : "Failed to reject");
+    } finally {
+      setProcessingId(null);
+    }
+  }, [processingId]);
 
   if (loading) {
     return (
@@ -183,14 +207,16 @@ export default function InboxPage() {
                   <button
                     className="btn btn-primary"
                     onClick={() => handleApprove(item.id)}
+                    disabled={processingId === item.id}
                   >
-                    Approve
+                    {processingId === item.id ? "Processing..." : "Approve"}
                   </button>
                   <button
                     className="btn btn-secondary"
                     onClick={() => handleReject(item.id)}
+                    disabled={processingId === item.id}
                   >
-                    Reject
+                    {processingId === item.id ? "Processing..." : "Reject"}
                   </button>
                 </div>
               </div>

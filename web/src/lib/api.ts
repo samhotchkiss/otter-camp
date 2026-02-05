@@ -82,6 +82,11 @@ export interface FeedResponse {
   feedItems: FeedItem[];
 }
 
+export interface ApprovalResponse {
+  success: boolean;
+  message?: string;
+}
+
 // API methods
 export const api = {
   health: () => apiFetch<HealthResponse>('/health'),
@@ -89,6 +94,16 @@ export const api = {
   feed: () => apiFetch<FeedResponse>('/api/feed?demo=true'),
   tasks: () => apiFetch<Task[]>('/api/tasks?demo=true'),
   approvals: () => apiFetch<Approval[]>('/api/approvals/exec?demo=true'),
+  
+  // Approval actions
+  approveItem: (id: string) => apiFetch<ApprovalResponse>(`/api/approvals/exec/${id}/respond`, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'approve' }),
+  }),
+  rejectItem: (id: string) => apiFetch<ApprovalResponse>(`/api/approvals/exec/${id}/respond`, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'reject' }),
+  }),
 };
 
 export default api;
