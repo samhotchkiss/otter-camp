@@ -94,7 +94,6 @@ function timeAgo(dateString: string): string {
 
 export default function KnowledgePage() {
   const [entries, setEntries] = useState<KnowledgeEntry[]>(DEMO_ENTRIES);
-  const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<KnowledgeEntry | null>(null);
 
@@ -103,14 +102,9 @@ export default function KnowledgePage() {
     new Set(entries.flatMap((e) => e.tags))
   ).sort();
 
-  // Filter entries by search and tag
+  // Filter entries by tag (search handled by magic bar)
   const filteredEntries = entries.filter((entry) => {
-    const matchesSearch =
-      !searchQuery ||
-      entry.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entry.content.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesTag = !selectedTag || entry.tags.includes(selectedTag);
-    return matchesSearch && matchesTag;
+    return !selectedTag || entry.tags.includes(selectedTag);
   });
 
   return (
@@ -124,17 +118,8 @@ export default function KnowledgePage() {
         <button className="btn btn-primary">+ New Entry</button>
       </header>
 
-      {/* Search & Filters */}
+      {/* Tag Filters (search handled by magic bar ⌘K) */}
       <div className="knowledge-controls">
-        <div className="search-box">
-          <span className="search-icon">🔍</span>
-          <input
-            type="text"
-            placeholder="Search knowledge..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
         <div className="tag-filters">
           <button
             className={`tag-pill ${!selectedTag ? 'active' : ''}`}
@@ -187,8 +172,8 @@ export default function KnowledgePage() {
           <span className="empty-icon">📚</span>
           <p>No entries found</p>
           <p className="empty-hint">
-            {searchQuery || selectedTag
-              ? 'Try adjusting your search or filters'
+            {selectedTag
+              ? 'Try selecting a different tag'
               : 'Create your first knowledge entry'}
           </p>
         </div>
