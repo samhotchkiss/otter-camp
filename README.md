@@ -104,7 +104,65 @@ Set these in Railway dashboard:
 | `DATABASE_URL` | PostgreSQL connection string | Yes (auto-set by Railway) |
 | `REDIS_URL` | Redis connection string | No (auto-set by Railway) |
 | `OPENCLAW_WEBHOOK_SECRET` | Secret for webhook validation | Yes |
+| `OPENCLAW_SYNC_TOKEN` | Shared secret for sync endpoint auth | Yes (for live sync) |
+| `OPENCLAW_WS_SECRET` | Shared secret for WebSocket auth | Yes (for real-time updates) |
 | `PORT` | Server port | No (defaults to 8080) |
+
+## OpenClaw Bridge
+
+The bridge connects your local OpenClaw instance to the Otter Camp API, enabling real-time sync of agent sessions and status.
+
+### Architecture
+
+```
+┌─────────────────┐                                    ┌─────────────────┐
+│   Mac Studio    │                                    │     Railway     │
+│   (OpenClaw)    │                                    │   (Otter API)   │
+│                 │                                    │                 │
+│  ┌───────────┐  │    HTTP POST /api/sync/openclaw   │  ┌───────────┐  │
+│  │  Gateway  │◄─┼──┐                                │  │    API    │  │
+│  └───────────┘  │  │ WS                             │  └───────────┘  │
+│        ▲        │  │                                │        │        │
+│        │        │  │                                │        │ WS     │
+│  ┌───────────┐  │  │    Authorization: Bearer       │        ▼        │
+│  │  Bridge   │──┼──┴────────────────────────────────┼──►   Browser    │
+│  └───────────┘  │                                    │                 │
+└─────────────────┘                                    └─────────────────┘
+```
+
+### Bridge Environment Variables
+
+The bridge (`bridge/openclaw-bridge.ts`) requires these env vars:
+
+| Variable | Description | Where it connects |
+|----------|-------------|-------------------|
+| `OPENCLAW_HOST` | OpenClaw gateway host | Default: `127.0.0.1` |
+| `OPENCLAW_PORT` | OpenClaw gateway port | Default: `18791` |
+| `OPENCLAW_TOKEN` | Token for OpenClaw gateway auth | Local gateway |
+| `OTTERCAMP_URL` | Otter Camp API URL | Default: `https://api.otter.camp` |
+| `OTTERCAMP_TOKEN` | Auth token for sync endpoint | Must match API's `OPENCLAW_SYNC_TOKEN` |
+
+### Running the Bridge
+
+```bash
+# Set environment variables
+export OPENCLAW_TOKEN="your-openclaw-gateway-token"
+export OTTERCAMP_URL="https://api.otter.camp"
+export OTTERCAMP_TOKEN="your-sync-token"  # Must match OPENCLAW_SYNC_TOKEN on API
+
+# Run bridge (one-shot sync)
+npx tsx bridge/openclaw-bridge.ts
+
+# Run bridge (continuous sync every 30s)
+npx tsx bridge/openclaw-bridge.ts --continuous
+```
+
+### Security Notes
+
+- **Never commit secrets** — Use environment variables or `.env` files (gitignored)
+- **Token matching** — `OTTERCAMP_TOKEN` (bridge) must equal `OPENCLAW_SYNC_TOKEN` (API)
+- **Fail-closed** — If `OPENCLAW_WS_SECRET` is unset, WebSocket connections are rejected
+- **Sync endpoint** — Requires valid Bearer token; returns 401 without auth
 
 ### Docker (Self-hosted)
 
