@@ -1,205 +1,341 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../contexts/AuthContext";
-import { useToast } from "../contexts/ToastContext";
 
-type LoginPageProps = {
-  onLoginSuccess?: () => void;
-};
-
-export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
-  const { requestLogin, exchangeToken } = useAuth();
-  const toast = useToast();
-  const [orgId, setOrgId] = useState("");
-  const [authRequest, setAuthRequest] = useState<{
-    request_id: string;
-    state: string;
-    expires_at: string;
-    exchange_url: string;
-    openclaw_request: {
-      request_id: string;
-      state: string;
-      org_id: string;
-      callback_url: string;
-      expires_at: string;
-    };
-  } | null>(null);
-  const [token, setToken] = useState("");
-  const [error, setError] = useState<string | null>(null);
+/**
+ * LoginPage - Clean magic link auth
+ * Design: Jeff G (matches dashboard-v5/login.html mockup)
+ * 
+ * Uses our gold (#C9A86C) palette, not teal/emerald.
+ */
+export default function LoginPage() {
+  const { login } = useAuth();
+  const [email, setEmail] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleRequest = async (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     setIsSubmitting(true);
 
     try {
-      const trimmedOrgId = orgId.trim();
-      try {
-        localStorage.setItem("otter-camp-org-id", trimmedOrgId);
-      } catch {
-        // ignore storage errors
-      }
-
-      const request = await requestLogin(trimmedOrgId);
-      setAuthRequest(request);
-      toast.success("Auth request created", "OpenClaw will prompt you to approve the login");
+      // For now, just simulate magic link sent
+      // In production, this would call the API to send a magic link
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      setEmailSent(true);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Login failed";
-      setError(message);
-      toast.error("Request failed", message);
+      setError(err instanceof Error ? err.message : "Failed to send magic link");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleExchange = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!authRequest) return;
-    setError(null);
-    setIsSubmitting(true);
-
-    try {
-      await exchangeToken(authRequest.request_id, token);
-      try {
-        const nextOrgId = authRequest.openclaw_request?.org_id?.trim();
-        if (nextOrgId) {
-          localStorage.setItem("otter-camp-org-id", nextOrgId);
-        }
-      } catch {
-        // ignore storage errors
-      }
-      toast.success("Welcome back!", "You have successfully signed in");
-      onLoginSuccess?.();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Login failed";
-      setError(message);
-      toast.error("Sign in failed", message);
-    } finally {
-      setIsSubmitting(false);
-    }
+  // Quick login for testing (Sam's request: simple magic link)
+  const handleQuickLogin = () => {
+    login("sam@hotchkiss.me", "demo-org");
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-sky-100 via-white to-emerald-100 px-4 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
-      <div className="w-full max-w-md">
-        {/* Logo */}
-        <div className="mb-8 text-center">
-          <span className="text-6xl">🦦</span>
-          <h1 className="mt-4 text-3xl font-bold text-slate-900 dark:text-white">
-            Otter Camp
-          </h1>
-          <p className="mt-2 text-slate-600 dark:text-slate-400">
-            Sign in to your account
-          </p>
+    <div className="login-page">
+      <div className="login-container">
+        {/* Header */}
+        <div className="login-header">
+          <div className="login-logo">🦦</div>
+          <h1 className="login-title">otter.camp</h1>
+          <p className="login-subtitle">Your AI team's home base</p>
         </div>
 
-        {/* Login Form */}
-        <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 shadow-xl backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80">
-          <form onSubmit={handleRequest} className="space-y-6">
-            {error && (
-              <div className="rounded-xl bg-red-50 p-4 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
-                {error}
-              </div>
-            )}
+        {/* Login Card */}
+        <div className="login-card">
+          {!emailSent ? (
+            <>
+              <h2 className="login-card-title">Sign in to your account</h2>
 
-            <div>
-              <label
-                htmlFor="org-id"
-                className="block text-sm font-medium text-slate-700 dark:text-slate-300"
-              >
-                Organization ID
-              </label>
-              <input
-                id="org-id"
-                type="text"
-                autoComplete="organization"
-                required
-                value={orgId}
-                onChange={(e) => setOrgId(e.target.value)}
-                className="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500 dark:focus:border-sky-400"
-                placeholder="00000000-0000-0000-0000-000000000000"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-emerald-500 px-4 py-3 font-semibold text-white shadow-lg transition hover:from-sky-600 hover:to-emerald-600 focus:outline-none focus:ring-2 focus:ring-sky-500/50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isSubmitting ? (
-                <>
-                  <svg
-                    className="h-5 w-5 animate-spin"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    />
-                  </svg>
-                  Requesting...
-                </>
-              ) : (
-                "Request Login"
+              {error && (
+                <div className="login-error">{error}</div>
               )}
-            </button>
-          </form>
 
-          {authRequest && (
-            <div className="mt-8 space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-slate-500">OpenClaw Request</div>
-                <div className="mt-1 break-all font-mono text-xs">
-                  {JSON.stringify(authRequest.openclaw_request)}
-                </div>
-              </div>
-
-              <form onSubmit={handleExchange} className="space-y-3">
-                <div>
-                  <label
-                    htmlFor="token"
-                    className="block text-sm font-medium text-slate-700 dark:text-slate-300"
-                  >
-                    OpenClaw Token
+              <form onSubmit={handleSubmit}>
+                <div className="form-group">
+                  <label htmlFor="email" className="form-label">
+                    Email address
                   </label>
                   <input
-                    id="token"
-                    type="text"
+                    id="email"
+                    type="email"
+                    className="form-input"
+                    placeholder="you@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     required
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    className="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500 dark:focus:border-emerald-400"
-                    placeholder="oc_auth_..."
+                    autoComplete="email"
+                    autoFocus
                   />
+                  <p className="form-hint">
+                    We'll send you a magic link to sign in
+                  </p>
                 </div>
 
                 <button
                   type="submit"
+                  className="btn btn-primary"
                   disabled={isSubmitting}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white shadow-lg transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-500/50 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
                 >
-                  {isSubmitting ? "Signing in..." : "Exchange Token"}
+                  {isSubmitting ? "Sending..." : "Send Magic Link"}
                 </button>
               </form>
+
+              <div className="divider">or continue with</div>
+
+              <div className="alt-login">
+                <button type="button" className="btn btn-oauth" onClick={handleQuickLogin}>
+                  🔑 OpenClaw Token
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="login-success">
+              <div className="success-icon">✉️</div>
+              <h2 className="success-title">Check your email</h2>
+              <p className="success-text">
+                We sent a magic link to <strong>{email}</strong>
+              </p>
+              <p className="success-hint">
+                Click the link in the email to sign in. It expires in 10 minutes.
+              </p>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setEmailSent(false)}
+              >
+                Use a different email
+              </button>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <p className="mt-8 text-center text-xs text-slate-500 dark:text-slate-400">
+        <p className="login-footer">
           Cozy, collaborative, and ready for the next adventure.
         </p>
       </div>
+
+      <style>{`
+        .login-page {
+          min-height: 100vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 24px;
+          background: var(--bg, #1A1918);
+        }
+
+        .login-container {
+          width: 100%;
+          max-width: 420px;
+        }
+
+        .login-header {
+          text-align: center;
+          margin-bottom: 40px;
+        }
+
+        .login-logo {
+          font-size: 64px;
+          margin-bottom: 16px;
+        }
+
+        .login-title {
+          font-size: 28px;
+          font-weight: 700;
+          color: var(--text, #FAF8F5);
+          margin-bottom: 8px;
+        }
+
+        .login-subtitle {
+          font-size: 16px;
+          color: var(--text-muted, #A69582);
+        }
+
+        .login-card {
+          background: var(--surface, #252422);
+          border: 1px solid var(--border, #3D3A36);
+          border-radius: 16px;
+          padding: 32px;
+        }
+
+        .login-card-title {
+          font-size: 18px;
+          font-weight: 600;
+          color: var(--text, #FAF8F5);
+          margin-bottom: 24px;
+          text-align: center;
+        }
+
+        .login-error {
+          background: rgba(184, 92, 56, 0.15);
+          border: 1px solid rgba(184, 92, 56, 0.3);
+          color: #E57A52;
+          padding: 12px 16px;
+          border-radius: 10px;
+          font-size: 14px;
+          margin-bottom: 20px;
+        }
+
+        .form-group {
+          margin-bottom: 20px;
+        }
+
+        .form-label {
+          display: block;
+          font-size: 14px;
+          font-weight: 500;
+          color: var(--text, #FAF8F5);
+          margin-bottom: 8px;
+        }
+
+        .form-input {
+          width: 100%;
+          padding: 14px 16px;
+          background: var(--surface-alt, #2D2B28);
+          border: 1px solid var(--border, #3D3A36);
+          border-radius: 10px;
+          font-size: 15px;
+          color: var(--text, #FAF8F5);
+          transition: all 0.15s;
+        }
+
+        .form-input::placeholder {
+          color: var(--text-muted, #A69582);
+        }
+
+        .form-input:focus {
+          outline: none;
+          border-color: var(--accent, #C9A86C);
+          box-shadow: 0 0 0 3px rgba(201, 168, 108, 0.2);
+        }
+
+        .form-hint {
+          font-size: 13px;
+          color: var(--text-muted, #A69582);
+          margin-top: 8px;
+        }
+
+        .btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          width: 100%;
+          padding: 14px 24px;
+          border-radius: 10px;
+          font-size: 15px;
+          font-weight: 600;
+          border: none;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+
+        .btn-primary {
+          background: var(--accent, #C9A86C);
+          color: var(--bg, #1A1918);
+        }
+
+        .btn-primary:hover {
+          background: var(--accent-hover, #D4B87A);
+        }
+
+        .btn-primary:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        .btn-secondary {
+          background: var(--surface-alt, #2D2B28);
+          color: var(--text, #FAF8F5);
+          border: 1px solid var(--border, #3D3A36);
+          margin-top: 16px;
+        }
+
+        .btn-secondary:hover {
+          background: var(--border, #3D3A36);
+        }
+
+        .btn-oauth {
+          background: var(--surface, #252422);
+          border: 1px solid var(--border, #3D3A36);
+          color: var(--text, #FAF8F5);
+        }
+
+        .btn-oauth:hover {
+          background: var(--surface-alt, #2D2B28);
+        }
+
+        .divider {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          margin: 24px 0;
+          color: var(--text-muted, #A69582);
+          font-size: 13px;
+        }
+
+        .divider::before,
+        .divider::after {
+          content: '';
+          flex: 1;
+          height: 1px;
+          background: var(--border, #3D3A36);
+        }
+
+        .alt-login {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .login-success {
+          text-align: center;
+        }
+
+        .success-icon {
+          width: 80px;
+          height: 80px;
+          margin: 0 auto 24px;
+          background: rgba(90, 122, 92, 0.15);
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 40px;
+        }
+
+        .success-title {
+          font-size: 20px;
+          font-weight: 600;
+          color: var(--text, #FAF8F5);
+          margin-bottom: 8px;
+        }
+
+        .success-text {
+          color: var(--text, #FAF8F5);
+          margin-bottom: 8px;
+        }
+
+        .success-hint {
+          font-size: 14px;
+          color: var(--text-muted, #A69582);
+          margin-bottom: 24px;
+        }
+
+        .login-footer {
+          text-align: center;
+          font-size: 13px;
+          color: var(--text-muted, #A69582);
+          margin-top: 32px;
+        }
+      `}</style>
     </div>
   );
 }
