@@ -8,11 +8,7 @@
   color-scheme: dark light;
 }
 
-body {
-  background-color: var(--otter-bg);
-  color: var(--otter-text);
-  font-family: var(--otter-font);
-}
+/* Body styles already in theme.css */
 
 @keyframes palette-fade {
   from {
