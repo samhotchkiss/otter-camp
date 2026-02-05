@@ -1,13 +1,17 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
@@ -25,6 +29,18 @@ func NewRouter() http.Handler {
 
 	hub := ws.NewHub()
 	go hub.Run()
+
+	// Initialize database connection (graceful - demo mode if unavailable)
+	var db *sql.DB
+	var agentStore *store.AgentStore
+	
+	if dbConn, err := store.DB(); err != nil {
+		log.Printf("⚠️  Database not available, using demo mode: %v", err)
+	} else {
+		db = dbConn
+		agentStore = store.NewAgentStore(db)
+		log.Printf("✅ Database connected, Postgres-backed stores ready")
+	}
 
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
@@ -53,7 +69,7 @@ func NewRouter() http.Handler {
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
 	taskHandler := &TaskHandler{Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
-	agentsHandler := &AgentsHandler{}
+	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
 	workflowsHandler := &WorkflowsHandler{}
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub}
 	
@@ -78,7 +94,7 @@ func NewRouter() http.Handler {
 		r.Post("/approvals/exec/{id}/respond", execApprovalsHandler.Respond)
 		r.Get("/tasks", taskHandler.ListTasks)
 		r.Post("/tasks", taskHandler.CreateTask)
-		r.Get("/agents", agentsHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/agents", agentsHandler.List)
 		r.Get("/workflows", workflowsHandler.List)
 		r.Post("/sync/openclaw", openclawSyncHandler.Handle)
 		r.Get("/sync/agents", openclawSyncHandler.GetAgents)
