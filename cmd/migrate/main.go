@@ -31,6 +31,8 @@ func main() {
 		runDown(args)
 	case "create":
 		runCreate(args)
+	case "force":
+		runForce(args)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -46,6 +48,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  up [n]        Apply all migrations or the next n migrations")
 	fmt.Fprintln(os.Stderr, "  down [n]      Roll back all migrations or the last n migrations")
 	fmt.Fprintln(os.Stderr, "  create <name> Create new migration files")
+	fmt.Fprintln(os.Stderr, "  force <ver>   Force set the migration version (fixes dirty state)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Environment:")
 	fmt.Fprintln(os.Stderr, "  DATABASE_URL  PostgreSQL connection string")
@@ -95,6 +98,28 @@ func runDown(args []string) {
 	if err := m.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		exitWithError(err)
 	}
+}
+
+func runForce(args []string) {
+	if len(args) == 0 {
+		exitWithError(errors.New("version number is required"))
+	}
+
+	version, err := strconv.Atoi(args[0])
+	if err != nil {
+		exitWithError(fmt.Errorf("invalid version: %s", args[0]))
+	}
+
+	m, err := newMigrator()
+	if err != nil {
+		exitWithError(err)
+	}
+	defer closeMigrator(m)
+
+	if err := m.Force(version); err != nil {
+		exitWithError(err)
+	}
+	fmt.Printf("Forced version to %d\n", version)
 }
 
 func runCreate(args []string) {

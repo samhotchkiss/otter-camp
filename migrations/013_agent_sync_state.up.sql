@@ -1,5 +1,5 @@
 -- Agent sync state from OpenClaw (no RLS - single-tenant MVP)
-CREATE TABLE agent_sync_state (
+CREATE TABLE IF NOT EXISTS agent_sync_state (
     id TEXT PRIMARY KEY, -- agent slug (e.g., "main", "2b")
     name TEXT NOT NULL,
     role TEXT,
@@ -15,11 +15,11 @@ CREATE TABLE agent_sync_state (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE sync_metadata (
+CREATE TABLE IF NOT EXISTS sync_metadata (
     key TEXT PRIMARY KEY,
     value TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Index for status queries
-CREATE INDEX idx_agent_sync_state_status ON agent_sync_state(status);
+CREATE INDEX IF NOT EXISTS idx_agent_sync_state_status ON agent_sync_state(status);
