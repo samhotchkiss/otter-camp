@@ -175,7 +175,7 @@ export default function Dashboard() {
         {/* YOUR FEED Section */}
         <section className="section" data-tour="your-feed">
           <header className="section-header">
-            <h2 className="section-title">🏷️ YOUR FEED</h2>
+            <h2 className="section-title">📡 YOUR FEED</h2>
             <span className="section-count muted">{FEED_ITEMS.length}</span>
           </header>
 
@@ -210,6 +210,16 @@ export default function Dashboard() {
 
       {/* ========== SECONDARY COLUMN (SIDEBAR) ========== */}
       <aside className="secondary">
+        {/* Otter Illustration */}
+        <div className="otter-illustration">
+          <img 
+            src="/images/otters-sailing.png" 
+            alt="Otters sailing together" 
+            className="otter-woodcut"
+          />
+          <p className="otter-caption">Your otters, working together</p>
+        </div>
+
         {/* Quick Action - Drop a thought */}
         <div 
           className="add-button" 
@@ -259,6 +269,38 @@ export default function Dashboard() {
       <NewTaskModal isOpen={isNewTaskOpen} onClose={closeNewTask} />
 
       <style>{`
+        /* Otter illustration */
+        .otter-illustration {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 16px;
+          padding: 20px;
+          text-align: center;
+          overflow: hidden;
+        }
+        
+        .otter-woodcut {
+          width: 100%;
+          max-width: 280px;
+          height: auto;
+          border-radius: 8px;
+          opacity: 0.9;
+          filter: sepia(20%) contrast(1.1);
+          transition: all 0.3s;
+        }
+        
+        .otter-illustration:hover .otter-woodcut {
+          opacity: 1;
+          transform: scale(1.02);
+        }
+        
+        .otter-caption {
+          margin-top: 12px;
+          font-size: 13px;
+          color: var(--text-muted);
+          font-style: italic;
+        }
+        
         /* Section count badges */
         .section-count {
           background: var(--red);
