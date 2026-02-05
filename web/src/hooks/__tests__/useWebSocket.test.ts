@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor, act } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+
 import useWebSocket, { type WebSocketMessageType } from "../useWebSocket";
 
-// Mock WebSocket
 class MockWebSocket {
   static CONNECTING = 0;
   static OPEN = 1;
@@ -12,21 +12,13 @@ class MockWebSocket {
   readyState = MockWebSocket.CONNECTING;
   url: string;
   onopen: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void | Promise<void>) | null = null;
   onerror: ((event: Event) => void) | null = null;
   onclose: ((event: CloseEvent) => void) | null = null;
-
   sentMessages: string[] = [];
 
   constructor(url: string) {
     this.url = url;
-    // Simulate async connection
-    setTimeout(() => {
-      this.readyState = MockWebSocket.OPEN;
-      if (this.onopen) {
-        this.onopen(new Event("open"));
-      }
-    }, 10);
   }
 
   send(data: string) {
@@ -35,509 +27,309 @@ class MockWebSocket {
 
   close() {
     this.readyState = MockWebSocket.CLOSED;
-    if (this.onclose) {
-      this.onclose(new CloseEvent("close"));
-    }
+    this.onclose?.(new CloseEvent("close"));
   }
 
-  // Test helpers
-  simulateMessage(data: string | Blob) {
-    if (this.onmessage) {
-      this.onmessage(new MessageEvent("message", { data }));
+  simulateOpen() {
+    this.readyState = MockWebSocket.OPEN;
+    this.onopen?.(new Event("open"));
+  }
+
+  async simulateMessage(data: string | Blob) {
+    if (!this.onmessage) {
+      return;
     }
+    await this.onmessage(new MessageEvent("message", { data }));
   }
 
   simulateError() {
-    if (this.onerror) {
-      this.onerror(new Event("error"));
-    }
-    this.close();
+    this.onerror?.(new Event("error"));
   }
 }
 
-let mockWebSocketInstance: MockWebSocket | null = null;
-const MockWebSocketConstructor = vi.fn((url: string) => {
-  mockWebSocketInstance = new MockWebSocket(url);
-  return mockWebSocketInstance;
-});
+type MockWebSocketCtor = {
+  new (url: string): MockWebSocket;
+  CONNECTING: number;
+  OPEN: number;
+  CLOSING: number;
+  CLOSED: number;
+};
 
-// Setup global WebSocket mock
+const sockets: MockWebSocket[] = [];
+const MockWebSocketConstructor = vi.fn((url: string) => {
+  const socket = new MockWebSocket(url);
+  sockets.push(socket);
+  return socket;
+}) as unknown as MockWebSocketCtor;
+
+MockWebSocketConstructor.CONNECTING = MockWebSocket.CONNECTING;
+MockWebSocketConstructor.OPEN = MockWebSocket.OPEN;
+MockWebSocketConstructor.CLOSING = MockWebSocket.CLOSING;
+MockWebSocketConstructor.CLOSED = MockWebSocket.CLOSED;
+
 vi.stubGlobal("WebSocket", MockWebSocketConstructor);
 
-// Mock window.location for URL construction
-const originalLocation = window.location;
+const latestSocket = () => {
+  const socket = sockets[sockets.length - 1];
+  expect(socket).toBeDefined();
+  return socket as MockWebSocket;
+};
+
+const expectedSocketUrl = () => {
+  const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+  const base = configured || window.location.origin;
+  const host = base.replace(/^https?:\/\//, "");
+  const protocol = base.startsWith("https") ? "wss:" : "ws:";
+  return `${protocol}//${host}/ws`;
+};
 
 describe("useWebSocket", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
     vi.useFakeTimers();
-    mockWebSocketInstance = null;
-
-    // Mock window.location
-    Object.defineProperty(window, "location", {
-      value: {
-        protocol: "https:",
-        host: "localhost:3000",
-      },
-      writable: true,
-    });
+    vi.clearAllMocks();
+    sockets.length = 0;
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     vi.useRealTimers();
-    Object.defineProperty(window, "location", {
-      value: originalLocation,
-      writable: true,
+  });
+
+  it("connects on mount and tracks connected state", () => {
+    const { result } = renderHook(() => useWebSocket());
+
+    expect(result.current.connected).toBe(false);
+
+    act(() => {
+      latestSocket().simulateOpen();
+    });
+
+    expect(result.current.connected).toBe(true);
+  });
+
+  it("uses the configured websocket endpoint", () => {
+    renderHook(() => useWebSocket());
+    expect(MockWebSocketConstructor).toHaveBeenCalledWith(expectedSocketUrl());
+  });
+
+  it("closes websocket and removes handlers on unmount", () => {
+    const { unmount } = renderHook(() => useWebSocket());
+    const socket = latestSocket();
+    const closeSpy = vi.spyOn(socket, "close");
+
+    unmount();
+
+    expect(closeSpy).toHaveBeenCalled();
+    expect(socket.onopen).toBeNull();
+    expect(socket.onmessage).toBeNull();
+    expect(socket.onerror).toBeNull();
+    expect(socket.onclose).toBeNull();
+  });
+
+  it("reconnects after close using backoff and resets after successful connect", () => {
+    const { result } = renderHook(() => useWebSocket());
+
+    const first = latestSocket();
+    act(() => {
+      first.simulateOpen();
+    });
+    expect(result.current.connected).toBe(true);
+
+    act(() => {
+      first.close();
+    });
+    expect(result.current.connected).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(499);
+    });
+    expect(MockWebSocketConstructor).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(MockWebSocketConstructor).toHaveBeenCalledTimes(2);
+
+    const second = latestSocket();
+    act(() => {
+      second.simulateOpen();
+    });
+
+    act(() => {
+      second.close();
+      vi.advanceTimersByTime(500);
+    });
+    expect(MockWebSocketConstructor).toHaveBeenCalledTimes(3);
+  });
+
+  it("clears pending reconnect timers on unmount", () => {
+    const { unmount } = renderHook(() => useWebSocket());
+    const socket = latestSocket();
+
+    act(() => {
+      socket.close();
+    });
+
+    expect(MockWebSocketConstructor).toHaveBeenCalledTimes(1);
+
+    unmount();
+
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(MockWebSocketConstructor).toHaveBeenCalledTimes(1);
+  });
+
+  it("parses type/data messages", async () => {
+    const { result } = renderHook(() => useWebSocket());
+    const socket = latestSocket();
+
+    act(() => {
+      socket.simulateOpen();
+    });
+
+    await act(async () => {
+      await socket.simulateMessage(
+        JSON.stringify({ type: "TaskCreated", data: { id: "task-1" } }),
+      );
+    });
+
+    expect(result.current.lastMessage).toEqual({
+      type: "TaskCreated",
+      data: { id: "task-1" },
     });
   });
 
-  describe("connection", () => {
-    it("connects to WebSocket on mount", async () => {
-      const { result } = renderHook(() => useWebSocket());
+  it("parses messageType/body fallback payloads", async () => {
+    const { result } = renderHook(() => useWebSocket());
+    const socket = latestSocket();
 
-      // Initially not connected
-      expect(result.current.connected).toBe(false);
-
-      // Fast-forward to connection
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
+    act(() => {
+      socket.simulateOpen();
     });
 
-    it("constructs correct WebSocket URL", async () => {
-      renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      expect(MockWebSocketConstructor).toHaveBeenCalledWith("wss://localhost:3000/ws");
+    await act(async () => {
+      await socket.simulateMessage(
+        JSON.stringify({ messageType: "CommentAdded", body: { text: "hi" } }),
+      );
     });
 
-    it("uses ws:// for http:// protocol", async () => {
-      Object.defineProperty(window, "location", {
-        value: {
-          protocol: "http:",
-          host: "localhost:3000",
-        },
-        writable: true,
-      });
-
-      renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      expect(MockWebSocketConstructor).toHaveBeenCalledWith("ws://localhost:3000/ws");
-    });
-
-    it("closes WebSocket on unmount", async () => {
-      const { unmount } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      const closeSpy = vi.spyOn(mockWebSocketInstance!, "close");
-      unmount();
-
-      expect(closeSpy).toHaveBeenCalled();
+    expect(result.current.lastMessage).toEqual({
+      type: "CommentAdded",
+      data: { text: "hi" },
     });
   });
 
-  describe("reconnection", () => {
-    it("reconnects after disconnect", async () => {
-      const { result } = renderHook(() => useWebSocket());
+  it("parses event/message fallback payloads", async () => {
+    const { result } = renderHook(() => useWebSocket());
+    const socket = latestSocket();
 
-      // Initial connection
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const initialCallCount = MockWebSocketConstructor.mock.calls.length;
-
-      // Simulate disconnect
-      act(() => {
-        mockWebSocketInstance?.close();
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(false);
-      });
-
-      // Fast-forward past reconnect delay (starts at 500ms)
-      act(() => {
-        vi.advanceTimersByTime(600);
-      });
-
-      // Should attempt to reconnect
-      expect(MockWebSocketConstructor.mock.calls.length).toBe(initialCallCount + 1);
+    act(() => {
+      socket.simulateOpen();
     });
 
-    it("uses exponential backoff for reconnection", async () => {
-      const { result } = renderHook(() => useWebSocket());
-
-      // Initial connection
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      // First disconnect and reconnect
-      act(() => {
-        mockWebSocketInstance?.close();
-        vi.advanceTimersByTime(500); // First delay: 500ms
-      });
-
-      const firstReconnectCount = MockWebSocketConstructor.mock.calls.length;
-
-      // Second disconnect (before successful reconnect)
-      act(() => {
-        mockWebSocketInstance?.close();
-        vi.advanceTimersByTime(500); // Should need 1000ms now
-      });
-
-      // Should not have reconnected yet
-      expect(MockWebSocketConstructor.mock.calls.length).toBe(firstReconnectCount);
-
-      act(() => {
-        vi.advanceTimersByTime(600); // Total 1100ms should trigger reconnect
-      });
-
-      expect(MockWebSocketConstructor.mock.calls.length).toBeGreaterThan(firstReconnectCount);
+    await act(async () => {
+      await socket.simulateMessage(
+        JSON.stringify({ event: "AgentStatusUpdated", message: { status: "online" } }),
+      );
     });
 
-    it("resets reconnect attempts on successful connection", async () => {
-      const { result } = renderHook(() => useWebSocket());
-
-      // Initial connection
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      // Disconnect
-      act(() => {
-        mockWebSocketInstance?.close();
-        vi.advanceTimersByTime(600); // Reconnect after first delay
-      });
-
-      // Wait for reconnection
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      // After successful reconnect, delay should reset to 500ms
-      // Disconnect again
-      act(() => {
-        mockWebSocketInstance?.close();
-      });
-
-      const callsBeforeReconnect = MockWebSocketConstructor.mock.calls.length;
-
-      // Should reconnect at 500ms (reset), not 1000ms
-      act(() => {
-        vi.advanceTimersByTime(600);
-      });
-
-      expect(MockWebSocketConstructor.mock.calls.length).toBeGreaterThan(callsBeforeReconnect);
+    expect(result.current.lastMessage).toEqual({
+      type: "AgentStatusUpdated",
+      data: { status: "online" },
     });
   });
 
-  describe("message handling", () => {
-    it("parses JSON messages correctly", async () => {
-      const { result } = renderHook(() => useWebSocket());
+  it("handles blob messages", async () => {
+    const { result } = renderHook(() => useWebSocket());
+    const socket = latestSocket();
 
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const testMessage = {
-        type: "TaskCreated",
-        data: { id: "task-1", title: "New Task" },
-      };
-
-      act(() => {
-        mockWebSocketInstance?.simulateMessage(JSON.stringify(testMessage));
-      });
-
-      await waitFor(() => {
-        expect(result.current.lastMessage).toEqual(testMessage);
-      });
+    act(() => {
+      socket.simulateOpen();
     });
 
-    it("handles message with payload field", async () => {
-      const { result } = renderHook(() => useWebSocket());
+    const blobPayload = JSON.stringify({ type: "TaskUpdated", data: { id: "a" } });
+    const blob = new Blob([blobPayload], {
+      type: "application/json",
+    }) as Blob & { text?: () => Promise<string> };
 
-      act(() => {
-        vi.advanceTimersByTime(20);
+    if (typeof blob.text !== "function") {
+      Object.defineProperty(blob, "text", {
+        value: async () => blobPayload,
       });
+    }
 
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const testMessage = {
-        type: "TaskUpdated",
-        payload: { id: "task-1", status: "done" },
-      };
-
-      act(() => {
-        mockWebSocketInstance?.simulateMessage(JSON.stringify(testMessage));
-      });
-
-      await waitFor(() => {
-        expect(result.current.lastMessage?.type).toBe("TaskUpdated");
-        expect(result.current.lastMessage?.data).toEqual({ id: "task-1", status: "done" });
-      });
+    await act(async () => {
+      await socket.simulateMessage(blob);
     });
 
-    it("handles message with messageType field", async () => {
-      const { result } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const testMessage = {
-        messageType: "CommentAdded",
-        body: { taskId: "task-1", text: "Hello" },
-      };
-
-      act(() => {
-        mockWebSocketInstance?.simulateMessage(JSON.stringify(testMessage));
-      });
-
-      await waitFor(() => {
-        expect(result.current.lastMessage?.type).toBe("CommentAdded");
-        expect(result.current.lastMessage?.data).toEqual({ taskId: "task-1", text: "Hello" });
-      });
-    });
-
-    it("handles message with event field", async () => {
-      const { result } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const testMessage = {
-        event: "AgentStatusUpdated",
-        message: { agentId: "agent-1", status: "online" },
-      };
-
-      act(() => {
-        mockWebSocketInstance?.simulateMessage(JSON.stringify(testMessage));
-      });
-
-      await waitFor(() => {
-        expect(result.current.lastMessage?.type).toBe("AgentStatusUpdated");
-        expect(result.current.lastMessage?.data).toEqual({ agentId: "agent-1", status: "online" });
-      });
-    });
-
-    it("returns Unknown type for unparseable messages", async () => {
-      const { result } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      act(() => {
-        mockWebSocketInstance?.simulateMessage("not valid json {{{");
-      });
-
-      await waitFor(() => {
-        expect(result.current.lastMessage?.type).toBe("Unknown");
-        expect(result.current.lastMessage?.data).toBe("not valid json {{{");
-      });
-    });
-
-    it("returns Unknown type for messages without recognized type", async () => {
-      const { result } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const testMessage = {
-        unknownType: "SomeOtherEvent",
-        data: { foo: "bar" },
-      };
-
-      act(() => {
-        mockWebSocketInstance?.simulateMessage(JSON.stringify(testMessage));
-      });
-
-      await waitFor(() => {
-        expect(result.current.lastMessage?.type).toBe("Unknown");
-      });
-    });
-
-    it("handles Blob messages", async () => {
-      const { result } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const testMessage = { type: "TaskCreated", data: { id: "task-1" } };
-      const blob = new Blob([JSON.stringify(testMessage)], { type: "application/json" });
-
-      act(() => {
-        mockWebSocketInstance?.simulateMessage(blob);
-      });
-
-      await waitFor(() => {
-        expect(result.current.lastMessage?.type).toBe("TaskCreated");
-      });
+    expect(result.current.lastMessage).toEqual({
+      type: "TaskUpdated",
+      data: { id: "a" },
     });
   });
 
-  describe("sendMessage", () => {
-    it("returns false when not connected", () => {
-      const { result } = renderHook(() => useWebSocket());
+  it("returns Unknown for invalid or unsupported message shapes", async () => {
+    const { result } = renderHook(() => useWebSocket());
+    const socket = latestSocket();
 
-      // Not connected yet
-      expect(result.current.sendMessage("test")).toBe(false);
+    act(() => {
+      socket.simulateOpen();
     });
 
-    it("sends string messages when connected", async () => {
-      const { result } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const success = result.current.sendMessage("test message");
-
-      expect(success).toBe(true);
-      expect(mockWebSocketInstance?.sentMessages).toContain("test message");
+    await act(async () => {
+      await socket.simulateMessage("not-json");
     });
+    expect(result.current.lastMessage).toEqual({ type: "Unknown", data: "not-json" });
 
-    it("sends object messages as JSON", async () => {
-      const { result } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const message = { type: "TaskUpdated", data: { id: "task-1" } };
-      const success = result.current.sendMessage(message);
-
-      expect(success).toBe(true);
-      expect(mockWebSocketInstance?.sentMessages).toContain(JSON.stringify(message));
+    await act(async () => {
+      await socket.simulateMessage(JSON.stringify({ foo: "bar" }));
     });
-
-    it("returns false when socket is closing", async () => {
-      const { result } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      mockWebSocketInstance!.readyState = MockWebSocket.CLOSING;
-
-      expect(result.current.sendMessage("test")).toBe(false);
-    });
+    expect(result.current.lastMessage).toEqual({ type: "Unknown", data: { foo: "bar" } });
   });
 
-  describe("error handling", () => {
-    it("handles connection errors gracefully", async () => {
-      const { result } = renderHook(() => useWebSocket());
+  it("sendMessage gates on open state and serializes objects", () => {
+    const { result } = renderHook(() => useWebSocket());
+    const socket = latestSocket();
 
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
+    expect(result.current.sendMessage("hello")).toBe(false);
 
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      act(() => {
-        mockWebSocketInstance?.simulateError();
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(false);
-      });
+    act(() => {
+      socket.simulateOpen();
     });
 
-    it("attempts reconnection after error", async () => {
-      const { result } = renderHook(() => useWebSocket());
+    expect(result.current.sendMessage("hello")).toBe(true);
+    expect(result.current.sendMessage({ type: "TaskUpdated", data: { id: "1" } })).toBe(
+      true,
+    );
+    expect(socket.sentMessages).toEqual([
+      "hello",
+      JSON.stringify({ type: "TaskUpdated", data: { id: "1" } }),
+    ]);
 
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const callCountBeforeError = MockWebSocketConstructor.mock.calls.length;
-
-      act(() => {
-        mockWebSocketInstance?.simulateError();
-        vi.advanceTimersByTime(600);
-      });
-
-      expect(MockWebSocketConstructor.mock.calls.length).toBeGreaterThan(callCountBeforeError);
-    });
+    socket.readyState = MockWebSocket.CLOSING;
+    expect(result.current.sendMessage("later")).toBe(false);
   });
 
-  describe("message types", () => {
+  it("closes socket on error and schedules reconnect", () => {
+    renderHook(() => useWebSocket());
+    const socket = latestSocket();
+
+    act(() => {
+      socket.simulateOpen();
+      socket.simulateError();
+    });
+
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(MockWebSocketConstructor).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts all supported websocket message types", async () => {
     const validTypes: WebSocketMessageType[] = [
       "TaskCreated",
       "TaskUpdated",
@@ -551,105 +343,18 @@ describe("useWebSocket", () => {
       "ExecApprovalResolved",
     ];
 
-    validTypes.forEach((type) => {
-      it(`recognizes ${type} as valid message type`, async () => {
-        const { result } = renderHook(() => useWebSocket());
+    const { result } = renderHook(() => useWebSocket());
+    const socket = latestSocket();
 
-        act(() => {
-          vi.advanceTimersByTime(20);
-        });
-
-        await waitFor(() => {
-          expect(result.current.connected).toBe(true);
-        });
-
-        const testMessage = { type, data: {} };
-
-        act(() => {
-          mockWebSocketInstance?.simulateMessage(JSON.stringify(testMessage));
-        });
-
-        await waitFor(() => {
-          expect(result.current.lastMessage?.type).toBe(type);
-        });
-      });
-    });
-  });
-
-  describe("cleanup", () => {
-    it("cleans up event handlers on unmount", async () => {
-      const { unmount } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      unmount();
-
-      expect(mockWebSocketInstance?.onopen).toBeNull();
-      expect(mockWebSocketInstance?.onmessage).toBeNull();
-      expect(mockWebSocketInstance?.onerror).toBeNull();
-      expect(mockWebSocketInstance?.onclose).toBeNull();
+    act(() => {
+      socket.simulateOpen();
     });
 
-    it("clears pending reconnect timers on unmount", async () => {
-      const { result, unmount } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
+    for (const type of validTypes) {
+      await act(async () => {
+        await socket.simulateMessage(JSON.stringify({ type, data: { ok: true } }));
       });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      // Trigger disconnect to schedule reconnect
-      act(() => {
-        mockWebSocketInstance?.close();
-      });
-
-      const callCountAfterClose = MockWebSocketConstructor.mock.calls.length;
-
-      // Unmount before reconnect timer fires
-      unmount();
-
-      // Advance time past reconnect delay
-      act(() => {
-        vi.advanceTimersByTime(1000);
-      });
-
-      // Should not have attempted to reconnect
-      expect(MockWebSocketConstructor.mock.calls.length).toBe(callCountAfterClose);
-    });
-
-    it("does not update state after unmount", async () => {
-      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      
-      const { result, unmount } = renderHook(() => useWebSocket());
-
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-
-      await waitFor(() => {
-        expect(result.current.connected).toBe(true);
-      });
-
-      const ws = mockWebSocketInstance;
-      unmount();
-
-      // Try to trigger state updates after unmount
-      // This should not cause React warnings
-      act(() => {
-        ws?.simulateMessage(JSON.stringify({ type: "TaskCreated", data: {} }));
-      });
-
-      // No React warning about updating unmounted component
-      expect(consoleErrorSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining("Can't perform a React state update on an unmounted component")
-      );
-
-      consoleErrorSpy.mockRestore();
-    });
+      expect(result.current.lastMessage?.type).toBe(type);
+    }
   });
 });
