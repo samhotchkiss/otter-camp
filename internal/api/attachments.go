@@ -16,22 +16,22 @@ import (
 )
 
 const (
-	maxUploadSize    = 10 << 20 // 10 MB
-	uploadsDir       = "uploads"
-	defaultBaseURL   = "/uploads"
+	maxUploadSize  = 10 << 20 // 10 MB
+	uploadsDir     = "uploads"
+	defaultBaseURL = "/uploads"
 )
 
 // Attachment represents a file attachment on a message.
 type Attachment struct {
-	ID           string  `json:"id"`
-	OrgID        string  `json:"org_id"`
-	CommentID    *string `json:"comment_id,omitempty"`
-	Filename     string  `json:"filename"`
-	SizeBytes    int64   `json:"size_bytes"`
-	MimeType     string  `json:"mime_type"`
-	StorageKey   string  `json:"storage_key"`
-	URL          string  `json:"url"`
-	ThumbnailURL *string `json:"thumbnail_url,omitempty"`
+	ID           string    `json:"id"`
+	OrgID        string    `json:"org_id"`
+	CommentID    *string   `json:"comment_id,omitempty"`
+	Filename     string    `json:"filename"`
+	SizeBytes    int64     `json:"size_bytes"`
+	MimeType     string    `json:"mime_type"`
+	StorageKey   string    `json:"storage_key"`
+	URL          string    `json:"url"`
+	ThumbnailURL *string   `json:"thumbnail_url,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
@@ -98,6 +98,22 @@ func (h *AttachmentsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, err := getTasksDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	identity, err := requireSessionIdentity(r.Context(), db, r)
+	if err != nil {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: err.Error()})
+		return
+	}
+	if identity.OrgID != orgID {
+		sendJSON(w, http.StatusForbidden, errorResponse{Error: "org_id mismatch"})
+		return
+	}
+
 	// Detect MIME type
 	mimeType := detectMimeType(file, header.Filename)
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -144,14 +160,6 @@ func (h *AttachmentsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	if isImageMimeType(mimeType) {
 		thumbURL := fileURL + "?thumb=1"
 		thumbnailURL = &thumbURL
-	}
-
-	// Save to database
-	db, err := getTasksDB()
-	if err != nil {
-		os.Remove(destPath)
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
-		return
 	}
 
 	var attachmentID string
@@ -203,14 +211,20 @@ func (h *AttachmentsHandler) GetAttachment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	identity, err := requireSessionIdentity(r.Context(), db, r)
+	if err != nil {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: err.Error()})
+		return
+	}
+
 	var attachment Attachment
 	var thumbnailURL sql.NullString
 	var commentID sql.NullString
 	err = db.QueryRowContext(r.Context(), `
 		SELECT id, org_id, comment_id, filename, size_bytes, mime_type, storage_key, url, thumbnail_url, created_at
 		FROM attachments
-		WHERE id = $1
-	`, attachmentID).Scan(
+		WHERE id = $1 AND org_id = $2
+	`, attachmentID, identity.OrgID).Scan(
 		&attachment.ID,
 		&attachment.OrgID,
 		&commentID,
