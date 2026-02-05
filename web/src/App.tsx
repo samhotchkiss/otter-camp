@@ -8,12 +8,14 @@ import WebSocketOrgSubscriber from "./components/WebSocketOrgSubscriber";
 import SkipLink from "./components/SkipLink";
 import { LiveRegionProvider } from "./components/LiveRegion";
 import AuthHandler from "./components/AuthHandler";
+import DemoBanner from "./components/DemoBanner";
 import { router } from "./router";
 
 export default function App() {
   return (
     <LiveRegionProvider>
       <AuthHandler>
+        <DemoBanner />
         <ToastProvider>
           <WebSocketProvider>
             <WebSocketOrgSubscriber />

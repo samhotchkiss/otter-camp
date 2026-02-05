@@ -3,7 +3,16 @@
  * Connects to the Go backend at api.otter.camp
  */
 
+import { isDemoMode } from './demo';
+
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
+
+/**
+ * Get demo query param based on hostname or explicit flag
+ */
+function getDemoQueryParam(): string {
+  return isDemoMode() ? '?demo=true' : '';
+}
 
 export interface ApiError extends Error {
   status: number;
@@ -106,10 +115,10 @@ export interface CreateTaskResponse {
 // API methods
 export const api = {
   health: () => apiFetch<HealthResponse>('/health'),
-  // Use demo mode for MVP until auth is implemented
-  feed: () => apiFetch<FeedResponse>('/api/feed?demo=true'),
-  tasks: () => apiFetch<Task[]>('/api/tasks?demo=true'),
-  approvals: () => apiFetch<Approval[]>('/api/approvals/exec?demo=true'),
+  // Use demo mode based on hostname (demo.otter.camp) or for MVP testing
+  feed: () => apiFetch<FeedResponse>(`/api/feed${getDemoQueryParam()}`),
+  tasks: () => apiFetch<Task[]>(`/api/tasks${getDemoQueryParam()}`),
+  approvals: () => apiFetch<Approval[]>(`/api/approvals/exec${getDemoQueryParam()}`),
   
   // Approval actions
   approveItem: (id: string) => apiFetch<ApprovalResponse>(`/api/approvals/exec/${id}/respond`, {

@@ -693,3 +693,41 @@ textarea::placeholder {
 .command-palette-panel {
   animation: palette-scale 200ms ease-out;
 }
+
+/* ========================================
+   DEMO BANNER
+   ======================================== */
+
+.demo-banner {
+  background: var(--orange, #C87941);
+  color: white;
+  text-align: center;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+}
+
+.demo-banner-link {
+  color: white;
+  text-decoration: underline;
+  margin-left: 4px;
+}
+
+.demo-banner-link:hover {
+  opacity: 0.9;
+}
+
+/* Offset the body when demo banner is shown */
+body.has-demo-banner {
+  padding-top: 36px;
+}
+
+body.has-demo-banner .topbar {
+  top: 36px;
+}
+

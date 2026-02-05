@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { isDemoMode } from '../lib/demo';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
@@ -20,6 +21,17 @@ export default function AuthHandler({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     const handleAuth = async () => {
+      // Skip auth entirely in demo mode
+      if (isDemoMode()) {
+        setUser({
+          id: 'demo-user',
+          name: 'Demo User',
+          email: 'demo@otter.camp',
+        });
+        setIsChecking(false);
+        return;
+      }
+
       // Check for auth param in URL
       const params = new URLSearchParams(window.location.search);
       const authToken = params.get('auth');
@@ -79,9 +91,19 @@ export default function AuthHandler({ children }: { children: React.ReactNode })
 
 // Export a hook for components to check auth status
 export function useAuth() {
+  // Demo mode is always "authenticated"
+  if (isDemoMode()) {
+    return {
+      isAuthenticated: true,
+      token: 'demo',
+      isDemo: true,
+    };
+  }
+  
   const token = localStorage.getItem('otter_auth_token');
   return {
     isAuthenticated: !!token,
     token,
+    isDemo: false,
   };
 }
