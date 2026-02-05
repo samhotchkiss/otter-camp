@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import NotificationBell from "../components/NotificationBell";
-import OtterFactsFooter from "../components/OtterFactsFooter";
+import Footer from "../components/Footer";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
@@ -359,7 +359,7 @@ export default function DashboardLayout({
           {children}
         </main>
 
-        <OtterFactsFooter />
+        <Footer />
       </div>
 
       {/* Keyboard Shortcuts Help Modal */}
