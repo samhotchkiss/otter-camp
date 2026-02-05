@@ -280,7 +280,7 @@ export default function OnboardingTour({
         {/* Spotlight border glow */}
         {spotlightPosition && (
           <div
-            className="pointer-events-none absolute rounded-xl ring-4 ring-sky-400/50 ring-offset-2 ring-offset-transparent transition-all duration-300"
+            className="pointer-events-none absolute rounded-xl ring-4 ring-otter-dark-accent/50 ring-offset-2 ring-offset-transparent transition-all duration-300"
             style={{
               top: spotlightPosition.top,
               left: spotlightPosition.left,
@@ -302,7 +302,7 @@ export default function OnboardingTour({
       >
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
           {/* Header */}
-          <div className="bg-gradient-to-r from-sky-500 to-emerald-500 px-6 py-4">
+          <div className="bg-otter-dark-accent px-6 py-4">
             <div className="flex items-center gap-3">
               <span className="text-3xl">{step.icon}</span>
               <div>
@@ -312,7 +312,7 @@ export default function OnboardingTour({
                 >
                   {step.title}
                 </h3>
-                <p className="text-sm text-sky-100">
+                <p className="text-sm text-otter-dark-bg/80">
                   Step {currentStep + 1} of {TOUR_STEPS.length}
                 </p>
               </div>
@@ -338,7 +338,7 @@ export default function OnboardingTour({
                 onClick={() => setCurrentStep(index)}
                 className={`h-2 rounded-full transition-all ${
                   index === currentStep
-                    ? "w-6 bg-sky-500"
+                    ? "w-6 bg-otter-dark-accent"
                     : "w-2 bg-slate-300 hover:bg-slate-400 dark:bg-slate-600 dark:hover:bg-slate-500"
                 }`}
                 aria-label={`Go to step ${index + 1}`}
