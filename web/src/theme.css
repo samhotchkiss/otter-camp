@@ -956,3 +956,48 @@ body.has-demo-banner .topbar {
   color: var(--text-muted);
 }
 
+
+/* ========================================
+   PAGE HEADERS (Visual Polish #85)
+   ======================================== */
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.page-subtitle {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+
+/* ========================================
+   AGENTS PAGE POLISH (#85)
+   ======================================== */
+
+/* Better disconnected badge */
+.connection-status.disconnected {
+  background: var(--red-bg, rgba(184, 92, 56, 0.2));
+  color: var(--red);
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Agent card padding */
+.agent-card {
+  padding: 20px;
+}
+
