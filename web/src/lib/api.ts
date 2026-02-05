@@ -79,6 +79,15 @@ export interface Task {
   project?: string;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  description?: string | null;
+  status?: string;
+  taskCount?: number;
+  completedCount?: number;
+}
+
 export interface Approval {
   id: string;
   type: string;
@@ -126,6 +135,7 @@ export const api = {
   feed: () => apiFetch<FeedResponse>(`/api/feed${getOrgQueryParam()}`),
   tasks: () => apiFetch<Task[]>(`/api/tasks${getOrgQueryParam()}`),
   approvals: () => apiFetch<Approval[]>(`/api/approvals/exec${getOrgQueryParam()}`),
+  projects: () => apiFetch<{ projects: Project[] }>(`/api/projects${getOrgQueryParam()}`),
   
   // Approval actions
   approveItem: (id: string) => apiFetch<ApprovalResponse>(`/api/approvals/exec/${id}/respond`, {

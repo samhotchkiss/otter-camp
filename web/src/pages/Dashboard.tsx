@@ -5,7 +5,8 @@ import TaskDetail from "../components/TaskDetail";
 import NewTaskModal from "../components/NewTaskModal";
 import type { Command } from "../hooks/useCommandPalette";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
-import { api, type ActionItem, type FeedItem } from "../lib/api";
+import { api, type ActionItem, type FeedItem, type Project } from "../lib/api";
+import { isDemoMode } from "../lib/demo";
 
 /**
  * Dashboard - Two-column layout matching Jeff G's mockups
@@ -15,8 +16,8 @@ import { api, type ActionItem, type FeedItem } from "../lib/api";
  * - Secondary (right): Quick actions + Projects list
  */
 
-// Fallback data when API is unavailable
-const FALLBACK_ACTION_ITEMS: ActionItem[] = [
+// Demo data (only used on demo host)
+const DEMO_ACTION_ITEMS: ActionItem[] = [
   {
     id: "1",
     icon: "🚀",
@@ -39,7 +40,7 @@ const FALLBACK_ACTION_ITEMS: ActionItem[] = [
   },
 ];
 
-const FALLBACK_FEED_ITEMS: FeedItem[] = [
+const DEMO_FEED_ITEMS: FeedItem[] = [
   {
     id: "summary",
     avatar: "✓",
@@ -78,8 +79,8 @@ const FALLBACK_FEED_ITEMS: FeedItem[] = [
   },
 ];
 
-// Sample projects for sidebar
-const PROJECTS = [
+// Demo projects for sidebar
+const DEMO_PROJECTS = [
   { id: "itsalive", name: "ItsAlive", desc: "Waiting on deploy approval", status: "blocked", time: "5m" },
   { id: "pearl", name: "Pearl", desc: "Derek pushing commits", status: "working", time: "2m" },
   { id: "otter-camp", name: "Otter Camp", desc: "Design + architecture in progress", status: "working", time: "now" },
@@ -99,8 +100,9 @@ export default function Dashboard() {
   } = useKeyboardShortcutsContext();
 
   // API state
-  const [actionItems, setActionItems] = useState<ActionItem[]>(FALLBACK_ACTION_ITEMS);
-  const [feedItems, setFeedItems] = useState<FeedItem[]>(FALLBACK_FEED_ITEMS);
+  const [actionItems, setActionItems] = useState<ActionItem[]>(isDemoMode() ? DEMO_ACTION_ITEMS : []);
+  const [feedItems, setFeedItems] = useState<FeedItem[]>(isDemoMode() ? DEMO_FEED_ITEMS : []);
+  const [projects, setProjects] = useState<Project[]>(isDemoMode() ? (DEMO_PROJECTS as unknown as Project[]) : []);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -112,16 +114,24 @@ export default function Dashboard() {
       try {
         setIsLoading(true);
         setError(null);
-        const data = await api.feed();
+        const [data, projectsResponse] = await Promise.all([
+          api.feed(),
+          api.projects(),
+        ]);
         if (!cancelled) {
-          if (data.actionItems?.length) setActionItems(data.actionItems);
-          if (data.feedItems?.length) setFeedItems(data.feedItems);
+          setActionItems(data.actionItems || []);
+          setFeedItems(data.feedItems || []);
+          setProjects(projectsResponse.projects || []);
         }
       } catch (err) {
         if (!cancelled) {
-          console.warn('API unavailable, using fallback data:', err);
+          console.warn('API unavailable:', err);
           setError('Unable to connect to API');
-          // Keep fallback data
+          if (!isDemoMode()) {
+            setActionItems([]);
+            setFeedItems([]);
+            setProjects([]);
+          }
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -192,6 +202,10 @@ export default function Dashboard() {
             </div>
           )}
 
+          {actionItems.length === 0 && !isLoading && (
+            <div className="empty-state">No approvals waiting.</div>
+          )}
+
           {actionItems.map((item) => (
             <div key={item.id} className="action-card">
               <div className="action-header">
@@ -222,6 +236,9 @@ export default function Dashboard() {
           </header>
 
           <div className="card">
+            {feedItems.length === 0 && !isLoading && (
+              <div className="empty-state">No activity yet.</div>
+            )}
             {feedItems.map((item) => (
               <div key={item.id} className="feed-item">
                 <div 
@@ -278,16 +295,24 @@ export default function Dashboard() {
         {/* Projects List */}
         <div className="projects-card">
           <div className="projects-header">Projects</div>
-          {PROJECTS.map((project) => (
-            <div key={project.id} className="project-item">
-              <div className={`project-status ${project.status}`}></div>
-              <div className="project-info">
-                <div className="project-name">{project.name}</div>
-                <div className="project-desc">{project.desc}</div>
+          {projects.length === 0 && !isLoading && (
+            <div className="empty-state">No projects yet.</div>
+          )}
+          {projects.map((project) => {
+            const total = project.taskCount ?? 0;
+            const done = project.completedCount ?? 0;
+            const desc = total > 0 ? `${done}/${total} tasks` : "No tasks yet";
+            return (
+              <div key={project.id} className="project-item">
+                <div className={`project-status ${project.status || "active"}`}></div>
+                <div className="project-info">
+                  <div className="project-name">{project.name}</div>
+                  <div className="project-desc">{desc}</div>
+                </div>
+                <div className="project-time">&nbsp;</div>
               </div>
-              <div className="project-time">{project.time}</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </aside>
       </div>
@@ -334,6 +359,12 @@ export default function Dashboard() {
           display: flex;
           align-items: center;
           gap: 8px;
+        }
+
+        .empty-state {
+          color: var(--text-muted);
+          font-size: 13px;
+          padding: 12px;
         }
         
         /* Otter illustration */
