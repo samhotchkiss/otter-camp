@@ -19,12 +19,14 @@ export interface ApiError extends Error {
 }
 
 export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const token = localStorage.getItem('token');
+  const token = localStorage.getItem('otter_camp_token');
+  const orgId = localStorage.getItem('otter-camp-org-id');
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       ...(token && { Authorization: `Bearer ${token}` }),
+      ...(orgId && { 'X-Org-ID': orgId }),
       ...options?.headers,
     },
   });
