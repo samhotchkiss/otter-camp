@@ -1,4 +1,7 @@
-export function formatMessageTimestamp(isoString: string): string {
+/**
+ * Format a timestamp for display.
+ */
+export function formatTimestamp(isoString: string): string {
   const date = new Date(isoString);
   const now = new Date();
   const isToday = date.toDateString() === now.toDateString();
@@ -20,15 +23,15 @@ export function formatMessageTimestamp(isoString: string): string {
   return `${dateStr} ${timeStr}`;
 }
 
+/**
+ * Get initials from a name for avatar fallback.
+ */
 export function getInitials(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) return "?";
-
-  const parts = trimmed.split(/\s+/).filter(Boolean);
-  const initials = parts
-    .map((part) => part.slice(0, 1))
+  return name
+    .split(" ")
+    .map((part) => part[0])
     .slice(0, 2)
-    .join("");
-  return initials.toUpperCase() || "?";
+    .join("")
+    .toUpperCase();
 }
 

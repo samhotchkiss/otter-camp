@@ -1,23 +1,44 @@
-export type MessageSenderType = "user" | "agent";
+/**
+ * Agent status for the status indicator.
+ */
+export type AgentStatus = "online" | "busy" | "offline";
 
-export type Attachment = {
+/**
+ * Agent information used by messaging components.
+ */
+export type Agent = {
   id: string;
-  filename: string;
-  size_bytes: number;
-  mime_type: string;
-  url: string;
-  thumbnail_url?: string;
+  name: string;
+  avatarUrl?: string;
+  status: AgentStatus;
+  role?: string;
 };
 
-export type TaskThreadMessage = {
+/**
+ * Message sender type - distinguishes between human users and AI agents.
+ */
+export type MessageSenderType = "user" | "agent";
+
+/**
+ * Represents a single message in a DM thread.
+ */
+export type DMMessage = {
   id: string;
-  taskId?: string;
-  senderId?: string;
-  senderName?: string;
-  senderType?: MessageSenderType;
+  threadId: string;
+  senderId: string;
+  senderName: string;
+  senderType: MessageSenderType;
   senderAvatarUrl?: string;
   content: string;
-  attachments?: Attachment[];
   createdAt: string;
+};
+
+/**
+ * Pagination info returned from API.
+ */
+export type PaginationInfo = {
+  hasMore: boolean;
+  nextCursor?: string;
+  totalCount?: number;
 };
 

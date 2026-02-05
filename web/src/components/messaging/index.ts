@@ -1,8 +1,15 @@
-export { default as MessageAvatar } from "./MessageAvatar";
-export { default as MessageMarkdown } from "./MessageMarkdown";
-export { default as TaskMessageInput } from "./TaskMessageInput";
-export { default as TaskThread } from "./TaskThread";
-export { default as TaskThreadView } from "./TaskThreadView";
-export * from "./types";
-export * from "./utils";
+export { default as AgentSelector } from "./AgentSelector";
+export { default as AgentStatusIndicator } from "./AgentStatusIndicator";
+export { default as DMConversationView } from "./DMConversationView";
+export { default as MessageHistory } from "./MessageHistory";
+
+export type {
+  Agent,
+  AgentStatus,
+  DMMessage,
+  MessageSenderType,
+  PaginationInfo,
+} from "./types";
+
+export { formatTimestamp, getInitials } from "./utils";
 
