@@ -7,6 +7,8 @@ import {
   type ReactNode,
 } from "react";
 
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
+
 export type User = {
   id: string;
   email: string;
@@ -82,7 +84,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const requestLogin = useCallback(async (orgId: string) => {
-    const response = await fetch("/api/auth/login", {
+    const response = await fetch(`${API_URL}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ org_id: orgId }),
@@ -98,7 +100,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const exchangeToken = useCallback(async (requestId: string, token: string) => {
-    const response = await fetch("/api/auth/exchange", {
+    const response = await fetch(`${API_URL}/api/auth/exchange`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ request_id: requestId, token }),
