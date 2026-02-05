@@ -43,6 +43,7 @@ func NewRouter() http.Handler {
 	r.Post("/api/waitlist", HandleWaitlist)
 	r.Get("/api/search", SearchHandler)
 	r.Get("/api/commands/search", CommandSearchHandler)
+	r.Post("/api/commands/execute", CommandExecuteHandler)
 	r.Get("/api/feed", FeedHandlerV2)
 	r.Post("/api/auth/login", HandleLogin)
 	r.Post("/api/auth/exchange", HandleAuthExchange)
