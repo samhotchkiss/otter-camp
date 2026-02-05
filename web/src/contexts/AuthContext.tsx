@@ -82,6 +82,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       };
       localStorage.setItem(TOKEN_KEY, magicToken);
       localStorage.setItem(USER_KEY, JSON.stringify(samUser));
+      // Set org_id for Sam's organization (MVP: hardcoded)
+      localStorage.setItem('otter-camp-org-id', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
       setUser(samUser);
       
       // Remove auth param from URL

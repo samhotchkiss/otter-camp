@@ -8,10 +8,15 @@ import { isDemoMode } from './demo';
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
 /**
- * Get demo query param based on hostname or explicit flag
+ * Get query params for API calls that need org_id
+ * Returns ?demo=true for demo mode, or ?org_id=<uuid> for authenticated users
  */
-function getDemoQueryParam(): string {
-  return isDemoMode() ? '?demo=true' : '';
+function getOrgQueryParam(): string {
+  if (isDemoMode()) {
+    return '?demo=true';
+  }
+  const orgId = localStorage.getItem('otter-camp-org-id');
+  return orgId ? `?org_id=${orgId}` : '';
 }
 
 export interface ApiError extends Error {
@@ -117,10 +122,10 @@ export interface CreateTaskResponse {
 // API methods
 export const api = {
   health: () => apiFetch<HealthResponse>('/health'),
-  // Use demo mode based on hostname (demo.otter.camp) or for MVP testing
-  feed: () => apiFetch<FeedResponse>(`/api/feed${getDemoQueryParam()}`),
-  tasks: () => apiFetch<Task[]>(`/api/tasks${getDemoQueryParam()}`),
-  approvals: () => apiFetch<Approval[]>(`/api/approvals/exec${getDemoQueryParam()}`),
+  // Pass org_id to get real data, or demo=true for demo mode
+  feed: () => apiFetch<FeedResponse>(`/api/feed${getOrgQueryParam()}`),
+  tasks: () => apiFetch<Task[]>(`/api/tasks${getOrgQueryParam()}`),
+  approvals: () => apiFetch<Approval[]>(`/api/approvals/exec${getOrgQueryParam()}`),
   
   // Approval actions
   approveItem: (id: string) => apiFetch<ApprovalResponse>(`/api/approvals/exec/${id}/respond`, {
