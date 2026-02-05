@@ -7,22 +7,25 @@ import WebSocketToastHandler from "./components/WebSocketToastHandler";
 import WebSocketOrgSubscriber from "./components/WebSocketOrgSubscriber";
 import SkipLink from "./components/SkipLink";
 import { LiveRegionProvider } from "./components/LiveRegion";
+import AuthHandler from "./components/AuthHandler";
 import { router } from "./router";
 
 export default function App() {
   return (
     <LiveRegionProvider>
-      <ToastProvider>
-        <WebSocketProvider>
-          <WebSocketOrgSubscriber />
-          <NotificationProvider>
-            <SkipLink targetId="main-content" />
-            <RouterProvider router={router} />
-            <WebSocketToastHandler />
-            <ToastContainer />
-          </NotificationProvider>
-        </WebSocketProvider>
-      </ToastProvider>
+      <AuthHandler>
+        <ToastProvider>
+          <WebSocketProvider>
+            <WebSocketOrgSubscriber />
+            <NotificationProvider>
+              <SkipLink targetId="main-content" />
+              <RouterProvider router={router} />
+              <WebSocketToastHandler />
+              <ToastContainer />
+            </NotificationProvider>
+          </WebSocketProvider>
+        </ToastProvider>
+      </AuthHandler>
     </LiveRegionProvider>
   );
 }
