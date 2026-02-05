@@ -119,19 +119,36 @@ const wsMessageToNotification = (
       };
 
     case "AgentStatusUpdated":
+    case "AgentStatusChanged": {
+      const agentPayload =
+        payload?.agent && typeof payload.agent === "object"
+          ? (payload.agent as Record<string, unknown>)
+          : undefined;
+      const agentName =
+        (payload?.agentName as string | undefined) ||
+        (agentPayload?.display_name as string | undefined) ||
+        (agentPayload?.name as string | undefined);
+      const status =
+        (payload?.status as string | undefined) ||
+        (agentPayload?.status as string | undefined) ||
+        "updated";
+      const agentId =
+        (payload?.agentId as string | undefined) ||
+        (agentPayload?.id as string | undefined);
       return {
         id: crypto.randomUUID(),
         type: "agent_update",
         title: "Agent Status",
-        message: payload?.agentName
-          ? `${payload.agentName} is now ${payload.status ?? "updated"}`
+        message: agentName
+          ? `${agentName} is now ${status}`
           : "An agent's status changed",
         read: false,
         createdAt: new Date(),
-        sourceId: payload?.agentId ? String(payload.agentId) : undefined,
+        sourceId: agentId ? String(agentId) : undefined,
         sourceType: "agent",
-        sourceUrl: payload?.agentId ? `/agents/${payload.agentId}` : "/agents",
+        sourceUrl: agentId ? `/agents/${agentId}` : "/agents",
       };
+    }
 
     case "DMMessageReceived":
       return {

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
-import useWebSocket, { type WebSocketMessage, type WebSocketMessageType } from "../useWebSocket";
+import useWebSocket, { type WebSocketMessageType } from "../useWebSocket";
 
 // Mock WebSocket
 class MockWebSocket {
@@ -544,6 +544,8 @@ describe("useWebSocket", () => {
       "TaskStatusChanged",
       "CommentAdded",
       "AgentStatusUpdated",
+      "AgentStatusChanged",
+      "FeedItemsAdded",
       "DMMessageReceived",
       "ExecApprovalRequested",
       "ExecApprovalResolved",

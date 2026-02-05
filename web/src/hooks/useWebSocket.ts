@@ -9,6 +9,8 @@ export type WebSocketMessageType =
   | "TaskStatusChanged"
   | "CommentAdded"
   | "AgentStatusUpdated"
+  | "AgentStatusChanged"
+  | "FeedItemsAdded"
   | "DMMessageReceived"
   | "ExecApprovalRequested"
   | "ExecApprovalResolved";
@@ -40,6 +42,7 @@ const MESSAGE_TYPES: WebSocketMessageType[] = [
   "CommentAdded",
   "AgentStatusUpdated",
   "AgentStatusChanged",
+  "FeedItemsAdded",
   "DMMessageReceived",
   "ExecApprovalRequested",
   "ExecApprovalResolved",
@@ -47,7 +50,18 @@ const MESSAGE_TYPES: WebSocketMessageType[] = [
 
 const messageTypeSet = new Set<WebSocketMessageType>(MESSAGE_TYPES);
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
+const resolveApiUrl = (): string => {
+  const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+  if (configured) {
+    return configured;
+  }
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return "";
+};
+
+const API_URL = resolveApiUrl();
 
 const toWebSocketUrl = (path: string) => {
   if (typeof window === "undefined") {
@@ -55,8 +69,9 @@ const toWebSocketUrl = (path: string) => {
   }
 
   // Connect to API server for WebSocket (may be different from frontend host)
-  const apiHost = API_URL.replace(/^https?:\/\//, '');
-  const protocol = API_URL.startsWith('https') ? 'wss:' : 'ws:';
+  const apiBase = API_URL || window.location.origin;
+  const apiHost = apiBase.replace(/^https?:\/\//, "");
+  const protocol = apiBase.startsWith("https") ? "wss:" : "ws:";
   return `${protocol}//${apiHost}${path}`;
 };
 

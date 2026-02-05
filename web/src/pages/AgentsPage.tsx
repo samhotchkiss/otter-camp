@@ -97,6 +97,24 @@ import { isDemoMode } from '../lib/demo';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
+function normalizeAgentStatus(value: unknown): AgentStatus | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "online" || normalized === "active") {
+    return "online";
+  }
+  if (normalized === "busy" || normalized === "working") {
+    return "busy";
+  }
+  if (normalized === "offline" || normalized === "inactive") {
+    return "offline";
+  }
+  return undefined;
+}
+
 function AgentsPageComponent({
   apiEndpoint = isDemoMode() 
     ? `${API_URL}/api/agents?demo=true`
@@ -179,40 +197,69 @@ function AgentsPageComponent({
       return;
     }
 
-    if (lastMessage.type === "AgentStatusUpdated") {
-      const data = lastMessage.data as {
-        agentId?: string;
-        status?: AgentStatus;
-        currentTask?: string;
-        lastActive?: string;
-      };
+    if (lastMessage.type === "AgentStatusUpdated" || lastMessage.type === "AgentStatusChanged") {
+      const payload =
+        lastMessage.data && typeof lastMessage.data === "object"
+          ? (lastMessage.data as Record<string, unknown>)
+          : {};
+      const nestedAgent =
+        payload.agent && typeof payload.agent === "object"
+          ? (payload.agent as Record<string, unknown>)
+          : null;
 
-      if (data.agentId) {
-        setAgents((prev) =>
-          prev.map((agent) =>
-            agent.id === data.agentId
-              ? {
-                  ...agent,
-                  status: data.status ?? agent.status,
-                  currentTask: data.currentTask ?? agent.currentTask,
-                  lastActive: data.lastActive ?? agent.lastActive,
-                }
-              : agent
-          )
-        );
-
-        // Update selected agent if it's the one that changed
-        setSelectedAgent((prev) =>
-          prev && prev.id === data.agentId
-            ? {
-                ...prev,
-                status: data.status ?? prev.status,
-                currentTask: data.currentTask ?? prev.currentTask,
-                lastActive: data.lastActive ?? prev.lastActive,
-              }
-            : prev
-        );
+      const agentId =
+        (typeof payload.agentId === "string" && payload.agentId) ||
+        (nestedAgent && typeof nestedAgent.id === "string" ? nestedAgent.id : "");
+      if (!agentId) {
+        return;
       }
+
+      const status =
+        normalizeAgentStatus(payload.status) ??
+        normalizeAgentStatus(nestedAgent?.status);
+      const currentTask =
+        (typeof payload.currentTask === "string" && payload.currentTask) ||
+        (nestedAgent && typeof nestedAgent.current_task === "string"
+          ? nestedAgent.current_task
+          : nestedAgent && typeof nestedAgent.currentTask === "string"
+            ? nestedAgent.currentTask
+            : undefined);
+      const lastActive =
+        (typeof payload.lastActive === "string" && payload.lastActive) ||
+        (nestedAgent && typeof nestedAgent.last_seen === "string"
+          ? nestedAgent.last_seen
+          : nestedAgent && typeof nestedAgent.lastSeen === "string"
+            ? nestedAgent.lastSeen
+            : nestedAgent && typeof nestedAgent.updated_at === "string"
+              ? nestedAgent.updated_at
+              : nestedAgent && typeof nestedAgent.updatedAt === "string"
+                ? nestedAgent.updatedAt
+                : undefined);
+
+      setAgents((prev) =>
+        prev.map((agent) =>
+          agent.id === agentId
+            ? {
+                ...agent,
+                status: status ?? agent.status,
+                currentTask: currentTask ?? agent.currentTask,
+                lastActive: lastActive ?? agent.lastActive,
+              }
+            : agent
+        )
+      );
+
+      // Update selected agent if it's the one that changed
+      setSelectedAgent((prev) =>
+        prev && prev.id === agentId
+          ? {
+              ...prev,
+              status: status ?? prev.status,
+              currentTask: currentTask ?? prev.currentTask,
+              lastActive: lastActive ?? prev.lastActive,
+            }
+          : prev
+      );
     }
   }, [lastMessage]);
 
