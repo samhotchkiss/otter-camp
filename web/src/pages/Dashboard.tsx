@@ -1,37 +1,97 @@
-import { useState, useMemo, Suspense } from "react";
+import { useMemo } from "react";
 import CommandPalette from "../components/CommandPalette";
-import KanbanBoard from "../components/kanban";
-import ActivityPanel from "../components/ActivityPanel";
-import ProjectFilters from "../components/ProjectFilters";
 import OnboardingTour from "../components/OnboardingTour";
 import TaskDetail from "../components/TaskDetail";
 import NewTaskModal from "../components/NewTaskModal";
-import ErrorBoundary from "../components/ErrorBoundary";
-import LoadingSpinner from "../components/LoadingSpinner";
-import { SkeletonKanbanColumn } from "../components/Skeleton";
 import type { Command } from "../hooks/useCommandPalette";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 
-// Sample assignees for filters demo
-const ASSIGNEES = [
-  { value: "otter-1", label: "🦦 Scout Otter" },
-  { value: "otter-2", label: "🦦 Builder Otter" },
-  { value: "otter-3", label: "🦦 Lead Otter" },
+/**
+ * Dashboard - Two-column layout matching Jeff G's mockups
+ * 
+ * Layout:
+ * - Primary (left): "NEEDS YOU" action items + "YOUR FEED" activity
+ * - Secondary (right): Quick actions + Projects list
+ */
+
+// Sample action items for demo
+const ACTION_ITEMS = [
+  {
+    id: "1",
+    icon: "🚀",
+    project: "ItsAlive",
+    time: "5 min ago",
+    agent: "Ivy",
+    message: "is waiting on your approval to deploy v2.1.0 with the new onboarding flow.",
+    primaryAction: "Approve Deploy",
+    secondaryAction: "View Details",
+  },
+  {
+    id: "2",
+    icon: "✍️",
+    project: "Content",
+    time: "1 hour ago",
+    agent: "Stone",
+    message: 'finished a blog post for you to review: "Why I Run 12 AI Agents"',
+    primaryAction: "Review Post",
+    secondaryAction: "Later",
+  },
 ];
 
-// Sample projects for filters demo
+// Sample feed items for demo
+const FEED_ITEMS = [
+  {
+    id: "summary",
+    avatar: "✓",
+    avatarBg: "var(--green)",
+    title: "4 projects active",
+    text: "Derek pushed 4 commits to Pearl, Jeff G finished mockups, Nova scheduled tweets",
+    meta: "Last 6 hours • 14 updates total",
+    type: null,
+  },
+  {
+    id: "email",
+    avatar: "P",
+    avatarBg: "var(--blue)",
+    title: "Important email",
+    text: 'from investor@example.com — "Follow up on our conversation"',
+    meta: "30 min ago",
+    type: { label: "Penny • Email", className: "insight" },
+  },
+  {
+    id: "markets",
+    avatar: "B",
+    avatarBg: "var(--orange)",
+    title: "Market Summary",
+    text: "S&P up 0.8%, your watchlist +1.2%. No alerts triggered.",
+    meta: "2 hours ago",
+    type: { label: "Beau H • Markets", className: "progress" },
+  },
+  {
+    id: "social",
+    avatar: "N",
+    avatarBg: "#ec4899",
+    title: "@samhotchkiss",
+    text: "got 3 replies worth reading. One potential lead.",
+    meta: "45 min ago",
+    type: { label: "Nova • Twitter", className: "insight" },
+  },
+];
+
+// Sample projects for sidebar
 const PROJECTS = [
-  { value: "camp-setup", label: "Camp Setup" },
-  { value: "expedition", label: "Expedition Planning" },
-  { value: "supplies", label: "Supply Management" },
+  { id: "itsalive", name: "ItsAlive", desc: "Waiting on deploy approval", status: "blocked", time: "5m" },
+  { id: "pearl", name: "Pearl", desc: "Derek pushing commits", status: "working", time: "2m" },
+  { id: "otter-camp", name: "Otter Camp", desc: "Design + architecture in progress", status: "working", time: "now" },
+  { id: "three-stones", name: "Three Stones", desc: "Presentation shipped", status: "idle", time: "3h" },
+  { id: "content", name: "Content", desc: "Tweets scheduled", status: "idle", time: "1h" },
 ];
 
 export default function Dashboard() {
-  const [activeView, setActiveView] = useState<"kanban" | "activity">("kanban");
-  
   const {
     isCommandPaletteOpen,
     closeCommandPalette,
+    openCommandPalette,
     selectedTaskId,
     closeTaskDetail,
     isNewTaskOpen,
@@ -45,28 +105,21 @@ export default function Dashboard() {
         label: "Go to Projects",
         category: "Navigation",
         keywords: ["projects", "boards"],
-        action: () => window.alert("Projects view coming soon"),
-      },
-      {
-        id: "nav-tasks",
-        label: "Go to Tasks",
-        category: "Navigation",
-        keywords: ["tasks", "todo"],
-        action: () => setActiveView("kanban"),
+        action: () => (window.location.href = "/projects"),
       },
       {
         id: "nav-agents",
         label: "Go to Agents",
         category: "Navigation",
         keywords: ["agents", "ai"],
-        action: () => window.alert("Agents view coming soon"),
+        action: () => (window.location.href = "/agents"),
       },
       {
         id: "nav-feed",
         label: "Go to Feed",
         category: "Navigation",
         keywords: ["feed", "activity"],
-        action: () => setActiveView("activity"),
+        action: () => (window.location.href = "/feed"),
       },
       {
         id: "task-create",
@@ -76,44 +129,11 @@ export default function Dashboard() {
         action: () => window.alert("Task creation coming soon"),
       },
       {
-        id: "task-search",
-        label: "Search Tasks",
-        category: "Tasks",
-        keywords: ["search", "find"],
-        action: () => {
-          const searchInput = document.querySelector<HTMLInputElement>(
-            'input[placeholder="Search tasks..."]'
-          );
-          searchInput?.focus();
-        },
-      },
-      {
-        id: "agent-scout",
-        label: "Summon Scout Agent",
-        category: "Agents",
-        keywords: ["scout", "research"],
-        action: () => window.alert("Scout agent incoming!"),
-      },
-      {
-        id: "agent-builder",
-        label: "Summon Builder Agent",
-        category: "Agents",
-        keywords: ["builder", "ship"],
-        action: () => window.alert("Builder agent incoming!"),
-      },
-      {
         id: "settings-theme",
         label: "Toggle Dark Mode",
         category: "Settings",
         keywords: ["dark", "light", "theme"],
         action: () => document.documentElement.classList.toggle("dark"),
-      },
-      {
-        id: "settings-profile",
-        label: "Open Profile Settings",
-        category: "Settings",
-        keywords: ["profile", "account"],
-        action: () => window.alert("Profile settings coming soon"),
       },
     ],
     []
@@ -121,108 +141,103 @@ export default function Dashboard() {
 
   return (
     <OnboardingTour>
-      <div className="space-y-6">
-        {/* Page Header */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white sm:text-3xl">
-              Dashboard
-            </h1>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Manage your camp, track tasks, and coordinate with agents.
-            </p>
-          </div>
+      {/* ========== PRIMARY COLUMN ========== */}
+      <div className="primary">
+        {/* NEEDS YOU Section */}
+        <section className="section" data-tour="needs-you">
+          <header className="section-header">
+            <h2 className="section-title">⚡ NEEDS YOU</h2>
+            <span className="section-count">{ACTION_ITEMS.length}</span>
+          </header>
 
-          {/* View toggle */}
-          <div className="flex rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-700 dark:bg-slate-800">
-            <button
-              type="button"
-              onClick={() => setActiveView("kanban")}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                activeView === "kanban"
-                  ? "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
-              }`}
-            >
-              📋 Kanban
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveView("activity")}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                activeView === "activity"
-                  ? "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
-              }`}
-            >
-              📡 Activity
-            </button>
-          </div>
-        </div>
-
-        {/* Filters - includes create task button */}
-        <div
-          className="rounded-2xl border border-slate-200 bg-white/80 p-4 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80 sm:p-6"
-          data-tour="create-task"
-        >
-          <ProjectFilters assignees={ASSIGNEES} projects={PROJECTS} />
-        </div>
-
-        {/* Main Content Grid */}
-        <div className="grid gap-6 lg:grid-cols-3">
-          {/* Primary Content */}
-          <div className={activeView === "kanban" ? "lg:col-span-2" : "lg:col-span-3"}>
-            <ErrorBoundary errorMessage="Failed to load content">
-              {activeView === "kanban" ? (
-                <div
-                  className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/80"
-                  data-tour="kanban-board"
-                >
-                  <Suspense
-                    fallback={
-                      <div className="flex gap-4 overflow-x-auto p-4">
-                        <SkeletonKanbanColumn />
-                        <SkeletonKanbanColumn />
-                        <SkeletonKanbanColumn />
-                        <SkeletonKanbanColumn />
-                      </div>
-                    }
-                  >
-                    <KanbanBoard />
-                  </Suspense>
-                </div>
-              ) : (
-                <Suspense
-                  fallback={
-                    <div className="flex min-h-[300px] items-center justify-center">
-                      <LoadingSpinner size="lg" message="Loading activity..." />
-                    </div>
-                  }
-                >
-                  <ActivityPanel className="w-full" />
-                </Suspense>
-              )}
-            </ErrorBoundary>
-          </div>
-
-          {/* Sidebar Activity (only in kanban view) */}
-          {activeView === "kanban" && (
-            <div className="lg:col-span-1" data-tour="agent-chat">
-              <ErrorBoundary errorMessage="Failed to load activity">
-                <Suspense
-                  fallback={
-                    <div className="flex min-h-[200px] items-center justify-center rounded-2xl border border-slate-200 bg-white/80 dark:border-slate-800 dark:bg-slate-900/80">
-                      <LoadingSpinner size="md" message="Loading..." />
-                    </div>
-                  }
-                >
-                  <ActivityPanel className="h-fit" />
-                </Suspense>
-              </ErrorBoundary>
+          {ACTION_ITEMS.map((item) => (
+            <div key={item.id} className="action-card">
+              <div className="action-header">
+                <span className="action-icon">{item.icon}</span>
+                <span className="action-project">{item.project}</span>
+                <span className="action-time">{item.time}</span>
+              </div>
+              <p className="action-text">
+                <strong>{item.agent}</strong> {item.message}
+              </p>
+              <div className="action-buttons">
+                <button type="button" className="btn btn-primary">
+                  {item.primaryAction}
+                </button>
+                <button type="button" className="btn btn-secondary">
+                  {item.secondaryAction}
+                </button>
+              </div>
             </div>
-          )}
-        </div>
+          ))}
+        </section>
+
+        {/* YOUR FEED Section */}
+        <section className="section" data-tour="your-feed">
+          <header className="section-header">
+            <h2 className="section-title">🏷️ YOUR FEED</h2>
+            <span className="section-count muted">{FEED_ITEMS.length}</span>
+          </header>
+
+          <div className="card">
+            {FEED_ITEMS.map((item, index) => (
+              <div key={item.id} className="feed-item">
+                <div 
+                  className="feed-avatar" 
+                  style={{ background: item.avatarBg }}
+                >
+                  {item.avatar}
+                </div>
+                <div className="feed-content">
+                  <p className="feed-text">
+                    <strong>{item.title}</strong> {item.text}
+                  </p>
+                  <p className="feed-meta">
+                    {item.type && (
+                      <span className={`feed-type ${item.type.className}`}>
+                        {item.type.label}
+                      </span>
+                    )}
+                    {item.type && " • "}
+                    {item.meta}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
+
+      {/* ========== SECONDARY COLUMN (SIDEBAR) ========== */}
+      <aside className="secondary">
+        {/* Quick Action - Drop a thought */}
+        <div 
+          className="add-button" 
+          onClick={openCommandPalette}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => e.key === "Enter" && openCommandPalette()}
+        >
+          <div className="add-otter">🦦💭</div>
+          <div className="add-text">Drop a thought</div>
+          <div className="add-hint">Press / to open command bar</div>
+        </div>
+
+        {/* Projects List */}
+        <div className="projects-card">
+          <div className="projects-header">Projects</div>
+          {PROJECTS.map((project) => (
+            <div key={project.id} className="project-item">
+              <div className={`project-status ${project.status}`}></div>
+              <div className="project-info">
+                <div className="project-name">{project.name}</div>
+                <div className="project-desc">{project.desc}</div>
+              </div>
+              <div className="project-time">{project.time}</div>
+            </div>
+          ))}
+        </div>
+      </aside>
 
       {/* Command Palette */}
       <CommandPalette
@@ -242,6 +257,200 @@ export default function Dashboard() {
 
       {/* New Task Modal */}
       <NewTaskModal isOpen={isNewTaskOpen} onClose={closeNewTask} />
+
+      <style>{`
+        /* Section count badges */
+        .section-count {
+          background: var(--red);
+          color: white;
+          font-size: 12px;
+          font-weight: 700;
+          padding: 2px 10px;
+          border-radius: 10px;
+        }
+        
+        .section-count.muted {
+          background: var(--text-muted);
+        }
+        
+        /* Action card enhancements */
+        .action-header {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 12px;
+        }
+        
+        .action-icon {
+          font-size: 24px;
+        }
+        
+        .action-project {
+          font-weight: 700;
+          font-size: 18px;
+        }
+        
+        .action-time {
+          margin-left: auto;
+          font-size: 12px;
+          color: var(--text-muted);
+        }
+        
+        .action-text {
+          color: var(--text-muted);
+          margin-bottom: 16px;
+        }
+        
+        .action-text strong {
+          color: var(--text);
+        }
+        
+        .action-buttons {
+          display: flex;
+          gap: 12px;
+        }
+        
+        /* Feed type badges */
+        .feed-type {
+          font-size: 11px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          padding: 2px 8px;
+          border-radius: 4px;
+          background: var(--surface-alt);
+          color: var(--text-muted);
+        }
+        
+        .feed-type.insight {
+          background: rgba(74, 109, 124, 0.15);
+          color: var(--blue);
+        }
+        
+        .feed-type.progress {
+          background: rgba(90, 122, 92, 0.15);
+          color: var(--green);
+        }
+        
+        /* Add button */
+        .add-button {
+          background: var(--surface);
+          border: 2px dashed var(--border);
+          border-radius: 12px;
+          padding: 24px;
+          text-align: center;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        
+        .add-button:hover {
+          border-color: var(--accent);
+          border-style: solid;
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .add-otter {
+          font-size: 44px;
+          margin-bottom: 8px;
+          transition: transform 0.2s;
+        }
+        
+        .add-button:hover .add-otter {
+          transform: scale(1.1);
+        }
+        
+        .add-text {
+          font-weight: 600;
+          color: var(--text-muted);
+          font-size: 15px;
+        }
+        
+        .add-hint {
+          font-size: 12px;
+          color: var(--text-muted);
+          margin-top: 4px;
+          opacity: 0.7;
+        }
+        
+        /* Projects card */
+        .projects-card {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          overflow: hidden;
+        }
+        
+        .projects-header {
+          background: var(--surface-alt);
+          padding: 14px 20px;
+          border-bottom: 1px solid var(--border);
+          font-weight: 700;
+          font-size: 14px;
+        }
+        
+        .project-item {
+          padding: 14px 20px;
+          border-bottom: 1px solid var(--border);
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+        
+        .project-item:last-child {
+          border-bottom: none;
+        }
+        
+        .project-item:hover {
+          background: var(--surface-alt);
+          transform: translateX(4px);
+        }
+        
+        .project-status {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+        
+        .project-status.blocked {
+          background: var(--red);
+        }
+        
+        .project-status.working {
+          background: var(--green);
+        }
+        
+        .project-status.idle {
+          background: var(--text-muted);
+        }
+        
+        .project-info {
+          flex: 1;
+          min-width: 0;
+        }
+        
+        .project-name {
+          font-weight: 600;
+          font-size: 14px;
+        }
+        
+        .project-desc {
+          font-size: 12px;
+          color: var(--text-muted);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        
+        .project-time {
+          font-size: 11px;
+          color: var(--text-muted);
+          white-space: nowrap;
+        }
+      `}</style>
     </OnboardingTour>
   );
 }

@@ -165,11 +165,11 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         >
           <span className="search-icon">🔍</span>
           <span className="search-text">Search or command...</span>
-          <kbd className="search-kbd">⌘K</kbd>
+          <kbd>⌘K</kbd>
         </button>
 
         {/* Desktop Navigation */}
-        <nav className="topbar-nav">
+        <nav className="nav-links">
           {NAV_ITEMS.map((item) => (
             <Link
               key={item.id}
@@ -188,7 +188,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         <div className="topbar-right">
           {/* Connection Status */}
           <div className="connection-status">
-            <span className="status-dot"></span>
+            <span className="status-dot status-working"></span>
             <span className="status-text">Live</span>
           </div>
 
@@ -232,7 +232,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       )}
 
       {/* ========== MAIN CONTENT ========== */}
-      <main className="main-content" id="main-content">
+      <main className="main" id="main-content">
         {children}
       </main>
 
@@ -248,252 +248,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
       {/* Keyboard Shortcuts Help Modal */}
       <ShortcutsHelpModal isOpen={isShortcutsHelpOpen} onClose={closeShortcutsHelp} />
-
-      <style>{`
-        /* ========== LAYOUT STYLES (from Jeff G's mockups) ========== */
-        
-        .app {
-          min-height: 100vh;
-          display: flex;
-          flex-direction: column;
-          background: var(--otter-bg);
-          color: var(--otter-text);
-        }
-        
-        /* ========== TOPBAR ========== */
-        .topbar {
-          background: var(--otter-accent);
-          color: var(--otter-bg);
-          padding: 12px 24px;
-          display: flex;
-          align-items: center;
-          gap: 24px;
-          position: sticky;
-          top: 0;
-          z-index: 100;
-        }
-        
-        .logo {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          font-weight: 700;
-          font-size: 18px;
-          text-decoration: none;
-          color: inherit;
-        }
-        
-        .logo-icon {
-          font-size: 24px;
-        }
-        
-        .search-trigger {
-          flex: 1;
-          max-width: 400px;
-          background: rgba(255, 255, 255, 0.15);
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          border-radius: 8px;
-          padding: 10px 16px;
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          cursor: pointer;
-          color: inherit;
-          font-family: inherit;
-          font-size: 14px;
-          transition: background 0.15s;
-        }
-        
-        .search-trigger:hover {
-          background: rgba(255, 255, 255, 0.2);
-        }
-        
-        .search-text {
-          flex: 1;
-          opacity: 0.7;
-          text-align: left;
-        }
-        
-        .search-kbd {
-          font-size: 12px;
-          opacity: 0.6;
-          font-family: 'JetBrains Mono', monospace;
-          background: none;
-          border: none;
-          padding: 0;
-        }
-        
-        .topbar-nav {
-          display: flex;
-          gap: 8px;
-        }
-        
-        .nav-link {
-          color: inherit;
-          text-decoration: none;
-          padding: 8px 12px;
-          border-radius: 6px;
-          font-size: 14px;
-          font-weight: 500;
-          opacity: 0.8;
-          transition: all 0.15s;
-        }
-        
-        .nav-link:hover {
-          opacity: 1;
-          background: rgba(255, 255, 255, 0.1);
-        }
-        
-        .nav-link.active {
-          opacity: 1;
-          background: rgba(255, 255, 255, 0.15);
-        }
-        
-        .nav-badge {
-          opacity: 0.6;
-          margin-left: 4px;
-        }
-        
-        .topbar-right {
-          display: flex;
-          align-items: center;
-          gap: 16px;
-          margin-left: auto;
-        }
-        
-        .connection-status {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 12px;
-          opacity: 0.8;
-        }
-        
-        .status-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: var(--otter-green);
-        }
-        
-        .avatar {
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
-          background: rgba(255, 255, 255, 0.2);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 14px;
-          font-weight: 600;
-          border: none;
-          cursor: pointer;
-          color: inherit;
-        }
-        
-        .avatar:hover {
-          background: rgba(255, 255, 255, 0.3);
-        }
-        
-        .mobile-menu-btn {
-          display: none;
-          background: none;
-          border: none;
-          color: inherit;
-          padding: 8px;
-          cursor: pointer;
-          border-radius: 6px;
-        }
-        
-        .mobile-menu-btn:hover {
-          background: rgba(255, 255, 255, 0.1);
-        }
-        
-        /* ========== MOBILE NAV ========== */
-        .mobile-nav {
-          display: none;
-          background: var(--otter-surface);
-          border-bottom: 1px solid var(--otter-border);
-          padding: 8px;
-        }
-        
-        .mobile-nav-link {
-          display: block;
-          padding: 12px 16px;
-          color: var(--otter-text);
-          text-decoration: none;
-          border-radius: 8px;
-          font-size: 15px;
-        }
-        
-        .mobile-nav-link:hover,
-        .mobile-nav-link.active {
-          background: var(--otter-surface-alt);
-        }
-        
-        /* ========== MAIN CONTENT ========== */
-        .main-content {
-          flex: 1;
-          padding: 24px;
-          max-width: 1400px;
-          margin: 0 auto;
-          width: 100%;
-        }
-        
-        /* ========== FOOTER ========== */
-        .footer {
-          padding: 20px 24px;
-          border-top: 1px solid var(--otter-border);
-          background: var(--otter-surface-alt);
-          text-align: center;
-        }
-        
-        .footer-fact {
-          font-size: 13px;
-          color: var(--otter-text-muted);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-        }
-        
-        .footer-fact strong {
-          color: var(--otter-accent);
-        }
-        
-        /* ========== RESPONSIVE ========== */
-        @media (max-width: 900px) {
-          .topbar-nav {
-            display: none;
-          }
-          
-          .mobile-menu-btn {
-            display: block;
-          }
-          
-          .mobile-nav {
-            display: block;
-          }
-          
-          .search-trigger {
-            display: none;
-          }
-        }
-        
-        @media (max-width: 640px) {
-          .topbar {
-            padding: 12px 16px;
-          }
-          
-          .main-content {
-            padding: 16px;
-          }
-          
-          .connection-status .status-text {
-            display: none;
-          }
-        }
-      `}</style>
     </div>
   );
 }
