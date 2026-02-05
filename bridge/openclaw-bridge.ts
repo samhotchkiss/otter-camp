@@ -182,7 +182,6 @@ async function fetchSessions(): Promise<OpenClawSession[]> {
   // Use the sessions.list method
   const response = await sendRequest('sessions.list', {
     limit: 50,
-    includeMessages: false,
   }) as SessionsListResponse;
   
   return response.sessions || [];

@@ -34,3 +34,4 @@ coverage/
 web/test-results/
 web/playwright-report/
 web/playwright/.cache/
+bridge/.env
