@@ -59,12 +59,12 @@ export type TaskDetailPageProps = {
 };
 
 const STATUS_OPTIONS: { value: TaskStatus; label: string; icon: string; className: string }[] = [
-  { value: "backlog", label: "Backlog", icon: "🗂️", className: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200" },
-  { value: "todo", label: "To Do", icon: "📋", className: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200" },
-  { value: "in-progress", label: "In Progress", icon: "🚀", className: "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300" },
+  { value: "backlog", label: "Backlog", icon: "🗂️", className: "bg-[var(--surface-alt)] text-[var(--text-muted)]" },
+  { value: "todo", label: "To Do", icon: "📋", className: "bg-[var(--surface-alt)] text-[var(--text-muted)]" },
+  { value: "in-progress", label: "In Progress", icon: "🚀", className: "bg-[#C9A86C]/20 text-[#C9A86C]" },
   { value: "blocked", label: "Blocked", icon: "⛔", className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300" },
   { value: "review", label: "Review", icon: "🔍", className: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
-  { value: "done", label: "Done", icon: "✅", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  { value: "done", label: "Done", icon: "✅", className: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" },
 ];
 
 const PRIORITY_OPTIONS: { value: TaskPriority; label: string; className: string }[] = [
@@ -75,9 +75,9 @@ const PRIORITY_OPTIONS: { value: TaskPriority; label: string; className: string 
 ];
 
 const SAMPLE_ASSIGNEES: TaskAssignee[] = [
-  { id: "otter-1", name: "Scout Otter", avatar: "🦦" },
-  { id: "otter-2", name: "Builder Otter", avatar: "🦦" },
-  { id: "otter-3", name: "Lead Otter", avatar: "🦦" },
+  { id: "derek", name: "Derek", avatar: "🏗️" },
+  { id: "ivy", name: "Ivy", avatar: "⚡" },
+  { id: "stone", name: "Stone", avatar: "🪨" },
 ];
 
 const SAMPLE_TASKS: Record<string, TaskDetail> = {
@@ -198,14 +198,14 @@ function SectionCard({
   action?: ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/80 sm:p-6">
+    <section className="rounded-2xl border border-slate-200 bg-[var(--surface)]/80 p-5 shadow-sm backdrop-blur sm:p-6">
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
             {title}
           </h2>
           {description ? (
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
               {description}
             </p>
           ) : null}
@@ -691,9 +691,9 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
   if (!task) {
     return (
       <div className="w-full">
-        <div className="rounded-2xl border border-slate-200 bg-white/80 p-6 dark:border-slate-800 dark:bg-slate-900/80">
-          <h1 className="text-lg font-semibold text-slate-900 dark:text-white">Task not found</h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+        <div className="rounded-2xl border border-slate-200 bg-[var(--surface)]/80 p-6">
+          <h1 className="text-lg font-semibold text-[var(--text)]">Task not found</h1>
+          <p className="mt-1 text-sm text-[var(--text-muted)]">
             The requested task doesn’t exist (or isn’t available in this demo).
           </p>
           <div className="mt-4">
@@ -721,7 +721,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
               <span aria-hidden="true">←</span>
               Back
             </button>
-            <span className="text-xs text-slate-500 dark:text-slate-400">
+            <span className="text-xs text-[var(--text-muted)]">
               Task <span className="font-mono">{task.id}</span>
             </span>
           </div>
@@ -733,11 +733,11 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
                 type="text"
                 value={draftTitle}
                 onChange={(e) => setDraftTitle(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-2xl font-semibold text-slate-900 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/30 dark:border-slate-800 dark:bg-slate-900 dark:text-white"
+                className="w-full rounded-xl border border-slate-200 bg-[var(--surface)] px-4 py-3 text-2xl font-semibold text-[var(--text)] shadow-sm focus:border-[#C9A86C] focus:outline-none focus:ring-2 focus:ring-[#C9A86C]/30"
                 aria-label="Task title"
               />
             ) : (
-              <h1 className="truncate text-2xl font-semibold text-slate-900 dark:text-white sm:text-3xl">
+              <h1 className="truncate text-2xl font-semibold text-[var(--text)] sm:text-3xl">
                 {task.title}
               </h1>
             )}
@@ -853,9 +853,9 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   components={{
-                    h1: ({ children }) => <h3 className="mb-2 text-lg font-semibold text-slate-900 dark:text-white">{children}</h3>,
-                    h2: ({ children }) => <h4 className="mb-2 text-base font-semibold text-slate-900 dark:text-white">{children}</h4>,
-                    h3: ({ children }) => <h5 className="mb-2 text-sm font-semibold text-slate-900 dark:text-white">{children}</h5>,
+                    h1: ({ children }) => <h3 className="mb-2 text-lg font-semibold text-[var(--text)]">{children}</h3>,
+                    h2: ({ children }) => <h4 className="mb-2 text-base font-semibold text-[var(--text)]">{children}</h4>,
+                    h3: ({ children }) => <h5 className="mb-2 text-sm font-semibold text-[var(--text)]">{children}</h5>,
                     p: ({ children }) => <p className="text-sm leading-6 text-slate-700 dark:text-slate-200">{children}</p>,
                     a: ({ children, href }) => (
                       <a
@@ -882,7 +882,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
                 </ReactMarkdown>
               </div>
             ) : (
-              <p className="text-sm italic text-slate-500 dark:text-slate-400">No description yet.</p>
+              <p className="text-sm italic text-[var(--text-muted)]">No description yet.</p>
             )}
           </SectionCard>
 
@@ -902,7 +902,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
               />
               <button
                 type="submit"
-                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-500"
+                className="rounded-xl bg-[#C9A86C] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#B8975B]"
               >
                 Add
               </button>
@@ -910,7 +910,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
 
             <ul className="mt-4 space-y-2">
               {subtasks.length === 0 ? (
-                <li className="text-sm text-slate-500 dark:text-slate-400">No subtasks yet.</li>
+                <li className="text-sm text-[var(--text-muted)]">No subtasks yet.</li>
               ) : (
                 subtasks.map((s) => (
                   <li
@@ -921,14 +921,14 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
                       type="checkbox"
                       checked={s.completed}
                       onChange={() => toggleSubtask(s.id)}
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      className="mt-1 h-4 w-4 rounded border-[var(--border)] text-[#C9A86C] focus:ring-[#C9A86C]"
                       aria-label={`Mark subtask ${s.title} as ${s.completed ? "incomplete" : "complete"}`}
                     />
                     <div className="min-w-0 flex-1">
                       <p className={`text-sm ${s.completed ? "text-slate-500 line-through dark:text-slate-400" : "text-slate-800 dark:text-slate-100"}`}>
                         {s.title}
                       </p>
-                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                      <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                         Added {formatRelativeTime(s.createdAt)}
                       </p>
                     </div>
@@ -971,23 +971,23 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
 
             <ul className="mt-5 space-y-3">
               {comments.length === 0 ? (
-                <li className="text-sm text-slate-500 dark:text-slate-400">No comments yet.</li>
+                <li className="text-sm text-[var(--text-muted)]">No comments yet.</li>
               ) : (
                 comments.map((c) => (
                   <li
                     key={c.id}
-                    className="rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/20"
+                    className="rounded-2xl border border-[var(--border)] bg-[var(--surface)]/70 p-4"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-2">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-sky-400 to-emerald-400 text-xs font-semibold text-white">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-[#C9A86C] to-amber-600 text-xs font-semibold text-white">
                           {c.author.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase()}
                         </div>
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">
+                          <p className="truncate text-sm font-semibold text-[var(--text)]">
                             {c.author}
                           </p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                          <p className="text-xs text-[var(--text-muted)]">
                             {formatRelativeTime(c.createdAt)}
                           </p>
                         </div>
@@ -1010,11 +1010,11 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
           <SectionCard title="Details">
             <dl className="space-y-4 text-sm">
               <div className="flex items-start justify-between gap-4">
-                <dt className="text-slate-500 dark:text-slate-400">Created</dt>
+                <dt className="text-[var(--text-muted)]">Created</dt>
                 <dd className="text-right font-medium text-slate-800 dark:text-slate-100">{formatTimestamp(task.createdAt)}</dd>
               </div>
               <div className="flex items-start justify-between gap-4">
-                <dt className="text-slate-500 dark:text-slate-400">Updated</dt>
+                <dt className="text-[var(--text-muted)]">Updated</dt>
                 <dd className="text-right font-medium text-slate-800 dark:text-slate-100">{formatTimestamp(task.updatedAt)}</dd>
               </div>
             </dl>
@@ -1023,7 +1023,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
           {/* Activity */}
           <SectionCard title="Activity timeline" description="Recent changes and conversation at a glance.">
             {activity.length === 0 ? (
-              <p className="text-sm text-slate-500 dark:text-slate-400">No activity yet.</p>
+              <p className="text-sm text-[var(--text-muted)]">No activity yet.</p>
             ) : (
               <ol className="space-y-3">
                 {activity.map((evt) => (
@@ -1036,7 +1036,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
                         <span className="font-semibold">{evt.actor}</span>{" "}
                         {evt.description}
                       </p>
-                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                      <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                         {formatRelativeTime(evt.timestamp)}
                       </p>
                     </div>
