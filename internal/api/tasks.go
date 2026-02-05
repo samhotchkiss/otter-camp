@@ -118,8 +118,8 @@ type TaskStatusRequest struct {
 
 // ListTasks handles GET /api/tasks
 func (h *TaskHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
-	// Demo mode: return sample tasks without auth (for MVP testing)
-	if r.URL.Query().Get("demo") == "true" || r.URL.Query().Get("org_id") == "" {
+	// Demo mode: return sample tasks only when explicitly requested.
+	if r.URL.Query().Get("demo") == "true" {
 		demoTasks := []map[string]interface{}{
 			{
 				"id":       "demo-1",
@@ -151,6 +151,10 @@ func (h *TaskHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+	if orgID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing query parameter: org_id"})
+		return
+	}
 	if !uuidRegex.MatchString(orgID) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid org_id"})
 		return

@@ -73,8 +73,8 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Demo mode: return sample data without auth (for MVP testing)
-	if r.URL.Query().Get("demo") == "true" || r.URL.Query().Get("org_id") == "" {
+	// Demo mode: return sample data only when explicitly requested.
+	if r.URL.Query().Get("demo") == "true" {
 		sendJSON(w, http.StatusOK, DemoFeedResponse{
 			ActionItems: []map[string]interface{}{
 				{
@@ -133,6 +133,10 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 
 	// Parse org_id (required for non-demo mode)
 	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+	if orgID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing query parameter: org_id"})
+		return
+	}
 	if !uuidRegex.MatchString(orgID) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid org_id"})
 		return
