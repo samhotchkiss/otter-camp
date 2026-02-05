@@ -1,7 +1,16 @@
+/**
+ * DashboardLayout - Main layout component matching Jeff G's design mockups
+ * 
+ * Key design elements:
+ * - Topbar with accent background (warm gold)
+ * - Horizontal navigation in topbar
+ * - Search trigger as centered pill
+ * - Connection status + avatar on right
+ * - No sidebar - clean topbar-based navigation
+ */
+
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import NotificationBell from "../components/NotificationBell";
-import Footer from "../components/Footer";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
@@ -9,28 +18,25 @@ import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
 type NavItem = {
   id: string;
   label: string;
-  icon: string;
   href: string;
+  badge?: number;
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { id: "projects", label: "Projects", icon: "📁", href: "/projects" },
-  { id: "tasks", label: "Tasks", icon: "✅", href: "/" },
-  { id: "agents", label: "Agents", icon: "🤖", href: "/agents" },
-  { id: "feed", label: "Feed", icon: "📡", href: "/feed" },
-  { id: "settings", label: "Settings", icon: "⚙️", href: "/settings" },
+  { id: "dashboard", label: "Dashboard", href: "/" },
+  { id: "inbox", label: "Inbox", href: "/inbox", badge: 3 },
+  { id: "projects", label: "Projects", href: "/projects" },
+  { id: "agents", label: "Agents", href: "/agents" },
+  { id: "feed", label: "Feed", href: "/feed" },
 ];
 
 type DashboardLayoutProps = {
   children: ReactNode;
 };
 
-export default function DashboardLayout({
-  children,
-}: DashboardLayoutProps) {
+export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   const {
     openCommandPalette,
@@ -49,9 +55,8 @@ export default function DashboardLayout({
     isNewTaskOpen,
   } = useKeyboardShortcutsContext();
 
-  // Define global keyboard shortcuts
+  // Keyboard shortcuts
   const shortcuts: Shortcut[] = [
-    // General
     {
       key: "k",
       modifiers: { cmd: true },
@@ -67,10 +72,10 @@ export default function DashboardLayout({
       action: openCommandPalette,
     },
     {
-      key: "/",
-      modifiers: { cmd: true },
+      key: "?",
       description: "Show keyboard shortcuts",
       category: "General",
+      skipInInput: true,
       action: openShortcutsHelp,
     },
     {
@@ -78,20 +83,13 @@ export default function DashboardLayout({
       description: "Close modals/panels",
       category: "General",
       action: () => {
-        if (isCommandPaletteOpen) {
-          closeCommandPalette();
-        } else if (isShortcutsHelpOpen) {
-          closeShortcutsHelp();
-        } else if (selectedTaskId) {
-          closeTaskDetail();
-        } else if (isNewTaskOpen) {
-          closeNewTask();
-        } else if (sidebarOpen && isMobile) {
-          setSidebarOpen(false);
-        }
+        if (isCommandPaletteOpen) closeCommandPalette();
+        else if (isShortcutsHelpOpen) closeShortcutsHelp();
+        else if (selectedTaskId) closeTaskDetail();
+        else if (isNewTaskOpen) closeNewTask();
+        else if (mobileMenuOpen) setMobileMenuOpen(false);
       },
     },
-    // Tasks
     {
       key: "n",
       modifiers: { cmd: true },
@@ -101,8 +99,8 @@ export default function DashboardLayout({
     },
     {
       key: "j",
-      description: "Move down in task list",
-      category: "Tasks",
+      description: "Move down",
+      category: "Navigation",
       skipInInput: true,
       action: () => {
         if (taskCount > 0) {
@@ -112,8 +110,8 @@ export default function DashboardLayout({
     },
     {
       key: "k",
-      description: "Move up in task list",
-      category: "Tasks",
+      description: "Move up",
+      category: "Navigation",
       skipInInput: true,
       action: () => {
         if (taskCount > 0 && selectedTaskIndex > 0) {
@@ -122,248 +120,380 @@ export default function DashboardLayout({
       },
     },
     {
-      key: "Enter",
-      description: "Open selected task",
-      category: "Tasks",
+      key: "g",
+      description: "Go to inbox",
+      category: "Navigation",
       skipInInput: true,
       action: () => {
-        // This will be handled by the KanbanBoard which knows the task IDs
-        const event = new CustomEvent("keyboard:open-task");
-        window.dispatchEvent(event);
-      },
-    },
-    // Priority shortcuts (1-4)
-    {
-      key: "1",
-      description: "Set priority: Low",
-      category: "Tasks",
-      skipInInput: true,
-      action: () => {
-        const event = new CustomEvent("keyboard:set-priority", { detail: "low" });
-        window.dispatchEvent(event);
-      },
-    },
-    {
-      key: "2",
-      description: "Set priority: Medium",
-      category: "Tasks",
-      skipInInput: true,
-      action: () => {
-        const event = new CustomEvent("keyboard:set-priority", { detail: "medium" });
-        window.dispatchEvent(event);
-      },
-    },
-    {
-      key: "3",
-      description: "Set priority: High",
-      category: "Tasks",
-      skipInInput: true,
-      action: () => {
-        const event = new CustomEvent("keyboard:set-priority", { detail: "high" });
-        window.dispatchEvent(event);
-      },
-    },
-    {
-      key: "4",
-      description: "Set priority: Critical",
-      category: "Tasks",
-      skipInInput: true,
-      action: () => {
-        const event = new CustomEvent("keyboard:set-priority", { detail: "critical" });
-        window.dispatchEvent(event);
+        window.location.href = "/inbox";
       },
     },
   ];
 
   useKeyboardShortcuts(shortcuts);
 
-  // Determine active nav item from current path
+  // Get active nav item
   const getActiveNavId = () => {
     const path = location.pathname;
-    if (path === "/" || path === "/tasks") return "tasks";
-    const item = NAV_ITEMS.find((item) => item.href === path);
-    return item?.id ?? "tasks";
+    if (path === "/") return "dashboard";
+    const item = NAV_ITEMS.find((item) => path.startsWith(item.href) && item.href !== "/");
+    return item?.id ?? "dashboard";
   };
 
   const activeNavId = getActiveNavId();
 
-  // Detect mobile viewport
+  // Close mobile menu on navigation
   useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
-
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-    return () => window.removeEventListener("resize", checkMobile);
-  }, []);
-
-  // Close sidebar on mobile when clicking outside
-  const handleOverlayClick = useCallback(() => {
-    if (isMobile && sidebarOpen) {
-      setSidebarOpen(false);
-    }
-  }, [isMobile, sidebarOpen]);
-
-  // Close sidebar on navigation (mobile)
-  useEffect(() => {
-    if (isMobile) {
-      setSidebarOpen(false);
-    }
-  }, [location.pathname, isMobile]);
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
 
   return (
-    <div className="flex h-screen bg-otter-bg dark:bg-otter-dark-bg">
-      {/* Mobile overlay */}
-      {isMobile && sidebarOpen && (
-        <div
-          className="fixed inset-0 z-20 bg-otter-dark-bg/50 backdrop-blur-sm"
-          onClick={handleOverlayClick}
-          aria-hidden="true"
-        />
-      )}
-
-      {/* Sidebar */}
-      <aside
-        aria-label="Application sidebar"
-        className={`
-          fixed inset-y-0 left-0 z-30 flex w-64 flex-col border-r border-otter-border bg-otter-surface/95 backdrop-blur-sm
-          transition-transform duration-300 ease-in-out
-          dark:border-otter-dark-border dark:bg-otter-dark-surface/95
-          md:relative md:translate-x-0
-          ${isMobile && !sidebarOpen ? "-translate-x-full" : "translate-x-0"}
-        `}
-      >
-        {/* Sidebar Header */}
-        <Link to="/" className="flex h-16 items-center gap-3 border-b border-otter-border px-5 dark:border-otter-dark-border hover:bg-otter-surface-alt dark:hover:bg-otter-dark-surface-alt transition">
-          <span className="text-2xl">🦦</span>
-          <span className="text-lg font-semibold text-otter-text dark:text-otter-dark-text">
-            Otter Camp
-          </span>
-          {isMobile && (
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(false)}
-              className="ml-auto rounded-lg p-2 text-otter-muted transition hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
-              aria-label="Close sidebar"
-            >
-              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          )}
+    <div className="app">
+      {/* ========== TOPBAR ========== */}
+      <header className="topbar">
+        {/* Logo */}
+        <Link to="/" className="logo">
+          <span className="logo-icon">🦦</span>
+          <span className="logo-text">otter.camp</span>
         </Link>
 
-        {/* Navigation */}
-        <nav aria-label="Main navigation" className="flex-1 space-y-1 px-3 py-4">
-          {NAV_ITEMS.map((item) => {
-            const isActive = item.id === activeNavId;
-            return (
-              <Link
-                key={item.id}
-                to={item.href}
-                aria-current={isActive ? "page" : undefined}
-                className={`
-                  flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition
-                  ${
-                    isActive
-                      ? "bg-otter-accent/10 text-otter-accent dark:bg-otter-dark-accent/20 dark:text-otter-dark-accent"
-                      : "text-otter-muted hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt"
-                  }
-                `}
-              >
-                <span className="text-lg" aria-hidden="true">{item.icon}</span>
-                {item.label}
-              </Link>
-            );
-          })}
+        {/* Search Trigger */}
+        <button
+          type="button"
+          onClick={openCommandPalette}
+          className="search-trigger"
+        >
+          <span className="search-icon">🔍</span>
+          <span className="search-text">Search or command...</span>
+          <kbd className="search-kbd">⌘K</kbd>
+        </button>
+
+        {/* Desktop Navigation */}
+        <nav className="topbar-nav">
+          {NAV_ITEMS.map((item) => (
+            <Link
+              key={item.id}
+              to={item.href}
+              className={`nav-link ${activeNavId === item.id ? "active" : ""}`}
+            >
+              {item.label}
+              {item.badge && (
+                <span className="nav-badge">({item.badge})</span>
+              )}
+            </Link>
+          ))}
         </nav>
 
-        {/* Sidebar Footer */}
-        <div className="border-t border-otter-border p-4 dark:border-otter-dark-border">
-          <div className="rounded-xl bg-otter-green/10 p-4 dark:bg-otter-green/20">
-            <p className="text-xs font-semibold uppercase tracking-wide text-otter-green dark:text-otter-green">
-              Pro tip
-            </p>
-            <p className="mt-1 text-sm text-otter-green dark:text-otter-green/80">
-              Press <kbd className="rounded bg-otter-green/20 px-1.5 py-0.5 text-xs font-semibold dark:bg-otter-green/30">/</kbd> for quick actions
-            </p>
+        {/* Right Side */}
+        <div className="topbar-right">
+          {/* Connection Status */}
+          <div className="connection-status">
+            <span className="status-dot"></span>
+            <span className="status-text">Live</span>
           </div>
+
+          {/* User Avatar */}
+          <button type="button" className="avatar" aria-label="User menu">
+            S
+          </button>
         </div>
-      </aside>
 
-      {/* Main content area */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Header */}
-        <header
-          role="banner"
-          className="flex h-16 items-center justify-between border-b border-otter-border bg-otter-surface/80 px-4 backdrop-blur-sm dark:border-otter-dark-border dark:bg-otter-dark-surface/80 md:px-6"
+        {/* Mobile Menu Button */}
+        <button
+          type="button"
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="mobile-menu-btn"
+          aria-label="Toggle menu"
         >
-          {/* Mobile menu button */}
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(true)}
-            className="rounded-lg p-2 text-otter-muted transition hover:bg-otter-surface-alt dark:text-otter-dark-muted dark:hover:bg-otter-dark-surface-alt md:hidden"
-            aria-label="Open sidebar"
-          >
-            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            {mobileMenuOpen ? (
+              <path d="M6 18L18 6M6 6l12 12" />
+            ) : (
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            )}
+          </svg>
+        </button>
+      </header>
 
-          {/* Command palette trigger */}
-          <button
-            type="button"
-            onClick={openCommandPalette}
-            data-tour="command-palette"
-            className="hidden items-center gap-2 rounded-xl border border-otter-border bg-otter-surface px-4 py-2 text-sm text-otter-muted shadow-sm transition hover:border-otter-accent/30 hover:bg-otter-surface-alt dark:border-otter-dark-border dark:bg-otter-dark-surface dark:text-otter-dark-muted dark:hover:border-otter-dark-accent/30 dark:hover:bg-otter-dark-surface-alt md:flex"
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <span>Search or command...</span>
-            <kbd className="rounded bg-otter-surface-alt px-2 py-0.5 text-xs font-semibold text-otter-muted dark:bg-otter-dark-surface-alt">/</kbd>
-          </button>
-
-          {/* Right side actions */}
-          <div className="flex items-center gap-2">
-            {/* Notifications */}
-            <NotificationBell />
-
-            {/* User avatar */}
-            <button
-              type="button"
-              className="flex items-center gap-2 rounded-xl p-1.5 transition hover:bg-otter-surface-alt dark:hover:bg-otter-dark-surface-alt"
-              aria-label="User menu"
+      {/* Mobile Navigation */}
+      {mobileMenuOpen && (
+        <nav className="mobile-nav">
+          {NAV_ITEMS.map((item) => (
+            <Link
+              key={item.id}
+              to={item.href}
+              className={`mobile-nav-link ${activeNavId === item.id ? "active" : ""}`}
             >
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-otter-accent text-sm font-semibold text-white dark:bg-otter-dark-accent dark:text-otter-dark-bg">
-                🦦
-              </div>
-              <span className="hidden text-sm font-medium text-otter-text dark:text-otter-dark-text sm:block">
-                Otter
-              </span>
-              <svg className="hidden h-4 w-4 text-otter-muted sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-          </div>
-        </header>
+              {item.label}
+              {item.badge && <span className="nav-badge">({item.badge})</span>}
+            </Link>
+          ))}
+        </nav>
+      )}
 
-        {/* Main content */}
-        <main
-          id="main-content"
-          role="main"
-          aria-label="Main content"
-          className="flex-1 overflow-y-auto p-4 md:p-6"
-        >
-          {children}
-        </main>
+      {/* ========== MAIN CONTENT ========== */}
+      <main className="main-content" id="main-content">
+        {children}
+      </main>
 
-        <Footer />
-      </div>
+      {/* ========== FOOTER ========== */}
+      <footer className="footer">
+        <div className="footer-fact">
+          <span>🦦</span>
+          <span>
+            <strong>Otter fact:</strong> Sea otters have the densest fur of any mammal — about 1 million hairs per square inch.
+          </span>
+        </div>
+      </footer>
 
       {/* Keyboard Shortcuts Help Modal */}
       <ShortcutsHelpModal isOpen={isShortcutsHelpOpen} onClose={closeShortcutsHelp} />
+
+      <style>{`
+        /* ========== LAYOUT STYLES (from Jeff G's mockups) ========== */
+        
+        .app {
+          min-height: 100vh;
+          display: flex;
+          flex-direction: column;
+          background: var(--otter-bg);
+          color: var(--otter-text);
+        }
+        
+        /* ========== TOPBAR ========== */
+        .topbar {
+          background: var(--otter-accent);
+          color: var(--otter-bg);
+          padding: 12px 24px;
+          display: flex;
+          align-items: center;
+          gap: 24px;
+          position: sticky;
+          top: 0;
+          z-index: 100;
+        }
+        
+        .logo {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          font-weight: 700;
+          font-size: 18px;
+          text-decoration: none;
+          color: inherit;
+        }
+        
+        .logo-icon {
+          font-size: 24px;
+        }
+        
+        .search-trigger {
+          flex: 1;
+          max-width: 400px;
+          background: rgba(255, 255, 255, 0.15);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          border-radius: 8px;
+          padding: 10px 16px;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          cursor: pointer;
+          color: inherit;
+          font-family: inherit;
+          font-size: 14px;
+          transition: background 0.15s;
+        }
+        
+        .search-trigger:hover {
+          background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .search-text {
+          flex: 1;
+          opacity: 0.7;
+          text-align: left;
+        }
+        
+        .search-kbd {
+          font-size: 12px;
+          opacity: 0.6;
+          font-family: 'JetBrains Mono', monospace;
+          background: none;
+          border: none;
+          padding: 0;
+        }
+        
+        .topbar-nav {
+          display: flex;
+          gap: 8px;
+        }
+        
+        .nav-link {
+          color: inherit;
+          text-decoration: none;
+          padding: 8px 12px;
+          border-radius: 6px;
+          font-size: 14px;
+          font-weight: 500;
+          opacity: 0.8;
+          transition: all 0.15s;
+        }
+        
+        .nav-link:hover {
+          opacity: 1;
+          background: rgba(255, 255, 255, 0.1);
+        }
+        
+        .nav-link.active {
+          opacity: 1;
+          background: rgba(255, 255, 255, 0.15);
+        }
+        
+        .nav-badge {
+          opacity: 0.6;
+          margin-left: 4px;
+        }
+        
+        .topbar-right {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          margin-left: auto;
+        }
+        
+        .connection-status {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 12px;
+          opacity: 0.8;
+        }
+        
+        .status-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: var(--otter-green);
+        }
+        
+        .avatar {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          background: rgba(255, 255, 255, 0.2);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 14px;
+          font-weight: 600;
+          border: none;
+          cursor: pointer;
+          color: inherit;
+        }
+        
+        .avatar:hover {
+          background: rgba(255, 255, 255, 0.3);
+        }
+        
+        .mobile-menu-btn {
+          display: none;
+          background: none;
+          border: none;
+          color: inherit;
+          padding: 8px;
+          cursor: pointer;
+          border-radius: 6px;
+        }
+        
+        .mobile-menu-btn:hover {
+          background: rgba(255, 255, 255, 0.1);
+        }
+        
+        /* ========== MOBILE NAV ========== */
+        .mobile-nav {
+          display: none;
+          background: var(--otter-surface);
+          border-bottom: 1px solid var(--otter-border);
+          padding: 8px;
+        }
+        
+        .mobile-nav-link {
+          display: block;
+          padding: 12px 16px;
+          color: var(--otter-text);
+          text-decoration: none;
+          border-radius: 8px;
+          font-size: 15px;
+        }
+        
+        .mobile-nav-link:hover,
+        .mobile-nav-link.active {
+          background: var(--otter-surface-alt);
+        }
+        
+        /* ========== MAIN CONTENT ========== */
+        .main-content {
+          flex: 1;
+          padding: 24px;
+          max-width: 1400px;
+          margin: 0 auto;
+          width: 100%;
+        }
+        
+        /* ========== FOOTER ========== */
+        .footer {
+          padding: 20px 24px;
+          border-top: 1px solid var(--otter-border);
+          background: var(--otter-surface-alt);
+          text-align: center;
+        }
+        
+        .footer-fact {
+          font-size: 13px;
+          color: var(--otter-text-muted);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+        }
+        
+        .footer-fact strong {
+          color: var(--otter-accent);
+        }
+        
+        /* ========== RESPONSIVE ========== */
+        @media (max-width: 900px) {
+          .topbar-nav {
+            display: none;
+          }
+          
+          .mobile-menu-btn {
+            display: block;
+          }
+          
+          .mobile-nav {
+            display: block;
+          }
+          
+          .search-trigger {
+            display: none;
+          }
+        }
+        
+        @media (max-width: 640px) {
+          .topbar {
+            padding: 12px 16px;
+          }
+          
+          .main-content {
+            padding: 16px;
+          }
+          
+          .connection-status .status-text {
+            display: none;
+          }
+        }
+      `}</style>
     </div>
   );
 }
