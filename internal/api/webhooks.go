@@ -141,6 +141,8 @@ func (h *WebhookHandler) OpenClawHandler(w http.ResponseWriter, r *http.Request)
 			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid agent id"})
 			return
 		}
+	} else if isExecApprovalEvent(event.Event) {
+		// Exec approvals are validated when persisted.
 	} else {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "unsupported event"})
 		return
@@ -149,6 +151,17 @@ func (h *WebhookHandler) OpenClawHandler(w http.ResponseWriter, r *http.Request)
 	db, err := getWebhooksDB()
 	if err != nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	// Handle exec approval events (persist + broadcast)
+	if isExecApprovalEvent(event.Event) {
+		if _, err := handleExecApprovalWebhook(r.Context(), db, h.Hub, event.OrgID, body); err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to store exec approval"})
+			return
+		}
+
+		sendJSON(w, http.StatusOK, openClawWebhookResponse{OK: true})
 		return
 	}
 
@@ -274,6 +287,8 @@ func OpenClawWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid agent id"})
 			return
 		}
+	} else if isExecApprovalEvent(event) {
+		// Exec approvals are stored by the WebSocket-enabled handler.
 	} else {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "unsupported event"})
 		return

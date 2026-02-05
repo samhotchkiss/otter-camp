@@ -545,6 +545,8 @@ describe("useWebSocket", () => {
       "CommentAdded",
       "AgentStatusUpdated",
       "DMMessageReceived",
+      "ExecApprovalRequested",
+      "ExecApprovalResolved",
     ];
 
     validTypes.forEach((type) => {

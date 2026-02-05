@@ -33,7 +33,14 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
     setIsSubmitting(true);
 
     try {
-      const request = await requestLogin(orgId);
+      const trimmedOrgId = orgId.trim();
+      try {
+        localStorage.setItem("otter-camp-org-id", trimmedOrgId);
+      } catch {
+        // ignore storage errors
+      }
+
+      const request = await requestLogin(trimmedOrgId);
       setAuthRequest(request);
       toast.success("Auth request created", "OpenClaw will prompt you to approve the login");
     } catch (err) {
@@ -53,6 +60,14 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
 
     try {
       await exchangeToken(authRequest.request_id, token);
+      try {
+        const nextOrgId = authRequest.openclaw_request?.org_id?.trim();
+        if (nextOrgId) {
+          localStorage.setItem("otter-camp-org-id", nextOrgId);
+        }
+      } catch {
+        // ignore storage errors
+      }
       toast.success("Welcome back!", "You have successfully signed in");
       onLoginSuccess?.();
     } catch (err) {

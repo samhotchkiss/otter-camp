@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useWS } from "../contexts/WebSocketContext";
+import ExecApprovalsFeed from "./approvals/ExecApprovalsFeed";
 
 // Activity types that can be filtered
 export type ActivityType =
@@ -275,6 +276,7 @@ function ActivityPanelComponent({ className = "" }: ActivityPanelProps) {
         ref={parentRef}
         className="max-h-[60vh] overflow-y-auto px-3 py-4"
       >
+        <ExecApprovalsFeed />
         {filteredActivities.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="text-4xl">🦦</div>
