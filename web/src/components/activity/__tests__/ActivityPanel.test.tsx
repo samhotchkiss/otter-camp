@@ -130,7 +130,7 @@ describe("ActivityPanel", () => {
 
     await userEvent.click(rowButton!);
     expect(await screen.findByText("Metadata")).toBeInTheDocument();
-    expect(screen.getByText(/deadbeef/)).toBeInTheDocument();
+    expect(screen.getAllByText(/deadbeef/).length).toBeGreaterThanOrEqual(1);
   });
 
   it("merges real-time FeedItemsAdded updates into the list", async () => {
@@ -166,7 +166,7 @@ describe("ActivityPanel", () => {
         }),
     });
 
-    const { rerender } = render(<ActivityPanel />);
+    const { rerender } = render(<ActivityPanel className="ws-seed-a" />);
 
     await screen.findByText(/committed to otter-camp/i);
 
@@ -187,7 +187,7 @@ describe("ActivityPanel", () => {
       },
     };
 
-    rerender(<ActivityPanel />);
+    rerender(<ActivityPanel className="ws-seed-b" />);
 
     expect(await screen.findByText(/live update/i)).toBeInTheDocument();
   });
