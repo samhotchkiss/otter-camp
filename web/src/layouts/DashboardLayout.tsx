@@ -16,6 +16,7 @@ import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcu
 import { useWS } from "../contexts/WebSocketContext";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
 import DemoBanner from "../components/DemoBanner";
+import GlobalSearch from "../components/GlobalSearch";
 
 type NavItem = {
   id: string;
@@ -256,6 +257,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
       {/* Keyboard Shortcuts Help Modal */}
       <ShortcutsHelpModal isOpen={isShortcutsHelpOpen} onClose={closeShortcutsHelp} />
+
+      {/* Global Search / Command Palette */}
+      <GlobalSearch
+        isOpen={isCommandPaletteOpen}
+        onOpenChange={(open) => open ? openCommandPalette() : closeCommandPalette()}
+      />
     </div>
   );
 }
