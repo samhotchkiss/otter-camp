@@ -9,7 +9,7 @@
  * - No sidebar - clean topbar-based navigation
  */
 
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";

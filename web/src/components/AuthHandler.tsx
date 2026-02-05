@@ -17,7 +17,7 @@ interface User {
  */
 export default function AuthHandler({ children }: { children: React.ReactNode }) {
   const [isChecking, setIsChecking] = useState(true);
-  const [user, setUser] = useState<User | null>(null);
+  const [, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     const handleAuth = async () => {

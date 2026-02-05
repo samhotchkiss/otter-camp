@@ -62,40 +62,6 @@ const TYPE_ORDER: SearchResultType[] = ["task", "project", "agent", "message"];
 
 const normalize = (text: string) => text.toLowerCase().trim();
 
-const getFuzzyScore = (text: string, query: string): number => {
-  const source = normalize(text);
-  const needle = normalize(query);
-
-  if (!needle) return 1;
-  if (source.includes(needle)) return 100 + (needle.length / source.length) * 50;
-
-  let score = 0;
-  let lastIndex = -1;
-  let consecutiveBonus = 0;
-
-  for (const char of needle) {
-    const index = source.indexOf(char, lastIndex + 1);
-    if (index === -1) return -1;
-
-    // Bonus for consecutive matches
-    if (index === lastIndex + 1) {
-      consecutiveBonus += 5;
-    } else {
-      consecutiveBonus = 0;
-    }
-
-    // Bonus for word boundaries
-    const isWordStart = index === 0 || /[\s\-_.]/.test(source[index - 1]);
-    score += isWordStart ? 15 : 10;
-    score += consecutiveBonus;
-    score -= Math.min(index - lastIndex - 1, 5) * 0.5;
-
-    lastIndex = index;
-  }
-
-  return score;
-};
-
 const highlightMatch = (text: string, query: string): string => {
   if (!query.trim()) return text;
 

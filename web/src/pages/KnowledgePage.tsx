@@ -9,8 +9,7 @@
  * - Entry detail modal
  */
 
-import { useState, useEffect } from 'react';
-import { api } from '../lib/api';
+import { useState } from 'react';
 
 interface KnowledgeEntry {
   id: string;
@@ -93,7 +92,7 @@ function timeAgo(dateString: string): string {
 }
 
 export default function KnowledgePage() {
-  const [entries, setEntries] = useState<KnowledgeEntry[]>(DEMO_ENTRIES);
+  const [entries] = useState<KnowledgeEntry[]>(DEMO_ENTRIES);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<KnowledgeEntry | null>(null);
 

@@ -103,12 +103,6 @@ const colorClasses: Record<string, { bg: string; text: string; progress: string 
   },
 };
 
-const formatLabel = (value: string) => {
-  return value
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-};
-
 const getUpdatedAtMs = (project: Project) => {
   const raw =
     project.updatedAt ??
@@ -118,23 +112,6 @@ const getUpdatedAtMs = (project: Project) => {
   if (!raw) return 0;
   const ms = Date.parse(raw);
   return Number.isNaN(ms) ? 0 : ms;
-};
-
-const getPriorityRank = (value: string | null | undefined) => {
-  if (!value) return 0;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "urgent") return 4;
-  if (normalized === "high") return 3;
-  if (normalized === "medium") return 2;
-  if (normalized === "low") return 1;
-
-  const pMatch = normalized.match(/^p([0-3])$/);
-  if (pMatch) {
-    const score = 4 - Number(pMatch[1]);
-    return Number.isFinite(score) ? score : 0;
-  }
-
-  return 0;
 };
 
 function ProjectCard({ project, onClick }: { project: Project; onClick: () => void }) {

@@ -87,7 +87,6 @@ function getTooltipPosition(
 
   const padding = 16;
   const tooltipWidth = 360;
-  const tooltipHeight = 200;
 
   switch (position) {
     case "top":
