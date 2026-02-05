@@ -86,8 +86,9 @@ func NewRouter() http.Handler {
 		r.Post("/import/validate", HandleImportValidate)
 	})
 	
-	// WebSocket handler
+	// WebSocket handlers
 	r.Handle("/ws", &ws.Handler{Hub: hub})
+	r.Handle("/ws/openclaw", ws.NewOpenClawHandler(hub))
 	
 	// Static file fallback for frontend SPA (must be last)
 	r.Get("/*", handleRoot)
