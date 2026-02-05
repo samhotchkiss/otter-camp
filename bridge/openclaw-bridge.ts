@@ -7,8 +7,6 @@
  * 
  * Usage:
  *   OPENCLAW_TOKEN=xxx OTTERCAMP_URL=https://api.otter.camp npx tsx bridge/openclaw-bridge.ts
- * 
- * Or as a cron job that runs every 30 seconds.
  */
 
 import WebSocket from 'ws';
@@ -45,7 +43,9 @@ interface SessionsListResponse {
 
 let ws: WebSocket | null = null;
 let requestId = 0;
-let pendingRequests = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>();
+const genId = () => `req-${++requestId}`;
+let pendingRequests = new Map<string, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>();
+let challengeNonce: string | null = null;
 
 async function connectToOpenClaw(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -55,47 +55,76 @@ async function connectToOpenClaw(): Promise<void> {
     ws = new WebSocket(url);
     
     ws.on('open', () => {
-      console.log('Connected to OpenClaw Gateway');
-      
-      // Send connect handshake
-      const connectMsg = {
-        type: 'req',
-        id: ++requestId,
-        method: 'connect',
-        params: {
-          auth: OPENCLAW_TOKEN ? { token: OPENCLAW_TOKEN } : undefined,
-          client: {
-            name: 'otter-camp-bridge',
-            version: '1.0.0',
-          },
-        },
-      };
-      
-      ws!.send(JSON.stringify(connectMsg));
+      console.log('WebSocket connected, waiting for challenge...');
     });
     
-    ws.on('message', (data) => {
+    ws.on('message', async (data) => {
       try {
         const msg = JSON.parse(data.toString());
         
+        // Handle challenge event - gateway sends this first
+        if (msg.type === 'event' && msg.event === 'connect.challenge') {
+          console.log('Received connect challenge');
+          challengeNonce = msg.payload?.nonce;
+          
+          // Send connect request with auth
+          const connectId = genId();
+          const connectMsg = {
+            type: 'req',
+            id: connectId,
+            method: 'connect',
+            params: {
+              minProtocol: 3,
+              maxProtocol: 3,
+              client: {
+                id: 'cli',
+                version: '1.0.0',
+                platform: 'macos',
+                mode: 'operator',
+              },
+              role: 'operator',
+              scopes: ['operator.read'],
+              caps: [],
+              commands: [],
+              permissions: {},
+              auth: OPENCLAW_TOKEN ? { token: OPENCLAW_TOKEN } : undefined,
+              locale: 'en-US',
+              userAgent: 'openclaw-cli/1.0.0',
+            },
+          };
+          
+          // Register a handler for the connect response
+          pendingRequests.set(connectId, {
+            resolve: () => {
+              console.log('Connected to OpenClaw Gateway');
+              resolve();
+            },
+            reject: (err) => {
+              reject(err);
+            }
+          });
+          
+          console.log('Sending connect request with token:', OPENCLAW_TOKEN ? 'present' : 'missing');
+          ws!.send(JSON.stringify(connectMsg));
+          return;
+        }
+        
+        // Handle response
         if (msg.type === 'res') {
           const pending = pendingRequests.get(msg.id);
           if (pending) {
+            pendingRequests.delete(msg.id);
             if (msg.ok) {
               pending.resolve(msg.payload);
             } else {
               pending.reject(new Error(msg.error?.message || 'Request failed'));
             }
-            pendingRequests.delete(msg.id);
           }
-          
-          // Handle connect response
-          if (msg.id === 1 && msg.ok) {
-            console.log('Handshake complete');
-            resolve();
-          }
-        } else if (msg.type === 'event') {
-          // Handle real-time events (for future streaming support)
+          return;
+        }
+        
+        // Handle other events
+        if (msg.type === 'event') {
           console.log(`Event: ${msg.event}`);
         }
       } catch (err) {
@@ -108,10 +137,15 @@ async function connectToOpenClaw(): Promise<void> {
       reject(err);
     });
     
-    ws.on('close', () => {
-      console.log('Disconnected from OpenClaw');
+    ws.on('close', (code, reason) => {
+      console.log(`Disconnected from OpenClaw - code: ${code}, reason: ${reason.toString()}`);
       ws = null;
     });
+    
+    // Timeout for connection
+    setTimeout(() => {
+      reject(new Error('Connection timeout'));
+    }, 30000);
   });
 }
 
@@ -120,7 +154,7 @@ async function sendRequest(method: string, params: Record<string, unknown> = {})
     throw new Error('Not connected to OpenClaw');
   }
   
-  const id = ++requestId;
+  const id = genId();
   
   return new Promise((resolve, reject) => {
     pendingRequests.set(id, { resolve, reject });

@@ -19,6 +19,12 @@ type OpenClawSyncHandler struct {
 	DB  *sql.DB
 }
 
+// In-memory fallback store (used when DB is unavailable)
+var (
+	memoryAgentStates = make(map[string]*AgentState)
+	memoryLastSync    time.Time
+)
+
 // OpenClawSession represents a session from OpenClaw's sessions_list
 type OpenClawSession struct {
 	Key             string                 `json:"key"`
@@ -195,8 +201,29 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 		currentTask := session.DisplayName
 
+		// Build agent state
+		agentState := &AgentState{
+			ID:            agentID,
+			Name:          name,
+			Role:          role,
+			Status:        status,
+			Avatar:        avatar,
+			CurrentTask:   currentTask,
+			LastSeen:      lastSeen,
+			Model:         session.Model,
+			TotalTokens:   session.TotalTokens,
+			ContextTokens: session.ContextTokens,
+			Channel:       session.Channel,
+			SessionKey:    session.Key,
+			UpdatedAt:     updatedAt,
+		}
+
+		// Always update in-memory store (fallback when DB unavailable)
+		memoryAgentStates[agentID] = agentState
+		processedCount++
+
+		// Also persist to database if available
 		if db != nil {
-			// Upsert to database
 			_, err := db.Exec(`
 				INSERT INTO agent_sync_state 
 					(id, name, role, status, avatar, current_task, last_seen, model, 
@@ -220,14 +247,13 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 				session.Channel, session.Key, updatedAt)
 
 			if err != nil {
-				log.Printf("Failed to upsert agent %s: %v", agentID, err)
-			} else {
-				processedCount++
+				log.Printf("Failed to upsert agent %s to DB: %v", agentID, err)
 			}
 		}
 	}
 
 	// Update sync metadata
+	memoryLastSync = now // Always update memory
 	if db != nil {
 		_, _ = db.Exec(`
 			INSERT INTO sync_metadata (key, value, updated_at)
@@ -277,7 +303,7 @@ func (h *OpenClawSyncHandler) GetAgents(w http.ResponseWriter, r *http.Request) 
 		log.Printf("Failed to get agents from DB: %v", err)
 	}
 
-	// Get last sync time
+	// Get last sync time (try DB first, fall back to memory)
 	var lastSync time.Time
 	var syncHealthy bool
 	if db != nil {
@@ -287,6 +313,11 @@ func (h *OpenClawSyncHandler) GetAgents(w http.ResponseWriter, r *http.Request) 
 			lastSync, _ = time.Parse(time.RFC3339, lastSyncStr)
 			syncHealthy = time.Since(lastSync) < 2*time.Minute
 		}
+	}
+	// Fall back to memory if DB didn't have data
+	if lastSync.IsZero() && !memoryLastSync.IsZero() {
+		lastSync = memoryLastSync
+		syncHealthy = time.Since(lastSync) < 2*time.Minute
 	}
 
 	sendJSON(w, http.StatusOK, map[string]interface{}{
@@ -298,8 +329,13 @@ func (h *OpenClawSyncHandler) GetAgents(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *OpenClawSyncHandler) getAgentsFromDB(db *sql.DB) ([]AgentState, error) {
+	// If no database, return from in-memory store
 	if db == nil {
-		return []AgentState{}, nil
+		agents := make([]AgentState, 0, len(memoryAgentStates))
+		for _, state := range memoryAgentStates {
+			agents = append(agents, *state)
+		}
+		return agents, nil
 	}
 
 	rows, err := db.Query(`
