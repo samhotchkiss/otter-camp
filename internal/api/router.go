@@ -73,6 +73,13 @@ func NewRouter() http.Handler {
 	workflowsHandler := &WorkflowsHandler{}
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
 	
+	// Initialize project store and handler
+	var projectStore *store.ProjectStore
+	if db != nil {
+		projectStore = store.NewProjectStore(db)
+	}
+	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
+	
 	// All API routes under /api prefix
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/waitlist", HandleWaitlist)
@@ -96,6 +103,9 @@ func NewRouter() http.Handler {
 		r.Post("/tasks", taskHandler.CreateTask)
 		r.With(middleware.OptionalWorkspace).Get("/agents", agentsHandler.List)
 		r.Get("/workflows", workflowsHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/projects", projectsHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}", projectsHandler.Get)
+		r.With(middleware.OptionalWorkspace).Post("/projects", projectsHandler.Create)
 		r.Post("/sync/openclaw", openclawSyncHandler.Handle)
 		r.Get("/sync/agents", openclawSyncHandler.GetAgents)
 		r.Patch("/tasks/{id}", taskHandler.UpdateTask)
