@@ -86,6 +86,8 @@ func TestRequireWorkspace(t *testing.T) {
 	})
 
 	t.Run("extracts workspace from JWT Bearer token", func(t *testing.T) {
+		t.Setenv("TRUST_UNVERIFIED_JWT_WORKSPACE_CLAIMS", "true")
+
 		claims := map[string]string{
 			"org_id": "550e8400-e29b-41d4-a716-446655440000",
 			"sub":    "user-123",
@@ -103,6 +105,8 @@ func TestRequireWorkspace(t *testing.T) {
 	})
 
 	t.Run("prefers JWT over headers", func(t *testing.T) {
+		t.Setenv("TRUST_UNVERIFIED_JWT_WORKSPACE_CLAIMS", "true")
+
 		claims := map[string]string{
 			"org_id": "11111111-1111-1111-1111-111111111111",
 		}
@@ -118,6 +122,23 @@ func TestRequireWorkspace(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		// JWT takes precedence
 		assert.Equal(t, "11111111-1111-1111-1111-111111111111", rec.Body.String())
+	})
+
+	t.Run("does not trust JWT claims by default", func(t *testing.T) {
+		claims := map[string]string{
+			"org_id": "11111111-1111-1111-1111-111111111111",
+		}
+		token := createTestJWT(t, claims)
+
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-Workspace-ID", "22222222-2222-2222-2222-222222222222")
+		rec := httptest.NewRecorder()
+
+		RequireWorkspace(handler).ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "22222222-2222-2222-2222-222222222222", rec.Body.String())
 	})
 
 	t.Run("rejects invalid UUID in header", func(t *testing.T) {

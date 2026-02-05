@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -102,12 +103,14 @@ func OptionalWorkspace(next http.Handler) http.Handler {
 
 // extractWorkspaceID attempts to extract workspace ID from various sources.
 func extractWorkspaceID(r *http.Request) string {
-	// 1. Try JWT Bearer token first
-	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-		token := strings.TrimPrefix(auth, "Bearer ")
-		if claims := parseJWTClaims(token); claims != nil {
-			if id := firstValidUUID(claims.OrgID, claims.OrganizationID, claims.WorkspaceID); id != "" {
-				return id
+	// 1. Optionally try JWT Bearer token claims (disabled by default).
+	if trustUnverifiedJWTWorkspaceClaims() {
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token := strings.TrimPrefix(auth, "Bearer ")
+			if claims := parseJWTClaims(token); claims != nil {
+				if id := firstValidUUID(claims.OrgID, claims.OrganizationID, claims.WorkspaceID); id != "" {
+					return id
+				}
 			}
 		}
 	}
@@ -132,13 +135,20 @@ func extractWorkspaceID(r *http.Request) string {
 
 // extractUserID attempts to extract user ID from JWT.
 func extractUserID(r *http.Request) string {
-	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-		token := strings.TrimPrefix(auth, "Bearer ")
-		if claims := parseJWTClaims(token); claims != nil && claims.Sub != "" {
-			return claims.Sub
+	if trustUnverifiedJWTWorkspaceClaims() {
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token := strings.TrimPrefix(auth, "Bearer ")
+			if claims := parseJWTClaims(token); claims != nil && claims.Sub != "" {
+				return claims.Sub
+			}
 		}
 	}
 	return ""
+}
+
+func trustUnverifiedJWTWorkspaceClaims() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRUST_UNVERIFIED_JWT_WORKSPACE_CLAIMS")))
+	return raw == "1" || raw == "true" || raw == "yes"
 }
 
 // parseJWTClaims extracts claims from a JWT without verifying the signature.
