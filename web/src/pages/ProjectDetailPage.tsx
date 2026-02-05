@@ -170,7 +170,7 @@ function BoardColumn({
       </div>
       <button
         type="button"
-        className="mx-3 mb-3 rounded-lg border-2 border-dashed border-slate-300 bg-transparent py-3 text-sm text-slate-500 transition hover:border-emerald-500 hover:text-slate-700 dark:border-slate-600 dark:hover:border-emerald-400 dark:hover:text-slate-300"
+        className="mx-3 mb-3 rounded-lg border-2 border-dashed border-slate-300 bg-transparent py-3 text-sm text-slate-500 transition hover:border-amber-500 hover:text-slate-700 dark:border-slate-600 dark:hover:border-amber-400 dark:hover:text-slate-300"
       >
         + Add Task
       </button>
@@ -237,7 +237,7 @@ export default function ProjectDetailPage() {
         <button
           type="button"
           onClick={() => navigate("/projects")}
-          className="mt-6 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700"
+          className="mt-6 rounded-xl bg-amber-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-amber-700"
         >
           ← Back to Projects
         </button>
@@ -310,7 +310,7 @@ export default function ProjectDetailPage() {
             </button>
             <button
               type="button"
-              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
+              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-700"
             >
               + New Task
             </button>
@@ -327,7 +327,7 @@ export default function ProjectDetailPage() {
             onClick={() => setActiveTab(tab.key)}
             className={`relative px-5 py-3 text-sm font-medium transition ${
               activeTab === tab.key
-                ? "text-emerald-600 dark:text-emerald-400"
+                ? "text-amber-600 dark:text-amber-400"
                 : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
             }`}
           >
@@ -338,7 +338,7 @@ export default function ProjectDetailPage() {
               </span>
             )}
             {activeTab === tab.key && (
-              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-600 dark:bg-emerald-400" />
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-600 dark:bg-amber-400" />
             )}
           </button>
         ))}
