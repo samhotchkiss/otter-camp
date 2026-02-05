@@ -7,9 +7,9 @@ export type {
   Agent,
   AgentStatus,
   DMMessage,
+  TaskThreadMessage,
   MessageSenderType,
   PaginationInfo,
 } from "./types";
 
 export { formatTimestamp, getInitials } from "./utils";
-

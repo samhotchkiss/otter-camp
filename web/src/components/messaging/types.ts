@@ -34,6 +34,20 @@ export type DMMessage = {
 };
 
 /**
+ * Represents a single message in a task thread.
+ */
+export type TaskThreadMessage = {
+  id: string;
+  taskId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderType?: MessageSenderType;
+  senderAvatarUrl?: string;
+  content: string;
+  createdAt: string;
+};
+
+/**
  * Pagination info returned from API.
  */
 export type PaginationInfo = {
@@ -41,4 +55,3 @@ export type PaginationInfo = {
   nextCursor?: string;
   totalCount?: number;
 };
-
