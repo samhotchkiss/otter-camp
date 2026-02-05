@@ -62,6 +62,10 @@ func NewRouter() http.Handler {
 
 	r.Handle("/ws", &ws.Handler{Hub: hub})
 
+	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
+	r.Get("/api/approvals/exec", execApprovalsHandler.List)
+	r.Post("/api/approvals/exec/{id}/respond", execApprovalsHandler.Respond)
+
 	taskHandler := &TaskHandler{Hub: hub}
 	r.Get("/api/tasks", taskHandler.ListTasks)
 	r.Post("/api/tasks", taskHandler.CreateTask)
