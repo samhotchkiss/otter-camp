@@ -1,12 +1,15 @@
 package api
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -18,6 +21,8 @@ type OpenClawSyncHandler struct {
 	Hub *ws.Hub
 	DB  *sql.DB
 }
+
+const maxOpenClawSyncBodySize = 2 << 20 // 2 MB
 
 // In-memory fallback store (used when DB is unavailable)
 var (
@@ -148,12 +153,21 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	if status, err := requireOpenClawSyncAuth(r); err != nil {
+		sendJSON(w, status, errorResponse{Error: err.Error()})
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxOpenClawSyncBodySize+1))
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "failed to read body"})
 		return
 	}
 	defer r.Body.Close()
+	if len(body) > maxOpenClawSyncBodySize {
+		sendJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "payload too large"})
+		return
+	}
 
 	var payload SyncPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -282,6 +296,36 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		SessionsReceived: processedCount,
 		Message:          fmt.Sprintf("Synced %d agents to database", processedCount),
 	})
+}
+
+func requireOpenClawSyncAuth(r *http.Request) (int, error) {
+	secret := strings.TrimSpace(os.Getenv("OPENCLAW_SYNC_TOKEN"))
+	if secret == "" {
+		secret = strings.TrimSpace(os.Getenv("OPENCLAW_WEBHOOK_SECRET"))
+	}
+	if secret == "" {
+		return http.StatusServiceUnavailable, fmt.Errorf("sync authentication is not configured")
+	}
+
+	token := strings.TrimSpace(r.Header.Get("X-OpenClaw-Token"))
+	if token == "" {
+		token = strings.TrimSpace(r.Header.Get("X-Sync-Token"))
+	}
+	if token == "" {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		}
+	}
+
+	if token == "" {
+		return http.StatusUnauthorized, fmt.Errorf("missing authentication")
+	}
+	if subtle.ConstantTimeCompare([]byte(token), []byte(secret)) != 1 {
+		return http.StatusUnauthorized, fmt.Errorf("invalid authentication")
+	}
+
+	return http.StatusOK, nil
 }
 
 // GetAgents returns current agent states
