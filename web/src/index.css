@@ -207,3 +207,42 @@
     width: 100%;
   }
 }
+
+/* ========== DEMO BANNER ========== */
+.demo-banner {
+  background: var(--orange);
+  color: white;
+  text-align: center;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 101; /* Above topbar */
+}
+
+.demo-banner-icon {
+  font-size: 16px;
+}
+
+.demo-banner-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.demo-banner-link {
+  color: white;
+  text-decoration: underline;
+  opacity: 0.9;
+}
+
+.demo-banner-link:hover {
+  opacity: 1;
+}
