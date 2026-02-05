@@ -1,87 +1,62 @@
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
+import LoadingSpinner from "../components/LoadingSpinner";
 
-// Demo project data - matches structure from ProjectsPage
-const DEMO_PROJECTS: Record<string, {
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
+
+// Agent color mappings
+const agentColors: Record<string, string> = {
+  "Derek": "var(--blue, #4A6D7C)",
+  "Ivy": "var(--green, #5A7A5C)",
+  "Jeff G": "var(--orange, #C87941)",
+  "Stone": "#ec4899",
+  "Josh S": "var(--blue, #4A6D7C)",
+  "Frank": "var(--accent, #C9A86C)",
+  "Nova": "#a855f7",
+  "Max": "#06b6d4",
+  "Penny": "#f59e0b",
+  "Beau H": "#10b981",
+  "Jeremy H": "#6366f1",
+  "Claudette": "#ec4899",
+};
+
+// Project emoji mappings  
+const projectEmojis: Record<string, string> = {
+  "Pearl Proxy": "🔮",
+  "Otter Camp": "🦦",
+  "ItsAlive": "⚡",
+  "Three Stones": "🪨",
+  "OpenClaw": "🦀",
+};
+
+type Project = {
   id: string;
   name: string;
-  description: string;
-  emoji: string;
-  color: string;
+  description?: string;
+  status?: string;
+  lead?: string;
+  repo_url?: string;
+};
+
+type ApiTask = {
+  id: string;
+  title: string;
+  description?: string;
   status: string;
-  lead: string;
-  taskCount: number;
-  completedCount: number;
-}> = {
-  "1": {
-    id: "1",
-    name: "Pearl Proxy",
-    description: "Memory and routing infrastructure",
-    emoji: "🔮",
-    color: "amber",
-    status: "active",
-    lead: "Derek",
-    taskCount: 12,
-    completedCount: 5,
-  },
-  "2": {
-    id: "2",
-    name: "Otter Camp",
-    description: "Task management for AI-assisted workflows",
-    emoji: "🦦",
-    color: "amber",
-    status: "active",
-    lead: "Derek",
-    taskCount: 24,
-    completedCount: 18,
-  },
-  "3": {
-    id: "3",
-    name: "ItsAlive",
-    description: "Static site deployment platform",
-    emoji: "⚡",
-    color: "amber",
-    status: "active",
-    lead: "Ivy",
-    taskCount: 8,
-    completedCount: 8,
-  },
-  "4": {
-    id: "4",
-    name: "Three Stones",
-    description: "Educational content and presentations",
-    emoji: "🪨",
-    color: "amber",
-    status: "archived",
-    lead: "Stone",
-    taskCount: 15,
-    completedCount: 10,
-  },
+  priority: string;
+  assigned_agent_id?: string;
+  number?: number;
 };
 
 type Task = {
   id: string;
   title: string;
-  status: "queued" | "in_progress" | "review" | "done";
-  priority: "P0" | "P1" | "P2";
+  status: "queued" | "in_progress" | "review" | "done" | "blocked" | "dispatched" | "cancelled";
+  priority: "P0" | "P1" | "P2" | "P3";
   assignee: string;
   avatarColor: string;
   blocked?: boolean;
 };
-
-const DEMO_TASKS: Task[] = [
-  { id: "t1", title: "Add email notification system", status: "queued", priority: "P2", assignee: "Ivy", avatarColor: "var(--green, #5A7A5C)" },
-  { id: "t2", title: "Improve error handling in deploy flow", status: "queued", priority: "P2", assignee: "Derek", avatarColor: "var(--blue, #4A6D7C)" },
-  { id: "t3", title: "Write user documentation for API", status: "queued", priority: "P2", assignee: "Stone", avatarColor: "#ec4899" },
-  { id: "t4", title: "Deploy v2.1.0 to production", status: "in_progress", priority: "P0", assignee: "Ivy", avatarColor: "var(--green, #5A7A5C)", blocked: true },
-  { id: "t5", title: "Implement onboarding flow redesign", status: "in_progress", priority: "P1", assignee: "Derek", avatarColor: "var(--blue, #4A6D7C)" },
-  { id: "t6", title: "Design new dashboard components", status: "in_progress", priority: "P1", assignee: "Jeff G", avatarColor: "var(--orange, #C87941)" },
-  { id: "t7", title: "Landing page copy update", status: "review", priority: "P2", assignee: "Stone", avatarColor: "#ec4899" },
-  { id: "t8", title: "API endpoint refactor", status: "review", priority: "P2", assignee: "Derek", avatarColor: "var(--blue, #4A6D7C)" },
-  { id: "t9", title: "Set up staging environment", status: "done", priority: "P2", assignee: "Ivy", avatarColor: "var(--green, #5A7A5C)" },
-  { id: "t10", title: "Write test suite for auth", status: "done", priority: "P1", assignee: "Josh S", avatarColor: "var(--blue, #4A6D7C)" },
-  { id: "t11", title: "Fix mobile responsive issues", status: "done", priority: "P2", assignee: "Jeff G", avatarColor: "var(--orange, #C87941)" },
-];
 
 type Activity = {
   id: string;
@@ -92,26 +67,36 @@ type Activity = {
   timeAgo: string;
 };
 
-const DEMO_ACTIVITY: Activity[] = [
-  { id: "a1", agent: "Ivy", avatarColor: "var(--green, #5A7A5C)", text: "Waiting on ", highlight: "your approval", timeAgo: "5m ago" },
-  { id: "a2", agent: "Derek", avatarColor: "var(--blue, #4A6D7C)", text: "Pushed ", highlight: "3 commits", timeAgo: "23m ago" },
-  { id: "a3", agent: "Jeff G", avatarColor: "var(--orange, #C87941)", text: "Completed ", highlight: "dashboard components", timeAgo: "1h ago" },
-  { id: "a4", agent: "Stone", avatarColor: "#ec4899", text: "Moved ", highlight: "Landing page copy", timeAgo: "2h ago" },
-  { id: "a5", agent: "Josh S", avatarColor: "var(--blue, #4A6D7C)", text: "Completed ", highlight: "auth test suite", timeAgo: "3h ago" },
-];
+// Agent ID to name mapping (from database)
+const agentIdToName: Record<string, string> = {};
 
 const COLUMNS = [
-  { key: "queued", title: "📋 Queued", statuses: ["queued"] },
+  { key: "queued", title: "📋 Queued", statuses: ["queued", "dispatched"] },
   { key: "in_progress", title: "🔨 In Progress", statuses: ["in_progress"] },
-  { key: "review", title: "👀 Review", statuses: ["review"] },
-  { key: "done", title: "✅ Done", statuses: ["done"] },
+  { key: "review", title: "👀 Review", statuses: ["review", "blocked"] },
+  { key: "done", title: "✅ Done", statuses: ["done", "cancelled"] },
 ] as const;
+
+function formatTimeAgo(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${diffDays}d ago`;
+}
 
 function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
   const priorityClasses: Record<string, string> = {
     P0: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
     P1: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
     P2: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+    P3: "bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400",
   };
 
   return (
@@ -137,7 +122,7 @@ function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
           <span className="text-[var(--text-muted)]">{task.assignee}</span>
         </div>
         {task.status !== "done" && (
-          <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${priorityClasses[task.priority]}`}>
+          <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${priorityClasses[task.priority] || priorityClasses.P2}`}>
             {task.priority}{task.blocked ? " • Blocked" : ""}
           </span>
         )}
@@ -167,6 +152,11 @@ function BoardColumn({
         {tasks.map((task) => (
           <TaskCard key={task.id} task={task} onClick={() => onTaskClick?.(task)} />
         ))}
+        {tasks.length === 0 && (
+          <div className="py-8 text-center text-sm text-[var(--text-muted)]">
+            No tasks
+          </div>
+        )}
       </div>
       <button
         type="button"
@@ -209,22 +199,132 @@ export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabKey>("board");
+  const [project, setProject] = useState<Project | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [activity, setActivity] = useState<Activity[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const project = id ? DEMO_PROJECTS[id] : null;
+  // Fetch project and tasks
+  useEffect(() => {
+    async function fetchData() {
+      if (!id) return;
+      
+      setIsLoading(true);
+      setError(null);
+      
+      try {
+        const orgId = localStorage.getItem('otter-camp-org-id');
+        
+        // Fetch project
+        const projectRes = await fetch(`${API_URL}/api/projects/${id}`);
+        if (!projectRes.ok) {
+          throw new Error('Project not found');
+        }
+        const projectData = await projectRes.json();
+        setProject(projectData);
+        
+        // Fetch agents to map IDs to names
+        const agentsRes = await fetch(`${API_URL}/api/sync/agents`);
+        if (agentsRes.ok) {
+          const agentsData = await agentsRes.json();
+          for (const agent of (agentsData.agents || [])) {
+            agentIdToName[agent.id] = agent.name;
+          }
+        }
+        
+        // Fetch tasks for this project
+        const tasksUrl = orgId 
+          ? `${API_URL}/api/tasks?org_id=${orgId}&project_id=${id}`
+          : `${API_URL}/api/tasks?project_id=${id}`;
+        const tasksRes = await fetch(tasksUrl);
+        if (tasksRes.ok) {
+          const tasksData = await tasksRes.json();
+          const apiTasks: ApiTask[] = tasksData.tasks || tasksData || [];
+          
+          // Transform API tasks to UI tasks
+          const transformedTasks: Task[] = apiTasks.map((t) => {
+            const agentName = t.assigned_agent_id ? 
+              (agentIdToName[t.assigned_agent_id] || "Unassigned") : 
+              "Unassigned";
+            return {
+              id: t.id,
+              title: t.title,
+              status: t.status as Task["status"],
+              priority: (t.priority || "P2") as Task["priority"],
+              assignee: agentName,
+              avatarColor: agentColors[agentName] || "var(--accent, #C9A86C)",
+              blocked: t.status === "blocked",
+            };
+          });
+          setTasks(transformedTasks);
+        }
+        
+        // Fetch activity for this project
+        const activityUrl = orgId
+          ? `${API_URL}/api/feed?org_id=${orgId}&limit=10`
+          : `${API_URL}/api/feed?limit=10`;
+        const activityRes = await fetch(activityUrl);
+        if (activityRes.ok) {
+          const activityData = await activityRes.json();
+          const items = activityData.items || [];
+          const transformedActivity: Activity[] = items.slice(0, 5).map((item: {
+            id: string;
+            agent_name?: string;
+            type?: string;
+            metadata?: { message?: string; comment?: string; title?: string };
+            created_at?: string;
+          }) => {
+            const agentName = item.agent_name || "Unknown";
+            const metadata = item.metadata || {};
+            const highlight = metadata.message || metadata.comment || metadata.title || item.type || "";
+            return {
+              id: item.id,
+              agent: agentName,
+              avatarColor: agentColors[agentName] || "var(--accent, #C9A86C)",
+              text: `${item.type?.replace(/_/g, " ")}: `,
+              highlight: highlight,
+              timeAgo: item.created_at ? formatTimeAgo(item.created_at) : "",
+            };
+          });
+          setActivity(transformedActivity);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load project');
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    
+    fetchData();
+  }, [id]);
 
   const tasksByColumn = useMemo(() => {
     const grouped: Record<string, Task[]> = {};
     for (const col of COLUMNS) {
-      grouped[col.key] = DEMO_TASKS.filter((t) => col.statuses.includes(t.status));
+      grouped[col.key] = tasks.filter((t) => col.statuses.includes(t.status));
     }
     return grouped;
-  }, []);
+  }, [tasks]);
 
   const waitingCount = useMemo(() => {
-    return DEMO_TASKS.filter((t) => t.blocked).length;
-  }, []);
+    return tasks.filter((t) => t.blocked).length;
+  }, [tasks]);
 
-  if (!project) {
+  const activeTaskCount = useMemo(() => {
+    return tasks.filter((t) => t.status !== "done" && t.status !== "cancelled").length;
+  }, [tasks]);
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <LoadingSpinner size="lg" />
+        <p className="mt-4 text-[var(--text-muted)]">Loading project...</p>
+      </div>
+    );
+  }
+
+  if (error || !project) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
         <div className="text-6xl">🦦</div>
@@ -232,7 +332,7 @@ export default function ProjectDetailPage() {
           Project Not Found
         </h1>
         <p className="mt-2 text-[var(--text-muted)]">
-          This project doesn't exist or may have been deleted.
+          {error || "This project doesn't exist or may have been deleted."}
         </p>
         <button
           type="button"
@@ -245,14 +345,15 @@ export default function ProjectDetailPage() {
     );
   }
 
+  const emoji = projectEmojis[project.name] || "📁";
+  const status = project.status || "active";
   const statusColors: Record<string, { dot: string; text: string }> = {
     active: { dot: "bg-[var(--green)]", text: "Active" },
     completed: { dot: "bg-[var(--text-muted)]", text: "Completed" },
     archived: { dot: "bg-[var(--text-muted)]", text: "Archived" },
     blocked: { dot: "bg-amber-500", text: "Blocked" },
   };
-
-  const status = statusColors[project.status] || statusColors.active;
+  const statusDisplay = statusColors[status] || statusColors.active;
 
   const tabs: { key: TabKey; label: string; badge?: number }[] = [
     { key: "board", label: "Board" },
@@ -280,7 +381,7 @@ export default function ProjectDetailPage() {
       <header className="mb-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
         <div className="flex items-center gap-5">
           <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--surface-alt)] text-4xl">
-            {project.emoji}
+            {emoji}
           </div>
           <div className="flex-1">
             <h1 className="text-2xl font-bold text-[var(--text)]">
@@ -288,18 +389,25 @@ export default function ProjectDetailPage() {
             </h1>
             <div className="mt-1 flex flex-wrap items-center gap-4 text-sm text-[var(--text-muted)]">
               <div className="flex items-center gap-1.5">
-                <span className={`h-2.5 w-2.5 rounded-full ${status.dot}`} />
+                <span className={`h-2.5 w-2.5 rounded-full ${statusDisplay.dot}`} />
                 {waitingCount > 0 ? (
                   <span>{waitingCount} item{waitingCount !== 1 ? "s" : ""} waiting on you</span>
                 ) : (
-                  <span>{status.text}</span>
+                  <span>{statusDisplay.text}</span>
                 )}
               </div>
               <span>•</span>
-              <span>{project.taskCount - project.completedCount} active tasks</span>
-              <span>•</span>
-              <span>Lead: {project.lead}</span>
+              <span>{activeTaskCount} active task{activeTaskCount !== 1 ? "s" : ""}</span>
+              {project.lead && (
+                <>
+                  <span>•</span>
+                  <span>Lead: {project.lead}</span>
+                </>
+              )}
             </div>
+            {project.description && (
+              <p className="mt-2 text-sm text-[var(--text-muted)]">{project.description}</p>
+            )}
           </div>
           <div className="flex gap-3">
             <button
@@ -368,9 +476,15 @@ export default function ProjectDetailPage() {
               </span>
             </div>
             <div className="flex-1 overflow-y-auto p-3">
-              {DEMO_ACTIVITY.map((activity) => (
-                <ActivityItem key={activity.id} activity={activity} />
-              ))}
+              {activity.length > 0 ? (
+                activity.map((a) => (
+                  <ActivityItem key={a.id} activity={a} />
+                ))
+              ) : (
+                <div className="py-8 text-center text-sm text-[var(--text-muted)]">
+                  No recent activity
+                </div>
+              )}
             </div>
           </aside>
         </div>
@@ -379,28 +493,35 @@ export default function ProjectDetailPage() {
       {activeTab === "list" && (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
           <div className="space-y-3">
-            {DEMO_TASKS.filter(t => t.status !== "done").map((task) => (
-              <div
-                key={task.id}
-                onClick={() => handleTaskClick(task)}
-                className="flex cursor-pointer items-center gap-4 rounded-xl border border-[var(--border)] p-4 transition hover:border-[#C9A86C]/50 hover:bg-[var(--surface-alt)]"
-              >
-                <input type="checkbox" className="h-5 w-5 rounded border-[var(--border)]" readOnly />
-                <span className="flex-1 text-sm font-medium text-[var(--text)]">
-                  {task.title}
-                </span>
-                <span className="text-xs text-[var(--text-muted)]">
-                  {task.assignee}
-                </span>
-                <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
-                  task.priority === "P0" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
-                  task.priority === "P1" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :
-                  "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                }`}>
-                  {task.priority}
-                </span>
+            {tasks.filter(t => t.status !== "done" && t.status !== "cancelled").length > 0 ? (
+              tasks.filter(t => t.status !== "done" && t.status !== "cancelled").map((task) => (
+                <div
+                  key={task.id}
+                  onClick={() => handleTaskClick(task)}
+                  className="flex cursor-pointer items-center gap-4 rounded-xl border border-[var(--border)] p-4 transition hover:border-[#C9A86C]/50 hover:bg-[var(--surface-alt)]"
+                >
+                  <input type="checkbox" className="h-5 w-5 rounded border-[var(--border)]" readOnly />
+                  <span className="flex-1 text-sm font-medium text-[var(--text)]">
+                    {task.title}
+                  </span>
+                  <span className="text-xs text-[var(--text-muted)]">
+                    {task.assignee}
+                  </span>
+                  <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                    task.priority === "P0" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
+                    task.priority === "P1" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :
+                    task.priority === "P2" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
+                    "bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400"
+                  }`}>
+                    {task.priority}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="py-8 text-center text-sm text-[var(--text-muted)]">
+                No active tasks
               </div>
-            ))}
+            )}
           </div>
         </div>
       )}
@@ -408,9 +529,15 @@ export default function ProjectDetailPage() {
       {activeTab === "activity" && (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
           <div className="space-y-2">
-            {DEMO_ACTIVITY.map((activity) => (
-              <ActivityItem key={activity.id} activity={activity} />
-            ))}
+            {activity.length > 0 ? (
+              activity.map((a) => (
+                <ActivityItem key={a.id} activity={a} />
+              ))
+            ) : (
+              <div className="py-8 text-center text-sm text-[var(--text-muted)]">
+                No recent activity
+              </div>
+            )}
           </div>
         </div>
       )}
