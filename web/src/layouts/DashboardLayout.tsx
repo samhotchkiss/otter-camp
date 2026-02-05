@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
+import { useWS } from "../contexts/WebSocketContext";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
 
 type NavItem = {
@@ -37,6 +38,7 @@ type DashboardLayoutProps = {
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { connected } = useWS();
   
   const {
     openCommandPalette,
@@ -187,9 +189,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         {/* Right Side */}
         <div className="topbar-right">
           {/* Connection Status */}
-          <div className="connection-status">
-            <span className="status-dot status-working"></span>
-            <span className="status-text">Live</span>
+          <div className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
+            <span className={`status-dot ${connected ? 'status-live' : 'status-offline'}`}></span>
+            <span className="status-text">{connected ? 'Live' : 'Offline'}</span>
           </div>
 
           {/* User Avatar */}

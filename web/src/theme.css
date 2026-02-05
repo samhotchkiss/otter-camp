@@ -428,12 +428,26 @@ body {
   background: var(--green);
 }
 
+.status-live {
+  background: var(--green);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.status-offline {
+  background: var(--red);
+}
+
 .status-blocked {
   background: var(--red);
 }
 
 .status-idle {
   background: var(--text-muted);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 /* ========================================
