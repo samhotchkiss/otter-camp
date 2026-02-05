@@ -7,6 +7,16 @@ import (
 	"time"
 )
 
+// RankingMode controls how incoming feed items are combined before ranking.
+type RankingMode string
+
+const (
+	// RankingModeAugment accumulates items (no collapsing).
+	RankingModeAugment RankingMode = "augment"
+	// RankingModeReplace collapses to the latest item per source.
+	RankingModeReplace RankingMode = "replace"
+)
+
 // Priority constants for feed items.
 const (
 	PriorityCritical = "P0"
@@ -74,6 +84,14 @@ type Ranker struct {
 	// CurrentUserID is the ID of the viewing user (for involvement scoring).
 	CurrentUserID string
 
+	// Mode controls how items are combined before ranking.
+	// Defaults to RankingModeAugment.
+	Mode RankingMode
+
+	// SourceKeyFn returns a stable identifier for a feed item's "source" used by
+	// replace mode. If nil, a default source key is derived from the item.
+	SourceKeyFn func(item *Item) string
+
 	// Now is the reference time for decay calculations. Defaults to time.Now().
 	Now func() time.Time
 }
@@ -82,6 +100,7 @@ type Ranker struct {
 func NewRanker() *Ranker {
 	return &Ranker{
 		PreferredAgents: make(map[string]bool),
+		Mode:            RankingModeAugment,
 		Now:             time.Now,
 	}
 }
@@ -99,9 +118,19 @@ func (r *Ranker) SetCurrentUser(userID string) {
 	r.CurrentUserID = userID
 }
 
-// Score calculates the importance score for a single feed item.
+// UrgencyScore calculates the urgency score for a single feed item.
+// This is the value used to rank items (higher = more urgent).
+func (r *Ranker) UrgencyScore(item *Item) float64 {
+	return r.Score(item)
+}
+
+// Score calculates the urgency score for a single feed item.
 func (r *Ranker) Score(item *Item) float64 {
-	now := r.Now()
+	nowFunc := r.Now
+	if nowFunc == nil {
+		nowFunc = time.Now
+	}
+	now := nowFunc()
 
 	// Base score from item type
 	score := TypeWeights[item.Type]
@@ -116,9 +145,16 @@ func (r *Ranker) Score(item *Item) float64 {
 	}
 
 	// Apply priority multiplier
-	if mult, ok := PriorityWeights[priority]; ok {
-		score *= mult
+	priorityMultiplier := 1.0
+	if priority != "" {
+		if mult, ok := PriorityWeights[priority]; ok {
+			priorityMultiplier = mult
+		}
+	} else if extractMetadataBool(item.Metadata, "priority") {
+		// Agent-pushed items can mark priority as a boolean flag.
+		priorityMultiplier = PriorityWeights[PriorityHigh]
 	}
+	score *= priorityMultiplier
 
 	// Boost for preferred agents
 	if item.AgentID != nil && r.PreferredAgents[*item.AgentID] {
@@ -132,7 +168,12 @@ func (r *Ranker) Score(item *Item) float64 {
 
 	// Apply time decay
 	age := now.Sub(item.CreatedAt)
-	score *= calculateDecay(age, DecayHalfLife)
+	halfLife := DecayHalfLife
+	// Higher priority items should remain visible longer.
+	if priorityMultiplier > 1.0 {
+		halfLife = time.Duration(float64(DecayHalfLife) * priorityMultiplier)
+	}
+	score *= calculateDecay(age, halfLife)
 
 	return score
 }
@@ -140,20 +181,31 @@ func (r *Ranker) Score(item *Item) float64 {
 // RankItems scores and sorts a slice of feed items by importance.
 // Returns a new slice of RankedItems, highest score first.
 func (r *Ranker) RankItems(items []*Item) []*RankedItem {
-	ranked := make([]*RankedItem, len(items))
+	mode := r.Mode
+	if mode == "" {
+		mode = RankingModeAugment
+	}
+	rankable := items
+	if mode == RankingModeReplace {
+		rankable = r.latestPerSource(items)
+	}
 
-	for i, item := range items {
-		score := r.Score(item)
+	ranked := make([]*RankedItem, 0, len(rankable))
+	for _, item := range rankable {
+		if item == nil {
+			continue
+		}
+		score := r.UrgencyScore(item)
 		priority := extractMetadataString(item.Metadata, "priority")
 		if priority == "" {
 			priority = extractMetadataString(item.Metadata, "task_priority")
 		}
 
-		ranked[i] = &RankedItem{
+		ranked = append(ranked, &RankedItem{
 			Item:     *item,
 			Score:    score,
 			Priority: priority,
-		}
+		})
 	}
 
 	// Sort by score descending
@@ -186,6 +238,80 @@ func (r *Ranker) ForYouFeed(items []*Item) []*RankedItem {
 // AllActivityFeed returns all items ranked by importance.
 func (r *Ranker) AllActivityFeed(items []*Item) []*RankedItem {
 	return r.RankItems(items)
+}
+
+func (r *Ranker) sourceKey(item *Item) string {
+	if item == nil {
+		return ""
+	}
+
+	if r.SourceKeyFn != nil {
+		key := r.SourceKeyFn(item)
+		if key != "" {
+			return key
+		}
+	}
+
+	if item.TaskID != nil && *item.TaskID != "" {
+		return "task:" + *item.TaskID
+	}
+
+	// Common metadata keys for grouping.
+	if projectID := extractMetadataString(item.Metadata, "project_id"); projectID != "" {
+		return "project:" + projectID
+	}
+	if projectID := extractMetadataString(item.Metadata, "project"); projectID != "" {
+		return "project:" + projectID
+	}
+	if repo := extractMetadataString(item.Metadata, "repo"); repo != "" {
+		return "repo:" + repo
+	}
+
+	if item.AgentID != nil && *item.AgentID != "" {
+		return "agent:" + *item.AgentID
+	}
+	if item.Type != "" {
+		return "type:" + item.Type
+	}
+	if item.ID != "" {
+		return "item:" + item.ID
+	}
+	return ""
+}
+
+func (r *Ranker) latestPerSource(items []*Item) []*Item {
+	latest := make(map[string]*Item)
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+
+		key := r.sourceKey(item)
+		if key == "" {
+			// No source key means we should not collapse unrelated items.
+			key = "item:" + item.ID
+		}
+
+		existing, ok := latest[key]
+		if !ok {
+			latest[key] = item
+			continue
+		}
+
+		if item.CreatedAt.After(existing.CreatedAt) {
+			latest[key] = item
+			continue
+		}
+		if item.CreatedAt.Equal(existing.CreatedAt) && r.UrgencyScore(item) > r.UrgencyScore(existing) {
+			latest[key] = item
+		}
+	}
+
+	collapsed := make([]*Item, 0, len(latest))
+	for _, item := range latest {
+		collapsed = append(collapsed, item)
+	}
+	return collapsed
 }
 
 // isUserInvolved checks if the current user is mentioned or assigned.
@@ -364,4 +490,23 @@ func extractMetadataStringSlice(metadata json.RawMessage, key string) []string {
 		}
 	}
 	return result
+}
+
+// extractMetadataBool extracts a boolean value from metadata JSON.
+func extractMetadataBool(metadata json.RawMessage, key string) bool {
+	if len(metadata) == 0 {
+		return false
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(metadata, &m); err != nil {
+		return false
+	}
+
+	if v, ok := m[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return false
 }

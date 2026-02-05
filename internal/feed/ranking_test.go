@@ -485,3 +485,119 @@ func TestUnknownTypeDefaultWeight(t *testing.T) {
 	require.Len(t, ranked, 1)
 	require.InDelta(t, DefaultTypeWeight, ranked[0].Score, 0.01)
 }
+
+func TestRankItemsReplaceModeOnlyLatestPerSource(t *testing.T) {
+	r := NewRanker()
+	r.Now = fixedTime
+	r.Mode = RankingModeReplace
+
+	now := fixedTime()
+	taskID := "task-1"
+	agentID := "agent-1"
+
+	items := []*Item{
+		{
+			ID:        "old-high-score",
+			TaskID:    &taskID,
+			AgentID:   &agentID,
+			Type:      "task_created",
+			Metadata:  json.RawMessage(`{"priority":"P0"}`),
+			CreatedAt: now.Add(-2 * time.Hour),
+		},
+		{
+			ID:        "new-low-score",
+			TaskID:    &taskID,
+			AgentID:   &agentID,
+			Type:      "message",
+			Metadata:  json.RawMessage(`{}`),
+			CreatedAt: now.Add(-1 * time.Hour),
+		},
+	}
+
+	ranked := r.RankItems(items)
+
+	require.Len(t, ranked, 1)
+	require.Equal(t, "new-low-score", ranked[0].ID)
+}
+
+func TestRankItemsReplaceModeFallsBackToAgentID(t *testing.T) {
+	r := NewRanker()
+	r.Now = fixedTime
+	r.Mode = RankingModeReplace
+
+	now := fixedTime()
+	agent1 := "agent-1"
+	agent2 := "agent-2"
+
+	items := []*Item{
+		{
+			ID:        "agent-1-old",
+			AgentID:   &agent1,
+			Type:      "commit",
+			Metadata:  json.RawMessage(`{}`),
+			CreatedAt: now.Add(-2 * time.Hour),
+		},
+		{
+			ID:        "agent-1-new",
+			AgentID:   &agent1,
+			Type:      "commit",
+			Metadata:  json.RawMessage(`{}`),
+			CreatedAt: now.Add(-1 * time.Hour),
+		},
+		{
+			ID:        "agent-2",
+			AgentID:   &agent2,
+			Type:      "commit",
+			Metadata:  json.RawMessage(`{}`),
+			CreatedAt: now,
+		},
+	}
+
+	ranked := r.RankItems(items)
+
+	require.Len(t, ranked, 2)
+
+	ids := []string{ranked[0].ID, ranked[1].ID}
+	require.Contains(t, ids, "agent-1-new")
+	require.NotContains(t, ids, "agent-1-old")
+	require.Contains(t, ids, "agent-2")
+}
+
+func TestRankItemsAugmentModeAccumulatesItems(t *testing.T) {
+	r := NewRanker()
+	r.Now = fixedTime
+	r.Mode = RankingModeAugment
+
+	now := fixedTime()
+	taskID := "task-1"
+
+	items := []*Item{
+		{ID: "a", TaskID: &taskID, Type: "message", Metadata: json.RawMessage(`{}`), CreatedAt: now},
+		{ID: "b", TaskID: &taskID, Type: "message", Metadata: json.RawMessage(`{}`), CreatedAt: now.Add(-time.Minute)},
+	}
+
+	ranked := r.RankItems(items)
+	require.Len(t, ranked, 2)
+}
+
+func TestUrgencyScorePriorityFlagBoost(t *testing.T) {
+	r := NewRanker()
+	r.Now = fixedTime
+
+	now := fixedTime()
+
+	regular := &Item{
+		ID:        "regular",
+		Type:      "commit",
+		Metadata:  json.RawMessage(`{}`),
+		CreatedAt: now,
+	}
+	priorityFlag := &Item{
+		ID:        "priority-flag",
+		Type:      "commit",
+		Metadata:  json.RawMessage(`{"priority":true}`),
+		CreatedAt: now,
+	}
+
+	require.Greater(t, r.UrgencyScore(priorityFlag), r.UrgencyScore(regular))
+}
