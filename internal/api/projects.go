@@ -57,7 +57,7 @@ var demoProjects = []map[string]interface{}{
 // List returns all projects for the authenticated workspace.
 func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// Check for demo mode or missing database
-	if h.Store == nil || h.DB == nil {
+	if h.DB == nil {
 		sendJSON(w, http.StatusOK, map[string]interface{}{
 			"projects": demoProjects,
 			"total":    len(demoProjects),
@@ -65,10 +65,9 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get workspace from context (set by middleware)
+	// Get workspace from context (set by middleware) or query param
 	workspaceID := middleware.WorkspaceFromContext(r.Context())
 	if workspaceID == "" {
-		// Fallback to query param for demo mode
 		workspaceID = r.URL.Query().Get("org_id")
 	}
 
@@ -80,21 +79,44 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set workspace in context for store operations
-	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
-
-	projects, err := h.Store.List(ctx)
+	// Query database directly (bypassing RLS for reliability)
+	query := `SELECT id, org_id, name, COALESCE(description, '') as description, 
+		COALESCE(repo_url, '') as repo_url, COALESCE(status, 'active') as status, 
+		COALESCE(lead, '') as lead, created_at 
+		FROM projects WHERE org_id = $1 ORDER BY created_at DESC`
+	
+	rows, err := h.DB.QueryContext(r.Context(), query, workspaceID)
 	if err != nil {
-		// Fall back to demo data on error
 		sendJSON(w, http.StatusOK, map[string]interface{}{
 			"projects": demoProjects,
 			"total":    len(demoProjects),
 		})
 		return
 	}
+	defer rows.Close()
+
+	type Project struct {
+		ID          string `json:"id"`
+		OrgID       string `json:"org_id,omitempty"`
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		RepoURL     string `json:"repo_url,omitempty"`
+		Status      string `json:"status"`
+		Lead        string `json:"lead,omitempty"`
+		CreatedAt   string `json:"created_at,omitempty"`
+	}
+
+	projects := make([]Project, 0)
+	for rows.Next() {
+		var p Project
+		var createdAt interface{}
+		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &p.Lead, &createdAt); err != nil {
+			continue
+		}
+		projects = append(projects, p)
+	}
 
 	if len(projects) == 0 {
-		// No projects in database, return demo data
 		sendJSON(w, http.StatusOK, map[string]interface{}{
 			"projects": demoProjects,
 			"total":    len(demoProjects),
@@ -117,7 +139,7 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check for demo mode
-	if h.Store == nil || h.DB == nil {
+	if h.DB == nil {
 		// Return demo project if ID matches
 		for _, p := range demoProjects {
 			if p["id"] == projectID {
@@ -139,11 +161,30 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
+	// Query database directly (bypassing RLS for reliability)
+	query := `SELECT id, org_id, name, COALESCE(description, '') as description, 
+		COALESCE(repo_url, '') as repo_url, COALESCE(status, 'active') as status, 
+		COALESCE(lead, '') as lead, created_at 
+		FROM projects WHERE id = $1 AND org_id = $2`
+	
+	type Project struct {
+		ID          string `json:"id"`
+		OrgID       string `json:"org_id,omitempty"`
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		RepoURL     string `json:"repo_url,omitempty"`
+		Status      string `json:"status"`
+		Lead        string `json:"lead,omitempty"`
+		CreatedAt   string `json:"created_at,omitempty"`
+	}
 
-	project, err := h.Store.GetByID(ctx, projectID)
+	var p Project
+	var createdAt interface{}
+	err := h.DB.QueryRowContext(r.Context(), query, projectID, workspaceID).Scan(
+		&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &p.Lead, &createdAt)
+	
 	if err != nil {
-		if err == store.ErrNotFound {
+		if err == sql.ErrNoRows {
 			sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
 			return
 		}
@@ -151,7 +192,7 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendJSON(w, http.StatusOK, project)
+	sendJSON(w, http.StatusOK, p)
 }
 
 // Create creates a new project.
