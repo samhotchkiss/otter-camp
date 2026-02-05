@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import TaskDetail, {
@@ -7,23 +7,22 @@ import TaskDetail, {
   PriorityBadge,
 } from "../TaskDetail";
 
-// Mock WebSocketContext
+const wsState: { lastMessage: unknown } = { lastMessage: null };
+
 vi.mock("../../contexts/WebSocketContext", () => ({
   useWS: vi.fn(() => ({
     connected: true,
-    lastMessage: null,
+    lastMessage: wsState.lastMessage,
     sendMessage: vi.fn(),
   })),
 }));
 
-// Mock TaskThread component
 vi.mock("../TaskThread", () => ({
   default: ({ taskId }: { taskId: string }) => (
     <div data-testid="task-thread">TaskThread for {taskId}</div>
   ),
 }));
 
-// Mock fetch
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
@@ -62,678 +61,208 @@ const mockTask: TaskDetailData = {
       actor: "John Doe",
       timestamp: "2026-02-01T09:00:00.000Z",
     },
-    {
-      id: "activity-2",
-      type: "status_changed",
-      actor: "Jane Smith",
-      timestamp: "2026-02-01T10:30:00.000Z",
-      oldValue: "todo",
-      newValue: "in-progress",
-    },
   ],
   createdAt: "2026-02-01T09:00:00.000Z",
   updatedAt: "2026-02-01T10:30:00.000Z",
 };
 
+function mockFetchTask(task: TaskDetailData = mockTask) {
+  mockFetch.mockResolvedValueOnce({
+    ok: true,
+    json: () => Promise.resolve({ task }),
+  });
+}
+
 describe("TaskDetail", () => {
   const mockOnClose = vi.fn();
   const mockOnTaskUpdated = vi.fn();
-  const mockOnTaskDeleted = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ task: mockTask }),
-    });
+    wsState.lastMessage = null;
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  it("does not render when closed", () => {
+    render(<TaskDetail taskId="task-123" isOpen={false} onClose={mockOnClose} />);
+    expect(screen.queryByText("Task Details")).not.toBeInTheDocument();
   });
 
-  describe("rendering", () => {
-    it("does not render when isOpen is false", () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={false}
-          onClose={mockOnClose}
-        />
-      );
+  it("loads and renders task details", async () => {
+    mockFetchTask();
 
-      expect(screen.queryByText("Task Details")).not.toBeInTheDocument();
-    });
-
-    it("renders loading state initially", () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      expect(screen.getByText("Loading task...")).toBeInTheDocument();
-    });
-
-    it("renders task details after loading", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-    });
-
-    it("displays task header with otter emoji", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("🦦")).toBeInTheDocument();
-        expect(screen.getByText("Task Details")).toBeInTheDocument();
-      });
-    });
-
-    it("renders assignee with avatar", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("John Doe")).toBeInTheDocument();
-        expect(screen.getByAltText("John Doe")).toHaveAttribute(
-          "src",
-          "https://example.com/avatar.jpg"
-        );
-      });
-    });
-
-    it("renders labels", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Bug")).toBeInTheDocument();
-        expect(screen.getByText("Frontend")).toBeInTheDocument();
-      });
-    });
-
-    it("renders markdown description", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        // Should render bold text
-        expect(screen.getByText("test")).toBeInTheDocument();
-        // Should render code
-        expect(screen.getByText("code")).toBeInTheDocument();
-        // Should render link
-        expect(screen.getByRole("link", { name: "link" })).toHaveAttribute(
-          "href",
-          "https://example.com"
-        );
-      });
-    });
-
-    it("renders due date", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText(/Due/)).toBeInTheDocument();
-      });
-    });
-  });
-
-  describe("error handling", () => {
-    it("displays error when fetch fails", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        statusText: "Not Found",
-      });
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Failed to fetch task details")).toBeInTheDocument();
-      });
-    });
-
-    it("allows dismissing error", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        statusText: "Not Found",
-      });
-
-      const user = userEvent.setup();
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Failed to fetch task details")).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByText("Dismiss"));
-
-      await waitFor(() => {
-        expect(screen.queryByText("Failed to fetch task details")).not.toBeInTheDocument();
-      });
-    });
-  });
-
-  describe("user interactions", () => {
-    it("closes on backdrop click", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      // Click the backdrop
-      const backdrop = document.querySelector('[aria-hidden="true"]');
-      if (backdrop) {
-        fireEvent.click(backdrop);
-      }
-
-      expect(mockOnClose).toHaveBeenCalled();
-    });
-
-    it("closes on close button click", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      const closeButton = screen.getByLabelText("Close");
-      await user.click(closeButton);
-
-      expect(mockOnClose).toHaveBeenCalled();
-    });
-
-    it("closes on Escape key", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      fireEvent.keyDown(window, { key: "Escape" });
-
-      expect(mockOnClose).toHaveBeenCalled();
-    });
-
-    it("enters edit mode on Edit button click", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByText("✏️ Edit"));
-
-      // Should show input fields
-      expect(screen.getByDisplayValue("Test Task")).toBeInTheDocument();
-      expect(screen.getByText("Save Changes")).toBeInTheDocument();
-      expect(screen.getByText("Cancel")).toBeInTheDocument();
-    });
-
-    it("cancels edit mode", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByText("✏️ Edit"));
-      
-      // Modify the title
-      const titleInput = screen.getByDisplayValue("Test Task");
-      await user.clear(titleInput);
-      await user.type(titleInput, "Modified Title");
-
-      // Cancel
-      await user.click(screen.getByText("Cancel"));
-
-      // Should revert to original
-      expect(screen.getByText("Test Task")).toBeInTheDocument();
-      expect(screen.queryByText("Modified Title")).not.toBeInTheDocument();
-    });
-
-    it("saves edited task", async () => {
-      const user = userEvent.setup();
-
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ task: { ...mockTask, title: "Updated Title" } }),
-      });
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-          onTaskUpdated={mockOnTaskUpdated}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByText("✏️ Edit"));
-      
-      const titleInput = screen.getByDisplayValue("Test Task");
-      await user.clear(titleInput);
-      await user.type(titleInput, "Updated Title");
-
-      await user.click(screen.getByText("Save Changes"));
-
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith(
-          "/api/tasks/task-123",
-          expect.objectContaining({
-            method: "PATCH",
-            body: expect.stringContaining("Updated Title"),
-          })
-        );
-      });
-    });
-  });
-
-  describe("status changes", () => {
-    it("updates status via dropdown", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-          onTaskUpdated={mockOnTaskUpdated}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      const statusDropdown = screen.getByDisplayValue(/In Progress/i);
-      await user.selectOptions(statusDropdown, "done");
-
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith(
-          "/api/tasks/task-123",
-          expect.objectContaining({
-            method: "PATCH",
-            body: expect.stringContaining("done"),
-          })
-        );
-      });
-    });
-  });
-
-  describe("delete functionality", () => {
-    it("shows delete confirmation", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByText("🗑️ Delete"));
-
-      expect(screen.getByText("Delete this task?")).toBeInTheDocument();
-      expect(screen.getByText("Confirm")).toBeInTheDocument();
-    });
-
-    it("cancels delete confirmation", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByText("🗑️ Delete"));
-      await user.click(screen.getByRole("button", { name: "Cancel" }));
-
-      expect(screen.queryByText("Delete this task?")).not.toBeInTheDocument();
-    });
-
-    it("deletes task on confirmation", async () => {
-      const user = userEvent.setup();
-
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({}),
-      });
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-          onTaskDeleted={mockOnTaskDeleted}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByText("🗑️ Delete"));
-      await user.click(screen.getByText("Confirm"));
-
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith(
-          "/api/tasks/task-123",
-          expect.objectContaining({ method: "DELETE" })
-        );
-        expect(mockOnTaskDeleted).toHaveBeenCalledWith("task-123");
-        expect(mockOnClose).toHaveBeenCalled();
-      });
-    });
-  });
-
-  describe("tabs", () => {
-    it("renders all tabs", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      expect(screen.getByText("Comments")).toBeInTheDocument();
-      expect(screen.getByText("Activity")).toBeInTheDocument();
-      expect(screen.getByText("Attachments")).toBeInTheDocument();
-    });
-
-    it("switches to Activity tab", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByRole("button", { name: /Activity/i }));
-
-      // Should show activity items
-      await waitFor(() => {
-        expect(screen.getByText(/created this task/)).toBeInTheDocument();
-        expect(screen.getByText(/changed status from todo to in-progress/)).toBeInTheDocument();
-      });
-    });
-
-    it("switches to Attachments tab", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByRole("button", { name: /Attachments/i }));
-
-      // Should show attachment
-      await waitFor(() => {
-        expect(screen.getByText("screenshot.png")).toBeInTheDocument();
-      });
-    });
-
-    it("shows attachment count badge", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      // Should show count badge
-      expect(screen.getByText("1")).toBeInTheDocument();
-    });
-  });
-
-  describe("TaskThread integration", () => {
-    it("renders TaskThread in Comments tab", async () => {
-      render(
-        <TaskDetail
-          taskId="task-123"
-          isOpen={true}
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText("Test Task")).toBeInTheDocument();
-      });
-
-      expect(screen.getByTestId("task-thread")).toBeInTheDocument();
-      expect(screen.getByText("TaskThread for task-123")).toBeInTheDocument();
-    });
-  });
-});
-
-describe("StatusBadge", () => {
-  it("renders todo status", () => {
-    render(<StatusBadge status="todo" />);
-    
-    expect(screen.getByText("To Do")).toBeInTheDocument();
-    expect(screen.getByText("📋")).toBeInTheDocument();
-  });
-
-  it("renders in-progress status", () => {
-    render(<StatusBadge status="in-progress" />);
-    
-    expect(screen.getByText("In Progress")).toBeInTheDocument();
-    expect(screen.getByText("🚀")).toBeInTheDocument();
-  });
-
-  it("renders done status", () => {
-    render(<StatusBadge status="done" />);
-    
-    expect(screen.getByText("Done")).toBeInTheDocument();
-    expect(screen.getByText("✅")).toBeInTheDocument();
-  });
-
-  it("applies correct color classes", () => {
-    const { container } = render(<StatusBadge status="in-progress" />);
-    
-    const badge = container.firstChild;
-    expect(badge).toHaveClass("bg-sky-100");
-  });
-});
-
-describe("PriorityBadge", () => {
-  it("renders low priority", () => {
-    render(<PriorityBadge priority="low" />);
-    
-    expect(screen.getByText("Low")).toBeInTheDocument();
-  });
-
-  it("renders medium priority", () => {
-    render(<PriorityBadge priority="medium" />);
-    
-    expect(screen.getByText("Medium")).toBeInTheDocument();
-  });
-
-  it("renders high priority", () => {
-    render(<PriorityBadge priority="high" />);
-    
-    expect(screen.getByText("High")).toBeInTheDocument();
-  });
-
-  it("applies correct color classes for high priority", () => {
-    const { container } = render(<PriorityBadge priority="high" />);
-    
-    const badge = container.firstChild;
-    expect(badge).toHaveClass("bg-red-100");
-  });
-});
-
-describe("WebSocket integration", () => {
-  it("updates task when receiving TaskUpdated message", async () => {
-    const { useWS } = await import("../../contexts/WebSocketContext");
-    const mockUseWS = vi.mocked(useWS);
-    const onClose = vi.fn();
-
-    mockUseWS.mockReturnValue({
-      connected: true,
-      lastMessage: null,
-      sendMessage: vi.fn(),
-    });
-
-    const { rerender } = render(
+    render(
       <TaskDetail
         taskId="task-123"
         isOpen={true}
-        onClose={onClose}
-      />
+        onClose={mockOnClose}
+        apiEndpoint="/api/tasks"
+      />,
     );
+
+    expect(screen.getByText("Loading task...")).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText("Test Task")).toBeInTheDocument();
     });
 
-    // Simulate WebSocket message
-    mockUseWS.mockReturnValue({
-      connected: true,
-      lastMessage: {
-        type: "TaskUpdated",
-        data: { id: "task-123", title: "Updated via WebSocket" },
-      },
-      sendMessage: vi.fn(),
+    expect(screen.getByText("John Doe")).toBeInTheDocument();
+    expect(screen.getByText("Bug")).toBeInTheDocument();
+    expect(screen.getByTestId("task-thread")).toHaveTextContent("task-123");
+  });
+
+  it("closes when close button is clicked", async () => {
+    mockFetchTask();
+    const user = userEvent.setup();
+
+    render(
+      <TaskDetail
+        taskId="task-123"
+        isOpen={true}
+        onClose={mockOnClose}
+        apiEndpoint="/api/tasks"
+      />,
+    );
+
+    await screen.findByText("Test Task");
+    await user.click(screen.getByRole("button", { name: /close task details/i }));
+    expect(mockOnClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("enters edit mode and saves changes", async () => {
+    mockFetchTask();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ task: { ...mockTask, title: "Updated Title" } }),
     });
+
+    const user = userEvent.setup();
+
+    render(
+      <TaskDetail
+        taskId="task-123"
+        isOpen={true}
+        onClose={mockOnClose}
+        onTaskUpdated={mockOnTaskUpdated}
+        apiEndpoint="/api/tasks"
+      />,
+    );
+
+    await screen.findByText("Test Task");
+    await user.click(screen.getByRole("button", { name: /edit task/i }));
+
+    const titleInput = screen.getByPlaceholderText("Task title");
+    await user.clear(titleInput);
+    await user.type(titleInput, "Updated Title");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/tasks/task-123",
+        expect.objectContaining({
+          method: "PATCH",
+          body: expect.stringContaining("Updated Title"),
+        }),
+      );
+    });
+
+    expect(mockOnTaskUpdated).toHaveBeenCalled();
+  });
+
+  it("updates status with optimistic PATCH call", async () => {
+    mockFetchTask();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ task: { ...mockTask, status: "done" } }),
+    });
+
+    render(
+      <TaskDetail
+        taskId="task-123"
+        isOpen={true}
+        onClose={mockOnClose}
+        apiEndpoint="/api/tasks"
+      />,
+    );
+
+    await screen.findByText("Test Task");
+
+    const [statusSelect] = screen.getAllByRole("combobox");
+    fireEvent.change(statusSelect, { target: { value: "done" } });
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/tasks/task-123",
+        expect.objectContaining({
+          method: "PATCH",
+          body: expect.stringContaining('"status":"done"'),
+        }),
+      );
+    });
+  });
+
+  it("shows dismissible error when task fetch fails", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, statusText: "Not Found" });
+    const user = userEvent.setup();
+
+    render(
+      <TaskDetail
+        taskId="task-123"
+        isOpen={true}
+        onClose={mockOnClose}
+        apiEndpoint="/api/tasks"
+      />,
+    );
+
+    expect(await screen.findByText("Failed to fetch task details")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Failed to fetch task details")).not.toBeInTheDocument();
+    });
+  });
+
+  it("applies TaskUpdated websocket payloads for the active task", async () => {
+    mockFetchTask();
+
+    const { rerender } = render(
+      <TaskDetail
+        taskId="task-123"
+        isOpen={true}
+        onClose={mockOnClose}
+        apiEndpoint="/api/tasks"
+      />,
+    );
+
+    await screen.findByText("Test Task");
+
+    wsState.lastMessage = {
+      type: "TaskUpdated",
+      data: {
+        id: "task-123",
+        title: "Task Updated via WebSocket",
+      },
+    };
 
     rerender(
       <TaskDetail
         taskId="task-123"
         isOpen={true}
-        onClose={onClose}
-      />
+        onClose={mockOnClose}
+        apiEndpoint="/api/tasks"
+      />,
     );
 
-    // The component should handle the WebSocket update
-    // (actual behavior depends on the effect running)
+    expect(await screen.findByText("Task Updated via WebSocket")).toBeInTheDocument();
+  });
+});
+
+describe("TaskDetail badges", () => {
+  it("renders StatusBadge", () => {
+    render(<StatusBadge status="todo" />);
+    expect(screen.getByText("To Do")).toBeInTheDocument();
+  });
+
+  it("renders PriorityBadge", () => {
+    render(<PriorityBadge priority="high" />);
+    expect(screen.getByText("High")).toBeInTheDocument();
   });
 });

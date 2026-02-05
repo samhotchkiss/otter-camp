@@ -559,16 +559,28 @@ export default function TaskDetail({
 
   // Handle WebSocket updates
   useEffect(() => {
-    if (!lastMessage || !task) return;
-
-    if (
-      lastMessage.type === "TaskUpdated" &&
-      (lastMessage.data as { id?: string })?.id === task.id
-    ) {
-      const updatedData = lastMessage.data as Partial<TaskDetailData>;
-      setTask((prev) => (prev ? { ...prev, ...updatedData } : prev));
+    if (lastMessage?.type !== "TaskUpdated") {
+      return;
     }
-  }, [lastMessage, task]);
+
+    const updatedData = lastMessage.data as Partial<TaskDetailData> & { id?: string };
+    if (!updatedData.id) {
+      return;
+    }
+
+    setTask((prev) => {
+      if (!prev || prev.id !== updatedData.id) {
+        return prev;
+      }
+
+      const hasChanges = Object.entries(updatedData).some(([key, value]) => {
+        const taskKey = key as keyof TaskDetailData;
+        return prev[taskKey] !== value;
+      });
+
+      return hasChanges ? { ...prev, ...updatedData } : prev;
+    });
+  }, [lastMessage]);
 
   // Reset state when panel closes
   useEffect(() => {
