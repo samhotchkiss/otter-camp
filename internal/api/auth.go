@@ -511,3 +511,159 @@ func requestIP(r *http.Request) string {
 	}
 	return strings.TrimSpace(r.RemoteAddr)
 }
+
+// MagicLinkResponse is the response for generating a magic login link
+type MagicLinkResponse struct {
+	URL       string    `json:"url"`
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// HandleMagicLink generates a simple auth token for MVP testing.
+// This bypasses the full OpenClaw auth flow.
+// Usage: POST /api/auth/magic with optional {"name": "Sam", "email": "sam@example.com"}
+func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	// Parse optional user info
+	var req struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req) // Ignore errors, use defaults
+
+	if req.Name == "" {
+		req.Name = "Sam"
+	}
+	if req.Email == "" {
+		req.Email = "sam@otter.camp"
+	}
+
+	// Generate a simple token
+	token, err := generateRandomToken(32)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to generate token"})
+		return
+	}
+	authToken := "oc_magic_" + token
+	expiresAt := time.Now().UTC().Add(sessionTTL())
+
+	// Try to store in DB if available, but don't fail if DB isn't configured
+	if db, err := getAuthDB(); err == nil {
+		// Create a demo org if needed
+		var orgID string
+		err := db.QueryRowContext(r.Context(), 
+			`INSERT INTO organizations (name, slug) VALUES ('Demo Org', 'demo') 
+			 ON CONFLICT (slug) DO UPDATE SET name = 'Demo Org' 
+			 RETURNING id`).Scan(&orgID)
+		if err == nil {
+			// Create a demo user
+			var userID string
+			err = db.QueryRowContext(r.Context(),
+				`INSERT INTO users (org_id, display_name, email, subject, issuer) 
+				 VALUES ($1, $2, $3, 'magic', 'otter.camp')
+				 ON CONFLICT (org_id, issuer, subject) DO UPDATE SET display_name = $2, email = $3
+				 RETURNING id`,
+				orgID, req.Name, req.Email).Scan(&userID)
+			if err == nil {
+				// Create session
+				_, err = db.ExecContext(r.Context(),
+					`INSERT INTO sessions (org_id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)`,
+					orgID, userID, authToken, expiresAt)
+			}
+		}
+		// If any DB operation fails, we still return the token (for demo mode)
+	}
+
+	// Build the magic link URL
+	baseURL := getPublicBaseURL(r)
+	// Use sam.otter.camp if we detect we're in production
+	if strings.Contains(baseURL, "api.otter.camp") {
+		baseURL = "https://sam.otter.camp"
+	}
+	magicURL := baseURL + "/?auth=" + authToken
+
+	sendJSON(w, http.StatusOK, MagicLinkResponse{
+		URL:       magicURL,
+		Token:     authToken,
+		ExpiresAt: expiresAt,
+	})
+}
+
+// HandleValidateToken validates a magic link token and sets a session cookie.
+// GET /api/auth/validate?token=xxx
+func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing token"})
+		return
+	}
+
+	// For demo mode, accept any oc_magic_ token
+	if strings.HasPrefix(token, "oc_magic_") {
+		// Set the auth cookie
+		http.SetCookie(w, &http.Cookie{
+			Name:     "otter_auth",
+			Value:    token,
+			Path:     "/",
+			MaxAge:   int(sessionTTL().Seconds()),
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+		})
+
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"valid": true,
+			"user": User{
+				ID:    "demo-user",
+				Name:  "Sam",
+				Email: "sam@otter.camp",
+			},
+		})
+		return
+	}
+
+	// Try to validate against DB
+	db, err := getAuthDB()
+	if err != nil {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid token"})
+		return
+	}
+
+	var userID, userName, userEmail string
+	var expiresAt time.Time
+	err = db.QueryRowContext(r.Context(),
+		`SELECT s.user_id, s.expires_at, u.display_name, u.email 
+		 FROM sessions s 
+		 JOIN users u ON s.user_id = u.id 
+		 WHERE s.token = $1`,
+		token).Scan(&userID, &expiresAt, &userName, &userEmail)
+	
+	if err != nil || time.Now().After(expiresAt) {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid or expired token"})
+		return
+	}
+
+	// Set the auth cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "otter_auth",
+		Value:    token,
+		Path:     "/",
+		MaxAge:   int(time.Until(expiresAt).Seconds()),
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"valid": true,
+		"user": User{
+			ID:    userID,
+			Name:  userName,
+			Email: userEmail,
+		},
+	})
+}

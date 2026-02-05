@@ -66,6 +66,8 @@ func NewRouter() http.Handler {
 		r.Post("/auth/login", HandleLogin)
 		r.Post("/auth/exchange", HandleAuthExchange)
 		r.Get("/auth/exchange", HandleAuthExchange)
+		r.Post("/auth/magic", HandleMagicLink)
+		r.Get("/auth/validate", HandleValidateToken)
 		r.Get("/user/prefixes", HandleUserCommandPrefixesList)
 		r.Post("/user/prefixes", HandleUserCommandPrefixesCreate)
 		r.Delete("/user/prefixes/{id}", HandleUserCommandPrefixesDelete)
