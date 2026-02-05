@@ -92,10 +92,14 @@ const GAP = 16;
  * - Click card to open AgentDM modal
  * - Real-time status updates via WebSocket
  */
+import { isDemoMode } from '../lib/demo';
+
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
 function AgentsPageComponent({
-  apiEndpoint = `${API_URL}/api/agents?demo=true`,
+  apiEndpoint = isDemoMode() 
+    ? `${API_URL}/api/agents?demo=true`
+    : `${API_URL}/api/sync/agents`,
 }: AgentsPageProps) {
   const [agents, setAgents] = useState<AgentCardData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -125,6 +129,17 @@ function AgentsPageComponent({
     return () => window.removeEventListener("resize", updateColumns);
   }, []);
 
+  // Map sync API response to AgentCardData format
+  const mapAgentData = (agent: Record<string, unknown>): AgentCardData => ({
+    id: agent.id as string,
+    name: agent.name as string,
+    avatarUrl: agent.avatarUrl as string | undefined,
+    status: (agent.status as AgentStatus) || 'offline',
+    role: agent.role as string | undefined,
+    currentTask: agent.currentTask as string | undefined,
+    lastActive: (agent.lastSeen || agent.lastActive || agent.updatedAt) as string | undefined,
+  });
+
   // Fetch agents from API
   const fetchAgents = useCallback(async () => {
     try {
@@ -133,7 +148,8 @@ function AgentsPageComponent({
         throw new Error("Failed to fetch agents");
       }
       const data = await response.json();
-      return (data.agents || data || []) as AgentCardData[];
+      const agents = data.agents || data || [];
+      return agents.map(mapAgentData);
     } catch (err) {
       throw err instanceof Error ? err : new Error("Failed to load agents");
     }
