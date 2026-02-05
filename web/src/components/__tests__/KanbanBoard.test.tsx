@@ -38,10 +38,6 @@ vi.mock("@dnd-kit/core", async () => {
     useDroppable: vi.fn(() => ({
       setNodeRef: vi.fn(),
       isOver: false,
-      active: null,
-      over: null,
-      rect: null,
-      node: { current: null },
     })),
     useSensor: vi.fn(),
     useSensors: vi.fn(() => []),
