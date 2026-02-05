@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -222,16 +223,16 @@ func (h *FeedPushHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	normalized := make([]FeedPushItem, 0, len(req.Items))
 	for i, item := range req.Items {
 		if strings.TrimSpace(item.Type) == "" {
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "item " + string(rune('0'+i)) + ": missing type"})
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("item %d: missing type", i)})
 			return
 		}
 		if item.TaskID != nil && !uuidRegex.MatchString(*item.TaskID) {
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "item " + string(rune('0'+i)) + ": invalid task_id"})
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("item %d: invalid task_id", i)})
 			return
 		}
 		metadata, err := normalizeFeedPushMetadata(item.Metadata, item.Priority)
 		if err != nil {
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "item " + string(rune('0'+i)) + ": invalid metadata"})
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("item %d: invalid metadata", i)})
 			return
 		}
 		item.Metadata = metadata

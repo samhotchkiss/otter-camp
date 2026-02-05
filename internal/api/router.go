@@ -33,7 +33,7 @@ func NewRouter() http.Handler {
 	// Initialize database connection (graceful - demo mode if unavailable)
 	var db *sql.DB
 	var agentStore *store.AgentStore
-	
+
 	if dbConn, err := store.DB(); err != nil {
 		log.Printf("⚠️  Database not available, using demo mode: %v", err)
 	} else {
@@ -63,7 +63,7 @@ func NewRouter() http.Handler {
 	})
 
 	r.Get("/health", handleHealth)
-	
+
 	webhookHandler := &WebhookHandler{Hub: hub}
 	feedPushHandler := NewFeedPushHandler(hub)
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
@@ -72,14 +72,14 @@ func NewRouter() http.Handler {
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
 	workflowsHandler := &WorkflowsHandler{}
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
-	
+
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
 	if db != nil {
 		projectStore = store.NewProjectStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
-	
+
 	// All API routes under /api prefix
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/waitlist", HandleWaitlist)
@@ -116,11 +116,11 @@ func NewRouter() http.Handler {
 		r.Post("/import", HandleImport)
 		r.Post("/import/validate", HandleImportValidate)
 	})
-	
+
 	// WebSocket handlers
 	r.Handle("/ws", &ws.Handler{Hub: hub})
 	r.Handle("/ws/openclaw", ws.NewOpenClawHandler(hub))
-	
+
 	// Static file fallback for frontend SPA (must be last)
 	r.Get("/*", handleRoot)
 
@@ -144,21 +144,21 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 	if staticDir == "" {
 		staticDir = "./static"
 	}
-	
+
 	// Check if static directory exists
 	if _, err := os.Stat(staticDir); err == nil {
 		// Serve index.html for root and non-API paths
 		serveStatic(staticDir, w, r)
 		return
 	}
-	
+
 	// Fall back to JSON response if no static files
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
 
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	sendJSON(w, http.StatusOK, map[string]string{
 		"name":    "Otter Camp",
 		"tagline": "Work management for AI agent teams",
 		"docs":    "/docs",
@@ -169,25 +169,25 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 func serveStatic(dir string, w http.ResponseWriter, r *http.Request) {
 	// Remove Content-Type: application/json header for static files
 	w.Header().Del("Content-Type")
-	
+
 	path := r.URL.Path
 	if path == "/" {
 		path = "/index.html"
 	}
-	
+
 	// Try to serve the exact file
 	filePath := dir + path
 	if _, err := os.Stat(filePath); err == nil {
 		http.ServeFile(w, r, filePath)
 		return
 	}
-	
+
 	// For SPA: serve index.html for all non-asset routes
 	if _, err := os.Stat(dir + "/index.html"); err == nil {
 		http.ServeFile(w, r, dir+"/index.html")
 		return
 	}
-	
+
 	http.NotFound(w, r)
 }
 
