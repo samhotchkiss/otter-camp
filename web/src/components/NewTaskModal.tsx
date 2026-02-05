@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, type ChangeEvent, type FormEvent } from "react";
+import api from "../lib/api";
 
 type NewTaskModalProps = {
   isOpen: boolean;
@@ -37,30 +38,35 @@ export default function NewTaskModal({ isOpen, onClose, onTaskCreated }: NewTask
       setTitle("");
       setDescription("");
       setPriority("");
+      setError(null);
     }
   }, [isOpen]);
+
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
 
     setIsSubmitting(true);
+    setError(null);
     
     try {
-      // TODO: Replace with actual API call
-      const task = {
+      const createdTask = await api.createTask({
         title: title.trim(),
         description: description.trim() || undefined,
         priority: priority || undefined,
-      };
+      });
       
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      
-      onTaskCreated?.(task);
+      onTaskCreated?.({
+        title: createdTask.title,
+        description: description.trim() || undefined,
+        priority: createdTask.priority,
+      });
       onClose();
-    } catch (error) {
-      console.error("Failed to create task:", error);
+    } catch (err) {
+      console.error("Failed to create task:", err);
+      setError(err instanceof Error ? err.message : "Failed to create task");
     } finally {
       setIsSubmitting(false);
     }
@@ -164,6 +170,13 @@ export default function NewTaskModal({ isOpen, onClose, onTaskCreated }: NewTask
               </div>
             </div>
           </div>
+
+          {/* Error message */}
+          {error && (
+            <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">
+              {error}
+            </div>
+          )}
 
           {/* Footer */}
           <div className="mt-6 flex items-center justify-end gap-3">

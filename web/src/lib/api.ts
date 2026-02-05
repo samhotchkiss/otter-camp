@@ -87,6 +87,22 @@ export interface ApprovalResponse {
   message?: string;
 }
 
+export interface CreateTaskInput {
+  title: string;
+  description?: string;
+  priority?: string;
+  agent?: string;
+  project?: string;
+}
+
+export interface CreateTaskResponse {
+  id: string;
+  title: string;
+  status: string;
+  priority?: string;
+  createdAt: string;
+}
+
 // API methods
 export const api = {
   health: () => apiFetch<HealthResponse>('/health'),
@@ -103,6 +119,12 @@ export const api = {
   rejectItem: (id: string) => apiFetch<ApprovalResponse>(`/api/approvals/exec/${id}/respond`, {
     method: 'POST',
     body: JSON.stringify({ action: 'reject' }),
+  }),
+  
+  // Task actions
+  createTask: (input: CreateTaskInput) => apiFetch<CreateTaskResponse>('/api/tasks', {
+    method: 'POST',
+    body: JSON.stringify(input),
   }),
 };
 
