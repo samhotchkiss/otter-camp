@@ -175,6 +175,7 @@ export default function Dashboard() {
 
   return (
     <OnboardingTour>
+      <div className="two-column-layout">
       {/* ========== PRIMARY COLUMN ========== */}
       <div className="primary">
         {/* NEEDS YOU Section */}
@@ -289,6 +290,7 @@ export default function Dashboard() {
           ))}
         </div>
       </aside>
+      </div>
 
       {/* Command Palette */}
       <CommandPalette

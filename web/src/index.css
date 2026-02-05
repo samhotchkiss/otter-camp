@@ -43,8 +43,7 @@
    ======================================== */
 
 .inbox-container {
-  max-width: 900px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .inbox-list {
@@ -249,9 +248,7 @@
 
 /* ========== KNOWLEDGE PAGE ========== */
 .knowledge-page {
-  padding: 24px;
-  max-width: 1200px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .knowledge-controls {

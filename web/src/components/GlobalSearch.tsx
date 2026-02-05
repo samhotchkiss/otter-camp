@@ -6,6 +6,7 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
+import { isDemoMode } from "../lib/demo";
 
 // --- Types ---
 

@@ -262,6 +262,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       <GlobalSearch
         isOpen={isCommandPaletteOpen}
         onOpenChange={(open) => open ? openCommandPalette() : closeCommandPalette()}
+        orgId={localStorage.getItem("otter-camp-org-id") || undefined}
       />
     </div>
   );

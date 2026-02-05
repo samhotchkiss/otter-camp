@@ -247,6 +247,7 @@ LIMIT $3;
 
 // SearchHandler handles GET /api/search?q=<query>&org_id=<uuid>
 // Returns unified search results across tasks, projects, agents, and messages
+// Supports demo mode with ?demo=true for testing without org_id
 func SearchHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
@@ -255,15 +256,24 @@ func SearchHandler(w http.ResponseWriter, r *http.Request) {
 
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+	isDemo := r.URL.Query().Get("demo") == "true"
 
 	if q == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing query parameter: q"})
 		return
 	}
-	if orgID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing query parameter: org_id"})
+
+	// Demo mode: return sample results without DB
+	if isDemo || orgID == "" {
+		demoResults := getDemoSearchResults(q)
+		sendJSON(w, http.StatusOK, GlobalSearchResponse{
+			Query:   q,
+			OrgID:   "demo",
+			Results: demoResults,
+		})
 		return
 	}
+
 	if !uuidRegex.MatchString(orgID) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid org_id"})
 		return
@@ -459,4 +469,97 @@ func parseNonNegativeInt(raw string, fallback int) (int, error) {
 	}
 
 	return value, nil
+}
+
+// getDemoSearchResults returns sample search results for demo mode
+func getDemoSearchResults(query string) GlobalSearchResults {
+	q := strings.ToLower(query)
+	results := GlobalSearchResults{
+		Tasks:    make([]SearchTaskResult, 0),
+		Projects: make([]SearchProjectResult, 0),
+		Agents:   make([]SearchAgentResult, 0),
+		Messages: make([]SearchMessageResult, 0),
+	}
+
+	// Demo tasks
+	demoTasks := []struct {
+		id, title, desc, status, priority string
+		number                            int32
+	}{
+		{"demo-1", "Deploy OtterCamp v1.0", "Final deployment and testing", "in_progress", "P1", 1},
+		{"demo-2", "Review blog post draft", "Content review for publication", "review", "P2", 2},
+		{"demo-3", "Schedule social media posts", "Queue up Twitter and LinkedIn", "done", "P3", 3},
+		{"demo-4", "API documentation update", "Update OpenAPI specs", "queued", "P2", 4},
+		{"demo-5", "Fix authentication flow", "Token refresh not working", "in_progress", "P1", 5},
+	}
+
+	for _, t := range demoTasks {
+		if strings.Contains(strings.ToLower(t.title), q) || strings.Contains(strings.ToLower(t.desc), q) {
+			desc := t.desc
+			results.Tasks = append(results.Tasks, SearchTaskResult{
+				ID:                   t.id,
+				OrgID:                "demo",
+				Number:               t.number,
+				Title:                t.title,
+				Description:          &desc,
+				Status:               t.status,
+				Priority:             t.priority,
+				Context:              json.RawMessage("{}"),
+				Rank:                 1.0,
+				TitleHighlight:       highlightMatches(t.title, query),
+				DescriptionHighlight: highlightMatches(t.desc, query),
+			})
+		}
+	}
+
+	// Demo projects
+	demoProjects := []struct {
+		id, name, desc, status string
+	}{
+		{"proj-1", "OtterCamp", "AI agent work management platform", "active"},
+		{"proj-2", "Marketing", "Social media and content campaigns", "active"},
+		{"proj-3", "Infrastructure", "DevOps and deployment automation", "active"},
+	}
+
+	for _, p := range demoProjects {
+		if strings.Contains(strings.ToLower(p.name), q) || strings.Contains(strings.ToLower(p.desc), q) {
+			desc := p.desc
+			results.Projects = append(results.Projects, SearchProjectResult{
+				ID:                   p.id,
+				Name:                 p.name,
+				NameHighlight:        highlightMatches(p.name, query),
+				Description:          &desc,
+				DescriptionHighlight: highlightMatches(p.desc, query),
+				Status:               p.status,
+				Rank:                 1.0,
+			})
+		}
+	}
+
+	// Demo agents
+	demoAgents := []struct {
+		id, slug, displayName, status string
+	}{
+		{"agent-frank", "frank", "Frank", "online"},
+		{"agent-derek", "derek", "Derek", "online"},
+		{"agent-nova", "nova", "Nova", "online"},
+		{"agent-stone", "stone", "Stone", "busy"},
+		{"agent-ivy", "ivy", "Ivy", "online"},
+		{"agent-jeff", "jeff-g", "Jeff G", "online"},
+	}
+
+	for _, a := range demoAgents {
+		if strings.Contains(strings.ToLower(a.displayName), q) || strings.Contains(strings.ToLower(a.slug), q) {
+			results.Agents = append(results.Agents, SearchAgentResult{
+				ID:                   a.id,
+				Slug:                 a.slug,
+				DisplayName:          a.displayName,
+				DisplayNameHighlight: highlightMatches(a.displayName, query),
+				Status:               a.status,
+				Rank:                 1.0,
+			})
+		}
+	}
+
+	return results
 }

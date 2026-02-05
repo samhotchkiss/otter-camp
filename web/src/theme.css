@@ -173,12 +173,16 @@ body {
 
 .main {
   flex: 1;
+  padding: 24px;
+  width: 100%;
+}
+
+/* Two-column layout for dashboard home */
+.main.two-column,
+.two-column-layout {
   display: grid;
   grid-template-columns: 1fr 360px;
   gap: 24px;
-  padding: 24px;
-  max-width: 1200px;
-  margin: 0 auto;
   width: 100%;
 }
 
@@ -197,7 +201,8 @@ body {
 }
 
 @media (max-width: 900px) {
-  .main {
+  .main.two-column,
+  .two-column-layout {
     grid-template-columns: 1fr;
   }
   .secondary {
@@ -458,8 +463,6 @@ body {
 .main-content {
   flex: 1;
   padding: 24px;
-  max-width: 1400px;
-  margin: 0 auto;
   width: 100%;
 }
 
@@ -738,9 +741,7 @@ body.has-demo-banner .topbar {
    ======================================== */
 
 .workflows-page {
-  padding: 24px;
-  max-width: 1200px;
-  margin: 0 auto;
+  width: 100%;
 }
 
 .workflows-grid {
