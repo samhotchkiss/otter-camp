@@ -10,26 +10,27 @@
    COLOR TOKENS
    ======================================== */
 
+/* Dark theme is DEFAULT */
 :root {
-  /* Light theme */
-  --otter-bg: #FAF8F5;
-  --otter-surface: #FFFFFF;
-  --otter-surface-alt: #F5F2ED;
-  --otter-border: #E8E2D9;
-  --otter-text: #2D2A26;
-  --otter-text-muted: #8B7355;
-  --otter-accent: #5C4A3D;
-  --otter-accent-hover: #4A3C31;
+  /* Dark theme colors */
+  --otter-bg: #1A1918;
+  --otter-surface: #252422;
+  --otter-surface-alt: #2D2B28;
+  --otter-border: #3D3A36;
+  --otter-text: #FAF8F5;
+  --otter-text-muted: #A69582;
+  --otter-accent: #C9A86C;           /* WARM GOLD - signature color */
+  --otter-accent-hover: #D4B87A;
   
   /* Semantic colors */
   --otter-green: #5A7A5C;
-  --otter-green-bg: rgba(90, 122, 92, 0.15);
+  --otter-green-bg: rgba(90, 122, 92, 0.2);
   --otter-red: #B85C38;
-  --otter-red-bg: rgba(184, 92, 56, 0.15);
+  --otter-red-bg: rgba(184, 92, 56, 0.2);
   --otter-yellow: #C4A03C;
-  --otter-yellow-bg: rgba(196, 160, 60, 0.15);
+  --otter-yellow-bg: rgba(196, 160, 60, 0.2);
   --otter-blue: #4A6D7C;
-  --otter-blue-bg: rgba(74, 109, 124, 0.15);
+  --otter-blue-bg: rgba(74, 109, 124, 0.2);
   --otter-orange: #C87941;
   
   /* Typography */
@@ -42,30 +43,7 @@
   --otter-radius-lg: 12px;
   --otter-radius-xl: 16px;
   
-  /* Shadows */
-  --otter-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --otter-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --otter-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
-}
-
-/* Dark theme (DEFAULT) */
-[data-theme="dark"],
-.dark,
-:root {
-  --otter-bg: #1A1918;
-  --otter-surface: #252422;
-  --otter-surface-alt: #2D2B28;
-  --otter-border: #3D3A36;
-  --otter-text: #FAF8F5;
-  --otter-text-muted: #A69582;
-  --otter-accent: #C9A86C;
-  --otter-accent-hover: #D4B87A;
-  
-  --otter-green-bg: rgba(90, 122, 92, 0.2);
-  --otter-red-bg: rgba(184, 92, 56, 0.2);
-  --otter-yellow-bg: rgba(196, 160, 60, 0.2);
-  --otter-blue-bg: rgba(74, 109, 124, 0.2);
-  
+  /* Shadows (dark mode) */
   --otter-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
   --otter-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
   --otter-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
