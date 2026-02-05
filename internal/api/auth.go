@@ -551,31 +551,51 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	authToken := "oc_magic_" + token
 	expiresAt := time.Now().UTC().Add(sessionTTL())
 
-	// Try to store in DB if available, but don't fail if DB isn't configured
-	if db, err := getAuthDB(); err == nil {
-		// Create a demo org if needed
-		var orgID string
-		err := db.QueryRowContext(r.Context(), 
-			`INSERT INTO organizations (name, slug) VALUES ('Demo Org', 'demo') 
-			 ON CONFLICT (slug) DO UPDATE SET name = 'Demo Org' 
-			 RETURNING id`).Scan(&orgID)
-		if err == nil {
-			// Create a demo user
-			var userID string
-			err = db.QueryRowContext(r.Context(),
-				`INSERT INTO users (org_id, display_name, email, subject, issuer) 
-				 VALUES ($1, $2, $3, 'magic', 'otter.camp')
-				 ON CONFLICT (org_id, issuer, subject) DO UPDATE SET display_name = $2, email = $3
-				 RETURNING id`,
-				orgID, req.Name, req.Email).Scan(&userID)
-			if err == nil {
-				// Create session
-				_, err = db.ExecContext(r.Context(),
-					`INSERT INTO sessions (org_id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)`,
-					orgID, userID, authToken, expiresAt)
-			}
-		}
-		// If any DB operation fails, we still return the token (for demo mode)
+	db, err := getAuthDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	// Create a demo org if needed
+	var orgID string
+	if err := db.QueryRowContext(
+		r.Context(),
+		`INSERT INTO organizations (name, slug) VALUES ('Demo Org', 'demo') 
+		 ON CONFLICT (slug) DO UPDATE SET name = 'Demo Org' 
+		 RETURNING id`,
+	).Scan(&orgID); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create demo org"})
+		return
+	}
+
+	// Create a demo user
+	var userID string
+	if err := db.QueryRowContext(
+		r.Context(),
+		`INSERT INTO users (org_id, display_name, email, subject, issuer) 
+		 VALUES ($1, $2, $3, 'magic', 'otter.camp')
+		 ON CONFLICT (org_id, issuer, subject) DO UPDATE SET display_name = $2, email = $3
+		 RETURNING id`,
+		orgID,
+		req.Name,
+		req.Email,
+	).Scan(&userID); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create demo user"})
+		return
+	}
+
+	// Create session
+	if _, err := db.ExecContext(
+		r.Context(),
+		`INSERT INTO sessions (org_id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)`,
+		orgID,
+		userID,
+		authToken,
+		expiresAt,
+	); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create session"})
+		return
 	}
 
 	// Build the magic link URL
@@ -602,8 +622,8 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For demo mode, accept any oc_magic_ token
-	if strings.HasPrefix(token, "oc_magic_") {
+	// Optional unsafe mode for local-only development.
+	if strings.HasPrefix(token, "oc_magic_") && allowInsecureMagicTokenValidation() {
 		// Set the auth cookie
 		http.SetCookie(w, &http.Cookie{
 			Name:     "otter_auth",
@@ -641,7 +661,7 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 		 JOIN users u ON s.user_id = u.id 
 		 WHERE s.token = $1`,
 		token).Scan(&userID, &expiresAt, &userName, &userEmail)
-	
+
 	if err != nil || time.Now().After(expiresAt) {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid or expired token"})
 		return
@@ -666,4 +686,9 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 			Email: userEmail,
 		},
 	})
+}
+
+func allowInsecureMagicTokenValidation() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION")))
+	return value == "1" || value == "true" || value == "yes"
 }
