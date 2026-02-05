@@ -47,13 +47,17 @@ const MESSAGE_TYPES: WebSocketMessageType[] = [
 
 const messageTypeSet = new Set<WebSocketMessageType>(MESSAGE_TYPES);
 
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
+
 const toWebSocketUrl = (path: string) => {
   if (typeof window === "undefined") {
     return path;
   }
 
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}${path}`;
+  // Connect to API server for WebSocket (may be different from frontend host)
+  const apiHost = API_URL.replace(/^https?:\/\//, '');
+  const protocol = API_URL.startsWith('https') ? 'wss:' : 'ws:';
+  return `${protocol}//${apiHost}${path}`;
 };
 
 const parseMessage = (raw: string): WebSocketMessage => {
