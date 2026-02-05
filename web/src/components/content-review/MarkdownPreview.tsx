@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -19,7 +19,7 @@ function useHeadingRenderer(
   onSectionSelect?: (sectionId: string) => void,
   slugCounts?: Map<string, number>
 ) {
-  return function HeadingRenderer({ children }: { children: React.ReactNode }) {
+  return function HeadingRenderer({ children }: { children?: React.ReactNode }) {
     const text = extractTextFromNode(children);
     const baseId = slugifyHeading(text);
     const sectionId = slugCounts ? getUniqueSectionId(baseId, slugCounts) : baseId;
@@ -87,20 +87,20 @@ export default function MarkdownPreview({
           h4: useHeadingRenderer(4, headingProps.activeSectionId, headingProps.commentCounts, headingProps.onSectionSelect, slugCounts),
           h5: useHeadingRenderer(5, headingProps.activeSectionId, headingProps.commentCounts, headingProps.onSectionSelect, slugCounts),
           h6: useHeadingRenderer(6, headingProps.activeSectionId, headingProps.commentCounts, headingProps.onSectionSelect, slugCounts),
-          code({ inline, className, children, ...props }) {
+          code({ className, children, ...props }) {
+            const inline = Boolean((props as { inline?: boolean }).inline);
             const match = /language-(\w+)/.exec(className || "");
             if (!inline && match) {
               return (
                 <div className="my-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-950/90 dark:border-slate-800">
                   <SyntaxHighlighter
                     language={match[1]}
-                    style={prefersDark ? oneDark : oneLight}
+                    style={(prefersDark ? oneDark : oneLight) as Record<string, CSSProperties>}
                     customStyle={{
                       background: "transparent",
                       margin: 0,
                       padding: "1rem",
                     }}
-                    {...props}
                   >
                     {String(children).replace(/\n$/, "")}
                   </SyntaxHighlighter>
