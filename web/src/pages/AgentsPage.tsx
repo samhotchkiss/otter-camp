@@ -17,18 +17,19 @@ export type AgentsPageProps = {
 };
 
 // Status filter styles - memoized outside component
+// Using gold/amber for active states per DESIGN-SPEC.md
 const ACTIVE_STYLES: Record<StatusFilter, string> = {
-  all: "bg-slate-700 text-slate-100",
-  online: "bg-emerald-500/20 text-emerald-300 border-emerald-500/50",
+  all: "bg-[var(--surface-alt)] text-[var(--text)]",
+  online: "bg-[#C9A86C]/20 text-[#C9A86C] border-[#C9A86C]/50",
   busy: "bg-amber-500/20 text-amber-300 border-amber-500/50",
-  offline: "bg-slate-700 text-slate-300",
+  offline: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
 };
 
 const DOT_STYLES: Record<StatusFilter, string> = {
-  all: "bg-slate-400",
-  online: "bg-emerald-500",
+  all: "bg-[var(--text-muted)]",
+  online: "bg-[#C9A86C]",
   busy: "bg-amber-500",
-  offline: "bg-slate-500",
+  offline: "bg-[var(--text-muted)]",
 };
 
 /**
@@ -52,7 +53,7 @@ const StatusFilterButton = memo(function StatusFilterButton({
     if (isActive) {
       return `${base} ${ACTIVE_STYLES[status]}`;
     }
-    return `${base} border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:text-slate-300`;
+    return `${base} border-[var(--border)] bg-[var(--surface)]/50 text-[var(--text-muted)] hover:border-[var(--accent)]/50 hover:text-[var(--text)]`;
   }, [isActive, status]);
 
   return (
@@ -63,7 +64,7 @@ const StatusFilterButton = memo(function StatusFilterButton({
       {label}
       <span
         className={`rounded-full px-2 py-0.5 text-xs ${
-          isActive ? "bg-black/20" : "bg-slate-700"
+          isActive ? "bg-black/20" : "bg-[var(--surface-alt)]"
         }`}
       >
         {count}
@@ -284,8 +285,8 @@ function AgentsPageComponent({
   if (isLoading) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
-        <div className="flex items-center gap-3 text-slate-400">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-emerald-500" />
+        <div className="flex items-center gap-3 text-[var(--text-muted)]">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-[#C9A86C]" />
           <span>Loading agents...</span>
         </div>
       </div>
@@ -299,7 +300,7 @@ function AgentsPageComponent({
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="rounded-lg bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
+          className="rounded-lg bg-[var(--surface)] px-4 py-2 text-sm text-[var(--text-muted)] hover:bg-[var(--surface-alt)]"
         >
           Try Again
         </button>
@@ -325,13 +326,13 @@ function AgentsPageComponent({
           <div
             className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${
               connected
-                ? "bg-emerald-500/20 text-emerald-400"
+                ? "bg-[#C9A86C]/20 text-[#C9A86C]"
                 : "bg-red-500/20 text-red-400"
             }`}
           >
             <span
               className={`h-2 w-2 rounded-full ${
-                connected ? "bg-emerald-500 animate-pulse" : "bg-red-500"
+                connected ? "bg-[#C9A86C] animate-pulse" : "bg-red-500"
               }`}
             />
             {connected ? "Live" : "Disconnected"}
@@ -373,8 +374,8 @@ function AgentsPageComponent({
 
       {/* Agent grid with virtual scrolling */}
       {filteredAgents.length === 0 ? (
-        <div className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-900/50">
-          <p className="text-slate-500">
+        <div className="flex min-h-[200px] flex-col items-center justify-center rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface)]/50">
+          <p className="text-[var(--text-muted)]">
             {statusFilter === "all"
               ? "No agents found"
               : `No ${statusFilter} agents`}
@@ -438,7 +439,7 @@ function AgentsPageComponent({
               <button
                 type="button"
                 onClick={handleCloseDM}
-                className="rounded-full bg-slate-800 p-2 text-slate-400 transition hover:bg-slate-700 hover:text-slate-200"
+                className="rounded-full bg-[var(--surface)] p-2 text-[var(--text-muted)] transition hover:bg-[var(--surface-alt)] hover:text-[var(--text)]"
                 aria-label="Close"
               >
                 <svg
