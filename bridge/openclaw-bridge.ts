@@ -77,10 +77,10 @@ async function connectToOpenClaw(): Promise<void> {
               minProtocol: 3,
               maxProtocol: 3,
               client: {
-                id: 'cli',
+                id: 'gateway-client',
                 version: '1.0.0',
                 platform: 'macos',
-                mode: 'operator',
+                mode: 'backend',
               },
               role: 'operator',
               scopes: ['operator.read'],
