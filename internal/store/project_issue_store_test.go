@@ -1,11 +1,27 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func createIssueTestAgent(t *testing.T, db Querier, orgID, slug string) string {
+	t.Helper()
+	var id string
+	err := db.QueryRowContext(
+		context.Background(),
+		`INSERT INTO agents (org_id, slug, display_name, status) VALUES ($1, $2, $3, 'active') RETURNING id`,
+		orgID,
+		slug,
+		"Agent "+slug,
+	).Scan(&id)
+	require.NoError(t, err)
+	return id
+}
 
 func TestProjectIssueStore_GitHubLinkUpsertIsIdempotent(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
@@ -146,4 +162,168 @@ func TestProjectIssueStore_IsolationBlocksCrossOrgReadsAndWrites(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrNotFound))
+}
+
+func TestProjectIssueStore_ParticipantAddRemoveAndUniqueness(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-participants-org")
+	projectID := createTestProject(t, db, orgID, "Issue Participant Project")
+	ownerAgentID := createIssueTestAgent(t, db, orgID, "owner-agent")
+	collabAgentID := createIssueTestAgent(t, db, orgID, "collab-agent")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Participants issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	owner, err := issueStore.AddParticipant(ctx, AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: ownerAgentID,
+		Role:    "owner",
+	})
+	require.NoError(t, err)
+
+	ownerAgain, err := issueStore.AddParticipant(ctx, AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: ownerAgentID,
+		Role:    "owner",
+	})
+	require.NoError(t, err)
+	require.Equal(t, owner.ID, ownerAgain.ID)
+
+	collab, err := issueStore.AddParticipant(ctx, AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: collabAgentID,
+		Role:    "collaborator",
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.AddParticipant(ctx, AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: collabAgentID,
+		Role:    "owner",
+	})
+	require.Error(t, err)
+
+	require.NoError(t, issueStore.RemoveParticipant(ctx, issue.ID, collabAgentID))
+	readded, err := issueStore.AddParticipant(ctx, AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: collabAgentID,
+		Role:    "collaborator",
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, collab.ID, readded.ID)
+
+	activeParticipants, err := issueStore.ListParticipants(ctx, issue.ID, false)
+	require.NoError(t, err)
+	require.Len(t, activeParticipants, 2)
+}
+
+func TestProjectIssueStore_CommentOrderingAndPaginationByIssue(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-comments-org")
+	projectID := createTestProject(t, db, orgID, "Issue Comment Project")
+	authorID := createIssueTestAgent(t, db, orgID, "comment-author")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Comment thread issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	base := time.Date(2026, 2, 6, 12, 0, 0, 0, time.UTC)
+	bodies := []string{"first", "second", "third"}
+	for index, body := range bodies {
+		comment, err := issueStore.CreateComment(ctx, CreateProjectIssueCommentInput{
+			IssueID:       issue.ID,
+			AuthorAgentID: authorID,
+			Body:          body,
+		})
+		require.NoError(t, err)
+		timestamp := base.Add(time.Duration(index) * time.Minute)
+		_, err = db.Exec(
+			`UPDATE project_issue_comments SET created_at = $1, updated_at = $1 WHERE id = $2`,
+			timestamp,
+			comment.ID,
+		)
+		require.NoError(t, err)
+	}
+
+	firstPage, err := issueStore.ListComments(ctx, issue.ID, 2, 0)
+	require.NoError(t, err)
+	require.Len(t, firstPage, 2)
+	require.Equal(t, "first", firstPage[0].Body)
+	require.Equal(t, "second", firstPage[1].Body)
+
+	secondPage, err := issueStore.ListComments(ctx, issue.ID, 2, 2)
+	require.NoError(t, err)
+	require.Len(t, secondPage, 1)
+	require.Equal(t, "third", secondPage[0].Body)
+}
+
+func TestProjectIssueStore_ParticipantAndCommentIsolation(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgA := createTestOrganization(t, db, "issue-ops-iso-a")
+	orgB := createTestOrganization(t, db, "issue-ops-iso-b")
+	projectA := createTestProject(t, db, orgA, "Issue Ops A")
+	projectB := createTestProject(t, db, orgB, "Issue Ops B")
+	agentA := createIssueTestAgent(t, db, orgA, "ops-agent-a")
+	agentB := createIssueTestAgent(t, db, orgB, "ops-agent-b")
+
+	issueStore := NewProjectIssueStore(db)
+	ctxA := ctxWithWorkspace(orgA)
+	ctxB := ctxWithWorkspace(orgB)
+	issueA, err := issueStore.CreateIssue(ctxA, CreateProjectIssueInput{
+		ProjectID: projectA,
+		Title:     "Issue A",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	issueB, err := issueStore.CreateIssue(ctxB, CreateProjectIssueInput{
+		ProjectID: projectB,
+		Title:     "Issue B",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.AddParticipant(ctxA, AddProjectIssueParticipantInput{
+		IssueID: issueB.ID,
+		AgentID: agentB,
+		Role:    "collaborator",
+	})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNotFound))
+
+	_, err = issueStore.CreateComment(ctxA, CreateProjectIssueCommentInput{
+		IssueID:       issueB.ID,
+		AuthorAgentID: agentA,
+		Body:          "cross org",
+	})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNotFound))
+
+	participants, err := issueStore.ListParticipants(ctxA, issueB.ID, false)
+	require.NoError(t, err)
+	require.Empty(t, participants)
+
+	comments, err := issueStore.ListComments(ctxA, issueB.ID, 20, 0)
+	require.NoError(t, err)
+	require.Empty(t, comments)
+
+	_, err = issueStore.CreateComment(ctxA, CreateProjectIssueCommentInput{
+		IssueID:       issueA.ID,
+		AuthorAgentID: agentA,
+		Body:          "valid",
+	})
+	require.NoError(t, err)
 }

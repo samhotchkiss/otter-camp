@@ -261,6 +261,8 @@ func TestRLSEnabled(t *testing.T) {
 		"project_issues",
 		"project_issue_github_links",
 		"project_issue_sync_checkpoints",
+		"project_issue_participants",
+		"project_issue_comments",
 	}
 
 	for _, table := range tables {

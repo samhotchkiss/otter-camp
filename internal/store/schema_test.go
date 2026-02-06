@@ -71,6 +71,23 @@ func insertSchemaTask(t *testing.T, db *sql.DB, orgID string, projectID, agentID
 	return id
 }
 
+func insertSchemaIssue(t *testing.T, db *sql.DB, orgID, projectID, title, state, origin string) string {
+	t.Helper()
+	var id string
+	err := db.QueryRow(
+		`INSERT INTO project_issues (org_id, project_id, issue_number, title, state, origin)
+		 VALUES ($1, $2, COALESCE((SELECT MAX(issue_number) + 1 FROM project_issues WHERE project_id = $2), 1), $3, $4, $5)
+		 RETURNING id`,
+		orgID,
+		projectID,
+		title,
+		state,
+		origin,
+	).Scan(&id)
+	require.NoError(t, err)
+	return id
+}
+
 func TestSchemaMigrationsUpDown(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db, err := sql.Open("postgres", connStr)
@@ -274,6 +291,44 @@ func TestSchemaCheckConstraints(t *testing.T) {
 		"Bad Priority",
 		"queued",
 		"P9",
+	)
+	requirePQCode(t, err, "23514")
+}
+
+func TestSchemaIssueParticipantAndCommentConstraints(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "issue-schema-org")
+	projectID := insertSchemaProject(t, db, orgID, "Issue Schema Project")
+	ownerAgentID := insertSchemaAgent(t, db, orgID, "issue-owner")
+	collabAgentID := insertSchemaAgent(t, db, orgID, "issue-collab")
+	issueID := insertSchemaIssue(t, db, orgID, projectID, "Schema issue", "open", "local")
+
+	_, err := db.Exec(
+		`INSERT INTO project_issue_participants (org_id, issue_id, agent_id, role)
+		 VALUES ($1, $2, $3, 'owner')`,
+		orgID,
+		issueID,
+		ownerAgentID,
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO project_issue_participants (org_id, issue_id, agent_id, role)
+		 VALUES ($1, $2, $3, 'owner')`,
+		orgID,
+		issueID,
+		collabAgentID,
+	)
+	requirePQCode(t, err, "23505")
+
+	_, err = db.Exec(
+		`INSERT INTO project_issue_comments (org_id, issue_id, author_agent_id, body)
+		 VALUES ($1, $2, $3, '')`,
+		orgID,
+		issueID,
+		ownerAgentID,
 	)
 	requirePQCode(t, err, "23514")
 }
