@@ -263,6 +263,41 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 	return items, nil
 }
 
+func (s *ProjectIssueStore) GetIssueByID(ctx context.Context, issueID string) (*ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	issue, err := scanProjectIssue(conn.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, created_at, updated_at, closed_at
+			FROM project_issues
+			WHERE id = $1`,
+		issueID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to get issue: %w", err)
+	}
+	if issue.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+	return &issue, nil
+}
+
 func (s *ProjectIssueStore) UpsertGitHubLink(
 	ctx context.Context,
 	input UpsertProjectIssueGitHubLinkInput,

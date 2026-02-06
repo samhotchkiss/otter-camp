@@ -77,6 +77,7 @@ func NewRouter() http.Handler {
 	githubPullRequestsHandler := &GitHubPullRequestsHandler{}
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 	projectChatHandler := &ProjectChatHandler{Hub: hub}
+	issuesHandler := &IssuesHandler{}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -89,6 +90,7 @@ func NewRouter() http.Handler {
 		githubPullRequestsHandler.ProjectRepos = store.NewProjectRepoStore(db)
 		githubIntegrationHandler.SyncJobs = githubSyncJobStore
 		projectChatHandler.ChatStore = store.NewProjectChatStore(db)
+		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	projectChatHandler.ProjectStore = projectStore
@@ -129,6 +131,11 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/search", projectChatHandler.SearchContent)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
+		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/issues/{id}", issuesHandler.Get)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/participants", issuesHandler.AddParticipant)
+		r.With(middleware.OptionalWorkspace).Delete("/issues/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/projects/{id}/repo/branches", githubIntegrationHandler.GetProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Put("/projects/{id}/repo/branches", githubIntegrationHandler.UpdateProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/repo/sync", githubIntegrationHandler.ManualRepoSync)
