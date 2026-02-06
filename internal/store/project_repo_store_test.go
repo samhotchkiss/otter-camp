@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -225,6 +226,44 @@ func TestProjectRepoStore_ListBindingsForPollingIncludesEnabledAndDisabled(t *te
 	}
 	require.True(t, byProject[projectA].Enabled)
 	require.False(t, byProject[projectB].Enabled)
+}
+
+func TestProjectRepoStore_SetConflictStateTransitions(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "repo-conflict-state-org")
+	projectID := createTestProject(t, db, orgID, "repo-conflict-state-project")
+
+	store := NewProjectRepoStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	_, err := store.UpsertBinding(ctx, UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      RepoConflictNone,
+	})
+	require.NoError(t, err)
+
+	details := json.RawMessage(`{"branch":"main","local_sha":"abc","remote_sha":"def"}`)
+	needsDecision, err := store.SetConflictState(ctx, projectID, RepoConflictNeedsDecision, details)
+	require.NoError(t, err)
+	require.Equal(t, RepoConflictNeedsDecision, needsDecision.ConflictState)
+	require.JSONEq(t, string(details), string(needsDecision.ConflictDetails))
+
+	resolvedDetails := json.RawMessage(`{"decision":"keep_github","resolved_at":"2026-02-06T12:00:00Z"}`)
+	resolved, err := store.SetConflictState(ctx, projectID, RepoConflictResolved, resolvedDetails)
+	require.NoError(t, err)
+	require.Equal(t, RepoConflictResolved, resolved.ConflictState)
+	require.JSONEq(t, string(resolvedDetails), string(resolved.ConflictDetails))
+
+	cleared, err := store.SetConflictState(ctx, projectID, RepoConflictNone, nil)
+	require.NoError(t, err)
+	require.Equal(t, RepoConflictNone, cleared.ConflictState)
+	require.JSONEq(t, `{}`, string(cleared.ConflictDetails))
 }
 
 func TestProjectRepoStore_IsolationAndValidation(t *testing.T) {

@@ -2,6 +2,7 @@ package githubsync
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,13 +14,20 @@ import (
 )
 
 type fakeRepoCloneStateStore struct {
-	updates []fakeRepoCloneStateUpdate
+	updates         []fakeRepoCloneStateUpdate
+	conflictUpdates []fakeConflictStateUpdate
 }
 
 type fakeRepoCloneStateUpdate struct {
 	ProjectID     string
 	DefaultBranch string
 	LocalRepoPath string
+}
+
+type fakeConflictStateUpdate struct {
+	ProjectID      string
+	ConflictState  string
+	ConflictDetail json.RawMessage
 }
 
 func (f *fakeRepoCloneStateStore) UpdateLocalCloneState(
@@ -37,6 +45,24 @@ func (f *fakeRepoCloneStateStore) UpdateLocalCloneState(
 		ProjectID:     projectID,
 		DefaultBranch: defaultBranch,
 		LocalRepoPath: stringPtr(localRepoPath),
+	}, nil
+}
+
+func (f *fakeRepoCloneStateStore) SetConflictState(
+	_ context.Context,
+	projectID string,
+	conflictState string,
+	conflictDetails json.RawMessage,
+) (*store.ProjectRepoBinding, error) {
+	f.conflictUpdates = append(f.conflictUpdates, fakeConflictStateUpdate{
+		ProjectID:      projectID,
+		ConflictState:  conflictState,
+		ConflictDetail: conflictDetails,
+	})
+	return &store.ProjectRepoBinding{
+		ProjectID:       projectID,
+		ConflictState:   conflictState,
+		ConflictDetails: conflictDetails,
 	}, nil
 }
 
@@ -115,6 +141,56 @@ func TestRepoCloneManagerFetchesUpdatesWithoutReclone(t *testing.T) {
 	require.Equal(t, latestSHA, localSHA)
 }
 
+func TestRepoCloneManagerDetectsNonFastForwardConflictAndPersistsState(t *testing.T) {
+	remote := newTestGitRemote(t)
+	_ = remote.CommitAndPush(t, "README.md", "initial\n", "initial commit")
+
+	stateStore := &fakeRepoCloneStateStore{}
+	manager := NewRepoCloneManager(t.TempDir(), stateStore)
+	projectID := "550e8400-e29b-41d4-a716-446655440000"
+
+	first, err := manager.EnsureLocalClone(context.Background(), EnsureRepoCloneInput{
+		ProjectID:     projectID,
+		Repository:    "file://" + remote.RemotePath,
+		DefaultBranch: "main",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	// Create a local commit that has not been pushed.
+	runGit(t, first.RepoPath, "config", "user.email", "local@example.com")
+	runGit(t, first.RepoPath, "config", "user.name", "Local Tester")
+	require.NoError(t, os.WriteFile(filepath.Join(first.RepoPath, "README.md"), []byte("local\n"), 0o644))
+	runGit(t, first.RepoPath, "add", "README.md")
+	runGit(t, first.RepoPath, "commit", "-m", "local commit")
+
+	// Create a conflicting commit on origin/main so local can no longer fast-forward.
+	_ = remote.CommitAndPush(t, "README.md", "remote\n", "remote commit")
+
+	_, err = manager.EnsureLocalClone(context.Background(), EnsureRepoCloneInput{
+		ProjectID:     projectID,
+		Repository:    "file://" + remote.RemotePath,
+		DefaultBranch: "main",
+	})
+	require.Error(t, err)
+	var conflictErr *SyncConflictError
+	require.ErrorAs(t, err, &conflictErr)
+	require.Equal(t, projectID, conflictErr.ProjectID)
+	require.Equal(t, "main", conflictErr.Branch)
+	require.NotEmpty(t, conflictErr.LocalSHA)
+	require.NotEmpty(t, conflictErr.RemoteSHA)
+
+	require.NotEmpty(t, stateStore.conflictUpdates)
+	lastConflict := stateStore.conflictUpdates[len(stateStore.conflictUpdates)-1]
+	require.Equal(t, projectID, lastConflict.ProjectID)
+	require.Equal(t, store.RepoConflictNeedsDecision, lastConflict.ConflictState)
+	require.JSONEq(
+		t,
+		`{"branch":"main","reason":"non_fast_forward"}`,
+		subsetConflictJSON(lastConflict.ConflictDetail, []string{"branch", "reason"}),
+	)
+}
+
 func TestRepoCloneManagerRejectsInvalidRepositoryMapping(t *testing.T) {
 	manager := NewRepoCloneManager(t.TempDir(), nil)
 
@@ -183,4 +259,15 @@ func runGitOutput(t *testing.T, dir string, args ...string) string {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func subsetConflictJSON(raw json.RawMessage, keys []string) string {
+	var payload map[string]any
+	_ = json.Unmarshal(raw, &payload)
+	subset := map[string]any{}
+	for _, key := range keys {
+		subset[key] = payload[key]
+	}
+	out, _ := json.Marshal(subset)
+	return string(out)
 }

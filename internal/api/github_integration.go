@@ -130,11 +130,13 @@ type githubConnectCallbackResponse struct {
 }
 
 type githubProjectBranchesResponse struct {
-	ProjectID      string                          `json:"project_id"`
-	DefaultBranch  string                          `json:"default_branch"`
-	LastSyncedSHA  *string                         `json:"last_synced_sha,omitempty"`
-	LastSyncedAt   *time.Time                      `json:"last_synced_at,omitempty"`
-	ActiveBranches []store.ProjectRepoActiveBranch `json:"active_branches"`
+	ProjectID       string                          `json:"project_id"`
+	DefaultBranch   string                          `json:"default_branch"`
+	LastSyncedSHA   *string                         `json:"last_synced_sha,omitempty"`
+	LastSyncedAt    *time.Time                      `json:"last_synced_at,omitempty"`
+	ConflictState   string                          `json:"conflict_state"`
+	ConflictDetails json.RawMessage                 `json:"conflict_details"`
+	ActiveBranches  []store.ProjectRepoActiveBranch `json:"active_branches"`
 }
 
 type githubManualSyncResponse struct {
@@ -760,11 +762,13 @@ func (h *GitHubIntegrationHandler) GetProjectBranches(w http.ResponseWriter, r *
 	}
 
 	sendJSON(w, http.StatusOK, githubProjectBranchesResponse{
-		ProjectID:      projectID,
-		DefaultBranch:  binding.DefaultBranch,
-		LastSyncedSHA:  binding.LastSyncedSHA,
-		LastSyncedAt:   binding.LastSyncedAt,
-		ActiveBranches: activeBranches,
+		ProjectID:       projectID,
+		DefaultBranch:   binding.DefaultBranch,
+		LastSyncedSHA:   binding.LastSyncedSHA,
+		LastSyncedAt:    binding.LastSyncedAt,
+		ConflictState:   binding.ConflictState,
+		ConflictDetails: binding.ConflictDetails,
+		ActiveBranches:  activeBranches,
 	})
 }
 

@@ -107,6 +107,15 @@ func TestGitHubIntegrationSettingsBranchesAndManualSync(t *testing.T) {
 	handler.UpdateSettings(updateRec, updateReq)
 	require.Equal(t, http.StatusOK, updateRec.Code)
 
+	workspaceCtx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err = handler.ProjectRepos.SetConflictState(
+		workspaceCtx,
+		projectID,
+		store.RepoConflictNeedsDecision,
+		json.RawMessage(`{"branch":"main","local_sha":"sha-local","remote_sha":"sha-remote"}`),
+	)
+	require.NoError(t, err)
+
 	branchesReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/repo/branches", nil)
 	branchesReq = addRouteParam(branchesReq, "id", projectID)
 	branchesReq = withWorkspaceContext(branchesReq, orgID)
@@ -117,6 +126,8 @@ func TestGitHubIntegrationSettingsBranchesAndManualSync(t *testing.T) {
 	var branchesResp githubProjectBranchesResponse
 	require.NoError(t, json.NewDecoder(branchesRec.Body).Decode(&branchesResp))
 	require.Equal(t, "main", branchesResp.DefaultBranch)
+	require.Equal(t, store.RepoConflictNeedsDecision, branchesResp.ConflictState)
+	require.JSONEq(t, `{"branch":"main","local_sha":"sha-local","remote_sha":"sha-remote"}`, string(branchesResp.ConflictDetails))
 	require.Len(t, branchesResp.ActiveBranches, 2)
 
 	syncReq := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/repo/sync", nil)
