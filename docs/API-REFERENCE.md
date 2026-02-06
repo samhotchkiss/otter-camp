@@ -663,6 +663,28 @@ function verifyWebhook(payload, signature, timestamp, secret) {
 
 ---
 
+## GitHub Sync Ops (MVP)
+
+### GET /api/github/sync/health
+
+Returns sync queue diagnostics and live sync metrics.
+
+Query params:
+- `stuck_threshold` (optional duration, default `15m`)
+
+### GET /api/github/sync/dead-letters
+
+Lists dead-lettered sync/import/webhook jobs.
+
+Query params:
+- `limit` (optional, default `50`)
+
+### POST /api/github/sync/dead-letters/{id}/replay
+
+Re-enqueues a dead-lettered job for retry.
+
+---
+
 ## Errors
 
 ### Error Response Format
