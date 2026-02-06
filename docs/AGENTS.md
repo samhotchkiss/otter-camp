@@ -12,6 +12,47 @@ This document is the **source of truth** for how agents interact with OtterCamp.
 2. **Commit early and often.** Each meaningful change should be committed with a clear message.
 3. **Push when done.** Push commits so OtterCamp can ingest them into the activity stream.
 
+## Create a Project + Configure the Git Remote
+Use the `otter` CLI to create/clone the project so the **remote is set correctly**.
+
+### Option A — Create + clone (recommended)
+```bash
+# Create a new OtterCamp project
+otter project create "Project Name"
+
+# Clone it locally (this sets the correct remote automatically)
+otter clone <project-name>
+
+# Work in the repo
+cd ~/Documents/OtterCamp/<project-name>
+```
+
+### Option B — Project already exists
+```bash
+# Clone existing project (remote set automatically)
+otter clone <project-name>
+cd ~/Documents/OtterCamp/<project-name>
+```
+
+### Option C — Repo exists locally, add the remote
+If you already have a local repo, add the OtterCamp remote:
+```bash
+otter remote add <project-name>
+```
+
+If you need the raw remote URL:
+```bash
+otter repo info <project-name>
+# then: git remote add origin <url>
+```
+
+### Push workflow
+```bash
+git add -A
+git commit -m "your message"
+git push
+```
+
 ## Commit Message Format (Required)
 Commit messages must include:
 
