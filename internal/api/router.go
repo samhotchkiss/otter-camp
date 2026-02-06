@@ -241,7 +241,7 @@ func NewRouter() http.Handler {
 		r.Post("/import/validate", HandleImportValidate)
 
 		// Admin endpoints
-		r.Post("/admin/init-repos", HandleAdminInitRepos(db))
+		r.With(middleware.OptionalWorkspace).Post("/admin/init-repos", HandleAdminInitRepos(db))
 	})
 
 	// WebSocket handlers
