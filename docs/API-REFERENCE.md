@@ -683,6 +683,69 @@ Query params:
 
 Re-enqueues a dead-lettered job for retry.
 
+### Pearl Workflow Endpoints
+
+#### POST /api/projects/{id}/repo/sync
+
+Queues a manual repository sync job for the project.
+
+Response highlights:
+- `job_id`
+- `status`
+- `repository_full_name`
+- `last_synced_sha`
+- `conflict_state`
+
+#### POST /api/github/webhook
+
+Processes GitHub webhook deliveries (`push`, `issues`, `pull_request`, `issue_comment`), with signature verification and dedupe.
+
+Push webhook response highlights:
+- `repo_sync_queued`
+- `commits_ingested`
+- `webhook_job_id`
+
+#### POST /api/projects/{id}/issues/import
+
+Queues manual GitHub issue import for a mapped repository.
+
+Response highlights:
+- `job.id`
+- `job.type` (`issue_import`)
+- `job.status`
+
+#### GET /api/projects/{id}/issues/status
+
+Returns issue sync state and metadata:
+- issue counts
+- last import job status
+- sync checkpoints
+- last sync error (if present)
+
+#### GET /api/projects/{id}/commits
+
+Lists project commits (including commits ingested from push webhooks and browser commits).
+
+#### GET /api/projects/{id}/commits/{sha}
+
+Returns commit metadata (subject/body/author/timestamps).
+
+#### GET /api/projects/{id}/commits/{sha}/diff
+
+Returns normalized file-diff payload from stored commit metadata.
+
+#### POST /api/projects/{id}/publish
+
+Performs publish preflight and optional push.
+- `{"dry_run": true}` for preflight-only
+- `{"dry_run": false}` to publish and run linked issue closure workflow
+
+#### POST /api/projects/{id}/repo/conflicts/resolve
+
+Resolves sync conflict state:
+- `{"action":"keep_github"}`
+- `{"action":"keep_ottercamp"}`
+
 ---
 
 ## Errors

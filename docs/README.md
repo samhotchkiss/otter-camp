@@ -35,6 +35,7 @@ Unlike GitHub (designed for human teams) or Linear (designed for human velocity)
 | [SECURITY.md](SECURITY.md) | Security model and practices |
 | [ROADMAP.md](ROADMAP.md) | Development phases and milestones |
 | [EDITOR-CAPABILITY-MATRIX.md](EDITOR-CAPABILITY-MATRIX.md) | MVP file-type editor behavior contract |
+| [PEARL-IMPLEMENTATION.md](PEARL-IMPLEMENTATION.md) | Implemented Pearl workflow, E2E coverage, and runbooks |
 
 ---
 
