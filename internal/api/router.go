@@ -78,6 +78,7 @@ func NewRouter() http.Handler {
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 	projectChatHandler := &ProjectChatHandler{Hub: hub}
 	issuesHandler := &IssuesHandler{Hub: hub}
+	projectCommitsHandler := &ProjectCommitsHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
 
@@ -97,6 +98,8 @@ func NewRouter() http.Handler {
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
 		issuesHandler.ProjectStore = projectStore
 		issuesHandler.DB = db
+		projectCommitsHandler.ProjectStore = projectStore
+		projectCommitsHandler.CommitStore = store.NewProjectCommitStore(db)
 		websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{
 			IssueStore: issuesHandler.IssueStore,
 		}
@@ -145,6 +148,9 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/delete", projectChatHandler.DeleteContent)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/metadata", projectChatHandler.GetContentMetadata)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/search", projectChatHandler.SearchContent)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits", projectCommitsHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}", projectCommitsHandler.Get)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}/diff", projectCommitsHandler.Diff)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)

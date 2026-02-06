@@ -161,10 +161,13 @@ type githubWebhookPayload struct {
 }
 
 type githubWebhookCommitPayload struct {
-	ID        string `json:"id"`
-	Message   string `json:"message"`
-	Timestamp string `json:"timestamp"`
-	URL       string `json:"url"`
+	ID        string   `json:"id"`
+	Message   string   `json:"message"`
+	Timestamp string   `json:"timestamp"`
+	URL       string   `json:"url"`
+	Added     []string `json:"added"`
+	Removed   []string `json:"removed"`
+	Modified  []string `json:"modified"`
 	Author    struct {
 		Name     string `json:"name"`
 		Email    string `json:"email"`
@@ -1173,9 +1176,12 @@ func (h *GitHubIntegrationHandler) ingestPushCommits(
 		}
 
 		metadata, err := json.Marshal(map[string]any{
-			"url":    strings.TrimSpace(item.URL),
-			"before": strings.TrimSpace(payload.Before),
-			"after":  strings.TrimSpace(payload.After),
+			"url":      strings.TrimSpace(item.URL),
+			"before":   strings.TrimSpace(payload.Before),
+			"after":    strings.TrimSpace(payload.After),
+			"added":    item.Added,
+			"removed":  item.Removed,
+			"modified": item.Modified,
 		})
 		if err != nil {
 			return 0, err
