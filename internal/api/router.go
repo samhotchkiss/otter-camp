@@ -79,6 +79,7 @@ func NewRouter() http.Handler {
 	projectChatHandler := &ProjectChatHandler{Hub: hub}
 	issuesHandler := &IssuesHandler{Hub: hub}
 	projectCommitsHandler := &ProjectCommitsHandler{}
+	knowledgeHandler := &KnowledgeHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
 
@@ -111,6 +112,7 @@ func NewRouter() http.Handler {
 		projectIssueSyncHandler.Installations = githubIntegrationHandler.Installations
 		projectIssueSyncHandler.SyncJobs = githubSyncJobStore
 		projectIssueSyncHandler.IssueStore = issuesHandler.IssueStore
+		knowledgeHandler.Store = store.NewKnowledgeEntryStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	projectChatHandler.ProjectStore = projectStore
@@ -155,6 +157,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits", projectCommitsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}", projectCommitsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}/diff", projectCommitsHandler.Diff)
+		r.With(middleware.OptionalWorkspace).Get("/knowledge", knowledgeHandler.List)
+		r.With(middleware.OptionalWorkspace).Post("/knowledge/import", knowledgeHandler.Import)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)

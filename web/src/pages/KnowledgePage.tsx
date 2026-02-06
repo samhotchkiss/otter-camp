@@ -3,13 +3,13 @@
  * Design spec: Jeff G
  * 
  * Features:
- * - Searchable entry list
  * - Tag filtering
  * - Card grid layout
  * - Entry detail modal
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { apiFetch } from '../lib/api';
 
 interface KnowledgeEntry {
   id: string;
@@ -21,63 +21,10 @@ interface KnowledgeEntry {
   updated_at: string;
 }
 
-// Demo entries for MVP
-const DEMO_ENTRIES: KnowledgeEntry[] = [
-  {
-    id: 'kb-001',
-    title: "Sam's email preferences",
-    content: "- Respond same-day to investors\n- Archive newsletters automatically\n- Flag anything from family\n- VIP list: investors, advisors, close friends",
-    tags: ['preferences', 'email', 'penny'],
-    created_by: 'Penny',
-    created_at: '2026-02-02T10:00:00Z',
-    updated_at: '2026-02-02T10:00:00Z',
-  },
-  {
-    id: 'kb-002',
-    title: 'Meeting scheduling rules',
-    content: "- No meetings before 10am\n- Batch meetings on Tuesdays and Thursdays\n- Always leave 15min buffer between calls\n- Lunch is sacred: 12-1pm blocked",
-    tags: ['preferences', 'calendar', 'max'],
-    created_by: 'Max',
-    created_at: '2026-02-01T14:00:00Z',
-    updated_at: '2026-02-01T14:00:00Z',
-  },
-  {
-    id: 'kb-003',
-    title: 'ItsAlive deployment process',
-    content: "1. Run tests locally\n2. Push to staging branch\n3. Wait for CI green\n4. Get Ivy's approval\n5. Merge to main\n6. Monitor for 30 minutes",
-    tags: ['process', 'itsalive', 'deployment'],
-    created_by: 'Derek',
-    created_at: '2026-01-28T09:00:00Z',
-    updated_at: '2026-02-03T16:00:00Z',
-  },
-  {
-    id: 'kb-004',
-    title: 'Content voice guidelines',
-    content: "- First person, conversational\n- No jargon unless necessary\n- Short paragraphs (3-4 sentences max)\n- Always include a takeaway\n- Humor is welcome but not forced",
-    tags: ['content', 'writing', 'stone'],
-    created_by: 'Stone',
-    created_at: '2026-01-25T11:00:00Z',
-    updated_at: '2026-01-25T11:00:00Z',
-  },
-  {
-    id: 'kb-005',
-    title: 'Social media posting times',
-    content: "**Twitter/X:**\n- Best: 9am, 12pm, 5pm MST\n- Avoid weekends\n\n**LinkedIn:**\n- Best: Tuesday-Thursday, 8-10am\n- Long-form on Wednesdays",
-    tags: ['social', 'nova', 'schedule'],
-    created_by: 'Nova',
-    created_at: '2026-01-20T08:00:00Z',
-    updated_at: '2026-02-01T08:00:00Z',
-  },
-  {
-    id: 'kb-006',
-    title: 'Market alert thresholds',
-    content: "- Portfolio swing > 2%: alert immediately\n- Watchlist item moves > 5%: notify\n- Major index drops > 3%: full briefing\n- Crypto volatility: only BTC/ETH, >10% moves",
-    tags: ['markets', 'alerts', 'beau'],
-    created_by: 'Beau H',
-    created_at: '2026-01-15T07:00:00Z',
-    updated_at: '2026-01-30T07:00:00Z',
-  },
-];
+interface KnowledgeListResponse {
+  items: KnowledgeEntry[];
+  total: number;
+}
 
 function timeAgo(dateString: string): string {
   const date = new Date(dateString);
@@ -92,9 +39,37 @@ function timeAgo(dateString: string): string {
 }
 
 export default function KnowledgePage() {
-  const [entries] = useState<KnowledgeEntry[]>(DEMO_ENTRIES);
+  const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<KnowledgeEntry | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setLoadError(null);
+
+    void apiFetch<KnowledgeListResponse>('/api/knowledge')
+      .then((payload) => {
+        if (!active) return;
+        setEntries(payload.items ?? []);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const message = error instanceof Error ? error.message : 'Failed to load knowledge entries';
+        setLoadError(message);
+        setEntries([]);
+      })
+      .finally(() => {
+        if (!active) return;
+        setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Get all unique tags
   const allTags = Array.from(
@@ -140,6 +115,17 @@ export default function KnowledgePage() {
 
       {/* Entry Grid */}
       <div className="knowledge-grid">
+        {loading && (
+          <div className="knowledge-empty">
+            <p>Loading knowledge entries…</p>
+          </div>
+        )}
+        {!loading && loadError && (
+          <div className="knowledge-empty">
+            <p>Unable to load knowledge entries</p>
+            <p className="empty-hint">{loadError}</p>
+          </div>
+        )}
         {filteredEntries.map((entry) => (
           <article
             key={entry.id}
@@ -166,7 +152,7 @@ export default function KnowledgePage() {
       </div>
 
       {/* Empty State */}
-      {filteredEntries.length === 0 && (
+      {!loading && !loadError && filteredEntries.length === 0 && (
         <div className="knowledge-empty">
           <span className="empty-icon">📚</span>
           <p>No entries found</p>
