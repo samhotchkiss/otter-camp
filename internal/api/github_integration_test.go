@@ -135,6 +135,46 @@ func TestGitHubIntegrationSettingsBranchesAndManualSync(t *testing.T) {
 	require.Equal(t, 1, countSyncJobs(t, db, orgID, store.GitHubSyncJobTypeRepoSync))
 }
 
+func TestGitHubIntegrationListSettingsIncludesWorkflowModePolicy(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-settings-mode-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Writing Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := handler.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModePush,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNone,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/github/integration/settings", nil)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.ListSettings(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload githubSettingsListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.NotEmpty(t, payload.Projects)
+
+	var found *githubProjectSettingView
+	for i := range payload.Projects {
+		if payload.Projects[i].ProjectID == projectID {
+			found = &payload.Projects[i]
+			break
+		}
+	}
+	require.NotNil(t, found)
+	require.Equal(t, reviewWorkflowModeLocalIssuePR, found.WorkflowMode)
+	require.False(t, found.GitHubPREnabled)
+}
+
 func TestGitHubWebhookEnqueueAndReplayProtection(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "github-webhook-org")

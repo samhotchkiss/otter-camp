@@ -81,4 +81,60 @@ describe("GitHubSettings", () => {
     expect(screen.getAllByText("the-trawl/otter-camp").length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+
+  it("shows local issue-review mode label for push-mode projects", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/github/integration/status")) {
+        return new Response(JSON.stringify({ connected: true, installation: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/github/integration/repos")) {
+        return new Response(JSON.stringify({ repos: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/github/integration/settings")) {
+        return new Response(
+          JSON.stringify({
+            projects: [
+              {
+                project_id: "proj-1",
+                project_name: "Technonymous",
+                description: "Writing workflow",
+                enabled: true,
+                repo_full_name: "samhotchkiss/otter-camp",
+                default_branch: "main",
+                sync_mode: "push",
+                workflow_mode: "local_issue_review",
+                github_pr_enabled: false,
+                auto_sync: true,
+                active_branches: ["main"],
+                conflict_state: "none",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      return new Response(JSON.stringify({ error: "unexpected endpoint" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<GitHubSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Technonymous")).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByText(/Issue Review \(local only\)/).length).toBeGreaterThan(0);
+  });
 });

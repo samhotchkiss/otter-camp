@@ -21,6 +21,7 @@ type Project = {
 };
 
 type SyncMode = "push" | "sync";
+type WorkflowMode = "github_pr_sync" | "local_issue_review";
 
 type ProjectSyncSettings = {
   enabled: boolean;
@@ -29,6 +30,8 @@ type ProjectSyncSettings = {
   mode: SyncMode;
   autoSync: boolean;
   activeBranches: string[];
+  workflowMode: WorkflowMode;
+  githubPREnabled: boolean;
 };
 
 type SyncState = "idle" | "syncing" | "error";
@@ -71,6 +74,8 @@ type SettingsListPayload = {
     active_branches?: string[];
     last_synced_at?: string | null;
     conflict_state?: string;
+    workflow_mode?: WorkflowMode;
+    github_pr_enabled?: boolean;
   }>;
 };
 
@@ -83,6 +88,8 @@ const DEFAULT_PROJECT_SETTINGS: ProjectSyncSettings = {
   mode: "sync",
   autoSync: true,
   activeBranches: [],
+  workflowMode: "github_pr_sync",
+  githubPREnabled: true,
 };
 
 function formatDateTime(iso: string): string {
@@ -355,6 +362,8 @@ export default function GitHubSettings() {
           mode: row.sync_mode || "sync",
           autoSync: row.auto_sync,
           activeBranches: row.active_branches || [],
+          workflowMode: row.workflow_mode || "github_pr_sync",
+          githubPREnabled: typeof row.github_pr_enabled === "boolean" ? row.github_pr_enabled : true,
         };
 
         const conflict = row.conflict_state || "none";
@@ -697,6 +706,10 @@ export default function GitHubSettings() {
                 const settings = projectSettings[project.id] ?? DEFAULT_PROJECT_SETTINGS;
                 const status = projectStatus[project.id];
                 const lastSyncAt = status?.lastSyncAt ?? null;
+                const modeLabel =
+                  settings.workflowMode === "local_issue_review"
+                    ? "Issue Review (local only)"
+                    : "GitHub PR Sync";
 
                 const badge = (() => {
                   if (!connection) return <StatusBadge tone="neutral" label="Disconnected" />;
@@ -720,6 +733,7 @@ export default function GitHubSettings() {
                           ) : (
                             "No repository linked"
                           )}
+                          {settings.repoFullName ? <> • {modeLabel}</> : null}
                           {lastSyncAt ? <> • Last sync {formatDateTime(lastSyncAt)}</> : null}
                         </p>
                       </div>
@@ -777,12 +791,24 @@ export default function GitHubSettings() {
                         <Select
                           label="Mode"
                           value={settings.mode}
-                          onChange={(value) => updateProjectSettings(project.id, { mode: value as SyncMode })}
+                          onChange={(value) => {
+                            const mode = value as SyncMode;
+                            updateProjectSettings(project.id, {
+                              mode,
+                              workflowMode:
+                                mode === "push" ? "local_issue_review" : "github_pr_sync",
+                              githubPREnabled: mode !== "push",
+                            });
+                          }}
                           disabled={!connection || !settings.enabled}
-                          helperText="Sync keeps bi-directional parity. Push is OtterCamp -> GitHub."
+                          helperText={
+                            settings.mode === "push"
+                              ? "Local issue-review mode: GitHub PR creation is disabled."
+                              : "GitHub PR sync mode: PR operations remain enabled."
+                          }
                         >
-                          <option value="sync">Sync (bi-directional)</option>
-                          <option value="push">Push (OtterCamp to GitHub)</option>
+                          <option value="sync">GitHub PR Sync</option>
+                          <option value="push">Issue Review (local only)</option>
                         </Select>
 
                         <Toggle

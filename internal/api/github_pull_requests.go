@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -32,8 +33,10 @@ type githubPullRequestListItem struct {
 }
 
 type githubPullRequestListResponse struct {
-	Items []githubPullRequestListItem `json:"items"`
-	Total int                         `json:"total"`
+	Items           []githubPullRequestListItem `json:"items"`
+	Total           int                         `json:"total"`
+	Mode            string                      `json:"mode"`
+	GitHubPREnabled bool                        `json:"github_pr_enabled"`
 }
 
 func (h *GitHubPullRequestsHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +48,21 @@ func (h *GitHubPullRequestsHandler) ListByProject(w http.ResponseWriter, r *http
 	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
 	if projectID == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+
+	mode, err := h.resolveProjectReviewMode(r.Context(), projectID)
+	if err != nil {
+		handlePullRequestStoreError(w, err)
+		return
+	}
+	if !mode.GitHubPREnabled {
+		sendJSON(w, http.StatusOK, githubPullRequestListResponse{
+			Items:           []githubPullRequestListItem{},
+			Total:           0,
+			Mode:            mode.Mode,
+			GitHubPREnabled: false,
+		})
 		return
 	}
 
@@ -69,18 +87,6 @@ func (h *GitHubPullRequestsHandler) ListByProject(w http.ResponseWriter, r *http
 		return
 	}
 
-	if h.ProjectRepos != nil {
-		binding, err := h.ProjectRepos.GetBinding(r.Context(), projectID)
-		switch {
-		case err == nil && binding.SyncMode == store.RepoSyncModePush:
-			sendJSON(w, http.StatusOK, githubPullRequestListResponse{Items: []githubPullRequestListItem{}, Total: 0})
-			return
-		case err != nil && !errors.Is(err, store.ErrNotFound):
-			handlePullRequestStoreError(w, err)
-			return
-		}
-	}
-
 	items := make([]githubPullRequestListItem, 0, len(records))
 	for _, record := range records {
 		items = append(items, githubPullRequestListItem{
@@ -100,7 +106,58 @@ func (h *GitHubPullRequestsHandler) ListByProject(w http.ResponseWriter, r *http
 		})
 	}
 
-	sendJSON(w, http.StatusOK, githubPullRequestListResponse{Items: items, Total: len(items)})
+	sendJSON(w, http.StatusOK, githubPullRequestListResponse{
+		Items:           items,
+		Total:           len(items),
+		Mode:            mode.Mode,
+		GitHubPREnabled: true,
+	})
+}
+
+func (h *GitHubPullRequestsHandler) CreateForProject(w http.ResponseWriter, r *http.Request) {
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+
+	mode, err := h.resolveProjectReviewMode(r.Context(), projectID)
+	if err != nil {
+		handlePullRequestStoreError(w, err)
+		return
+	}
+
+	if !mode.GitHubPREnabled {
+		sendJSON(w, http.StatusConflict, map[string]any{
+			"error":             "github PR creation is disabled for local issue-review mode",
+			"mode":              mode.Mode,
+			"github_pr_enabled": false,
+		})
+		return
+	}
+
+	sendJSON(w, http.StatusNotImplemented, map[string]any{
+		"error":             "github PR creation endpoint is not implemented yet",
+		"mode":              mode.Mode,
+		"github_pr_enabled": true,
+	})
+}
+
+func (h *GitHubPullRequestsHandler) resolveProjectReviewMode(ctx context.Context, projectID string) (reviewModeDecision, error) {
+	defaultMode := resolveReviewMode(store.RepoSyncModeSync)
+	if h.ProjectRepos == nil {
+		return defaultMode, nil
+	}
+
+	binding, err := h.ProjectRepos.GetBinding(ctx, projectID)
+	switch {
+	case err == nil:
+		return resolveReviewMode(binding.SyncMode), nil
+	case errors.Is(err, store.ErrNotFound):
+		return defaultMode, nil
+	default:
+		return reviewModeDecision{}, err
+	}
 }
 
 func handlePullRequestStoreError(w http.ResponseWriter, err error) {

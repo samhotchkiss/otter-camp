@@ -15,6 +15,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newPullRequestTestRouter(handler *GitHubPullRequestsHandler) http.Handler {
+	router := chi.NewRouter()
+	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/pull-requests", handler.ListByProject)
+	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/pull-requests", handler.CreateForProject)
+	return router
+}
+
 func seedPullRequestTestData(t *testing.T, db *sql.DB, orgID string) string {
 	t.Helper()
 	projectID := insertProjectTestProject(t, db, orgID, "PR API Project")
@@ -85,8 +92,7 @@ func TestGitHubPullRequestsListByProjectIncludesPRSpecificBadge(t *testing.T) {
 	projectID := seedPullRequestTestData(t, db, orgID)
 
 	handler := &GitHubPullRequestsHandler{Store: store.NewGitHubIssuePRStore(db)}
-	router := chi.NewRouter()
-	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/pull-requests", handler.ListByProject)
+	router := newPullRequestTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/pull-requests?org_id="+orgID, nil)
 	rec := httptest.NewRecorder()
@@ -96,6 +102,8 @@ func TestGitHubPullRequestsListByProjectIncludesPRSpecificBadge(t *testing.T) {
 	var resp githubPullRequestListResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, 3, resp.Total)
+	require.Equal(t, reviewWorkflowModeGitHubPR, resp.Mode)
+	require.True(t, resp.GitHubPREnabled)
 
 	byNumber := map[int64]githubPullRequestListItem{}
 	for _, item := range resp.Items {
@@ -114,8 +122,7 @@ func TestGitHubPullRequestsListByProjectFiltersByState(t *testing.T) {
 	projectID := seedPullRequestTestData(t, db, orgID)
 
 	handler := &GitHubPullRequestsHandler{Store: store.NewGitHubIssuePRStore(db)}
-	router := chi.NewRouter()
-	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/pull-requests", handler.ListByProject)
+	router := newPullRequestTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/pull-requests?org_id="+orgID+"&state=closed", nil)
 	rec := httptest.NewRecorder()
@@ -135,8 +142,7 @@ func TestGitHubPullRequestsListByProjectRequiresWorkspace(t *testing.T) {
 	projectID := seedPullRequestTestData(t, db, orgID)
 
 	handler := &GitHubPullRequestsHandler{Store: store.NewGitHubIssuePRStore(db)}
-	router := chi.NewRouter()
-	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/pull-requests", handler.ListByProject)
+	router := newPullRequestTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/pull-requests", nil)
 	rec := httptest.NewRecorder()
@@ -166,8 +172,7 @@ func TestGitHubPullRequestsListByProjectReturnsEmptyForLocalIssueAsPRMode(t *tes
 		Store:        store.NewGitHubIssuePRStore(db),
 		ProjectRepos: repoStore,
 	}
-	router := chi.NewRouter()
-	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/pull-requests", handler.ListByProject)
+	router := newPullRequestTestRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/pull-requests?org_id="+orgID, nil)
 	rec := httptest.NewRecorder()
@@ -178,6 +183,76 @@ func TestGitHubPullRequestsListByProjectReturnsEmptyForLocalIssueAsPRMode(t *tes
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, 0, resp.Total)
 	require.Empty(t, resp.Items)
+	require.Equal(t, reviewWorkflowModeLocalIssuePR, resp.Mode)
+	require.False(t, resp.GitHubPREnabled)
+}
+
+func TestGitHubPullRequestsCreateForProjectBlocksLocalIssueReviewMode(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "pr-api-create-local-org")
+	projectID := seedPullRequestTestData(t, db, orgID)
+
+	repoStore := store.NewProjectRepoStore(db)
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := repoStore.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModePush,
+		AutoSync:           true,
+	})
+	require.NoError(t, err)
+
+	handler := &GitHubPullRequestsHandler{
+		Store:        store.NewGitHubIssuePRStore(db),
+		ProjectRepos: repoStore,
+	}
+	router := newPullRequestTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/pull-requests?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	var payload map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, reviewWorkflowModeLocalIssuePR, payload["mode"])
+	require.Equal(t, false, payload["github_pr_enabled"])
+}
+
+func TestGitHubPullRequestsCreateForProjectAllowsNonLocalModes(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "pr-api-create-sync-org")
+	projectID := seedPullRequestTestData(t, db, orgID)
+
+	repoStore := store.NewProjectRepoStore(db)
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := repoStore.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+	})
+	require.NoError(t, err)
+
+	handler := &GitHubPullRequestsHandler{
+		Store:        store.NewGitHubIssuePRStore(db),
+		ProjectRepos: repoStore,
+	}
+	router := newPullRequestTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/pull-requests?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusNotImplemented, rec.Code)
+	var payload map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, reviewWorkflowModeGitHubPR, payload["mode"])
+	require.Equal(t, true, payload["github_pr_enabled"])
 }
 
 func stringPtr(value string) *string {

@@ -33,10 +33,10 @@ const (
 )
 
 var allowedGitHubEvents = map[string]struct{}{
-	"push":         {},
-	"issues":       {},
+	"push":          {},
+	"issues":        {},
 	"issue_comment": {},
-	"pull_request": {},
+	"pull_request":  {},
 }
 
 type GitHubIntegrationHandler struct {
@@ -75,26 +75,28 @@ type githubRepoOption struct {
 }
 
 type githubIntegrationStatusResponse struct {
-	Connected        bool                       `json:"connected"`
-	Installation     *store.GitHubInstallation  `json:"installation,omitempty"`
-	ConfiguredRepos  int                        `json:"configured_repos"`
-	ConfiguredCount  int                        `json:"configured_projects"`
-	LastConnectedAt  *time.Time                 `json:"last_connected_at,omitempty"`
+	Connected       bool                      `json:"connected"`
+	Installation    *store.GitHubInstallation `json:"installation,omitempty"`
+	ConfiguredRepos int                       `json:"configured_repos"`
+	ConfiguredCount int                       `json:"configured_projects"`
+	LastConnectedAt *time.Time                `json:"last_connected_at,omitempty"`
 }
 
 type githubProjectSettingView struct {
-	ProjectID        string     `json:"project_id"`
-	ProjectName      string     `json:"project_name"`
-	Description      *string    `json:"description,omitempty"`
-	Enabled          bool       `json:"enabled"`
-	RepoFullName     *string    `json:"repo_full_name,omitempty"`
-	DefaultBranch    string     `json:"default_branch"`
-	SyncMode         string     `json:"sync_mode"`
-	AutoSync         bool       `json:"auto_sync"`
-	ActiveBranches   []string   `json:"active_branches"`
-	LastSyncedSHA    *string    `json:"last_synced_sha,omitempty"`
-	LastSyncedAt     *time.Time `json:"last_synced_at,omitempty"`
-	ConflictState    string     `json:"conflict_state"`
+	ProjectID       string     `json:"project_id"`
+	ProjectName     string     `json:"project_name"`
+	Description     *string    `json:"description,omitempty"`
+	Enabled         bool       `json:"enabled"`
+	RepoFullName    *string    `json:"repo_full_name,omitempty"`
+	DefaultBranch   string     `json:"default_branch"`
+	SyncMode        string     `json:"sync_mode"`
+	AutoSync        bool       `json:"auto_sync"`
+	ActiveBranches  []string   `json:"active_branches"`
+	LastSyncedSHA   *string    `json:"last_synced_sha,omitempty"`
+	LastSyncedAt    *time.Time `json:"last_synced_at,omitempty"`
+	ConflictState   string     `json:"conflict_state"`
+	WorkflowMode    string     `json:"workflow_mode"`
+	GitHubPREnabled bool       `json:"github_pr_enabled"`
 }
 
 type githubSettingsListResponse struct {
@@ -126,27 +128,27 @@ type githubConnectCallbackResponse struct {
 }
 
 type githubProjectBranchesResponse struct {
-	ProjectID      string                             `json:"project_id"`
-	DefaultBranch  string                             `json:"default_branch"`
-	LastSyncedSHA  *string                            `json:"last_synced_sha,omitempty"`
-	LastSyncedAt   *time.Time                         `json:"last_synced_at,omitempty"`
-	ActiveBranches []store.ProjectRepoActiveBranch    `json:"active_branches"`
+	ProjectID      string                          `json:"project_id"`
+	DefaultBranch  string                          `json:"default_branch"`
+	LastSyncedSHA  *string                         `json:"last_synced_sha,omitempty"`
+	LastSyncedAt   *time.Time                      `json:"last_synced_at,omitempty"`
+	ActiveBranches []store.ProjectRepoActiveBranch `json:"active_branches"`
 }
 
 type githubManualSyncResponse struct {
-	JobID             string     `json:"job_id"`
-	Status            string     `json:"status"`
-	ProjectID         string     `json:"project_id"`
-	RepositoryFullName string    `json:"repository_full_name"`
-	LastSyncedSHA     *string    `json:"last_synced_sha,omitempty"`
-	LastSyncedAt      *time.Time `json:"last_synced_at,omitempty"`
-	ConflictState     string     `json:"conflict_state"`
+	JobID              string     `json:"job_id"`
+	Status             string     `json:"status"`
+	ProjectID          string     `json:"project_id"`
+	RepositoryFullName string     `json:"repository_full_name"`
+	LastSyncedSHA      *string    `json:"last_synced_sha,omitempty"`
+	LastSyncedAt       *time.Time `json:"last_synced_at,omitempty"`
+	ConflictState      string     `json:"conflict_state"`
 }
 
 type githubWebhookPayload struct {
-	Ref string `json:"ref"`
-	Before string `json:"before"`
-	After string `json:"after"`
+	Ref        string `json:"ref"`
+	Before     string `json:"before"`
+	After      string `json:"after"`
 	Repository struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
@@ -565,6 +567,9 @@ func (h *GitHubIntegrationHandler) ListSettings(w http.ResponseWriter, r *http.R
 			repoName := strings.TrimSpace(repo.String)
 			item.RepoFullName = &repoName
 		}
+		mode := resolveReviewMode(item.SyncMode)
+		item.WorkflowMode = mode.Mode
+		item.GitHubPREnabled = mode.GitHubPREnabled
 		item.ActiveBranches = branchesByProject[item.ProjectID]
 		projects = append(projects, item)
 	}
@@ -852,9 +857,9 @@ func (h *GitHubIntegrationHandler) ManualRepoSync(w http.ResponseWriter, r *http
 	}
 
 	_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.repo_sync_requested", map[string]any{
-		"job_id":              job.ID,
+		"job_id":               job.ID,
 		"repository_full_name": binding.RepositoryFullName,
-		"branches":            branches,
+		"branches":             branches,
 	})
 
 	sendJSON(w, http.StatusAccepted, githubManualSyncResponse{
@@ -967,8 +972,8 @@ func (h *GitHubIntegrationHandler) GitHubWebhook(w http.ResponseWriter, r *http.
 	}
 
 	repoSyncQueued := false
-		if eventType == "push" && projectID != nil {
-			queued, queueErr := h.enqueuePushRepoSync(ctx, *projectID, payload, deliveryID)
+	if eventType == "push" && projectID != nil {
+		queued, queueErr := h.enqueuePushRepoSync(ctx, *projectID, payload, deliveryID)
 		if queueErr != nil {
 			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to enqueue repo sync from push event"})
 			return
@@ -977,10 +982,10 @@ func (h *GitHubIntegrationHandler) GitHubWebhook(w http.ResponseWriter, r *http.
 	}
 
 	_ = logGitHubActivity(r.Context(), h.DB, orgID, projectID, "github.webhook."+eventType, map[string]any{
-		"delivery_id":   deliveryID,
-		"repository":    payload.Repository.FullName,
+		"delivery_id":    deliveryID,
+		"repository":     payload.Repository.FullName,
 		"webhook_job_id": webhookJob.ID,
-		"repo_sync":     repoSyncQueued,
+		"repo_sync":      repoSyncQueued,
 	})
 
 	sendJSON(w, http.StatusAccepted, map[string]any{
