@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS users_org_role_idx;
+
+ALTER TABLE users
+DROP COLUMN IF EXISTS role;

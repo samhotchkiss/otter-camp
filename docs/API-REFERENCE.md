@@ -690,6 +690,23 @@ function verifyWebhook(payload, signature, timestamp, secret) {
 | `rate_limited` | 429 | Too many requests |
 | `internal_error` | 500 | Server error |
 
+### Capability-Scoped Forbidden Responses
+
+Endpoints that trigger protected GitHub actions include a capability key in `403` responses:
+
+```json
+{
+  "error": "forbidden",
+  "capability": "github.publish"
+}
+```
+
+Current capability keys:
+- `github.sync.manual`
+- `github.conflict.resolve`
+- `github.publish`
+- `github.integration.manage`
+
 ---
 
 ## Rate Limits

@@ -35,11 +35,6 @@ type createUserCommandPrefixRequest struct {
 	Command string `json:"command"`
 }
 
-type sessionIdentity struct {
-	OrgID  string
-	UserID string
-}
-
 // HandleUserCommandPrefixesList handles GET /api/user/prefixes.
 func HandleUserCommandPrefixesList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -236,52 +231,3 @@ func deleteUserCommandPrefix(ctx context.Context, db *sql.DB, userID, id string)
 	}
 	return true, nil
 }
-
-func requireSessionIdentity(ctx context.Context, db *sql.DB, r *http.Request) (sessionIdentity, error) {
-	token := extractSessionToken(r)
-	if token == "" {
-		return sessionIdentity{}, errors.New("missing authentication")
-	}
-	if !strings.HasPrefix(token, "oc_sess_") {
-		return sessionIdentity{}, errors.New("invalid session token")
-	}
-
-	var identity sessionIdentity
-	err := db.QueryRowContext(
-		ctx,
-		`SELECT org_id::text, user_id::text
-		 FROM sessions
-		 WHERE token = $1
-		   AND revoked_at IS NULL
-		   AND expires_at > NOW()`,
-		token,
-	).Scan(&identity.OrgID, &identity.UserID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return sessionIdentity{}, errors.New("invalid session token")
-		}
-		return sessionIdentity{}, errors.New("authentication error")
-	}
-	return identity, nil
-}
-
-func extractSessionToken(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-
-	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-		if token != "" {
-			return token
-		}
-	}
-
-	if token := strings.TrimSpace(r.Header.Get("X-Session-Token")); token != "" {
-		return token
-	}
-
-	return ""
-}
-
