@@ -5,6 +5,8 @@ import LoadingSpinner from "../components/LoadingSpinner";
 import { ErrorFallback } from "../components/ErrorBoundary";
 import { NoProjectsEmpty } from "../components/EmptyState";
 import { SkeletonList } from "../components/Skeleton";
+import api from "../lib/api";
+import { isDemoMode } from "../lib/demo";
 // Filters removed - use magic bar (Cmd+K) for search
 
 type Project = {
@@ -201,11 +203,16 @@ export default function ProjectsPage({
   const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Fetch projects from API
   const fetchProjects = useCallback(async () => {
     try {
+      if (apiEndpoint === "https://api.otter.camp/api/projects") {
+        const data = await api.projects();
+        return (data.projects || []) as Project[];
+      }
+
       const response = await fetch(apiEndpoint);
       if (!response.ok) {
         throw new Error("Failed to fetch projects");
@@ -221,13 +228,21 @@ export default function ProjectsPage({
   useEffect(() => {
     const loadProjects = async () => {
       setIsLoading(true);
+      setError(null);
       try {
         const fetchedProjects = await fetchProjects();
-        // If API returns empty, fall back to sample data for demo
-        setProjects(fetchedProjects.length > 0 ? fetchedProjects : SAMPLE_PROJECTS);
-      } catch {
-        // On error, use sample data for demo purposes
-        setProjects(SAMPLE_PROJECTS);
+        if (fetchedProjects.length === 0 && isDemoMode()) {
+          setProjects(SAMPLE_PROJECTS);
+        } else {
+          setProjects(fetchedProjects);
+        }
+      } catch (err) {
+        if (isDemoMode()) {
+          setProjects(SAMPLE_PROJECTS);
+        } else {
+          setProjects([]);
+          setError(err instanceof Error ? err.message : "Failed to load projects");
+        }
       } finally {
         setIsLoading(false);
       }
