@@ -21,36 +21,44 @@ type ProjectsHandler struct {
 // Demo projects for when database is unavailable
 var demoProjects = []map[string]interface{}{
 	{
-		"id":          "proj-1",
-		"name":        "Pearl Proxy",
-		"description": "Memory and routing infrastructure",
-		"status":      "active",
-		"repo_url":    "https://github.com/The-Trawl/pearl",
-		"lead":        "Derek",
+		"id":             "proj-1",
+		"name":           "Pearl Proxy",
+		"description":    "Memory and routing infrastructure",
+		"status":         "active",
+		"repo_url":       "https://github.com/The-Trawl/pearl",
+		"lead":           "Derek",
+		"taskCount":      12,
+		"completedCount": 5,
 	},
 	{
-		"id":          "proj-2",
-		"name":        "Otter Camp",
-		"description": "Task management for AI-assisted workflows",
-		"status":      "active",
-		"repo_url":    "https://github.com/samhotchkiss/otter-camp",
-		"lead":        "Derek",
+		"id":             "proj-2",
+		"name":           "Otter Camp",
+		"description":    "Task management for AI-assisted workflows",
+		"status":         "active",
+		"repo_url":       "https://github.com/samhotchkiss/otter-camp",
+		"lead":           "Derek",
+		"taskCount":      24,
+		"completedCount": 18,
 	},
 	{
-		"id":          "proj-3",
-		"name":        "ItsAlive",
-		"description": "Static site deployment platform",
-		"status":      "active",
-		"repo_url":    "https://github.com/The-Trawl/itsalive",
-		"lead":        "Ivy",
+		"id":             "proj-3",
+		"name":           "ItsAlive",
+		"description":    "Static site deployment platform",
+		"status":         "active",
+		"repo_url":       "https://github.com/The-Trawl/itsalive",
+		"lead":           "Ivy",
+		"taskCount":      8,
+		"completedCount": 8,
 	},
 	{
-		"id":          "proj-4",
-		"name":        "Three Stones",
-		"description": "Educational content and presentations",
-		"status":      "archived",
-		"repo_url":    nil,
-		"lead":        "Stone",
+		"id":             "proj-4",
+		"name":           "Three Stones",
+		"description":    "Educational content and presentations",
+		"status":         "archived",
+		"repo_url":       nil,
+		"lead":           "Stone",
+		"taskCount":      15,
+		"completedCount": 10,
 	},
 }
 
@@ -80,10 +88,21 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query database directly (bypassing RLS for reliability)
-	query := `SELECT id, org_id, name, COALESCE(description, '') as description, 
-		COALESCE(repo_url, '') as repo_url, COALESCE(status, 'active') as status, created_at 
-		FROM projects WHERE org_id = $1 ORDER BY created_at DESC`
-	
+	query := `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
+		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+		COALESCE(t.task_count, 0) as task_count,
+		COALESCE(t.completed_count, 0) as completed_count
+		FROM projects p
+		LEFT JOIN (
+			SELECT project_id,
+				COUNT(*) as task_count,
+				COUNT(*) FILTER (WHERE status = 'done') as completed_count
+			FROM tasks
+			WHERE org_id = $1 AND project_id IS NOT NULL
+			GROUP BY project_id
+		) t ON t.project_id = p.id
+		WHERE p.org_id = $1 ORDER BY p.created_at DESC`
+
 	rows, err := h.DB.QueryContext(r.Context(), query, workspaceID)
 	if err != nil {
 		sendJSON(w, http.StatusOK, map[string]interface{}{
@@ -95,20 +114,22 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type Project struct {
-		ID          string `json:"id"`
-		OrgID       string `json:"org_id,omitempty"`
-		Name        string `json:"name"`
-		Description string `json:"description,omitempty"`
-		RepoURL     string `json:"repo_url,omitempty"`
-		Status      string `json:"status"`
-		CreatedAt   string `json:"created_at,omitempty"`
+		ID             string `json:"id"`
+		OrgID          string `json:"org_id,omitempty"`
+		Name           string `json:"name"`
+		Description    string `json:"description,omitempty"`
+		RepoURL        string `json:"repo_url,omitempty"`
+		Status         string `json:"status"`
+		CreatedAt      string `json:"created_at,omitempty"`
+		TaskCount      int    `json:"taskCount"`
+		CompletedCount int    `json:"completedCount"`
 	}
 
 	projects := make([]Project, 0)
 	for rows.Next() {
 		var p Project
 		var createdAt interface{}
-		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount); err != nil {
 			continue
 		}
 		projects = append(projects, p)
@@ -160,25 +181,38 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query database directly (bypassing RLS for reliability)
-	query := `SELECT id, org_id, name, COALESCE(description, '') as description, 
-		COALESCE(repo_url, '') as repo_url, COALESCE(status, 'active') as status, created_at 
-		FROM projects WHERE id = $1 AND org_id = $2`
-	
+	query := `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
+		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+		COALESCE(t.task_count, 0) as task_count,
+		COALESCE(t.completed_count, 0) as completed_count
+		FROM projects p
+		LEFT JOIN (
+			SELECT project_id,
+				COUNT(*) as task_count,
+				COUNT(*) FILTER (WHERE status = 'done') as completed_count
+			FROM tasks
+			WHERE org_id = $2 AND project_id IS NOT NULL
+			GROUP BY project_id
+		) t ON t.project_id = p.id
+		WHERE p.id = $1 AND p.org_id = $2`
+
 	type Project struct {
-		ID          string `json:"id"`
-		OrgID       string `json:"org_id,omitempty"`
-		Name        string `json:"name"`
-		Description string `json:"description,omitempty"`
-		RepoURL     string `json:"repo_url,omitempty"`
-		Status      string `json:"status"`
-		CreatedAt   string `json:"created_at,omitempty"`
+		ID             string `json:"id"`
+		OrgID          string `json:"org_id,omitempty"`
+		Name           string `json:"name"`
+		Description    string `json:"description,omitempty"`
+		RepoURL        string `json:"repo_url,omitempty"`
+		Status         string `json:"status"`
+		CreatedAt      string `json:"created_at,omitempty"`
+		TaskCount      int    `json:"taskCount"`
+		CompletedCount int    `json:"completedCount"`
 	}
 
 	var p Project
 	var createdAt interface{}
 	err := h.DB.QueryRowContext(r.Context(), query, projectID, workspaceID).Scan(
-		&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt)
-	
+		&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount)
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
