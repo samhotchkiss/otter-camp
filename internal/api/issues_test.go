@@ -24,6 +24,7 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/comments", handler.CreateComment)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approval-state", handler.TransitionApprovalState)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approve", handler.Approve)
+	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/review/save", handler.SaveReview)
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}/review/changes", handler.ReviewChanges)
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}/review/history", handler.ReviewHistory)
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}/review/history/{sha}", handler.ReviewVersion)

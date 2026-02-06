@@ -17,6 +17,8 @@ const (
 	MessageCommentAdded              MessageType = "CommentAdded"
 	MessageProjectChatMessageCreated MessageType = "ProjectChatMessageCreated"
 	MessageIssueCommentCreated       MessageType = "IssueCommentCreated"
+	MessageIssueReviewSaved          MessageType = "IssueReviewSaved"
+	MessageIssueReviewAddressed      MessageType = "IssueReviewAddressed"
 )
 
 // BroadcastMessage packages a payload for an org-scoped broadcast.
