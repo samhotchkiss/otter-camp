@@ -62,8 +62,8 @@ func TestGitHandlerReceivePackUnauthorized(t *testing.T) {
 	}
 
 	router := chi.NewRouter()
-	router.Mount("/git", AuthMiddleware(func(ctx context.Context, token string) (string, string, error) {
-		return "", "", nil
+	router.Mount("/git", AuthMiddleware(func(ctx context.Context, token string) (AuthInfo, error) {
+		return AuthInfo{}, nil
 	})(h.Routes()))
 
 	req := httptest.NewRequest(http.MethodPost, "/git/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11/11111111-1111-1111-1111-111111111111.git/git-receive-pack", nil)
@@ -115,11 +115,17 @@ func TestGitHandlerReceivePackAuthorizedPushLogsActivityAndBroadcasts(t *testing
 	}
 
 	router := chi.NewRouter()
-	router.Mount("/git", AuthMiddleware(func(ctx context.Context, token string) (string, string, error) {
+	router.Mount("/git", AuthMiddleware(func(ctx context.Context, token string) (AuthInfo, error) {
 		if token != "test-token" {
-			return "", "", errors.New("invalid token")
+			return AuthInfo{}, errors.New("invalid token")
 		}
-		return orgID, userID, nil
+		return AuthInfo{
+			OrgID:  orgID,
+			UserID: userID,
+			Permissions: map[string]ProjectPermission{
+				projectID: PermissionWrite,
+			},
+		}, nil
 	})(h.Routes()))
 
 	server := httptest.NewServer(router)

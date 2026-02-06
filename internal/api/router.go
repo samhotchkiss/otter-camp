@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -138,14 +139,11 @@ func NewRouter() http.Handler {
 			SyncJobs:      githubSyncJobStore,
 			Hub:           hub,
 		}
-		gitAuth := gitserver.AuthMiddleware(func(ctx context.Context, token string) (string, string, error) {
-			req := &http.Request{Header: http.Header{}}
-			req.Header.Set("Authorization", "Bearer "+token)
-			identity, err := requireSessionIdentity(ctx, db, req)
-			if err != nil {
-				return "", "", err
+		gitAuth := gitserver.AuthMiddleware(func(ctx context.Context, token string) (gitserver.AuthInfo, error) {
+			if db == nil {
+				return gitserver.AuthInfo{}, errors.New("database not available")
 			}
-			return identity.OrgID, identity.UserID, nil
+			return validateGitToken(ctx, db, token)
 		})
 		r.Mount("/git", gitAuth(gitHandler.Routes()))
 	}
@@ -163,6 +161,12 @@ func NewRouter() http.Handler {
 		r.Get("/auth/exchange", HandleAuthExchange)
 		r.Post("/auth/magic", HandleMagicLink)
 		r.Get("/auth/validate", HandleValidateToken)
+		r.Get("/git/tokens", HandleGitTokensList)
+		r.Post("/git/tokens", HandleGitTokensCreate)
+		r.Post("/git/tokens/{id}/revoke", HandleGitTokensRevoke)
+		r.Get("/git/keys", HandleGitSSHKeysList)
+		r.Post("/git/keys", HandleGitSSHKeysCreate)
+		r.Post("/git/keys/{id}/revoke", HandleGitSSHKeysRevoke)
 		r.Get("/user/prefixes", HandleUserCommandPrefixesList)
 		r.Post("/user/prefixes", HandleUserCommandPrefixesCreate)
 		r.Delete("/user/prefixes/{id}", HandleUserCommandPrefixesDelete)

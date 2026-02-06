@@ -93,6 +93,10 @@ func (h *Handler) InfoRefs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
+	if !permissionAllowsRead(r.Context(), project) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
 
 	repoPath, err := h.RepoResolver(r.Context(), org, project)
 	if err != nil {
@@ -133,6 +137,10 @@ func (h *Handler) UploadPack(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
+	if !permissionAllowsRead(r.Context(), project) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
 
 	repoPath, err := h.RepoResolver(r.Context(), org, project)
 	if err != nil {
@@ -167,6 +175,10 @@ func (h *Handler) ReceivePack(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Authentication required", http.StatusUnauthorized)
 		return
 	} else if authOrg != org {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	if !permissionAllowsWrite(r.Context(), project) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -326,4 +338,20 @@ func handleRepoError(w http.ResponseWriter, err error) {
 	default:
 		http.Error(w, "Repository error", http.StatusInternalServerError)
 	}
+}
+
+func permissionAllowsRead(ctx context.Context, projectID string) bool {
+	perm, ok := ProjectPermissionFor(ctx, projectID)
+	if !ok {
+		return false
+	}
+	return perm == PermissionRead || perm == PermissionWrite
+}
+
+func permissionAllowsWrite(ctx context.Context, projectID string) bool {
+	perm, ok := ProjectPermissionFor(ctx, projectID)
+	if !ok {
+		return false
+	}
+	return perm == PermissionWrite
 }

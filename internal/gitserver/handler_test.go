@@ -21,8 +21,8 @@ func TestGitHandlerUnauthorized(t *testing.T) {
 	}
 
 	router := chi.NewRouter()
-	router.Mount("/git", AuthMiddleware(func(ctx context.Context, token string) (string, string, error) {
-		return "", "", nil
+	router.Mount("/git", AuthMiddleware(func(ctx context.Context, token string) (AuthInfo, error) {
+		return AuthInfo{}, nil
 	})(h.Routes()))
 
 	req := httptest.NewRequest(http.MethodGet, "/git/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11/11111111-1111-1111-1111-111111111111.git/info/refs?service=git-upload-pack", nil)
@@ -48,8 +48,14 @@ func TestGitHandlerInfoRefsAuthorized(t *testing.T) {
 	}
 
 	router := chi.NewRouter()
-	router.Mount("/git", AuthMiddleware(func(ctx context.Context, token string) (string, string, error) {
-		return "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "user-1", nil
+	router.Mount("/git", AuthMiddleware(func(ctx context.Context, token string) (AuthInfo, error) {
+		return AuthInfo{
+			OrgID:  "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+			UserID: "user-1",
+			Permissions: map[string]ProjectPermission{
+				"11111111-1111-1111-1111-111111111111": PermissionRead,
+			},
+		}, nil
 	})(h.Routes()))
 
 	req := httptest.NewRequest(http.MethodGet, "/git/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11/11111111-1111-1111-1111-111111111111.git/info/refs?service=git-upload-pack", nil)
@@ -77,8 +83,14 @@ func TestGitHandlerRejectsBadUUID(t *testing.T) {
 	}
 
 	router := chi.NewRouter()
-	router.Mount("/git", AuthMiddleware(func(ctx context.Context, token string) (string, string, error) {
-		return "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "user-1", nil
+	router.Mount("/git", AuthMiddleware(func(ctx context.Context, token string) (AuthInfo, error) {
+		return AuthInfo{
+			OrgID:  "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+			UserID: "user-1",
+			Permissions: map[string]ProjectPermission{
+				"11111111-1111-1111-1111-111111111111": PermissionRead,
+			},
+		}, nil
 	})(h.Routes()))
 
 	req := httptest.NewRequest(http.MethodGet, "/git/not-a-uuid/11111111-1111-1111-1111-111111111111.git/info/refs?service=git-upload-pack", nil)
