@@ -229,7 +229,10 @@ export default function ProjectDetailPage() {
         const orgId = localStorage.getItem('otter-camp-org-id');
         
         // Fetch project
-        const projectRes = await fetch(`${API_URL}/api/projects/${id}`);
+        const projectUrl = orgId
+          ? `${API_URL}/api/projects/${id}?org_id=${encodeURIComponent(orgId)}`
+          : `${API_URL}/api/projects/${id}`;
+        const projectRes = await fetch(projectUrl);
         if (!projectRes.ok) {
           throw new Error('Project not found');
         }
