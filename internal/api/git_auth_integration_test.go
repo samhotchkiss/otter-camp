@@ -69,7 +69,7 @@ func TestGitAuthIntegration(t *testing.T) {
 
 	readToken, _, _, err := generateGitToken()
 	require.NoError(t, err)
-	insertGitAccessToken(t, db, orgID, userID, "read-token", readToken, projectID, "read")
+	tokenID := insertGitAccessToken(t, db, orgID, userID, "read-token", readToken, projectID, "read")
 
 	router := NewRouter()
 
@@ -80,6 +80,13 @@ func TestGitAuthIntegration(t *testing.T) {
 		router.ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	{
+		var lastUsedAt sql.NullTime
+		err := db.QueryRow(`SELECT last_used_at FROM git_access_tokens WHERE id = $1`, tokenID).Scan(&lastUsedAt)
+		require.NoError(t, err)
+		require.True(t, lastUsedAt.Valid)
 	}
 
 	{

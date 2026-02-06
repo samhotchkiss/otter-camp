@@ -67,6 +67,12 @@ func requireSessionIdentity(ctx context.Context, db *sql.DB, r *http.Request) (s
 			}
 			return sessionIdentity{}, errAuthentication
 		}
+
+		_, _ = db.ExecContext(
+			ctx,
+			`UPDATE git_access_tokens SET last_used_at = NOW() WHERE token_hash = $1`,
+			hashGitSecret(token),
+		)
 	} else {
 		return sessionIdentity{}, errInvalidSessionToken
 	}
