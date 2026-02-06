@@ -303,6 +303,129 @@ func TestProjectIssueStore_GetReviewCheckpointMissingReturnsNotFound(t *testing.
 	require.True(t, errors.Is(err, ErrNotFound))
 }
 
+func TestProjectIssueStore_ReviewVersionLifecycle(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-review-version-org")
+	projectID := createTestProject(t, db, orgID, "Issue Review Version Project")
+	reviewerID := createIssueTestAgent(t, db, orgID, "review-version-reviewer")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Review version issue",
+		Origin:       "local",
+		DocumentPath: stringPtr("/posts/2026-02-06-review-version.md"),
+	})
+	require.NoError(t, err)
+
+	first, err := issueStore.UpsertReviewVersion(
+		ctx,
+		issue.ID,
+		"/posts/2026-02-06-review-version.md",
+		"review-sha-1",
+		&reviewerID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, issue.ID, first.IssueID)
+	require.Equal(t, "review-sha-1", first.ReviewCommitSHA)
+	require.NotNil(t, first.ReviewerAgentID)
+	require.Equal(t, reviewerID, *first.ReviewerAgentID)
+	require.Nil(t, first.AddressedInCommitSHA)
+
+	second, err := issueStore.UpsertReviewVersion(
+		ctx,
+		issue.ID,
+		"/posts/2026-02-06-review-version.md",
+		"review-sha-2",
+		&reviewerID,
+	)
+	require.NoError(t, err)
+
+	versions, err := issueStore.ListReviewVersions(ctx, issue.ID)
+	require.NoError(t, err)
+	require.Len(t, versions, 2)
+	require.Equal(t, second.ReviewCommitSHA, versions[0].ReviewCommitSHA)
+	require.Equal(t, first.ReviewCommitSHA, versions[1].ReviewCommitSHA)
+
+	latestUnaddressed, err := issueStore.GetLatestUnaddressedReviewVersion(ctx, issue.ID)
+	require.NoError(t, err)
+	require.Equal(t, second.ReviewCommitSHA, latestUnaddressed.ReviewCommitSHA)
+
+	addressed, err := issueStore.MarkLatestReviewVersionAddressed(ctx, issue.ID, "addressed-sha-1")
+	require.NoError(t, err)
+	require.Equal(t, second.ReviewCommitSHA, addressed.ReviewCommitSHA)
+	require.NotNil(t, addressed.AddressedInCommitSHA)
+	require.Equal(t, "addressed-sha-1", *addressed.AddressedInCommitSHA)
+	require.NotNil(t, addressed.AddressedAt)
+
+	addressed, err = issueStore.MarkLatestReviewVersionAddressed(ctx, issue.ID, "addressed-sha-2")
+	require.NoError(t, err)
+	require.Equal(t, first.ReviewCommitSHA, addressed.ReviewCommitSHA)
+	require.NotNil(t, addressed.AddressedInCommitSHA)
+	require.Equal(t, "addressed-sha-2", *addressed.AddressedInCommitSHA)
+
+	_, err = issueStore.GetLatestUnaddressedReviewVersion(ctx, issue.ID)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNotFound))
+
+	_, err = issueStore.MarkLatestReviewVersionAddressed(ctx, issue.ID, "addressed-sha-3")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNotFound))
+}
+
+func TestProjectIssueStore_CreateReviewNotificationDeduplicatesTuples(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-review-notification-org")
+	projectID := createTestProject(t, db, orgID, "Issue Review Notification Project")
+	targetAgentID := createIssueTestAgent(t, db, orgID, "review-notification-target")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Review notification issue",
+		Origin:       "local",
+		DocumentPath: stringPtr("/posts/2026-02-06-review-notification.md"),
+	})
+	require.NoError(t, err)
+
+	first, created, err := issueStore.CreateReviewNotification(ctx, CreateProjectIssueReviewNotificationInput{
+		IssueID:          issue.ID,
+		NotificationType: IssueReviewNotificationSavedForOwner,
+		TargetAgentID:    targetAgentID,
+		ReviewCommitSHA:  "review-sha-1",
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NotNil(t, first)
+
+	second, created, err := issueStore.CreateReviewNotification(ctx, CreateProjectIssueReviewNotificationInput{
+		IssueID:          issue.ID,
+		NotificationType: IssueReviewNotificationSavedForOwner,
+		TargetAgentID:    targetAgentID,
+		ReviewCommitSHA:  "review-sha-1",
+	})
+	require.NoError(t, err)
+	require.False(t, created)
+	require.Nil(t, second)
+
+	addressedSHA := "addressed-sha-1"
+	third, created, err := issueStore.CreateReviewNotification(ctx, CreateProjectIssueReviewNotificationInput{
+		IssueID:              issue.ID,
+		NotificationType:     IssueReviewNotificationAddressedForReviewer,
+		TargetAgentID:        targetAgentID,
+		ReviewCommitSHA:      "review-sha-1",
+		AddressedInCommitSHA: &addressedSHA,
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NotNil(t, third)
+	require.Equal(t, addressedSHA, third.AddressedInCommitSHA)
+}
+
 func TestProjectIssueStore_ListByProjectStateAndOrigin(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

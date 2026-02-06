@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -95,6 +96,40 @@ type ProjectIssueReviewCheckpoint struct {
 	UpdatedAt           time.Time `json:"updated_at"`
 }
 
+type ProjectIssueReviewVersion struct {
+	ID                   string     `json:"id"`
+	OrgID                string     `json:"org_id"`
+	IssueID              string     `json:"issue_id"`
+	DocumentPath         string     `json:"document_path"`
+	ReviewCommitSHA      string     `json:"review_commit_sha"`
+	ReviewerAgentID      *string    `json:"reviewer_agent_id,omitempty"`
+	AddressedInCommitSHA *string    `json:"addressed_in_commit_sha,omitempty"`
+	AddressedAt          *time.Time `json:"addressed_at,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
+type ProjectIssueReviewNotification struct {
+	ID                   string          `json:"id"`
+	OrgID                string          `json:"org_id"`
+	IssueID              string          `json:"issue_id"`
+	NotificationType     string          `json:"notification_type"`
+	TargetAgentID        string          `json:"target_agent_id"`
+	ReviewCommitSHA      string          `json:"review_commit_sha"`
+	AddressedInCommitSHA string          `json:"addressed_in_commit_sha"`
+	Payload              json.RawMessage `json:"payload"`
+	CreatedAt            time.Time       `json:"created_at"`
+}
+
+type CreateProjectIssueReviewNotificationInput struct {
+	IssueID              string
+	NotificationType     string
+	TargetAgentID        string
+	ReviewCommitSHA      string
+	AddressedInCommitSHA *string
+	Payload              json.RawMessage
+}
+
 type ProjectIssueCounts struct {
 	Total        int `json:"total"`
 	Open         int `json:"open"`
@@ -157,6 +192,9 @@ const (
 	IssueApprovalStateReadyForReview = "ready_for_review"
 	IssueApprovalStateNeedsChanges   = "needs_changes"
 	IssueApprovalStateApproved       = "approved"
+
+	IssueReviewNotificationSavedForOwner        = "review_saved_for_owner"
+	IssueReviewNotificationAddressedForReviewer = "review_addressed_for_reviewer"
 )
 
 func normalizeIssueApprovalState(state string) string {
@@ -198,6 +236,15 @@ func defaultApprovalStateForLegacyState(issueState string) string {
 		return IssueApprovalStateApproved
 	}
 	return IssueApprovalStateDraft
+}
+
+func isValidIssueReviewNotificationType(value string) bool {
+	switch strings.TrimSpace(value) {
+	case IssueReviewNotificationSavedForOwner, IssueReviewNotificationAddressedForReviewer:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeIssueDocumentPath(documentPath *string) (*string, error) {
@@ -950,6 +997,325 @@ func (s *ProjectIssueStore) GetReviewCheckpoint(
 	return &record, nil
 }
 
+func (s *ProjectIssueStore) UpsertReviewVersion(
+	ctx context.Context,
+	issueID string,
+	documentPath string,
+	reviewCommitSHA string,
+	reviewerAgentID *string,
+) (*ProjectIssueReviewVersion, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+	documentPath = strings.TrimSpace(documentPath)
+	if documentPath == "" {
+		return nil, fmt.Errorf("document_path is required")
+	}
+	normalizedPath, err := normalizeIssueDocumentPath(&documentPath)
+	if err != nil || normalizedPath == nil {
+		return nil, fmt.Errorf("invalid document_path")
+	}
+
+	reviewCommitSHA = strings.TrimSpace(reviewCommitSHA)
+	if reviewCommitSHA == "" {
+		return nil, fmt.Errorf("review_commit_sha is required")
+	}
+
+	reviewerID := ""
+	if reviewerAgentID != nil {
+		reviewerID = strings.TrimSpace(*reviewerAgentID)
+	}
+	if reviewerID != "" && !uuidRegex.MatchString(reviewerID) {
+		return nil, fmt.Errorf("invalid reviewer_agent_id")
+	}
+	var reviewerIDPtr *string
+	if reviewerID != "" {
+		reviewerIDPtr = &reviewerID
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := ensureIssueVisible(ctx, tx, issueID); err != nil {
+		return nil, err
+	}
+	if reviewerID != "" {
+		if err := ensureAgentVisible(ctx, tx, reviewerID); err != nil {
+			return nil, err
+		}
+	}
+
+	record, err := scanProjectIssueReviewVersion(tx.QueryRowContext(
+		ctx,
+		`INSERT INTO project_issue_review_versions (
+			org_id, issue_id, document_path, review_commit_sha, reviewer_agent_id
+		) VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (issue_id, review_commit_sha)
+		DO UPDATE SET
+			document_path = EXCLUDED.document_path,
+			reviewer_agent_id = COALESCE(EXCLUDED.reviewer_agent_id, project_issue_review_versions.reviewer_agent_id),
+			updated_at = NOW()
+		RETURNING id, org_id, issue_id, document_path, review_commit_sha, reviewer_agent_id, addressed_in_commit_sha, addressed_at, created_at, updated_at`,
+		workspaceID,
+		issueID,
+		*normalizedPath,
+		reviewCommitSHA,
+		nullableString(reviewerIDPtr),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to upsert review version: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit review version upsert: %w", err)
+	}
+	return &record, nil
+}
+
+func (s *ProjectIssueStore) ListReviewVersions(
+	ctx context.Context,
+	issueID string,
+) ([]ProjectIssueReviewVersion, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	rows, err := conn.QueryContext(
+		ctx,
+		`SELECT id, org_id, issue_id, document_path, review_commit_sha, reviewer_agent_id, addressed_in_commit_sha, addressed_at, created_at, updated_at
+			FROM project_issue_review_versions
+			WHERE issue_id = $1
+			ORDER BY created_at DESC, review_commit_sha DESC`,
+		issueID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list review versions: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]ProjectIssueReviewVersion, 0)
+	for rows.Next() {
+		record, err := scanProjectIssueReviewVersion(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan review version row: %w", err)
+		}
+		if record.OrgID != workspaceID {
+			return nil, ErrForbidden
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read review version rows: %w", err)
+	}
+	return items, nil
+}
+
+func (s *ProjectIssueStore) MarkLatestReviewVersionAddressed(
+	ctx context.Context,
+	issueID string,
+	addressedCommitSHA string,
+) (*ProjectIssueReviewVersion, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+	addressedCommitSHA = strings.TrimSpace(addressedCommitSHA)
+	if addressedCommitSHA == "" {
+		return nil, fmt.Errorf("addressed_commit_sha is required")
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := ensureIssueVisible(ctx, tx, issueID); err != nil {
+		return nil, err
+	}
+
+	record, err := scanProjectIssueReviewVersion(tx.QueryRowContext(
+		ctx,
+		`WITH latest AS (
+			SELECT id
+			FROM project_issue_review_versions
+			WHERE issue_id = $1 AND addressed_in_commit_sha IS NULL
+			ORDER BY created_at DESC, review_commit_sha DESC
+			LIMIT 1
+			FOR UPDATE
+		)
+		UPDATE project_issue_review_versions
+			SET addressed_in_commit_sha = $2,
+				addressed_at = NOW(),
+				updated_at = NOW()
+		WHERE id IN (SELECT id FROM latest)
+		RETURNING id, org_id, issue_id, document_path, review_commit_sha, reviewer_agent_id, addressed_in_commit_sha, addressed_at, created_at, updated_at`,
+		issueID,
+		addressedCommitSHA,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to mark latest review version addressed: %w", err)
+	}
+	if record.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit review version update: %w", err)
+	}
+	return &record, nil
+}
+
+func (s *ProjectIssueStore) GetLatestUnaddressedReviewVersion(
+	ctx context.Context,
+	issueID string,
+) (*ProjectIssueReviewVersion, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	record, err := scanProjectIssueReviewVersion(conn.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, issue_id, document_path, review_commit_sha, reviewer_agent_id, addressed_in_commit_sha, addressed_at, created_at, updated_at
+			FROM project_issue_review_versions
+			WHERE issue_id = $1 AND addressed_in_commit_sha IS NULL
+			ORDER BY created_at DESC, review_commit_sha DESC
+			LIMIT 1`,
+		issueID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to get latest unaddressed review version: %w", err)
+	}
+	if record.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+	return &record, nil
+}
+
+func (s *ProjectIssueStore) CreateReviewNotification(
+	ctx context.Context,
+	input CreateProjectIssueReviewNotificationInput,
+) (*ProjectIssueReviewNotification, bool, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, false, ErrNoWorkspace
+	}
+
+	issueID := strings.TrimSpace(input.IssueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, false, fmt.Errorf("invalid issue_id")
+	}
+	notificationType := strings.TrimSpace(input.NotificationType)
+	if !isValidIssueReviewNotificationType(notificationType) {
+		return nil, false, fmt.Errorf("invalid notification_type")
+	}
+	targetAgentID := strings.TrimSpace(input.TargetAgentID)
+	if !uuidRegex.MatchString(targetAgentID) {
+		return nil, false, fmt.Errorf("invalid target_agent_id")
+	}
+	reviewCommitSHA := strings.TrimSpace(input.ReviewCommitSHA)
+	if reviewCommitSHA == "" {
+		return nil, false, fmt.Errorf("review_commit_sha is required")
+	}
+	addressedInCommitSHA := ""
+	if input.AddressedInCommitSHA != nil {
+		addressedInCommitSHA = strings.TrimSpace(*input.AddressedInCommitSHA)
+	}
+
+	payload := input.Payload
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := ensureIssueVisible(ctx, tx, issueID); err != nil {
+		return nil, false, err
+	}
+	if err := ensureAgentVisible(ctx, tx, targetAgentID); err != nil {
+		return nil, false, err
+	}
+
+	record, err := scanProjectIssueReviewNotification(tx.QueryRowContext(
+		ctx,
+		`INSERT INTO project_issue_review_notifications (
+			org_id, issue_id, notification_type, target_agent_id, review_commit_sha, addressed_in_commit_sha, payload
+		) VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (issue_id, notification_type, target_agent_id, review_commit_sha, addressed_in_commit_sha)
+		DO NOTHING
+		RETURNING id, org_id, issue_id, notification_type, target_agent_id, review_commit_sha, addressed_in_commit_sha, payload, created_at`,
+		workspaceID,
+		issueID,
+		notificationType,
+		targetAgentID,
+		reviewCommitSHA,
+		addressedInCommitSHA,
+		payload,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			if err := tx.Commit(); err != nil {
+				return nil, false, fmt.Errorf("failed to commit duplicate review notification check: %w", err)
+			}
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("failed to create review notification: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, false, fmt.Errorf("failed to commit review notification create: %w", err)
+	}
+	return &record, true, nil
+}
+
 func (s *ProjectIssueStore) UpsertGitHubLink(
 	ctx context.Context,
 	input UpsertProjectIssueGitHubLinkInput,
@@ -1634,6 +2000,68 @@ func scanProjectIssueReviewCheckpoint(
 		return checkpoint, err
 	}
 	return checkpoint, nil
+}
+
+func scanProjectIssueReviewVersion(
+	scanner interface{ Scan(...any) error },
+) (ProjectIssueReviewVersion, error) {
+	var version ProjectIssueReviewVersion
+	var reviewerAgentID sql.NullString
+	var addressedInCommitSHA sql.NullString
+	var addressedAt sql.NullTime
+
+	err := scanner.Scan(
+		&version.ID,
+		&version.OrgID,
+		&version.IssueID,
+		&version.DocumentPath,
+		&version.ReviewCommitSHA,
+		&reviewerAgentID,
+		&addressedInCommitSHA,
+		&addressedAt,
+		&version.CreatedAt,
+		&version.UpdatedAt,
+	)
+	if err != nil {
+		return version, err
+	}
+	if reviewerAgentID.Valid {
+		version.ReviewerAgentID = &reviewerAgentID.String
+	}
+	if addressedInCommitSHA.Valid {
+		version.AddressedInCommitSHA = &addressedInCommitSHA.String
+	}
+	if addressedAt.Valid {
+		version.AddressedAt = &addressedAt.Time
+	}
+	return version, nil
+}
+
+func scanProjectIssueReviewNotification(
+	scanner interface{ Scan(...any) error },
+) (ProjectIssueReviewNotification, error) {
+	var notification ProjectIssueReviewNotification
+	var payload []byte
+	err := scanner.Scan(
+		&notification.ID,
+		&notification.OrgID,
+		&notification.IssueID,
+		&notification.NotificationType,
+		&notification.TargetAgentID,
+		&notification.ReviewCommitSHA,
+		&notification.AddressedInCommitSHA,
+		&payload,
+		&notification.CreatedAt,
+	)
+	if err != nil {
+		return notification, err
+	}
+	if len(payload) == 0 {
+		notification.Payload = json.RawMessage(`{}`)
+	} else {
+		notification.Payload = json.RawMessage(payload)
+	}
+	return notification, nil
 }
 
 func scanProjectIssueParticipant(scanner interface{ Scan(...any) error }) (ProjectIssueParticipant, error) {

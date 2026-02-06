@@ -163,6 +163,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approval-state", issuesHandler.TransitionApprovalState)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approve", issuesHandler.Approve)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/review/save", issuesHandler.SaveReview)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/review/address", issuesHandler.AddressReview)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/changes", issuesHandler.ReviewChanges)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/history", issuesHandler.ReviewHistory)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/history/{sha}", issuesHandler.ReviewVersion)

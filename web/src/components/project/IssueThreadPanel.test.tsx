@@ -336,6 +336,7 @@ describe("IssueThreadPanel", () => {
     await user.click(screen.getByTestId("issue-review-open-sha-old"));
     expect(await screen.findByTestId("content-review-read-only")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add Inline Comment" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resolve comment/i })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Rendered" }));
     expect(await screen.findByText("old comment")).toBeInTheDocument();

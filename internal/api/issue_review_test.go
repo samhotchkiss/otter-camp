@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
@@ -184,6 +185,31 @@ func TestResolveReviewDiffBaseSHAFallback(t *testing.T) {
 	})
 	require.True(t, fallback)
 	require.Equal(t, "first", base)
+}
+
+func TestBuildReviewVersionAddressedSummaryDeterministic(t *testing.T) {
+	now := time.Now().UTC()
+	firstAddressed := "addressed-older"
+	secondAddressed := "addressed-newer"
+	summary := buildReviewVersionAddressedSummary([]store.ProjectIssueReviewVersion{
+		{
+			ReviewCommitSHA:      "review-2",
+			AddressedInCommitSHA: &secondAddressed,
+			CreatedAt:            now.Add(2 * time.Minute),
+		},
+		{
+			ReviewCommitSHA:      "review-2",
+			AddressedInCommitSHA: &firstAddressed,
+			CreatedAt:            now,
+		},
+		{
+			ReviewCommitSHA: "review-1",
+			CreatedAt:       now.Add(time.Minute),
+		},
+	})
+
+	require.Len(t, summary, 1)
+	require.Equal(t, secondAddressed, summary["review-2"])
 }
 
 func createIssueReviewCommit(

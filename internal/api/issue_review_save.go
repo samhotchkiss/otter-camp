@@ -40,6 +40,7 @@ type issueReviewSavedEvent struct {
 	ReviewCommitSHA string         `json:"review_commit_sha"`
 	ReviewerAgentID string         `json:"reviewer_agent_id"`
 	OwnerAgentID    *string        `json:"owner_agent_id,omitempty"`
+	SourceURL       string         `json:"source_url"`
 }
 
 func (h *IssuesHandler) SaveReview(w http.ResponseWriter, r *http.Request) {
@@ -119,22 +120,63 @@ func (h *IssuesHandler) SaveReview(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
+	reviewVersion, err := h.IssueStore.UpsertReviewVersion(
+		r.Context(),
+		issue.ID,
+		*issue.DocumentPath,
+		commitResponse.Commit.SHA,
+		&reviewerAgentID,
+	)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	shouldNotifyOwner := ownerAgentID != nil
+	createdOwnerNotification := true
+	if shouldNotifyOwner {
+		notificationPayload, marshalErr := json.Marshal(map[string]any{
+			"source_url": buildIssueReviewSourceURL(issue.ProjectID, issue.ID, commitResponse.Commit.SHA, ""),
+		})
+		if marshalErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to encode review notification"})
+			return
+		}
+		_, createdOwnerNotification, err = h.IssueStore.CreateReviewNotification(
+			r.Context(),
+			store.CreateProjectIssueReviewNotificationInput{
+				IssueID:          issue.ID,
+				NotificationType: store.IssueReviewNotificationSavedForOwner,
+				TargetAgentID:    *ownerAgentID,
+				ReviewCommitSHA:  commitResponse.Commit.SHA,
+				Payload:          notificationPayload,
+			},
+		)
+		if err != nil {
+			handleIssueStoreError(w, err)
+			return
+		}
+	}
 
 	h.logIssueReviewSaved(
 		r.Context(),
 		*issue,
 		checkpoint,
+		reviewVersion,
 		commitResponse.Commit.SHA,
 		reviewerAgentID,
 		ownerAgentID,
+		shouldNotifyOwner && createdOwnerNotification,
 	)
-	h.broadcastIssueReviewSaved(
-		r.Context(),
-		*issue,
-		commitResponse.Commit.SHA,
-		reviewerAgentID,
-		ownerAgentID,
-	)
+	if shouldNotifyOwner && createdOwnerNotification {
+		h.broadcastIssueReviewSaved(
+			r.Context(),
+			*issue,
+			commitResponse.Commit.SHA,
+			reviewerAgentID,
+			ownerAgentID,
+		)
+	}
 
 	sendJSON(w, http.StatusCreated, issueReviewSaveResponse{
 		IssueID:         issue.ID,
@@ -167,9 +209,11 @@ func (h *IssuesHandler) logIssueReviewSaved(
 	ctx context.Context,
 	issue store.ProjectIssue,
 	checkpoint *store.ProjectIssueReviewCheckpoint,
+	reviewVersion *store.ProjectIssueReviewVersion,
 	reviewCommitSHA string,
 	reviewerAgentID string,
 	ownerAgentID *string,
+	notificationSent bool,
 ) {
 	if h.DB == nil {
 		return
@@ -191,9 +235,14 @@ func (h *IssuesHandler) logIssueReviewSaved(
 		metadata["checkpoint_id"] = checkpoint.ID
 		metadata["checkpoint_sha"] = checkpoint.LastReviewCommitSHA
 	}
+	if reviewVersion != nil {
+		metadata["review_version_id"] = reviewVersion.ID
+	}
 	if ownerAgentID != nil {
 		metadata["owner_agent_id"] = *ownerAgentID
 	}
+	metadata["notification_sent"] = notificationSent
+	metadata["source_url"] = buildIssueReviewSourceURL(issue.ProjectID, issue.ID, reviewCommitSHA, "")
 	_ = logGitHubActivity(ctx, h.DB, workspaceID, &issue.ProjectID, "issue.review_saved", metadata)
 }
 
@@ -224,6 +273,7 @@ func (h *IssuesHandler) broadcastIssueReviewSaved(
 		ReviewCommitSHA: strings.TrimSpace(reviewCommitSHA),
 		ReviewerAgentID: strings.TrimSpace(reviewerAgentID),
 		OwnerAgentID:    ownerAgentID,
+		SourceURL:       buildIssueReviewSourceURL(issue.ProjectID, issue.ID, reviewCommitSHA, ""),
 	})
 	if err != nil {
 		return

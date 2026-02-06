@@ -49,6 +49,7 @@ type IssueReviewHistoryItem = {
   authored_at: string;
   author_name: string;
   is_review_checkpoint: boolean;
+  addressed_in_commit_sha?: string | null;
 };
 
 type IssueReviewHistoryResponse = {
@@ -945,6 +946,11 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
                               <span className="mt-1 inline-flex rounded-full border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
                                 Review checkpoint
                               </span>
+                            )}
+                            {item.addressed_in_commit_sha && (
+                              <p className="mt-1 text-[11px] text-emerald-700">
+                                Addressed in commit {item.addressed_in_commit_sha.slice(0, 7)}
+                              </p>
                             )}
                           </div>
                           <button

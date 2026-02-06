@@ -119,6 +119,12 @@ func (h *IssuesHandler) ReviewHistory(w http.ResponseWriter, r *http.Request) {
 		h.handleIssueReviewError(w, err)
 		return
 	}
+	reviewVersions, err := h.IssueStore.ListReviewVersions(r.Context(), issue.ID)
+	if err != nil {
+		h.handleIssueReviewError(w, err)
+		return
+	}
+	addressedSummaryByReviewSHA := buildReviewVersionAddressedSummary(reviewVersions)
 
 	var checkpointSHA string
 	if checkpoint != nil {
@@ -127,16 +133,18 @@ func (h *IssuesHandler) ReviewHistory(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]issueReviewHistoryItem, 0, len(touchingCommits))
 	for _, commit := range touchingCommits {
+		addressedInCommitSHA := addressedSummaryByReviewSHA[strings.TrimSpace(commit.SHA)]
 		items = append(items, issueReviewHistoryItem{
-			SHA:                commit.SHA,
-			Subject:            commit.Subject,
-			Body:               trimOptionalString(commit.Body),
-			Message:            commit.Message,
-			AuthorName:         commit.AuthorName,
-			AuthorEmail:        trimOptionalString(commit.AuthorEmail),
-			AuthoredAt:         commit.AuthoredAt.UTC().Format(time.RFC3339),
-			BranchName:         commit.BranchName,
-			IsReviewCheckpoint: checkpointSHA != "" && commit.SHA == checkpointSHA,
+			SHA:                  commit.SHA,
+			Subject:              commit.Subject,
+			Body:                 trimOptionalString(commit.Body),
+			Message:              commit.Message,
+			AuthorName:           commit.AuthorName,
+			AuthorEmail:          trimOptionalString(commit.AuthorEmail),
+			AuthoredAt:           commit.AuthoredAt.UTC().Format(time.RFC3339),
+			BranchName:           commit.BranchName,
+			IsReviewCheckpoint:   checkpointSHA != "" && commit.SHA == checkpointSHA,
+			AddressedInCommitSHA: trimOptionalString(&addressedInCommitSHA),
 		})
 	}
 
@@ -419,4 +427,42 @@ func parseIssueReviewNameStatus(output string) []projectCommitDiffFile {
 		})
 	}
 	return files
+}
+
+func buildReviewVersionAddressedSummary(
+	versions []store.ProjectIssueReviewVersion,
+) map[string]string {
+	if len(versions) == 0 {
+		return map[string]string{}
+	}
+
+	sorted := append([]store.ProjectIssueReviewVersion(nil), versions...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		leftReviewSHA := strings.TrimSpace(sorted[i].ReviewCommitSHA)
+		rightReviewSHA := strings.TrimSpace(sorted[j].ReviewCommitSHA)
+		if leftReviewSHA == rightReviewSHA {
+			return sorted[i].CreatedAt.After(sorted[j].CreatedAt)
+		}
+		return leftReviewSHA < rightReviewSHA
+	})
+
+	out := make(map[string]string, len(sorted))
+	for _, version := range sorted {
+		reviewSHA := strings.TrimSpace(version.ReviewCommitSHA)
+		if reviewSHA == "" {
+			continue
+		}
+		addressedSHA := ""
+		if version.AddressedInCommitSHA != nil {
+			addressedSHA = strings.TrimSpace(*version.AddressedInCommitSHA)
+		}
+		if addressedSHA == "" {
+			continue
+		}
+		if _, exists := out[reviewSHA]; exists {
+			continue
+		}
+		out[reviewSHA] = addressedSHA
+	}
+	return out
 }
