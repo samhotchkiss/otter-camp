@@ -132,6 +132,7 @@ func handleProject(args []string) {
 	switch args[0] {
 	case "create":
 		flags := flag.NewFlagSet("project create", flag.ExitOnError)
+		flags.SetInterspersed(true)
 		description := flags.String("description", "", "project description")
 		status := flags.String("status", "", "status (active|archived|completed)")
 		repoURL := flags.String("repo-url", "", "repo URL")
