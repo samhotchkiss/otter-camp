@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
@@ -24,14 +25,24 @@ func HandleAdminInitRepos(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// Try context first, then query param, then header
 		orgID := middleware.WorkspaceFromContext(r.Context())
 		if orgID == "" {
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing org_id"})
+			orgID = r.URL.Query().Get("org_id")
+		}
+		if orgID == "" {
+			orgID = r.Header.Get("X-Org-ID")
+		}
+		if orgID == "" {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing org_id (pass as ?org_id= or X-Org-ID header)"})
 			return
 		}
+		
+		// Inject into context for downstream store calls
+		ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, orgID)
 
 		projectStore := store.NewProjectStore(db)
-		projects, err := projectStore.List(r.Context())
+		projects, err := projectStore.List(ctx)
 		if err != nil {
 			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
 			return
@@ -44,12 +55,12 @@ func HandleAdminInitRepos(db *sql.DB) http.HandlerFunc {
 				"name": p.Name,
 			}
 
-			if err := projectStore.InitProjectRepo(r.Context(), p.ID); err != nil {
+			if err := projectStore.InitProjectRepo(ctx, p.ID); err != nil {
 				result["status"] = "error"
 				result["error"] = err.Error()
 				log.Printf("[admin] init repo failed for %s (%s): %v", p.Name, p.ID, err)
 			} else {
-				repoPath, _ := projectStore.GetRepoPath(r.Context(), p.ID)
+				repoPath, _ := projectStore.GetRepoPath(ctx, p.ID)
 				result["status"] = "ok"
 				result["repo_path"] = repoPath
 				log.Printf("[admin] init repo ok for %s (%s): %s", p.Name, p.ID, repoPath)
