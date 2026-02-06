@@ -9,12 +9,13 @@ Allow reviewers to insert inline feedback directly in Markdown text without manu
 - Comments render as inline bubbles in the rendered view.
 
 ## Storage Format (MVP)
-- Use a unique delimiter to avoid Markdown collisions, e.g.:
+- Use a unique delimiter to avoid Markdown collisions. Recommended safe format:
 
 ```
-{{{comment:uuid|This paragraph needs a stronger opening.}}}
+<!-- oc-comment:uuid|author|This paragraph needs a stronger opening. -->
 ```
 
+- HTML comments are non‑rendering in Markdown and unlikely to collide with prose.
 - Delimiter format can evolve, but must be **round‑trippable** between UI and raw Markdown.
 
 ## Rendering Rules
