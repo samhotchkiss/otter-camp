@@ -145,6 +145,16 @@ function normalizeAgentId(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeLastActive(value: unknown): string | number | null | undefined {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return value;
+  }
+  return undefined;
+}
+
 function AgentsPageComponent({
   apiEndpoint = isDemoMode() 
     ? `${API_URL}/api/agents?demo=true`
@@ -283,13 +293,15 @@ function AgentsPageComponent({
         normalizeCurrentTask(nestedAgent?.current_task) ||
         normalizeCurrentTask(nestedAgent?.currentTask);
       const lastActive =
-        payload.lastActive ||
-        payload.last_active ||
-        payload.lastSeen ||
-        payload.last_seen ||
-        payload.updatedAt ||
-        payload.updated_at ||
-        (nestedAgent && (nestedAgent.last_seen || nestedAgent.lastSeen || nestedAgent.updated_at || nestedAgent.updatedAt));
+        normalizeLastActive(payload.lastActive) ??
+        normalizeLastActive(payload.last_active) ??
+        normalizeLastActive(payload.lastSeen) ??
+        normalizeLastActive(payload.last_seen) ??
+        normalizeLastActive(payload.updatedAt) ??
+        normalizeLastActive(payload.updated_at) ??
+        normalizeLastActive(
+          nestedAgent && (nestedAgent.last_seen || nestedAgent.lastSeen || nestedAgent.updated_at || nestedAgent.updatedAt)
+        );
 
       setAgents((prev) =>
         prev.map((agent) =>

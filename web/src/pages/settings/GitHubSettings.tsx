@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type GitHubConnection = {
-  username: string;
-  avatarUrl: string | null;
-  connectedAt: string; // ISO
-  scopes: string[];
+  installationId: number;
+  accountLogin: string;
+  accountType: string;
+  connectedAt: string;
 };
 
 type GitHubRepo = {
   id: string;
-  fullName: string; // owner/name
+  fullName: string;
   private: boolean;
   defaultBranch: string;
 };
@@ -18,7 +18,6 @@ type Project = {
   id: string;
   name: string;
   description: string | null;
-  repoUrl: string | null;
 };
 
 type SyncMode = "push" | "sync";
@@ -29,73 +28,53 @@ type ProjectSyncSettings = {
   branch: string;
   mode: SyncMode;
   autoSync: boolean;
+  activeBranches: string[];
 };
 
 type SyncState = "idle" | "syncing" | "error";
 
 type SyncStatus = {
   state: SyncState;
-  lastSyncAt: string | null; // ISO
+  lastSyncAt: string | null;
   message?: string;
 };
 
-type PersistedGitHubSettings = {
-  connection: GitHubConnection | null;
-  repos: GitHubRepo[];
-  projectSettings: Record<string, ProjectSyncSettings>;
-  projectStatus: Record<string, SyncStatus>;
+type IntegrationStatusPayload = {
+  connected: boolean;
+  installation?: {
+    installation_id: number;
+    account_login: string;
+    account_type: string;
+    connected_at: string;
+  };
 };
 
-const STORAGE_KEY = "otter-camp-github-settings-v1";
-
-const SAMPLE_CONNECTION: GitHubConnection = {
-  username: "octocat",
-  avatarUrl: "https://github.com/octocat.png?size=80",
-  connectedAt: new Date().toISOString(),
-  scopes: ["read:user", "repo"],
+type RepoListPayload = {
+  repos: Array<{
+    id: string;
+    full_name: string;
+    default_branch: string;
+    private: boolean;
+  }>;
 };
 
-const SAMPLE_REPOS: GitHubRepo[] = [
-  {
-    id: "r1",
-    fullName: "otter-camp/otter-camp",
-    private: false,
-    defaultBranch: "main",
-  },
-  {
-    id: "r2",
-    fullName: "otter-camp/infra",
-    private: true,
-    defaultBranch: "main",
-  },
-  {
-    id: "r3",
-    fullName: "samhotchkiss/dotfiles",
-    private: false,
-    defaultBranch: "master",
-  },
-];
+type SettingsListPayload = {
+  projects: Array<{
+    project_id: string;
+    project_name: string;
+    description: string | null;
+    enabled: boolean;
+    repo_full_name?: string | null;
+    default_branch: string;
+    sync_mode: SyncMode;
+    auto_sync: boolean;
+    active_branches?: string[];
+    last_synced_at?: string | null;
+    conflict_state?: string;
+  }>;
+};
 
-const SAMPLE_PROJECTS: Project[] = [
-  {
-    id: "p1",
-    name: "Otter Camp",
-    description: "Task management for AI-assisted workflows",
-    repoUrl: null,
-  },
-  {
-    id: "p2",
-    name: "Pearl Proxy",
-    description: "Memory and routing infrastructure",
-    repoUrl: null,
-  },
-  {
-    id: "p3",
-    name: "ItsAlive",
-    description: "Static site deployment platform",
-    repoUrl: null,
-  },
-];
+const API_URL = import.meta.env.VITE_API_URL || "";
 
 const DEFAULT_PROJECT_SETTINGS: ProjectSyncSettings = {
   enabled: false,
@@ -103,16 +82,8 @@ const DEFAULT_PROJECT_SETTINGS: ProjectSyncSettings = {
   branch: "main",
   mode: "sync",
   autoSync: true,
+  activeBranches: [],
 };
-
-function safeJsonParse<T>(value: string | null): T | null {
-  if (!value) return null;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
-}
 
 function formatDateTime(iso: string): string {
   return new Intl.DateTimeFormat("en-US", {
@@ -123,6 +94,36 @@ function formatDateTime(iso: string): string {
 
 function buildRepoUrl(fullName: string): string {
   return `https://github.com/${fullName}`;
+}
+
+function getRequestHeaders(): Record<string, string> {
+  const token = localStorage.getItem("otter_camp_token");
+  const orgId = localStorage.getItem("otter-camp-org-id");
+
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(orgId ? { "X-Org-ID": orgId } : {}),
+  };
+}
+
+async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: {
+      ...getRequestHeaders(),
+      ...(init?.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: string; message?: string }
+      | null;
+    throw new Error(payload?.error || payload?.message || `Request failed (${response.status})`);
+  }
+
+  return response.json() as Promise<T>;
 }
 
 type ButtonProps = {
@@ -209,9 +210,7 @@ function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
         />
       </button>
       {label && (
-        <span className="text-sm text-slate-700 dark:text-slate-300">
-          {label}
-        </span>
+        <span className="text-sm text-slate-700 dark:text-slate-300">{label}</span>
       )}
     </label>
   );
@@ -226,19 +225,10 @@ type SelectProps = {
   helperText?: string;
 };
 
-function Select({
-  label,
-  value,
-  onChange,
-  disabled,
-  children,
-  helperText,
-}: SelectProps) {
+function Select({ label, value, onChange, disabled, children, helperText }: SelectProps) {
   return (
     <label className="block">
-      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-        {label}
-      </span>
+      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -247,11 +237,7 @@ function Select({
       >
         {children}
       </select>
-      {helperText && (
-        <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
-          {helperText}
-        </p>
-      )}
+      {helperText && <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">{helperText}</p>}
     </label>
   );
 }
@@ -265,19 +251,10 @@ type InputProps = {
   helperText?: string;
 };
 
-function Input({
-  label,
-  value,
-  onChange,
-  placeholder,
-  disabled,
-  helperText,
-}: InputProps) {
+function Input({ label, value, onChange, placeholder, disabled, helperText }: InputProps) {
   return (
     <label className="block">
-      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-        {label}
-      </span>
+      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
       <input
         type="text"
         value={value}
@@ -286,183 +263,125 @@ function Input({
         disabled={disabled}
         className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-emerald-500 dark:disabled:bg-slate-900"
       />
-      {helperText && (
-        <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
-          {helperText}
-        </p>
-      )}
+      {helperText && <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">{helperText}</p>}
     </label>
   );
 }
 
-function StatusBadge({
-  tone,
-  label,
-}: {
-  tone: "neutral" | "success" | "warning" | "danger" | "info";
-  label: string;
-}) {
-  const toneClasses: Record<typeof tone, string> = {
+function StatusBadge({ tone, label }: { tone: "neutral" | "success" | "warning" | "danger" | "info"; label: string }) {
+  const toneClasses: Record<string, string> = {
     neutral: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
-    success:
-      "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200",
-    warning:
-      "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200",
+    success: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200",
+    warning: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200",
     danger: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200",
     info: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200",
   };
 
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${toneClasses[tone]}`}
-    >
+    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${toneClasses[tone]}`}>
       {label}
     </span>
   );
 }
 
-function parseProjects(data: unknown): Project[] {
-  const candidates = Array.isArray(data)
-    ? data
-    : typeof data === "object" && data !== null && "projects" in data
-      ? (data as { projects: unknown }).projects
-      : [];
-
-  if (!Array.isArray(candidates)) return [];
-
-  return candidates
-    .map((candidate) => {
-      if (typeof candidate !== "object" || candidate === null) return null;
-      const obj = candidate as Record<string, unknown>;
-      const id = typeof obj.id === "string" ? obj.id : null;
-      const name = typeof obj.name === "string" ? obj.name : null;
-      if (!id || !name) return null;
-
-      const description =
-        typeof obj.description === "string" ? obj.description : null;
-      const repoUrl =
-        typeof obj.repoUrl === "string"
-          ? obj.repoUrl
-          : typeof obj.repo_url === "string"
-            ? obj.repo_url
-            : null;
-
-      return { id, name, description, repoUrl };
-    })
-    .filter((project): project is Project => project !== null);
-}
-
 export default function GitHubSettings() {
   const [connection, setConnection] = useState<GitHubConnection | null>(null);
   const [repos, setRepos] = useState<GitHubRepo[]>([]);
-  const [projectSettings, setProjectSettings] = useState<
-    Record<string, ProjectSyncSettings>
-  >({});
-  const [projectStatus, setProjectStatus] = useState<Record<string, SyncStatus>>(
-    {}
-  );
-
+  const [projectSettings, setProjectSettings] = useState<Record<string, ProjectSyncSettings>>({});
+  const [projectStatus, setProjectStatus] = useState<Record<string, SyncStatus>>({});
   const [projects, setProjects] = useState<Project[]>([]);
-  const [projectsLoading, setProjectsLoading] = useState(true);
 
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [refreshingRepos, setRefreshingRepos] = useState(false);
-
-  const syncTimersRef = useRef<Record<string, number>>({});
+  const [savingProjectId, setSavingProjectId] = useState<string | null>(null);
+  const [syncingProjectId, setSyncingProjectId] = useState<string | null>(null);
 
   const repoOptions = useMemo(() => {
-    const sorted = [...repos].sort((a, b) => a.fullName.localeCompare(b.fullName));
+    const sorted = [...repos];
+    sorted.sort((a, b) => a.fullName.localeCompare(b.fullName));
     return sorted;
   }, [repos]);
 
-  // Load persisted settings
-  useEffect(() => {
-    const persisted = safeJsonParse<PersistedGitHubSettings>(
-      localStorage.getItem(STORAGE_KEY)
-    );
-    if (!persisted) return;
-
-    setConnection(persisted.connection ?? null);
-    setRepos(Array.isArray(persisted.repos) ? persisted.repos : []);
-    setProjectSettings(
-      persisted.projectSettings && typeof persisted.projectSettings === "object"
-        ? persisted.projectSettings
-        : {}
-    );
-    setProjectStatus(
-      persisted.projectStatus && typeof persisted.projectStatus === "object"
-        ? persisted.projectStatus
-        : {}
-    );
-  }, []);
-
-  // Persist settings locally (placeholder until backend is wired)
-  useEffect(() => {
-    const toPersist: PersistedGitHubSettings = {
-      connection,
-      repos,
-      projectSettings,
-      projectStatus,
-    };
+  const hydrateFromApi = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(toPersist));
-    } catch {
-      // Ignore persistence errors (e.g. private mode / storage disabled)
+      const [statusPayload, reposPayload, settingsPayload] = await Promise.all([
+        apiRequest<IntegrationStatusPayload>("/api/github/integration/status"),
+        apiRequest<RepoListPayload>("/api/github/integration/repos"),
+        apiRequest<SettingsListPayload>("/api/github/integration/settings"),
+      ]);
+
+      if (statusPayload.connected && statusPayload.installation) {
+        setConnection({
+          installationId: statusPayload.installation.installation_id,
+          accountLogin: statusPayload.installation.account_login,
+          accountType: statusPayload.installation.account_type,
+          connectedAt: statusPayload.installation.connected_at,
+        });
+      } else {
+        setConnection(null);
+      }
+
+      setRepos(
+        (reposPayload.repos || []).map((repo) => ({
+          id: repo.id,
+          fullName: repo.full_name,
+          defaultBranch: repo.default_branch || "main",
+          private: Boolean(repo.private),
+        }))
+      );
+
+      const projectRows = settingsPayload.projects || [];
+      setProjects(
+        projectRows.map((row) => ({
+          id: row.project_id,
+          name: row.project_name,
+          description: row.description ?? null,
+        }))
+      );
+
+      const nextSettings: Record<string, ProjectSyncSettings> = {};
+      const nextStatus: Record<string, SyncStatus> = {};
+
+      for (const row of projectRows) {
+        nextSettings[row.project_id] = {
+          enabled: row.enabled,
+          repoFullName: row.repo_full_name ?? null,
+          branch: row.default_branch || "main",
+          mode: row.sync_mode || "sync",
+          autoSync: row.auto_sync,
+          activeBranches: row.active_branches || [],
+        };
+
+        const conflict = row.conflict_state || "none";
+        nextStatus[row.project_id] = {
+          state: conflict === "needs_decision" ? "error" : "idle",
+          lastSyncAt: row.last_synced_at ?? null,
+          message:
+            conflict === "needs_decision"
+              ? "Sync conflict needs decision"
+              : row.last_synced_at
+                ? "In sync"
+                : "Not synced yet",
+        };
+      }
+
+      setProjectSettings(nextSettings);
+      setProjectStatus(nextStatus);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load GitHub settings");
+    } finally {
+      setLoading(false);
     }
-  }, [connection, projectSettings, projectStatus, repos]);
-
-  // Load projects (falls back to sample data for demo)
-  useEffect(() => {
-    let canceled = false;
-
-    const loadProjects = async () => {
-      setProjectsLoading(true);
-      try {
-        const response = await fetch("/api/projects");
-        if (!response.ok) throw new Error("Failed to fetch projects");
-        const data: unknown = await response.json();
-        const parsed = parseProjects(data);
-        if (!canceled) {
-          setProjects(parsed.length > 0 ? parsed : SAMPLE_PROJECTS);
-        }
-      } catch {
-        if (!canceled) setProjects(SAMPLE_PROJECTS);
-      } finally {
-        if (!canceled) setProjectsLoading(false);
-      }
-    };
-
-    loadProjects();
-
-    return () => {
-      canceled = true;
-    };
   }, []);
 
-  // Ensure each known project has an entry
   useEffect(() => {
-    if (projects.length === 0) return;
-    setProjectSettings((prev) => {
-      let changed = false;
-      const next: Record<string, ProjectSyncSettings> = { ...prev };
-      for (const project of projects) {
-        if (!next[project.id]) {
-          next[project.id] = { ...DEFAULT_PROJECT_SETTINGS };
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [projects]);
-
-  // Cleanup sync timers on unmount
-  useEffect(() => {
-    return () => {
-      for (const timeoutId of Object.values(syncTimersRef.current)) {
-        window.clearTimeout(timeoutId);
-      }
-    };
-  }, []);
+    hydrateFromApi();
+  }, [hydrateFromApi]);
 
   const updateProjectSettings = useCallback(
     (projectId: string, patch: Partial<ProjectSyncSettings>) => {
@@ -480,74 +399,144 @@ export default function GitHubSettings() {
 
   const handleConnect = useCallback(async () => {
     setConnecting(true);
+    setError(null);
     try {
-      // OAuth flow placeholder — replace with real backend integration.
-      await new Promise((resolve) => window.setTimeout(resolve, 600));
-      setConnection({ ...SAMPLE_CONNECTION, connectedAt: new Date().toISOString() });
-      setRepos(SAMPLE_REPOS);
+      const payload = await apiRequest<{ install_url: string }>("/api/github/connect/start", {
+        method: "POST",
+      });
+
+      if (payload.install_url) {
+        window.open(payload.install_url, "_blank", "noopener,noreferrer");
+      }
+
+      await hydrateFromApi();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start GitHub connect flow");
     } finally {
       setConnecting(false);
     }
-  }, []);
+  }, [hydrateFromApi]);
 
-  const handleDisconnect = useCallback(() => {
-    setConnection(null);
-    setRepos([]);
-  }, []);
+  const handleDisconnect = useCallback(async () => {
+    setDisconnecting(true);
+    setError(null);
+    try {
+      await apiRequest<{ disconnected: boolean }>("/api/github/integration/connection", {
+        method: "DELETE",
+      });
+      await hydrateFromApi();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to disconnect GitHub");
+    } finally {
+      setDisconnecting(false);
+    }
+  }, [hydrateFromApi]);
 
   const handleRefreshRepos = useCallback(async () => {
-    if (!connection) return;
     setRefreshingRepos(true);
+    setError(null);
     try {
-      // API placeholder — replace with /api/integrations/github/repos, etc.
-      await new Promise((resolve) => window.setTimeout(resolve, 500));
-      setRepos((prev) => (prev.length > 0 ? prev : SAMPLE_REPOS));
+      const payload = await apiRequest<RepoListPayload>("/api/github/integration/repos");
+      setRepos(
+        (payload.repos || []).map((repo) => ({
+          id: repo.id,
+          fullName: repo.full_name,
+          defaultBranch: repo.default_branch || "main",
+          private: Boolean(repo.private),
+        }))
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh repositories");
     } finally {
       setRefreshingRepos(false);
     }
-  }, [connection]);
+  }, []);
 
   const handleRepoSelection = useCallback(
     (projectId: string, repoFullName: string | null) => {
-      const selectedRepo = repos.find((repo) => repo.fullName === repoFullName);
+      const selected = repos.find((repo) => repo.fullName === repoFullName);
       updateProjectSettings(projectId, {
         repoFullName,
-        branch: selectedRepo?.defaultBranch ?? "main",
+        branch: selected?.defaultBranch ?? "main",
       });
     },
     [repos, updateProjectSettings]
   );
 
-  const handleSyncNow = useCallback(
-    (projectId: string) => {
+  const handleSaveProjectSettings = useCallback(
+    async (projectId: string) => {
       const settings = projectSettings[projectId] ?? DEFAULT_PROJECT_SETTINGS;
-      if (!connection || !settings.enabled || !settings.repoFullName) return;
+      setSavingProjectId(projectId);
+      setError(null);
+      try {
+        await apiRequest(`/api/github/integration/settings/${encodeURIComponent(projectId)}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            enabled: settings.enabled,
+            repo_full_name: settings.repoFullName,
+            default_branch: settings.branch,
+            sync_mode: settings.mode,
+            auto_sync: settings.autoSync,
+            active_branches: settings.activeBranches,
+          }),
+        });
 
-      setProjectStatus((prev) => ({
-        ...prev,
-        [projectId]: {
-          state: "syncing",
-          lastSyncAt: prev[projectId]?.lastSyncAt ?? null,
-          message: "Syncing…",
-        },
-      }));
-
-      const existing = syncTimersRef.current[projectId];
-      if (existing) window.clearTimeout(existing);
-
-      syncTimersRef.current[projectId] = window.setTimeout(() => {
         setProjectStatus((prev) => ({
           ...prev,
           [projectId]: {
             state: "idle",
-            lastSyncAt: new Date().toISOString(),
-            message: "In sync",
+            lastSyncAt: prev[projectId]?.lastSyncAt ?? null,
+            message: "Saved",
           },
         }));
-      }, 1400);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to save project settings");
+      } finally {
+        setSavingProjectId(null);
+      }
     },
-    [connection, projectSettings]
+    [projectSettings]
   );
+
+  const handleSyncNow = useCallback(async (projectId: string) => {
+    setSyncingProjectId(projectId);
+    setError(null);
+    setProjectStatus((prev) => ({
+      ...prev,
+      [projectId]: {
+        state: "syncing",
+        lastSyncAt: prev[projectId]?.lastSyncAt ?? null,
+        message: "Syncing…",
+      },
+    }));
+
+    try {
+      await apiRequest(`/api/projects/${encodeURIComponent(projectId)}/repo/sync`, {
+        method: "POST",
+      });
+
+      setProjectStatus((prev) => ({
+        ...prev,
+        [projectId]: {
+          state: "idle",
+          lastSyncAt: new Date().toISOString(),
+          message: "Sync job queued",
+        },
+      }));
+    } catch (err) {
+      setProjectStatus((prev) => ({
+        ...prev,
+        [projectId]: {
+          state: "error",
+          lastSyncAt: prev[projectId]?.lastSyncAt ?? null,
+          message: "Sync failed",
+        },
+      }));
+      setError(err instanceof Error ? err.message : "Failed to trigger sync");
+    } finally {
+      setSyncingProjectId(null);
+    }
+  }, []);
 
   const configuredCount = useMemo(() => {
     return projects.filter((project) => {
@@ -561,9 +550,17 @@ export default function GitHubSettings() {
       .filter((status) => status.state === "idle" && status.lastSyncAt)
       .map((status) => status.lastSyncAt as string);
     if (timestamps.length === 0) return null;
-    const sorted = timestamps.sort();
-    return sorted[sorted.length - 1] ?? null;
+    timestamps.sort();
+    return timestamps[timestamps.length - 1] ?? null;
   }, [projectStatus]);
+
+  if (loading) {
+    return (
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+        <p className="text-sm text-slate-500 dark:text-slate-400">Loading GitHub settings…</p>
+      </section>
+    );
+  }
 
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
@@ -573,48 +570,38 @@ export default function GitHubSettings() {
             🐙
           </span>
           <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
-              GitHub
-            </h2>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">GitHub</h2>
             <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-              Connect your account, link repositories, and sync projects
+              Connect your GitHub App installation and map repos to projects.
             </p>
           </div>
         </div>
       </div>
 
       <div className="space-y-8 p-6">
-        {/* Connection */}
+        {error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+            {error}
+          </div>
+        )}
+
         <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-950/20">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
-              {connection?.avatarUrl ? (
-                <img
-                  src={connection.avatarUrl}
-                  alt="GitHub avatar"
-                  loading="lazy"
-                  decoding="async"
-                  className="h-10 w-10 rounded-full object-cover"
-                />
-              ) : (
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-200 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-200">
-                  GH
-                </div>
-              )}
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-200 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-200">
+                GH
+              </div>
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="font-medium text-slate-900 dark:text-white">
-                    {connection ? `@${connection.username}` : "Not connected"}
+                    {connection ? `@${connection.accountLogin}` : "Not connected"}
                   </p>
-                  {connection ? (
-                    <StatusBadge tone="success" label="Connected" />
-                  ) : (
-                    <StatusBadge tone="neutral" label="Disconnected" />
-                  )}
+                  {connection ? <StatusBadge tone="success" label="Connected" /> : <StatusBadge tone="neutral" label="Disconnected" />}
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                  OAuth flow placeholder — settings are stored locally until the
-                  server integration is wired.
+                  {connection
+                    ? `Installation #${connection.installationId} (${connection.accountType})`
+                    : "Connect GitHub to configure project sync settings."}
                 </p>
               </div>
             </div>
@@ -625,7 +612,7 @@ export default function GitHubSettings() {
                   <Button variant="secondary" onClick={handleRefreshRepos} loading={refreshingRepos}>
                     Refresh repos
                   </Button>
-                  <Button variant="danger" onClick={handleDisconnect}>
+                  <Button variant="danger" onClick={handleDisconnect} loading={disconnecting}>
                     Disconnect
                   </Button>
                 </>
@@ -639,11 +626,7 @@ export default function GitHubSettings() {
 
           {connection && (
             <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-              <span>
-                Connected {formatDateTime(connection.connectedAt)}
-              </span>
-              <span aria-hidden="true">•</span>
-              <span>Scopes: {connection.scopes.join(", ")}</span>
+              <span>Connected {formatDateTime(connection.connectedAt)}</span>
               {lastSuccessfulSync && (
                 <>
                   <span aria-hidden="true">•</span>
@@ -654,18 +637,10 @@ export default function GitHubSettings() {
           )}
         </div>
 
-        {/* Connected repos */}
         <div>
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">
-              Connected repositories
-            </h3>
-            <Button
-              variant="secondary"
-              disabled={!connection}
-              onClick={handleRefreshRepos}
-              loading={refreshingRepos}
-            >
+            <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">Available repositories</h3>
+            <Button variant="secondary" disabled={!connection} onClick={handleRefreshRepos} loading={refreshingRepos}>
               Refresh
             </Button>
           </div>
@@ -674,17 +649,9 @@ export default function GitHubSettings() {
             repos.length > 0 ? (
               <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-700">
                 {repoOptions.map((repo) => (
-                  <div
-                    key={repo.id}
-                    className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-                  >
+                  <div key={repo.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <a
-                        href={buildRepoUrl(repo.fullName)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-medium text-slate-900 hover:underline dark:text-white"
-                      >
+                      <a href={buildRepoUrl(repo.fullName)} target="_blank" rel="noreferrer" className="font-medium text-slate-900 hover:underline dark:text-white">
                         {repo.fullName}
                       </a>
                       <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
@@ -692,129 +659,80 @@ export default function GitHubSettings() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      {repo.private ? (
-                        <StatusBadge tone="warning" label="Private" />
-                      ) : (
-                        <StatusBadge tone="neutral" label="Public" />
-                      )}
-                      <StatusBadge tone="success" label="Connected" />
+                      {repo.private ? <StatusBadge tone="warning" label="Private" /> : <StatusBadge tone="neutral" label="Public" />}
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
               <div className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-6 py-8 text-center dark:border-slate-700 dark:bg-slate-800/50">
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  No repositories connected yet
-                </p>
-                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-                  Use “Refresh” to load repositories (placeholder).
-                </p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">No repositories found for this installation.</p>
               </div>
             )
           ) : (
             <div className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-6 py-8 text-center dark:border-slate-700 dark:bg-slate-800/50">
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                Connect GitHub to view repositories
-              </p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Connect GitHub to view repositories</p>
             </div>
           )}
         </div>
 
-        {/* Project sync settings */}
         <div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                Project sync
-              </h3>
+              <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">Project sync</h3>
               <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                 {configuredCount} of {projects.length} projects configured
               </p>
             </div>
-            <div className="text-xs text-slate-500 dark:text-slate-400">
-              Sync status is simulated until the backend is implemented.
-            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">Sync state is backed by the GitHub integration APIs.</div>
           </div>
 
-          {projectsLoading ? (
-            <div className="mt-4 flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
-              <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                />
-              </svg>
-              Loading projects…
-            </div>
-          ) : projects.length === 0 ? (
+          {projects.length === 0 ? (
             <div className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-6 py-8 text-center dark:border-slate-700 dark:bg-slate-800/50">
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                No projects found
-              </p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">No projects found</p>
             </div>
           ) : (
             <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-700">
               {projects.map((project) => {
-                const settings =
-                  projectSettings[project.id] ?? DEFAULT_PROJECT_SETTINGS;
+                const settings = projectSettings[project.id] ?? DEFAULT_PROJECT_SETTINGS;
+                const status = projectStatus[project.id];
+                const lastSyncAt = status?.lastSyncAt ?? null;
 
-                const computedBadge = (() => {
+                const badge = (() => {
                   if (!connection) return <StatusBadge tone="neutral" label="Disconnected" />;
                   if (!settings.enabled) return <StatusBadge tone="neutral" label="Disabled" />;
                   if (!settings.repoFullName) return <StatusBadge tone="warning" label="Select repo" />;
-
-                  const status = projectStatus[project.id];
-                  if (!status) return <StatusBadge tone="info" label="Ready" />;
-                  if (status.state === "syncing") return <StatusBadge tone="info" label="Syncing" />;
-                  if (status.state === "error") return <StatusBadge tone="danger" label="Error" />;
-                  return <StatusBadge tone="success" label="In sync" />;
+                  if (status?.state === "syncing") return <StatusBadge tone="info" label="Syncing" />;
+                  if (status?.state === "error") return <StatusBadge tone="danger" label="Needs attention" />;
+                  return <StatusBadge tone="success" label="Ready" />;
                 })();
-
-                const lastSyncAt = projectStatus[project.id]?.lastSyncAt ?? null;
 
                 return (
                   <details key={project.id} className="group">
                     <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 [&::-webkit-details-marker]:hidden">
                       <div className="min-w-0">
-                        <p className="truncate font-medium text-slate-900 dark:text-white">
-                          {project.name}
-                        </p>
+                        <p className="truncate font-medium text-slate-900 dark:text-white">{project.name}</p>
                         <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">
                           {settings.repoFullName ? (
                             <>
-                              Linked to{" "}
-                              <span className="font-mono">{settings.repoFullName}</span>
+                              Linked to <span className="font-mono">{settings.repoFullName}</span>
                             </>
                           ) : (
                             "No repository linked"
                           )}
-                          {lastSyncAt ? (
-                            <>
-                              {" "}
-                              • Last sync {formatDateTime(lastSyncAt)}
-                            </>
-                          ) : null}
+                          {lastSyncAt ? <> • Last sync {formatDateTime(lastSyncAt)}</> : null}
                         </p>
                       </div>
 
                       <div className="flex shrink-0 flex-wrap items-center gap-3">
-                        {computedBadge}
+                        {badge}
                         <Button
                           variant="secondary"
                           disabled={!connection || !settings.enabled || !settings.repoFullName}
+                          loading={syncingProjectId === project.id}
                           onClick={(e) => {
                             e.preventDefault();
-                            handleSyncNow(project.id);
+                            void handleSyncNow(project.id);
                           }}
                         >
                           Sync now
@@ -826,9 +744,7 @@ export default function GitHubSettings() {
                       <div className="grid gap-4 md:grid-cols-2">
                         <Toggle
                           checked={settings.enabled}
-                          onChange={(enabled) =>
-                            updateProjectSettings(project.id, { enabled })
-                          }
+                          onChange={(enabled) => updateProjectSettings(project.id, { enabled })}
                           label="Enable GitHub sync"
                           disabled={!connection}
                         />
@@ -836,15 +752,9 @@ export default function GitHubSettings() {
                         <Select
                           label="Repository"
                           value={settings.repoFullName ?? ""}
-                          onChange={(value) =>
-                            handleRepoSelection(project.id, value || null)
-                          }
+                          onChange={(value) => handleRepoSelection(project.id, value || null)}
                           disabled={!connection || !settings.enabled}
-                          helperText={
-                            settings.repoFullName
-                              ? "Repo is linked to this project"
-                              : "Select which repo this project syncs with"
-                          }
+                          helperText={settings.repoFullName ? "Repo is linked to this project" : "Select which repo this project syncs with"}
                         >
                           <option value="">Not linked</option>
                           {repoOptions.map((repo) => (
@@ -858,61 +768,40 @@ export default function GitHubSettings() {
                         <Input
                           label="Branch"
                           value={settings.branch}
-                          onChange={(branch) =>
-                            updateProjectSettings(project.id, { branch })
-                          }
-                          disabled={!connection || !settings.enabled || !settings.repoFullName}
+                          onChange={(value) => updateProjectSettings(project.id, { branch: value })}
+                          disabled={!connection || !settings.enabled}
                           placeholder="main"
-                          helperText="Used for pushes and sync operations"
+                          helperText="Default branch for sync/publish"
                         />
 
                         <Select
                           label="Mode"
                           value={settings.mode}
-                          onChange={(mode) =>
-                            updateProjectSettings(project.id, {
-                              mode: mode as SyncMode,
-                            })
-                          }
-                          disabled={!connection || !settings.enabled || !settings.repoFullName}
-                          helperText={
-                            settings.mode === "sync"
-                              ? "Two-way sync (project ↔ GitHub)"
-                              : "Push only (project → GitHub)"
-                          }
+                          onChange={(value) => updateProjectSettings(project.id, { mode: value as SyncMode })}
+                          disabled={!connection || !settings.enabled}
+                          helperText="Sync keeps bi-directional parity. Push is OtterCamp -> GitHub."
                         >
-                          <option value="sync">Two-way sync</option>
-                          <option value="push">Push only</option>
+                          <option value="sync">Sync (bi-directional)</option>
+                          <option value="push">Push (OtterCamp to GitHub)</option>
                         </Select>
 
-                        <div className="md:col-span-2">
-                          <Toggle
-                            checked={settings.autoSync}
-                            onChange={(autoSync) =>
-                              updateProjectSettings(project.id, { autoSync })
-                            }
-                            label="Auto-sync in background"
-                            disabled={!connection || !settings.enabled || !settings.repoFullName}
-                          />
-                          {projectStatus[project.id]?.message ? (
-                            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                              Status: {projectStatus[project.id]?.message}
-                            </p>
-                          ) : null}
-                          {settings.repoFullName ? (
-                            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                              Repo link:{" "}
-                              <a
-                                href={buildRepoUrl(settings.repoFullName)}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="font-mono text-slate-700 hover:underline dark:text-slate-200"
-                              >
-                                {buildRepoUrl(settings.repoFullName)}
-                              </a>
-                            </p>
-                          ) : null}
-                        </div>
+                        <Toggle
+                          checked={settings.autoSync}
+                          onChange={(autoSync) => updateProjectSettings(project.id, { autoSync })}
+                          label="Auto-sync on webhook updates"
+                          disabled={!connection || !settings.enabled}
+                        />
+                      </div>
+
+                      <div className="mt-4 flex items-center justify-end">
+                        <Button
+                          variant="primary"
+                          loading={savingProjectId === project.id}
+                          onClick={() => void handleSaveProjectSettings(project.id)}
+                          disabled={!connection}
+                        >
+                          Save settings
+                        </Button>
                       </div>
                     </div>
                   </details>
