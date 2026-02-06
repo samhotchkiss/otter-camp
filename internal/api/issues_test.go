@@ -42,7 +42,15 @@ func TestIssuesHandlerListAndGetIncludeOwnerParticipantsAndComments(t *testing.T
 	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
 		ProjectID: projectID,
 		Title:     "Issue API title",
-		Origin:    "local",
+		Origin:    "github",
+	})
+	require.NoError(t, err)
+	_, err = issueStore.UpsertGitHubLink(ctx, store.UpsertProjectIssueGitHubLinkInput{
+		IssueID:            issue.ID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		GitHubNumber:       42,
+		GitHubURL:          issueTestStringPtr("https://github.com/samhotchkiss/otter-camp/issues/42"),
+		GitHubState:        "open",
 	})
 	require.NoError(t, err)
 	_, err = issueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
@@ -78,6 +86,11 @@ func TestIssuesHandlerListAndGetIncludeOwnerParticipantsAndComments(t *testing.T
 	require.Equal(t, issue.ID, listResp.Items[0].ID)
 	require.NotNil(t, listResp.Items[0].OwnerAgentID)
 	require.Equal(t, ownerID, *listResp.Items[0].OwnerAgentID)
+	require.Equal(t, "issue", listResp.Items[0].Kind)
+	require.NotNil(t, listResp.Items[0].GitHubNumber)
+	require.Equal(t, int64(42), *listResp.Items[0].GitHubNumber)
+	require.NotNil(t, listResp.Items[0].GitHubURL)
+	require.Equal(t, "https://github.com/samhotchkiss/otter-camp/issues/42", *listResp.Items[0].GitHubURL)
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/issues/"+issue.ID+"?org_id="+orgID, nil)
 	getRec := httptest.NewRecorder()
@@ -90,6 +103,10 @@ func TestIssuesHandlerListAndGetIncludeOwnerParticipantsAndComments(t *testing.T
 	require.Len(t, detail.Participants, 2)
 	require.Len(t, detail.Comments, 1)
 	require.Equal(t, "First comment", detail.Comments[0].Body)
+	require.Equal(t, "issue", detail.Issue.Kind)
+	require.NotNil(t, detail.Issue.GitHubRepositoryFullName)
+	require.Equal(t, "samhotchkiss/otter-camp", *detail.Issue.GitHubRepositoryFullName)
+	require.NotEmpty(t, detail.Issue.LastActivityAt)
 }
 
 func TestIssuesHandlerCommentCreateValidatesAndPersists(t *testing.T) {
@@ -313,4 +330,79 @@ func TestIssuesHandlerCommentBroadcastsToIssueChannelSubscribersOnly(t *testing.
 		t.Fatalf("expected cross-org subscriber to receive no event, got %s", string(payload))
 	case <-time.After(120 * time.Millisecond):
 	}
+}
+
+func TestIssuesHandlerListSupportsKindFiltering(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-kind-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Kind Project")
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+
+	githubIssue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "GitHub Issue",
+		Origin:    "github",
+	})
+	require.NoError(t, err)
+	_, err = issueStore.UpsertGitHubLink(ctx, store.UpsertProjectIssueGitHubLinkInput{
+		IssueID:            githubIssue.ID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		GitHubNumber:       101,
+		GitHubURL:          issueTestStringPtr("https://github.com/samhotchkiss/otter-camp/issues/101"),
+		GitHubState:        "open",
+	})
+	require.NoError(t, err)
+
+	githubPR, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "GitHub PR",
+		Origin:    "github",
+	})
+	require.NoError(t, err)
+	_, err = issueStore.UpsertGitHubLink(ctx, store.UpsertProjectIssueGitHubLinkInput{
+		IssueID:            githubPR.ID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		GitHubNumber:       202,
+		GitHubURL:          issueTestStringPtr("https://github.com/samhotchkiss/otter-camp/pull/202"),
+		GitHubState:        "open",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	prReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/issues?org_id="+orgID+"&project_id="+projectID+"&origin=github&kind=pull_request",
+		nil,
+	)
+	prRec := httptest.NewRecorder()
+	router.ServeHTTP(prRec, prReq)
+	require.Equal(t, http.StatusOK, prRec.Code)
+
+	var prResp issueListResponse
+	require.NoError(t, json.NewDecoder(prRec.Body).Decode(&prResp))
+	require.Len(t, prResp.Items, 1)
+	require.Equal(t, githubPR.ID, prResp.Items[0].ID)
+	require.Equal(t, "pull_request", prResp.Items[0].Kind)
+
+	issueReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/issues?org_id="+orgID+"&project_id="+projectID+"&origin=github&kind=issue",
+		nil,
+	)
+	issueRec := httptest.NewRecorder()
+	router.ServeHTTP(issueRec, issueReq)
+	require.Equal(t, http.StatusOK, issueRec.Code)
+
+	var issueResp issueListResponse
+	require.NoError(t, json.NewDecoder(issueRec.Body).Decode(&issueResp))
+	require.Len(t, issueResp.Items, 1)
+	require.Equal(t, githubIssue.ID, issueResp.Items[0].ID)
+	require.Equal(t, "issue", issueResp.Items[0].Kind)
+}
+
+func issueTestStringPtr(v string) *string {
+	return &v
 }

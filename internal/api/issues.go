@@ -21,14 +21,20 @@ type IssuesHandler struct {
 }
 
 type issueSummaryPayload struct {
-	ID           string  `json:"id"`
-	ProjectID    string  `json:"project_id"`
-	IssueNumber  int64   `json:"issue_number"`
-	Title        string  `json:"title"`
-	Body         *string `json:"body,omitempty"`
-	State        string  `json:"state"`
-	Origin       string  `json:"origin"`
-	OwnerAgentID *string `json:"owner_agent_id,omitempty"`
+	ID                       string  `json:"id"`
+	ProjectID                string  `json:"project_id"`
+	IssueNumber              int64   `json:"issue_number"`
+	Title                    string  `json:"title"`
+	Body                     *string `json:"body,omitempty"`
+	State                    string  `json:"state"`
+	Origin                   string  `json:"origin"`
+	Kind                     string  `json:"kind"`
+	OwnerAgentID             *string `json:"owner_agent_id,omitempty"`
+	LastActivityAt           string  `json:"last_activity_at"`
+	GitHubNumber             *int64  `json:"github_number,omitempty"`
+	GitHubURL                *string `json:"github_url,omitempty"`
+	GitHubState              *string `json:"github_state,omitempty"`
+	GitHubRepositoryFullName *string `json:"github_repository_full_name,omitempty"`
 }
 
 type issueParticipantPayload struct {
@@ -84,6 +90,10 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("origin")); raw != "" {
 		origin = &raw
 	}
+	var kind *string
+	if raw := strings.TrimSpace(r.URL.Query().Get("kind")); raw != "" {
+		kind = &raw
+	}
 
 	limit := 100
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
@@ -99,8 +109,19 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 		ProjectID: projectID,
 		State:     state,
 		Origin:    origin,
+		Kind:      kind,
 		Limit:     limit,
 	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	issueIDs := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		issueIDs = append(issueIDs, issue.ID)
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), issueIDs)
 	if err != nil {
 		handleIssueStoreError(w, err)
 		return
@@ -113,16 +134,7 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 			handleIssueStoreError(w, err)
 			return
 		}
-		items = append(items, issueSummaryPayload{
-			ID:           issue.ID,
-			ProjectID:    issue.ProjectID,
-			IssueNumber:  issue.IssueNumber,
-			Title:        issue.Title,
-			Body:         issue.Body,
-			State:        issue.State,
-			Origin:       issue.Origin,
-			OwnerAgentID: ownerAgentIDFromParticipants(participants),
-		})
+		items = append(items, toIssueSummaryPayload(issue, participants, findIssueLink(linksByIssueID, issue.ID)))
 	}
 
 	sendJSON(w, http.StatusOK, issueListResponse{Items: items, Total: len(items)})
@@ -155,18 +167,14 @@ func (h *IssuesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
 
 	sendJSON(w, http.StatusOK, issueDetailPayload{
-		Issue: issueSummaryPayload{
-			ID:           issue.ID,
-			ProjectID:    issue.ProjectID,
-			IssueNumber:  issue.IssueNumber,
-			Title:        issue.Title,
-			Body:         issue.Body,
-			State:        issue.State,
-			Origin:       issue.Origin,
-			OwnerAgentID: ownerAgentIDFromParticipants(participants),
-		},
+		Issue:        toIssueSummaryPayload(*issue, participants, findIssueLink(linksByIssueID, issue.ID)),
 		Participants: mapIssueParticipants(participants),
 		Comments:     mapIssueComments(comments),
 	})
@@ -320,6 +328,55 @@ func mapIssueComments(comments []store.ProjectIssueComment) []issueCommentPayloa
 		})
 	}
 	return out
+}
+
+func toIssueSummaryPayload(
+	issue store.ProjectIssue,
+	participants []store.ProjectIssueParticipant,
+	link *store.ProjectIssueGitHubLink,
+) issueSummaryPayload {
+	payload := issueSummaryPayload{
+		ID:             issue.ID,
+		ProjectID:      issue.ProjectID,
+		IssueNumber:    issue.IssueNumber,
+		Title:          issue.Title,
+		Body:           issue.Body,
+		State:          issue.State,
+		Origin:         issue.Origin,
+		Kind:           inferIssueKind(link),
+		OwnerAgentID:   ownerAgentIDFromParticipants(participants),
+		LastActivityAt: issue.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+	if link != nil {
+		payload.GitHubNumber = &link.GitHubNumber
+		payload.GitHubURL = link.GitHubURL
+		gitHubState := link.GitHubState
+		payload.GitHubState = &gitHubState
+		repo := link.RepositoryFullName
+		payload.GitHubRepositoryFullName = &repo
+	}
+	return payload
+}
+
+func inferIssueKind(link *store.ProjectIssueGitHubLink) string {
+	if link != nil && link.GitHubURL != nil {
+		if strings.Contains(strings.ToLower(strings.TrimSpace(*link.GitHubURL)), "/pull/") {
+			return "pull_request"
+		}
+	}
+	return "issue"
+}
+
+func findIssueLink(
+	links map[string]store.ProjectIssueGitHubLink,
+	issueID string,
+) *store.ProjectIssueGitHubLink {
+	link, ok := links[issueID]
+	if !ok {
+		return nil
+	}
+	copy := link
+	return &copy
 }
 
 func (h *IssuesHandler) broadcastIssueCommentCreated(

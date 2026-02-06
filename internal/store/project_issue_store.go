@@ -38,6 +38,7 @@ type ProjectIssueFilter struct {
 	ProjectID string
 	State     *string
 	Origin    *string
+	Kind      *string
 	Limit     int
 }
 
@@ -207,8 +208,10 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		limit = 100
 	}
 
-	query := `SELECT id, org_id, project_id, issue_number, title, body, state, origin, created_at, updated_at, closed_at
-		FROM project_issues WHERE project_id = $1`
+	query := `SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.created_at, i.updated_at, i.closed_at
+		FROM project_issues i
+		LEFT JOIN project_issue_github_links l ON l.issue_id = i.id
+		WHERE i.project_id = $1`
 	args := []any{projectID}
 	argPos := 2
 
@@ -230,8 +233,19 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		args = append(args, origin)
 		argPos++
 	}
+	if filter.Kind != nil && strings.TrimSpace(*filter.Kind) != "" {
+		kind := strings.TrimSpace(strings.ToLower(*filter.Kind))
+		switch kind {
+		case "issue":
+			query += ` AND (l.github_url IS NULL OR l.github_url NOT ILIKE '%/pull/%')`
+		case "pull_request":
+			query += ` AND l.github_url ILIKE '%/pull/%'`
+		default:
+			return nil, fmt.Errorf("invalid kind filter")
+		}
+	}
 
-	query += fmt.Sprintf(" ORDER BY issue_number DESC LIMIT $%d", argPos)
+	query += fmt.Sprintf(" ORDER BY i.issue_number DESC LIMIT $%d", argPos)
 	args = append(args, limit)
 
 	conn, err := WithWorkspace(ctx, s.db)
@@ -261,6 +275,75 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		return nil, fmt.Errorf("failed to read issue rows: %w", err)
 	}
 	return items, nil
+}
+
+func (s *ProjectIssueStore) ListGitHubLinksByIssueIDs(
+	ctx context.Context,
+	issueIDs []string,
+) (map[string]ProjectIssueGitHubLink, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	normalizedIDs := make([]string, 0, len(issueIDs))
+	seen := make(map[string]struct{}, len(issueIDs))
+	for _, raw := range issueIDs {
+		issueID := strings.TrimSpace(raw)
+		if !uuidRegex.MatchString(issueID) {
+			return nil, fmt.Errorf("invalid issue_id")
+		}
+		if _, ok := seen[issueID]; ok {
+			continue
+		}
+		seen[issueID] = struct{}{}
+		normalizedIDs = append(normalizedIDs, issueID)
+	}
+
+	links := make(map[string]ProjectIssueGitHubLink, len(normalizedIDs))
+	if len(normalizedIDs) == 0 {
+		return links, nil
+	}
+
+	placeholders := make([]string, len(normalizedIDs))
+	args := make([]any, len(normalizedIDs))
+	for i, issueID := range normalizedIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = issueID
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	rows, err := conn.QueryContext(
+		ctx,
+		`SELECT id, org_id, issue_id, repository_full_name, github_number, github_url, github_state, last_synced_at
+			FROM project_issue_github_links
+			WHERE issue_id IN (`+strings.Join(placeholders, ",")+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list issue github links: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		link, err := scanProjectIssueGitHubLink(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan issue github link row: %w", err)
+		}
+		if link.OrgID != workspaceID {
+			return nil, ErrForbidden
+		}
+		links[link.IssueID] = link
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read issue github link rows: %w", err)
+	}
+	return links, nil
 }
 
 func (s *ProjectIssueStore) GetIssueByID(ctx context.Context, issueID string) (*ProjectIssue, error) {

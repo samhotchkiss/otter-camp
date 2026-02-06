@@ -87,6 +87,29 @@ func TestProjectIssueStore_ListByProjectStateAndOrigin(t *testing.T) {
 		Origin:    "github",
 	})
 	require.NoError(t, err)
+	_, err = issueStore.UpsertGitHubLink(ctx, UpsertProjectIssueGitHubLinkInput{
+		IssueID:            openGitHubIssue.ID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		GitHubNumber:       123,
+		GitHubURL:          stringPtr("https://github.com/samhotchkiss/otter-camp/issues/123"),
+		GitHubState:        "open",
+	})
+	require.NoError(t, err)
+	openGitHubPR, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Imported open PR",
+		State:     "open",
+		Origin:    "github",
+	})
+	require.NoError(t, err)
+	_, err = issueStore.UpsertGitHubLink(ctx, UpsertProjectIssueGitHubLinkInput{
+		IssueID:            openGitHubPR.ID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		GitHubNumber:       124,
+		GitHubURL:          stringPtr("https://github.com/samhotchkiss/otter-camp/pull/124"),
+		GitHubState:        "open",
+	})
+	require.NoError(t, err)
 	_, err = issueStore.CreateIssue(ctx, CreateProjectIssueInput{
 		ProjectID: projectID,
 		Title:     "Imported closed issue",
@@ -103,10 +126,41 @@ func TestProjectIssueStore_ListByProjectStateAndOrigin(t *testing.T) {
 		Origin:    &origin,
 	})
 	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Equal(t, openGitHubIssue.ID, results[0].ID)
-	require.Equal(t, "open", results[0].State)
-	require.Equal(t, "github", results[0].Origin)
+	require.Len(t, results, 2)
+	resultIDs := map[string]bool{
+		results[0].ID: true,
+		results[1].ID: true,
+	}
+	require.True(t, resultIDs[openGitHubIssue.ID])
+	require.True(t, resultIDs[openGitHubPR.ID])
+
+	kindIssue := "issue"
+	issuesOnly, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID: projectID,
+		State:     &state,
+		Origin:    &origin,
+		Kind:      &kindIssue,
+	})
+	require.NoError(t, err)
+	require.Len(t, issuesOnly, 1)
+	require.Equal(t, openGitHubIssue.ID, issuesOnly[0].ID)
+
+	kindPR := "pull_request"
+	prsOnly, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID: projectID,
+		State:     &state,
+		Origin:    &origin,
+		Kind:      &kindPR,
+	})
+	require.NoError(t, err)
+	require.Len(t, prsOnly, 1)
+	require.Equal(t, openGitHubPR.ID, prsOnly[0].ID)
+
+	links, err := issueStore.ListGitHubLinksByIssueIDs(ctx, []string{openGitHubIssue.ID, openGitHubPR.ID})
+	require.NoError(t, err)
+	require.Len(t, links, 2)
+	require.Equal(t, int64(123), links[openGitHubIssue.ID].GitHubNumber)
+	require.Equal(t, int64(124), links[openGitHubPR.ID].GitHubNumber)
 }
 
 func TestProjectIssueStore_IsolationBlocksCrossOrgReadsAndWrites(t *testing.T) {

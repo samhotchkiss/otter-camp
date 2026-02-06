@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProjectChatPanel from "../components/project/ProjectChatPanel";
+import ProjectIssuesList from "../components/project/ProjectIssuesList";
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
@@ -201,12 +202,12 @@ function ActivityItem({ activity }: { activity: Activity }) {
   );
 }
 
-type TabKey = "board" | "list" | "activity" | "chat" | "settings";
+type TabKey = "board" | "list" | "activity" | "chat" | "issues" | "settings";
 
 export default function ProjectDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id, issueId } = useParams<{ id: string; issueId?: string }>();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabKey>("board");
+  const [activeTab, setActiveTab] = useState<TabKey>(issueId ? "issues" : "board");
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
@@ -324,6 +325,12 @@ export default function ProjectDetailPage() {
     return tasks.filter((t) => t.status !== "done" && t.status !== "cancelled").length;
   }, [tasks]);
 
+  useEffect(() => {
+    if (issueId) {
+      setActiveTab("issues");
+    }
+  }, [issueId]);
+
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
@@ -369,6 +376,7 @@ export default function ProjectDetailPage() {
     { key: "list", label: "List" },
     { key: "activity", label: "Activity" },
     { key: "chat", label: "Chat", badge: chatUnreadCount > 0 ? chatUnreadCount : undefined },
+    { key: "issues", label: "Issues" },
     { key: "settings", label: "Settings" },
   ];
 
@@ -559,6 +567,16 @@ export default function ProjectDetailPage() {
           onUnreadChange={setChatUnreadCount}
         />
       </div>
+
+      {activeTab === "issues" && (
+        <ProjectIssuesList
+          projectId={project.id}
+          selectedIssueID={issueId ?? null}
+          onSelectIssue={(selectedIssueID) =>
+            navigate(`/projects/${project.id}/issues/${selectedIssueID}`)
+          }
+        />
+      )}
 
       {activeTab === "settings" && (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
