@@ -251,7 +251,7 @@ func TestRLSEnabled(t *testing.T) {
 	db := setupTestDatabase(t, connStr)
 
 	// Check that RLS is enabled on key tables
-	tables := []string{"tasks", "agents", "projects", "activity_log", "tags"}
+	tables := []string{"tasks", "agents", "projects", "activity_log", "tags", "project_chat_messages"}
 
 	for _, table := range tables {
 		var rlsEnabled bool

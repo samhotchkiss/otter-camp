@@ -76,6 +76,7 @@ func NewRouter() http.Handler {
 	githubSyncHealthHandler := &GitHubSyncHealthHandler{}
 	githubPullRequestsHandler := &GitHubPullRequestsHandler{}
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
+	projectChatHandler := &ProjectChatHandler{Hub: hub}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -86,8 +87,10 @@ func NewRouter() http.Handler {
 		githubSyncHealthHandler.Store = githubSyncJobStore
 		githubPullRequestsHandler.Store = store.NewGitHubIssuePRStore(db)
 		githubIntegrationHandler.SyncJobs = githubSyncJobStore
+		projectChatHandler.ChatStore = store.NewProjectChatStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
+	projectChatHandler.ProjectStore = projectStore
 
 	// All API routes under /api prefix
 	r.Route("/api", func(r chi.Router) {
@@ -115,6 +118,9 @@ func NewRouter() http.Handler {
 		r.Get("/workflows", workflowsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects", projectsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}", projectsHandler.Get)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat/search", projectChatHandler.Search)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages", projectChatHandler.Create)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/projects/{id}/repo/branches", githubIntegrationHandler.GetProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Put("/projects/{id}/repo/branches", githubIntegrationHandler.UpdateProjectBranches)

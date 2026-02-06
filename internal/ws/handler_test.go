@@ -22,6 +22,24 @@ func TestIsAllowedSubscriptionOrgID(t *testing.T) {
 	}
 }
 
+func TestIsAllowedSubscriptionTopic(t *testing.T) {
+	if !isAllowedSubscriptionTopic("project:550e8400-e29b-41d4-a716-446655440000:chat") {
+		t.Fatalf("expected project topic to be allowed")
+	}
+	if !isAllowedSubscriptionTopic("issue:12345") {
+		t.Fatalf("expected issue topic to be allowed")
+	}
+	if isAllowedSubscriptionTopic("") {
+		t.Fatalf("expected empty topic to be rejected")
+	}
+	if isAllowedSubscriptionTopic("project:bad topic") {
+		t.Fatalf("expected topic with spaces to be rejected")
+	}
+	if isAllowedSubscriptionTopic("project/<script>") {
+		t.Fatalf("expected topic with disallowed chars to be rejected")
+	}
+}
+
 func TestIsWebSocketOriginAllowed_NoOrigin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://api.otter.camp/ws", nil)
 	req.Host = "api.otter.camp"

@@ -13,7 +13,8 @@ export type WebSocketMessageType =
   | "FeedItemsAdded"
   | "DMMessageReceived"
   | "ExecApprovalRequested"
-  | "ExecApprovalResolved";
+  | "ExecApprovalResolved"
+  | "ProjectChatMessageCreated";
 
 export type WebSocketMessage =
   | {
@@ -46,6 +47,7 @@ const MESSAGE_TYPES: WebSocketMessageType[] = [
   "DMMessageReceived",
   "ExecApprovalRequested",
   "ExecApprovalResolved",
+  "ProjectChatMessageCreated",
 ];
 
 const messageTypeSet = new Set<WebSocketMessageType>(MESSAGE_TYPES);

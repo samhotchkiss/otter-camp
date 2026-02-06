@@ -27,6 +27,7 @@ var upgrader = websocket.Upgrader{
 }
 
 var orgIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
+var topicPattern = regexp.MustCompile(`^[a-zA-Z0-9:_-]{1,160}$`)
 
 // Handler upgrades HTTP connections to websocket clients.
 type Handler struct {
@@ -41,21 +42,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := NewClient(h.Hub, conn)
-	h.Hub.register <- client
+	h.Hub.Register(client)
 
 	go client.WritePump()
 	client.ReadPump()
 }
 
 type clientMessage struct {
-	Type  string `json:"type"`
-	OrgID string `json:"org_id"`
+	Type    string `json:"type"`
+	OrgID   string `json:"org_id"`
+	Topic   string `json:"topic"`
+	Channel string `json:"channel"`
 }
 
 // ReadPump pumps messages from the websocket connection.
 func (c *Client) ReadPump() {
 	defer func() {
-		c.Hub.unregister <- c
+		c.Hub.Unregister(c)
 		c.Conn.Close()
 	}()
 
@@ -81,6 +84,21 @@ func (c *Client) ReadPump() {
 			orgID := strings.TrimSpace(payload.OrgID)
 			if isAllowedSubscriptionOrgID(orgID) {
 				c.SetOrgID(orgID)
+			}
+			topic := strings.TrimSpace(payload.Topic)
+			if topic == "" {
+				topic = strings.TrimSpace(payload.Channel)
+			}
+			if isAllowedSubscriptionTopic(topic) {
+				c.SubscribeTopic(topic)
+			}
+		case "unsubscribe":
+			topic := strings.TrimSpace(payload.Topic)
+			if topic == "" {
+				topic = strings.TrimSpace(payload.Channel)
+			}
+			if isAllowedSubscriptionTopic(topic) {
+				c.UnsubscribeTopic(topic)
 			}
 		}
 	}
@@ -123,6 +141,14 @@ func isAllowedSubscriptionOrgID(orgID string) bool {
 		return true
 	}
 	return orgIDPattern.MatchString(orgID)
+}
+
+func isAllowedSubscriptionTopic(topic string) bool {
+	topic = strings.TrimSpace(topic)
+	if topic == "" {
+		return false
+	}
+	return topicPattern.MatchString(topic)
 }
 
 func isWebSocketOriginAllowed(r *http.Request) bool {
