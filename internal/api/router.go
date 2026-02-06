@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
+	"github.com/samhotchkiss/otter-camp/internal/gitserver"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
@@ -116,6 +118,28 @@ func NewRouter() http.Handler {
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	projectChatHandler.ProjectStore = projectStore
+
+	if db != nil && projectStore != nil {
+		gitHandler := &gitserver.Handler{
+			RepoResolver: func(ctx context.Context, orgID, projectID string) (string, error) {
+				if authOrg := gitserver.OrgIDFromContext(ctx); authOrg != "" && authOrg != orgID {
+					return "", store.ErrForbidden
+				}
+				workspaceCtx := context.WithValue(ctx, middleware.WorkspaceIDKey, orgID)
+				return projectStore.GetRepoPath(workspaceCtx, projectID)
+			},
+		}
+		gitAuth := gitserver.AuthMiddleware(func(ctx context.Context, token string) (string, string, error) {
+			req := &http.Request{Header: http.Header{}}
+			req.Header.Set("Authorization", "Bearer "+token)
+			identity, err := requireSessionIdentity(ctx, db, req)
+			if err != nil {
+				return "", "", err
+			}
+			return identity.OrgID, identity.UserID, nil
+		})
+		r.Mount("/git", gitAuth(gitHandler.Routes()))
+	}
 
 	// All API routes under /api prefix
 	r.Route("/api", func(r chi.Router) {
