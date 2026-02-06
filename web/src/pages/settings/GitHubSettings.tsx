@@ -42,6 +42,32 @@ type SyncStatus = {
   message?: string;
 };
 
+type PublishCheck = {
+  name: string;
+  status: "pass" | "fail" | "info";
+  detail: string;
+  blocking: boolean;
+};
+
+type PublishResponse = {
+  project_id: string;
+  dry_run: boolean;
+  status: "dry_run" | "blocked" | "no_changes" | "published";
+  checks: PublishCheck[];
+  local_head_sha?: string | null;
+  remote_head_sha?: string | null;
+  commits_ahead: number;
+  published_at?: string | null;
+};
+
+type PublishRunState = {
+  running: null | "dry_run" | "publish";
+  lastDryRun: PublishResponse | null;
+  lastPublish: PublishResponse | null;
+  logs: string[];
+  error: string | null;
+};
+
 type IntegrationStatusPayload = {
   connected: boolean;
   installation?: {
@@ -92,6 +118,14 @@ const DEFAULT_PROJECT_SETTINGS: ProjectSyncSettings = {
   githubPREnabled: true,
 };
 
+const DEFAULT_PUBLISH_STATE: PublishRunState = {
+  running: null,
+  lastDryRun: null,
+  lastPublish: null,
+  logs: [],
+  error: null,
+};
+
 function formatDateTime(iso: string): string {
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
@@ -101,6 +135,25 @@ function formatDateTime(iso: string): string {
 
 function buildRepoUrl(fullName: string): string {
   return `https://github.com/${fullName}`;
+}
+
+function publishLogLine(message: string): string {
+  const stamp = new Intl.DateTimeFormat("en-US", { timeStyle: "medium" }).format(new Date());
+  return `[${stamp}] ${message}`;
+}
+
+function publishFailureGuidance(errorMessage: string): string {
+  const normalized = errorMessage.toLowerCase();
+  if (normalized.includes("unresolved sync conflicts")) {
+    return "Resolve sync conflicts in project settings, then retry publish.";
+  }
+  if (normalized.includes("publish push failed")) {
+    return "Run Sync now, verify branch state, and retry publish.";
+  }
+  if (normalized.includes("local repo path")) {
+    return "Verify local clone setup before publishing again.";
+  }
+  return "Run a dry run first and resolve any blocking checks before retrying publish.";
 }
 
 function getRequestHeaders(): Record<string, string> {
@@ -305,6 +358,8 @@ export default function GitHubSettings() {
   const [refreshingRepos, setRefreshingRepos] = useState(false);
   const [savingProjectId, setSavingProjectId] = useState<string | null>(null);
   const [syncingProjectId, setSyncingProjectId] = useState<string | null>(null);
+  const [publishingProjectId, setPublishingProjectId] = useState<string | null>(null);
+  const [publishStateByProject, setPublishStateByProject] = useState<Record<string, PublishRunState>>({});
 
   const repoOptions = useMemo(() => {
     const sorted = [...repos];
@@ -547,6 +602,113 @@ export default function GitHubSettings() {
     }
   }, []);
 
+  const updatePublishState = useCallback(
+    (projectId: string, updater: (current: PublishRunState) => PublishRunState) => {
+      setPublishStateByProject((prev) => {
+        const current = prev[projectId] ?? DEFAULT_PUBLISH_STATE;
+        return {
+          ...prev,
+          [projectId]: updater(current),
+        };
+      });
+    },
+    []
+  );
+
+  const runPublish = useCallback(
+    async (projectId: string, dryRun: boolean) => {
+      const runMode: PublishRunState["running"] = dryRun ? "dry_run" : "publish";
+      setPublishingProjectId(projectId);
+      setError(null);
+      updatePublishState(projectId, (current) => ({
+        ...current,
+        running: runMode,
+        error: null,
+        logs: [...current.logs, publishLogLine(dryRun ? "Starting dry run." : "Starting publish.")].slice(-20),
+      }));
+
+      try {
+        const response = await apiRequest<PublishResponse>(
+          `/api/projects/${encodeURIComponent(projectId)}/publish`,
+          {
+            method: "POST",
+            body: JSON.stringify({ dry_run: dryRun }),
+          }
+        );
+
+        const checkLines = response.checks.map((check) =>
+          publishLogLine(
+            `${check.status.toUpperCase()} ${check.name}: ${check.detail}${check.blocking ? " (blocking)" : ""}`
+          )
+        );
+        const nextLogs = [
+          ...checkLines,
+          publishLogLine(`Publish API status: ${response.status}`),
+        ];
+        if (response.status === "blocked") {
+          nextLogs.push(
+            publishLogLine("Action required: resolve blocking checks, then retry publish.")
+          );
+        }
+        if (response.status === "published" && response.published_at) {
+          nextLogs.push(publishLogLine(`Published at ${formatDateTime(response.published_at)}.`));
+        }
+
+        updatePublishState(projectId, (current) => ({
+          ...current,
+          running: null,
+          error: null,
+          lastDryRun: dryRun ? response : current.lastDryRun,
+          lastPublish: dryRun ? current.lastPublish : response,
+          logs: [...current.logs, ...nextLogs].slice(-20),
+        }));
+
+        if (!dryRun) {
+          setProjectStatus((prev) => ({
+            ...prev,
+            [projectId]: {
+              state: response.status === "blocked" ? "error" : "idle",
+              lastSyncAt: new Date().toISOString(),
+              message:
+                response.status === "published"
+                  ? "Published"
+                  : response.status === "blocked"
+                    ? "Publish blocked"
+                    : "Publish complete",
+            },
+          }));
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Publish request failed";
+        const guidance = publishFailureGuidance(message);
+        setError(message);
+        updatePublishState(projectId, (current) => ({
+          ...current,
+          running: null,
+          error: message,
+          logs: [...current.logs, publishLogLine(`Publish failed: ${message}`), publishLogLine(guidance)].slice(-20),
+        }));
+      } finally {
+        setPublishingProjectId(null);
+      }
+    },
+    [updatePublishState]
+  );
+
+  const handlePublishDryRun = useCallback(
+    (projectId: string) => {
+      void runPublish(projectId, true);
+    },
+    [runPublish]
+  );
+
+  const handlePublishExecute = useCallback(
+    (projectId: string) => {
+      void runPublish(projectId, false);
+    },
+    [runPublish]
+  );
+
   const configuredCount = useMemo(() => {
     return projects.filter((project) => {
       const settings = projectSettings[project.id] ?? DEFAULT_PROJECT_SETTINGS;
@@ -705,6 +867,8 @@ export default function GitHubSettings() {
               {projects.map((project) => {
                 const settings = projectSettings[project.id] ?? DEFAULT_PROJECT_SETTINGS;
                 const status = projectStatus[project.id];
+                const publishState = publishStateByProject[project.id] ?? DEFAULT_PUBLISH_STATE;
+                const latestPublishSummary = publishState.lastPublish ?? publishState.lastDryRun;
                 const lastSyncAt = status?.lastSyncAt ?? null;
                 const modeLabel =
                   settings.workflowMode === "local_issue_review"
@@ -828,6 +992,83 @@ export default function GitHubSettings() {
                         >
                           Save settings
                         </Button>
+                      </div>
+
+                      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900/40">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <h4 className="text-sm font-semibold text-slate-900 dark:text-white">Publish</h4>
+                            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                              Run preflight checks and publish commits to GitHub.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              variant="secondary"
+                              loading={publishingProjectId === project.id && publishState.running === "dry_run"}
+                              disabled={!connection || !settings.enabled || !settings.repoFullName}
+                              onClick={() => handlePublishDryRun(project.id)}
+                            >
+                              Dry run
+                            </Button>
+                            <Button
+                              variant="primary"
+                              loading={publishingProjectId === project.id && publishState.running === "publish"}
+                              disabled={!connection || !settings.enabled || !settings.repoFullName}
+                              onClick={() => handlePublishExecute(project.id)}
+                            >
+                              Publish
+                            </Button>
+                          </div>
+                        </div>
+
+                        {latestPublishSummary && (
+                          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-700 dark:bg-slate-800/40">
+                            <p className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                              Dry-run summary
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                              Status: <span className="font-semibold">{latestPublishSummary.status}</span> • Commits ahead:{" "}
+                              {latestPublishSummary.commits_ahead}
+                            </p>
+                            {publishState.lastPublish?.published_at && (
+                              <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-300">
+                                Published at {formatDateTime(publishState.lastPublish.published_at)}
+                              </p>
+                            )}
+                            <ul className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">
+                              {latestPublishSummary.checks.map((check) => (
+                                <li key={`${project.id}-${check.name}`}>
+                                  <span className="font-semibold">{check.name}</span>: {check.detail} •{" "}
+                                  {check.blocking ? "Blocking" : "Non-blocking"}
+                                </li>
+                              ))}
+                            </ul>
+                            {latestPublishSummary.status === "blocked" && (
+                              <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                                Action required: resolve blocking checks, run sync/conflict resolution, then retry publish.
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {publishState.error && (
+                          <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+                            <p className="font-semibold">Publish failed</p>
+                            <p className="mt-1">{publishFailureGuidance(publishState.error)}</p>
+                          </div>
+                        )}
+
+                        {publishState.logs.length > 0 && (
+                          <div className="mt-3">
+                            <p className="text-xs font-medium text-slate-700 dark:text-slate-200">Publish progress log</p>
+                            <ul className="mt-1 space-y-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">
+                              {publishState.logs.map((line, index) => (
+                                <li key={`${project.id}-publish-log-${index}`}>{line}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </details>
