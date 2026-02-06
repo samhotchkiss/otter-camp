@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -57,6 +59,11 @@ type projectChatSearchItem struct {
 type projectChatSearchResponse struct {
 	Items []projectChatSearchItem `json:"items"`
 	Total int                     `json:"total"`
+}
+
+type projectChatSaveToNotesResponse struct {
+	Path  string `json:"path"`
+	Saved bool   `json:"saved"`
 }
 
 type projectChatMessageCreatedEvent struct {
@@ -249,6 +256,46 @@ func (h *ProjectChatHandler) Search(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusOK, projectChatSearchResponse{Items: items, Total: len(items)})
 }
 
+func (h *ProjectChatHandler) SaveToNotes(w http.ResponseWriter, r *http.Request) {
+	if h.ProjectStore == nil || h.ChatStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+	messageID := strings.TrimSpace(chi.URLParam(r, "messageID"))
+	if messageID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "message id is required"})
+		return
+	}
+
+	if err := h.requireProjectAccess(r.Context(), projectID); err != nil {
+		handleProjectChatStoreError(w, err)
+		return
+	}
+
+	message, err := h.ChatStore.GetByID(r.Context(), projectID, messageID)
+	if err != nil {
+		handleProjectChatStoreError(w, err)
+		return
+	}
+
+	relativePath, saved, err := saveProjectChatMessageToNotes(*message)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save message to notes"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, projectChatSaveToNotesResponse{
+		Path:  relativePath,
+		Saved: saved,
+	})
+}
+
 func (h *ProjectChatHandler) requireProjectAccess(ctx context.Context, projectID string) error {
 	workspaceID := middleware.WorkspaceFromContext(ctx)
 	if workspaceID == "" {
@@ -296,6 +343,65 @@ func toProjectChatPayload(message store.ProjectChatMessage) projectChatMessagePa
 		CreatedAt: message.CreatedAt,
 		UpdatedAt: message.UpdatedAt,
 	}
+}
+
+func saveProjectChatMessageToNotes(message store.ProjectChatMessage) (string, bool, error) {
+	root := strings.TrimSpace(os.Getenv("OTTER_CONTENT_ROOT"))
+	if root == "" {
+		root = filepath.Join("data", "content")
+	}
+
+	relativePath := filepath.ToSlash(filepath.Join(message.ProjectID, "notes", "project-chat.md"))
+	absolutePath := filepath.Join(root, filepath.FromSlash(relativePath))
+
+	if err := os.MkdirAll(filepath.Dir(absolutePath), 0o755); err != nil {
+		return "", false, err
+	}
+
+	existingBytes, err := os.ReadFile(absolutePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", false, err
+	}
+	existing := string(existingBytes)
+
+	metadataLine := projectChatSourceMarker(message)
+	if strings.Contains(existing, metadataLine) {
+		return "/" + filepath.ToSlash(filepath.Join("notes", "project-chat.md")), false, nil
+	}
+
+	var builder strings.Builder
+	if strings.TrimSpace(existing) != "" {
+		builder.WriteString(existing)
+		if !strings.HasSuffix(existing, "\n") {
+			builder.WriteString("\n")
+		}
+		builder.WriteString("\n")
+	}
+	builder.WriteString(metadataLine)
+	builder.WriteString("\n")
+	builder.WriteString("### Chat capture (")
+	builder.WriteString(message.Author)
+	builder.WriteString(" · ")
+	builder.WriteString(message.CreatedAt.UTC().Format(time.RFC3339))
+	builder.WriteString(")\n\n")
+	builder.WriteString(message.Body)
+	builder.WriteString("\n")
+
+	if err := os.WriteFile(absolutePath, []byte(builder.String()), 0o644); err != nil {
+		return "", false, err
+	}
+
+	return "/" + filepath.ToSlash(filepath.Join("notes", "project-chat.md")), true, nil
+}
+
+func projectChatSourceMarker(message store.ProjectChatMessage) string {
+	return fmt.Sprintf(
+		"<!-- ottercamp_project_chat_source message_id=%s project_id=%s author=%s created_at=%s -->",
+		message.ID,
+		message.ProjectID,
+		strings.ReplaceAll(strings.TrimSpace(message.Author), " ", "_"),
+		message.CreatedAt.UTC().Format(time.RFC3339),
+	)
 }
 
 func handleProjectChatStoreError(w http.ResponseWriter, err error) {

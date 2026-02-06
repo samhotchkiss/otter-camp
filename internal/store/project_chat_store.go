@@ -185,6 +185,52 @@ func (s *ProjectChatStore) List(
 	return out, hasMore, nil
 }
 
+func (s *ProjectChatStore) GetByID(
+	ctx context.Context,
+	projectID string,
+	messageID string,
+) (*ProjectChatMessage, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+	messageID = strings.TrimSpace(messageID)
+	if !uuidRegex.MatchString(messageID) {
+		return nil, fmt.Errorf("invalid message_id")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if err := ensureProjectInWorkspace(ctx, conn, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+
+	message, err := scanProjectChatMessage(conn.QueryRowContext(
+		ctx,
+		`SELECT `+projectChatColumns+` FROM project_chat_messages
+		WHERE org_id = $1 AND project_id = $2 AND id = $3`,
+		workspaceID,
+		projectID,
+		messageID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to load project chat message: %w", err)
+	}
+	return &message, nil
+}
+
 func (s *ProjectChatStore) Search(ctx context.Context, input SearchProjectChatInput) ([]ProjectChatSearchResult, error) {
 	workspaceID := middleware.WorkspaceFromContext(ctx)
 	if workspaceID == "" {

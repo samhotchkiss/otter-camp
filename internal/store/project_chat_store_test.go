@@ -189,3 +189,31 @@ func TestProjectChatStoreSearchRankingAndFilters(t *testing.T) {
 	require.Len(t, filteredByTime, 1)
 	require.Equal(t, loose.ID, filteredByTime[0].Message.ID)
 }
+
+func TestProjectChatStoreGetByIDHonorsWorkspace(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgA := createTestOrganization(t, db, "chat-get-org-a")
+	orgB := createTestOrganization(t, db, "chat-get-org-b")
+	projectA := insertProjectChatTestProject(t, db, orgA, "Project A")
+	_ = insertProjectChatTestProject(t, db, orgB, "Project B")
+
+	chatStore := NewProjectChatStore(db)
+	ctxA := ctxWithWorkspace(orgA)
+	ctxB := ctxWithWorkspace(orgB)
+
+	created, err := chatStore.Create(ctxA, CreateProjectChatMessageInput{
+		ProjectID: projectA,
+		Author:    "Sam",
+		Body:      "Workspace scoped message",
+	})
+	require.NoError(t, err)
+
+	loaded, err := chatStore.GetByID(ctxA, projectA, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, created.ID, loaded.ID)
+
+	_, err = chatStore.GetByID(ctxB, projectA, created.ID)
+	require.ErrorIs(t, err, ErrForbidden)
+}

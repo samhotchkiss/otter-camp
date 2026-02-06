@@ -121,6 +121,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat/search", projectChatHandler.Search)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages", projectChatHandler.Create)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages/{messageID}/save-to-notes", projectChatHandler.SaveToNotes)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/projects/{id}/repo/branches", githubIntegrationHandler.GetProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Put("/projects/{id}/repo/branches", githubIntegrationHandler.UpdateProjectBranches)

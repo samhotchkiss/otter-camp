@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +24,7 @@ func newProjectChatTestRouter(handler *ProjectChatHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/chat", handler.List)
 	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/chat/search", handler.Search)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/chat/messages", handler.Create)
+	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/chat/messages/{messageID}/save-to-notes", handler.SaveToNotes)
 	return router
 }
 
@@ -193,6 +197,90 @@ func TestProjectChatHandlerWebSocketBroadcastProjectChannel(t *testing.T) {
 		t.Fatalf("did not expect project B subscriber payload: %s", string(payload))
 	case <-time.After(120 * time.Millisecond):
 	}
+}
+
+func TestProjectChatHandlerSaveToNotesWritesProvenanceAndIsIdempotent(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-notes-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Notes")
+
+	tempRoot := t.TempDir()
+	t.Setenv("OTTER_CONTENT_ROOT", tempRoot)
+
+	chatStore := store.NewProjectChatStore(db)
+	ctx := testCtxWithWorkspace(orgID)
+	message, err := chatStore.Create(ctx, store.CreateProjectChatMessageInput{
+		ProjectID: projectID,
+		Author:    "Sam",
+		Body:      "Save this to notes",
+	})
+	require.NoError(t, err)
+
+	handler := &ProjectChatHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ChatStore:    chatStore,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	savePath := "/api/projects/" + projectID + "/chat/messages/" + message.ID + "/save-to-notes?org_id=" + orgID
+	saveReq := httptest.NewRequest(http.MethodPost, savePath, nil)
+	saveRec := httptest.NewRecorder()
+	router.ServeHTTP(saveRec, saveReq)
+	require.Equal(t, http.StatusOK, saveRec.Code)
+
+	var saveResp projectChatSaveToNotesResponse
+	require.NoError(t, json.NewDecoder(saveRec.Body).Decode(&saveResp))
+	require.True(t, saveResp.Saved)
+	require.Equal(t, "/notes/project-chat.md", saveResp.Path)
+
+	noteFile := filepath.Join(tempRoot, projectID, "notes", "project-chat.md")
+	contentBytes, err := os.ReadFile(noteFile)
+	require.NoError(t, err)
+	content := string(contentBytes)
+	require.Contains(t, content, "Save this to notes")
+	require.Contains(t, content, "ottercamp_project_chat_source")
+	require.Contains(t, content, "message_id="+message.ID)
+
+	// Saving the same message twice should be idempotent.
+	saveReq = httptest.NewRequest(http.MethodPost, savePath, nil)
+	saveRec = httptest.NewRecorder()
+	router.ServeHTTP(saveRec, saveReq)
+	require.Equal(t, http.StatusOK, saveRec.Code)
+	require.NoError(t, json.NewDecoder(saveRec.Body).Decode(&saveResp))
+	require.False(t, saveResp.Saved)
+
+	contentBytes, err = os.ReadFile(noteFile)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(contentBytes), "message_id="+message.ID))
+}
+
+func TestProjectChatHandlerCreateDoesNotAutoWriteNotes(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-notes-regression-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Notes Regression")
+
+	tempRoot := t.TempDir()
+	t.Setenv("OTTER_CONTENT_ROOT", tempRoot)
+
+	handler := &ProjectChatHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ChatStore:    store.NewProjectChatStore(db),
+	}
+	router := newProjectChatTestRouter(handler)
+
+	createReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"Normal chat message"}`)),
+	)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code)
+
+	noteFile := filepath.Join(tempRoot, projectID, "notes", "project-chat.md")
+	_, err := os.Stat(noteFile)
+	require.Error(t, err)
+	require.True(t, os.IsNotExist(err))
 }
 
 func testCtxWithWorkspace(orgID string) context.Context {
