@@ -115,23 +115,50 @@ export default function Dashboard() {
       try {
         setIsLoading(true);
         setError(null);
-        const [data, projectsResponse, syncResponse] = await Promise.all([
+        const [feedResult, projectsResult, syncResult] = await Promise.allSettled([
           api.feed(),
           api.projects(),
           api.syncAgents(),
         ]);
-        if (!cancelled) {
-          setActionItems(data.actionItems || []);
-          setFeedItems(data.feedItems || []);
-          setProjects(projectsResponse.projects || []);
-          if (syncResponse?.last_sync) {
-            setLastSync(new Date(syncResponse.last_sync));
-          }
+
+        if (cancelled) return;
+
+        if (feedResult.status === "fulfilled") {
+          setActionItems(feedResult.value.actionItems || []);
+          setFeedItems(feedResult.value.feedItems || []);
+        } else if (!isDemoMode()) {
+          setActionItems([]);
+          setFeedItems([]);
+        }
+
+        if (projectsResult.status === "fulfilled") {
+          setProjects(projectsResult.value.projects || []);
+        } else if (!isDemoMode()) {
+          setProjects([]);
+        }
+
+        if (syncResult.status === "fulfilled" && syncResult.value?.last_sync) {
+          setLastSync(new Date(syncResult.value.last_sync));
+        } else if (!isDemoMode()) {
+          setLastSync(null);
+        }
+
+        if (
+          feedResult.status === "rejected" ||
+          projectsResult.status === "rejected" ||
+          syncResult.status === "rejected"
+        ) {
+          console.warn("API unavailable:", {
+            feed: feedResult.status === "rejected" ? feedResult.reason : null,
+            projects: projectsResult.status === "rejected" ? projectsResult.reason : null,
+            sync: syncResult.status === "rejected" ? syncResult.reason : null,
+          });
+          setError("Unable to connect to API");
         }
       } catch (err) {
         if (!cancelled) {
-          console.warn('API unavailable:', err);
-          setError('Unable to connect to API');
+          console.warn("API unavailable:", err);
+          setError("Unable to connect to API");
           if (!isDemoMode()) {
             setActionItems([]);
             setFeedItems([]);
@@ -145,7 +172,9 @@ export default function Dashboard() {
     }
 
     fetchFeed();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const commands = useMemo<Command[]>(
