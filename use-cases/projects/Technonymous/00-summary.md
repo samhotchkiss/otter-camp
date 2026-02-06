@@ -8,7 +8,7 @@
 - Provide a **project‑level chat** for brainstorming (not tied to issues).
 - Treat each post as a **PR‑like issue** with inline feedback and approvals.
 - Support **Markdown render ↔ source toggle**.
-- Allow **in‑browser edits + commit**.
+- Allow **in‑browser edits + commit** (commit message optional).
 - Enforce **commit‑first workflow** (commit on each meaningful change).
 
 ## Key Decisions (from Sam)

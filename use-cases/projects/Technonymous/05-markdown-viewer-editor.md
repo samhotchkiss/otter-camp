@@ -10,11 +10,12 @@ Support read + edit of Markdown with a **rendered ↔ source** toggle and in‑b
 
 ## Commit Flow
 1. Edit in browser.
-2. Provide commit subject + body.
+2. Optional commit message (subject/body) — **not required**.
 3. Commit to repo (local).
-4. Push to GitHub (optional, human‑initiated).
+4. Notify issue owner agent; agent incorporates updates and continues.
+5. Push to GitHub (optional, human‑initiated).
 
 ## Acceptance Criteria
 - Toggle works without losing comment markers.
 - Edits can be committed from the browser.
-- Commit body is required (feeds Code Browser).
+- Commit message is optional (auto‑generated default if omitted).
