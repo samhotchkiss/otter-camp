@@ -57,6 +57,21 @@ func normalizeContentPath(input string) (string, error) {
 }
 
 func validateContentWritePath(input string) (string, error) {
+	normalized, err := validateContentReadPath(input)
+	if err != nil {
+		return "", err
+	}
+
+	if strings.HasPrefix(normalized, "/posts/") {
+		if err := validatePostPathConvention(normalized); err != nil {
+			return "", err
+		}
+	}
+
+	return normalized, nil
+}
+
+func validateContentReadPath(input string) (string, error) {
 	normalized, err := normalizeContentPath(input)
 	if err != nil {
 		return "", err
@@ -71,12 +86,6 @@ func validateContentWritePath(input string) (string, error) {
 	}
 	if !allowedRoot {
 		return "", fmt.Errorf("%w: path must be under /notes, /posts, or /assets", errInvalidContentPath)
-	}
-
-	if strings.HasPrefix(normalized, "/posts/") {
-		if err := validatePostPathConvention(normalized); err != nil {
-			return "", err
-		}
 	}
 
 	return normalized, nil

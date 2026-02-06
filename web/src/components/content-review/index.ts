@@ -5,3 +5,11 @@ export type {
   ContentReviewProps,
   ReviewComment,
 } from "./ContentReview";
+export {
+  resolveEditorForPath,
+  resolveEditorComponent,
+  type EditorCapabilities,
+  type EditorComponentKey,
+  type EditorMode,
+  type EditorResolution,
+} from "./editorModeResolver";

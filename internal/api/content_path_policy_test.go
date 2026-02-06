@@ -48,6 +48,15 @@ func TestValidatePostPathConventionRequiresDatePrefixAndSlug(t *testing.T) {
 	require.Error(t, validatePostPathConvention("/posts/2026-02-06-Bad-Title.md"))
 }
 
+func TestValidateContentReadPathAllowsLegacyPostsWithoutWriteConvention(t *testing.T) {
+	normalized, err := validateContentReadPath("/posts/legacy-title.md")
+	require.NoError(t, err)
+	require.Equal(t, "/posts/legacy-title.md", normalized)
+
+	_, err = validateContentWritePath("/posts/legacy-title.md")
+	require.Error(t, err)
+}
+
 func TestResolveProjectContentWritePathUsesProjectScopedRoot(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("OTTER_CONTENT_ROOT", root)

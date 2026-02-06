@@ -26,6 +26,7 @@ func newProjectChatTestRouter(handler *ProjectChatHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/chat/messages", handler.Create)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/chat/messages/{messageID}/save-to-notes", handler.SaveToNotes)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/content/bootstrap", handler.BootstrapContent)
+	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/content/metadata", handler.GetContentMetadata)
 	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/content/search", handler.SearchContent)
 	return router
 }
