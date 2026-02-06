@@ -115,6 +115,36 @@ function normalizeAgentStatus(value: unknown): AgentStatus | undefined {
   return undefined;
 }
 
+function normalizeCurrentTask(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const upper = trimmed.toUpperCase();
+  if (upper === "HEARTBEAT_OK" || upper === "HEARTBEAT OK" || upper === "HEARTBEAT") {
+    return undefined;
+  }
+  if (upper.startsWith("HEARTBEAT_")) {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
+function normalizeAgentId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function AgentsPageComponent({
   apiEndpoint = isDemoMode() 
     ? `${API_URL}/api/agents?demo=true`
@@ -149,15 +179,45 @@ function AgentsPageComponent({
   }, []);
 
   // Map sync API response to AgentCardData format
-  const mapAgentData = (agent: Record<string, unknown>): AgentCardData => ({
-    id: agent.id as string,
-    name: agent.name as string,
-    avatarUrl: agent.avatarUrl as string | undefined,
-    status: (agent.status as AgentStatus) || 'offline',
-    role: agent.role as string | undefined,
-    currentTask: agent.currentTask as string | undefined,
-    lastActive: (agent.lastSeen || agent.lastActive || agent.updatedAt) as string | undefined,
-  });
+  const mapAgentData = (agent: Record<string, unknown>): AgentCardData => {
+    const id =
+      normalizeAgentId(agent.id) ||
+      normalizeAgentId(agent.agentId) ||
+      normalizeAgentId(agent.slug) ||
+      "unknown";
+    const name =
+      (typeof agent.name === "string" && agent.name.trim()) ||
+      (typeof agent.displayName === "string" && agent.displayName.trim()) ||
+      id;
+    const status = normalizeAgentStatus(agent.status) ?? "offline";
+    const avatarRaw =
+      (typeof agent.avatarUrl === "string" && agent.avatarUrl) ||
+      (typeof agent.avatar === "string" && agent.avatar) ||
+      (typeof agent.avatar_url === "string" && agent.avatar_url) ||
+      undefined;
+    const avatarUrl = avatarRaw && avatarRaw.startsWith("http") ? avatarRaw : undefined;
+    const currentTask =
+      normalizeCurrentTask(agent.currentTask) ||
+      normalizeCurrentTask(agent.current_task) ||
+      normalizeCurrentTask(agent.displayName);
+    const lastActive =
+      agent.lastSeen ||
+      agent.last_seen ||
+      agent.lastActive ||
+      agent.last_active ||
+      agent.updatedAt ||
+      agent.updated_at;
+
+    return {
+      id,
+      name,
+      avatarUrl,
+      status,
+      role: (typeof agent.role === "string" && agent.role) || undefined,
+      currentTask,
+      lastActive: lastActive as string | number | null | undefined,
+    };
+  };
 
   // Fetch agents from API
   const fetchAgents = useCallback(async () => {
@@ -218,23 +278,18 @@ function AgentsPageComponent({
         normalizeAgentStatus(payload.status) ??
         normalizeAgentStatus(nestedAgent?.status);
       const currentTask =
-        (typeof payload.currentTask === "string" && payload.currentTask) ||
-        (nestedAgent && typeof nestedAgent.current_task === "string"
-          ? nestedAgent.current_task
-          : nestedAgent && typeof nestedAgent.currentTask === "string"
-            ? nestedAgent.currentTask
-            : undefined);
+        normalizeCurrentTask(payload.currentTask) ||
+        normalizeCurrentTask(payload.current_task) ||
+        normalizeCurrentTask(nestedAgent?.current_task) ||
+        normalizeCurrentTask(nestedAgent?.currentTask);
       const lastActive =
-        (typeof payload.lastActive === "string" && payload.lastActive) ||
-        (nestedAgent && typeof nestedAgent.last_seen === "string"
-          ? nestedAgent.last_seen
-          : nestedAgent && typeof nestedAgent.lastSeen === "string"
-            ? nestedAgent.lastSeen
-            : nestedAgent && typeof nestedAgent.updated_at === "string"
-              ? nestedAgent.updated_at
-              : nestedAgent && typeof nestedAgent.updatedAt === "string"
-                ? nestedAgent.updatedAt
-                : undefined);
+        payload.lastActive ||
+        payload.last_active ||
+        payload.lastSeen ||
+        payload.last_seen ||
+        payload.updatedAt ||
+        payload.updated_at ||
+        (nestedAgent && (nestedAgent.last_seen || nestedAgent.lastSeen || nestedAgent.updated_at || nestedAgent.updatedAt));
 
       setAgents((prev) =>
         prev.map((agent) =>

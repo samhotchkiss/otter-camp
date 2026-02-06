@@ -203,17 +203,17 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		// Calculate status based on activity
 		updatedAt := time.Unix(session.UpdatedAt/1000, 0)
 		timeSinceUpdate := time.Since(updatedAt)
-		var status, lastSeen string
+		var status string
 		if timeSinceUpdate < 5*time.Minute {
 			status = "online"
 		} else if timeSinceUpdate < 30*time.Minute {
 			status = "busy"
 		} else {
 			status = "offline"
-			lastSeen = formatTimeSince(updatedAt)
 		}
 
-		currentTask := session.DisplayName
+		lastSeen := normalizeLastSeenTimestamp(updatedAt)
+		currentTask := normalizeCurrentTask(session.DisplayName)
 
 		// Build agent state
 		agentState := &AgentState{

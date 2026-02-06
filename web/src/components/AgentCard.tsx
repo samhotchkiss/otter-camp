@@ -11,7 +11,7 @@ export type AgentCardData = {
   status: AgentStatus;
   role?: string;
   currentTask?: string;
-  lastActive?: string;
+  lastActive?: string | number | null;
 };
 
 export type AgentCardProps = {
@@ -34,12 +34,28 @@ function getInitials(name: string): string {
 /**
  * Format relative time for "last active" display.
  */
-function formatLastActive(isoString?: string): string {
-  if (!isoString) {
+export function formatLastActive(value?: string | number | null): string {
+  if (value === null || value === undefined) {
     return "Never";
   }
 
-  const date = new Date(isoString);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value <= 0) {
+      return "Never";
+    }
+    return formatLastActive(new Date(value).toISOString());
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "0") {
+    return "Never";
+  }
+
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    return "Never";
+  }
+
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMin = Math.floor(diffMs / 60000);

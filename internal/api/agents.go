@@ -2,7 +2,6 @@ package api
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -19,13 +18,13 @@ type AgentsHandler struct {
 
 // AgentResponse represents an agent in the API response
 type AgentResponse struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Role        string  `json:"role"`
-	Status      string  `json:"status"`
-	Avatar      string  `json:"avatar"`
-	CurrentTask string  `json:"currentTask,omitempty"`
-	LastSeen    string  `json:"lastSeen,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Role        string `json:"role"`
+	Status      string `json:"status"`
+	Avatar      string `json:"avatar"`
+	CurrentTask string `json:"currentTask,omitempty"`
+	LastSeen    string `json:"lastSeen,omitempty"`
 }
 
 // List returns all agents (demo mode supported, Postgres when available)
@@ -68,7 +67,7 @@ func (h *AgentsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 			// Calculate last seen from UpdatedAt
 			if agent.Status == "offline" {
-				resp.LastSeen = formatLastSeen(agent.UpdatedAt)
+				resp.LastSeen = normalizeLastSeenTimestamp(agent.UpdatedAt)
 			}
 
 			responseAgents = append(responseAgents, resp)
@@ -87,6 +86,7 @@ func (h *AgentsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // sendDemoAgents returns hardcoded demo agents
 func (h *AgentsHandler) sendDemoAgents(w http.ResponseWriter) {
+	now := time.Now()
 	demoAgents := []AgentResponse{
 		{
 			ID:          "frank",
@@ -137,12 +137,12 @@ func (h *AgentsHandler) sendDemoAgents(w http.ResponseWriter) {
 			CurrentTask: "Awaiting deploy approval",
 		},
 		{
-			ID:          "max",
-			Name:        "Max",
-			Role:        "Personal Ops",
-			Status:      "offline",
-			Avatar:      "🏠",
-			LastSeen:    "2 hours ago",
+			ID:       "max",
+			Name:     "Max",
+			Role:     "Personal Ops",
+			Status:   "offline",
+			Avatar:   "🏠",
+			LastSeen: normalizeLastSeenTimestamp(now.Add(-2 * time.Hour)),
 		},
 		{
 			ID:          "penny",
@@ -161,12 +161,12 @@ func (h *AgentsHandler) sendDemoAgents(w http.ResponseWriter) {
 			CurrentTask: "Monitoring watchlist",
 		},
 		{
-			ID:          "josh-s",
-			Name:        "Josh S",
-			Role:        "Head of Engineering",
-			Status:      "offline",
-			Avatar:      "⚙️",
-			LastSeen:    "1 hour ago",
+			ID:       "josh-s",
+			Name:     "Josh S",
+			Role:     "Head of Engineering",
+			Status:   "offline",
+			Avatar:   "⚙️",
+			LastSeen: normalizeLastSeenTimestamp(now.Add(-1 * time.Hour)),
 		},
 		{
 			ID:          "jeremy-h",
@@ -177,43 +177,16 @@ func (h *AgentsHandler) sendDemoAgents(w http.ResponseWriter) {
 			CurrentTask: "Code review queue",
 		},
 		{
-			ID:          "claudette",
-			Name:        "Claudette",
-			Role:        "Essie's Assistant",
-			Status:      "offline",
-			Avatar:      "💜",
-			LastSeen:    "3 hours ago",
+			ID:       "claudette",
+			Name:     "Claudette",
+			Role:     "Essie's Assistant",
+			Status:   "offline",
+			Avatar:   "💜",
+			LastSeen: normalizeLastSeenTimestamp(now.Add(-3 * time.Hour)),
 		},
 	}
 	sendJSON(w, http.StatusOK, map[string]interface{}{
 		"agents": demoAgents,
 		"total":  len(demoAgents),
 	})
-}
-
-// formatLastSeen converts a time to a human-readable "X ago" string
-func formatLastSeen(t time.Time) string {
-	diff := time.Since(t)
-	
-	if diff < time.Minute {
-		return "just now"
-	} else if diff < time.Hour {
-		mins := int(diff.Minutes())
-		if mins == 1 {
-			return "1 minute ago"
-		}
-		return fmt.Sprintf("%d minutes ago", mins)
-	} else if diff < 24*time.Hour {
-		hours := int(diff.Hours())
-		if hours == 1 {
-			return "1 hour ago"
-		}
-		return fmt.Sprintf("%d hours ago", hours)
-	} else {
-		days := int(diff.Hours() / 24)
-		if days == 1 {
-			return "1 day ago"
-		}
-		return fmt.Sprintf("%d days ago", days)
-	}
 }
