@@ -37,3 +37,6 @@
 - `04-publish-and-close.md` — push to GitHub + issue closure
 - `05-auth-permissions.md` — GitHub App auth model
 - `06-resync-and-polling.md` — webhook + polling + manual resync
+
+## Related Docs
+- `docs/ISSUE-MODEL.md` — issue state machine, telemetry, auto‑kick
