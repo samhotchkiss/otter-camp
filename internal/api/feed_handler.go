@@ -3,12 +3,14 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/feed"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
 // EnrichedFeedItem represents a feed item with related entity data.
@@ -232,10 +234,21 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	conn, err := store.WithWorkspaceID(r.Context(), db, orgID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, store.ErrNoWorkspace) || errors.Is(err, store.ErrInvalidWorkspace) {
+			status = http.StatusBadRequest
+		}
+		sendJSON(w, status, errorResponse{Error: err.Error()})
+		return
+	}
+	defer conn.Close()
+
 	// Get total count
 	countQuery, countArgs := buildFeedCountQuery(orgID, types, from, to)
 	var total int
-	if err := db.QueryRowContext(r.Context(), countQuery, countArgs...).Scan(&total); err != nil {
+	if err := conn.QueryRowContext(r.Context(), countQuery, countArgs...).Scan(&total); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to count feed items"})
 		return
 	}
@@ -249,7 +262,7 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 
 	// Get feed items with related entities
 	query, args := buildEnrichedFeedQuery(orgID, types, from, to, fetchLimit, 0)
-	rows, err := db.QueryContext(r.Context(), query, args...)
+	rows, err := conn.QueryContext(r.Context(), query, args...)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load feed"})
 		return

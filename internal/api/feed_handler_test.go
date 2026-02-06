@@ -62,13 +62,24 @@ func TestFeedHandlerV2RequiresOrgID(t *testing.T) {
 	require.Contains(t, resp.Error, "org_id")
 }
 
-func TestFeedHandlerV2InvalidOrgID(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id=not-a-uuid", nil)
+func TestFeedHandlerV2EmptyOrgID(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id=", nil)
 	rec := httptest.NewRecorder()
 
 	FeedHandlerV2(rec, req)
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestFeedHandlerV2InvalidOrgID(t *testing.T) {
+	for _, orgID := range []string{"not-a-uuid", "test'"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID, nil)
+		rec := httptest.NewRecorder()
+
+		FeedHandlerV2(rec, req)
+
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+	}
 }
 
 func TestFeedHandlerV2InvalidLimit(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -17,6 +18,8 @@ import (
 var (
 	// ErrNoWorkspace is returned when a workspace ID is required but not present.
 	ErrNoWorkspace = errors.New("workspace ID not found in context")
+	// ErrInvalidWorkspace is returned when a workspace ID is invalid.
+	ErrInvalidWorkspace = errors.New("invalid workspace ID")
 	// ErrNotFound is returned when a requested entity does not exist.
 	ErrNotFound = errors.New("entity not found")
 	// ErrForbidden is returned when access to an entity is denied.
@@ -28,6 +31,19 @@ var (
 	globalDBErr  error
 	globalDBOnce sync.Once
 )
+
+var uuidRegex = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
+
+func normalizeWorkspaceID(workspaceID string) (string, error) {
+	trimmed := strings.TrimSpace(workspaceID)
+	if trimmed == "" {
+		return "", ErrNoWorkspace
+	}
+	if !uuidRegex.MatchString(trimmed) {
+		return "", ErrInvalidWorkspace
+	}
+	return trimmed, nil
+}
 
 // DB returns the shared database connection pool.
 func DB() (*sql.DB, error) {
@@ -96,9 +112,9 @@ func runSyncStateMigrations(db *sql.DB) {
 // WithWorkspace sets the app.org_id session variable for RLS policies.
 // This must be called before any query that uses RLS-protected tables.
 func WithWorkspace(ctx context.Context, db *sql.DB) (*sql.Conn, error) {
-	workspaceID := middleware.WorkspaceFromContext(ctx)
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
+	workspaceID, err := normalizeWorkspaceID(middleware.WorkspaceFromContext(ctx))
+	if err != nil {
+		return nil, err
 	}
 
 	conn, err := db.Conn(ctx)
@@ -119,8 +135,9 @@ func WithWorkspace(ctx context.Context, db *sql.DB) (*sql.Conn, error) {
 // using an explicit workspace ID instead of extracting from context.
 // Useful for admin operations or service-to-service calls.
 func WithWorkspaceID(ctx context.Context, db *sql.DB, workspaceID string) (*sql.Conn, error) {
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
+	workspaceID, err := normalizeWorkspaceID(workspaceID)
+	if err != nil {
+		return nil, err
 	}
 
 	conn, err := db.Conn(ctx)
@@ -140,9 +157,9 @@ func WithWorkspaceID(ctx context.Context, db *sql.DB, workspaceID string) (*sql.
 // WithWorkspaceTx starts a transaction with the workspace context set.
 // The caller must commit or rollback the transaction.
 func WithWorkspaceTx(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
-	workspaceID := middleware.WorkspaceFromContext(ctx)
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
+	workspaceID, err := normalizeWorkspaceID(middleware.WorkspaceFromContext(ctx))
+	if err != nil {
+		return nil, err
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -161,8 +178,9 @@ func WithWorkspaceTx(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
 
 // WithWorkspaceIDTx starts a transaction with an explicit workspace ID set.
 func WithWorkspaceIDTx(ctx context.Context, db *sql.DB, workspaceID string) (*sql.Tx, error) {
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
+	workspaceID, err := normalizeWorkspaceID(workspaceID)
+	if err != nil {
+		return nil, err
 	}
 
 	tx, err := db.BeginTx(ctx, nil)

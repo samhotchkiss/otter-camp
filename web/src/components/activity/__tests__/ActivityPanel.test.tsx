@@ -191,4 +191,24 @@ describe("ActivityPanel", () => {
 
     expect(await screen.findByText(/live update/i)).toBeInTheDocument();
   });
+
+  it("shows an empty state when there is no activity", async () => {
+    const wsState = {
+      connected: true,
+      lastMessage: null,
+      sendMessage: vi.fn(),
+    };
+    vi.mocked(useWS).mockImplementation(() => wsState);
+
+    localStorage.setItem("otter-camp-org-id", ORG_ID);
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ org_id: ORG_ID, items: [] }),
+    });
+
+    render(<ActivityPanel />);
+
+    expect(await screen.findByText(/no activity yet/i)).toBeInTheDocument();
+  });
 });

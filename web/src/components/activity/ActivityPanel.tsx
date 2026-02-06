@@ -439,7 +439,7 @@ function ActivityPanelComponent({
           <div className="flex flex-col items-center justify-center py-14 text-center">
             <div className="text-4xl">🦦</div>
             <p className="mt-3 text-sm font-medium text-slate-700 dark:text-slate-200">
-              No activity found
+              No activity yet
             </p>
             <p className="mt-1 max-w-md text-xs text-slate-500 dark:text-slate-400">
               Try adjusting your filters, or connect a live org to see updates.

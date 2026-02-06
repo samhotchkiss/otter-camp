@@ -31,6 +31,18 @@ func TestWithWorkspace_NoWorkspaceInContext(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNoWorkspace)
 }
 
+func TestWithWorkspace_InvalidWorkspace(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	ctx := ctxWithWorkspace("not-a-uuid")
+
+	conn, err := WithWorkspace(ctx, db)
+	assert.Error(t, err)
+	assert.Nil(t, conn)
+	assert.ErrorIs(t, err, ErrInvalidWorkspace)
+}
+
 func TestWithWorkspace_ValidWorkspace(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
@@ -60,6 +72,18 @@ func TestWithWorkspaceID_EmptyWorkspace(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, conn)
 	assert.ErrorIs(t, err, ErrNoWorkspace)
+}
+
+func TestWithWorkspaceID_InvalidWorkspace(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	ctx := context.Background()
+
+	conn, err := WithWorkspaceID(ctx, db, "test'")
+	assert.Error(t, err)
+	assert.Nil(t, conn)
+	assert.ErrorIs(t, err, ErrInvalidWorkspace)
 }
 
 func TestWithWorkspaceID_ValidWorkspace(t *testing.T) {
@@ -195,10 +219,10 @@ func TestNullableString_Store(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		input    *string
-		wantNil  bool
-		wantVal  string
+		name    string
+		input   *string
+		wantNil bool
+		wantVal string
 	}{
 		{
 			name:    "nil",
