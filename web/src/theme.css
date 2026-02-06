@@ -786,6 +786,10 @@ body.has-demo-banner .topbar {
 .workflow-icon.email { background: var(--yellow-bg, rgba(196, 160, 60, 0.2)); }
 .workflow-icon.markets { background: var(--green-bg, rgba(90, 122, 92, 0.2)); }
 .workflow-icon.content { background: var(--red-bg, rgba(184, 92, 56, 0.2)); }
+.workflow-icon.default { background: var(--surface-alt); }
+.workflow-icon.cron { background: var(--blue-bg, rgba(74, 109, 124, 0.2)); }
+.workflow-icon.event { background: var(--yellow-bg, rgba(196, 160, 60, 0.2)); }
+.workflow-icon.manual { background: var(--surface-alt); }
 
 .workflow-info {
   flex: 1;
@@ -798,7 +802,8 @@ body.has-demo-banner .topbar {
   margin-bottom: 2px;
 }
 
-.workflow-agent {
+.workflow-agent,
+.workflow-trigger {
   font-size: 13px;
   color: var(--text-muted);
   display: flex;
@@ -861,6 +866,18 @@ body.has-demo-banner .topbar {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.workflow-steps {
+  margin-top: 16px;
+}
+
+.workflow-steps-list {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .workflow-card-footer {
@@ -957,6 +974,21 @@ body.has-demo-banner .topbar {
   text-align: center;
   padding: 48px;
   color: var(--text-muted);
+}
+
+.workflows-empty {
+  text-align: center;
+  padding: 64px 24px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--surface-alt);
+}
+
+.workflows-empty h3 {
+  font-size: 16px;
+  color: var(--text);
+  margin-bottom: 8px;
 }
 
 

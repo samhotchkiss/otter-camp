@@ -26,8 +26,9 @@ const maxOpenClawSyncBodySize = 2 << 20 // 2 MB
 
 // In-memory fallback store (used when DB is unavailable)
 var (
-	memoryAgentStates = make(map[string]*AgentState)
-	memoryLastSync    time.Time
+	memoryAgentStates  = make(map[string]*AgentState)
+	memoryAgentConfigs = make(map[string]*OpenClawAgentConfig)
+	memoryLastSync     time.Time
 )
 
 // OpenClawSession represents a session from OpenClaw's sessions_list
@@ -60,6 +61,13 @@ type OpenClawAgent struct {
 		Primary   string   `json:"primary"`
 		Fallbacks []string `json:"fallbacks"`
 	} `json:"model,omitempty"`
+}
+
+// OpenClawAgentConfig stores agent schedule details used by workflows.
+type OpenClawAgentConfig struct {
+	ID             string    `json:"id"`
+	HeartbeatEvery string    `json:"heartbeat_every,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // SyncPayload is the payload sent from OpenClaw bridge
@@ -262,6 +270,34 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 			if err != nil {
 				log.Printf("Failed to upsert agent %s to DB: %v", agentID, err)
+			}
+		}
+	}
+
+	// Update agent configs
+	if len(payload.Agents) > 0 {
+		for _, agent := range payload.Agents {
+			if agent.ID == "" {
+				continue
+			}
+			config := &OpenClawAgentConfig{
+				ID:             agent.ID,
+				HeartbeatEvery: agent.Heartbeat.Every,
+				UpdatedAt:      now,
+			}
+			memoryAgentConfigs[agent.ID] = config
+
+			if db != nil {
+				_, err := db.Exec(`
+					INSERT INTO openclaw_agent_configs (id, heartbeat_every, updated_at)
+					VALUES ($1, $2, $3)
+					ON CONFLICT (id) DO UPDATE SET
+						heartbeat_every = EXCLUDED.heartbeat_every,
+						updated_at = EXCLUDED.updated_at
+				`, agent.ID, agent.Heartbeat.Every, now)
+				if err != nil {
+					log.Printf("Failed to upsert agent config %s: %v", agent.ID, err)
+				}
 			}
 		}
 	}

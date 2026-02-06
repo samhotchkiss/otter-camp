@@ -1,148 +1,240 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
+	"sort"
 	"time"
+
+	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
-// Workflow represents an ongoing agent process.
+// Workflow represents an ongoing automation workflow.
 type Workflow struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Agent       string    `json:"agent"`
-	AgentEmoji  string    `json:"agent_emoji"`
-	Icon        string    `json:"icon"`
-	IconType    string    `json:"icon_type"` // twitter, email, markets, content
-	Status      string    `json:"status"`    // active, paused
-	Schedule    string    `json:"schedule"`
-	DisplayMode string    `json:"display_mode"` // replace, stack
-	LatestItem  *WorkflowItem `json:"latest_item,omitempty"`
-	StackedItems []WorkflowItem `json:"stacked_items,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID      string          `json:"id"`
+	Name    string          `json:"name"`
+	Trigger WorkflowTrigger `json:"trigger"`
+	Steps   []WorkflowStep  `json:"steps"`
+	Status  string          `json:"status"`
+	LastRun *time.Time      `json:"last_run,omitempty"`
 }
 
-// WorkflowItem represents a single item/message in a workflow.
-type WorkflowItem struct {
-	ID             string    `json:"id"`
-	Content        string    `json:"content"`
-	Priority       string    `json:"priority"` // low, normal, high, urgent
-	ActionRequired bool      `json:"action_required"`
-	DismissedAt    *time.Time `json:"dismissed_at,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+// WorkflowTrigger describes how a workflow starts.
+type WorkflowTrigger struct {
+	Type  string `json:"type"`             // cron, event, manual
+	Every string `json:"every,omitempty"`  // e.g. 5m
+	Cron  string `json:"cron,omitempty"`   // cron expression
+	Event string `json:"event,omitempty"`  // event name
+	Label string `json:"label,omitempty"`  // human-readable label
+}
+
+// WorkflowStep describes a step in a workflow.
+type WorkflowStep struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind,omitempty"`
 }
 
 // WorkflowsHandler handles workflow-related requests.
-type WorkflowsHandler struct{}
+type WorkflowsHandler struct {
+	DB *sql.DB
+}
 
 // List returns all workflows.
 func (h *WorkflowsHandler) List(w http.ResponseWriter, r *http.Request) {
-	// Check for demo mode
 	demo := r.URL.Query().Get("demo") == "true"
-	
-	var workflows []Workflow
-	
+
 	if demo {
-		workflows = getDemoWorkflows()
-	} else {
-		// TODO: Fetch from database
-		workflows = getDemoWorkflows()
+		json.NewEncoder(w).Encode(getDemoWorkflows())
+		return
 	}
-	
+
+	db := h.DB
+	if db == nil {
+		if dbConn, err := store.DB(); err == nil {
+			db = dbConn
+		}
+	}
+
+	workflows, err := getOpenClawWorkflows(db)
+	if err != nil {
+		log.Printf("Failed to load workflows: %v", err)
+		workflows = []Workflow{}
+	}
+
 	json.NewEncoder(w).Encode(workflows)
+}
+
+func getOpenClawWorkflows(db *sql.DB) ([]Workflow, error) {
+	configs, err := getOpenClawAgentConfigs(db)
+	if err != nil {
+		return nil, err
+	}
+
+	workflows := make([]Workflow, 0, len(configs))
+	for _, config := range configs {
+		name := agentNames[config.ID]
+		if name == "" {
+			name = config.ID
+		}
+
+		trigger := WorkflowTrigger{Type: "manual"}
+		if config.HeartbeatEvery != "" {
+			trigger = WorkflowTrigger{
+				Type:  "cron",
+				Every: config.HeartbeatEvery,
+				Label: "Every " + config.HeartbeatEvery,
+			}
+		}
+
+		lastRun, agentStatus := lookupAgentLastRun(db, config.ID)
+		status := "active"
+		if agentStatus == "offline" {
+			status = "paused"
+		}
+
+		steps := []WorkflowStep{
+			{
+				ID:   config.ID + "-run",
+				Name: "Run agent workflow",
+				Kind: "agent",
+			},
+		}
+
+		workflows = append(workflows, Workflow{
+			ID:      "openclaw-" + config.ID,
+			Name:    name + " workflow",
+			Trigger: trigger,
+			Steps:   steps,
+			Status:  status,
+			LastRun: lastRun,
+		})
+	}
+
+	sort.Slice(workflows, func(i, j int) bool {
+		return workflows[i].Name < workflows[j].Name
+	})
+
+	return workflows, nil
+}
+
+func getOpenClawAgentConfigs(db *sql.DB) ([]OpenClawAgentConfig, error) {
+	if db == nil {
+		configs := make([]OpenClawAgentConfig, 0, len(memoryAgentConfigs))
+		for _, config := range memoryAgentConfigs {
+			configs = append(configs, *config)
+		}
+		return configs, nil
+	}
+
+	rows, err := db.Query(`
+		SELECT id, heartbeat_every, updated_at
+		FROM openclaw_agent_configs
+		ORDER BY id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	configs := []OpenClawAgentConfig{}
+	for rows.Next() {
+		var config OpenClawAgentConfig
+		var heartbeat sql.NullString
+		if err := rows.Scan(&config.ID, &heartbeat, &config.UpdatedAt); err != nil {
+			continue
+		}
+		if heartbeat.Valid {
+			config.HeartbeatEvery = heartbeat.String
+		}
+		configs = append(configs, config)
+	}
+
+	return configs, rows.Err()
+}
+
+func lookupAgentLastRun(db *sql.DB, agentID string) (*time.Time, string) {
+	if db == nil {
+		if state, ok := memoryAgentStates[agentID]; ok {
+			lastRun := state.UpdatedAt
+			return &lastRun, state.Status
+		}
+		return nil, ""
+	}
+
+	var updatedAt time.Time
+	var status sql.NullString
+	err := db.QueryRow(`
+		SELECT updated_at, status
+		FROM agent_sync_state
+		WHERE id = $1
+	`, agentID).Scan(&updatedAt, &status)
+	if err != nil {
+		return nil, ""
+	}
+
+	statusValue := ""
+	if status.Valid {
+		statusValue = status.String
+	}
+
+	return &updatedAt, statusValue
 }
 
 func getDemoWorkflows() []Workflow {
 	now := time.Now()
-	
+
 	return []Workflow{
 		{
-			ID:          "nova-twitter",
-			Name:        "Twitter Engagement",
-			Agent:       "Nova",
-			AgentEmoji:  "✨",
-			Icon:        "🐦",
-			IconType:    "twitter",
-			Status:      "active",
-			Schedule:    "Every 5 minutes",
-			DisplayMode: "replace",
-			LatestItem: &WorkflowItem{
-				ID:        "tw-1",
-				Content:   "Posted update about OtterCamp launch. 12 likes, 3 retweets so far. Engagement looking good!",
-				Priority:  "normal",
-				CreatedAt: now.Add(-15 * time.Minute),
+			ID:   "demo-nova-twitter",
+			Name: "Twitter Engagement",
+			Trigger: WorkflowTrigger{
+				Type:  "cron",
+				Every: "5m",
+				Label: "Every 5 minutes",
 			},
-			CreatedAt: now.Add(-7 * 24 * time.Hour),
+			Steps: []WorkflowStep{
+				{ID: "step-1", Name: "Scan mentions", Kind: "social"},
+				{ID: "step-2", Name: "Draft response", Kind: "social"},
+				{ID: "step-3", Name: "Publish update", Kind: "social"},
+			},
+			Status:  "active",
+			LastRun: ptrTime(now.Add(-15 * time.Minute)),
 		},
 		{
-			ID:          "penny-email",
-			Name:        "Email Monitoring",
-			Agent:       "Penny",
-			AgentEmoji:  "📬",
-			Icon:        "✉️",
-			IconType:    "email",
-			Status:      "active",
-			Schedule:    "Every 2 minutes",
-			DisplayMode: "stack",
-			LatestItem: &WorkflowItem{
-				ID:             "em-1",
-				Content:        "Important email from investor@example.com — wants to schedule a call about Series A",
-				Priority:       "high",
-				ActionRequired: true,
-				CreatedAt:      now.Add(-30 * time.Minute),
+			ID:   "demo-penny-email",
+			Name: "Inbox Triage",
+			Trigger: WorkflowTrigger{
+				Type:  "event",
+				Event: "New email received",
+				Label: "On new email",
 			},
-			StackedItems: []WorkflowItem{
-				{
-					ID:        "em-2",
-					Content:   "Newsletter from TechCrunch — AI funding roundup",
-					Priority:  "low",
-					CreatedAt: now.Add(-2 * time.Hour),
-				},
-				{
-					ID:        "em-3",
-					Content:   "GitHub notification: PR #94 merged",
-					Priority:  "normal",
-					CreatedAt: now.Add(-3 * time.Hour),
-				},
+			Steps: []WorkflowStep{
+				{ID: "step-1", Name: "Classify sender", Kind: "email"},
+				{ID: "step-2", Name: "Flag urgent threads", Kind: "email"},
 			},
-			CreatedAt: now.Add(-14 * 24 * time.Hour),
+			Status:  "active",
+			LastRun: ptrTime(now.Add(-45 * time.Minute)),
 		},
 		{
-			ID:          "beau-markets",
-			Name:        "Market Watch",
-			Agent:       "Beau H",
-			AgentEmoji:  "📈",
-			Icon:        "💹",
-			IconType:    "markets",
-			Status:      "active",
-			Schedule:    "Every 15 minutes",
-			DisplayMode: "replace",
-			LatestItem: &WorkflowItem{
-				ID:        "mk-1",
-				Content:   "Markets closed up 0.8%. Tech sector led gains. Your watchlist: NVDA +2.3%, MSFT +1.1%, AAPL +0.5%",
-				Priority:  "normal",
-				CreatedAt: now.Add(-45 * time.Minute),
+			ID:   "demo-stone-content",
+			Name: "Content Review",
+			Trigger: WorkflowTrigger{
+				Type:  "manual",
+				Label: "Manual",
 			},
-			CreatedAt: now.Add(-30 * 24 * time.Hour),
-		},
-		{
-			ID:          "stone-content",
-			Name:        "Content Pipeline",
-			Agent:       "Stone",
-			AgentEmoji:  "✍️",
-			Icon:        "📝",
-			IconType:    "content",
-			Status:      "paused",
-			Schedule:    "Daily at 9am",
-			DisplayMode: "stack",
-			LatestItem: &WorkflowItem{
-				ID:             "ct-1",
-				Content:        "Blog draft ready for review: 'Why I Run 12 AI Agents'",
-				Priority:       "normal",
-				ActionRequired: true,
-				CreatedAt:      now.Add(-4 * time.Hour),
+			Steps: []WorkflowStep{
+				{ID: "step-1", Name: "Draft outline", Kind: "content"},
+				{ID: "step-2", Name: "Write section", Kind: "content"},
 			},
-			CreatedAt: now.Add(-21 * 24 * time.Hour),
+			Status:  "paused",
+			LastRun: ptrTime(now.Add(-6 * time.Hour)),
 		},
 	}
+}
+
+func ptrTime(t time.Time) *time.Time {
+	return &t
 }

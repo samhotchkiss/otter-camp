@@ -70,7 +70,7 @@ func NewRouter() http.Handler {
 	taskHandler := &TaskHandler{Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
-	workflowsHandler := &WorkflowsHandler{}
+	workflowsHandler := &WorkflowsHandler{DB: db}
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
 
 	// Initialize project store and handler

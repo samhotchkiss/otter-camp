@@ -1,28 +1,29 @@
 import { useState, useEffect } from "react";
+import { withDemoParam } from "../lib/demo";
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
-interface WorkflowItem {
+interface WorkflowTrigger {
+  type: string;
+  every?: string;
+  cron?: string;
+  event?: string;
+  label?: string;
+}
+
+interface WorkflowStep {
   id: string;
-  content: string;
-  priority: string;
-  action_required: boolean;
-  created_at: string;
+  name: string;
+  kind?: string;
 }
 
 interface Workflow {
   id: string;
   name: string;
-  agent: string;
-  agent_emoji: string;
-  icon: string;
-  icon_type: string;
+  trigger: WorkflowTrigger;
+  steps: WorkflowStep[];
   status: string;
-  schedule: string;
-  display_mode: string;
-  latest_item?: WorkflowItem;
-  stacked_items?: WorkflowItem[];
-  created_at: string;
+  last_run?: string;
 }
 
 function formatTime(dateString: string): string {
@@ -38,17 +39,32 @@ function formatTime(dateString: string): string {
   return date.toLocaleDateString();
 }
 
-function getPriorityBadge(priority: string, actionRequired: boolean) {
-  if (actionRequired) {
-    return <span className="escalation-badge action">⚡ Action Required</span>;
+function formatTrigger(trigger?: WorkflowTrigger): string {
+  if (!trigger) return "Manual";
+  if (trigger.label) return trigger.label;
+  if (trigger.type === "cron") {
+    if (trigger.every) return `Every ${trigger.every}`;
+    if (trigger.cron) return `Cron: ${trigger.cron}`;
   }
-  if (priority === "urgent") {
-    return <span className="escalation-badge urgent">🔴 Urgent</span>;
+  if (trigger.type === "event" && trigger.event) {
+    return `On ${trigger.event}`;
   }
-  if (priority === "high") {
-    return <span className="escalation-badge high">🟡 High</span>;
+  if (trigger.type === "manual") return "Manual";
+  return trigger.type || "Manual";
+}
+
+function triggerIcon(trigger?: WorkflowTrigger): string {
+  if (!trigger) return "⚙️";
+  switch (trigger.type) {
+    case "cron":
+      return "⏱️";
+    case "event":
+      return "⚡";
+    case "manual":
+      return "🧩";
+    default:
+      return "⚙️";
   }
-  return null;
 }
 
 export default function WorkflowsPage() {
@@ -59,7 +75,7 @@ export default function WorkflowsPage() {
   useEffect(() => {
     async function fetchWorkflows() {
       try {
-        const res = await fetch(`${API_URL}/api/workflows?demo=true`);
+        const res = await fetch(withDemoParam(`${API_URL}/api/workflows`));
         if (!res.ok) throw new Error("Failed to fetch workflows");
         const data = await res.json();
         setWorkflows(data);
@@ -100,6 +116,23 @@ export default function WorkflowsPage() {
     );
   }
 
+  if (workflows.length === 0) {
+    return (
+      <div className="workflows-page">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Workflows</h1>
+            <p className="page-subtitle">Ongoing agent processes</p>
+          </div>
+        </div>
+        <div className="workflows-empty">
+          <h3>No workflows configured</h3>
+          <p>Connect OpenClaw or create a new automation to get started.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="workflows-page">
       <div className="page-header">
@@ -116,15 +149,12 @@ export default function WorkflowsPage() {
         {workflows.map((workflow) => (
           <div key={workflow.id} className="workflow-card">
             <div className="workflow-card-header">
-              <div className={`workflow-icon ${workflow.icon_type}`}>
-                {workflow.icon}
+              <div className={`workflow-icon ${workflow.trigger?.type || "default"}`}>
+                {triggerIcon(workflow.trigger)}
               </div>
               <div className="workflow-info">
                 <div className="workflow-name">{workflow.name}</div>
-                <div className="workflow-agent">
-                  <span>{workflow.agent_emoji}</span>
-                  <span>{workflow.agent}</span>
-                </div>
+                <div className="workflow-trigger">{formatTrigger(workflow.trigger)}</div>
               </div>
               <div className={`workflow-status ${workflow.status}`}>
                 <span className="status-dot"></span>
@@ -133,31 +163,19 @@ export default function WorkflowsPage() {
             </div>
 
             <div className="workflow-card-body">
-              {workflow.latest_item && (
-                <>
-                  <div className="workflow-latest-label">
-                    Latest {workflow.display_mode === "replace" ? "" : "• " + formatTime(workflow.latest_item.created_at)}
-                    {getPriorityBadge(workflow.latest_item.priority, workflow.latest_item.action_required)}
-                  </div>
-                  <div className="workflow-latest">
-                    {workflow.latest_item.content}
-                  </div>
-                </>
-              )}
+              <div className="workflow-latest-label">Last run</div>
+              <div className="workflow-latest">
+                {workflow.last_run ? formatTime(workflow.last_run) : "Never"}
+              </div>
 
-              {workflow.display_mode === "stack" && workflow.stacked_items && workflow.stacked_items.length > 0 && (
-                <div className="stacked-items">
-                  {workflow.stacked_items.map((item) => (
-                    <div key={item.id} className="stacked-item">
-                      <span className="stacked-item-icon">
-                        {item.priority === "low" ? "📄" : "📌"}
-                      </span>
-                      <div className="stacked-item-content">
-                        <div className="stacked-item-text">{item.content}</div>
-                        <div className="stacked-item-time">{formatTime(item.created_at)}</div>
-                      </div>
-                    </div>
-                  ))}
+              {workflow.steps && workflow.steps.length > 0 && (
+                <div className="workflow-steps">
+                  <div className="workflow-latest-label">Steps</div>
+                  <ul className="workflow-steps-list">
+                    {workflow.steps.map((step) => (
+                      <li key={step.id}>{step.name}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </div>
@@ -165,7 +183,7 @@ export default function WorkflowsPage() {
             <div className="workflow-card-footer">
               <div className="workflow-schedule">
                 <span>🕐</span>
-                {workflow.schedule}
+                {formatTrigger(workflow.trigger)}
               </div>
               <div className="workflow-actions">
                 {workflow.status === "active" ? (
