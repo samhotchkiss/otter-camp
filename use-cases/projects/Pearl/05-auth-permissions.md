@@ -6,6 +6,7 @@ Use a GitHub App for secure, installation‑scoped access.
 ## Auth Model (MVP)
 - **GitHub App** installed via OtterCamp UI.
 - User clicks **Connect GitHub** → GitHub App install → callback to OtterCamp.
+- **Install scope:** per‑repo (not org‑wide) for MVP.
 - Store installation ID per OtterCamp org/project.
 
 ## Required Permissions (MVP)

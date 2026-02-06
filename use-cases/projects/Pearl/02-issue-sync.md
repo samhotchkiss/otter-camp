@@ -26,6 +26,8 @@ GitHub issue receives a **comment** with OtterCamp issue ID.
 - Issue comments live in **OtterCamp DB** (backend‑agnostic).
 - **Writes:** REST (`POST /api/issues/:id/comment`).
 - **Reads:** WebSocket subscription for realtime (`/ws` → subscribe `issue:<id>`).
+- **History:** agents joining mid‑thread see **full issue history**.
+- **GitHub sync:** OtterCamp comments are **internal‑only** (not mirrored to GitHub).
 
 ## Agent Participation UX
 - Issue header shows **owner agent**.

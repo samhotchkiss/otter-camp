@@ -34,7 +34,7 @@ Ingest Pearl’s GitHub repository into OtterCamp so all code + history are avai
 
 ## Failure Paths (MVP)
 - **Sync fails:** surface error, keep last known SHA, log failure in activity feed.
-- **Conflict unresolved:** remain in “needs decision” state until user chooses.
+- **Conflict unresolved:** remain in “needs decision” state; **deploys blocked** until resolved.
 
 ## Minimum API Surface (MVP)
 - `POST /api/projects/:id/repo/sync` — manual resync
