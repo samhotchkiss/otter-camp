@@ -2,19 +2,18 @@
 
 ## Chat → Scratch File Flow
 - Notes from **Project Chat** can be saved into `/notes/`.
-- Trigger options (MVP):
-  - **Explicit command** (“save this to notes”) in chat.
-  - **Manual action** by owner/agent from chat UI.
+- **Agent decides** what to save (per agent instruction set).
 - Avoid auto‑saving every message to keep notes curated.
 
 ## Comment Notifications
-- When a review is saved (CriticMarkup comments added), notify the **issue owner agent**:
-  - “X new inline comments added”
-  - Include links to the comment anchors.
+- When a review is saved (CriticMarkup comments added), a **new commit** is created.
+- Agent is notified of the **new commit** and processes inline comments in that commit.
+- Optional: include boilerplate in the agent request describing comment format.
 
 ## Comment Resolution
-- Use a **resolved state** stored in OtterCamp (not in the Markdown).
-- UI marks comment resolved; underlying CriticMarkup token can be removed on next save or retained with a `resolved=true` flag in OtterCamp metadata.
+- Comments are **not tracked individually**.
+- Agent addresses feedback by updating the document and committing a new version.
+- Discussion about feedback happens in issue chat if needed.
 
 ## Diff Between Review Cycles
 - Provide a “changes since last review” diff:
@@ -23,4 +22,4 @@
 ## Final Approval UX
 - Provide explicit **Approve** action.
 - Approval moves issue to **Needs Review (Human)** → **Completed**.
-- Optionally lock the document after approval (MVP optional).
+- Trigger a **confetti celebration** on approval.
