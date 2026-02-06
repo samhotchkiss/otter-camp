@@ -1,6 +1,12 @@
 export { default as ContentReview } from "./ContentReview";
 export { default as MarkdownPreview } from "./MarkdownPreview";
 export { default as DocumentWorkspace } from "./DocumentWorkspace";
+export {
+  buildMarkdownImageLink,
+  insertMarkdownImageLinkAtSelection,
+  type MarkdownImageInsertionInput,
+  type MarkdownImageInsertionResult,
+} from "./markdownAsset";
 export type {
   ContentReviewActionPayload,
   ContentReviewProps,

@@ -8,6 +8,7 @@ import {
   type ReviewWorkflowState,
 } from "./reviewStateMachine";
 import { insertCriticMarkupCommentAtSelection, parseCriticMarkupComments } from "./criticMarkup";
+import { insertMarkdownImageLinkAtSelection } from "./markdownAsset";
 
 export type ReviewComment = {
   id: string;
@@ -76,6 +77,9 @@ export default function ContentReview({
   const [sourceSelection, setSourceSelection] = useState<TextSelection>({ start: 0, end: 0 });
   const [commentDraft, setCommentDraft] = useState("");
   const [composerOpen, setComposerOpen] = useState(false);
+  const [imageComposerOpen, setImageComposerOpen] = useState(false);
+  const [imagePathDraft, setImagePathDraft] = useState("");
+  const [imageAltDraft, setImageAltDraft] = useState("");
   const [pendingSelection, setPendingSelection] = useState<TextSelection | null>(null);
 
   const sourceRef = useRef<HTMLTextAreaElement | null>(null);
@@ -89,7 +93,7 @@ export default function ContentReview({
   }, [initialMarkdown]);
 
   useEffect(() => {
-    if (documentView !== "source" || composerOpen) {
+    if (documentView !== "source" || composerOpen || imageComposerOpen) {
       return;
     }
     const source = sourceRef.current;
@@ -108,7 +112,7 @@ export default function ContentReview({
     });
 
     return () => window.cancelAnimationFrame(rafID);
-  }, [documentView, sourceSelection, markdown.length, composerOpen]);
+  }, [documentView, sourceSelection, markdown.length, composerOpen, imageComposerOpen]);
 
   const captureSourceSelection = () => {
     const source = sourceRef.current;
@@ -140,6 +144,14 @@ export default function ContentReview({
     const selection = captureSourceSelection();
     setPendingSelection(selection);
     setComposerOpen(true);
+    setImageComposerOpen(false);
+  };
+
+  const openImageComposerFromSelection = () => {
+    const selection = captureSourceSelection();
+    setPendingSelection(selection);
+    setImageComposerOpen(true);
+    setComposerOpen(false);
   };
 
   const handleInsertInlineComment = () => {
@@ -183,6 +195,33 @@ export default function ContentReview({
       event.preventDefault();
       openComposerFromSelection();
     }
+  };
+
+  const handleInsertImageLink = () => {
+    if (!pendingSelection) {
+      return;
+    }
+    const assetPath = imagePathDraft.trim();
+    if (assetPath === "") {
+      return;
+    }
+
+    const insertion = insertMarkdownImageLinkAtSelection({
+      markdown,
+      start: pendingSelection.start,
+      end: pendingSelection.end,
+      assetPath,
+      altText: imageAltDraft,
+    });
+
+    setMarkdown(insertion.markdown);
+    const collapsed = { start: insertion.cursor, end: insertion.cursor };
+    setSourceSelection(collapsed);
+    setPendingSelection(collapsed);
+    setImagePathDraft("");
+    setImageAltDraft("");
+    setImageComposerOpen(false);
+    setDocumentView("source");
   };
 
   const handleApprove = () => {
@@ -281,6 +320,13 @@ export default function ContentReview({
             >
               Add Inline Comment
             </button>
+            <button
+              type="button"
+              onClick={openImageComposerFromSelection}
+              className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Add Image Link
+            </button>
           </div>
           <textarea
             ref={sourceRef}
@@ -322,6 +368,49 @@ export default function ContentReview({
                   onClick={() => {
                     setComposerOpen(false);
                     setCommentDraft("");
+                  }}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {imageComposerOpen && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3 dark:border-emerald-700 dark:bg-emerald-900/20">
+              <label className="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-700 dark:text-emerald-200">
+                Insert Markdown Image
+              </label>
+              <input
+                value={imagePathDraft}
+                onChange={(event) => setImagePathDraft(event.target.value)}
+                className="mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-emerald-700 dark:bg-slate-950 dark:text-slate-100"
+                placeholder="/assets/cover.png"
+                data-testid="image-path-input"
+              />
+              <input
+                value={imageAltDraft}
+                onChange={(event) => setImageAltDraft(event.target.value)}
+                className="mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-emerald-700 dark:bg-slate-950 dark:text-slate-100"
+                placeholder="Alt text (optional)"
+                data-testid="image-alt-input"
+              />
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleInsertImageLink}
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={imagePathDraft.trim().length === 0}
+                >
+                  Insert Image Link
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImageComposerOpen(false);
+                    setImagePathDraft("");
+                    setImageAltDraft("");
                   }}
                   className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                 >

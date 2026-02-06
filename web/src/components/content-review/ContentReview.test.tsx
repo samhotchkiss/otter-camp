@@ -158,4 +158,23 @@ describe("ContentReview inline comment insertion", () => {
     expect(screen.getByTestId("critic-comment-bubble")).toBeInTheDocument();
     expect(screen.getByText("check this")).toBeInTheDocument();
   });
+
+  it("inserts markdown image links from the image insert flow", async () => {
+    const user = userEvent.setup();
+    render(<ContentReview initialMarkdown="Intro" reviewerName="Sam" />);
+
+    const textarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    fireEvent.select(textarea);
+
+    await user.click(screen.getByRole("button", { name: "Add Image Link" }));
+    await user.type(screen.getByTestId("image-path-input"), "/assets/cover.png");
+    await user.type(screen.getByTestId("image-alt-input"), "Cover");
+    await user.click(screen.getByRole("button", { name: "Insert Image Link" }));
+
+    expect((screen.getByTestId("source-textarea") as HTMLTextAreaElement).value).toContain(
+      "![Cover](/assets/cover.png)"
+    );
+  });
 });
