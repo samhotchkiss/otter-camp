@@ -373,7 +373,8 @@ func TestProjectCommitsHandlerCreateRejectsInvalidPathAndNoOp(t *testing.T) {
 		bytes.NewReader([]byte(`{
 			"path": "/notes/research.md",
 			"content": "alpha",
-			"commit_subject": "Add notes draft"
+			"commit_subject": "Add notes draft",
+			"commit_body": "Capture initial research notes for the writing workflow."
 		}`)),
 	)
 	firstRec := httptest.NewRecorder()
@@ -396,6 +397,131 @@ func TestProjectCommitsHandlerCreateRejectsInvalidPathAndNoOp(t *testing.T) {
 	var payload errorResponse
 	require.NoError(t, json.NewDecoder(noOpRec.Body).Decode(&payload))
 	require.Contains(t, payload.Error, "no changes")
+}
+
+func TestProjectCommitsHandlerCreateEnforcesWritingCommitBodyPolicy(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-commits-policy-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Commits Policy")
+	fixture := newPublishRepoFixture(t)
+	seedProjectCommitRepoBinding(t, db, orgID, projectID, fixture.LocalPath)
+
+	handler := &ProjectCommitsHandler{
+		ProjectStore: store.NewProjectStore(db),
+		CommitStore:  store.NewProjectCommitStore(db),
+		ProjectRepos: store.NewProjectRepoStore(db),
+	}
+	router := newProjectCommitsTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/commits?org_id="+orgID,
+		bytes.NewReader([]byte(`{
+			"path": "/notes/policy.md",
+			"content": "alpha",
+			"commit_subject": "Policy check commit"
+		}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Contains(t, payload.Error, "commit_body is required")
+}
+
+func TestProjectCommitsHandlerCreateBypassesPolicyForReviewAndSystemCommitTypes(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-commits-policy-bypass-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Commits Policy Bypass")
+	fixture := newPublishRepoFixture(t)
+	seedProjectCommitRepoBinding(t, db, orgID, projectID, fixture.LocalPath)
+
+	handler := &ProjectCommitsHandler{
+		ProjectStore: store.NewProjectStore(db),
+		CommitStore:  store.NewProjectCommitStore(db),
+		ProjectRepos: store.NewProjectRepoStore(db),
+	}
+	router := newProjectCommitsTestRouter(handler)
+
+	reviewReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/commits?org_id="+orgID,
+		bytes.NewReader([]byte(`{
+			"path": "/posts/2026-02-06-review.md",
+			"content": "review alpha",
+			"commit_subject": "Save review markup",
+			"commit_type": "review"
+		}`)),
+	)
+	reviewRec := httptest.NewRecorder()
+	router.ServeHTTP(reviewRec, reviewReq)
+	require.Equal(t, http.StatusCreated, reviewRec.Code)
+
+	systemReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/commits?org_id="+orgID,
+		bytes.NewReader([]byte(`{
+			"path": "/notes/system.md",
+			"content": "system alpha",
+			"commit_subject": "System automation update",
+			"commit_type": "system"
+		}`)),
+	)
+	systemRec := httptest.NewRecorder()
+	router.ServeHTTP(systemRec, systemReq)
+	require.Equal(t, http.StatusCreated, systemRec.Code)
+}
+
+func TestProjectCommitsHandlerCreateAllowsMissingBodyWhenPolicyDisabled(t *testing.T) {
+	t.Setenv("OTTER_WRITING_COMMIT_POLICY_ENABLED", "false")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-commits-policy-disabled-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Commits Policy Disabled")
+	fixture := newPublishRepoFixture(t)
+	seedProjectCommitRepoBinding(t, db, orgID, projectID, fixture.LocalPath)
+
+	handler := &ProjectCommitsHandler{
+		ProjectStore: store.NewProjectStore(db),
+		CommitStore:  store.NewProjectCommitStore(db),
+		ProjectRepos: store.NewProjectRepoStore(db),
+	}
+	router := newProjectCommitsTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/commits?org_id="+orgID,
+		bytes.NewReader([]byte(`{
+			"path": "/notes/policy-disabled.md",
+			"content": "alpha",
+			"commit_subject": "No body needed"
+		}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+}
+
+func TestValidateBrowserCommitPolicy(t *testing.T) {
+	policy := browserCommitPolicy{
+		Enabled:      true,
+		MinBodyChars: 20,
+	}
+	require.Error(t, validateBrowserCommitPolicy(browserCommitTypeWriting, nil, policy))
+
+	tooShort := "too short"
+	require.Error(t, validateBrowserCommitPolicy(browserCommitTypeWriting, &tooShort, policy))
+
+	valid := "Provide context, rationale, and expected review scope."
+	require.NoError(t, validateBrowserCommitPolicy(browserCommitTypeWriting, &valid, policy))
+	require.NoError(t, validateBrowserCommitPolicy(browserCommitTypeReview, nil, policy))
+	require.NoError(t, validateBrowserCommitPolicy(browserCommitTypeSystem, nil, policy))
+	require.NoError(t, validateBrowserCommitPolicy(browserCommitTypeWriting, nil, browserCommitPolicy{
+		Enabled:      false,
+		MinBodyChars: 20,
+	}))
 }
 
 func TestGenerateBrowserCommitMessageDeterministic(t *testing.T) {
