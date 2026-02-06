@@ -104,6 +104,61 @@ func TestSchemaMigrationsUpDown(t *testing.T) {
 	}
 }
 
+func TestSchemaNativeIssueTablesCreateAndRollback(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"project_issues",
+		"project_issue_github_links",
+		"project_issue_sync_checkpoints",
+	} {
+		require.True(t, schemaTableExists(t, db, table), table)
+	}
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"project_issues",
+		"project_issue_github_links",
+		"project_issue_sync_checkpoints",
+	} {
+		require.False(t, schemaTableExists(t, db, table), table)
+	}
+}
+
+func schemaTableExists(t *testing.T, db *sql.DB, name string) bool {
+	t.Helper()
+	var regclass sql.NullString
+	err := db.QueryRow("SELECT to_regclass('public.' || $1)::text", name).Scan(&regclass)
+	require.NoError(t, err)
+	return regclass.Valid && regclass.String != ""
+}
+
 func TestSchemaForeignKeys(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
