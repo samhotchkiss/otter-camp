@@ -26,22 +26,42 @@ export interface ApiError extends Error {
 export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('otter_camp_token');
   const orgId = localStorage.getItem('otter-camp-org-id');
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...(orgId && { 'X-Org-ID': orgId }),
-      ...options?.headers,
-    },
-  });
-  
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` }),
+        ...(orgId && { 'X-Org-ID': orgId }),
+        ...options?.headers,
+      },
+    });
+  } catch (err) {
+    if (err instanceof TypeError) {
+      throw new Error('Connection failed');
+    }
+    throw err;
+  }
+
   if (!res.ok) {
-    const error = new Error(`API error: ${res.status}`) as ApiError;
+    let message = `API error: ${res.status}`;
+    const contentType = res.headers.get('Content-Type') || '';
+    if (contentType.includes('application/json')) {
+      const body = await res.json().catch(() => null);
+      if (body?.error) {
+        message = body.error;
+      } else if (body?.message) {
+        message = body.message;
+      }
+    }
+
+    const error = new Error(message) as ApiError;
     error.status = res.status;
     throw error;
   }
-  
+
   return res.json();
 }
 
@@ -97,6 +117,10 @@ export interface Approval {
   createdAt: string;
 }
 
+export interface InboxResponse {
+  items: Approval[];
+}
+
 export interface HealthResponse {
   status: string;
   version?: string;
@@ -139,6 +163,7 @@ export const api = {
   // Pass org_id to get real data, or demo=true for demo mode
   feed: () => apiFetch<FeedResponse>(`/api/feed${getOrgQueryParam()}`),
   tasks: () => apiFetch<Task[]>(`/api/tasks${getOrgQueryParam()}`),
+  inbox: () => apiFetch<InboxResponse>(`/api/inbox${getOrgQueryParam()}`),
   approvals: () => apiFetch<Approval[]>(`/api/approvals/exec${getOrgQueryParam()}`),
   projects: () => apiFetch<{ projects: Project[] }>(`/api/projects${getOrgQueryParam()}`),
   syncAgents: () => apiFetch<SyncAgentsResponse>(`/api/sync/agents`),

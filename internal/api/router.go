@@ -45,7 +45,7 @@ func NewRouter() http.Handler {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Org-ID", "X-Workspace-ID"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: false,
 		MaxAge:           300,
@@ -99,6 +99,7 @@ func NewRouter() http.Handler {
 		r.Post("/webhooks/openclaw", webhookHandler.OpenClawHandler)
 		r.Get("/approvals/exec", execApprovalsHandler.List)
 		r.Post("/approvals/exec/{id}/respond", execApprovalsHandler.Respond)
+		r.With(middleware.OptionalWorkspace).Get("/inbox", HandleInbox)
 		r.Get("/tasks", taskHandler.ListTasks)
 		r.Post("/tasks", taskHandler.CreateTask)
 		r.With(middleware.OptionalWorkspace).Get("/agents", agentsHandler.List)

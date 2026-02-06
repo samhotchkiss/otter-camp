@@ -71,8 +71,8 @@ export default function InboxPage() {
       try {
         setLoading(true);
         setError(null);
-        const approvals = await api.approvals();
-        const inboxItems = approvals.map(mapToInboxItem);
+        const response = await api.inbox();
+        const inboxItems = response.items.map(mapToInboxItem);
         setItems(inboxItems);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to fetch approvals");
