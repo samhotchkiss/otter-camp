@@ -36,6 +36,7 @@ func getMigrationsDir(t *testing.T) string {
 
 func setupTestDatabase(t *testing.T, connStr string) *sql.DB {
 	t.Helper()
+	t.Setenv("GIT_REPO_ROOT", t.TempDir())
 	db, err := sql.Open("postgres", connStr)
 	require.NoError(t, err)
 

@@ -30,6 +30,7 @@ func setupMessageTestDB(t *testing.T) *sql.DB {
 	if connStr == "" {
 		t.Skipf("set %s to a dedicated test database", testDBURLKey)
 	}
+	t.Setenv("GIT_REPO_ROOT", t.TempDir())
 
 	db, err := sql.Open("postgres", connStr)
 	require.NoError(t, err)
