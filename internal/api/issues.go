@@ -342,18 +342,47 @@ func (h *IssuesHandler) TransitionApprovalState(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if h.DB != nil && before.ApprovalState != updated.ApprovalState {
-		workspaceID := middleware.WorkspaceFromContext(r.Context())
-		if workspaceID != "" {
-			_ = logGitHubActivity(r.Context(), h.DB, workspaceID, &updated.ProjectID, "issue.approval_state_changed", map[string]any{
-				"issue_id":    updated.ID,
-				"project_id":  updated.ProjectID,
-				"from_state":  before.ApprovalState,
-				"to_state":    updated.ApprovalState,
-				"issue_state": updated.State,
-			})
-		}
+	h.logIssueApprovalTransition(r.Context(), *before, *updated)
+
+	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
+}
+
+func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
 	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if issueID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
+		return
+	}
+
+	before, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	updated, err := h.IssueStore.TransitionApprovalState(r.Context(), issueID, store.IssueApprovalStateApproved)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	h.logIssueApprovalTransition(r.Context(), *before, *updated)
+	h.logIssueApproved(r.Context(), *before, *updated)
 
 	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
 }
@@ -606,6 +635,53 @@ func loadLinkedDocumentContent(projectID string, documentPath *string) (*string,
 	}
 	content := string(contentBytes)
 	return &content, nil
+}
+
+func (h *IssuesHandler) logIssueApprovalTransition(
+	ctx context.Context,
+	before store.ProjectIssue,
+	updated store.ProjectIssue,
+) {
+	if h.DB == nil || before.ApprovalState == updated.ApprovalState {
+		return
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return
+	}
+	_ = logGitHubActivity(ctx, h.DB, workspaceID, &updated.ProjectID, "issue.approval_state_changed", map[string]any{
+		"issue_id":    updated.ID,
+		"project_id":  updated.ProjectID,
+		"from_state":  before.ApprovalState,
+		"to_state":    updated.ApprovalState,
+		"issue_state": updated.State,
+	})
+}
+
+func (h *IssuesHandler) logIssueApproved(
+	ctx context.Context,
+	before store.ProjectIssue,
+	updated store.ProjectIssue,
+) {
+	if h.DB == nil {
+		return
+	}
+	if before.ApprovalState == store.IssueApprovalStateApproved || updated.ApprovalState != store.IssueApprovalStateApproved {
+		return
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return
+	}
+	_ = logGitHubActivity(ctx, h.DB, workspaceID, &updated.ProjectID, "issue.approved", map[string]any{
+		"issue_id":       updated.ID,
+		"project_id":     updated.ProjectID,
+		"approval_state": updated.ApprovalState,
+		"issue_state":    updated.State,
+		"closed_at":      updated.ClosedAt,
+	})
 }
 
 func handleIssueStoreError(w http.ResponseWriter, err error) {

@@ -191,19 +191,30 @@ type ApprovalAction = {
   label: string;
   toState: IssueApprovalState;
   style: "neutral" | "warn" | "success";
+  endpoint: "transition" | "approve";
 };
 
 function nextApprovalActions(state: IssueApprovalState): ApprovalAction[] {
   switch (state) {
     case "draft":
-      return [{ label: "Mark Ready for Review", toState: "ready_for_review", style: "neutral" }];
+      return [{
+        label: "Mark Ready for Review",
+        toState: "ready_for_review",
+        style: "neutral",
+        endpoint: "transition",
+      }];
     case "ready_for_review":
       return [
-        { label: "Request Changes", toState: "needs_changes", style: "warn" },
-        { label: "Approve", toState: "approved", style: "success" },
+        { label: "Request Changes", toState: "needs_changes", style: "warn", endpoint: "transition" },
+        { label: "Approve", toState: "approved", style: "success", endpoint: "approve" },
       ];
     case "needs_changes":
-      return [{ label: "Mark Ready for Review", toState: "ready_for_review", style: "neutral" }];
+      return [{
+        label: "Mark Ready for Review",
+        toState: "ready_for_review",
+        style: "neutral",
+        endpoint: "transition",
+      }];
     case "approved":
     default:
       return [];
@@ -251,6 +262,7 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
   const [updatingParticipant, setUpdatingParticipant] = useState(false);
   const [updatingApprovalState, setUpdatingApprovalState] = useState<IssueApprovalState | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [showApprovalConfetti, setShowApprovalConfetti] = useState(false);
 
   const { lastMessage } = useWS();
 
@@ -455,22 +467,37 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
     }
   }
 
-  async function handleTransitionApprovalState(nextState: IssueApprovalState): Promise<void> {
+  useEffect(() => {
+    if (!showApprovalConfetti) {
+      return;
+    }
+    const timeoutID = window.setTimeout(() => setShowApprovalConfetti(false), 1600);
+    return () => window.clearTimeout(timeoutID);
+  }, [showApprovalConfetti]);
+
+  async function handleTransitionApprovalState(action: ApprovalAction): Promise<void> {
     const orgID = getOrgID();
     if (!orgID || !issue) {
       return;
     }
 
     setApprovalError(null);
-    setUpdatingApprovalState(nextState);
+    setUpdatingApprovalState(action.toState);
     try {
+      const endpoint = action.endpoint === "approve"
+        ? `${API_URL}/api/issues/${issue.id}/approve?org_id=${encodeURIComponent(orgID)}`
+        : `${API_URL}/api/issues/${issue.id}/approval-state?org_id=${encodeURIComponent(orgID)}`;
+      const requestInit: RequestInit = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      };
+      if (action.endpoint === "transition") {
+        requestInit.body = JSON.stringify({ approval_state: action.toState });
+      }
+
       const response = await fetch(
-        `${API_URL}/api/issues/${issue.id}/approval-state?org_id=${encodeURIComponent(orgID)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ approval_state: nextState }),
-        },
+        endpoint,
+        requestInit,
       );
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
@@ -487,6 +514,9 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
           document_content: current.document_content,
         };
       });
+      if (action.endpoint === "approve") {
+        setShowApprovalConfetti(true);
+      }
     } catch (err) {
       setApprovalError(err instanceof Error ? err.message : "Failed to update review state");
     } finally {
@@ -612,10 +642,25 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
                     type="button"
                     className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${approvalActionButtonClass(action.style)}`}
                     disabled={updatingApprovalState !== null}
-                    onClick={() => void handleTransitionApprovalState(action.toState)}
+                    onClick={() => void handleTransitionApprovalState(action)}
                   >
                     {updatingApprovalState === action.toState ? "Updating..." : action.label}
                   </button>
+                ))}
+              </div>
+            )}
+            {showApprovalConfetti && (
+              <div
+                className="mt-3 flex flex-wrap gap-1"
+                data-testid="approval-confetti"
+                aria-label="Approval celebration"
+              >
+                {["#f59e0b", "#ef4444", "#10b981", "#3b82f6", "#8b5cf6", "#eab308"].map((color, index) => (
+                  <span
+                    key={`${color}-${index}`}
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{ backgroundColor: color }}
+                  />
                 ))}
               </div>
             )}

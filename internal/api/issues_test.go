@@ -23,6 +23,7 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}", handler.Get)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/comments", handler.CreateComment)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approval-state", handler.TransitionApprovalState)
+	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approve", handler.Approve)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/participants", handler.AddParticipant)
 	router.With(middleware.OptionalWorkspace).Delete("/api/issues/{id}/participants/{agentID}", handler.RemoveParticipant)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues/link", handler.CreateLinkedIssue)
@@ -555,6 +556,80 @@ func TestIssuesHandlerTransitionApprovalStateEnforcesStateMachineAndEmitsActivit
 	require.NoError(t, err)
 	require.Equal(t, store.IssueApprovalStateDraft, fromState)
 	require.Equal(t, store.IssueApprovalStateReadyForReview, toState)
+}
+
+func TestIssuesHandlerApproveRequiresReadyForReviewAndEmitsCompletionActivity(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-approve-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Approve API Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Approve me",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore: issueStore,
+		DB:         db,
+	}
+	router := newIssueTestRouter(handler)
+
+	earlyApproveReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/approve?org_id="+orgID,
+		nil,
+	)
+	earlyApproveRec := httptest.NewRecorder()
+	router.ServeHTTP(earlyApproveRec, earlyApproveReq)
+	require.Equal(t, http.StatusBadRequest, earlyApproveRec.Code)
+
+	moveReadyReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/approval-state?org_id="+orgID,
+		bytes.NewReader([]byte(`{"approval_state":"ready_for_review"}`)),
+	)
+	moveReadyRec := httptest.NewRecorder()
+	router.ServeHTTP(moveReadyRec, moveReadyReq)
+	require.Equal(t, http.StatusOK, moveReadyRec.Code)
+
+	approveReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/approve?org_id="+orgID,
+		nil,
+	)
+	approveRec := httptest.NewRecorder()
+	router.ServeHTTP(approveRec, approveReq)
+	require.Equal(t, http.StatusOK, approveRec.Code)
+
+	var approved issueSummaryPayload
+	require.NoError(t, json.NewDecoder(approveRec.Body).Decode(&approved))
+	require.Equal(t, store.IssueApprovalStateApproved, approved.ApprovalState)
+	require.Equal(t, "closed", approved.State)
+
+	var approvedCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM activity_log WHERE org_id = $1 AND project_id = $2 AND action = 'issue.approved'`,
+		orgID,
+		projectID,
+	).Scan(&approvedCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, approvedCount)
+
+	var loggedIssueState string
+	err = db.QueryRow(
+		`SELECT metadata->>'issue_state'
+			FROM activity_log
+			WHERE org_id = $1 AND project_id = $2 AND action = 'issue.approved'
+			ORDER BY created_at DESC
+			LIMIT 1`,
+		orgID,
+		projectID,
+	).Scan(&loggedIssueState)
+	require.NoError(t, err)
+	require.Equal(t, "closed", loggedIssueState)
 }
 
 func issueTestStringPtr(v string) *string {

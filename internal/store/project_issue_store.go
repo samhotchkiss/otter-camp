@@ -363,12 +363,22 @@ func (s *ProjectIssueStore) TransitionApprovalState(
 
 	updated := current
 	if currentState != normalizedNext {
-		updated, err = scanProjectIssue(tx.QueryRowContext(
-			ctx,
-			`UPDATE project_issues
+		updateQuery := `UPDATE project_issues
 				SET approval_state = $2
 				WHERE id = $1
-				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at`,
+				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at`
+		if normalizedNext == IssueApprovalStateApproved {
+			updateQuery = `UPDATE project_issues
+				SET approval_state = $2,
+					state = 'closed',
+					closed_at = COALESCE(closed_at, NOW())
+				WHERE id = $1
+				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at`
+		}
+
+		updated, err = scanProjectIssue(tx.QueryRowContext(
+			ctx,
+			updateQuery,
 			issueID,
 			normalizedNext,
 		))

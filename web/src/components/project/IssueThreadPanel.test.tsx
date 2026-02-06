@@ -284,4 +284,56 @@ describe("IssueThreadPanel", () => {
     expect(screen.getByRole("button", { name: "Request Changes" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark Ready for Review" })).not.toBeInTheDocument();
   });
+
+  it("approving from ready-for-review triggers confetti once and updates state badges", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/issues/issue-1/approve") && init?.method === "POST") {
+        return mockJSONResponse({
+          id: "issue-1",
+          issue_number: 1,
+          title: "Approval issue",
+          state: "closed",
+          origin: "local",
+          approval_state: "approved",
+          document_path: null,
+        });
+      }
+      if (url.includes("/api/issues/issue-1?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-1",
+            issue_number: 1,
+            title: "Approval issue",
+            state: "open",
+            origin: "local",
+            approval_state: "ready_for_review",
+            document_path: null,
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const user = userEvent.setup();
+    render(<IssueThreadPanel issueID="issue-1" />);
+
+    expect(await screen.findByText("#1 Approval issue")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("issue-thread-approval")).toHaveTextContent("Approved");
+    });
+    expect(screen.getByText(/Local · Closed/)).toBeInTheDocument();
+    expect(screen.getByTestId("approval-confetti")).toBeInTheDocument();
+    expect(screen.getAllByTestId("approval-confetti")).toHaveLength(1);
+  });
 });

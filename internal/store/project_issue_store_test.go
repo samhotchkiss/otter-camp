@@ -198,6 +198,8 @@ func TestProjectIssueStore_TransitionApprovalStateEnforcesStateMachine(t *testin
 	approved, err := issueStore.TransitionApprovalState(ctx, issue.ID, IssueApprovalStateApproved)
 	require.NoError(t, err)
 	require.Equal(t, IssueApprovalStateApproved, approved.ApprovalState)
+	require.Equal(t, "closed", approved.State)
+	require.NotNil(t, approved.ClosedAt)
 
 	_, err = issueStore.TransitionApprovalState(ctx, issue.ID, IssueApprovalStateDraft)
 	require.Error(t, err)
