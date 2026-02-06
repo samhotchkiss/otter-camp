@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import LoadingSpinner from "../components/LoadingSpinner";
+import ProjectChatPanel from "../components/project/ProjectChatPanel";
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
@@ -200,7 +201,7 @@ function ActivityItem({ activity }: { activity: Activity }) {
   );
 }
 
-type TabKey = "board" | "list" | "activity" | "settings";
+type TabKey = "board" | "list" | "activity" | "chat" | "settings";
 
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -209,6 +210,7 @@ export default function ProjectDetailPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
+  const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -366,6 +368,7 @@ export default function ProjectDetailPage() {
     { key: "board", label: "Board" },
     { key: "list", label: "List" },
     { key: "activity", label: "Activity" },
+    { key: "chat", label: "Chat", badge: chatUnreadCount > 0 ? chatUnreadCount : undefined },
     { key: "settings", label: "Settings" },
   ];
 
@@ -548,6 +551,14 @@ export default function ProjectDetailPage() {
           </div>
         </div>
       )}
+
+      <div className={activeTab === "chat" ? "block" : "hidden"}>
+        <ProjectChatPanel
+          projectId={project.id}
+          active={activeTab === "chat"}
+          onUnreadChange={setChatUnreadCount}
+        />
+      </div>
 
       {activeTab === "settings" && (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
