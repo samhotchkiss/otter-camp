@@ -100,6 +100,7 @@ func NewRouter() http.Handler {
 		issuesHandler.DB = db
 		projectCommitsHandler.ProjectStore = projectStore
 		projectCommitsHandler.CommitStore = store.NewProjectCommitStore(db)
+		projectCommitsHandler.ProjectRepos = store.NewProjectRepoStore(db)
 		websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{
 			IssueStore: issuesHandler.IssueStore,
 		}
@@ -148,6 +149,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/delete", projectChatHandler.DeleteContent)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/metadata", projectChatHandler.GetContentMetadata)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/search", projectChatHandler.SearchContent)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/commits", projectCommitsHandler.Create)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits", projectCommitsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}", projectCommitsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}/diff", projectCommitsHandler.Diff)

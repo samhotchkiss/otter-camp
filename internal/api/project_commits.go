@@ -16,6 +16,7 @@ import (
 type ProjectCommitsHandler struct {
 	ProjectStore *store.ProjectStore
 	CommitStore  *store.ProjectCommitStore
+	ProjectRepos *store.ProjectRepoStore
 }
 
 type projectCommitPayload struct {
