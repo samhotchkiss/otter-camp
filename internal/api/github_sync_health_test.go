@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/githubsync"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/syncmetrics"
@@ -17,6 +18,7 @@ import (
 
 func TestGitHubSyncHealthIncludesQueueDepthStuckJobsAndMetrics(t *testing.T) {
 	syncmetrics.ResetForTests()
+	githubsync.ResetRepoDriftPollSnapshotForTests()
 
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "sync-health-org")
@@ -54,6 +56,26 @@ func TestGitHubSyncHealthIncludesQueueDepthStuckJobsAndMetrics(t *testing.T) {
 	syncmetrics.RecordQuota("issue_import", 5000, 4500, time.Now().UTC().Add(30*time.Minute))
 	syncmetrics.RecordThrottle("issue_import")
 
+	poller := githubsync.NewRepoDriftPoller(
+		&healthPollBindingStore{
+			bindings: []store.ProjectRepoBinding{
+				{
+					OrgID:              orgID,
+					ProjectID:          projectID,
+					RepositoryFullName: "samhotchkiss/otter-camp",
+					DefaultBranch:      "main",
+					Enabled:            true,
+					LastSyncedSHA:      healthStringPtr("sha-old"),
+				},
+			},
+		},
+		jobStore,
+		&healthPollBranchClient{sha: "sha-new"},
+		time.Hour,
+	)
+	_, err = poller.RunOnce(context.Background())
+	require.NoError(t, err)
+
 	ownerID := insertTestUserWithRole(t, db, orgID, "owner-health", RoleOwner)
 	token := "oc_sess_sync_health_owner"
 	insertTestSession(t, db, orgID, ownerID, token, time.Now().UTC().Add(time.Hour))
@@ -78,7 +100,7 @@ func TestGitHubSyncHealthIncludesQueueDepthStuckJobsAndMetrics(t *testing.T) {
 	for _, row := range resp.QueueDepth {
 		depthByType[row.JobType] = row
 	}
-	require.Equal(t, 1, depthByType[store.GitHubSyncJobTypeRepoSync].Queued)
+	require.Equal(t, 2, depthByType[store.GitHubSyncJobTypeRepoSync].Queued)
 	require.Equal(t, 1, depthByType[store.GitHubSyncJobTypeIssueImport].InProgress)
 
 	issueMetrics, ok := resp.Metrics.Jobs[store.GitHubSyncJobTypeIssueImport]
@@ -90,4 +112,32 @@ func TestGitHubSyncHealthIncludesQueueDepthStuckJobsAndMetrics(t *testing.T) {
 	require.Equal(t, 5000, quotaMetrics.Limit)
 	require.Equal(t, 4500, quotaMetrics.Remaining)
 	require.Equal(t, int64(1), quotaMetrics.ThrottleEvents)
+
+	require.NotNil(t, resp.Poller.LastRunAt)
+	require.NotNil(t, resp.Poller.LastCompletedAt)
+	require.Equal(t, 1, resp.Poller.ProjectsChecked)
+	require.Equal(t, 1, resp.Poller.DriftDetected)
+	require.Equal(t, 1, resp.Poller.JobsEnqueued)
+}
+
+type healthPollBindingStore struct {
+	bindings []store.ProjectRepoBinding
+}
+
+func (s *healthPollBindingStore) ListBindingsForPolling(context.Context) ([]store.ProjectRepoBinding, error) {
+	out := make([]store.ProjectRepoBinding, len(s.bindings))
+	copy(out, s.bindings)
+	return out, nil
+}
+
+type healthPollBranchClient struct {
+	sha string
+}
+
+func (c *healthPollBranchClient) GetBranchHeadSHA(context.Context, string, string) (string, error) {
+	return c.sha, nil
+}
+
+func healthStringPtr(value string) *string {
+	return &value
 }

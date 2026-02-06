@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -179,6 +180,51 @@ func TestProjectRepoStore_UpdateLocalCloneState(t *testing.T) {
 
 	_, err = store.UpdateLocalCloneState(ctx, projectID, "main", "   ")
 	require.Error(t, err)
+}
+
+func TestProjectRepoStore_ListBindingsForPollingIncludesEnabledAndDisabled(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgA := createTestOrganization(t, db, "repo-polling-a")
+	orgB := createTestOrganization(t, db, "repo-polling-b")
+	projectA := createTestProject(t, db, orgA, "repo-polling-project-a")
+	projectB := createTestProject(t, db, orgB, "repo-polling-project-b")
+
+	store := NewProjectRepoStore(db)
+	ctxA := ctxWithWorkspace(orgA)
+	ctxB := ctxWithWorkspace(orgB)
+
+	_, err := store.UpsertBinding(ctxA, UpsertProjectRepoBindingInput{
+		ProjectID:          projectA,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      RepoConflictNone,
+	})
+	require.NoError(t, err)
+	_, err = store.UpsertBinding(ctxB, UpsertProjectRepoBindingInput{
+		ProjectID:          projectB,
+		RepositoryFullName: "samhotchkiss/private-repo",
+		DefaultBranch:      "main",
+		Enabled:            false,
+		SyncMode:           RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      RepoConflictNone,
+	})
+	require.NoError(t, err)
+
+	bindings, err := store.ListBindingsForPolling(context.Background())
+	require.NoError(t, err)
+	require.Len(t, bindings, 2)
+
+	byProject := map[string]ProjectRepoBinding{}
+	for _, binding := range bindings {
+		byProject[binding.ProjectID] = binding
+	}
+	require.True(t, byProject[projectA].Enabled)
+	require.False(t, byProject[projectB].Enabled)
 }
 
 func TestProjectRepoStore_IsolationAndValidation(t *testing.T) {

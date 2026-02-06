@@ -245,6 +245,32 @@ func (s *ProjectRepoStore) GetBinding(
 	return &binding, nil
 }
 
+// ListBindingsForPolling lists repo bindings across all workspaces for internal
+// background reconciler jobs. This intentionally bypasses workspace scoping.
+func (s *ProjectRepoStore) ListBindingsForPolling(ctx context.Context) ([]ProjectRepoBinding, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT`+projectRepoBindingColumns+` FROM project_repo_bindings ORDER BY updated_at ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list repo bindings for polling: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]ProjectRepoBinding, 0)
+	for rows.Next() {
+		binding, err := scanProjectRepoBinding(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan repo binding: %w", err)
+		}
+		out = append(out, binding)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading repo bindings: %w", err)
+	}
+	return out, nil
+}
+
 func (s *ProjectRepoStore) SetActiveBranches(
 	ctx context.Context,
 	projectID string,

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/samhotchkiss/otter-camp/internal/githubsync"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/syncmetrics"
 )
@@ -15,11 +16,12 @@ type GitHubSyncHealthHandler struct {
 }
 
 type githubSyncHealthResponse struct {
-	QueueDepth     []store.GitHubSyncQueueDepth `json:"queue_depth"`
-	StuckJobs      int                          `json:"stuck_jobs"`
-	StuckThreshold string                       `json:"stuck_threshold"`
-	Metrics        syncmetrics.Snapshot         `json:"metrics"`
-	GeneratedAt    time.Time                    `json:"generated_at"`
+	QueueDepth     []store.GitHubSyncQueueDepth     `json:"queue_depth"`
+	StuckJobs      int                              `json:"stuck_jobs"`
+	StuckThreshold string                           `json:"stuck_threshold"`
+	Metrics        syncmetrics.Snapshot             `json:"metrics"`
+	Poller         githubsync.RepoDriftPollSnapshot `json:"poller"`
+	GeneratedAt    time.Time                        `json:"generated_at"`
 }
 
 func (h *GitHubSyncHealthHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +57,7 @@ func (h *GitHubSyncHealthHandler) Get(w http.ResponseWriter, r *http.Request) {
 		StuckJobs:      stuckJobs,
 		StuckThreshold: stuckThreshold.String(),
 		Metrics:        syncmetrics.SnapshotNow(),
+		Poller:         githubsync.CurrentRepoDriftPollSnapshot(),
 		GeneratedAt:    time.Now().UTC(),
 	}
 	sendJSON(w, http.StatusOK, resp)
