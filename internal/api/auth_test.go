@@ -98,3 +98,17 @@ func buildOpenClawToken(t *testing.T, claims openClawClaims, secret string) stri
 	signatureB64 := base64.RawURLEncoding.EncodeToString(sig.Sum(nil))
 	return openClawTokenPrefix + payloadB64 + "." + signatureB64
 }
+
+func TestAllowInsecureMagicTokenValidationEnvAliases(t *testing.T) {
+	t.Setenv("OTTERCAMP_ALLOW_INSECURE_MAGIC_AUTH", "true")
+	t.Setenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION", "")
+	require.True(t, allowInsecureMagicTokenValidation())
+
+	t.Setenv("OTTERCAMP_ALLOW_INSECURE_MAGIC_AUTH", "")
+	t.Setenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION", "yes")
+	require.True(t, allowInsecureMagicTokenValidation())
+
+	t.Setenv("OTTERCAMP_ALLOW_INSECURE_MAGIC_AUTH", "false")
+	t.Setenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION", "")
+	require.False(t, allowInsecureMagicTokenValidation())
+}

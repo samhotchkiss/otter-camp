@@ -335,10 +335,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func requireOpenClawSyncAuth(r *http.Request) (int, error) {
-	secret := strings.TrimSpace(os.Getenv("OPENCLAW_SYNC_TOKEN"))
-	if secret == "" {
-		secret = strings.TrimSpace(os.Getenv("OPENCLAW_WEBHOOK_SECRET"))
-	}
+	secret := resolveOpenClawSyncSecret()
 	if secret == "" {
 		return http.StatusServiceUnavailable, fmt.Errorf("sync authentication is not configured")
 	}
@@ -362,6 +359,21 @@ func requireOpenClawSyncAuth(r *http.Request) (int, error) {
 	}
 
 	return http.StatusOK, nil
+}
+
+func resolveOpenClawSyncSecret() string {
+	// Preferred variable name.
+	secret := strings.TrimSpace(os.Getenv("OPENCLAW_SYNC_SECRET"))
+	if secret != "" {
+		return secret
+	}
+	// Backward compatibility.
+	secret = strings.TrimSpace(os.Getenv("OPENCLAW_SYNC_TOKEN"))
+	if secret != "" {
+		return secret
+	}
+	// Legacy fallback.
+	return strings.TrimSpace(os.Getenv("OPENCLAW_WEBHOOK_SECRET"))
 }
 
 // GetAgents returns current agent states

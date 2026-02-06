@@ -689,6 +689,9 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func allowInsecureMagicTokenValidation() bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION")))
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("OTTERCAMP_ALLOW_INSECURE_MAGIC_AUTH")))
+	if value == "" {
+		value = strings.ToLower(strings.TrimSpace(os.Getenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION")))
+	}
 	return value == "1" || value == "true" || value == "yes"
 }

@@ -1,10 +1,12 @@
 package ws
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,7 +24,7 @@ type OpenClawHandler struct {
 
 // NewOpenClawHandler creates a handler for OpenClaw connections.
 func NewOpenClawHandler(hub *Hub) *OpenClawHandler {
-	secret := os.Getenv("OPENCLAW_WS_SECRET")
+	secret := strings.TrimSpace(os.Getenv("OPENCLAW_WS_SECRET"))
 	return &OpenClawHandler{
 		Hub:        hub,
 		authSecret: secret,
@@ -72,7 +74,8 @@ func (h *OpenClawHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		token = r.Header.Get("X-OpenClaw-Token")
 	}
 
-	if token != h.authSecret {
+	token = strings.TrimSpace(token)
+	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(h.authSecret)) != 1 {
 		log.Printf("[openclaw-ws] Auth failed: invalid token")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
