@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useWS } from "../../contexts/WebSocketContext";
 import WebSocketIssueSubscriber from "../WebSocketIssueSubscriber";
+import { DocumentWorkspace } from "../content-review";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const COMMENTS_PAGE_SIZE = 20;
+type IssueApprovalState = "draft" | "ready_for_review" | "needs_changes" | "approved";
 
 type IssueSummary = {
   id: string;
@@ -12,6 +14,9 @@ type IssueSummary = {
   issue_number: number;
   state: "open" | "closed";
   origin: "local" | "github";
+  approval_state?: IssueApprovalState | null;
+  document_path?: string | null;
+  document_content?: string | null;
 };
 
 type IssueParticipant = {
@@ -143,6 +148,43 @@ function formatTimestamp(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function normalizeApprovalState(raw: string | null | undefined): IssueApprovalState {
+  switch (raw) {
+    case "ready_for_review":
+    case "needs_changes":
+    case "approved":
+      return raw;
+    default:
+      return "draft";
+  }
+}
+
+function approvalStateLabel(state: IssueApprovalState): string {
+  switch (state) {
+    case "ready_for_review":
+      return "Ready for Review";
+    case "needs_changes":
+      return "Needs Changes";
+    case "approved":
+      return "Approved";
+    default:
+      return "Draft";
+  }
+}
+
+function approvalStateBadgeClass(state: IssueApprovalState): string {
+  switch (state) {
+    case "ready_for_review":
+      return "border-blue-200 bg-blue-50 text-blue-700";
+    case "needs_changes":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    case "approved":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    default:
+      return "border-slate-200 bg-slate-100 text-slate-700";
+  }
 }
 
 function sortComments(comments: IssueComment[]): IssueComment[] {
@@ -463,10 +505,36 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
             <h2 className="text-lg font-semibold text-[var(--text)]">
               #{issue.issue_number} {issue.title}
             </h2>
-            <p className="mt-1 text-xs text-[var(--text-muted)]">
-              {issue.origin === "github" ? "GitHub" : "Local"} · {issue.state === "open" ? "Open" : "Closed"}
-            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p className="text-xs text-[var(--text-muted)]">
+                {issue.origin === "github" ? "GitHub" : "Local"} · {issue.state === "open" ? "Open" : "Closed"}
+              </p>
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${approvalStateBadgeClass(normalizeApprovalState(issue.approval_state))}`}
+                data-testid="issue-thread-approval"
+              >
+                {approvalStateLabel(normalizeApprovalState(issue.approval_state))}
+              </span>
+            </div>
           </header>
+
+          {issue.document_path && (
+            <section className="space-y-3">
+              <h3 className="text-sm font-semibold text-[var(--text)]">Linked document</h3>
+              <p className="text-xs text-[var(--text-muted)]">{issue.document_path}</p>
+              {typeof issue.document_content === "string" ? (
+                <DocumentWorkspace
+                  path={issue.document_path}
+                  content={issue.document_content}
+                  reviewerName={agentNameByID.get(commentAuthorID) ?? "Reviewer"}
+                />
+              ) : (
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-3 text-xs text-[var(--text-muted)]">
+                  Linked document content is unavailable.
+                </div>
+              )}
+            </section>
+          )}
 
           <div className="space-y-3">
             <h3 className="text-sm font-semibold text-[var(--text)]">Participants</h3>

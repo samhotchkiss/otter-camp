@@ -6,6 +6,7 @@ const ORG_STORAGE_KEY = "otter-camp-org-id";
 type IssueFilterState = "all" | "open" | "closed";
 type IssueFilterKind = "all" | "issue" | "pull_request";
 type IssueFilterOrigin = "all" | "local" | "github";
+type IssueApprovalState = "draft" | "ready_for_review" | "needs_changes" | "approved";
 
 type ProjectIssueItem = {
   id: string;
@@ -14,6 +15,7 @@ type ProjectIssueItem = {
   state: "open" | "closed";
   origin: "local" | "github";
   kind: "issue" | "pull_request";
+  approval_state?: IssueApprovalState | null;
   owner_agent_id?: string | null;
   last_activity_at: string;
   github_number?: number | null;
@@ -63,6 +65,43 @@ function normalizeIssueKindLabel(kind: string): string {
 
 function normalizeOriginLabel(origin: string): string {
   return origin === "github" ? "GitHub" : "Local";
+}
+
+function normalizeApprovalState(raw: string | null | undefined): IssueApprovalState {
+  switch (raw) {
+    case "ready_for_review":
+    case "needs_changes":
+    case "approved":
+      return raw;
+    default:
+      return "draft";
+  }
+}
+
+function approvalStateLabel(state: IssueApprovalState): string {
+  switch (state) {
+    case "ready_for_review":
+      return "Ready for Review";
+    case "needs_changes":
+      return "Needs Changes";
+    case "approved":
+      return "Approved";
+    default:
+      return "Draft";
+  }
+}
+
+function approvalStateBadgeClass(state: IssueApprovalState): string {
+  switch (state) {
+    case "ready_for_review":
+      return "bg-blue-50 text-blue-700 border border-blue-200";
+    case "needs_changes":
+      return "bg-amber-50 text-amber-700 border border-amber-200";
+    case "approved":
+      return "bg-emerald-50 text-emerald-700 border border-emerald-200";
+    default:
+      return "bg-slate-100 text-slate-700 border border-slate-200";
+  }
 }
 
 export default function ProjectIssuesList({
@@ -222,6 +261,7 @@ export default function ProjectIssuesList({
         <ul className="space-y-3">
           {items.map((issue) => {
             const selected = selectedIssueID === issue.id;
+            const approvalState = normalizeApprovalState(issue.approval_state);
             return (
               <li key={issue.id}>
                 <button
@@ -245,6 +285,12 @@ export default function ProjectIssuesList({
                     </span>
                     <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
                       {issue.state === "open" ? "Open" : "Closed"}
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${approvalStateBadgeClass(approvalState)}`}
+                      data-testid={`issue-approval-${issue.id}`}
+                    >
+                      {approvalStateLabel(approvalState)}
                     </span>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-[var(--text-muted)]">

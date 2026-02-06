@@ -117,6 +117,55 @@ func TestProjectIssueStore_UpsertIssueFromGitHubIsIdempotentAndUpdatesFields(t *
 	require.NotNil(t, links[second.ID].GitHubURL)
 }
 
+func TestProjectIssueStore_CreateIssuePersistsAndValidatesLinkedDocumentAndApprovalState(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-linked-fields-org")
+	projectID := createTestProject(t, db, orgID, "Issue Linked Fields Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	documentPath := "/posts/2026-02-06-launch-plan.md"
+	created, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Review launch plan",
+		Origin:        "local",
+		DocumentPath:  &documentPath,
+		ApprovalState: IssueApprovalStateReadyForReview,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created.DocumentPath)
+	require.Equal(t, documentPath, *created.DocumentPath)
+	require.Equal(t, IssueApprovalStateReadyForReview, created.ApprovalState)
+
+	loaded, err := issueStore.GetIssueByID(ctx, created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded.DocumentPath)
+	require.Equal(t, documentPath, *loaded.DocumentPath)
+	require.Equal(t, IssueApprovalStateReadyForReview, loaded.ApprovalState)
+
+	invalidPath := "/notes/not-a-post.md"
+	_, err = issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Invalid path issue",
+		Origin:       "local",
+		DocumentPath: &invalidPath,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "document_path")
+
+	_, err = issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Invalid approval state issue",
+		Origin:        "local",
+		DocumentPath:  &documentPath,
+		ApprovalState: "queued",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "approval_state")
+}
+
 func TestProjectIssueStore_ListByProjectStateAndOrigin(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

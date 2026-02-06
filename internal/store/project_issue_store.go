@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -12,26 +13,30 @@ import (
 )
 
 type ProjectIssue struct {
-	ID          string     `json:"id"`
-	OrgID       string     `json:"org_id"`
-	ProjectID   string     `json:"project_id"`
-	IssueNumber int64      `json:"issue_number"`
-	Title       string     `json:"title"`
-	Body        *string    `json:"body,omitempty"`
-	State       string     `json:"state"`
-	Origin      string     `json:"origin"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	ClosedAt    *time.Time `json:"closed_at,omitempty"`
+	ID            string     `json:"id"`
+	OrgID         string     `json:"org_id"`
+	ProjectID     string     `json:"project_id"`
+	IssueNumber   int64      `json:"issue_number"`
+	Title         string     `json:"title"`
+	Body          *string    `json:"body,omitempty"`
+	State         string     `json:"state"`
+	Origin        string     `json:"origin"`
+	DocumentPath  *string    `json:"document_path,omitempty"`
+	ApprovalState string     `json:"approval_state"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	ClosedAt      *time.Time `json:"closed_at,omitempty"`
 }
 
 type CreateProjectIssueInput struct {
-	ProjectID string
-	Title     string
-	Body      *string
-	State     string
-	Origin    string
-	ClosedAt  *time.Time
+	ProjectID     string
+	Title         string
+	Body          *string
+	State         string
+	Origin        string
+	DocumentPath  *string
+	ApprovalState string
+	ClosedAt      *time.Time
 }
 
 type UpsertProjectIssueFromGitHubInput struct {
@@ -139,6 +144,60 @@ func NewProjectIssueStore(db *sql.DB) *ProjectIssueStore {
 	return &ProjectIssueStore{db: db}
 }
 
+const (
+	IssueApprovalStateDraft          = "draft"
+	IssueApprovalStateReadyForReview = "ready_for_review"
+	IssueApprovalStateNeedsChanges   = "needs_changes"
+	IssueApprovalStateApproved       = "approved"
+)
+
+func normalizeIssueApprovalState(state string) string {
+	return strings.TrimSpace(strings.ToLower(state))
+}
+
+func isValidIssueApprovalState(state string) bool {
+	switch normalizeIssueApprovalState(state) {
+	case IssueApprovalStateDraft, IssueApprovalStateReadyForReview, IssueApprovalStateNeedsChanges, IssueApprovalStateApproved:
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultApprovalStateForLegacyState(issueState string) string {
+	if normalizeIssueState(issueState) == "closed" {
+		return IssueApprovalStateApproved
+	}
+	return IssueApprovalStateDraft
+}
+
+func normalizeIssueDocumentPath(documentPath *string) (*string, error) {
+	if documentPath == nil {
+		return nil, nil
+	}
+
+	value := strings.TrimSpace(strings.ReplaceAll(*documentPath, "\\", "/"))
+	if value == "" {
+		return nil, nil
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+
+	for _, segment := range strings.Split(value, "/") {
+		if segment == ".." {
+			return nil, fmt.Errorf("document_path must not traverse directories")
+		}
+	}
+
+	clean := path.Clean(value)
+	if !strings.HasPrefix(clean, "/posts/") || !strings.HasSuffix(strings.ToLower(clean), ".md") {
+		return nil, fmt.Errorf("document_path must point to /posts/*.md")
+	}
+
+	return &clean, nil
+}
+
 func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProjectIssueInput) (*ProjectIssue, error) {
 	workspaceID := middleware.WorkspaceFromContext(ctx)
 	if workspaceID == "" {
@@ -170,6 +229,19 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 		return nil, fmt.Errorf("origin must be local or github")
 	}
 
+	documentPath, err := normalizeIssueDocumentPath(input.DocumentPath)
+	if err != nil {
+		return nil, err
+	}
+
+	approvalState := normalizeIssueApprovalState(input.ApprovalState)
+	if approvalState == "" {
+		approvalState = defaultApprovalStateForLegacyState(state)
+	}
+	if !isValidIssueApprovalState(approvalState) {
+		return nil, fmt.Errorf("invalid approval_state")
+	}
+
 	tx, err := WithWorkspaceTx(ctx, s.db)
 	if err != nil {
 		return nil, err
@@ -192,9 +264,9 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 	record, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
 		`INSERT INTO project_issues (
-			org_id, project_id, issue_number, title, body, state, origin, closed_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, created_at, updated_at, closed_at`,
+			org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, closed_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at`,
 		workspaceID,
 		projectID,
 		nextIssueNumber,
@@ -202,6 +274,8 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 		nullableString(input.Body),
 		state,
 		origin,
+		nullableString(documentPath),
+		approvalState,
 		input.ClosedAt,
 	))
 	if err != nil {
@@ -245,6 +319,7 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 	if !isValidIssueState(state) {
 		return nil, false, fmt.Errorf("invalid state")
 	}
+	approvalState := defaultApprovalStateForLegacyState(state)
 
 	tx, err := WithWorkspaceTx(ctx, s.db)
 	if err != nil {
@@ -258,7 +333,7 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 
 	existingIssue, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
-		`SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.created_at, i.updated_at, i.closed_at
+		`SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.created_at, i.updated_at, i.closed_at
 			FROM project_issues i
 			JOIN project_issue_github_links l ON l.issue_id = i.id
 			WHERE i.project_id = $1 AND l.repository_full_name = $2 AND l.github_number = $3
@@ -278,13 +353,15 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 					body = $3,
 					state = $4,
 					origin = 'github',
-					closed_at = $5
+					approval_state = $5,
+					closed_at = $6
 				WHERE id = $1
-				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, created_at, updated_at, closed_at`,
+				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at`,
 			existingIssue.ID,
 			title,
 			nullableString(input.Body),
 			state,
+			approvalState,
 			input.ClosedAt,
 		))
 		if err != nil {
@@ -304,15 +381,16 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 		issue, err = scanProjectIssue(tx.QueryRowContext(
 			ctx,
 			`INSERT INTO project_issues (
-				org_id, project_id, issue_number, title, body, state, origin, closed_at
-			) VALUES ($1,$2,$3,$4,$5,$6,'github',$7)
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, created_at, updated_at, closed_at`,
+				org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, closed_at
+			) VALUES ($1,$2,$3,$4,$5,$6,'github',NULL,$7,$8)
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at`,
 			workspaceID,
 			projectID,
 			nextIssueNumber,
 			title,
 			nullableString(input.Body),
 			state,
+			approvalState,
 			input.ClosedAt,
 		))
 		if err != nil {
@@ -390,7 +468,7 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		limit = 100
 	}
 
-	query := `SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.created_at, i.updated_at, i.closed_at
+	query := `SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.created_at, i.updated_at, i.closed_at
 		FROM project_issues i
 		LEFT JOIN project_issue_github_links l ON l.issue_id = i.id
 		WHERE i.project_id = $1`
@@ -402,7 +480,7 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		if !isValidIssueState(state) {
 			return nil, fmt.Errorf("invalid state filter")
 		}
-		query += fmt.Sprintf(" AND state = $%d", argPos)
+		query += fmt.Sprintf(" AND i.state = $%d", argPos)
 		args = append(args, state)
 		argPos++
 	}
@@ -411,7 +489,7 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		if origin != "local" && origin != "github" {
 			return nil, fmt.Errorf("invalid origin filter")
 		}
-		query += fmt.Sprintf(" AND origin = $%d", argPos)
+		query += fmt.Sprintf(" AND i.origin = $%d", argPos)
 		args = append(args, origin)
 		argPos++
 	}
@@ -546,7 +624,7 @@ func (s *ProjectIssueStore) GetIssueByID(ctx context.Context, issueID string) (*
 
 	issue, err := scanProjectIssue(conn.QueryRowContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE id = $1`,
 		issueID,
@@ -1150,6 +1228,7 @@ func loadActiveIssueParticipant(
 func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, error) {
 	var issue ProjectIssue
 	var body sql.NullString
+	var documentPath sql.NullString
 	var closedAt sql.NullTime
 
 	err := scanner.Scan(
@@ -1161,6 +1240,8 @@ func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, er
 		&body,
 		&issue.State,
 		&issue.Origin,
+		&documentPath,
+		&issue.ApprovalState,
 		&issue.CreatedAt,
 		&issue.UpdatedAt,
 		&closedAt,
@@ -1170,6 +1251,13 @@ func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, er
 	}
 	if body.Valid {
 		issue.Body = &body.String
+	}
+	if documentPath.Valid {
+		issue.DocumentPath = &documentPath.String
+	}
+	issue.ApprovalState = normalizeIssueApprovalState(issue.ApprovalState)
+	if issue.ApprovalState == "" {
+		issue.ApprovalState = defaultApprovalStateForLegacyState(issue.State)
 	}
 	if closedAt.Valid {
 		issue.ClosedAt = &closedAt.Time

@@ -192,4 +192,40 @@ describe("IssueThreadPanel", () => {
       expect(participantCalls).toHaveLength(2);
     });
   });
+
+  it("shows approval badge and renders linked post in markdown workspace", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/issues/issue-1?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-1",
+            issue_number: 1,
+            title: "Linked post review",
+            state: "open",
+            origin: "local",
+            approval_state: "ready_for_review",
+            document_path: "/posts/2026-02-06-launch-plan.md",
+            document_content: "# Launch plan",
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<IssueThreadPanel issueID="issue-1" />);
+
+    expect(await screen.findByText("#1 Linked post review")).toBeInTheDocument();
+    expect(screen.getByTestId("issue-thread-approval")).toHaveTextContent("Ready for Review");
+    expect(screen.getByText("/posts/2026-02-06-launch-plan.md")).toBeInTheDocument();
+    expect(screen.getByTestId("editor-mode-markdown")).toBeInTheDocument();
+  });
 });

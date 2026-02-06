@@ -9,6 +9,7 @@ type MockIssue = {
   state: "open" | "closed";
   origin: "local" | "github";
   kind: "issue" | "pull_request";
+  approval_state?: "draft" | "ready_for_review" | "needs_changes" | "approved" | null;
   owner_agent_id?: string | null;
   last_activity_at: string;
   github_number?: number | null;
@@ -36,7 +37,7 @@ describe("ProjectIssuesList", () => {
     localStorage.clear();
   });
 
-  it("renders origin metadata, github fields, and state badges", async () => {
+  it("renders origin metadata, github fields, and approval badges", async () => {
     fetchMock.mockResolvedValueOnce(
       mockJSONResponse({
         items: [
@@ -47,6 +48,7 @@ describe("ProjectIssuesList", () => {
             state: "open",
             origin: "github",
             kind: "issue",
+            approval_state: "ready_for_review",
             owner_agent_id: "stone",
             last_activity_at: "2026-02-06T06:00:00Z",
             github_number: 77,
@@ -63,6 +65,7 @@ describe("ProjectIssuesList", () => {
     expect(within(row).getByText("Issue")).toBeInTheDocument();
     expect(within(row).getByText("GitHub")).toBeInTheDocument();
     expect(within(row).getByText("Open", { selector: "span" })).toBeInTheDocument();
+    expect(within(row).getByTestId("issue-approval-issue-1")).toHaveTextContent("Ready for Review");
     expect(within(row).getByText("GitHub #77", { exact: false })).toBeInTheDocument();
     expect(within(row).getByRole("link", { name: "Open" })).toHaveAttribute(
       "href",

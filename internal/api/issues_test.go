@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/comments", handler.CreateComment)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/participants", handler.AddParticipant)
 	router.With(middleware.OptionalWorkspace).Delete("/api/issues/{id}/participants/{agentID}", handler.RemoveParticipant)
+	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues/link", handler.CreateLinkedIssue)
 	return router
 }
 
@@ -401,6 +403,91 @@ func TestIssuesHandlerListSupportsKindFiltering(t *testing.T) {
 	require.Len(t, issueResp.Items, 1)
 	require.Equal(t, githubIssue.ID, issueResp.Items[0].ID)
 	require.Equal(t, "issue", issueResp.Items[0].Kind)
+}
+
+func TestIssuesHandlerCreateLinkedIssueValidatesPathAndApprovalState(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-link-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Linked Issue Project")
+
+	handler := &IssuesHandler{
+		IssueStore:   store.NewProjectIssueStore(db),
+		ProjectStore: store.NewProjectStore(db),
+	}
+	router := newIssueTestRouter(handler)
+
+	invalidPathReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues/link?org_id="+orgID,
+		bytes.NewReader([]byte(`{"document_path":"/notes/not-a-post.md","title":"Bad path"}`)),
+	)
+	invalidPathRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidPathRec, invalidPathReq)
+	require.Equal(t, http.StatusBadRequest, invalidPathRec.Code)
+
+	invalidStateReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues/link?org_id="+orgID,
+		bytes.NewReader([]byte(`{"document_path":"/posts/2026-02-06-launch-plan.md","approval_state":"invalid"}`)),
+	)
+	invalidStateRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidStateRec, invalidStateReq)
+	require.Equal(t, http.StatusBadRequest, invalidStateRec.Code)
+
+	validReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues/link?org_id="+orgID,
+		bytes.NewReader([]byte(`{"document_path":"posts/2026-02-06-launch-plan.md","approval_state":"ready_for_review"}`)),
+	)
+	validRec := httptest.NewRecorder()
+	router.ServeHTTP(validRec, validReq)
+	require.Equal(t, http.StatusCreated, validRec.Code)
+
+	var issue issueSummaryPayload
+	require.NoError(t, json.NewDecoder(validRec.Body).Decode(&issue))
+	require.NotEmpty(t, issue.ID)
+	require.NotNil(t, issue.DocumentPath)
+	require.Equal(t, "/posts/2026-02-06-launch-plan.md", *issue.DocumentPath)
+	require.Equal(t, store.IssueApprovalStateReadyForReview, issue.ApprovalState)
+	require.Equal(t, "Review: 2026 02 06 launch plan", issue.Title)
+}
+
+func TestIssuesHandlerGetIncludesLinkedDocumentContent(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-linked-doc-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Linked Doc Project")
+
+	root := t.TempDir()
+	t.Setenv("OTTER_CONTENT_ROOT", root)
+	documentPath := "/posts/2026-02-06-launch-plan.md"
+	absolute := filepath.Join(root, projectID, "posts", "2026-02-06-launch-plan.md")
+	writeProjectContentTestFile(t, absolute, "# Linked post\n\nBody text", time.Now().UTC())
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Linked post review",
+		Origin:        "local",
+		DocumentPath:  &documentPath,
+		ApprovalState: store.IssueApprovalStateDraft,
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/issues/"+issue.ID+"?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	var detail issueDetailPayload
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&detail))
+	require.NotNil(t, detail.Issue.DocumentPath)
+	require.Equal(t, documentPath, *detail.Issue.DocumentPath)
+	require.NotNil(t, detail.Issue.DocumentContent)
+	require.Equal(t, "# Linked post\n\nBody text", *detail.Issue.DocumentContent)
+	require.Equal(t, store.IssueApprovalStateDraft, detail.Issue.ApprovalState)
 }
 
 func issueTestStringPtr(v string) *string {
