@@ -28,23 +28,48 @@ func requireSessionIdentity(ctx context.Context, db *sql.DB, r *http.Request) (s
 	if token == "" {
 		return sessionIdentity{}, errMissingAuthentication
 	}
-	if !strings.HasPrefix(token, "oc_sess_") {
+	var identity sessionIdentity
+	var err error
+	if strings.HasPrefix(token, "oc_sess_") {
+		err = db.QueryRowContext(
+			ctx,
+			`SELECT s.org_id::text, s.user_id::text, COALESCE(u.role, 'owner')
+			 FROM sessions s
+			 JOIN users u
+			   ON u.id = s.user_id
+			  AND u.org_id = s.org_id
+			 WHERE s.token = $1
+			   AND s.revoked_at IS NULL
+			   AND s.expires_at > NOW()`,
+			token,
+		).Scan(&identity.OrgID, &identity.UserID, &identity.Role)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return sessionIdentity{}, errInvalidSessionToken
+			}
+			return sessionIdentity{}, errAuthentication
+		}
+	} else if strings.HasPrefix(token, "oc_git_") {
+		err = db.QueryRowContext(
+			ctx,
+			`SELECT t.org_id::text, t.user_id::text, COALESCE(u.role, 'owner')
+			 FROM git_access_tokens t
+			 JOIN users u
+			   ON u.id = t.user_id
+			  AND u.org_id = t.org_id
+			 WHERE t.token_hash = $1
+			   AND t.revoked_at IS NULL`,
+			hashGitSecret(token),
+		).Scan(&identity.OrgID, &identity.UserID, &identity.Role)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return sessionIdentity{}, errInvalidSessionToken
+			}
+			return sessionIdentity{}, errAuthentication
+		}
+	} else {
 		return sessionIdentity{}, errInvalidSessionToken
 	}
-
-	var identity sessionIdentity
-	err := db.QueryRowContext(
-		ctx,
-		`SELECT s.org_id::text, s.user_id::text, COALESCE(u.role, 'owner')
-		 FROM sessions s
-		 JOIN users u
-		   ON u.id = s.user_id
-		  AND u.org_id = s.org_id
-		 WHERE s.token = $1
-		   AND s.revoked_at IS NULL
-		   AND s.expires_at > NOW()`,
-		token,
-	).Scan(&identity.OrgID, &identity.UserID, &identity.Role)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return sessionIdentity{}, errInvalidSessionToken
