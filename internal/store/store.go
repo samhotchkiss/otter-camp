@@ -122,7 +122,9 @@ func WithWorkspace(ctx context.Context, db *sql.DB) (*sql.Conn, error) {
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 
-	_, err = conn.ExecContext(ctx, "SET LOCAL app.org_id = $1", workspaceID)
+	// Note: SET LOCAL doesn't support parameterized queries in PostgreSQL.
+	// The workspaceID is validated as a UUID above, so interpolation is safe.
+	_, err = conn.ExecContext(ctx, fmt.Sprintf("SET LOCAL app.org_id = '%s'", workspaceID))
 	if err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("failed to set workspace: %w", err)
@@ -145,7 +147,9 @@ func WithWorkspaceID(ctx context.Context, db *sql.DB, workspaceID string) (*sql.
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
 
-	_, err = conn.ExecContext(ctx, "SET LOCAL app.org_id = $1", workspaceID)
+	// Note: SET LOCAL doesn't support parameterized queries in PostgreSQL.
+	// The workspaceID is validated as a UUID above, so interpolation is safe.
+	_, err = conn.ExecContext(ctx, fmt.Sprintf("SET LOCAL app.org_id = '%s'", workspaceID))
 	if err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("failed to set workspace: %w", err)
@@ -167,7 +171,9 @@ func WithWorkspaceTx(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	_, err = tx.ExecContext(ctx, "SET LOCAL app.org_id = $1", workspaceID)
+	// Note: SET LOCAL doesn't support parameterized queries in PostgreSQL.
+	// The workspaceID is validated as a UUID above, so interpolation is safe.
+	_, err = tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL app.org_id = '%s'", workspaceID))
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("failed to set workspace: %w", err)
@@ -188,7 +194,9 @@ func WithWorkspaceIDTx(ctx context.Context, db *sql.DB, workspaceID string) (*sq
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	_, err = tx.ExecContext(ctx, "SET LOCAL app.org_id = $1", workspaceID)
+	// Note: SET LOCAL doesn't support parameterized queries in PostgreSQL.
+	// The workspaceID is validated as a UUID above, so interpolation is safe.
+	_, err = tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL app.org_id = '%s'", workspaceID))
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("failed to set workspace: %w", err)
