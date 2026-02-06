@@ -87,13 +87,18 @@ func NewRouter() http.Handler {
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
+	var githubSyncJobStore *store.GitHubSyncJobStore
+	var projectRepoStore *store.ProjectRepoStore
+	var activityStore *store.ActivityStore
 	if db != nil {
 		projectStore = store.NewProjectStore(db)
-		githubSyncJobStore := store.NewGitHubSyncJobStore(db)
+		githubSyncJobStore = store.NewGitHubSyncJobStore(db)
+		projectRepoStore = store.NewProjectRepoStore(db)
+		activityStore = store.NewActivityStore(db)
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
 		githubSyncHealthHandler.Store = githubSyncJobStore
 		githubPullRequestsHandler.Store = store.NewGitHubIssuePRStore(db)
-		githubPullRequestsHandler.ProjectRepos = store.NewProjectRepoStore(db)
+		githubPullRequestsHandler.ProjectRepos = projectRepoStore
 		githubIntegrationHandler.SyncJobs = githubSyncJobStore
 		projectChatHandler.ChatStore = store.NewProjectChatStore(db)
 		projectChatHandler.IssueStore = store.NewProjectIssueStore(db)
@@ -101,11 +106,11 @@ func NewRouter() http.Handler {
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
 		issuesHandler.ProjectStore = projectStore
 		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
-		issuesHandler.ProjectRepos = store.NewProjectRepoStore(db)
+		issuesHandler.ProjectRepos = projectRepoStore
 		issuesHandler.DB = db
 		projectCommitsHandler.ProjectStore = projectStore
 		projectCommitsHandler.CommitStore = store.NewProjectCommitStore(db)
-		projectCommitsHandler.ProjectRepos = store.NewProjectRepoStore(db)
+		projectCommitsHandler.ProjectRepos = projectRepoStore
 		websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{
 			IssueStore: issuesHandler.IssueStore,
 		}
@@ -128,6 +133,10 @@ func NewRouter() http.Handler {
 				workspaceCtx := context.WithValue(ctx, middleware.WorkspaceIDKey, orgID)
 				return projectStore.GetRepoPath(workspaceCtx, projectID)
 			},
+			ActivityStore: activityStore,
+			ProjectRepos:  projectRepoStore,
+			SyncJobs:      githubSyncJobStore,
+			Hub:           hub,
 		}
 		gitAuth := gitserver.AuthMiddleware(func(ctx context.Context, token string) (string, string, error) {
 			req := &http.Request{Header: http.Header{}}

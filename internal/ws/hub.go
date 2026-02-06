@@ -19,6 +19,7 @@ const (
 	MessageIssueCommentCreated       MessageType = "IssueCommentCreated"
 	MessageIssueReviewSaved          MessageType = "IssueReviewSaved"
 	MessageIssueReviewAddressed      MessageType = "IssueReviewAddressed"
+	MessageGitPush                   MessageType = "GitPush"
 )
 
 // BroadcastMessage packages a payload for an org-scoped broadcast.
