@@ -58,6 +58,8 @@ type PublishResponse = {
   remote_head_sha?: string | null;
   commits_ahead: number;
   published_at?: string | null;
+  force_push_required?: boolean;
+  force_push_confirmed?: boolean;
 };
 
 type PublishRunState = {
@@ -100,6 +102,7 @@ type SettingsListPayload = {
     active_branches?: string[];
     last_synced_at?: string | null;
     conflict_state?: string;
+    force_push_required?: boolean;
     workflow_mode?: WorkflowMode;
     github_pr_enabled?: boolean;
   }>;

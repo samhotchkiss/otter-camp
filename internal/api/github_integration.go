@@ -88,20 +88,21 @@ type githubIntegrationStatusResponse struct {
 }
 
 type githubProjectSettingView struct {
-	ProjectID       string     `json:"project_id"`
-	ProjectName     string     `json:"project_name"`
-	Description     *string    `json:"description,omitempty"`
-	Enabled         bool       `json:"enabled"`
-	RepoFullName    *string    `json:"repo_full_name,omitempty"`
-	DefaultBranch   string     `json:"default_branch"`
-	SyncMode        string     `json:"sync_mode"`
-	AutoSync        bool       `json:"auto_sync"`
-	ActiveBranches  []string   `json:"active_branches"`
-	LastSyncedSHA   *string    `json:"last_synced_sha,omitempty"`
-	LastSyncedAt    *time.Time `json:"last_synced_at,omitempty"`
-	ConflictState   string     `json:"conflict_state"`
-	WorkflowMode    string     `json:"workflow_mode"`
-	GitHubPREnabled bool       `json:"github_pr_enabled"`
+	ProjectID         string     `json:"project_id"`
+	ProjectName       string     `json:"project_name"`
+	Description       *string    `json:"description,omitempty"`
+	Enabled           bool       `json:"enabled"`
+	RepoFullName      *string    `json:"repo_full_name,omitempty"`
+	DefaultBranch     string     `json:"default_branch"`
+	SyncMode          string     `json:"sync_mode"`
+	AutoSync          bool       `json:"auto_sync"`
+	ActiveBranches    []string   `json:"active_branches"`
+	LastSyncedSHA     *string    `json:"last_synced_sha,omitempty"`
+	LastSyncedAt      *time.Time `json:"last_synced_at,omitempty"`
+	ConflictState     string     `json:"conflict_state"`
+	ForcePushRequired bool       `json:"force_push_required"`
+	WorkflowMode      string     `json:"workflow_mode"`
+	GitHubPREnabled   bool       `json:"github_pr_enabled"`
 }
 
 type githubSettingsListResponse struct {
@@ -133,13 +134,14 @@ type githubConnectCallbackResponse struct {
 }
 
 type githubProjectBranchesResponse struct {
-	ProjectID       string                          `json:"project_id"`
-	DefaultBranch   string                          `json:"default_branch"`
-	LastSyncedSHA   *string                         `json:"last_synced_sha,omitempty"`
-	LastSyncedAt    *time.Time                      `json:"last_synced_at,omitempty"`
-	ConflictState   string                          `json:"conflict_state"`
-	ConflictDetails json.RawMessage                 `json:"conflict_details"`
-	ActiveBranches  []store.ProjectRepoActiveBranch `json:"active_branches"`
+	ProjectID         string                          `json:"project_id"`
+	DefaultBranch     string                          `json:"default_branch"`
+	LastSyncedSHA     *string                         `json:"last_synced_sha,omitempty"`
+	LastSyncedAt      *time.Time                      `json:"last_synced_at,omitempty"`
+	ConflictState     string                          `json:"conflict_state"`
+	ConflictDetails   json.RawMessage                 `json:"conflict_details"`
+	ForcePushRequired bool                            `json:"force_push_required"`
+	ActiveBranches    []store.ProjectRepoActiveBranch `json:"active_branches"`
 }
 
 type githubManualSyncResponse struct {
@@ -157,16 +159,18 @@ type githubConflictResolutionRequest struct {
 }
 
 type githubConflictResolutionResponse struct {
-	ProjectID       string          `json:"project_id"`
-	Action          string          `json:"action"`
-	ConflictState   string          `json:"conflict_state"`
-	ConflictDetails json.RawMessage `json:"conflict_details"`
-	LocalHeadSHA    *string         `json:"local_head_sha,omitempty"`
-	ResolvedAt      string          `json:"resolved_at"`
+	ProjectID         string          `json:"project_id"`
+	Action            string          `json:"action"`
+	ConflictState     string          `json:"conflict_state"`
+	ConflictDetails   json.RawMessage `json:"conflict_details"`
+	LocalHeadSHA      *string         `json:"local_head_sha,omitempty"`
+	ForcePushRequired bool            `json:"force_push_required"`
+	ResolvedAt        string          `json:"resolved_at"`
 }
 
 type githubPublishRequest struct {
-	DryRun bool `json:"dry_run"`
+	DryRun             bool `json:"dry_run"`
+	ForcePushConfirmed bool `json:"force_push_confirmed"`
 }
 
 type githubPublishCheck struct {
@@ -177,14 +181,16 @@ type githubPublishCheck struct {
 }
 
 type githubPublishResponse struct {
-	ProjectID     string               `json:"project_id"`
-	DryRun        bool                 `json:"dry_run"`
-	Status        string               `json:"status"`
-	Checks        []githubPublishCheck `json:"checks"`
-	LocalHeadSHA  *string              `json:"local_head_sha,omitempty"`
-	RemoteHeadSHA *string              `json:"remote_head_sha,omitempty"`
-	CommitsAhead  int                  `json:"commits_ahead"`
-	PublishedAt   *string              `json:"published_at,omitempty"`
+	ProjectID          string               `json:"project_id"`
+	DryRun             bool                 `json:"dry_run"`
+	Status             string               `json:"status"`
+	Checks             []githubPublishCheck `json:"checks"`
+	LocalHeadSHA       *string              `json:"local_head_sha,omitempty"`
+	RemoteHeadSHA      *string              `json:"remote_head_sha,omitempty"`
+	CommitsAhead       int                  `json:"commits_ahead"`
+	PublishedAt        *string              `json:"published_at,omitempty"`
+	ForcePushRequired  bool                 `json:"force_push_required"`
+	ForcePushConfirmed bool                 `json:"force_push_confirmed"`
 }
 
 type githubWebhookPayload struct {
@@ -591,7 +597,8 @@ func (h *GitHubIntegrationHandler) ListSettings(w http.ResponseWriter, r *http.R
 			COALESCE(b.auto_sync, true) AS auto_sync,
 			b.last_synced_sha,
 			b.last_synced_at,
-			COALESCE(b.conflict_state, 'none') AS conflict_state
+			COALESCE(b.conflict_state, 'none') AS conflict_state,
+			COALESCE(b.force_push_required, false) AS force_push_required
 		FROM projects p
 		LEFT JOIN project_repo_bindings b ON b.project_id = p.id
 		WHERE p.org_id = $1
@@ -620,6 +627,7 @@ func (h *GitHubIntegrationHandler) ListSettings(w http.ResponseWriter, r *http.R
 			&item.LastSyncedSHA,
 			&item.LastSyncedAt,
 			&item.ConflictState,
+			&item.ForcePushRequired,
 		); err != nil {
 			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read github settings"})
 			return
@@ -801,13 +809,14 @@ func (h *GitHubIntegrationHandler) GetProjectBranches(w http.ResponseWriter, r *
 	}
 
 	sendJSON(w, http.StatusOK, githubProjectBranchesResponse{
-		ProjectID:       projectID,
-		DefaultBranch:   binding.DefaultBranch,
-		LastSyncedSHA:   binding.LastSyncedSHA,
-		LastSyncedAt:    binding.LastSyncedAt,
-		ConflictState:   binding.ConflictState,
-		ConflictDetails: binding.ConflictDetails,
-		ActiveBranches:  activeBranches,
+		ProjectID:         projectID,
+		DefaultBranch:     binding.DefaultBranch,
+		LastSyncedSHA:     binding.LastSyncedSHA,
+		LastSyncedAt:      binding.LastSyncedAt,
+		ConflictState:     binding.ConflictState,
+		ConflictDetails:   binding.ConflictDetails,
+		ForcePushRequired: binding.ForcePushRequired,
+		ActiveBranches:    activeBranches,
 	})
 }
 
@@ -943,7 +952,8 @@ func (h *GitHubIntegrationHandler) ResolveProjectConflict(w http.ResponseWriter,
 		remoteSHA,
 		resolvedAt,
 	)
-	updated, err := h.ProjectRepos.SetConflictState(ctx, projectID, store.RepoConflictResolved, details)
+	forcePushRequired := action == "keep_ottercamp"
+	updated, err := h.ProjectRepos.SetConflictResolution(ctx, projectID, store.RepoConflictResolved, details, forcePushRequired)
 	if err != nil {
 		handleRepoStoreError(w, err)
 		return
@@ -963,12 +973,13 @@ func (h *GitHubIntegrationHandler) ResolveProjectConflict(w http.ResponseWriter,
 		localHeadPtr = &localHeadSHA
 	}
 	sendJSON(w, http.StatusOK, githubConflictResolutionResponse{
-		ProjectID:       projectID,
-		Action:          action,
-		ConflictState:   updated.ConflictState,
-		ConflictDetails: updated.ConflictDetails,
-		LocalHeadSHA:    localHeadPtr,
-		ResolvedAt:      resolvedAt.Format(time.RFC3339),
+		ProjectID:         projectID,
+		Action:            action,
+		ConflictState:     updated.ConflictState,
+		ConflictDetails:   updated.ConflictDetails,
+		LocalHeadSHA:      localHeadPtr,
+		ForcePushRequired: updated.ForcePushRequired,
+		ResolvedAt:        resolvedAt.Format(time.RFC3339),
 	})
 }
 
@@ -1026,10 +1037,12 @@ func (h *GitHubIntegrationHandler) PublishProject(w http.ResponseWriter, r *http
 			"dry_run":    request.DryRun,
 		})
 		sendJSON(w, http.StatusConflict, githubPublishResponse{
-			ProjectID: projectID,
-			DryRun:    request.DryRun,
-			Status:    "blocked",
-			Checks:    checks,
+			ProjectID:          projectID,
+			DryRun:             request.DryRun,
+			Status:             "blocked",
+			Checks:             checks,
+			ForcePushRequired:  binding.ForcePushRequired,
+			ForcePushConfirmed: request.ForcePushConfirmed,
 		})
 		return
 	}
@@ -1044,30 +1057,48 @@ func (h *GitHubIntegrationHandler) PublishProject(w http.ResponseWriter, r *http
 		branch = "main"
 	}
 
-	preflight, err := runPublishPreflightChecks(r.Context(), localRepoPath, branch)
+	forcePushRequired := binding.ForcePushRequired
+	forcePushConfirmed := request.ForcePushConfirmed
+	forcePushAllowed := forcePushRequired && forcePushConfirmed
+
+	preflight, err := runPublishPreflightChecks(r.Context(), localRepoPath, branch, forcePushAllowed)
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 		return
 	}
 
+	if forcePushRequired && !forcePushConfirmed {
+		preflight.Checks = append(preflight.Checks, githubPublishCheck{
+			Name:     "force_push_confirmation",
+			Status:   "fail",
+			Detail:   "Force push required: confirm force push to proceed.",
+			Blocking: true,
+		})
+		preflight.BlockingCount++
+	}
+
 	response := githubPublishResponse{
-		ProjectID:     projectID,
-		DryRun:        request.DryRun,
-		Checks:        preflight.Checks,
-		LocalHeadSHA:  optionalStringPtr(preflight.LocalHeadSHA),
-		RemoteHeadSHA: optionalStringPtr(preflight.RemoteHeadSHA),
-		CommitsAhead:  preflight.CommitsAhead,
-		Status:        "dry_run",
+		ProjectID:          projectID,
+		DryRun:             request.DryRun,
+		Checks:             preflight.Checks,
+		LocalHeadSHA:       optionalStringPtr(preflight.LocalHeadSHA),
+		RemoteHeadSHA:      optionalStringPtr(preflight.RemoteHeadSHA),
+		CommitsAhead:       preflight.CommitsAhead,
+		Status:             "dry_run",
+		ForcePushRequired:  forcePushRequired,
+		ForcePushConfirmed: forcePushConfirmed,
 	}
 
 	if request.DryRun {
 		_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_dry_run", map[string]any{
-			"project_id":      projectID,
-			"branch":          branch,
-			"checks":          preflight.Checks,
-			"commits_ahead":   preflight.CommitsAhead,
-			"local_head_sha":  preflight.LocalHeadSHA,
-			"remote_head_sha": preflight.RemoteHeadSHA,
+			"project_id":           projectID,
+			"branch":               branch,
+			"checks":               preflight.Checks,
+			"commits_ahead":        preflight.CommitsAhead,
+			"local_head_sha":       preflight.LocalHeadSHA,
+			"remote_head_sha":      preflight.RemoteHeadSHA,
+			"force_push_required":  forcePushRequired,
+			"force_push_confirmed": forcePushConfirmed,
 		})
 		sendJSON(w, http.StatusOK, response)
 		return
@@ -1076,12 +1107,14 @@ func (h *GitHubIntegrationHandler) PublishProject(w http.ResponseWriter, r *http
 	if preflight.BlockingCount > 0 {
 		response.Status = "blocked"
 		_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_blocked", map[string]any{
-			"project_id":      projectID,
-			"branch":          branch,
-			"checks":          preflight.Checks,
-			"commits_ahead":   preflight.CommitsAhead,
-			"local_head_sha":  preflight.LocalHeadSHA,
-			"remote_head_sha": preflight.RemoteHeadSHA,
+			"project_id":           projectID,
+			"branch":               branch,
+			"checks":               preflight.Checks,
+			"commits_ahead":        preflight.CommitsAhead,
+			"local_head_sha":       preflight.LocalHeadSHA,
+			"remote_head_sha":      preflight.RemoteHeadSHA,
+			"force_push_required":  forcePushRequired,
+			"force_push_confirmed": forcePushConfirmed,
 		})
 		sendJSON(w, http.StatusConflict, response)
 		return
@@ -1107,18 +1140,50 @@ func (h *GitHubIntegrationHandler) PublishProject(w http.ResponseWriter, r *http
 		return
 	}
 
-	if _, err := runGitInRepo(r.Context(), localRepoPath, "push", "origin", "HEAD:refs/heads/"+branch); err != nil {
+	pushArgs := []string{"push"}
+	if forcePushAllowed {
+		pushArgs = append(pushArgs, "--force")
+	}
+	pushArgs = append(pushArgs, "origin", "HEAD:refs/heads/"+branch)
+	if _, err := runGitInRepo(r.Context(), localRepoPath, pushArgs...); err != nil {
 		_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_failed", map[string]any{
-			"project_id":      projectID,
-			"branch":          branch,
-			"error":           err.Error(),
-			"checks":          preflight.Checks,
-			"commits_ahead":   preflight.CommitsAhead,
-			"local_head_sha":  preflight.LocalHeadSHA,
-			"remote_head_sha": preflight.RemoteHeadSHA,
+			"project_id":           projectID,
+			"branch":               branch,
+			"error":                err.Error(),
+			"checks":               preflight.Checks,
+			"commits_ahead":        preflight.CommitsAhead,
+			"local_head_sha":       preflight.LocalHeadSHA,
+			"remote_head_sha":      preflight.RemoteHeadSHA,
+			"force_push_required":  forcePushRequired,
+			"force_push_confirmed": forcePushConfirmed,
 		})
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("publish push failed: %v", err)})
 		return
+	}
+
+	if forcePushAllowed {
+		metadata := map[string]any{
+			"project_id":      projectID,
+			"branch":          branch,
+			"local_head_sha":  preflight.LocalHeadSHA,
+			"remote_head_sha": preflight.RemoteHeadSHA,
+		}
+		if userID := strings.TrimSpace(middleware.UserFromContext(r.Context())); userID != "" {
+			metadata["user_id"] = userID
+		}
+		_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_force_push", metadata)
+	}
+
+	if forcePushRequired {
+		if _, err := h.ProjectRepos.SetForcePushRequired(ctx, projectID, false); err != nil {
+			_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_force_push_clear_failed", map[string]any{
+				"project_id": projectID,
+				"branch":     branch,
+				"error":      err.Error(),
+			})
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "publish succeeded but failed to clear force push requirement"})
+			return
+		}
 	}
 
 	publishedAt := time.Now().UTC().Format(time.RFC3339)
@@ -1126,13 +1191,15 @@ func (h *GitHubIntegrationHandler) PublishProject(w http.ResponseWriter, r *http
 	response.Status = "published"
 	response.PublishedAt = &publishedAt
 	_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_succeeded", map[string]any{
-		"project_id":      projectID,
-		"branch":          branch,
-		"checks":          preflight.Checks,
-		"commits_ahead":   preflight.CommitsAhead,
-		"local_head_sha":  preflight.LocalHeadSHA,
-		"remote_head_sha": preflight.RemoteHeadSHA,
-		"published_at":    publishedAt,
+		"project_id":           projectID,
+		"branch":               branch,
+		"checks":               preflight.Checks,
+		"commits_ahead":        preflight.CommitsAhead,
+		"local_head_sha":       preflight.LocalHeadSHA,
+		"remote_head_sha":      preflight.RemoteHeadSHA,
+		"force_push_required":  forcePushRequired,
+		"force_push_confirmed": forcePushConfirmed,
+		"published_at":         publishedAt,
 		"linked_issues": map[string]any{
 			"attempted": issueResolutionSummary.Attempted,
 			"closed":    issueResolutionSummary.Closed,
@@ -1727,6 +1794,7 @@ func runPublishPreflightChecks(
 	ctx context.Context,
 	localRepoPath string,
 	branch string,
+	allowForcePush bool,
 ) (publishPreflightResult, error) {
 	if err := ensureGitRepoPath(localRepoPath); err != nil {
 		return publishPreflightResult{}, err
@@ -1768,12 +1836,19 @@ func runPublishPreflightChecks(
 	if remoteHeadSHA != "" {
 		_, ffErr := runGitInRepo(ctx, localRepoPath, "merge-base", "--is-ancestor", remoteHeadSHA, localHeadSHA)
 		if ffErr != nil {
-			blockingCount++
+			blocking := !allowForcePush
+			if blocking {
+				blockingCount++
+			}
+			detail := "Remote branch is not an ancestor of local head."
+			if allowForcePush {
+				detail = "Remote branch is not an ancestor of local head; force push will be used."
+			}
 			checks = append(checks, githubPublishCheck{
 				Name:     "fast_forward",
 				Status:   "fail",
-				Detail:   "Remote branch is not an ancestor of local head.",
-				Blocking: true,
+				Detail:   detail,
+				Blocking: blocking,
 			})
 		} else {
 			checks = append(checks, githubPublishCheck{
@@ -1809,7 +1884,12 @@ func runPublishPreflightChecks(
 		Blocking: false,
 	})
 
-	_, dryRunPushErr := runGitInRepo(ctx, localRepoPath, "push", "--dry-run", "origin", "HEAD:refs/heads/"+branch)
+	pushArgs := []string{"push", "--dry-run"}
+	if allowForcePush {
+		pushArgs = append(pushArgs, "--force")
+	}
+	pushArgs = append(pushArgs, "origin", "HEAD:refs/heads/"+branch)
+	_, dryRunPushErr := runGitInRepo(ctx, localRepoPath, pushArgs...)
 	if dryRunPushErr != nil {
 		blockingCount++
 		checks = append(checks, githubPublishCheck{

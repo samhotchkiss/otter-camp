@@ -266,6 +266,67 @@ func TestProjectRepoStore_SetConflictStateTransitions(t *testing.T) {
 	require.JSONEq(t, `{}`, string(cleared.ConflictDetails))
 }
 
+func TestProjectRepoStore_SetConflictResolutionSetsForcePushRequired(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "repo-conflict-resolution-org")
+	projectID := createTestProject(t, db, orgID, "repo-conflict-resolution-project")
+
+	store := NewProjectRepoStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	_, err := store.UpsertBinding(ctx, UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      RepoConflictNone,
+	})
+	require.NoError(t, err)
+
+	details := json.RawMessage(`{"resolution":"keep_ottercamp","resolved_at":"2026-02-06T12:00:00Z"}`)
+	resolved, err := store.SetConflictResolution(ctx, projectID, RepoConflictResolved, details, true)
+	require.NoError(t, err)
+	require.Equal(t, RepoConflictResolved, resolved.ConflictState)
+	require.True(t, resolved.ForcePushRequired)
+	require.JSONEq(t, string(details), string(resolved.ConflictDetails))
+}
+
+func TestProjectRepoStore_SetForcePushRequired(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "repo-force-push-org")
+	projectID := createTestProject(t, db, orgID, "repo-force-push-project")
+
+	store := NewProjectRepoStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	_, err := store.UpsertBinding(ctx, UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      RepoConflictNone,
+	})
+	require.NoError(t, err)
+
+	binding, err := store.GetBinding(ctx, projectID)
+	require.NoError(t, err)
+	require.False(t, binding.ForcePushRequired)
+
+	updated, err := store.SetForcePushRequired(ctx, projectID, true)
+	require.NoError(t, err)
+	require.True(t, updated.ForcePushRequired)
+
+	cleared, err := store.SetForcePushRequired(ctx, projectID, false)
+	require.NoError(t, err)
+	require.False(t, cleared.ForcePushRequired)
+}
+
 func TestProjectRepoStore_IsolationAndValidation(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

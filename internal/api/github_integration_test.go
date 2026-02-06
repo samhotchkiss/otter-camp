@@ -267,6 +267,7 @@ func TestResolveProjectConflictKeepOtterCampPreservesLocalBranchAndMarksReadyToP
 	require.Equal(t, store.RepoConflictResolved, binding.ConflictState)
 	require.Contains(t, string(binding.ConflictDetails), `"resolution":"keep_ottercamp"`)
 	require.Contains(t, string(binding.ConflictDetails), `"ready_to_publish":true`)
+	require.True(t, binding.ForcePushRequired)
 
 	var metadataRaw []byte
 	err = db.QueryRow(
@@ -410,6 +411,127 @@ func TestPublishProjectFailsWhenConflictsUnresolved(t *testing.T) {
 
 	remoteHead := runGitTestOutput(t, fixture.WorkPath, "rev-parse", "HEAD")
 	require.Equal(t, fixture.RemoteHeadSHA, remoteHead)
+}
+
+func TestPublishProjectBlocksWithoutForcePushConfirmation(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-publish-force-block-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Publish Force Block Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	fixture := newConflictRepoFixture(t)
+	localPath := fixture.LocalPath
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := handler.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		LocalRepoPath:      &localPath,
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNone,
+	})
+	require.NoError(t, err)
+	_, err = handler.ProjectRepos.SetForcePushRequired(ctx, projectID, true)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish",
+		bytes.NewReader([]byte(`{"dry_run":false}`)),
+	)
+	req = addRouteParam(req, "id", projectID)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.PublishProject(rec, req)
+	require.Equal(t, http.StatusConflict, rec.Code)
+
+	var response githubPublishResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	require.Equal(t, "blocked", response.Status)
+	require.True(t, response.ForcePushRequired)
+	require.False(t, response.ForcePushConfirmed)
+
+	found := false
+	for _, check := range response.Checks {
+		if check.Name == "force_push_confirmation" {
+			found = true
+			require.True(t, check.Blocking)
+		}
+	}
+	require.True(t, found)
+
+	remoteHead := runGitTestOutput(t, fixture.RemotePath, "rev-parse", "HEAD")
+	require.Equal(t, fixture.RemoteSHA, remoteHead)
+}
+
+func TestPublishProjectForcePushesWithConfirmationAndClearsFlag(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-publish-force-confirm-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Publish Force Confirm Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	fixture := newConflictRepoFixture(t)
+	localPath := fixture.LocalPath
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := handler.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		LocalRepoPath:      &localPath,
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNone,
+	})
+	require.NoError(t, err)
+	_, err = handler.ProjectRepos.SetForcePushRequired(ctx, projectID, true)
+	require.NoError(t, err)
+
+	userID := "00000000-0000-0000-0000-000000000123"
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish",
+		bytes.NewReader([]byte(`{"dry_run":false,"force_push_confirmed":true}`)),
+	)
+	req = addRouteParam(req, "id", projectID)
+	req = withWorkspaceContext(req, orgID)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, userID))
+	rec := httptest.NewRecorder()
+	handler.PublishProject(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var response githubPublishResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	require.Equal(t, "published", response.Status)
+	require.True(t, response.ForcePushRequired)
+	require.True(t, response.ForcePushConfirmed)
+
+	remoteHead := runGitTestOutput(t, fixture.RemotePath, "rev-parse", "HEAD")
+	require.Equal(t, fixture.LocalSHA, remoteHead)
+
+	updated, err := handler.ProjectRepos.GetBinding(ctx, projectID)
+	require.NoError(t, err)
+	require.False(t, updated.ForcePushRequired)
+
+	var metadataRaw []byte
+	err = db.QueryRow(
+		`SELECT metadata
+			FROM activity_log
+			WHERE org_id = $1
+			  AND project_id = $2
+			  AND action = 'github.publish_force_push'
+			ORDER BY created_at DESC
+			LIMIT 1`,
+		orgID,
+		projectID,
+	).Scan(&metadataRaw)
+	require.NoError(t, err)
+
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal(metadataRaw, &metadata))
+	require.Equal(t, userID, metadata["user_id"])
 }
 
 func TestBuildPublishResolutionCommentIncludesCommitLinksAndIssueReference(t *testing.T) {

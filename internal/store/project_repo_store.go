@@ -37,6 +37,7 @@ type ProjectRepoBinding struct {
 	LastSyncedAt       *time.Time      `json:"last_synced_at,omitempty"`
 	ConflictState      string          `json:"conflict_state"`
 	ConflictDetails    json.RawMessage `json:"conflict_details"`
+	ForcePushRequired  bool            `json:"force_push_required"`
 	CreatedAt          time.Time       `json:"created_at"`
 	UpdatedAt          time.Time       `json:"updated_at"`
 }
@@ -88,6 +89,7 @@ const projectRepoBindingColumns = `
 	last_synced_at,
 	conflict_state,
 	conflict_details,
+	force_push_required,
 	created_at,
 	updated_at
 `
@@ -588,6 +590,116 @@ func (s *ProjectRepoStore) SetConflictState(
 	return &binding, nil
 }
 
+func (s *ProjectRepoStore) SetConflictResolution(
+	ctx context.Context,
+	projectID string,
+	conflictState string,
+	conflictDetails json.RawMessage,
+	forcePushRequired bool,
+) (*ProjectRepoBinding, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+
+	conflictState = strings.TrimSpace(conflictState)
+	if conflictState == "" {
+		conflictState = RepoConflictNone
+	}
+	switch conflictState {
+	case RepoConflictNone, RepoConflictNeedsDecision, RepoConflictResolved:
+	default:
+		return nil, fmt.Errorf("invalid conflict_state")
+	}
+
+	if len(conflictDetails) == 0 {
+		conflictDetails = json.RawMessage(`{}`)
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	binding, err := scanProjectRepoBinding(conn.QueryRowContext(
+		ctx,
+		`UPDATE project_repo_bindings
+			SET conflict_state = $2,
+				conflict_details = $3,
+				force_push_required = $4,
+				updated_at = NOW()
+			WHERE project_id = $1
+			RETURNING`+projectRepoBindingColumns,
+		projectID,
+		conflictState,
+		conflictDetails,
+		forcePushRequired,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to set conflict resolution: %w", err)
+	}
+
+	if binding.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	return &binding, nil
+}
+
+func (s *ProjectRepoStore) SetForcePushRequired(
+	ctx context.Context,
+	projectID string,
+	forcePushRequired bool,
+) (*ProjectRepoBinding, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	binding, err := scanProjectRepoBinding(conn.QueryRowContext(
+		ctx,
+		`UPDATE project_repo_bindings
+			SET force_push_required = $2,
+				updated_at = NOW()
+			WHERE project_id = $1
+			RETURNING`+projectRepoBindingColumns,
+		projectID,
+		forcePushRequired,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to set force push requirement: %w", err)
+	}
+
+	if binding.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	return &binding, nil
+}
+
 func scanProjectRepoBinding(scanner interface{ Scan(...any) error }) (ProjectRepoBinding, error) {
 	var binding ProjectRepoBinding
 	var localRepoPath sql.NullString
@@ -607,6 +719,7 @@ func scanProjectRepoBinding(scanner interface{ Scan(...any) error }) (ProjectRep
 		&lastSyncedAt,
 		&binding.ConflictState,
 		&binding.ConflictDetails,
+		&binding.ForcePushRequired,
 		&binding.CreatedAt,
 		&binding.UpdatedAt,
 	); err != nil {
