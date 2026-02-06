@@ -75,6 +75,7 @@ func NewRouter() http.Handler {
 	githubSyncDeadLettersHandler := &GitHubSyncDeadLettersHandler{}
 	githubSyncHealthHandler := &GitHubSyncHealthHandler{}
 	githubPullRequestsHandler := &GitHubPullRequestsHandler{}
+	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -84,6 +85,7 @@ func NewRouter() http.Handler {
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
 		githubSyncHealthHandler.Store = githubSyncJobStore
 		githubPullRequestsHandler.Store = store.NewGitHubIssuePRStore(db)
+		githubIntegrationHandler.SyncJobs = githubSyncJobStore
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 
@@ -114,7 +116,18 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects", projectsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}", projectsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
+		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/projects/{id}/repo/branches", githubIntegrationHandler.GetProjectBranches)
+		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Put("/projects/{id}/repo/branches", githubIntegrationHandler.UpdateProjectBranches)
+		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/repo/sync", githubIntegrationHandler.ManualRepoSync)
 		r.With(middleware.OptionalWorkspace).Post("/projects", projectsHandler.Create)
+		r.With(middleware.OptionalWorkspace).Get("/github/integration/status", githubIntegrationHandler.IntegrationStatus)
+		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/github/integration/repos", githubIntegrationHandler.ListRepos)
+		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/github/integration/settings", githubIntegrationHandler.ListSettings)
+		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Delete("/github/integration/connection", githubIntegrationHandler.Disconnect)
+		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Put("/github/integration/settings/{projectID}", githubIntegrationHandler.UpdateSettings)
+		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Post("/github/connect/start", githubIntegrationHandler.ConnectStart)
+		r.Get("/github/connect/callback", githubIntegrationHandler.ConnectCallback)
+		r.Post("/github/webhook", githubIntegrationHandler.GitHubWebhook)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Get("/github/sync/health", githubSyncHealthHandler.Get)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Get("/github/sync/dead-letters", githubSyncDeadLettersHandler.List)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/github/sync/dead-letters/{id}/replay", githubSyncDeadLettersHandler.Replay)

@@ -54,7 +54,7 @@ func TestCORSMiddleware(t *testing.T) {
 		t.Fatalf("expected Access-Control-Allow-Methods to include GET, got %q", allowMethods)
 	}
 
-	if allowHeaders := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(allowHeaders, "X-Org-ID") {
+	if allowHeaders := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(strings.ToLower(allowHeaders), "x-org-id") {
 		t.Fatalf("expected Access-Control-Allow-Headers to include X-Org-ID, got %q", allowHeaders)
 	}
 }
