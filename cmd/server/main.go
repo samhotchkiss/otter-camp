@@ -9,17 +9,17 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
-	port := cfg.Port
-	if port == "" {
-		port = "8080"
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("invalid configuration: %v", err)
 	}
 
 	router := api.NewRouter()
 
-	log.Printf("🦦 Otter Camp starting on port %s", port)
-	if err := http.ListenAndServe(":"+port, router); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	log.Printf("🦦 Otter Camp starting on port %s", cfg.Port)
+	if err := http.ListenAndServe(":"+cfg.Port, router); err != nil {
+		log.Fatalf("server failed: %v", err)
 	}
 }
+
 // Deploy trigger: 1770312576
