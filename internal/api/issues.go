@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,11 +10,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 type IssuesHandler struct {
 	IssueStore *store.ProjectIssueStore
+	Hub        *ws.Hub
 }
 
 type issueSummaryPayload struct {
@@ -46,6 +50,13 @@ type issueDetailPayload struct {
 	Issue        issueSummaryPayload       `json:"issue"`
 	Participants []issueParticipantPayload `json:"participants"`
 	Comments     []issueCommentPayload     `json:"comments"`
+}
+
+type issueCommentCreatedEvent struct {
+	Type    ws.MessageType      `json:"type"`
+	Channel string              `json:"channel"`
+	IssueID string              `json:"issue_id"`
+	Comment issueCommentPayload `json:"comment"`
 }
 
 type issueListResponse struct {
@@ -194,13 +205,16 @@ func (h *IssuesHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendJSON(w, http.StatusCreated, issueCommentPayload{
+	response := issueCommentPayload{
 		ID:            comment.ID,
 		AuthorAgentID: comment.AuthorAgentID,
 		Body:          comment.Body,
 		CreatedAt:     comment.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:     comment.UpdatedAt.UTC().Format(time.RFC3339),
-	})
+	}
+
+	h.broadcastIssueCommentCreated(r.Context(), issueID, response)
+	sendJSON(w, http.StatusCreated, response)
 }
 
 func (h *IssuesHandler) AddParticipant(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +320,37 @@ func mapIssueComments(comments []store.ProjectIssueComment) []issueCommentPayloa
 		})
 	}
 	return out
+}
+
+func (h *IssuesHandler) broadcastIssueCommentCreated(
+	ctx context.Context,
+	issueID string,
+	comment issueCommentPayload,
+) {
+	if h.Hub == nil {
+		return
+	}
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return
+	}
+
+	channel := issueChannel(issueID)
+	payload, err := json.Marshal(issueCommentCreatedEvent{
+		Type:    ws.MessageIssueCommentCreated,
+		Channel: channel,
+		IssueID: strings.TrimSpace(issueID),
+		Comment: comment,
+	})
+	if err != nil {
+		return
+	}
+
+	h.Hub.BroadcastTopic(workspaceID, channel, payload)
+}
+
+func issueChannel(issueID string) string {
+	return "issue:" + strings.TrimSpace(issueID)
 }
 
 func handleIssueStoreError(w http.ResponseWriter, err error) {

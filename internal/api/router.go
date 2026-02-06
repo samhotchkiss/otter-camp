@@ -77,7 +77,8 @@ func NewRouter() http.Handler {
 	githubPullRequestsHandler := &GitHubPullRequestsHandler{}
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 	projectChatHandler := &ProjectChatHandler{Hub: hub}
-	issuesHandler := &IssuesHandler{}
+	issuesHandler := &IssuesHandler{Hub: hub}
+	websocketHandler := &ws.Handler{Hub: hub}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -91,6 +92,9 @@ func NewRouter() http.Handler {
 		githubIntegrationHandler.SyncJobs = githubSyncJobStore
 		projectChatHandler.ChatStore = store.NewProjectChatStore(db)
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
+		websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{
+			IssueStore: issuesHandler.IssueStore,
+		}
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	projectChatHandler.ProjectStore = projectStore
@@ -163,7 +167,7 @@ func NewRouter() http.Handler {
 	})
 
 	// WebSocket handlers
-	r.Handle("/ws", &ws.Handler{Hub: hub})
+	r.Handle("/ws", websocketHandler)
 	r.Handle("/ws/openclaw", ws.NewOpenClawHandler(hub))
 
 	// Static file fallback for frontend SPA (must be last)

@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -37,6 +38,74 @@ func TestIsAllowedSubscriptionTopic(t *testing.T) {
 	}
 	if isAllowedSubscriptionTopic("project/<script>") {
 		t.Fatalf("expected topic with disallowed chars to be rejected")
+	}
+}
+
+type stubIssueSubscriptionAuthorizer struct {
+	allowed map[string]bool
+}
+
+func (s stubIssueSubscriptionAuthorizer) CanSubscribeIssue(
+	_ context.Context,
+	orgID, issueID string,
+) (bool, error) {
+	return s.allowed[orgID+":"+issueID], nil
+}
+
+func TestProcessClientMessageSubscribeIssueTopicAuthorized(t *testing.T) {
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	issueID := "11111111-1111-1111-1111-111111111111"
+	topic := "issue:" + issueID
+	client := NewClient(nil, nil)
+
+	processClientMessage(client, clientMessage{
+		Type:  "subscribe",
+		OrgID: orgID,
+		Topic: topic,
+	}, stubIssueSubscriptionAuthorizer{
+		allowed: map[string]bool{orgID + ":" + issueID: true},
+	})
+
+	if client.OrgID() != orgID {
+		t.Fatalf("expected client org to be set to %q, got %q", orgID, client.OrgID())
+	}
+	if !client.IsSubscribedToTopic(topic) {
+		t.Fatalf("expected client to be subscribed to %q", topic)
+	}
+}
+
+func TestProcessClientMessageSubscribeIssueTopicUnauthorized(t *testing.T) {
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	issueID := "22222222-2222-2222-2222-222222222222"
+	topic := "issue:" + issueID
+	client := NewClient(nil, nil)
+
+	processClientMessage(client, clientMessage{
+		Type:  "subscribe",
+		OrgID: orgID,
+		Topic: topic,
+	}, stubIssueSubscriptionAuthorizer{
+		allowed: map[string]bool{},
+	})
+
+	if client.IsSubscribedToTopic(topic) {
+		t.Fatalf("expected issue topic subscription to be rejected")
+	}
+}
+
+func TestProcessClientMessageSubscribeProjectTopicWithoutIssueAuthorizer(t *testing.T) {
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	topic := "project:11111111-1111-1111-1111-111111111111:chat"
+	client := NewClient(nil, nil)
+
+	processClientMessage(client, clientMessage{
+		Type:  "subscribe",
+		OrgID: orgID,
+		Topic: topic,
+	}, nil)
+
+	if !client.IsSubscribedToTopic(topic) {
+		t.Fatalf("expected non-issue topic subscription to continue working")
 	}
 }
 

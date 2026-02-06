@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 	"github.com/stretchr/testify/require"
 )
 
@@ -227,4 +229,88 @@ func TestIssuesHandlerRejectsCrossOrgAccess(t *testing.T) {
 	participantRec := httptest.NewRecorder()
 	router.ServeHTTP(participantRec, participantReq)
 	require.Contains(t, []int{http.StatusForbidden, http.StatusNotFound}, participantRec.Code)
+}
+
+func TestIssuesHandlerCommentBroadcastsToIssueChannelSubscribersOnly(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-ws-org")
+	otherOrgID := insertMessageTestOrganization(t, db, "issues-api-ws-other-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue WS Project")
+	authorID := insertMessageTestAgent(t, db, orgID, "issue-ws-author")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	issueA, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue A",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	issueB, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue B",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	hub := ws.NewHub()
+	go hub.Run()
+
+	clientA := ws.NewClient(hub, nil)
+	clientA.SetOrgID(orgID)
+	clientA.SubscribeTopic(issueChannel(issueA.ID))
+	hub.Register(clientA)
+
+	clientB := ws.NewClient(hub, nil)
+	clientB.SetOrgID(orgID)
+	clientB.SubscribeTopic(issueChannel(issueB.ID))
+	hub.Register(clientB)
+
+	clientOtherOrg := ws.NewClient(hub, nil)
+	clientOtherOrg.SetOrgID(otherOrgID)
+	clientOtherOrg.SubscribeTopic(issueChannel(issueA.ID))
+	hub.Register(clientOtherOrg)
+
+	t.Cleanup(func() {
+		hub.Unregister(clientA)
+		hub.Unregister(clientB)
+		hub.Unregister(clientOtherOrg)
+	})
+
+	time.Sleep(25 * time.Millisecond)
+
+	handler := &IssuesHandler{IssueStore: issueStore, Hub: hub}
+	router := newIssueTestRouter(handler)
+
+	commentReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issueA.ID+"/comments?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author_agent_id":"`+authorID+`","body":"WS comment"}`)),
+	)
+	commentRec := httptest.NewRecorder()
+	router.ServeHTTP(commentRec, commentReq)
+	require.Equal(t, http.StatusCreated, commentRec.Code)
+
+	select {
+	case payload := <-clientA.Send:
+		var event issueCommentCreatedEvent
+		require.NoError(t, json.Unmarshal(payload, &event))
+		require.Equal(t, ws.MessageIssueCommentCreated, event.Type)
+		require.Equal(t, issueA.ID, event.IssueID)
+		require.Equal(t, "WS comment", event.Comment.Body)
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("expected issue A subscriber to receive websocket event")
+	}
+
+	select {
+	case payload := <-clientB.Send:
+		t.Fatalf("expected issue B subscriber to receive no event, got %s", string(payload))
+	case <-time.After(120 * time.Millisecond):
+	}
+
+	select {
+	case payload := <-clientOtherOrg.Send:
+		t.Fatalf("expected cross-org subscriber to receive no event, got %s", string(payload))
+	case <-time.After(120 * time.Millisecond):
+	}
 }

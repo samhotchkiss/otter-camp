@@ -16,6 +16,7 @@ const (
 	MessageTaskStatusChanged         MessageType = "TaskStatusChanged"
 	MessageCommentAdded              MessageType = "CommentAdded"
 	MessageProjectChatMessageCreated MessageType = "ProjectChatMessageCreated"
+	MessageIssueCommentCreated       MessageType = "IssueCommentCreated"
 )
 
 // BroadcastMessage packages a payload for an org-scoped broadcast.

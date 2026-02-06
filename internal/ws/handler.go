@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -31,7 +32,13 @@ var topicPattern = regexp.MustCompile(`^[a-zA-Z0-9:_-]{1,160}$`)
 
 // Handler upgrades HTTP connections to websocket clients.
 type Handler struct {
-	Hub *Hub
+	Hub             *Hub
+	IssueAuthorizer IssueSubscriptionAuthorizer
+}
+
+// IssueSubscriptionAuthorizer validates issue-channel subscription access.
+type IssueSubscriptionAuthorizer interface {
+	CanSubscribeIssue(ctx context.Context, orgID, issueID string) (bool, error)
 }
 
 // ServeHTTP implements http.Handler.
@@ -45,7 +52,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Hub.Register(client)
 
 	go client.WritePump()
-	client.ReadPump()
+	client.ReadPump(h.IssueAuthorizer)
 }
 
 type clientMessage struct {
@@ -56,7 +63,7 @@ type clientMessage struct {
 }
 
 // ReadPump pumps messages from the websocket connection.
-func (c *Client) ReadPump() {
+func (c *Client) ReadPump(issueAuthorizer IssueSubscriptionAuthorizer) {
 	defer func() {
 		c.Hub.Unregister(c)
 		c.Conn.Close()
@@ -79,29 +86,77 @@ func (c *Client) ReadPump() {
 			continue
 		}
 
-		switch payload.Type {
-		case "subscribe":
-			orgID := strings.TrimSpace(payload.OrgID)
-			if isAllowedSubscriptionOrgID(orgID) {
-				c.SetOrgID(orgID)
-			}
-			topic := strings.TrimSpace(payload.Topic)
-			if topic == "" {
-				topic = strings.TrimSpace(payload.Channel)
-			}
-			if isAllowedSubscriptionTopic(topic) {
-				c.SubscribeTopic(topic)
-			}
-		case "unsubscribe":
-			topic := strings.TrimSpace(payload.Topic)
-			if topic == "" {
-				topic = strings.TrimSpace(payload.Channel)
-			}
-			if isAllowedSubscriptionTopic(topic) {
-				c.UnsubscribeTopic(topic)
-			}
+		processClientMessage(c, payload, issueAuthorizer)
+	}
+}
+
+func processClientMessage(c *Client, payload clientMessage, issueAuthorizer IssueSubscriptionAuthorizer) {
+	switch payload.Type {
+	case "subscribe":
+		orgID := strings.TrimSpace(payload.OrgID)
+		if isAllowedSubscriptionOrgID(orgID) {
+			c.SetOrgID(orgID)
+		}
+
+		topic := topicFromClientMessage(payload)
+		if !isAllowedSubscriptionTopic(topic) {
+			return
+		}
+		if !isAuthorizedTopicSubscription(context.Background(), c.OrgID(), topic, issueAuthorizer) {
+			return
+		}
+		c.SubscribeTopic(topic)
+	case "unsubscribe":
+		topic := topicFromClientMessage(payload)
+		if isAllowedSubscriptionTopic(topic) {
+			c.UnsubscribeTopic(topic)
 		}
 	}
+}
+
+func topicFromClientMessage(payload clientMessage) string {
+	topic := strings.TrimSpace(payload.Topic)
+	if topic == "" {
+		topic = strings.TrimSpace(payload.Channel)
+	}
+	return topic
+}
+
+func isAuthorizedTopicSubscription(
+	ctx context.Context,
+	orgID, topic string,
+	issueAuthorizer IssueSubscriptionAuthorizer,
+) bool {
+	issueID, issueTopic := issueIDFromTopic(topic)
+	if !issueTopic {
+		return true
+	}
+	if issueID == "" {
+		return false
+	}
+	if !isAllowedSubscriptionOrgID(orgID) {
+		return false
+	}
+	if issueAuthorizer == nil {
+		return false
+	}
+	allowed, err := issueAuthorizer.CanSubscribeIssue(ctx, orgID, issueID)
+	if err != nil {
+		return false
+	}
+	return allowed
+}
+
+func issueIDFromTopic(topic string) (string, bool) {
+	topic = strings.TrimSpace(topic)
+	if !strings.HasPrefix(topic, "issue:") {
+		return "", false
+	}
+	issueID := strings.TrimSpace(strings.TrimPrefix(topic, "issue:"))
+	if !orgIDPattern.MatchString(issueID) {
+		return "", true
+	}
+	return issueID, true
 }
 
 // WritePump pumps messages from the hub to the websocket connection.
