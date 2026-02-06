@@ -212,19 +212,32 @@ func (s *GitHubSyncJobStore) PickupNext(ctx context.Context, jobTypes ...string)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	whereClause := `status IN ('queued', 'retrying') AND next_attempt_at <= NOW()`
+	whereClause := `
+		j.status IN ('queued', 'retrying')
+		AND j.next_attempt_at <= NOW()
+		AND (
+			j.project_id IS NULL
+			OR NOT EXISTS (
+				SELECT 1
+				FROM github_sync_jobs running
+				WHERE running.org_id = j.org_id
+					AND running.project_id = j.project_id
+					AND running.status = 'in_progress'
+			)
+		)
+	`
 	args := []any{}
 	if len(normalizedTypes) > 0 {
-		whereClause += ` AND job_type = ANY($1)`
+		whereClause += ` AND j.job_type = ANY($1)`
 		args = append(args, pq.Array(normalizedTypes))
 	}
 
 	query := fmt.Sprintf(`
 		WITH next_job AS (
-			SELECT id
-			FROM github_sync_jobs
+			SELECT j.id
+			FROM github_sync_jobs j
 			WHERE %s
-			ORDER BY next_attempt_at ASC, created_at ASC
+			ORDER BY j.next_attempt_at ASC, j.created_at ASC
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
 		)

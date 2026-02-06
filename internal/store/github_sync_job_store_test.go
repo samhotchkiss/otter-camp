@@ -176,6 +176,66 @@ func TestGitHubSyncJobStore_QueueDepthAndStuckJobSignal(t *testing.T) {
 	require.Equal(t, job.ID, picked.ID)
 }
 
+func TestGitHubSyncJobStore_PickupSkipsConcurrentJobsForSameProject(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "github-sync-locking-org")
+	projectA := createTestProject(t, db, orgID, "github-sync-locking-project-a")
+	projectB := createTestProject(t, db, orgID, "github-sync-locking-project-b")
+
+	store := NewGitHubSyncJobStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	jobA1, err := store.Enqueue(ctx, EnqueueGitHubSyncJobInput{
+		ProjectID:   &projectA,
+		JobType:     GitHubSyncJobTypeRepoSync,
+		Payload:     json.RawMessage(`{"branch":"main","seq":1}`),
+		MaxAttempts: 3,
+	})
+	require.NoError(t, err)
+
+	jobA2, err := store.Enqueue(ctx, EnqueueGitHubSyncJobInput{
+		ProjectID:   &projectA,
+		JobType:     GitHubSyncJobTypeRepoSync,
+		Payload:     json.RawMessage(`{"branch":"main","seq":2}`),
+		MaxAttempts: 3,
+	})
+	require.NoError(t, err)
+
+	jobB, err := store.Enqueue(ctx, EnqueueGitHubSyncJobInput{
+		ProjectID:   &projectB,
+		JobType:     GitHubSyncJobTypeRepoSync,
+		Payload:     json.RawMessage(`{"branch":"main","seq":3}`),
+		MaxAttempts: 3,
+	})
+	require.NoError(t, err)
+
+	firstPickup, err := store.PickupNext(ctx, GitHubSyncJobTypeRepoSync)
+	require.NoError(t, err)
+	require.NotNil(t, firstPickup)
+	require.Equal(t, jobA1.ID, firstPickup.ID)
+	require.Equal(t, GitHubSyncJobStatusInProgress, firstPickup.Status)
+
+	// While project A has an in-progress job, the next pickup should skip A's queued job.
+	secondPickup, err := store.PickupNext(ctx, GitHubSyncJobTypeRepoSync)
+	require.NoError(t, err)
+	require.NotNil(t, secondPickup)
+	require.Equal(t, jobB.ID, secondPickup.ID)
+	require.Equal(t, GitHubSyncJobStatusInProgress, secondPickup.Status)
+
+	// Mark both in-progress jobs complete, then project A's queued follow-up can run.
+	_, err = store.MarkCompleted(ctx, firstPickup.ID)
+	require.NoError(t, err)
+	_, err = store.MarkCompleted(ctx, secondPickup.ID)
+	require.NoError(t, err)
+
+	thirdPickup, err := store.PickupNext(ctx, GitHubSyncJobTypeRepoSync)
+	require.NoError(t, err)
+	require.NotNil(t, thirdPickup)
+	require.Equal(t, jobA2.ID, thirdPickup.ID)
+	require.Equal(t, GitHubSyncJobStatusInProgress, thirdPickup.Status)
+}
+
 func derefString(t *testing.T, value *string) string {
 	t.Helper()
 	require.NotNil(t, value)
