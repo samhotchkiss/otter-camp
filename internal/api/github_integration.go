@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -147,6 +149,19 @@ type githubManualSyncResponse struct {
 	LastSyncedSHA      *string    `json:"last_synced_sha,omitempty"`
 	LastSyncedAt       *time.Time `json:"last_synced_at,omitempty"`
 	ConflictState      string     `json:"conflict_state"`
+}
+
+type githubConflictResolutionRequest struct {
+	Action string `json:"action"`
+}
+
+type githubConflictResolutionResponse struct {
+	ProjectID       string          `json:"project_id"`
+	Action          string          `json:"action"`
+	ConflictState   string          `json:"conflict_state"`
+	ConflictDetails json.RawMessage `json:"conflict_details"`
+	LocalHeadSHA    *string         `json:"local_head_sha,omitempty"`
+	ResolvedAt      string          `json:"resolved_at"`
 }
 
 type githubWebhookPayload struct {
@@ -819,6 +834,120 @@ func (h *GitHubIntegrationHandler) UpdateProjectBranches(w http.ResponseWriter, 
 	})
 }
 
+func (h *GitHubIntegrationHandler) ResolveProjectConflict(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	if h.ProjectRepos == nil || h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	orgID := workspaceIDFromRequest(r)
+	if orgID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" || !uuidRegex.MatchString(projectID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid project id"})
+		return
+	}
+
+	var request githubConflictResolutionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	action := strings.TrimSpace(strings.ToLower(request.Action))
+	if action != "keep_github" && action != "keep_ottercamp" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "action must be one of keep_github or keep_ottercamp"})
+		return
+	}
+
+	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, orgID)
+	binding, err := h.ProjectRepos.GetBinding(ctx, projectID)
+	if err != nil {
+		handleRepoStoreError(w, err)
+		return
+	}
+	if binding.ConflictState != store.RepoConflictNeedsDecision {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "project does not have unresolved sync conflicts"})
+		return
+	}
+	if binding.LocalRepoPath == nil || strings.TrimSpace(*binding.LocalRepoPath) == "" {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "project has no local repo path to resolve against"})
+		return
+	}
+
+	localRepoPath := strings.TrimSpace(*binding.LocalRepoPath)
+	branch := binding.DefaultBranch
+	remoteSHA := ""
+	if parsedBranch, parsedRemote := parseConflictContext(binding.DefaultBranch, binding.ConflictDetails); parsedBranch != "" {
+		branch = parsedBranch
+		remoteSHA = parsedRemote
+	}
+
+	var localHeadSHA string
+	switch action {
+	case "keep_github":
+		localHeadSHA, err = resolveConflictKeepGitHub(r.Context(), localRepoPath, branch, remoteSHA)
+		if err != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			return
+		}
+		if strings.TrimSpace(localHeadSHA) != "" {
+			_, _ = h.ProjectRepos.UpdateBranchCheckpoint(ctx, projectID, branch, localHeadSHA, time.Now().UTC())
+		}
+	case "keep_ottercamp":
+		localHeadSHA, err = resolveConflictKeepOtterCamp(r.Context(), localRepoPath)
+		if err != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			return
+		}
+	}
+
+	resolvedAt := time.Now().UTC()
+	details := mergeConflictResolutionDetails(
+		binding.ConflictDetails,
+		action,
+		branch,
+		localHeadSHA,
+		remoteSHA,
+		resolvedAt,
+	)
+	updated, err := h.ProjectRepos.SetConflictState(ctx, projectID, store.RepoConflictResolved, details)
+	if err != nil {
+		handleRepoStoreError(w, err)
+		return
+	}
+
+	_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.repo_conflict_resolved", map[string]any{
+		"project_id":      projectID,
+		"resolution":      action,
+		"branch":          branch,
+		"local_head_sha":  localHeadSHA,
+		"remote_head_sha": remoteSHA,
+		"resolved_at":     resolvedAt,
+	})
+
+	var localHeadPtr *string
+	if strings.TrimSpace(localHeadSHA) != "" {
+		localHeadPtr = &localHeadSHA
+	}
+	sendJSON(w, http.StatusOK, githubConflictResolutionResponse{
+		ProjectID:       projectID,
+		Action:          action,
+		ConflictState:   updated.ConflictState,
+		ConflictDetails: updated.ConflictDetails,
+		LocalHeadSHA:    localHeadPtr,
+		ResolvedAt:      resolvedAt.Format(time.RFC3339),
+	})
+}
+
 func (h *GitHubIntegrationHandler) ManualRepoSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
@@ -1251,6 +1380,145 @@ func splitCommitMessage(message string) (string, *string, string) {
 		subject = normalized
 	}
 	return subject, body, normalized
+}
+
+func parseConflictContext(defaultBranch string, raw json.RawMessage) (string, string) {
+	branch := strings.TrimSpace(defaultBranch)
+	if branch == "" {
+		branch = "main"
+	}
+	remoteSHA := ""
+	if len(raw) == 0 {
+		return branch, remoteSHA
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return branch, remoteSHA
+	}
+	if value, ok := payload["branch"].(string); ok && strings.TrimSpace(value) != "" {
+		branch = strings.TrimSpace(value)
+	}
+	if value, ok := payload["remote_sha"].(string); ok && strings.TrimSpace(value) != "" {
+		remoteSHA = strings.TrimSpace(value)
+	}
+	return branch, remoteSHA
+}
+
+func mergeConflictResolutionDetails(
+	existing json.RawMessage,
+	action string,
+	branch string,
+	localHeadSHA string,
+	remoteSHA string,
+	resolvedAt time.Time,
+) json.RawMessage {
+	payload := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &payload)
+	}
+	payload["branch"] = strings.TrimSpace(branch)
+	payload["resolution"] = action
+	payload["resolved_at"] = resolvedAt.UTC().Format(time.RFC3339)
+	payload["local_head_sha"] = strings.TrimSpace(localHeadSHA)
+	if strings.TrimSpace(remoteSHA) != "" {
+		payload["remote_sha"] = strings.TrimSpace(remoteSHA)
+	}
+	payload["ready_to_publish"] = action == "keep_ottercamp"
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return encoded
+}
+
+func resolveConflictKeepGitHub(
+	ctx context.Context,
+	localRepoPath string,
+	branch string,
+	remoteSHA string,
+) (string, error) {
+	if err := ensureGitRepoPath(localRepoPath); err != nil {
+		return "", err
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		branch = "main"
+	}
+
+	if _, err := runGitInRepo(ctx, localRepoPath, "fetch", "--prune", "origin"); err != nil {
+		return "", fmt.Errorf("fetch origin failed: %w", err)
+	}
+	if _, err := runGitInRepo(ctx, localRepoPath, "checkout", branch); err != nil {
+		if _, retryErr := runGitInRepo(ctx, localRepoPath, "checkout", "-B", branch, "origin/"+branch); retryErr != nil {
+			return "", fmt.Errorf("checkout branch %q failed: %w", branch, retryErr)
+		}
+	}
+
+	target := strings.TrimSpace(remoteSHA)
+	if target == "" {
+		target = "origin/" + branch
+	}
+	if _, err := runGitInRepo(ctx, localRepoPath, "reset", "--hard", target); err != nil {
+		return "", fmt.Errorf("reset branch to %q failed: %w", target, err)
+	}
+
+	headSHA, err := runGitInRepo(ctx, localRepoPath, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("resolve local head failed: %w", err)
+	}
+	return strings.TrimSpace(headSHA), nil
+}
+
+func resolveConflictKeepOtterCamp(ctx context.Context, localRepoPath string) (string, error) {
+	if err := ensureGitRepoPath(localRepoPath); err != nil {
+		return "", err
+	}
+	headSHA, err := runGitInRepo(ctx, localRepoPath, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("resolve local head failed: %w", err)
+	}
+	return strings.TrimSpace(headSHA), nil
+}
+
+func ensureGitRepoPath(localRepoPath string) error {
+	localRepoPath = strings.TrimSpace(localRepoPath)
+	if localRepoPath == "" {
+		return fmt.Errorf("local repo path is required")
+	}
+	info, err := os.Stat(localRepoPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("local repo path %q does not exist", localRepoPath)
+		}
+		return fmt.Errorf("local repo path %q is not accessible: %w", localRepoPath, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("local repo path %q is not a directory", localRepoPath)
+	}
+	if _, err := os.Stat(filepath.Join(localRepoPath, ".git")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("local repo path %q is not a git repository", localRepoPath)
+		}
+		return fmt.Errorf("local repo path %q failed git metadata check: %w", localRepoPath, err)
+	}
+	return nil
+}
+
+func runGitInRepo(ctx context.Context, localRepoPath string, args ...string) (string, error) {
+	command := exec.CommandContext(ctx, "git", args...)
+	command.Dir = localRepoPath
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		trimmed := strings.TrimSpace(string(output))
+		if trimmed == "" {
+			return "", fmt.Errorf("git %s failed: %w", strings.Join(args, " "), err)
+		}
+		return "", fmt.Errorf("git %s failed: %w (%s)", strings.Join(args, " "), err, trimmed)
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func workspaceIDFromRequest(r *http.Request) string {

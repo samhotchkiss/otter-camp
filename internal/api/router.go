@@ -165,6 +165,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/issues/status", projectIssueSyncHandler.Status)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/projects/{id}/repo/branches", githubIntegrationHandler.GetProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Put("/projects/{id}/repo/branches", githubIntegrationHandler.UpdateProjectBranches)
+		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/repo/conflicts/resolve", githubIntegrationHandler.ResolveProjectConflict)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/repo/sync", githubIntegrationHandler.ManualRepoSync)
 		r.With(middleware.OptionalWorkspace).Post("/projects", projectsHandler.Create)
 		r.With(middleware.OptionalWorkspace).Get("/github/integration/status", githubIntegrationHandler.IntegrationStatus)

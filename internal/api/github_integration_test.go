@@ -10,6 +10,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,6 +148,140 @@ func TestGitHubIntegrationSettingsBranchesAndManualSync(t *testing.T) {
 	require.Equal(t, "samhotchkiss/otter-camp", syncResp.RepositoryFullName)
 
 	require.Equal(t, 1, countSyncJobs(t, db, orgID, store.GitHubSyncJobTypeRepoSync))
+}
+
+func TestResolveProjectConflictRejectsInvalidAction(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-conflict-invalid-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Conflict Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/repo/conflicts/resolve",
+		bytes.NewReader([]byte(`{"action":"do_something_else"}`)),
+	)
+	req = addRouteParam(req, "id", projectID)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.ResolveProjectConflict(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestResolveProjectConflictKeepGitHubResetsLocalBranchAndLogsActivity(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-conflict-keep-gh-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Conflict Keep GitHub Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	fixture := newConflictRepoFixture(t)
+	localPath := fixture.LocalPath
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := handler.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		LocalRepoPath:      &localPath,
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNeedsDecision,
+		ConflictDetails:    json.RawMessage(`{"branch":"main","local_sha":"` + fixture.LocalSHA + `","remote_sha":"` + fixture.RemoteSHA + `"}`),
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/repo/conflicts/resolve",
+		bytes.NewReader([]byte(`{"action":"keep_github"}`)),
+	)
+	req = addRouteParam(req, "id", projectID)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.ResolveProjectConflict(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	localHead := runGitTestOutput(t, fixture.LocalPath, "rev-parse", "HEAD")
+	require.Equal(t, fixture.RemoteSHA, localHead)
+
+	binding, err := handler.ProjectRepos.GetBinding(ctx, projectID)
+	require.NoError(t, err)
+	require.Equal(t, store.RepoConflictResolved, binding.ConflictState)
+	require.Contains(t, string(binding.ConflictDetails), `"resolution":"keep_github"`)
+
+	var activityCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM activity_log
+			WHERE org_id = $1
+			  AND project_id = $2
+			  AND action = 'github.repo_conflict_resolved'`,
+		orgID,
+		projectID,
+	).Scan(&activityCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, activityCount)
+}
+
+func TestResolveProjectConflictKeepOtterCampPreservesLocalBranchAndMarksReadyToPublish(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-conflict-keep-local-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Conflict Keep Local Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	fixture := newConflictRepoFixture(t)
+	localPath := fixture.LocalPath
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := handler.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		LocalRepoPath:      &localPath,
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNeedsDecision,
+		ConflictDetails:    json.RawMessage(`{"branch":"main","local_sha":"` + fixture.LocalSHA + `","remote_sha":"` + fixture.RemoteSHA + `"}`),
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/repo/conflicts/resolve",
+		bytes.NewReader([]byte(`{"action":"keep_ottercamp"}`)),
+	)
+	req = addRouteParam(req, "id", projectID)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.ResolveProjectConflict(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	localHead := runGitTestOutput(t, fixture.LocalPath, "rev-parse", "HEAD")
+	require.Equal(t, fixture.LocalSHA, localHead)
+
+	binding, err := handler.ProjectRepos.GetBinding(ctx, projectID)
+	require.NoError(t, err)
+	require.Equal(t, store.RepoConflictResolved, binding.ConflictState)
+	require.Contains(t, string(binding.ConflictDetails), `"resolution":"keep_ottercamp"`)
+	require.Contains(t, string(binding.ConflictDetails), `"ready_to_publish":true`)
+
+	var metadataRaw []byte
+	err = db.QueryRow(
+		`SELECT metadata
+			FROM activity_log
+			WHERE org_id = $1
+			  AND project_id = $2
+			  AND action = 'github.repo_conflict_resolved'
+			ORDER BY created_at DESC
+			LIMIT 1`,
+		orgID,
+		projectID,
+	).Scan(&metadataRaw)
+	require.NoError(t, err)
+
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal(metadataRaw, &metadata))
+	require.Equal(t, "keep_ottercamp", metadata["resolution"])
 }
 
 func TestGitHubIntegrationListSettingsIncludesWorkflowModePolicy(t *testing.T) {
@@ -838,6 +976,75 @@ func TestLogGitHubActivity(t *testing.T) {
 	).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
+}
+
+type conflictRepoFixture struct {
+	RemotePath string
+	WorkPath   string
+	LocalPath  string
+	LocalSHA   string
+	RemoteSHA  string
+}
+
+func newConflictRepoFixture(t *testing.T) conflictRepoFixture {
+	t.Helper()
+
+	root := t.TempDir()
+	remotePath := filepath.Join(root, "remote.git")
+	workPath := filepath.Join(root, "work")
+	localPath := filepath.Join(root, "local")
+
+	runGitTest(t, "", "init", "--bare", remotePath)
+	runGitTest(t, "", "init", "--initial-branch=main", workPath)
+	runGitTest(t, workPath, "config", "user.email", "fixture@example.com")
+	runGitTest(t, workPath, "config", "user.name", "Fixture User")
+	runGitTest(t, workPath, "remote", "add", "origin", remotePath)
+
+	require.NoError(t, os.WriteFile(filepath.Join(workPath, "README.md"), []byte("initial\n"), 0o644))
+	runGitTest(t, workPath, "add", "README.md")
+	runGitTest(t, workPath, "commit", "-m", "initial commit")
+	runGitTest(t, workPath, "push", "-u", "origin", "main")
+
+	runGitTest(t, "", "clone", remotePath, localPath)
+	runGitTest(t, localPath, "config", "user.email", "local@example.com")
+	runGitTest(t, localPath, "config", "user.name", "Local User")
+
+	require.NoError(t, os.WriteFile(filepath.Join(localPath, "README.md"), []byte("local\n"), 0o644))
+	runGitTest(t, localPath, "add", "README.md")
+	runGitTest(t, localPath, "commit", "-m", "local commit")
+	localSHA := runGitTestOutput(t, localPath, "rev-parse", "HEAD")
+
+	require.NoError(t, os.WriteFile(filepath.Join(workPath, "README.md"), []byte("remote\n"), 0o644))
+	runGitTest(t, workPath, "add", "README.md")
+	runGitTest(t, workPath, "commit", "-m", "remote commit")
+	runGitTest(t, workPath, "push", "origin", "main")
+	remoteSHA := runGitTestOutput(t, workPath, "rev-parse", "HEAD")
+
+	return conflictRepoFixture{
+		RemotePath: remotePath,
+		WorkPath:   workPath,
+		LocalPath:  localPath,
+		LocalSHA:   localSHA,
+		RemoteSHA:  remoteSHA,
+	}
+}
+
+func runGitTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	_ = runGitTestOutput(t, dir, args...)
+}
+
+func runGitTestOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	if strings.TrimSpace(dir) != "" {
+		cmd.Dir = dir
+	}
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), string(output))
+	return strings.TrimSpace(string(output))
 }
 
 func TestWebhookDeliveryDedupUsesStoreWindow(t *testing.T) {
