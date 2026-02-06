@@ -2031,3 +2031,15 @@ gitclaw_websocket_messages_total{direction="out"}
 ---
 
 *End of Architecture Document*
+
+
+---
+
+## Dashboard Activity Feed Data Source
+
+The dashboard **Your Feed** section reads from `GET /api/feed?org_id=<uuid>` which queries the `activity_log` table in Postgres. Activity records are written by:
+
+- **OpenClaw agents** via `POST /api/feed/push` (bridge or agent integration).
+- **Webhook status events** handled in `internal/webhook/handlers.go` (`logActivity`).
+
+The web UI maps these feed items into the dashboard cards (actor, description, type badge, relative timestamp).

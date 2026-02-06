@@ -5,7 +5,9 @@ import TaskDetail from "../components/TaskDetail";
 import NewTaskModal from "../components/NewTaskModal";
 import type { Command } from "../hooks/useCommandPalette";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
-import { api, type ActionItem, type FeedItem, type Project } from "../lib/api";
+import { api, type ActionItem, type FeedApiItem, type FeedItem, type Project } from "../lib/api";
+import { getActivityDescription, formatRelativeTime, getTypeConfig, normalizeMetadata } from "../components/activity/activityFormat";
+import { getInitials } from "../components/messaging/utils";
 import { isDemoMode } from "../lib/demo";
 
 /**
@@ -88,6 +90,79 @@ const DEMO_PROJECTS = [
   { id: "content", name: "Content", desc: "Tweets scheduled", status: "idle", time: "1h" },
 ];
 
+const FEED_AVATAR_COLORS = [
+  "var(--accent)",
+  "var(--blue)",
+  "var(--green)",
+  "var(--orange)",
+  "#ec4899",
+  "var(--surface-alt)",
+];
+
+const FEED_TYPE_CLASS_MAP: Record<string, string> = {
+  message: "insight",
+  comment: "insight",
+  approval: "insight",
+  decision: "insight",
+  commit: "progress",
+  task_created: "progress",
+  task_update: "progress",
+  task_updated: "progress",
+  task_status_changed: "progress",
+  dispatch: "progress",
+  assignment: "progress",
+};
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function resolveAvatarColor(name: string): string {
+  if (!name) return "var(--accent)";
+  const index = hashString(name) % FEED_AVATAR_COLORS.length;
+  return FEED_AVATAR_COLORS[index];
+}
+
+function resolveFeedBadgeClass(type: string, priority?: string | null): string {
+  if (priority && ["urgent", "high", "critical"].includes(priority)) {
+    return "insight";
+  }
+  return FEED_TYPE_CLASS_MAP[type] || "progress";
+}
+
+function mapActivityToFeedItems(items: FeedApiItem[]): FeedItem[] {
+  return items.map((item) => {
+    const actorName = item.agent_name?.trim() || "System";
+    const type = item.type || "activity";
+    const typeConfig = getTypeConfig(type);
+    const description = getActivityDescription({
+      type,
+      actorName,
+      taskTitle: item.task_title || undefined,
+      summary: item.summary || undefined,
+      metadata: normalizeMetadata(item.metadata),
+    });
+
+    return {
+      id: item.id,
+      avatar: getInitials(actorName),
+      avatarBg: resolveAvatarColor(actorName),
+      title: actorName,
+      text: description,
+      meta: formatRelativeTime(new Date(item.created_at)),
+      type: {
+        label: typeConfig.label,
+        className: resolveFeedBadgeClass(type, item.priority),
+      },
+    };
+  });
+}
+
 export default function Dashboard() {
   const {
     isCommandPaletteOpen,
@@ -124,8 +199,14 @@ export default function Dashboard() {
         if (cancelled) return;
 
         if (feedResult.status === "fulfilled") {
-          setActionItems(feedResult.value.actionItems || []);
-          setFeedItems(feedResult.value.feedItems || []);
+          const feedValue = feedResult.value;
+          if ("feedItems" in feedValue) {
+            setActionItems(feedValue.actionItems || []);
+            setFeedItems(feedValue.feedItems || []);
+          } else {
+            setActionItems([]);
+            setFeedItems(mapActivityToFeedItems(feedValue.items || []));
+          }
         } else if (!isDemoMode()) {
           setActionItems([]);
           setFeedItems([]);

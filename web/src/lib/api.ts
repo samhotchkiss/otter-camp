@@ -131,6 +131,35 @@ export interface FeedResponse {
   feedItems: FeedItem[];
 }
 
+export interface FeedApiItem {
+  id: string;
+  org_id: string;
+  task_id?: string | null;
+  agent_id?: string | null;
+  type: string;
+  metadata?: unknown;
+  created_at: string;
+  task_title?: string | null;
+  agent_name?: string | null;
+  summary?: string | null;
+  score?: number | null;
+  priority?: string | null;
+}
+
+export interface PaginatedFeedResponse {
+  org_id: string;
+  feed_mode?: string;
+  types?: string[];
+  from?: string | null;
+  to?: string | null;
+  limit?: number;
+  offset?: number;
+  total?: number;
+  items: FeedApiItem[];
+}
+
+export type DashboardFeedResponse = FeedResponse | PaginatedFeedResponse;
+
 export interface SyncAgentsResponse {
   last_sync?: string;
   sync_healthy?: boolean;
@@ -161,7 +190,7 @@ export interface CreateTaskResponse {
 export const api = {
   health: () => apiFetch<HealthResponse>('/health'),
   // Pass org_id to get real data, or demo=true for demo mode
-  feed: () => apiFetch<FeedResponse>(`/api/feed${getOrgQueryParam()}`),
+  feed: () => apiFetch<DashboardFeedResponse>(`/api/feed${getOrgQueryParam()}`),
   tasks: () => apiFetch<Task[]>(`/api/tasks${getOrgQueryParam()}`),
   inbox: () => apiFetch<InboxResponse>(`/api/inbox${getOrgQueryParam()}`),
   approvals: () => apiFetch<Approval[]>(`/api/approvals/exec${getOrgQueryParam()}`),
