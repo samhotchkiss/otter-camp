@@ -225,6 +225,35 @@ func TestFeedHandlerV2FilterByTypes(t *testing.T) {
 	require.Len(t, resp.Items, 3)
 }
 
+func TestFeedHandlerV2SuppressesProjectChatEvents(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	orgID := insertFeedOrganization(t, db, "feed-project-chat-org")
+	base := time.Date(2026, 2, 4, 10, 0, 0, 0, time.UTC)
+	insertFeedActivity(t, db, orgID, "project_chat.message_created", json.RawMessage(`{"project_id":"abc"}`), base)
+	insertFeedActivity(t, db, orgID, "commit", json.RawMessage(`{"repo":"content"}`), base.Add(1*time.Minute))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp PaginatedFeedResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, 1, resp.Total)
+	require.Len(t, resp.Items, 1)
+	require.Equal(t, "commit", resp.Items[0].Type)
+}
+
 func TestFeedHandlerV2FilterByDateRange(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)

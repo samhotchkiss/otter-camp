@@ -144,7 +144,10 @@ func getFeedDB() (*sql.DB, error) {
 }
 
 func buildFeedQuery(orgID, action string, limit, offset int) (string, []interface{}) {
-	conditions := []string{"org_id = $1"}
+	conditions := []string{
+		"org_id = $1",
+		"action NOT LIKE 'project_chat.%'",
+	}
 	args := []interface{}{orgID}
 
 	if action != "" {

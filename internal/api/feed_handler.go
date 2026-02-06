@@ -352,7 +352,10 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 
 // buildFeedCountQuery builds a COUNT query for pagination.
 func buildFeedCountQuery(orgID string, types []string, from, to *time.Time) (string, []interface{}) {
-	conditions := []string{"org_id = $1"}
+	conditions := []string{
+		"org_id = $1",
+		"action NOT LIKE 'project_chat.%'",
+	}
 	args := []interface{}{orgID}
 
 	if len(types) == 1 {
@@ -382,7 +385,10 @@ func buildFeedCountQuery(orgID string, types []string, from, to *time.Time) (str
 
 // buildEnrichedFeedQuery builds a query that joins with tasks and agents tables.
 func buildEnrichedFeedQuery(orgID string, types []string, from, to *time.Time, limit, offset int) (string, []interface{}) {
-	conditions := []string{"a.org_id = $1"}
+	conditions := []string{
+		"a.org_id = $1",
+		"a.action NOT LIKE 'project_chat.%'",
+	}
 	args := []interface{}{orgID}
 
 	if len(types) == 1 {
