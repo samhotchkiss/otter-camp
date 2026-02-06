@@ -10,6 +10,7 @@ export type DocumentWorkspaceProps = {
   previousContent?: string;
   imageSrc?: string;
   reviewerName?: string;
+  readOnly?: boolean;
   onContentChange?: (next: string) => void;
 };
 
@@ -59,6 +60,7 @@ export default function DocumentWorkspace({
   previousContent = "",
   imageSrc,
   reviewerName = "Reviewer",
+  readOnly = false,
   onContentChange,
 }: DocumentWorkspaceProps) {
   const resolution = useMemo(() => resolveEditorForPath(path), [path]);
@@ -89,7 +91,7 @@ export default function DocumentWorkspace({
   if (resolution.editorMode === "markdown") {
     return (
       <div data-testid="editor-mode-markdown">
-        <ContentReview key={path} initialMarkdown={draft} reviewerName={reviewerName} />
+        <ContentReview key={path} initialMarkdown={draft} reviewerName={reviewerName} readOnly={readOnly} />
       </div>
     );
   }
@@ -104,9 +106,13 @@ export default function DocumentWorkspace({
         <textarea
           value={draft}
           onChange={(event) => {
+            if (readOnly) {
+              return;
+            }
             setDraft(event.target.value);
             onContentChange?.(event.target.value);
           }}
+          readOnly={readOnly}
           className="min-h-[260px] w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           data-testid="text-editor"
         />
@@ -124,9 +130,13 @@ export default function DocumentWorkspace({
         <textarea
           value={draft}
           onChange={(event) => {
+            if (readOnly) {
+              return;
+            }
             setDraft(event.target.value);
             onContentChange?.(event.target.value);
           }}
+          readOnly={readOnly}
           className="min-h-[180px] w-full resize-y rounded-xl border border-slate-200 bg-slate-950 px-4 py-3 font-mono text-sm text-slate-100 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700"
           data-testid="code-editor-input"
           spellCheck={false}

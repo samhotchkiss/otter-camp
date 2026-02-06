@@ -196,6 +196,33 @@ describe("IssueThreadPanel", () => {
   it("shows approval badge and renders linked post in markdown workspace", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("/api/issues/issue-1/review/history?")) {
+        return mockJSONResponse({
+          issue_id: "issue-1",
+          document_path: "/posts/2026-02-06-launch-plan.md",
+          items: [
+            {
+              sha: "sha-latest",
+              subject: "Latest",
+              authored_at: "2026-02-06T12:00:00Z",
+              author_name: "Sam",
+              is_review_checkpoint: false,
+            },
+          ],
+          total: 1,
+        });
+      }
+      if (url.includes("/api/issues/issue-1/review/changes?")) {
+        return mockJSONResponse({
+          issue_id: "issue-1",
+          document_path: "/posts/2026-02-06-launch-plan.md",
+          base_sha: "sha-base",
+          head_sha: "sha-head",
+          fallback_to_first_commit: true,
+          files: [],
+          total: 0,
+        });
+      }
       if (url.includes("/api/issues/issue-1?")) {
         return mockJSONResponse({
           issue: {
@@ -227,6 +254,92 @@ describe("IssueThreadPanel", () => {
     expect(screen.getByTestId("issue-thread-approval")).toHaveTextContent("Ready for Review");
     expect(screen.getByText("/posts/2026-02-06-launch-plan.md")).toBeInTheDocument();
     expect(screen.getByTestId("editor-mode-markdown")).toBeInTheDocument();
+  });
+
+  it("lists history and opens historical version with read-only comment rendering", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/issues/issue-1/review/history/sha-old?")) {
+        return mockJSONResponse({
+          issue_id: "issue-1",
+          document_path: "/posts/2026-02-06-review.md",
+          sha: "sha-old",
+          content: "# Old\n\nBody {>>AB: old comment<<}",
+          read_only: true,
+        });
+      }
+      if (url.includes("/api/issues/issue-1/review/history?")) {
+        return mockJSONResponse({
+          issue_id: "issue-1",
+          document_path: "/posts/2026-02-06-review.md",
+          items: [
+            {
+              sha: "sha-new",
+              subject: "Review v2",
+              authored_at: "2026-02-06T12:00:00Z",
+              author_name: "Sam",
+              is_review_checkpoint: false,
+            },
+            {
+              sha: "sha-old",
+              subject: "Review v1",
+              authored_at: "2026-02-06T11:00:00Z",
+              author_name: "Sam",
+              is_review_checkpoint: true,
+            },
+          ],
+          total: 2,
+        });
+      }
+      if (url.includes("/api/issues/issue-1/review/changes?")) {
+        return mockJSONResponse({
+          issue_id: "issue-1",
+          document_path: "/posts/2026-02-06-review.md",
+          base_sha: "sha-old",
+          head_sha: "sha-new",
+          fallback_to_first_commit: false,
+          files: [{ path: "/posts/2026-02-06-review.md", change_type: "modified" }],
+          total: 1,
+        });
+      }
+      if (url.includes("/api/issues/issue-1?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-1",
+            issue_number: 1,
+            title: "History issue",
+            state: "open",
+            origin: "local",
+            approval_state: "ready_for_review",
+            document_path: "/posts/2026-02-06-review.md",
+            document_content: "# New\n\nBody",
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const user = userEvent.setup();
+    render(<IssueThreadPanel issueID="issue-1" />);
+
+    expect(await screen.findByText("#1 History issue")).toBeInTheDocument();
+    expect(await screen.findByTestId("issue-review-history-list")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("issue-review-open-sha-old"));
+    expect(await screen.findByTestId("content-review-read-only")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add Inline Comment" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Rendered" }));
+    expect(await screen.findByText("old comment")).toBeInTheDocument();
+    expect(screen.getByTestId("critic-comment-bubble")).toBeInTheDocument();
   });
 
   it("shows only valid next review actions and updates badge on transition", async () => {

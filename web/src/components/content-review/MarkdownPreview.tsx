@@ -133,7 +133,7 @@ export default function MarkdownPreview({
 }: MarkdownPreviewProps) {
   const prefersDark = useMemo(() => {
     if (typeof window === "undefined") return false;
-    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+    return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? false;
   }, []);
 
   const headingProps = {

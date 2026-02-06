@@ -42,6 +42,47 @@ type IssueDetailResponse = {
   comments: IssueComment[];
 };
 
+type IssueReviewHistoryItem = {
+  sha: string;
+  subject: string;
+  body?: string | null;
+  authored_at: string;
+  author_name: string;
+  is_review_checkpoint: boolean;
+};
+
+type IssueReviewHistoryResponse = {
+  issue_id: string;
+  document_path: string;
+  last_review_commit_sha?: string | null;
+  items: IssueReviewHistoryItem[];
+  total: number;
+};
+
+type IssueReviewVersionResponse = {
+  issue_id: string;
+  document_path: string;
+  sha: string;
+  content: string;
+  read_only: boolean;
+};
+
+type IssueReviewChangesFile = {
+  path: string;
+  change_type: "added" | "modified" | "removed" | "renamed";
+  patch?: string | null;
+};
+
+type IssueReviewChangesResponse = {
+  issue_id: string;
+  document_path: string;
+  base_sha: string;
+  head_sha: string;
+  fallback_to_first_commit: boolean;
+  files: IssueReviewChangesFile[];
+  total: number;
+};
+
 type AgentOption = {
   id: string;
   name: string;
@@ -263,6 +304,16 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
   const [updatingApprovalState, setUpdatingApprovalState] = useState<IssueApprovalState | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [showApprovalConfetti, setShowApprovalConfetti] = useState(false);
+  const [reviewHistory, setReviewHistory] = useState<IssueReviewHistoryItem[]>([]);
+  const [reviewHistoryLoading, setReviewHistoryLoading] = useState(false);
+  const [reviewHistoryError, setReviewHistoryError] = useState<string | null>(null);
+  const [selectedReviewSHA, setSelectedReviewSHA] = useState<string | null>(null);
+  const [reviewVersionBySHA, setReviewVersionBySHA] = useState<Record<string, string>>({});
+  const [reviewVersionLoadingSHA, setReviewVersionLoadingSHA] = useState<string | null>(null);
+  const [reviewVersionError, setReviewVersionError] = useState<string | null>(null);
+  const [reviewChanges, setReviewChanges] = useState<IssueReviewChangesResponse | null>(null);
+  const [reviewChangesLoading, setReviewChangesLoading] = useState(false);
+  const [reviewChangesError, setReviewChangesError] = useState<string | null>(null);
 
   const { lastMessage } = useWS();
 
@@ -332,6 +383,13 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
         if (agentList.length > 0) {
           setCommentAuthorID((current) => current || agentList[0].id);
         }
+        setReviewHistory([]);
+        setReviewHistoryError(null);
+        setSelectedReviewSHA(null);
+        setReviewVersionBySHA({});
+        setReviewVersionError(null);
+        setReviewChanges(null);
+        setReviewChangesError(null);
       })
       .catch((loadError: unknown) => {
         if (cancelled) {
@@ -351,6 +409,100 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
   }, [issueID]);
 
   useEffect(() => {
+    const orgID = getOrgID();
+    if (!orgID || !issue?.document_path) {
+      setReviewHistory([]);
+      setReviewHistoryError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setReviewHistoryLoading(true);
+    setReviewHistoryError(null);
+
+    const url = new URL(`${API_URL}/api/issues/${issueID}/review/history`);
+    url.searchParams.set("org_id", orgID);
+
+    void fetch(url.toString(), { headers: { "Content-Type": "application/json" } })
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to load review history");
+        }
+        return response.json() as Promise<IssueReviewHistoryResponse>;
+      })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setReviewHistory(Array.isArray(payload.items) ? payload.items : []);
+      })
+      .catch((fetchError: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setReviewHistoryError(fetchError instanceof Error ? fetchError.message : "Failed to load review history");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setReviewHistoryLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [issue?.document_path, issueID]);
+
+  useEffect(() => {
+    const orgID = getOrgID();
+    if (!orgID || !issue?.document_path) {
+      setReviewChanges(null);
+      setReviewChangesError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setReviewChangesLoading(true);
+    setReviewChangesError(null);
+
+    const url = new URL(`${API_URL}/api/issues/${issueID}/review/changes`);
+    url.searchParams.set("org_id", orgID);
+
+    void fetch(url.toString(), { headers: { "Content-Type": "application/json" } })
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to load changes since last review");
+        }
+        return response.json() as Promise<IssueReviewChangesResponse>;
+      })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setReviewChanges(payload);
+      })
+      .catch((fetchError: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setReviewChangesError(
+          fetchError instanceof Error ? fetchError.message : "Failed to load changes since last review",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setReviewChangesLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [issue?.document_path, issueID]);
+
+  useEffect(() => {
     if (!lastMessage || lastMessage.type !== "IssueCommentCreated") {
       return;
     }
@@ -366,6 +518,38 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
       return sortComments([...prev, incoming]);
     });
   }, [issueID, lastMessage]);
+
+  async function handleOpenReviewVersion(sha: string): Promise<void> {
+    const orgID = getOrgID();
+    if (!orgID) {
+      return;
+    }
+    if (reviewVersionBySHA[sha]) {
+      setSelectedReviewSHA(sha);
+      setReviewVersionError(null);
+      return;
+    }
+
+    setReviewVersionLoadingSHA(sha);
+    setReviewVersionError(null);
+    try {
+      const response = await fetch(
+        `${API_URL}/api/issues/${issueID}/review/history/${encodeURIComponent(sha)}?org_id=${encodeURIComponent(orgID)}`,
+        { headers: { "Content-Type": "application/json" } },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to load review snapshot");
+      }
+      const payload = await response.json() as IssueReviewVersionResponse;
+      setReviewVersionBySHA((current) => ({ ...current, [sha]: payload.content }));
+      setSelectedReviewSHA(sha);
+    } catch (err) {
+      setReviewVersionError(err instanceof Error ? err.message : "Failed to load review snapshot");
+    } finally {
+      setReviewVersionLoadingSHA(null);
+    }
+  }
 
   async function autoAddMentionedParticipants(commentBody: string): Promise<void> {
     const orgID = getOrgID()
@@ -602,6 +786,22 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
     return nextApprovalActions(normalizedApprovalState);
   }, [issue, normalizedApprovalState]);
 
+  const selectedReviewContent = useMemo(() => {
+    if (!selectedReviewSHA) {
+      return null;
+    }
+    return reviewVersionBySHA[selectedReviewSHA] ?? null;
+  }, [reviewVersionBySHA, selectedReviewSHA]);
+
+  const isViewingHistoricalVersion = selectedReviewSHA !== null;
+
+  const displayedDocumentContent = useMemo(() => {
+    if (isViewingHistoricalVersion) {
+      return selectedReviewContent;
+    }
+    return issue?.document_content ?? null;
+  }, [isViewingHistoricalVersion, issue?.document_content, selectedReviewContent]);
+
   return (
     <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
       <WebSocketIssueSubscriber issueID={issueID} />
@@ -673,11 +873,107 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
             <section className="space-y-3">
               <h3 className="text-sm font-semibold text-[var(--text)]">Linked document</h3>
               <p className="text-xs text-[var(--text-muted)]">{issue.document_path}</p>
-              {typeof issue.document_content === "string" ? (
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                  Changes Since Last Review
+                </p>
+                {reviewChangesLoading && (
+                  <p className="mt-2 text-xs text-[var(--text-muted)]">Loading review diff…</p>
+                )}
+                {!reviewChangesLoading && reviewChangesError && (
+                  <p className="mt-2 text-xs text-red-700">{reviewChangesError}</p>
+                )}
+                {!reviewChangesLoading && !reviewChangesError && reviewChanges && (
+                  <div className="mt-2 space-y-2">
+                    <p className="text-xs text-[var(--text-muted)]">
+                      {reviewChanges.fallback_to_first_commit
+                        ? "No review checkpoint set; comparing current version to first commit."
+                        : "Comparing latest commit to the last review checkpoint."}
+                    </p>
+                    <p className="text-xs text-[var(--text-muted)]">
+                      Base: {reviewChanges.base_sha.slice(0, 7)} → Head: {reviewChanges.head_sha.slice(0, 7)}
+                    </p>
+                    {reviewChanges.files.length > 0 ? (
+                      <ul className="space-y-1 text-xs text-[var(--text)]">
+                        {reviewChanges.files.map((file) => (
+                          <li key={`${file.path}-${file.change_type}`} className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1">
+                            <span className="font-semibold">{file.change_type}</span> {file.path}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-[var(--text-muted)]">No file changes since last review.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                    Review Version History
+                  </p>
+                  {isViewingHistoricalVersion && (
+                    <button
+                      type="button"
+                      className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-alt)]"
+                      onClick={() => setSelectedReviewSHA(null)}
+                    >
+                      Latest Version
+                    </button>
+                  )}
+                </div>
+                {reviewHistoryLoading && (
+                  <p className="mt-2 text-xs text-[var(--text-muted)]">Loading history…</p>
+                )}
+                {!reviewHistoryLoading && reviewHistoryError && (
+                  <p className="mt-2 text-xs text-red-700">{reviewHistoryError}</p>
+                )}
+                {!reviewHistoryLoading && !reviewHistoryError && reviewHistory.length > 0 && (
+                  <ul className="mt-2 space-y-2" data-testid="issue-review-history-list">
+                    {reviewHistory.map((item) => (
+                      <li key={item.sha} className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-semibold text-[var(--text)]">
+                              {item.subject}
+                            </p>
+                            <p className="text-[11px] text-[var(--text-muted)]">
+                              {item.sha.slice(0, 7)} · {item.author_name} · {formatTimestamp(item.authored_at)}
+                            </p>
+                            {item.is_review_checkpoint && (
+                              <span className="mt-1 inline-flex rounded-full border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
+                                Review checkpoint
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-alt)]"
+                            onClick={() => void handleOpenReviewVersion(item.sha)}
+                            data-testid={`issue-review-open-${item.sha}`}
+                          >
+                            {reviewVersionLoadingSHA === item.sha ? "Loading..." : "Open"}
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {!reviewHistoryLoading && !reviewHistoryError && reviewHistory.length === 0 && (
+                  <p className="mt-2 text-xs text-[var(--text-muted)]">No review history yet.</p>
+                )}
+                {reviewVersionError && (
+                  <p className="mt-2 text-xs text-red-700">{reviewVersionError}</p>
+                )}
+              </div>
+
+              {typeof displayedDocumentContent === "string" ? (
                 <DocumentWorkspace
                   path={issue.document_path}
-                  content={issue.document_content}
+                  content={displayedDocumentContent}
                   reviewerName={agentNameByID.get(commentAuthorID) ?? "Reviewer"}
+                  readOnly={isViewingHistoricalVersion}
                 />
               ) : (
                 <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-3 text-xs text-[var(--text-muted)]">

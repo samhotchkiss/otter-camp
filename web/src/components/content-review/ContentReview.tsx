@@ -27,6 +27,7 @@ export type ContentReviewActionPayload = {
 export type ContentReviewProps = {
   initialMarkdown: string;
   reviewerName?: string;
+  readOnly?: boolean;
   onApprove?: (payload: ContentReviewActionPayload) => void;
   onRequestChanges?: (payload: ContentReviewActionPayload) => void;
   onCommentAdd?: (comment: ReviewComment) => void;
@@ -67,6 +68,7 @@ function buildReviewComments(markdown: string, reviewerName: string): ReviewComm
 export default function ContentReview({
   initialMarkdown,
   reviewerName = "Reviewer",
+  readOnly = false,
   onApprove,
   onRequestChanges,
   onCommentAdd,
@@ -191,6 +193,9 @@ export default function ContentReview({
   };
 
   const handleSourceKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (readOnly) {
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "m") {
       event.preventDefault();
       openComposerFromSelection();
@@ -254,7 +259,7 @@ export default function ContentReview({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {(reviewState === "draft" || reviewState === "needs_changes") && (
+          {!readOnly && (reviewState === "draft" || reviewState === "needs_changes") && (
             <button
               type="button"
               onClick={handleMarkReadyForReview}
@@ -264,7 +269,7 @@ export default function ContentReview({
             </button>
           )}
 
-          {reviewState === "ready_for_review" && (
+          {!readOnly && reviewState === "ready_for_review" && (
             <>
               <button
                 type="button"
@@ -283,9 +288,17 @@ export default function ContentReview({
             </>
           )}
 
-          {reviewState === "approved" && (
+          {!readOnly && reviewState === "approved" && (
             <span className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">
               Approved
+            </span>
+          )}
+          {readOnly && (
+            <span
+              className="rounded-full border border-slate-300 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-200"
+              data-testid="content-review-read-only"
+            >
+              Read-only snapshot
             </span>
           )}
         </div>
@@ -313,36 +326,46 @@ export default function ContentReview({
         <div className="space-y-4 rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-900/40">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Source Markdown</p>
-            <button
-              type="button"
-              onClick={openComposerFromSelection}
-              className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200"
-            >
-              Add Inline Comment
-            </button>
-            <button
-              type="button"
-              onClick={openImageComposerFromSelection}
-              className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-200 dark:hover:bg-slate-800"
-            >
-              Add Image Link
-            </button>
+            {!readOnly && (
+              <>
+                <button
+                  type="button"
+                  onClick={openComposerFromSelection}
+                  className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200"
+                >
+                  Add Inline Comment
+                </button>
+                <button
+                  type="button"
+                  onClick={openImageComposerFromSelection}
+                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  Add Image Link
+                </button>
+              </>
+            )}
           </div>
           <textarea
             ref={sourceRef}
             value={markdown}
-            onChange={(event) => setMarkdown(event.target.value)}
+            onChange={(event) => {
+              if (readOnly) {
+                return;
+              }
+              setMarkdown(event.target.value);
+            }}
             onSelect={captureSourceSelection}
             onKeyUp={captureSourceSelection}
             onClick={captureSourceSelection}
             onBlur={captureSourceSelection}
             onKeyDown={handleSourceKeyDown}
+            readOnly={readOnly}
             className="min-h-[280px] w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             data-testid="source-textarea"
             spellCheck={false}
           />
 
-          {composerOpen && (
+          {!readOnly && composerOpen && (
             <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-700 dark:bg-amber-900/20">
               <label className="text-xs font-semibold uppercase tracking-[0.3em] text-amber-700 dark:text-amber-200">
                 Inline Comment
@@ -377,7 +400,7 @@ export default function ContentReview({
             </div>
           )}
 
-          {imageComposerOpen && (
+          {!readOnly && imageComposerOpen && (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3 dark:border-emerald-700 dark:bg-emerald-900/20">
               <label className="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-700 dark:text-emerald-200">
                 Insert Markdown Image
@@ -420,9 +443,11 @@ export default function ContentReview({
             </div>
           )}
 
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Shortcut: Cmd/Ctrl+Shift+M inserts a CriticMarkup comment at the current caret/selection.
-          </p>
+          {!readOnly && (
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Shortcut: Cmd/Ctrl+Shift+M inserts a CriticMarkup comment at the current caret/selection.
+            </p>
+          )}
         </div>
       ) : (
         <MarkdownPreview markdown={markdown} />

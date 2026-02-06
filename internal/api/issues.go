@@ -23,6 +23,8 @@ import (
 type IssuesHandler struct {
 	IssueStore   *store.ProjectIssueStore
 	ProjectStore *store.ProjectStore
+	CommitStore  *store.ProjectCommitStore
+	ProjectRepos *store.ProjectRepoStore
 	DB           *sql.DB
 	Hub          *ws.Hub
 }

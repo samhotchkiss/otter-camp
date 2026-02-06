@@ -97,6 +97,8 @@ func NewRouter() http.Handler {
 		projectChatHandler.DB = db
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
 		issuesHandler.ProjectStore = projectStore
+		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
+		issuesHandler.ProjectRepos = store.NewProjectRepoStore(db)
 		issuesHandler.DB = db
 		projectCommitsHandler.ProjectStore = projectStore
 		projectCommitsHandler.CommitStore = store.NewProjectCommitStore(db)
@@ -160,6 +162,9 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approval-state", issuesHandler.TransitionApprovalState)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approve", issuesHandler.Approve)
+		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/changes", issuesHandler.ReviewChanges)
+		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/history", issuesHandler.ReviewHistory)
+		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/history/{sha}", issuesHandler.ReviewVersion)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/participants", issuesHandler.AddParticipant)
 		r.With(middleware.OptionalWorkspace).Delete("/issues/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues/link", issuesHandler.CreateLinkedIssue)

@@ -87,6 +87,14 @@ type ProjectIssueSyncCheckpoint struct {
 	LastSyncedAt       time.Time `json:"last_synced_at"`
 }
 
+type ProjectIssueReviewCheckpoint struct {
+	ID                  string    `json:"id"`
+	OrgID               string    `json:"org_id"`
+	IssueID             string    `json:"issue_id"`
+	LastReviewCommitSHA string    `json:"last_review_commit_sha"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
 type ProjectIssueCounts struct {
 	Total        int `json:"total"`
 	Open         int `json:"open"`
@@ -850,6 +858,98 @@ func (s *ProjectIssueStore) UpdateIssueDocumentPath(
 	return &updated, nil
 }
 
+func (s *ProjectIssueStore) UpsertReviewCheckpoint(
+	ctx context.Context,
+	issueID string,
+	lastReviewCommitSHA string,
+) (*ProjectIssueReviewCheckpoint, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+	lastReviewCommitSHA = strings.TrimSpace(lastReviewCommitSHA)
+	if lastReviewCommitSHA == "" {
+		return nil, fmt.Errorf("last_review_commit_sha is required")
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := ensureIssueVisible(ctx, tx, issueID); err != nil {
+		return nil, err
+	}
+
+	record, err := scanProjectIssueReviewCheckpoint(tx.QueryRowContext(
+		ctx,
+		`INSERT INTO project_issue_review_checkpoints (
+			org_id, issue_id, last_review_commit_sha
+		) VALUES ($1,$2,$3)
+		ON CONFLICT (issue_id)
+		DO UPDATE SET
+			last_review_commit_sha = EXCLUDED.last_review_commit_sha,
+			updated_at = NOW()
+		RETURNING id, org_id, issue_id, last_review_commit_sha, updated_at`,
+		workspaceID,
+		issueID,
+		lastReviewCommitSHA,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to upsert review checkpoint: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit review checkpoint upsert: %w", err)
+	}
+	return &record, nil
+}
+
+func (s *ProjectIssueStore) GetReviewCheckpoint(
+	ctx context.Context,
+	issueID string,
+) (*ProjectIssueReviewCheckpoint, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	record, err := scanProjectIssueReviewCheckpoint(conn.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, issue_id, last_review_commit_sha, updated_at
+			FROM project_issue_review_checkpoints
+			WHERE issue_id = $1`,
+		issueID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to get review checkpoint: %w", err)
+	}
+	if record.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+	return &record, nil
+}
+
 func (s *ProjectIssueStore) UpsertGitHubLink(
 	ctx context.Context,
 	input UpsertProjectIssueGitHubLinkInput,
@@ -1515,6 +1615,23 @@ func scanProjectIssueSyncCheckpoint(scanner interface{ Scan(...any) error }) (Pr
 	}
 	if cursor.Valid {
 		checkpoint.Cursor = &cursor.String
+	}
+	return checkpoint, nil
+}
+
+func scanProjectIssueReviewCheckpoint(
+	scanner interface{ Scan(...any) error },
+) (ProjectIssueReviewCheckpoint, error) {
+	var checkpoint ProjectIssueReviewCheckpoint
+	err := scanner.Scan(
+		&checkpoint.ID,
+		&checkpoint.OrgID,
+		&checkpoint.IssueID,
+		&checkpoint.LastReviewCommitSHA,
+		&checkpoint.UpdatedAt,
+	)
+	if err != nil {
+		return checkpoint, err
 	}
 	return checkpoint, nil
 }

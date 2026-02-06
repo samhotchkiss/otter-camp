@@ -251,6 +251,58 @@ func TestProjectIssueStore_UpdateAndListIssuesByDocumentPath(t *testing.T) {
 	require.Nil(t, detached.DocumentPath)
 }
 
+func TestProjectIssueStore_ReviewCheckpointUpsertAndGet(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-review-checkpoint-org")
+	projectID := createTestProject(t, db, orgID, "Issue Review Checkpoint Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Checkpoint issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	first, err := issueStore.UpsertReviewCheckpoint(ctx, issue.ID, "sha-review-1")
+	require.NoError(t, err)
+	require.Equal(t, issue.ID, first.IssueID)
+	require.Equal(t, "sha-review-1", first.LastReviewCommitSHA)
+
+	second, err := issueStore.UpsertReviewCheckpoint(ctx, issue.ID, "sha-review-2")
+	require.NoError(t, err)
+	require.Equal(t, first.ID, second.ID)
+	require.Equal(t, "sha-review-2", second.LastReviewCommitSHA)
+
+	loaded, err := issueStore.GetReviewCheckpoint(ctx, issue.ID)
+	require.NoError(t, err)
+	require.Equal(t, second.ID, loaded.ID)
+	require.Equal(t, "sha-review-2", loaded.LastReviewCommitSHA)
+}
+
+func TestProjectIssueStore_GetReviewCheckpointMissingReturnsNotFound(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-review-checkpoint-missing-org")
+	projectID := createTestProject(t, db, orgID, "Issue Review Checkpoint Missing Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Checkpoint missing issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.GetReviewCheckpoint(ctx, issue.ID)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNotFound))
+}
+
 func TestProjectIssueStore_ListByProjectStateAndOrigin(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

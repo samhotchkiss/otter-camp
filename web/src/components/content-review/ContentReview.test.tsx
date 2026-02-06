@@ -178,3 +178,24 @@ describe("ContentReview inline comment insertion", () => {
     );
   });
 });
+
+describe("ContentReview read-only snapshots", () => {
+  it("hides editing controls and still renders CriticMarkup comments", async () => {
+    const user = userEvent.setup();
+    render(
+      <ContentReview
+        initialMarkdown={"# Snapshot\n\nBody {>>AB: old feedback<<}"}
+        reviewerName="Sam"
+        readOnly
+      />
+    );
+
+    expect(screen.getByTestId("content-review-read-only")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark Ready for Review" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add Inline Comment" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add Image Link" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Rendered" }));
+    expect(await screen.findByText("old feedback")).toBeInTheDocument();
+  });
+});
