@@ -122,6 +122,19 @@ README.md      — project overview
 ### Mixed Projects
 Organize logically. When in doubt, create a folder.
 
+### Dedicated Non-Code Repos
+
+Use these repositories when work is primarily content/book/asset production:
+
+- `https://github.com/The-Trawl/content`
+  - long-form content, posts, drafts, research notes
+- `https://github.com/The-Trawl/three-stones-book`
+  - manuscript chapters, editorial notes, book research, exports
+- `https://github.com/The-Trawl/brand-assets`
+  - logos, illustrations, social assets, and delivery exports
+
+If your output belongs in one of these domains, commit there first so activity appears in OtterCamp and history stays project-scoped.
+
 ---
 
 ## Syncing with GitHub (When Connected)
