@@ -21,6 +21,10 @@ Commit: <link>
 OtterCamp issue: <id>
 ```
 
+## Failure Paths (MVP)
+- **Push fails:** show error, leave OtterCamp issue open, and log failure in activity feed.
+- **Conflict on push:** prompt user to re‑sync (GitHub → OtterCamp) and retry.
+
 ## Acceptance Criteria
 - Push succeeds to GitHub main.
 - Linked GitHub issues receive a comment + closure event.

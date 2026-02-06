@@ -16,7 +16,7 @@ This document is the **source of truth** for how agents interact with OtterCamp.
 Commit messages must include:
 
 ```
-<short subject line>
+<short subject line (≈50 chars)>
 
 <verbose description body>
 ```
@@ -57,6 +57,16 @@ When possible, include the issue ID in the commit message subject (e.g., `fix(#1
 - OtterCamp will ingest commits and display them in the Activity Feed.
 - GitHub issues may be imported and linked to OtterCamp issues (bi‑directional sync).
 - Closing issues in OtterCamp should close linked GitHub issues when the fix is pushed.
+
+## Manual Re‑Sync (Agent Trigger)
+Agents may trigger a re‑sync via API when needed:
+
+```
+POST /api/projects/:id/repo/sync
+POST /api/projects/:id/issues/import
+```
+
+Use these sparingly (after a batch of commits or when GitHub updated externally).
 
 ---
 Questions or updates? Open a PR or issue in `otter-camp` and tag the maintainers.

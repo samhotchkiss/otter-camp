@@ -9,7 +9,7 @@ Ensure OtterCamp stays in sync with GitHub even if webhooks are missed.
 - **Manual:** User‑triggered re‑sync.
 
 ## Polling Rules (MVP)
-- Poll on a fixed interval (e.g., every 15–30 minutes).
+- Poll on a fixed interval: **every 15 minutes**.
 - Compare latest SHA and issue update timestamps.
 - Only fetch deltas since last sync.
 

@@ -32,6 +32,10 @@ Ingest Pearl’s GitHub repository into OtterCamp so all code + history are avai
   - No auto‑merge UI in MVP.
   - Record decision in OtterCamp activity log.
 
+## Failure Paths (MVP)
+- **Sync fails:** surface error, keep last known SHA, log failure in activity feed.
+- **Conflict unresolved:** remain in “needs decision” state until user chooses.
+
 ## Minimum API Surface (MVP)
 - `POST /api/projects/:id/repo/sync` — manual resync
 - `GET /api/projects/:id/repo/status` — sync state, last SHA, conflicts

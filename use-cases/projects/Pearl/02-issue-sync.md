@@ -28,6 +28,14 @@ GitHub issue receives a **comment** with OtterCamp issue ID.
 - **OtterCamp issue resolved + publish** → GitHub issue is **commented + closed**.
 - **OtterCamp does NOT create new GitHub issues** in MVP.
 
+## External PR Workflow (MVP)
+- **Inbound:** GitHub PRs are imported and linked to OtterCamp issues.
+- **Review:** PRs are reviewed **inside OtterCamp** (summary, diff, discussion).
+- **Decision:** Human chooses to **merge in GitHub** or **close** with comment.
+- **Mirror:** OtterCamp records the decision + links the merge commit back to the issue.
+
+*(We are not generating PRs from OtterCamp in MVP.)*
+
 ## Webhooks vs Polling
 - **Webhook**: `issues`, `issue_comment`, `pull_request`, `push` events.
 - **Polling**: periodic sync to catch missed events.

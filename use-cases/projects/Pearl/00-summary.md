@@ -25,6 +25,10 @@
 - **Code browser** emphasizes commit descriptions; diffs are available but not primary.
 - **Activity feed** shows commits as the canonical activity stream.
 
+## Activity Feed Source (Pearl)
+- GitHub **push** events and periodic syncs write commit entries into `activity_log`.
+- These entries drive the **Dashboard Activity Feed**.
+
 ## Files in this Use Case
 - `01-repo-ingest.md` — repo sync model + branch handling
 - `02-issue-sync.md` — GitHub issue/PR ingest + linkage
