@@ -161,6 +161,41 @@ func TestProjectIssueStore_ListByProjectStateAndOrigin(t *testing.T) {
 	require.Len(t, links, 2)
 	require.Equal(t, int64(123), links[openGitHubIssue.ID].GitHubNumber)
 	require.Equal(t, int64(124), links[openGitHubPR.ID].GitHubNumber)
+
+	counts, err := issueStore.GetProjectIssueCounts(ctx, projectID)
+	require.NoError(t, err)
+	require.Equal(t, 4, counts.Total)
+	require.Equal(t, 3, counts.Open)
+	require.Equal(t, 1, counts.Closed)
+	require.Equal(t, 3, counts.GitHubOrigin)
+	require.Equal(t, 1, counts.LocalOrigin)
+	require.Equal(t, 1, counts.PullRequests)
+
+	firstSyncAt := time.Now().UTC().Add(-1 * time.Hour)
+	_, err = issueStore.UpsertSyncCheckpoint(ctx, UpsertProjectIssueSyncCheckpointInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		Resource:           "issues",
+		Cursor:             stringPtr("cursor-1"),
+		LastSyncedAt:       &firstSyncAt,
+	})
+	require.NoError(t, err)
+
+	secondSyncAt := time.Now().UTC()
+	_, err = issueStore.UpsertSyncCheckpoint(ctx, UpsertProjectIssueSyncCheckpointInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		Resource:           "pull_requests",
+		Cursor:             stringPtr("cursor-2"),
+		LastSyncedAt:       &secondSyncAt,
+	})
+	require.NoError(t, err)
+
+	checkpoints, err := issueStore.ListSyncCheckpoints(ctx, projectID)
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 2)
+	require.Equal(t, "pull_requests", checkpoints[0].Resource)
+	require.Equal(t, "issues", checkpoints[1].Resource)
 }
 
 func TestProjectIssueStore_IsolationBlocksCrossOrgReadsAndWrites(t *testing.T) {

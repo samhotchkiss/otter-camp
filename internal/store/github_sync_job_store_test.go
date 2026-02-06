@@ -236,6 +236,38 @@ func TestGitHubSyncJobStore_PickupSkipsConcurrentJobsForSameProject(t *testing.T
 	require.Equal(t, GitHubSyncJobStatusInProgress, thirdPickup.Status)
 }
 
+func TestGitHubSyncJobStore_GetLatestByProjectAndType(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "github-sync-latest-org")
+	projectID := createTestProject(t, db, orgID, "github-sync-latest-project")
+
+	store := NewGitHubSyncJobStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	first, err := store.Enqueue(ctx, EnqueueGitHubSyncJobInput{
+		ProjectID:   &projectID,
+		JobType:     GitHubSyncJobTypeIssueImport,
+		Payload:     json.RawMessage(`{"cursor":"page=1"}`),
+		MaxAttempts: 3,
+	})
+	require.NoError(t, err)
+
+	second, err := store.Enqueue(ctx, EnqueueGitHubSyncJobInput{
+		ProjectID:   &projectID,
+		JobType:     GitHubSyncJobTypeIssueImport,
+		Payload:     json.RawMessage(`{"cursor":"page=2"}`),
+		MaxAttempts: 3,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, first.ID, second.ID)
+
+	latest, err := store.GetLatestByProjectAndType(ctx, projectID, GitHubSyncJobTypeIssueImport)
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	require.Equal(t, second.ID, latest.ID)
+}
+
 func derefString(t *testing.T, value *string) string {
 	t.Helper()
 	require.NotNil(t, value)

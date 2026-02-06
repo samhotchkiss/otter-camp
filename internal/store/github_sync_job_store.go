@@ -313,6 +313,53 @@ func (s *GitHubSyncJobStore) MarkCompleted(ctx context.Context, jobID string) (*
 	return &job, nil
 }
 
+func (s *GitHubSyncJobStore) GetLatestByProjectAndType(
+	ctx context.Context,
+	projectID string,
+	jobType string,
+) (*GitHubSyncJob, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+
+	jobType = normalizeSyncJobType(jobType)
+	if !isValidSyncJobType(jobType) {
+		return nil, fmt.Errorf("invalid job_type")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	job, err := scanGitHubSyncJob(conn.QueryRowContext(
+		ctx,
+		`SELECT`+githubSyncJobColumns+`
+			FROM github_sync_jobs
+			WHERE project_id = $1 AND job_type = $2
+			ORDER BY created_at DESC
+			LIMIT 1`,
+		projectID,
+		jobType,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get latest github sync job: %w", err)
+	}
+	if job.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+	return &job, nil
+}
+
 func (s *GitHubSyncJobStore) RecordFailure(
 	ctx context.Context,
 	jobID string,

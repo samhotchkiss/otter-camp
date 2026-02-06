@@ -79,6 +79,7 @@ func NewRouter() http.Handler {
 	projectChatHandler := &ProjectChatHandler{Hub: hub}
 	issuesHandler := &IssuesHandler{Hub: hub}
 	websocketHandler := &ws.Handler{Hub: hub}
+	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -95,6 +96,11 @@ func NewRouter() http.Handler {
 		websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{
 			IssueStore: issuesHandler.IssueStore,
 		}
+		projectIssueSyncHandler.Projects = projectStore
+		projectIssueSyncHandler.ProjectRepos = githubIntegrationHandler.ProjectRepos
+		projectIssueSyncHandler.Installations = githubIntegrationHandler.Installations
+		projectIssueSyncHandler.SyncJobs = githubSyncJobStore
+		projectIssueSyncHandler.IssueStore = issuesHandler.IssueStore
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	projectChatHandler.ProjectStore = projectStore
@@ -140,6 +146,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/participants", issuesHandler.AddParticipant)
 		r.With(middleware.OptionalWorkspace).Delete("/issues/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
+		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/issues/import", projectIssueSyncHandler.ManualImport)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/issues/status", projectIssueSyncHandler.Status)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/projects/{id}/repo/branches", githubIntegrationHandler.GetProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Put("/projects/{id}/repo/branches", githubIntegrationHandler.UpdateProjectBranches)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/repo/sync", githubIntegrationHandler.ManualRepoSync)

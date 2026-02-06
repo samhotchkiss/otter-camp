@@ -71,6 +71,15 @@ type ProjectIssueSyncCheckpoint struct {
 	LastSyncedAt       time.Time `json:"last_synced_at"`
 }
 
+type ProjectIssueCounts struct {
+	Total        int `json:"total"`
+	Open         int `json:"open"`
+	Closed       int `json:"closed"`
+	GitHubOrigin int `json:"github_origin"`
+	LocalOrigin  int `json:"local_origin"`
+	PullRequests int `json:"pull_requests"`
+}
+
 type UpsertProjectIssueSyncCheckpointInput struct {
 	ProjectID          string
 	RepositoryFullName string
@@ -511,6 +520,109 @@ func (s *ProjectIssueStore) UpsertSyncCheckpoint(
 		return nil, fmt.Errorf("failed to commit issue sync checkpoint upsert: %w", err)
 	}
 	return &record, nil
+}
+
+func (s *ProjectIssueStore) ListSyncCheckpoints(
+	ctx context.Context,
+	projectID string,
+) ([]ProjectIssueSyncCheckpoint, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	rows, err := conn.QueryContext(
+		ctx,
+		`SELECT id, org_id, project_id, repository_full_name, resource, cursor, last_synced_at
+			FROM project_issue_sync_checkpoints
+			WHERE project_id = $1
+			ORDER BY last_synced_at DESC, repository_full_name ASC, resource ASC`,
+		projectID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list issue sync checkpoints: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]ProjectIssueSyncCheckpoint, 0)
+	for rows.Next() {
+		record, err := scanProjectIssueSyncCheckpoint(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan issue sync checkpoint row: %w", err)
+		}
+		if record.OrgID != workspaceID {
+			return nil, ErrForbidden
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read issue sync checkpoint rows: %w", err)
+	}
+	return items, nil
+}
+
+func (s *ProjectIssueStore) GetProjectIssueCounts(
+	ctx context.Context,
+	projectID string,
+) (*ProjectIssueCounts, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	var counts ProjectIssueCounts
+	err = conn.QueryRowContext(
+		ctx,
+		`SELECT
+			COUNT(*)::int AS total,
+			COUNT(*) FILTER (WHERE i.state = 'open')::int AS open_count,
+			COUNT(*) FILTER (WHERE i.state = 'closed')::int AS closed_count,
+			COUNT(*) FILTER (WHERE i.origin = 'github')::int AS github_origin_count,
+			COUNT(*) FILTER (WHERE i.origin = 'local')::int AS local_origin_count,
+			COUNT(*) FILTER (
+				WHERE l.github_url IS NOT NULL AND l.github_url ILIKE '%/pull/%'
+			)::int AS pull_request_count
+		FROM project_issues i
+		LEFT JOIN project_issue_github_links l ON l.issue_id = i.id
+		WHERE i.project_id = $1`,
+		projectID,
+	).Scan(
+		&counts.Total,
+		&counts.Open,
+		&counts.Closed,
+		&counts.GitHubOrigin,
+		&counts.LocalOrigin,
+		&counts.PullRequests,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load issue counts: %w", err)
+	}
+
+	if err := ensureProjectVisible(ctx, conn, projectID); err != nil {
+		return nil, err
+	}
+
+	return &counts, nil
 }
 
 func (s *ProjectIssueStore) AddParticipant(
