@@ -64,6 +64,59 @@ func TestProjectIssueStore_GitHubLinkUpsertIsIdempotent(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestProjectIssueStore_UpsertIssueFromGitHubIsIdempotentAndUpdatesFields(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-github-upsert-org")
+	projectID := createTestProject(t, db, orgID, "Issue GitHub Upsert Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	first, created, err := issueStore.UpsertIssueFromGitHub(ctx, UpsertProjectIssueFromGitHubInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		GitHubNumber:       321,
+		Title:              "Original imported issue",
+		Body:               stringPtr("First body"),
+		State:              "open",
+		GitHubURL:          stringPtr("https://github.com/samhotchkiss/otter-camp/issues/321"),
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, "Original imported issue", first.Title)
+	require.Equal(t, "open", first.State)
+
+	closedAt := time.Now().UTC()
+	second, created, err := issueStore.UpsertIssueFromGitHub(ctx, UpsertProjectIssueFromGitHubInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		GitHubNumber:       321,
+		Title:              "Updated imported issue",
+		Body:               stringPtr("Updated body"),
+		State:              "closed",
+		GitHubURL:          stringPtr("https://github.com/samhotchkiss/otter-camp/issues/321"),
+		ClosedAt:           &closedAt,
+	})
+	require.NoError(t, err)
+	require.False(t, created)
+	require.Equal(t, first.ID, second.ID)
+	require.Equal(t, "Updated imported issue", second.Title)
+	require.Equal(t, "closed", second.State)
+	require.NotNil(t, second.ClosedAt)
+
+	issues, err := issueStore.ListIssues(ctx, ProjectIssueFilter{ProjectID: projectID})
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	require.Equal(t, second.ID, issues[0].ID)
+
+	links, err := issueStore.ListGitHubLinksByIssueIDs(ctx, []string{second.ID})
+	require.NoError(t, err)
+	require.Len(t, links, 1)
+	require.Equal(t, int64(321), links[second.ID].GitHubNumber)
+	require.NotNil(t, links[second.ID].GitHubURL)
+}
+
 func TestProjectIssueStore_ListByProjectStateAndOrigin(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

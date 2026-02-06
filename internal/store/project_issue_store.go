@@ -34,6 +34,17 @@ type CreateProjectIssueInput struct {
 	ClosedAt  *time.Time
 }
 
+type UpsertProjectIssueFromGitHubInput struct {
+	ProjectID          string
+	RepositoryFullName string
+	GitHubNumber       int64
+	Title              string
+	Body               *string
+	State              string
+	GitHubURL          *string
+	ClosedAt           *time.Time
+}
+
 type ProjectIssueFilter struct {
 	ProjectID string
 	State     *string
@@ -201,6 +212,168 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 		return nil, fmt.Errorf("failed to commit issue create: %w", err)
 	}
 	return &record, nil
+}
+
+func (s *ProjectIssueStore) UpsertIssueFromGitHub(
+	ctx context.Context,
+	input UpsertProjectIssueFromGitHubInput,
+) (*ProjectIssue, bool, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, false, ErrNoWorkspace
+	}
+
+	projectID := strings.TrimSpace(input.ProjectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, false, fmt.Errorf("invalid project_id")
+	}
+	repo := strings.TrimSpace(input.RepositoryFullName)
+	if repo == "" {
+		return nil, false, fmt.Errorf("repository_full_name is required")
+	}
+	if input.GitHubNumber <= 0 {
+		return nil, false, fmt.Errorf("github_number must be greater than zero")
+	}
+	title := strings.TrimSpace(input.Title)
+	if title == "" {
+		return nil, false, fmt.Errorf("title is required")
+	}
+	state := normalizeIssueState(input.State)
+	if state == "" {
+		state = "open"
+	}
+	if !isValidIssueState(state) {
+		return nil, false, fmt.Errorf("invalid state")
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := ensureProjectVisible(ctx, tx, projectID); err != nil {
+		return nil, false, err
+	}
+
+	existingIssue, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.created_at, i.updated_at, i.closed_at
+			FROM project_issues i
+			JOIN project_issue_github_links l ON l.issue_id = i.id
+			WHERE i.project_id = $1 AND l.repository_full_name = $2 AND l.github_number = $3
+			LIMIT 1`,
+		projectID,
+		repo,
+		input.GitHubNumber,
+	))
+	created := false
+	var issue ProjectIssue
+	switch {
+	case err == nil:
+		issue, err = scanProjectIssue(tx.QueryRowContext(
+			ctx,
+			`UPDATE project_issues
+				SET title = $2,
+					body = $3,
+					state = $4,
+					origin = 'github',
+					closed_at = $5
+				WHERE id = $1
+				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, created_at, updated_at, closed_at`,
+			existingIssue.ID,
+			title,
+			nullableString(input.Body),
+			state,
+			input.ClosedAt,
+		))
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to update github issue: %w", err)
+		}
+	case errors.Is(err, sql.ErrNoRows):
+		created = true
+		var nextIssueNumber int64
+		if err := tx.QueryRowContext(
+			ctx,
+			`SELECT COALESCE(MAX(issue_number), 0) + 1 FROM project_issues WHERE project_id = $1`,
+			projectID,
+		).Scan(&nextIssueNumber); err != nil {
+			return nil, false, fmt.Errorf("failed to allocate issue number: %w", err)
+		}
+
+		issue, err = scanProjectIssue(tx.QueryRowContext(
+			ctx,
+			`INSERT INTO project_issues (
+				org_id, project_id, issue_number, title, body, state, origin, closed_at
+			) VALUES ($1,$2,$3,$4,$5,$6,'github',$7)
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, created_at, updated_at, closed_at`,
+			workspaceID,
+			projectID,
+			nextIssueNumber,
+			title,
+			nullableString(input.Body),
+			state,
+			input.ClosedAt,
+		))
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to insert github issue: %w", err)
+		}
+	default:
+		return nil, false, fmt.Errorf("failed to load github issue mapping: %w", err)
+	}
+
+	link, err := scanProjectIssueGitHubLink(tx.QueryRowContext(
+		ctx,
+		`UPDATE project_issue_github_links
+			SET repository_full_name = $2,
+				github_number = $3,
+				github_url = $4,
+				github_state = $5,
+				last_synced_at = NOW()
+			WHERE issue_id = $1
+			RETURNING id, org_id, issue_id, repository_full_name, github_number, github_url, github_state, last_synced_at`,
+		issue.ID,
+		repo,
+		input.GitHubNumber,
+		nullableString(input.GitHubURL),
+		state,
+	))
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, false, fmt.Errorf("failed to update issue github link: %w", err)
+		}
+		link, err = scanProjectIssueGitHubLink(tx.QueryRowContext(
+			ctx,
+			`INSERT INTO project_issue_github_links (
+				org_id, issue_id, repository_full_name, github_number, github_url, github_state, last_synced_at
+			) VALUES ($1,$2,$3,$4,$5,$6,NOW())
+			ON CONFLICT (org_id, repository_full_name, github_number)
+			DO UPDATE SET
+				issue_id = EXCLUDED.issue_id,
+				github_url = EXCLUDED.github_url,
+				github_state = EXCLUDED.github_state,
+				last_synced_at = NOW()
+			RETURNING id, org_id, issue_id, repository_full_name, github_number, github_url, github_state, last_synced_at`,
+			workspaceID,
+			issue.ID,
+			repo,
+			input.GitHubNumber,
+			nullableString(input.GitHubURL),
+			state,
+		))
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to insert issue github link: %w", err)
+		}
+	}
+
+	if link.OrgID != workspaceID {
+		return nil, false, ErrForbidden
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, false, fmt.Errorf("failed to commit github issue upsert: %w", err)
+	}
+	return &issue, created, nil
 }
 
 func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueFilter) ([]ProjectIssue, error) {

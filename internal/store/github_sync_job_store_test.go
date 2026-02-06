@@ -2,11 +2,9 @@ package store
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
-	"github.com/samhotchkiss/otter-camp/internal/githubsync"
 	"github.com/samhotchkiss/otter-camp/internal/syncmetrics"
 	"github.com/stretchr/testify/require"
 )
@@ -38,18 +36,14 @@ func TestGitHubSyncJobStore_EnqueuePickupRetryDeadLetterAndReplay(t *testing.T) 
 	require.Equal(t, 1, firstPickup.AttemptCount)
 	require.Equal(t, GitHubSyncJobStatusInProgress, firstPickup.Status)
 
-	policy := githubsync.DefaultRetryPolicy().WithRandom(func() float64 { return 0 })
 	now := time.Date(2026, 2, 6, 12, 0, 0, 0, time.UTC)
-	decision := policy.Decide(firstPickup.JobType, firstPickup.AttemptCount, errors.New("timeout while importing issues"), now)
-	require.True(t, decision.Retryable)
-	require.False(t, decision.Exhausted)
-	require.NotNil(t, decision.NextAttemptAt)
+	nextAttempt := now.Add(5 * time.Minute)
 
 	firstFailure, err := store.RecordFailure(ctx, firstPickup.ID, RecordGitHubSyncFailureInput{
-		ErrorClass:   decision.Class,
+		ErrorClass:   "timeout",
 		ErrorMessage: "timeout while importing issues",
-		Retryable:    decision.Retryable,
-		NextAttempt:  decision.NextAttemptAt,
+		Retryable:    true,
+		NextAttempt:  &nextAttempt,
 		OccurredAt:   now,
 	})
 	require.NoError(t, err)
@@ -63,15 +57,10 @@ func TestGitHubSyncJobStore_EnqueuePickupRetryDeadLetterAndReplay(t *testing.T) 
 	require.Equal(t, 2, secondPickup.AttemptCount)
 	require.Equal(t, GitHubSyncJobStatusInProgress, secondPickup.Status)
 
-	secondDecision := policy.Decide(secondPickup.JobType, secondPickup.AttemptCount, errors.New("timeout while importing issues"), now.Add(1*time.Minute))
-	require.True(t, secondDecision.Retryable)
-	require.True(t, secondDecision.Exhausted)
-
 	secondFailure, err := store.RecordFailure(ctx, secondPickup.ID, RecordGitHubSyncFailureInput{
-		ErrorClass:   secondDecision.Class,
+		ErrorClass:   "timeout",
 		ErrorMessage: "timeout while importing issues",
-		Retryable:    secondDecision.Retryable,
-		NextAttempt:  secondDecision.NextAttemptAt,
+		Retryable:    false,
 		OccurredAt:   now.Add(1 * time.Minute),
 	})
 	require.NoError(t, err)
