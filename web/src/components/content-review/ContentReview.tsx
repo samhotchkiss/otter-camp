@@ -1,6 +1,12 @@
 import { useMemo, useState } from "react";
 import MarkdownPreview from "./MarkdownPreview";
 import { parseMarkdownSections } from "./markdownUtils";
+import {
+  canTransitionReviewState,
+  reviewStateLabel,
+  transitionReviewState,
+  type ReviewWorkflowState,
+} from "./reviewStateMachine";
 
 export type ReviewComment = {
   id: string;
@@ -50,6 +56,7 @@ export default function ContentReview({
 }: ContentReviewProps) {
   const [markdown, setMarkdown] = useState(initialMarkdown);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
+  const [reviewState, setReviewState] = useState<ReviewWorkflowState>("draft");
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
   const [comments, setComments] = useState<ReviewComment[]>([]);
@@ -97,11 +104,20 @@ export default function ContentReview({
   };
 
   const handleApprove = () => {
+    if (!canTransitionReviewState(reviewState, "approved")) return;
     onApprove?.({ markdown, comments });
+    setReviewState(transitionReviewState(reviewState, "approved"));
   };
 
   const handleRequestChanges = () => {
+    if (!canTransitionReviewState(reviewState, "needs_changes")) return;
     onRequestChanges?.({ markdown, comments });
+    setReviewState(transitionReviewState(reviewState, "needs_changes"));
+  };
+
+  const handleMarkReadyForReview = () => {
+    if (!canTransitionReviewState(reviewState, "ready_for_review")) return;
+    setReviewState(transitionReviewState(reviewState, "ready_for_review"));
   };
 
   return (
@@ -114,26 +130,47 @@ export default function ContentReview({
           <h2 className="text-2xl font-semibold text-slate-900 dark:text-white">
             Markdown Review Session
           </h2>
-          <p className="text-sm text-slate-600 dark:text-slate-300">
+          <p className="text-sm text-slate-600 dark:text-slate-300" data-testid="review-state-label">
+            State: {reviewStateLabel(reviewState)} ·{" "}
             {totalComments} comment{totalComments === 1 ? "" : "s"} across {sections.length} section
             {sections.length === 1 ? "" : "s"}.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={handleRequestChanges}
-            className="rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:border-amber-300 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
-          >
-            Request Changes
-          </button>
-          <button
-            type="button"
-            onClick={handleApprove}
-            className="rounded-full border border-emerald-200 bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-600 dark:border-emerald-400"
-          >
-            Approve Content
-          </button>
+          {(reviewState === "draft" || reviewState === "needs_changes") && (
+            <button
+              type="button"
+              onClick={handleMarkReadyForReview}
+              className="rounded-full border border-indigo-200 bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 dark:border-indigo-400"
+            >
+              Mark Ready for Review
+            </button>
+          )}
+
+          {reviewState === "ready_for_review" && (
+            <>
+              <button
+                type="button"
+                onClick={handleRequestChanges}
+                className="rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:border-amber-300 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
+              >
+                Request Changes
+              </button>
+              <button
+                type="button"
+                onClick={handleApprove}
+                className="rounded-full border border-emerald-200 bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-600 dark:border-emerald-400"
+              >
+                Approve Content
+              </button>
+            </>
+          )}
+
+          {reviewState === "approved" && (
+            <span className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">
+              Approved
+            </span>
+          )}
         </div>
       </header>
 
