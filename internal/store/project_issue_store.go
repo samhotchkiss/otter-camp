@@ -746,6 +746,110 @@ func (s *ProjectIssueStore) GetIssueByID(ctx context.Context, issueID string) (*
 	return &issue, nil
 }
 
+func (s *ProjectIssueStore) ListIssuesByDocumentPath(
+	ctx context.Context,
+	projectID string,
+	documentPath string,
+) ([]ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+
+	documentPath = strings.TrimSpace(documentPath)
+	if documentPath == "" {
+		return nil, fmt.Errorf("document_path is required")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	rows, err := conn.QueryContext(
+		ctx,
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at
+			FROM project_issues
+			WHERE project_id = $1 AND document_path = $2
+			ORDER BY created_at ASC`,
+		projectID,
+		documentPath,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list issues by document_path: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]ProjectIssue, 0)
+	for rows.Next() {
+		item, err := scanProjectIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan issue: %w", err)
+		}
+		if item.OrgID != workspaceID {
+			continue
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading issue rows: %w", err)
+	}
+	return items, nil
+}
+
+func (s *ProjectIssueStore) UpdateIssueDocumentPath(
+	ctx context.Context,
+	issueID string,
+	documentPath *string,
+) (*ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+
+	normalizedPath, err := normalizeIssueDocumentPath(documentPath)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	updated, err := scanProjectIssue(conn.QueryRowContext(
+		ctx,
+		`UPDATE project_issues
+			SET document_path = $2
+			WHERE id = $1
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at`,
+		issueID,
+		nullableString(normalizedPath),
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to update issue document_path: %w", err)
+	}
+	if updated.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+	return &updated, nil
+}
+
 func (s *ProjectIssueStore) UpsertGitHubLink(
 	ctx context.Context,
 	input UpsertProjectIssueGitHubLinkInput,

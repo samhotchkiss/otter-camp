@@ -92,6 +92,8 @@ func NewRouter() http.Handler {
 		githubPullRequestsHandler.ProjectRepos = store.NewProjectRepoStore(db)
 		githubIntegrationHandler.SyncJobs = githubSyncJobStore
 		projectChatHandler.ChatStore = store.NewProjectChatStore(db)
+		projectChatHandler.IssueStore = store.NewProjectIssueStore(db)
+		projectChatHandler.DB = db
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
 		issuesHandler.ProjectStore = projectStore
 		issuesHandler.DB = db
@@ -139,6 +141,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages/{messageID}/save-to-notes", projectChatHandler.SaveToNotes)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/bootstrap", projectChatHandler.BootstrapContent)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/assets", projectChatHandler.UploadContentAsset)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/rename", projectChatHandler.RenameContent)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/delete", projectChatHandler.DeleteContent)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/metadata", projectChatHandler.GetContentMetadata)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/search", projectChatHandler.SearchContent)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)

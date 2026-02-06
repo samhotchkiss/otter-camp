@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,8 @@ const (
 type ProjectChatHandler struct {
 	ProjectStore *store.ProjectStore
 	ChatStore    *store.ProjectChatStore
+	IssueStore   *store.ProjectIssueStore
+	DB           *sql.DB
 	Hub          *ws.Hub
 }
 

@@ -210,6 +210,47 @@ func TestProjectIssueStore_TransitionApprovalStateEnforcesStateMachine(t *testin
 	require.Contains(t, err.Error(), "approval_state")
 }
 
+func TestProjectIssueStore_UpdateAndListIssuesByDocumentPath(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-doc-path-org")
+	projectID := createTestProject(t, db, orgID, "Issue Doc Path Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	pathA := "/posts/2026-02-06-post-a.md"
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Linked issue",
+		Origin:       "local",
+		DocumentPath: &pathA,
+	})
+	require.NoError(t, err)
+
+	matches, err := issueStore.ListIssuesByDocumentPath(ctx, projectID, pathA)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	require.Equal(t, issue.ID, matches[0].ID)
+
+	pathB := "/posts/2026-02-07-post-b.md"
+	updated, err := issueStore.UpdateIssueDocumentPath(ctx, issue.ID, &pathB)
+	require.NoError(t, err)
+	require.NotNil(t, updated.DocumentPath)
+	require.Equal(t, pathB, *updated.DocumentPath)
+
+	matches, err = issueStore.ListIssuesByDocumentPath(ctx, projectID, pathA)
+	require.NoError(t, err)
+	require.Empty(t, matches)
+	matches, err = issueStore.ListIssuesByDocumentPath(ctx, projectID, pathB)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	detached, err := issueStore.UpdateIssueDocumentPath(ctx, issue.ID, nil)
+	require.NoError(t, err)
+	require.Nil(t, detached.DocumentPath)
+}
+
 func TestProjectIssueStore_ListByProjectStateAndOrigin(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
