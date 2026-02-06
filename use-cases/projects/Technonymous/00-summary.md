@@ -23,3 +23,6 @@
 - `04-inline-comments.md` — comment model + markup encoding
 - `05-markdown-viewer-editor.md` — render/source toggle + edits + commit
 - `06-commit-cadence.md` — agent commit rules
+- `07-editor-detection.md` — file-type driven editor
+- `08-review-loop.md` — review loop details
+- `09-media-and-metadata.md` — images + metadata rules

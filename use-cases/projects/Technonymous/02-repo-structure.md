@@ -8,6 +8,7 @@ Define a simple, consistent repo layout for writing + drafts + notes.
 /notes/            # scratch ideas, brainstorms, snippets
 /posts/            # finished or in‑progress posts
 /posts/YYYY-MM-DD-title.md
+/assets/           # images committed to repo (non‑embedded)
 /README.md
 ```
 
