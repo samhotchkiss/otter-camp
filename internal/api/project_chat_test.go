@@ -25,6 +25,8 @@ func newProjectChatTestRouter(handler *ProjectChatHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/chat/search", handler.Search)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/chat/messages", handler.Create)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/chat/messages/{messageID}/save-to-notes", handler.SaveToNotes)
+	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/content/bootstrap", handler.BootstrapContent)
+	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/content/search", handler.SearchContent)
 	return router
 }
 
@@ -281,6 +283,34 @@ func TestProjectChatHandlerCreateDoesNotAutoWriteNotes(t *testing.T) {
 	_, err := os.Stat(noteFile)
 	require.Error(t, err)
 	require.True(t, os.IsNotExist(err))
+}
+
+func TestProjectContentBootstrapCreatesDirectorySkeleton(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-content-bootstrap-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Bootstrap")
+
+	root := t.TempDir()
+	t.Setenv("OTTER_CONTENT_ROOT", root)
+
+	handler := &ProjectChatHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ChatStore:    store.NewProjectChatStore(db),
+	}
+	router := newProjectChatTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/content/bootstrap?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp projectContentBootstrapResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.ElementsMatch(t, []string{"/notes", "/posts", "/assets"}, resp.Created)
+
+	for _, dir := range []string{"notes", "posts", "assets"} {
+		require.DirExists(t, filepath.Join(root, projectID, dir))
+	}
 }
 
 func testCtxWithWorkspace(orgID string) context.Context {

@@ -116,11 +116,7 @@ func searchProjectContent(
 	from, to *time.Time,
 	limit int,
 ) ([]projectContentSearchResult, error) {
-	root := strings.TrimSpace(os.Getenv("OTTER_CONTENT_ROOT"))
-	if root == "" {
-		root = filepath.Join("data", "content")
-	}
-
+	root := contentRootPath()
 	projectRoot := filepath.Join(root, projectID)
 	scopes := []string{"notes", "posts"}
 	if scope == "notes" || scope == "posts" {

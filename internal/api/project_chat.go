@@ -66,6 +66,10 @@ type projectChatSaveToNotesResponse struct {
 	Saved bool   `json:"saved"`
 }
 
+type projectContentBootstrapResponse struct {
+	Created []string `json:"created"`
+}
+
 type projectChatMessageCreatedEvent struct {
 	Type    ws.MessageType            `json:"type"`
 	Channel string                    `json:"channel"`
@@ -296,6 +300,32 @@ func (h *ProjectChatHandler) SaveToNotes(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+func (h *ProjectChatHandler) BootstrapContent(w http.ResponseWriter, r *http.Request) {
+	if h.ProjectStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+
+	if err := h.requireProjectAccess(r.Context(), projectID); err != nil {
+		handleProjectChatStoreError(w, err)
+		return
+	}
+
+	result, err := bootstrapProjectContentLayout(projectID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to bootstrap content layout"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, projectContentBootstrapResponse{Created: result.Created})
+}
+
 func (h *ProjectChatHandler) requireProjectAccess(ctx context.Context, projectID string) error {
 	workspaceID := middleware.WorkspaceFromContext(ctx)
 	if workspaceID == "" {
@@ -346,13 +376,10 @@ func toProjectChatPayload(message store.ProjectChatMessage) projectChatMessagePa
 }
 
 func saveProjectChatMessageToNotes(message store.ProjectChatMessage) (string, bool, error) {
-	root := strings.TrimSpace(os.Getenv("OTTER_CONTENT_ROOT"))
-	if root == "" {
-		root = filepath.Join("data", "content")
+	relativePath, absolutePath, err := resolveProjectContentWritePath(message.ProjectID, "/notes/project-chat.md")
+	if err != nil {
+		return "", false, err
 	}
-
-	relativePath := filepath.ToSlash(filepath.Join(message.ProjectID, "notes", "project-chat.md"))
-	absolutePath := filepath.Join(root, filepath.FromSlash(relativePath))
 
 	if err := os.MkdirAll(filepath.Dir(absolutePath), 0o755); err != nil {
 		return "", false, err
@@ -366,7 +393,7 @@ func saveProjectChatMessageToNotes(message store.ProjectChatMessage) (string, bo
 
 	metadataLine := projectChatSourceMarker(message)
 	if strings.Contains(existing, metadataLine) {
-		return "/" + filepath.ToSlash(filepath.Join("notes", "project-chat.md")), false, nil
+		return relativePath, false, nil
 	}
 
 	var builder strings.Builder
@@ -391,7 +418,7 @@ func saveProjectChatMessageToNotes(message store.ProjectChatMessage) (string, bo
 		return "", false, err
 	}
 
-	return "/" + filepath.ToSlash(filepath.Join("notes", "project-chat.md")), true, nil
+	return relativePath, true, nil
 }
 
 func projectChatSourceMarker(message store.ProjectChatMessage) string {
