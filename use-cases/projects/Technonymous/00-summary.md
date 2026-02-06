@@ -13,7 +13,7 @@
 
 ## Key Decisions (from Sam)
 - **Project chat exists for all projects** and is not issue‑scoped.
-- **Inline feedback**: click‑to‑comment UI; backend stores comments with a unique delimiter (e.g., `{{{comment}}}`) rather than raw curly braces.
+- **Inline feedback**: click‑to‑comment UI; backend stores comments using **CriticMarkup** `{>> comment <<}`.
 - **No external publishing** in MVP (Substack etc. later).
 
 ## Files in this Use Case
