@@ -18,17 +18,17 @@ import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
 import DemoBanner from "../components/DemoBanner";
 import GlobalSearch from "../components/GlobalSearch";
 import { isDemoMode } from "../lib/demo";
+import { api } from "../lib/api";
 
 type NavItem = {
   id: string;
   label: string;
   href: string;
-  badge?: number;
 };
 
 const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", href: "/" },
-  { id: "inbox", label: "Inbox", href: "/inbox", badge: 3 },
+  { id: "inbox", label: "Inbox", href: "/inbox" },
   { id: "projects", label: "Projects", href: "/projects" },
   { id: "agents", label: "Agents", href: "/agents" },
   { id: "workflows", label: "Workflows", href: "/workflows" },
@@ -43,6 +43,7 @@ type DashboardLayoutProps = {
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [inboxCount, setInboxCount] = useState<number | null>(null);
   const { connected: wsConnected } = useWS();
   // In demo mode, always show as connected for better UX
   const connected = isDemoMode() || wsConnected;
@@ -156,6 +157,30 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
+  // Load inbox count for nav badge
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadInboxCount() {
+      try {
+        if (isDemoMode()) {
+          setInboxCount(null);
+          return;
+        }
+        const response = await api.inbox();
+        if (cancelled) return;
+        setInboxCount(response.items?.length ?? 0);
+      } catch {
+        if (!cancelled) setInboxCount(null);
+      }
+    }
+
+    loadInboxCount();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="app">
       {/* ========== DEMO BANNER ========== */}
@@ -189,8 +214,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               className={`nav-link ${activeNavId === item.id ? "active" : ""}`}
             >
               {item.label}
-              {item.badge && (
-                <span className="nav-badge">({item.badge})</span>
+              {item.id === "inbox" && inboxCount && inboxCount > 0 && (
+                <span className="nav-badge">({inboxCount})</span>
               )}
             </Link>
           ))}
@@ -237,7 +262,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               className={`mobile-nav-link ${activeNavId === item.id ? "active" : ""}`}
             >
               {item.label}
-              {item.badge && <span className="nav-badge">({item.badge})</span>}
+              {item.id === "inbox" && inboxCount && inboxCount > 0 && (
+                <span className="nav-badge">({inboxCount})</span>
+              )}
             </Link>
           ))}
         </nav>
