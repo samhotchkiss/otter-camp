@@ -168,6 +168,68 @@ func TestSchemaNativeIssueTablesCreateAndRollback(t *testing.T) {
 	}
 }
 
+func TestSchemaIssueApprovalStateMigrationMapsLegacyStatuses(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(25)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "issue-approval-migration-org")
+	projectID := createTestProject(t, db, orgID, "Issue Approval Migration Project")
+
+	var openIssueID string
+	err = db.QueryRow(
+		`INSERT INTO project_issues (org_id, project_id, issue_number, title, state, origin)
+		 VALUES ($1, $2, 1, 'Open legacy issue', 'open', 'local')
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&openIssueID)
+	require.NoError(t, err)
+
+	var closedIssueID string
+	err = db.QueryRow(
+		`INSERT INTO project_issues (org_id, project_id, issue_number, title, state, origin)
+		 VALUES ($1, $2, 2, 'Closed legacy issue', 'closed', 'local')
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&closedIssueID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var openApprovalState string
+	err = db.QueryRow(`SELECT approval_state FROM project_issues WHERE id = $1`, openIssueID).Scan(&openApprovalState)
+	require.NoError(t, err)
+	require.Equal(t, "draft", openApprovalState)
+
+	var closedApprovalState string
+	err = db.QueryRow(`SELECT approval_state FROM project_issues WHERE id = $1`, closedIssueID).Scan(&closedApprovalState)
+	require.NoError(t, err)
+	require.Equal(t, "approved", closedApprovalState)
+}
+
 func schemaTableExists(t *testing.T, db *sql.DB, name string) bool {
 	t.Helper()
 	var regclass sql.NullString

@@ -164,6 +164,27 @@ func isValidIssueApprovalState(state string) bool {
 	}
 }
 
+func canTransitionIssueApprovalState(currentState, nextState string) bool {
+	current := normalizeIssueApprovalState(currentState)
+	next := normalizeIssueApprovalState(nextState)
+	if current == next {
+		return true
+	}
+
+	switch current {
+	case IssueApprovalStateDraft:
+		return next == IssueApprovalStateReadyForReview
+	case IssueApprovalStateReadyForReview:
+		return next == IssueApprovalStateNeedsChanges || next == IssueApprovalStateApproved
+	case IssueApprovalStateNeedsChanges:
+		return next == IssueApprovalStateReadyForReview
+	case IssueApprovalStateApproved:
+		return false
+	default:
+		return false
+	}
+}
+
 func defaultApprovalStateForLegacyState(issueState string) string {
 	if normalizeIssueState(issueState) == "closed" {
 		return IssueApprovalStateApproved
@@ -286,6 +307,80 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 		return nil, fmt.Errorf("failed to commit issue create: %w", err)
 	}
 	return &record, nil
+}
+
+func (s *ProjectIssueStore) TransitionApprovalState(
+	ctx context.Context,
+	issueID string,
+	nextState string,
+) (*ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+
+	normalizedNext := normalizeIssueApprovalState(nextState)
+	if !isValidIssueApprovalState(normalizedNext) {
+		return nil, fmt.Errorf("invalid approval_state")
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at
+			FROM project_issues
+			WHERE id = $1
+			FOR UPDATE`,
+		issueID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to load issue: %w", err)
+	}
+	if current.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	currentState := normalizeIssueApprovalState(current.ApprovalState)
+	if currentState == "" {
+		currentState = defaultApprovalStateForLegacyState(current.State)
+	}
+	if !canTransitionIssueApprovalState(currentState, normalizedNext) {
+		return nil, fmt.Errorf("invalid approval_state transition")
+	}
+
+	updated := current
+	if currentState != normalizedNext {
+		updated, err = scanProjectIssue(tx.QueryRowContext(
+			ctx,
+			`UPDATE project_issues
+				SET approval_state = $2
+				WHERE id = $1
+				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, created_at, updated_at, closed_at`,
+			issueID,
+			normalizedNext,
+		))
+		if err != nil {
+			return nil, fmt.Errorf("failed to update approval_state: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &updated, nil
 }
 
 func (s *ProjectIssueStore) UpsertIssueFromGitHub(

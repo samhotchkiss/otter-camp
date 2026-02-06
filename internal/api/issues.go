@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 type IssuesHandler struct {
 	IssueStore   *store.ProjectIssueStore
 	ProjectStore *store.ProjectStore
+	DB           *sql.DB
 	Hub          *ws.Hub
 }
 
@@ -294,6 +296,66 @@ func (h *IssuesHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 
 	h.broadcastIssueCommentCreated(r.Context(), issueID, response)
 	sendJSON(w, http.StatusCreated, response)
+}
+
+func (h *IssuesHandler) TransitionApprovalState(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if issueID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
+		return
+	}
+
+	var req struct {
+		ApprovalState string `json:"approval_state"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	before, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	updated, err := h.IssueStore.TransitionApprovalState(r.Context(), issueID, req.ApprovalState)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	if h.DB != nil && before.ApprovalState != updated.ApprovalState {
+		workspaceID := middleware.WorkspaceFromContext(r.Context())
+		if workspaceID != "" {
+			_ = logGitHubActivity(r.Context(), h.DB, workspaceID, &updated.ProjectID, "issue.approval_state_changed", map[string]any{
+				"issue_id":    updated.ID,
+				"project_id":  updated.ProjectID,
+				"from_state":  before.ApprovalState,
+				"to_state":    updated.ApprovalState,
+				"issue_state": updated.State,
+			})
+		}
+	}
+
+	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
 }
 
 func (h *IssuesHandler) AddParticipant(w http.ResponseWriter, r *http.Request) {

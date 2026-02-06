@@ -187,6 +187,41 @@ function approvalStateBadgeClass(state: IssueApprovalState): string {
   }
 }
 
+type ApprovalAction = {
+  label: string;
+  toState: IssueApprovalState;
+  style: "neutral" | "warn" | "success";
+};
+
+function nextApprovalActions(state: IssueApprovalState): ApprovalAction[] {
+  switch (state) {
+    case "draft":
+      return [{ label: "Mark Ready for Review", toState: "ready_for_review", style: "neutral" }];
+    case "ready_for_review":
+      return [
+        { label: "Request Changes", toState: "needs_changes", style: "warn" },
+        { label: "Approve", toState: "approved", style: "success" },
+      ];
+    case "needs_changes":
+      return [{ label: "Mark Ready for Review", toState: "ready_for_review", style: "neutral" }];
+    case "approved":
+    default:
+      return [];
+  }
+}
+
+function approvalActionButtonClass(style: ApprovalAction["style"]): string {
+  switch (style) {
+    case "warn":
+      return "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100";
+    case "success":
+      return "border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100";
+    case "neutral":
+    default:
+      return "border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-alt)]";
+  }
+}
+
 function sortComments(comments: IssueComment[]): IssueComment[] {
   return [...comments].sort((a, b) => {
     const aMs = Date.parse(a.created_at);
@@ -214,6 +249,8 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
   const [selectedAgentID, setSelectedAgentID] = useState("");
   const [submittingComment, setSubmittingComment] = useState(false);
   const [updatingParticipant, setUpdatingParticipant] = useState(false);
+  const [updatingApprovalState, setUpdatingApprovalState] = useState<IssueApprovalState | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   const { lastMessage } = useWS();
 
@@ -418,6 +455,45 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
     }
   }
 
+  async function handleTransitionApprovalState(nextState: IssueApprovalState): Promise<void> {
+    const orgID = getOrgID();
+    if (!orgID || !issue) {
+      return;
+    }
+
+    setApprovalError(null);
+    setUpdatingApprovalState(nextState);
+    try {
+      const response = await fetch(
+        `${API_URL}/api/issues/${issue.id}/approval-state?org_id=${encodeURIComponent(orgID)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approval_state: nextState }),
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to update review state");
+      }
+      const updated = await response.json() as IssueSummary;
+      setIssue((current) => {
+        if (!current) {
+          return current;
+        }
+        return {
+          ...current,
+          ...updated,
+          document_content: current.document_content,
+        };
+      });
+    } catch (err) {
+      setApprovalError(err instanceof Error ? err.message : "Failed to update review state");
+    } finally {
+      setUpdatingApprovalState(null);
+    }
+  }
+
   async function handleAddParticipant(): Promise<void> {
     const orgID = getOrgID();
     if (!orgID || !selectedAgentID) {
@@ -484,6 +560,18 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
     return out;
   }, [agents]);
 
+  const normalizedApprovalState = useMemo(
+    () => normalizeApprovalState(issue?.approval_state),
+    [issue?.approval_state],
+  );
+
+  const approvalActions = useMemo(() => {
+    if (!issue || issue.origin !== "local") {
+      return [] as ApprovalAction[];
+    }
+    return nextApprovalActions(normalizedApprovalState);
+  }, [issue, normalizedApprovalState]);
+
   return (
     <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
       <WebSocketIssueSubscriber issueID={issueID} />
@@ -510,12 +598,30 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
                 {issue.origin === "github" ? "GitHub" : "Local"} · {issue.state === "open" ? "Open" : "Closed"}
               </p>
               <span
-                className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${approvalStateBadgeClass(normalizeApprovalState(issue.approval_state))}`}
+                className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${approvalStateBadgeClass(normalizedApprovalState)}`}
                 data-testid="issue-thread-approval"
               >
-                {approvalStateLabel(normalizeApprovalState(issue.approval_state))}
+                {approvalStateLabel(normalizedApprovalState)}
               </span>
             </div>
+            {approvalActions.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {approvalActions.map((action) => (
+                  <button
+                    key={action.toState}
+                    type="button"
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${approvalActionButtonClass(action.style)}`}
+                    disabled={updatingApprovalState !== null}
+                    onClick={() => void handleTransitionApprovalState(action.toState)}
+                  >
+                    {updatingApprovalState === action.toState ? "Updating..." : action.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {approvalError && (
+              <p className="mt-2 text-xs text-red-700">{approvalError}</p>
+            )}
           </header>
 
           {issue.document_path && (

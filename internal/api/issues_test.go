@@ -22,6 +22,7 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Get("/api/issues", handler.List)
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}", handler.Get)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/comments", handler.CreateComment)
+	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approval-state", handler.TransitionApprovalState)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/participants", handler.AddParticipant)
 	router.With(middleware.OptionalWorkspace).Delete("/api/issues/{id}/participants/{agentID}", handler.RemoveParticipant)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues/link", handler.CreateLinkedIssue)
@@ -488,6 +489,72 @@ func TestIssuesHandlerGetIncludesLinkedDocumentContent(t *testing.T) {
 	require.NotNil(t, detail.Issue.DocumentContent)
 	require.Equal(t, "# Linked post\n\nBody text", *detail.Issue.DocumentContent)
 	require.Equal(t, store.IssueApprovalStateDraft, detail.Issue.ApprovalState)
+}
+
+func TestIssuesHandlerTransitionApprovalStateEnforcesStateMachineAndEmitsActivity(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-transition-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Transition API Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Transition API issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore: issueStore,
+		DB:         db,
+	}
+	router := newIssueTestRouter(handler)
+
+	invalidTransitionReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/approval-state?org_id="+orgID,
+		bytes.NewReader([]byte(`{"approval_state":"approved"}`)),
+	)
+	invalidTransitionRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidTransitionRec, invalidTransitionReq)
+	require.Equal(t, http.StatusBadRequest, invalidTransitionRec.Code)
+
+	validTransitionReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/approval-state?org_id="+orgID,
+		bytes.NewReader([]byte(`{"approval_state":"ready_for_review"}`)),
+	)
+	validTransitionRec := httptest.NewRecorder()
+	router.ServeHTTP(validTransitionRec, validTransitionReq)
+	require.Equal(t, http.StatusOK, validTransitionRec.Code)
+
+	var updated issueSummaryPayload
+	require.NoError(t, json.NewDecoder(validTransitionRec.Body).Decode(&updated))
+	require.Equal(t, store.IssueApprovalStateReadyForReview, updated.ApprovalState)
+
+	var activityCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM activity_log WHERE org_id = $1 AND project_id = $2 AND action = 'issue.approval_state_changed'`,
+		orgID,
+		projectID,
+	).Scan(&activityCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, activityCount)
+
+	var fromState string
+	var toState string
+	err = db.QueryRow(
+		`SELECT metadata->>'from_state', metadata->>'to_state'
+			FROM activity_log
+			WHERE org_id = $1 AND project_id = $2 AND action = 'issue.approval_state_changed'
+			ORDER BY created_at DESC
+			LIMIT 1`,
+		orgID,
+		projectID,
+	).Scan(&fromState, &toState)
+	require.NoError(t, err)
+	require.Equal(t, store.IssueApprovalStateDraft, fromState)
+	require.Equal(t, store.IssueApprovalStateReadyForReview, toState)
 }
 
 func issueTestStringPtr(v string) *string {

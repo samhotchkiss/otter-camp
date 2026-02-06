@@ -94,6 +94,7 @@ func NewRouter() http.Handler {
 		projectChatHandler.ChatStore = store.NewProjectChatStore(db)
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
 		issuesHandler.ProjectStore = projectStore
+		issuesHandler.DB = db
 		websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{
 			IssueStore: issuesHandler.IssueStore,
 		}
@@ -145,6 +146,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}", issuesHandler.Get)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approval-state", issuesHandler.TransitionApprovalState)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/participants", issuesHandler.AddParticipant)
 		r.With(middleware.OptionalWorkspace).Delete("/issues/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues/link", issuesHandler.CreateLinkedIssue)

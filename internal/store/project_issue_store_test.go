@@ -166,6 +166,48 @@ func TestProjectIssueStore_CreateIssuePersistsAndValidatesLinkedDocumentAndAppro
 	require.Contains(t, err.Error(), "approval_state")
 }
 
+func TestProjectIssueStore_TransitionApprovalStateEnforcesStateMachine(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-transition-org")
+	projectID := createTestProject(t, db, orgID, "Issue Transition Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Transition me",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	require.Equal(t, IssueApprovalStateDraft, issue.ApprovalState)
+
+	ready, err := issueStore.TransitionApprovalState(ctx, issue.ID, IssueApprovalStateReadyForReview)
+	require.NoError(t, err)
+	require.Equal(t, IssueApprovalStateReadyForReview, ready.ApprovalState)
+
+	needsChanges, err := issueStore.TransitionApprovalState(ctx, issue.ID, IssueApprovalStateNeedsChanges)
+	require.NoError(t, err)
+	require.Equal(t, IssueApprovalStateNeedsChanges, needsChanges.ApprovalState)
+
+	backToReady, err := issueStore.TransitionApprovalState(ctx, issue.ID, IssueApprovalStateReadyForReview)
+	require.NoError(t, err)
+	require.Equal(t, IssueApprovalStateReadyForReview, backToReady.ApprovalState)
+
+	approved, err := issueStore.TransitionApprovalState(ctx, issue.ID, IssueApprovalStateApproved)
+	require.NoError(t, err)
+	require.Equal(t, IssueApprovalStateApproved, approved.ApprovalState)
+
+	_, err = issueStore.TransitionApprovalState(ctx, issue.ID, IssueApprovalStateDraft)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "transition")
+
+	_, err = issueStore.TransitionApprovalState(ctx, issue.ID, "queued")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "approval_state")
+}
+
 func TestProjectIssueStore_ListByProjectStateAndOrigin(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

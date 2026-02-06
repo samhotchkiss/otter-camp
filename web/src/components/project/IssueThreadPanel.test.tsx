@@ -228,4 +228,60 @@ describe("IssueThreadPanel", () => {
     expect(screen.getByText("/posts/2026-02-06-launch-plan.md")).toBeInTheDocument();
     expect(screen.getByTestId("editor-mode-markdown")).toBeInTheDocument();
   });
+
+  it("shows only valid next review actions and updates badge on transition", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/issues/issue-1/approval-state") && init?.method === "POST") {
+        return mockJSONResponse({
+          id: "issue-1",
+          issue_number: 1,
+          title: "Workflow issue",
+          state: "open",
+          origin: "local",
+          approval_state: "ready_for_review",
+          document_path: null,
+        });
+      }
+      if (url.includes("/api/issues/issue-1?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-1",
+            issue_number: 1,
+            title: "Workflow issue",
+            state: "open",
+            origin: "local",
+            approval_state: "draft",
+            document_path: null,
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const user = userEvent.setup();
+    render(<IssueThreadPanel issueID="issue-1" />);
+
+    expect(await screen.findByText("#1 Workflow issue")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark Ready for Review" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request Changes" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Mark Ready for Review" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("issue-thread-approval")).toHaveTextContent("Ready for Review");
+    });
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Request Changes" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark Ready for Review" })).not.toBeInTheDocument();
+  });
 });
