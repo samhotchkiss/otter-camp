@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/samhotchkiss/otter-camp/internal/syncmetrics"
 )
 
 const defaultRateLimitBackoff = time.Minute
@@ -147,10 +149,14 @@ func (c *Client) Do(ctx context.Context, jobType JobType, req *http.Request) (*R
 
 	rateLimit := parseRateLimitHeaders(rawResponse.Header)
 	c.setRateLimit(rateLimit)
+	if !rateLimit.IsZero() {
+		syncmetrics.RecordQuota(string(jobType), rateLimit.Limit, rateLimit.Remaining, rateLimit.ResetAt)
+	}
 	budget := c.BudgetState(jobType)
 
 	if isRateLimited, secondary := isRateLimitResponse(rawResponse.StatusCode, rawResponse.Header, body); isRateLimited {
 		retryAfter := retryAfterForRateLimit(c.now(), rawResponse.Header, rateLimit, secondary)
+		syncmetrics.RecordThrottle(string(jobType))
 		return nil, &RateLimitError{
 			StatusCode: rawResponse.StatusCode,
 			RetryAfter: retryAfter,

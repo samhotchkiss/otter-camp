@@ -11,6 +11,7 @@ import (
 
 	"github.com/lib/pq"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/syncmetrics"
 )
 
 const (
@@ -61,6 +62,14 @@ type GitHubSyncDeadLetter struct {
 	FailedAt       time.Time       `json:"failed_at"`
 	ReplayedAt     *time.Time      `json:"replayed_at,omitempty"`
 	ReplayedBy     *string         `json:"replayed_by,omitempty"`
+}
+
+type GitHubSyncQueueDepth struct {
+	JobType    string `json:"job_type"`
+	Queued     int    `json:"queued"`
+	Retrying   int    `json:"retrying"`
+	InProgress int    `json:"in_progress"`
+	DeadLetter int    `json:"dead_letter"`
 }
 
 type EnqueueGitHubSyncJobInput struct {
@@ -245,6 +254,7 @@ func (s *GitHubSyncJobStore) PickupNext(ctx context.Context, jobTypes ...string)
 		return nil, fmt.Errorf("failed to commit github sync pickup: %w", err)
 	}
 
+	syncmetrics.RecordJobPicked(job.JobType)
 	return &job, nil
 }
 
@@ -286,6 +296,7 @@ func (s *GitHubSyncJobStore) MarkCompleted(ctx context.Context, jobID string) (*
 		return nil, ErrForbidden
 	}
 
+	syncmetrics.RecordJobCompleted(job.JobType, time.Since(job.CreatedAt))
 	return &job, nil
 }
 
@@ -392,6 +403,7 @@ func (s *GitHubSyncJobStore) RecordFailure(
 		return nil, fmt.Errorf("failed to commit github sync failure: %w", err)
 	}
 
+	syncmetrics.RecordJobFailure(updatedJob.JobType, input.Retryable && !shouldDeadLetter, shouldDeadLetter)
 	return result, nil
 }
 
@@ -471,6 +483,7 @@ func (s *GitHubSyncJobStore) ReplayDeadLetter(
 		return nil, fmt.Errorf("failed to commit dead-letter replay: %w", err)
 	}
 
+	syncmetrics.RecordDeadLetterReplay(job.JobType)
 	return &job, nil
 }
 
@@ -521,6 +534,82 @@ func (s *GitHubSyncJobStore) ListDeadLetters(
 	}
 
 	return deadLetters, nil
+}
+
+func (s *GitHubSyncJobStore) QueueDepth(ctx context.Context) ([]GitHubSyncQueueDepth, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	rows, err := conn.QueryContext(
+		ctx,
+		`SELECT
+			job_type,
+			COUNT(*) FILTER (WHERE status = 'queued') AS queued,
+			COUNT(*) FILTER (WHERE status = 'retrying') AS retrying,
+			COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress,
+			COUNT(*) FILTER (WHERE status = 'dead_letter') AS dead_letter
+		 FROM github_sync_jobs
+		 GROUP BY job_type
+		 ORDER BY job_type ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query github sync queue depth: %w", err)
+	}
+	defer rows.Close()
+
+	depth := make([]GitHubSyncQueueDepth, 0)
+	for rows.Next() {
+		var row GitHubSyncQueueDepth
+		if err := rows.Scan(&row.JobType, &row.Queued, &row.Retrying, &row.InProgress, &row.DeadLetter); err != nil {
+			return nil, fmt.Errorf("failed to scan github sync queue depth row: %w", err)
+		}
+		depth = append(depth, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read github sync queue depth rows: %w", err)
+	}
+
+	return depth, nil
+}
+
+func (s *GitHubSyncJobStore) CountStuckJobs(ctx context.Context, olderThan time.Duration) (int, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return 0, ErrNoWorkspace
+	}
+	if olderThan <= 0 {
+		olderThan = 15 * time.Minute
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	var stuckCount int
+	err = conn.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*)
+		 FROM github_sync_jobs
+		 WHERE status = $1
+		   AND updated_at < NOW() - ($2::bigint * interval '1 second')`,
+		GitHubSyncJobStatusInProgress,
+		int64(olderThan.Seconds()),
+	).Scan(&stuckCount)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count stuck github sync jobs: %w", err)
+	}
+
+	return stuckCount, nil
 }
 
 func (s *GitHubSyncJobStore) upsertDeadLetterTx(

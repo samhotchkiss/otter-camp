@@ -7,10 +7,13 @@ import (
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/githubsync"
+	"github.com/samhotchkiss/otter-camp/internal/syncmetrics"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGitHubSyncJobStore_EnqueuePickupRetryDeadLetterAndReplay(t *testing.T) {
+	syncmetrics.ResetForTests()
+
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
 	orgID := createTestOrganization(t, db, "github-sync-jobs-org")
@@ -108,6 +111,69 @@ func TestGitHubSyncJobStore_EnqueuePickupRetryDeadLetterAndReplay(t *testing.T) 
 	require.Len(t, deadLetters, 1)
 	require.NotNil(t, deadLetters[0].ReplayedAt)
 	require.Equal(t, replayedBy, derefString(t, deadLetters[0].ReplayedBy))
+
+	snapshot := syncmetrics.SnapshotNow()
+	metrics := snapshot.Jobs[GitHubSyncJobTypeIssueImport]
+	require.Equal(t, int64(2), metrics.PickedTotal)
+	require.Equal(t, int64(2), metrics.FailureTotal)
+	require.Equal(t, int64(1), metrics.RetryTotal)
+	require.Equal(t, int64(1), metrics.DeadLetterTotal)
+	require.Equal(t, int64(1), metrics.ReplayTotal)
+}
+
+func TestGitHubSyncJobStore_QueueDepthAndStuckJobSignal(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "github-sync-depth-org")
+	projectID := createTestProject(t, db, orgID, "github-sync-depth-project")
+
+	store := NewGitHubSyncJobStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	_, err := store.Enqueue(ctx, EnqueueGitHubSyncJobInput{
+		ProjectID:   &projectID,
+		JobType:     GitHubSyncJobTypeRepoSync,
+		Payload:     json.RawMessage(`{"branch":"main"}`),
+		MaxAttempts: 3,
+	})
+	require.NoError(t, err)
+
+	job, err := store.Enqueue(ctx, EnqueueGitHubSyncJobInput{
+		ProjectID:   &projectID,
+		JobType:     GitHubSyncJobTypeIssueImport,
+		Payload:     json.RawMessage(`{"cursor":"page=1"}`),
+		MaxAttempts: 3,
+	})
+	require.NoError(t, err)
+
+	picked, err := store.PickupNext(ctx, GitHubSyncJobTypeIssueImport)
+	require.NoError(t, err)
+	require.NotNil(t, picked)
+
+	_, err = db.Exec(
+		`UPDATE github_sync_jobs SET updated_at = NOW() - interval '1 hour' WHERE id = $1`,
+		picked.ID,
+	)
+	require.NoError(t, err)
+
+	depth, err := store.QueueDepth(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, depth)
+
+	depthByType := map[string]GitHubSyncQueueDepth{}
+	for _, row := range depth {
+		depthByType[row.JobType] = row
+	}
+
+	require.Equal(t, 1, depthByType[GitHubSyncJobTypeRepoSync].Queued)
+	require.Equal(t, 1, depthByType[GitHubSyncJobTypeIssueImport].InProgress)
+	require.Equal(t, 0, depthByType[GitHubSyncJobTypeIssueImport].DeadLetter)
+
+	stuckJobs, err := store.CountStuckJobs(ctx, 15*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 1, stuckJobs)
+
+	require.Equal(t, job.ID, picked.ID)
 }
 
 func derefString(t *testing.T, value *string) string {
