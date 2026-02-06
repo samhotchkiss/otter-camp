@@ -86,6 +86,7 @@ func NewRouter() http.Handler {
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
 		githubSyncHealthHandler.Store = githubSyncJobStore
 		githubPullRequestsHandler.Store = store.NewGitHubIssuePRStore(db)
+		githubPullRequestsHandler.ProjectRepos = store.NewProjectRepoStore(db)
 		githubIntegrationHandler.SyncJobs = githubSyncJobStore
 		projectChatHandler.ChatStore = store.NewProjectChatStore(db)
 	}

@@ -145,6 +145,41 @@ func TestGitHubPullRequestsListByProjectRequiresWorkspace(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+func TestGitHubPullRequestsListByProjectReturnsEmptyForLocalIssueAsPRMode(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "pr-api-local-mode-org")
+	projectID := seedPullRequestTestData(t, db, orgID)
+
+	repoStore := store.NewProjectRepoStore(db)
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := repoStore.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModePush,
+		AutoSync:           true,
+	})
+	require.NoError(t, err)
+
+	handler := &GitHubPullRequestsHandler{
+		Store:        store.NewGitHubIssuePRStore(db),
+		ProjectRepos: repoStore,
+	}
+	router := chi.NewRouter()
+	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/pull-requests", handler.ListByProject)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/pull-requests?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp githubPullRequestListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, 0, resp.Total)
+	require.Empty(t, resp.Items)
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

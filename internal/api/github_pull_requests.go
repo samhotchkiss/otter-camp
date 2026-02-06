@@ -11,7 +11,8 @@ import (
 )
 
 type GitHubPullRequestsHandler struct {
-	Store *store.GitHubIssuePRStore
+	Store        *store.GitHubIssuePRStore
+	ProjectRepos *store.ProjectRepoStore
 }
 
 type githubPullRequestListItem struct {
@@ -66,6 +67,18 @@ func (h *GitHubPullRequestsHandler) ListByProject(w http.ResponseWriter, r *http
 	if err != nil {
 		handlePullRequestStoreError(w, err)
 		return
+	}
+
+	if h.ProjectRepos != nil {
+		binding, err := h.ProjectRepos.GetBinding(r.Context(), projectID)
+		switch {
+		case err == nil && binding.SyncMode == store.RepoSyncModePush:
+			sendJSON(w, http.StatusOK, githubPullRequestListResponse{Items: []githubPullRequestListItem{}, Total: 0})
+			return
+		case err != nil && !errors.Is(err, store.ErrNotFound):
+			handlePullRequestStoreError(w, err)
+			return
+		}
 	}
 
 	items := make([]githubPullRequestListItem, 0, len(records))
