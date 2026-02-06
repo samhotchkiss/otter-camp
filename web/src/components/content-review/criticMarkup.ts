@@ -13,6 +13,22 @@ export type CriticMarkupTokenized = {
   commentsByToken: Record<string, CriticMarkupComment>;
 };
 
+export type CriticMarkupInsertion = {
+  markdown: string;
+  start: number;
+  end: number;
+  author?: string | null;
+  message: string;
+};
+
+export type CriticMarkupInsertionResult = {
+  markdown: string;
+  marker: string;
+  insertionStart: number;
+  insertionEnd: number;
+  cursor: number;
+};
+
 const CRITIC_COMMENT_REGEX = /\{>>([\s\S]*?)<<\}/g;
 const CRITIC_TOKEN_PREFIX = "@@CRITIC_COMMENT_";
 const CRITIC_TOKEN_SUFFIX = "@@";
@@ -115,4 +131,62 @@ export function restoreCriticMarkupTokens(
 
   const pattern = new RegExp(`(${CRITIC_TOKEN_PREFIX}\\d+${CRITIC_TOKEN_SUFFIX})`, "g");
   return value.replace(pattern, (token) => commentsByToken[token]?.raw ?? token);
+}
+
+function normalizeOffset(value: number, markdownLength: number): number {
+  if (Number.isNaN(value) || !Number.isFinite(value)) {
+    return 0;
+  }
+  if (value < 0) {
+    return 0;
+  }
+  if (value > markdownLength) {
+    return markdownLength;
+  }
+  return Math.floor(value);
+}
+
+function clampOutsideCommentBoundary(offset: number, comments: CriticMarkupComment[]): number {
+  for (const comment of comments) {
+    if (offset > comment.start && offset < comment.end) {
+      return comment.end;
+    }
+  }
+  return offset;
+}
+
+export function insertCriticMarkupCommentAtSelection(
+  input: CriticMarkupInsertion
+): CriticMarkupInsertionResult {
+  const markdown = input.markdown ?? "";
+  const length = markdown.length;
+  let start = normalizeOffset(input.start, length);
+  let end = normalizeOffset(input.end, length);
+  if (start > end) {
+    [start, end] = [end, start];
+  }
+
+  const comments = parseCriticMarkupComments(markdown);
+  start = clampOutsideCommentBoundary(start, comments);
+  end = clampOutsideCommentBoundary(end, comments);
+  if (start > end) {
+    start = end;
+  }
+
+  const marker = serializeCriticMarkupComment({
+    author: input.author,
+    message: input.message,
+  });
+
+  const insertionStart = end;
+  const nextMarkdown = markdown.slice(0, insertionStart) + marker + markdown.slice(insertionStart);
+  const cursor = insertionStart + marker.length;
+
+  return {
+    markdown: nextMarkdown,
+    marker,
+    insertionStart,
+    insertionEnd: cursor,
+    cursor,
+  };
 }
