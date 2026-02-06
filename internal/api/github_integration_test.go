@@ -8,12 +8,14 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -410,6 +412,176 @@ func TestPublishProjectFailsWhenConflictsUnresolved(t *testing.T) {
 	require.Equal(t, fixture.RemoteHeadSHA, remoteHead)
 }
 
+func TestBuildPublishResolutionCommentIncludesCommitLinksAndIssueReference(t *testing.T) {
+	issue := store.ProjectIssue{
+		ID:          "issue-id-123",
+		IssueNumber: 19,
+	}
+	link := store.ProjectIssueGitHubLink{
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		GitHubNumber:       44,
+	}
+
+	comment := buildPublishResolutionComment(
+		issue,
+		link,
+		[]string{"https://github.com/samhotchkiss/otter-camp/commit/abc123"},
+		"<!-- marker -->",
+	)
+
+	require.Contains(t, comment, "OtterCamp issue ID: issue-id-123")
+	require.Contains(t, comment, "https://github.com/samhotchkiss/otter-camp/commit/abc123")
+	require.Contains(t, comment, "<!-- marker -->")
+}
+
+func TestPublishProjectClosesLinkedGitHubIssuesAfterPush(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-publish-close-issues-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Publish Linked Issues Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	fixture := newPublishRepoFixture(t)
+	configurePublishBinding(t, handler, orgID, projectID, fixture.LocalPath)
+	createClosedIssueWithGitHubLink(t, db, orgID, projectID, "samhotchkiss/otter-camp", 314)
+
+	fakeCloser := newFakeGitHubIssueCloser()
+	handler.IssueCloser = fakeCloser
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish",
+		bytes.NewReader([]byte(`{"dry_run":false}`)),
+	)
+	req = addRouteParam(req, "id", projectID)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.PublishProject(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var response githubPublishResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	require.Equal(t, "published", response.Status)
+
+	key := fakePublishIssueKey("samhotchkiss/otter-camp", 314)
+	require.Equal(t, 1, fakeCloser.CommentPosts(key))
+	require.Equal(t, 1, fakeCloser.CloseOps(key))
+	require.Equal(t, []string{"comment", "close"}, fakeCloser.Operations(key))
+
+	_, link := loadIssueByGitHubNumber(t, db, orgID, projectID, 314)
+	require.Equal(t, "closed", link.GitHubState)
+}
+
+func TestPublishProjectIssueClosureRetryDoesNotDuplicateCommentOrClose(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-publish-close-retry-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Publish Linked Issue Retry Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	fixture := newPublishRepoFixture(t)
+	configurePublishBinding(t, handler, orgID, projectID, fixture.LocalPath)
+	createClosedIssueWithGitHubLink(t, db, orgID, projectID, "samhotchkiss/otter-camp", 315)
+
+	fakeCloser := newFakeGitHubIssueCloser()
+	handler.IssueCloser = fakeCloser
+
+	firstReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish",
+		bytes.NewReader([]byte(`{"dry_run":false}`)),
+	)
+	firstReq = addRouteParam(firstReq, "id", projectID)
+	firstReq = withWorkspaceContext(firstReq, orgID)
+	firstRec := httptest.NewRecorder()
+	handler.PublishProject(firstRec, firstReq)
+	require.Equal(t, http.StatusOK, firstRec.Code)
+
+	secondReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish",
+		bytes.NewReader([]byte(`{"dry_run":false}`)),
+	)
+	secondReq = addRouteParam(secondReq, "id", projectID)
+	secondReq = withWorkspaceContext(secondReq, orgID)
+	secondRec := httptest.NewRecorder()
+	handler.PublishProject(secondRec, secondReq)
+	require.Equal(t, http.StatusOK, secondRec.Code)
+
+	var secondResponse githubPublishResponse
+	require.NoError(t, json.NewDecoder(secondRec.Body).Decode(&secondResponse))
+	require.Equal(t, "no_changes", secondResponse.Status)
+
+	key := fakePublishIssueKey("samhotchkiss/otter-camp", 315)
+	require.Equal(t, 1, fakeCloser.CommentPosts(key))
+	require.Equal(t, 1, fakeCloser.CloseOps(key))
+
+	_, link := loadIssueByGitHubNumber(t, db, orgID, projectID, 315)
+	require.Equal(t, "closed", link.GitHubState)
+}
+
+func TestPublishProjectIssueCloseFailureLogsErrorAndKeepsLinkOpenUntilRetry(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-publish-close-failure-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Publish Linked Issue Failure Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	fixture := newPublishRepoFixture(t)
+	configurePublishBinding(t, handler, orgID, projectID, fixture.LocalPath)
+	createClosedIssueWithGitHubLink(t, db, orgID, projectID, "samhotchkiss/otter-camp", 316)
+
+	fakeCloser := newFakeGitHubIssueCloser()
+	key := fakePublishIssueKey("samhotchkiss/otter-camp", 316)
+	fakeCloser.SetCloseFailures(key, 1)
+	handler.IssueCloser = fakeCloser
+
+	firstReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish",
+		bytes.NewReader([]byte(`{"dry_run":false}`)),
+	)
+	firstReq = addRouteParam(firstReq, "id", projectID)
+	firstReq = withWorkspaceContext(firstReq, orgID)
+	firstRec := httptest.NewRecorder()
+	handler.PublishProject(firstRec, firstReq)
+	require.Equal(t, http.StatusOK, firstRec.Code)
+
+	_, firstLink := loadIssueByGitHubNumber(t, db, orgID, projectID, 316)
+	require.Equal(t, "open", firstLink.GitHubState)
+	require.Equal(t, 1, fakeCloser.CommentPosts(key))
+	require.Equal(t, 0, fakeCloser.CloseOps(key))
+
+	var failureCount int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM activity_log
+			WHERE org_id = $1
+			  AND project_id = $2
+			  AND action = 'github.publish_issue_close_failed'`,
+		orgID,
+		projectID,
+	).Scan(&failureCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, failureCount)
+
+	secondReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish",
+		bytes.NewReader([]byte(`{"dry_run":false}`)),
+	)
+	secondReq = addRouteParam(secondReq, "id", projectID)
+	secondReq = withWorkspaceContext(secondReq, orgID)
+	secondRec := httptest.NewRecorder()
+	handler.PublishProject(secondRec, secondReq)
+	require.Equal(t, http.StatusOK, secondRec.Code)
+
+	var secondResponse githubPublishResponse
+	require.NoError(t, json.NewDecoder(secondRec.Body).Decode(&secondResponse))
+	require.Equal(t, "no_changes", secondResponse.Status)
+
+	_, secondLink := loadIssueByGitHubNumber(t, db, orgID, projectID, 316)
+	require.Equal(t, "closed", secondLink.GitHubState)
+	require.Equal(t, 1, fakeCloser.CommentPosts(key))
+	require.Equal(t, 1, fakeCloser.CloseOps(key))
+}
+
 func TestPublishProjectRequiresAuthenticatedHumanContext(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "github-publish-auth-org")
@@ -428,6 +600,158 @@ func TestPublishProjectRequiresAuthenticatedHumanContext(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func configurePublishBinding(
+	t *testing.T,
+	handler *GitHubIntegrationHandler,
+	orgID string,
+	projectID string,
+	localPath string,
+) {
+	t.Helper()
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := handler.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		LocalRepoPath:      &localPath,
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNone,
+	})
+	require.NoError(t, err)
+}
+
+func createClosedIssueWithGitHubLink(
+	t *testing.T,
+	db *sql.DB,
+	orgID string,
+	projectID string,
+	repository string,
+	githubNumber int64,
+) {
+	t.Helper()
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         fmt.Sprintf("Closed issue #%d", githubNumber),
+		State:         "closed",
+		Origin:        "local",
+		ApprovalState: store.IssueApprovalStateApproved,
+	})
+	require.NoError(t, err)
+	_, err = issueStore.UpsertGitHubLink(ctx, store.UpsertProjectIssueGitHubLinkInput{
+		IssueID:            issue.ID,
+		RepositoryFullName: repository,
+		GitHubNumber:       githubNumber,
+		GitHubURL:          issueTestStringPtr(fmt.Sprintf("https://github.com/%s/issues/%d", repository, githubNumber)),
+		GitHubState:        "open",
+	})
+	require.NoError(t, err)
+}
+
+type fakeGitHubIssueCloser struct {
+	mu          sync.Mutex
+	states      map[string]*fakeGitHubIssueState
+	closeErrors map[string]int
+}
+
+type fakeGitHubIssueState struct {
+	markers      map[string]struct{}
+	closed       bool
+	commentPosts int
+	closeOps     int
+	operations   []string
+}
+
+func newFakeGitHubIssueCloser() *fakeGitHubIssueCloser {
+	return &fakeGitHubIssueCloser{
+		states:      map[string]*fakeGitHubIssueState{},
+		closeErrors: map[string]int{},
+	}
+}
+
+func fakePublishIssueKey(repository string, githubNumber int64) string {
+	return fmt.Sprintf("%s#%d", strings.TrimSpace(repository), githubNumber)
+}
+
+func (f *fakeGitHubIssueCloser) SetCloseFailures(key string, count int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeErrors[key] = count
+}
+
+func (f *fakeGitHubIssueCloser) ResolveIssue(
+	_ context.Context,
+	input GitHubIssueResolutionInput,
+) (GitHubIssueResolutionResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	key := fakePublishIssueKey(input.RepositoryFullName, input.IssueNumber)
+	state, ok := f.states[key]
+	if !ok {
+		state = &fakeGitHubIssueState{
+			markers: map[string]struct{}{},
+		}
+		f.states[key] = state
+	}
+
+	result := GitHubIssueResolutionResult{}
+	if _, exists := state.markers[input.IdempotencyMarker]; !exists {
+		state.markers[input.IdempotencyMarker] = struct{}{}
+		state.commentPosts++
+		state.operations = append(state.operations, "comment")
+		result.CommentPosted = true
+	}
+
+	if failures := f.closeErrors[key]; failures > 0 {
+		f.closeErrors[key] = failures - 1
+		return result, fmt.Errorf("simulated close failure")
+	}
+
+	if !state.closed {
+		state.closed = true
+		state.closeOps++
+		state.operations = append(state.operations, "close")
+	}
+	result.IssueClosed = state.closed
+	return result, nil
+}
+
+func (f *fakeGitHubIssueCloser) CommentPosts(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	state, ok := f.states[key]
+	if !ok {
+		return 0
+	}
+	return state.commentPosts
+}
+
+func (f *fakeGitHubIssueCloser) CloseOps(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	state, ok := f.states[key]
+	if !ok {
+		return 0
+	}
+	return state.closeOps
+}
+
+func (f *fakeGitHubIssueCloser) Operations(key string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	state, ok := f.states[key]
+	if !ok {
+		return nil
+	}
+	copyOps := make([]string, len(state.operations))
+	copy(copyOps, state.operations)
+	return copyOps
 }
 
 func TestGitHubIntegrationListSettingsIncludesWorkflowModePolicy(t *testing.T) {

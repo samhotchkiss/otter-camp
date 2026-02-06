@@ -48,6 +48,7 @@ type GitHubIntegrationHandler struct {
 	Commits           *store.ProjectCommitStore
 	SyncJobs          *store.GitHubSyncJobStore
 	IssueStore        *store.ProjectIssueStore
+	IssueCloser       GitHubIssueCloser
 	ConnectStates     *githubConnectStateStore
 	WebhookDeliveries *githubDeliveryStore
 }
@@ -217,6 +218,7 @@ type githubWebhookCommitPayload struct {
 func NewGitHubIntegrationHandler(db *sql.DB) *GitHubIntegrationHandler {
 	handler := &GitHubIntegrationHandler{
 		DB:                db,
+		IssueCloser:       newGitHubIssueCloserFromEnv(),
 		ConnectStates:     newGitHubConnectStateStore(10 * time.Minute),
 		WebhookDeliveries: newGitHubDeliveryStore(24 * time.Hour),
 	}
@@ -1086,6 +1088,7 @@ func (h *GitHubIntegrationHandler) PublishProject(w http.ResponseWriter, r *http
 	}
 
 	if preflight.CommitsAhead == 0 {
+		issueResolutionSummary := h.resolveLinkedGitHubIssuesAfterPublish(ctx, orgID, projectID, preflight.LocalHeadSHA)
 		response.Status = "no_changes"
 		_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_no_changes", map[string]any{
 			"project_id":      projectID,
@@ -1094,6 +1097,11 @@ func (h *GitHubIntegrationHandler) PublishProject(w http.ResponseWriter, r *http
 			"commits_ahead":   preflight.CommitsAhead,
 			"local_head_sha":  preflight.LocalHeadSHA,
 			"remote_head_sha": preflight.RemoteHeadSHA,
+			"linked_issues": map[string]any{
+				"attempted": issueResolutionSummary.Attempted,
+				"closed":    issueResolutionSummary.Closed,
+				"failed":    issueResolutionSummary.Failed,
+			},
 		})
 		sendJSON(w, http.StatusOK, response)
 		return
@@ -1114,6 +1122,7 @@ func (h *GitHubIntegrationHandler) PublishProject(w http.ResponseWriter, r *http
 	}
 
 	publishedAt := time.Now().UTC().Format(time.RFC3339)
+	issueResolutionSummary := h.resolveLinkedGitHubIssuesAfterPublish(ctx, orgID, projectID, preflight.LocalHeadSHA)
 	response.Status = "published"
 	response.PublishedAt = &publishedAt
 	_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_succeeded", map[string]any{
@@ -1124,6 +1133,11 @@ func (h *GitHubIntegrationHandler) PublishProject(w http.ResponseWriter, r *http
 		"local_head_sha":  preflight.LocalHeadSHA,
 		"remote_head_sha": preflight.RemoteHeadSHA,
 		"published_at":    publishedAt,
+		"linked_issues": map[string]any{
+			"attempted": issueResolutionSummary.Attempted,
+			"closed":    issueResolutionSummary.Closed,
+			"failed":    issueResolutionSummary.Failed,
+		},
 	})
 	sendJSON(w, http.StatusOK, response)
 }
