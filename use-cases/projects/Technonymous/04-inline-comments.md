@@ -9,14 +9,14 @@ Allow reviewers to insert inline feedback directly in Markdown text without manu
 - Comments render as inline bubbles in the rendered view.
 
 ## Storage Format (MVP)
-- Use a unique delimiter to avoid Markdown collisions. Recommended safe format:
+- Use **CriticMarkup** (open, non‑proprietary) for inline comments:
 
 ```
-<!-- oc-comment:uuid|author|This paragraph needs a stronger opening. -->
+{>> comment <<}
 ```
 
-- HTML comments are non‑rendering in Markdown and unlikely to collide with prose.
-- Delimiter format can evolve, but must be **round‑trippable** between UI and raw Markdown.
+- CriticMarkup is human‑readable and designed for parsing/rendering.
+- Delimiter format must be **round‑trippable** between UI and raw Markdown.
 
 ## Rendering Rules
 - Render view hides raw markers and shows comments inline.
