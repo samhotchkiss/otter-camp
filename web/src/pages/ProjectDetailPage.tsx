@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProjectChatPanel from "../components/project/ProjectChatPanel";
+import ProjectCommitBrowser from "../components/project/ProjectCommitBrowser";
 import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
 
@@ -203,7 +204,7 @@ function ActivityItem({ activity }: { activity: Activity }) {
   );
 }
 
-type TabKey = "board" | "list" | "activity" | "chat" | "issues" | "settings";
+type TabKey = "board" | "list" | "activity" | "chat" | "code" | "issues" | "settings";
 
 export default function ProjectDetailPage() {
   const { id, issueId } = useParams<{ id: string; issueId?: string }>();
@@ -377,6 +378,7 @@ export default function ProjectDetailPage() {
     { key: "list", label: "List" },
     { key: "activity", label: "Activity" },
     { key: "chat", label: "Chat", badge: chatUnreadCount > 0 ? chatUnreadCount : undefined },
+    { key: "code", label: "Code" },
     { key: "issues", label: "Issues" },
     { key: "settings", label: "Settings" },
   ];
@@ -568,6 +570,8 @@ export default function ProjectDetailPage() {
           onUnreadChange={setChatUnreadCount}
         />
       </div>
+
+      {activeTab === "code" && <ProjectCommitBrowser projectId={project.id} />}
 
       {activeTab === "issues" && (
         <div className={`grid gap-4 ${issueId ? "xl:grid-cols-[minmax(320px,420px)_1fr]" : "grid-cols-1"}`}>
