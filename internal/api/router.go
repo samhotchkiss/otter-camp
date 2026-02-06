@@ -72,11 +72,13 @@ func NewRouter() http.Handler {
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
 	workflowsHandler := &WorkflowsHandler{DB: db}
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
+	githubSyncDeadLettersHandler := &GitHubSyncDeadLettersHandler{}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
 	if db != nil {
 		projectStore = store.NewProjectStore(db)
+		githubSyncDeadLettersHandler.Store = store.NewGitHubSyncJobStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 
@@ -107,6 +109,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects", projectsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}", projectsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Post("/projects", projectsHandler.Create)
+		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Get("/github/sync/dead-letters", githubSyncDeadLettersHandler.List)
+		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/github/sync/dead-letters/{id}/replay", githubSyncDeadLettersHandler.Replay)
 		r.Post("/sync/openclaw", openclawSyncHandler.Handle)
 		r.Get("/sync/agents", openclawSyncHandler.GetAgents)
 		r.Patch("/tasks/{id}", taskHandler.UpdateTask)
