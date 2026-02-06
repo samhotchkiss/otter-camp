@@ -164,6 +164,28 @@ type githubConflictResolutionResponse struct {
 	ResolvedAt      string          `json:"resolved_at"`
 }
 
+type githubPublishRequest struct {
+	DryRun bool `json:"dry_run"`
+}
+
+type githubPublishCheck struct {
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	Detail   string `json:"detail"`
+	Blocking bool   `json:"blocking"`
+}
+
+type githubPublishResponse struct {
+	ProjectID     string               `json:"project_id"`
+	DryRun        bool                 `json:"dry_run"`
+	Status        string               `json:"status"`
+	Checks        []githubPublishCheck `json:"checks"`
+	LocalHeadSHA  *string              `json:"local_head_sha,omitempty"`
+	RemoteHeadSHA *string              `json:"remote_head_sha,omitempty"`
+	CommitsAhead  int                  `json:"commits_ahead"`
+	PublishedAt   *string              `json:"published_at,omitempty"`
+}
+
 type githubWebhookPayload struct {
 	Ref        string                       `json:"ref"`
 	Before     string                       `json:"before"`
@@ -948,6 +970,164 @@ func (h *GitHubIntegrationHandler) ResolveProjectConflict(w http.ResponseWriter,
 	})
 }
 
+func (h *GitHubIntegrationHandler) PublishProject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	if h.ProjectRepos == nil || h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	orgID := workspaceIDFromRequest(r)
+	if orgID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" || !uuidRegex.MatchString(projectID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid project id"})
+		return
+	}
+
+	var request githubPublishRequest
+	decodeErr := json.NewDecoder(r.Body).Decode(&request)
+	if decodeErr != nil && !errors.Is(decodeErr, io.EOF) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, orgID)
+	binding, err := h.ProjectRepos.GetBinding(ctx, projectID)
+	if err != nil {
+		handleRepoStoreError(w, err)
+		return
+	}
+	if !binding.Enabled {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "github integration is disabled for this project"})
+		return
+	}
+	if binding.ConflictState == store.RepoConflictNeedsDecision {
+		checks := []githubPublishCheck{
+			{
+				Name:     "conflict_state",
+				Status:   "fail",
+				Detail:   "Publish blocked: unresolved sync conflicts require resolution.",
+				Blocking: true,
+			},
+		}
+		_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_blocked", map[string]any{
+			"project_id": projectID,
+			"reason":     "unresolved_conflict",
+			"dry_run":    request.DryRun,
+		})
+		sendJSON(w, http.StatusConflict, githubPublishResponse{
+			ProjectID: projectID,
+			DryRun:    request.DryRun,
+			Status:    "blocked",
+			Checks:    checks,
+		})
+		return
+	}
+
+	if binding.LocalRepoPath == nil || strings.TrimSpace(*binding.LocalRepoPath) == "" {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "project has no local repo path configured"})
+		return
+	}
+	localRepoPath := strings.TrimSpace(*binding.LocalRepoPath)
+	branch := strings.TrimSpace(binding.DefaultBranch)
+	if branch == "" {
+		branch = "main"
+	}
+
+	preflight, err := runPublishPreflightChecks(r.Context(), localRepoPath, branch)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
+	response := githubPublishResponse{
+		ProjectID:     projectID,
+		DryRun:        request.DryRun,
+		Checks:        preflight.Checks,
+		LocalHeadSHA:  optionalStringPtr(preflight.LocalHeadSHA),
+		RemoteHeadSHA: optionalStringPtr(preflight.RemoteHeadSHA),
+		CommitsAhead:  preflight.CommitsAhead,
+		Status:        "dry_run",
+	}
+
+	if request.DryRun {
+		_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_dry_run", map[string]any{
+			"project_id":      projectID,
+			"branch":          branch,
+			"checks":          preflight.Checks,
+			"commits_ahead":   preflight.CommitsAhead,
+			"local_head_sha":  preflight.LocalHeadSHA,
+			"remote_head_sha": preflight.RemoteHeadSHA,
+		})
+		sendJSON(w, http.StatusOK, response)
+		return
+	}
+
+	if preflight.BlockingCount > 0 {
+		response.Status = "blocked"
+		_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_blocked", map[string]any{
+			"project_id":      projectID,
+			"branch":          branch,
+			"checks":          preflight.Checks,
+			"commits_ahead":   preflight.CommitsAhead,
+			"local_head_sha":  preflight.LocalHeadSHA,
+			"remote_head_sha": preflight.RemoteHeadSHA,
+		})
+		sendJSON(w, http.StatusConflict, response)
+		return
+	}
+
+	if preflight.CommitsAhead == 0 {
+		response.Status = "no_changes"
+		_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_no_changes", map[string]any{
+			"project_id":      projectID,
+			"branch":          branch,
+			"checks":          preflight.Checks,
+			"commits_ahead":   preflight.CommitsAhead,
+			"local_head_sha":  preflight.LocalHeadSHA,
+			"remote_head_sha": preflight.RemoteHeadSHA,
+		})
+		sendJSON(w, http.StatusOK, response)
+		return
+	}
+
+	if _, err := runGitInRepo(r.Context(), localRepoPath, "push", "origin", "HEAD:refs/heads/"+branch); err != nil {
+		_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_failed", map[string]any{
+			"project_id":      projectID,
+			"branch":          branch,
+			"error":           err.Error(),
+			"checks":          preflight.Checks,
+			"commits_ahead":   preflight.CommitsAhead,
+			"local_head_sha":  preflight.LocalHeadSHA,
+			"remote_head_sha": preflight.RemoteHeadSHA,
+		})
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: fmt.Sprintf("publish push failed: %v", err)})
+		return
+	}
+
+	publishedAt := time.Now().UTC().Format(time.RFC3339)
+	response.Status = "published"
+	response.PublishedAt = &publishedAt
+	_ = logGitHubActivity(r.Context(), h.DB, orgID, &projectID, "github.publish_succeeded", map[string]any{
+		"project_id":      projectID,
+		"branch":          branch,
+		"checks":          preflight.Checks,
+		"commits_ahead":   preflight.CommitsAhead,
+		"local_head_sha":  preflight.LocalHeadSHA,
+		"remote_head_sha": preflight.RemoteHeadSHA,
+		"published_at":    publishedAt,
+	})
+	sendJSON(w, http.StatusOK, response)
+}
+
 func (h *GitHubIntegrationHandler) ManualRepoSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
@@ -1519,6 +1699,135 @@ func runGitInRepo(ctx context.Context, localRepoPath string, args ...string) (st
 		return "", fmt.Errorf("git %s failed: %w (%s)", strings.Join(args, " "), err, trimmed)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+type publishPreflightResult struct {
+	Checks        []githubPublishCheck
+	LocalHeadSHA  string
+	RemoteHeadSHA string
+	CommitsAhead  int
+	BlockingCount int
+}
+
+func runPublishPreflightChecks(
+	ctx context.Context,
+	localRepoPath string,
+	branch string,
+) (publishPreflightResult, error) {
+	if err := ensureGitRepoPath(localRepoPath); err != nil {
+		return publishPreflightResult{}, err
+	}
+
+	checks := make([]githubPublishCheck, 0, 5)
+	if _, err := runGitInRepo(ctx, localRepoPath, "fetch", "--prune", "origin"); err != nil {
+		checks = append(checks, githubPublishCheck{
+			Name:     "fetch_origin",
+			Status:   "fail",
+			Detail:   err.Error(),
+			Blocking: true,
+		})
+		return publishPreflightResult{
+			Checks:        checks,
+			BlockingCount: 1,
+		}, nil
+	}
+	checks = append(checks, githubPublishCheck{
+		Name:     "fetch_origin",
+		Status:   "pass",
+		Detail:   "Fetched latest remote refs.",
+		Blocking: false,
+	})
+
+	localHeadSHA, err := runGitInRepo(ctx, localRepoPath, "rev-parse", "HEAD")
+	if err != nil {
+		return publishPreflightResult{}, fmt.Errorf("resolve local head failed: %w", err)
+	}
+	localHeadSHA = strings.TrimSpace(localHeadSHA)
+
+	remoteHeadSHA := ""
+	remoteHeadOutput, remoteErr := runGitInRepo(ctx, localRepoPath, "rev-parse", "origin/"+branch)
+	if remoteErr == nil {
+		remoteHeadSHA = strings.TrimSpace(remoteHeadOutput)
+	}
+
+	blockingCount := 0
+	if remoteHeadSHA != "" {
+		_, ffErr := runGitInRepo(ctx, localRepoPath, "merge-base", "--is-ancestor", remoteHeadSHA, localHeadSHA)
+		if ffErr != nil {
+			blockingCount++
+			checks = append(checks, githubPublishCheck{
+				Name:     "fast_forward",
+				Status:   "fail",
+				Detail:   "Remote branch is not an ancestor of local head.",
+				Blocking: true,
+			})
+		} else {
+			checks = append(checks, githubPublishCheck{
+				Name:     "fast_forward",
+				Status:   "pass",
+				Detail:   "Remote branch can be fast-forwarded to local head.",
+				Blocking: false,
+			})
+		}
+	} else {
+		checks = append(checks, githubPublishCheck{
+			Name:     "fast_forward",
+			Status:   "pass",
+			Detail:   "Remote branch ref does not exist yet.",
+			Blocking: false,
+		})
+	}
+
+	commitsAhead := 0
+	countOutput, countErr := runGitInRepo(ctx, localRepoPath, "rev-list", "--count", "origin/"+branch+"..HEAD")
+	if countErr != nil {
+		countOutput, countErr = runGitInRepo(ctx, localRepoPath, "rev-list", "--count", "HEAD")
+	}
+	if countErr == nil {
+		if parsed, parseErr := strconv.Atoi(strings.TrimSpace(countOutput)); parseErr == nil {
+			commitsAhead = parsed
+		}
+	}
+	checks = append(checks, githubPublishCheck{
+		Name:     "commits_ahead",
+		Status:   "info",
+		Detail:   fmt.Sprintf("Local branch is %d commit(s) ahead of remote.", commitsAhead),
+		Blocking: false,
+	})
+
+	_, dryRunPushErr := runGitInRepo(ctx, localRepoPath, "push", "--dry-run", "origin", "HEAD:refs/heads/"+branch)
+	if dryRunPushErr != nil {
+		blockingCount++
+		checks = append(checks, githubPublishCheck{
+			Name:     "push_dry_run",
+			Status:   "fail",
+			Detail:   dryRunPushErr.Error(),
+			Blocking: true,
+		})
+	} else {
+		checks = append(checks, githubPublishCheck{
+			Name:     "push_dry_run",
+			Status:   "pass",
+			Detail:   "Dry-run push succeeded.",
+			Blocking: false,
+		})
+	}
+
+	return publishPreflightResult{
+		Checks:        checks,
+		LocalHeadSHA:  localHeadSHA,
+		RemoteHeadSHA: remoteHeadSHA,
+		CommitsAhead:  commitsAhead,
+		BlockingCount: blockingCount,
+	}, nil
+}
+
+func optionalStringPtr(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func workspaceIDFromRequest(r *http.Request) string {

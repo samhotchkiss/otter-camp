@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
@@ -282,6 +283,151 @@ func TestResolveProjectConflictKeepOtterCampPreservesLocalBranchAndMarksReadyToP
 	var metadata map[string]any
 	require.NoError(t, json.Unmarshal(metadataRaw, &metadata))
 	require.Equal(t, "keep_ottercamp", metadata["resolution"])
+}
+
+func TestPublishProjectDryRunReturnsPreflightWithoutPushing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-publish-dry-run-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Publish Dry Run Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	fixture := newPublishRepoFixture(t)
+	localPath := fixture.LocalPath
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := handler.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		LocalRepoPath:      &localPath,
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNone,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish",
+		bytes.NewReader([]byte(`{"dry_run":true}`)),
+	)
+	req = addRouteParam(req, "id", projectID)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.PublishProject(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var response githubPublishResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	require.True(t, response.DryRun)
+	require.Equal(t, "dry_run", response.Status)
+	require.NotEmpty(t, response.Checks)
+
+	remoteHead := runGitTestOutput(t, fixture.WorkPath, "rev-parse", "HEAD")
+	require.Equal(t, fixture.RemoteHeadSHA, remoteHead)
+}
+
+func TestPublishProjectPushesCommitsToRemoteMain(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-publish-run-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Publish Execute Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	fixture := newPublishRepoFixture(t)
+	localPath := fixture.LocalPath
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := handler.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		LocalRepoPath:      &localPath,
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNone,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish",
+		bytes.NewReader([]byte(`{"dry_run":false}`)),
+	)
+	req = addRouteParam(req, "id", projectID)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.PublishProject(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var response githubPublishResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	require.Equal(t, "published", response.Status)
+	require.Equal(t, 1, response.CommitsAhead)
+	require.NotNil(t, response.PublishedAt)
+
+	remoteHead := runGitTestOutput(t, fixture.WorkPath, "rev-parse", "HEAD")
+	require.Equal(t, fixture.LocalHeadSHA, remoteHead)
+}
+
+func TestPublishProjectFailsWhenConflictsUnresolved(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-publish-conflict-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Publish Conflict Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	fixture := newPublishRepoFixture(t)
+	localPath := fixture.LocalPath
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := handler.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		LocalRepoPath:      &localPath,
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNeedsDecision,
+		ConflictDetails:    json.RawMessage(`{"branch":"main","reason":"non_fast_forward"}`),
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish",
+		bytes.NewReader([]byte(`{"dry_run":false}`)),
+	)
+	req = addRouteParam(req, "id", projectID)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.PublishProject(rec, req)
+	require.Equal(t, http.StatusConflict, rec.Code)
+
+	var response githubPublishResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	require.Equal(t, "blocked", response.Status)
+
+	remoteHead := runGitTestOutput(t, fixture.WorkPath, "rev-parse", "HEAD")
+	require.Equal(t, fixture.RemoteHeadSHA, remoteHead)
+}
+
+func TestPublishProjectRequiresAuthenticatedHumanContext(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-publish-auth-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Publish Auth Project")
+	handler := NewGitHubIntegrationHandler(db)
+
+	router := chi.NewRouter()
+	router.With(RequireCapability(db, CapabilityGitHubPublish)).Post("/api/projects/{id}/publish", handler.PublishProject)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/publish?org_id="+orgID,
+		bytes.NewReader([]byte(`{"dry_run":true}`)),
+	)
+	req = addRouteParam(req, "id", projectID)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
 func TestGitHubIntegrationListSettingsIncludesWorkflowModePolicy(t *testing.T) {
@@ -986,6 +1132,14 @@ type conflictRepoFixture struct {
 	RemoteSHA  string
 }
 
+type publishRepoFixture struct {
+	RemotePath    string
+	WorkPath      string
+	LocalPath     string
+	LocalHeadSHA  string
+	RemoteHeadSHA string
+}
+
 func newConflictRepoFixture(t *testing.T) conflictRepoFixture {
 	t.Helper()
 
@@ -1026,6 +1180,43 @@ func newConflictRepoFixture(t *testing.T) conflictRepoFixture {
 		LocalPath:  localPath,
 		LocalSHA:   localSHA,
 		RemoteSHA:  remoteSHA,
+	}
+}
+
+func newPublishRepoFixture(t *testing.T) publishRepoFixture {
+	t.Helper()
+
+	root := t.TempDir()
+	remotePath := filepath.Join(root, "remote.git")
+	workPath := filepath.Join(root, "work")
+	localPath := filepath.Join(root, "local")
+
+	runGitTest(t, "", "init", "--bare", remotePath)
+	runGitTest(t, "", "init", "--initial-branch=main", workPath)
+	runGitTest(t, workPath, "config", "user.email", "fixture@example.com")
+	runGitTest(t, workPath, "config", "user.name", "Fixture User")
+	runGitTest(t, workPath, "remote", "add", "origin", remotePath)
+
+	require.NoError(t, os.WriteFile(filepath.Join(workPath, "README.md"), []byte("initial\n"), 0o644))
+	runGitTest(t, workPath, "add", "README.md")
+	runGitTest(t, workPath, "commit", "-m", "initial commit")
+	runGitTest(t, workPath, "push", "-u", "origin", "main")
+	remoteHead := runGitTestOutput(t, workPath, "rev-parse", "HEAD")
+
+	runGitTest(t, "", "clone", remotePath, localPath)
+	runGitTest(t, localPath, "config", "user.email", "local@example.com")
+	runGitTest(t, localPath, "config", "user.name", "Local User")
+	require.NoError(t, os.WriteFile(filepath.Join(localPath, "README.md"), []byte("local ahead\n"), 0o644))
+	runGitTest(t, localPath, "add", "README.md")
+	runGitTest(t, localPath, "commit", "-m", "local ahead commit")
+	localHead := runGitTestOutput(t, localPath, "rev-parse", "HEAD")
+
+	return publishRepoFixture{
+		RemotePath:    remotePath,
+		WorkPath:      workPath,
+		LocalPath:     localPath,
+		LocalHeadSHA:  localHead,
+		RemoteHeadSHA: remoteHead,
 	}
 }
 
