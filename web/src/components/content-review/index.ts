@@ -1,5 +1,6 @@
 export { default as ContentReview } from "./ContentReview";
 export { default as MarkdownPreview } from "./MarkdownPreview";
+export { default as DocumentWorkspace } from "./DocumentWorkspace";
 export type {
   ContentReviewActionPayload,
   ContentReviewProps,
