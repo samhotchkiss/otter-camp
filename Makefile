@@ -1,4 +1,4 @@
-.PHONY: dev run build test migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
+.PHONY: dev run build build-otter test migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
 
 # Development
 dev:
@@ -16,6 +16,9 @@ dev-web:
 # Build
 build:
 	go build -o bin/server ./cmd/server
+
+build-otter:
+	go build -o bin/otter ./cmd/otter
 
 build-web:
 	cd web && npm run build

@@ -37,6 +37,7 @@ All work product must be committed to an OtterCamp project repository:
 ## Getting Started
 
 Use the `otter` CLI to create/clone projects so the **remote is set correctly**.
+Full CLI usage: `docs/CLI.md`.
 
 ### Option A — Create + clone (recommended)
 ```bash
