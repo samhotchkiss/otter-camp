@@ -18,6 +18,7 @@
 ## Diff Between Review Cycles
 - Provide a “changes since last review” diff:
   - Compare current commit to the last **review commit**.
+- Allow viewing **older versions** (previous commits) to recover past comments.
 
 ## Final Approval UX
 - Provide explicit **Approve** action.
