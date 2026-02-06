@@ -4,6 +4,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProjectChatPanel from "../components/project/ProjectChatPanel";
 import ProjectIssuesList from "../components/project/ProjectIssuesList";
+import IssueThreadPanel from "../components/project/IssueThreadPanel";
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
@@ -569,13 +570,16 @@ export default function ProjectDetailPage() {
       </div>
 
       {activeTab === "issues" && (
-        <ProjectIssuesList
-          projectId={project.id}
-          selectedIssueID={issueId ?? null}
-          onSelectIssue={(selectedIssueID) =>
-            navigate(`/projects/${project.id}/issues/${selectedIssueID}`)
-          }
-        />
+        <div className={`grid gap-4 ${issueId ? "xl:grid-cols-[minmax(320px,420px)_1fr]" : "grid-cols-1"}`}>
+          <ProjectIssuesList
+            projectId={project.id}
+            selectedIssueID={issueId ?? null}
+            onSelectIssue={(selectedIssueID) =>
+              navigate(`/projects/${project.id}/issues/${selectedIssueID}`)
+            }
+          />
+          {issueId && <IssueThreadPanel issueID={issueId} />}
+        </div>
       )}
 
       {activeTab === "settings" && (
