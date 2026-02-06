@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -98,6 +99,51 @@ func TestProjectRepoStore_SetAndListActiveBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	require.Equal(t, "release/1.0", listed[0].BranchName)
+}
+
+func TestProjectRepoStore_UpdateBranchCheckpoint(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "repo-checkpoint-org")
+	projectID := createTestProject(t, db, orgID, "repo-checkpoint-project")
+
+	store := NewProjectRepoStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	_, err := store.UpsertBinding(ctx, UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      RepoConflictNone,
+	})
+	require.NoError(t, err)
+
+	firstSyncedAt := time.Date(2026, 2, 6, 12, 0, 0, 0, time.UTC)
+	branch, err := store.UpdateBranchCheckpoint(ctx, projectID, "main", "sha-1", firstSyncedAt)
+	require.NoError(t, err)
+	require.Equal(t, "main", branch.BranchName)
+	require.NotNil(t, branch.LastSyncedSHA)
+	require.Equal(t, "sha-1", *branch.LastSyncedSHA)
+
+	secondSyncedAt := firstSyncedAt.Add(30 * time.Minute)
+	branch, err = store.UpdateBranchCheckpoint(ctx, projectID, "main", "sha-2", secondSyncedAt)
+	require.NoError(t, err)
+	require.NotNil(t, branch.LastSyncedSHA)
+	require.Equal(t, "sha-2", *branch.LastSyncedSHA)
+
+	active, err := store.ListActiveBranches(ctx, projectID)
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	require.NotNil(t, active[0].LastSyncedSHA)
+	require.Equal(t, "sha-2", *active[0].LastSyncedSHA)
+
+	binding, err := store.GetBinding(ctx, projectID)
+	require.NoError(t, err)
+	require.NotNil(t, binding.LastSyncedSHA)
+	require.Equal(t, "sha-2", *binding.LastSyncedSHA)
 }
 
 func TestProjectRepoStore_IsolationAndValidation(t *testing.T) {

@@ -43,6 +43,7 @@ type GitHubIntegrationHandler struct {
 	DB                *sql.DB
 	Installations     *store.GitHubInstallationStore
 	ProjectRepos      *store.ProjectRepoStore
+	Commits           *store.ProjectCommitStore
 	SyncJobs          *store.GitHubSyncJobStore
 	IssueStore        *store.ProjectIssueStore
 	ConnectStates     *githubConnectStateStore
@@ -147,15 +148,28 @@ type githubManualSyncResponse struct {
 }
 
 type githubWebhookPayload struct {
-	Ref        string `json:"ref"`
-	Before     string `json:"before"`
-	After      string `json:"after"`
+	Ref        string                       `json:"ref"`
+	Before     string                       `json:"before"`
+	After      string                       `json:"after"`
+	Commits    []githubWebhookCommitPayload `json:"commits"`
 	Repository struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
 	Installation struct {
 		ID int64 `json:"id"`
 	} `json:"installation"`
+}
+
+type githubWebhookCommitPayload struct {
+	ID        string `json:"id"`
+	Message   string `json:"message"`
+	Timestamp string `json:"timestamp"`
+	URL       string `json:"url"`
+	Author    struct {
+		Name     string `json:"name"`
+		Email    string `json:"email"`
+		Username string `json:"username"`
+	} `json:"author"`
 }
 
 func NewGitHubIntegrationHandler(db *sql.DB) *GitHubIntegrationHandler {
@@ -167,6 +181,7 @@ func NewGitHubIntegrationHandler(db *sql.DB) *GitHubIntegrationHandler {
 	if db != nil {
 		handler.Installations = store.NewGitHubInstallationStore(db)
 		handler.ProjectRepos = store.NewProjectRepoStore(db)
+		handler.Commits = store.NewProjectCommitStore(db)
 		handler.SyncJobs = store.NewGitHubSyncJobStore(db)
 		handler.IssueStore = store.NewProjectIssueStore(db)
 	}
@@ -974,7 +989,17 @@ func (h *GitHubIntegrationHandler) GitHubWebhook(w http.ResponseWriter, r *http.
 	}
 
 	repoSyncQueued := false
+	commitsIngested := 0
 	if eventType == "push" && projectID != nil {
+		if h.Commits != nil {
+			ingested, ingestErr := h.ingestPushCommits(ctx, orgID, *projectID, payload)
+			if ingestErr != nil {
+				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to ingest push commits"})
+				return
+			}
+			commitsIngested = ingested
+		}
+
 		queued, queueErr := h.enqueuePushRepoSync(ctx, *projectID, payload, deliveryID)
 		if queueErr != nil {
 			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to enqueue repo sync from push event"})
@@ -997,6 +1022,7 @@ func (h *GitHubIntegrationHandler) GitHubWebhook(w http.ResponseWriter, r *http.
 		"repository":     payload.Repository.FullName,
 		"webhook_job_id": webhookJob.ID,
 		"repo_sync":      repoSyncQueued,
+		"commits":        commitsIngested,
 		"issue_sync":     issueSyncProcessed,
 	})
 
@@ -1006,6 +1032,7 @@ func (h *GitHubIntegrationHandler) GitHubWebhook(w http.ResponseWriter, r *http.
 		"delivery_id":      deliveryID,
 		"webhook_job_id":   webhookJob.ID,
 		"repo_sync_queued": repoSyncQueued,
+		"commits_ingested": commitsIngested,
 		"issue_sync":       issueSyncProcessed,
 		"project_id":       projectID,
 	})
@@ -1096,6 +1123,119 @@ func (h *GitHubIntegrationHandler) enqueuePushRepoSync(
 	}
 
 	return true, nil
+}
+
+func (h *GitHubIntegrationHandler) ingestPushCommits(
+	ctx context.Context,
+	orgID string,
+	projectID string,
+	payload githubWebhookPayload,
+) (int, error) {
+	if h.Commits == nil || h.ProjectRepos == nil {
+		return 0, nil
+	}
+
+	repositoryFullName := strings.TrimSpace(payload.Repository.FullName)
+	branch := strings.TrimPrefix(strings.TrimSpace(payload.Ref), "refs/heads/")
+	if repositoryFullName == "" || branch == "" {
+		return 0, nil
+	}
+
+	createdCount := 0
+	for _, item := range payload.Commits {
+		sha := strings.TrimSpace(item.ID)
+		if sha == "" {
+			continue
+		}
+
+		subject, body, message := splitCommitMessage(item.Message)
+		if message == "" {
+			continue
+		}
+
+		authoredAt := time.Now().UTC()
+		if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(item.Timestamp)); err == nil {
+			authoredAt = parsed.UTC()
+		}
+
+		authorName := strings.TrimSpace(item.Author.Name)
+		if authorName == "" {
+			authorName = strings.TrimSpace(item.Author.Username)
+		}
+		if authorName == "" {
+			authorName = "GitHub"
+		}
+
+		authorEmail := strings.TrimSpace(item.Author.Email)
+		var authorEmailPtr *string
+		if authorEmail != "" {
+			authorEmailPtr = &authorEmail
+		}
+
+		metadata, err := json.Marshal(map[string]any{
+			"url":    strings.TrimSpace(item.URL),
+			"before": strings.TrimSpace(payload.Before),
+			"after":  strings.TrimSpace(payload.After),
+		})
+		if err != nil {
+			return 0, err
+		}
+
+		commit, created, err := h.Commits.UpsertCommit(ctx, store.UpsertProjectCommitInput{
+			ProjectID:          projectID,
+			RepositoryFullName: repositoryFullName,
+			BranchName:         branch,
+			SHA:                sha,
+			AuthorName:         authorName,
+			AuthorEmail:        authorEmailPtr,
+			AuthoredAt:         &authoredAt,
+			Subject:            subject,
+			Body:               body,
+			Message:            message,
+			Metadata:           metadata,
+		})
+		if err != nil {
+			return 0, err
+		}
+		if created {
+			createdCount++
+			_ = logGitHubActivity(ctx, h.DB, orgID, &projectID, "github.commit.ingested", map[string]any{
+				"project_id": projectID,
+				"branch":     branch,
+				"sha":        commit.SHA,
+				"subject":    commit.Subject,
+			})
+		}
+	}
+
+	afterSHA := strings.TrimSpace(payload.After)
+	if afterSHA != "" {
+		if _, err := h.ProjectRepos.UpdateBranchCheckpoint(ctx, projectID, branch, afterSHA, time.Now().UTC()); err != nil {
+			return createdCount, err
+		}
+	}
+
+	return createdCount, nil
+}
+
+func splitCommitMessage(message string) (string, *string, string) {
+	normalized := strings.TrimSpace(message)
+	if normalized == "" {
+		return "", nil, ""
+	}
+	subject := normalized
+	var body *string
+	if newline := strings.Index(normalized, "\n"); newline >= 0 {
+		subject = strings.TrimSpace(normalized[:newline])
+		remainder := strings.TrimSpace(normalized[newline+1:])
+		if remainder != "" {
+			body = &remainder
+		}
+	}
+	if subject == "" {
+		subject = normalized
+	}
+	return subject, body, normalized
 }
 
 func workspaceIDFromRequest(r *http.Request) string {

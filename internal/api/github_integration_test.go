@@ -556,6 +556,85 @@ func TestGitHubWebhookDuplicateDeliveryDoesNotDuplicateIssueWrites(t *testing.T)
 	require.Equal(t, 1, activityCount)
 }
 
+func TestGitHubWebhookPushIngestsCommitsAndUpdatesBranchCheckpoint(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-webhook-push-commits-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Webhook Push Commits Project")
+	handler := NewGitHubIntegrationHandler(db)
+	setupWebhookRepoBinding(t, handler, orgID, projectID, "samhotchkiss/otter-camp", 4326)
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret")
+
+	payload := []byte(`{
+		"ref":"refs/heads/main",
+		"before":"0000000000000000000000000000000000000000",
+		"after":"9999999999999999999999999999999999999999",
+		"repository":{"full_name":"samhotchkiss/otter-camp"},
+		"installation":{"id":4326},
+		"commits":[
+			{
+				"id":"1111111111111111111111111111111111111111",
+				"message":"First commit subject\n\nFirst commit body",
+				"timestamp":"2026-02-06T11:00:00Z",
+				"url":"https://github.com/samhotchkiss/otter-camp/commit/1111111111111111111111111111111111111111",
+				"author":{"name":"Sam","email":"sam@example.com"}
+			},
+			{
+				"id":"2222222222222222222222222222222222222222",
+				"message":"Second commit subject",
+				"timestamp":"2026-02-06T11:05:00Z",
+				"url":"https://github.com/samhotchkiss/otter-camp/commit/2222222222222222222222222222222222222222",
+				"author":{"name":"Stone","email":"stone@example.com"}
+			}
+		]
+	}`)
+	sendGitHubWebhook(t, handler, "push", "delivery-push-commits-1", payload)
+
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	commits, err := handler.Commits.ListCommits(ctx, store.ProjectCommitFilter{ProjectID: projectID, Limit: 20})
+	require.NoError(t, err)
+	require.Len(t, commits, 2)
+	require.Equal(t, "2222222222222222222222222222222222222222", commits[0].SHA)
+	require.Equal(t, "Second commit subject", commits[0].Subject)
+	require.Equal(t, "1111111111111111111111111111111111111111", commits[1].SHA)
+	require.NotNil(t, commits[1].Body)
+	require.Equal(t, "First commit body", *commits[1].Body)
+
+	branches, err := handler.ProjectRepos.ListActiveBranches(ctx, projectID)
+	require.NoError(t, err)
+	require.Len(t, branches, 1)
+	require.Equal(t, "main", branches[0].BranchName)
+	require.NotNil(t, branches[0].LastSyncedSHA)
+	require.Equal(t, "9999999999999999999999999999999999999999", *branches[0].LastSyncedSHA)
+
+	var activityCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM activity_log
+			WHERE org_id = $1
+			  AND project_id = $2
+			  AND action = 'github.commit.ingested'`,
+		orgID,
+		projectID,
+	).Scan(&activityCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, activityCount)
+
+	sendGitHubWebhook(t, handler, "push", "delivery-push-commits-2", payload)
+	commits, err = handler.Commits.ListCommits(ctx, store.ProjectCommitFilter{ProjectID: projectID, Limit: 20})
+	require.NoError(t, err)
+	require.Len(t, commits, 2)
+
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM activity_log
+			WHERE org_id = $1
+			  AND project_id = $2
+			  AND action = 'github.commit.ingested'`,
+		orgID,
+		projectID,
+	).Scan(&activityCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, activityCount)
+}
+
 func setupWebhookRepoBinding(
 	t *testing.T,
 	handler *GitHubIntegrationHandler,

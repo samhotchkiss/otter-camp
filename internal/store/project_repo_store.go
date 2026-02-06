@@ -359,6 +359,83 @@ func (s *ProjectRepoStore) ListActiveBranches(
 	return out, nil
 }
 
+func (s *ProjectRepoStore) UpdateBranchCheckpoint(
+	ctx context.Context,
+	projectID string,
+	branchName string,
+	lastSyncedSHA string,
+	lastSyncedAt time.Time,
+) (*ProjectRepoActiveBranch, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+	branchName = strings.TrimSpace(branchName)
+	if branchName == "" {
+		return nil, fmt.Errorf("branch_name is required")
+	}
+	lastSyncedSHA = strings.TrimSpace(lastSyncedSHA)
+	if lastSyncedSHA == "" {
+		return nil, fmt.Errorf("last_synced_sha is required")
+	}
+	lastSyncedAt = lastSyncedAt.UTC()
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	branch, err := scanProjectRepoActiveBranch(tx.QueryRowContext(
+		ctx,
+		`INSERT INTO project_repo_active_branches (
+			org_id,
+			project_id,
+			branch_name,
+			last_synced_sha,
+			last_synced_at
+		) VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (project_id, branch_name)
+		DO UPDATE SET
+			last_synced_sha = EXCLUDED.last_synced_sha,
+			last_synced_at = EXCLUDED.last_synced_at,
+			updated_at = NOW()
+		RETURNING`+projectRepoBranchColumns,
+		workspaceID,
+		projectID,
+		branchName,
+		lastSyncedSHA,
+		lastSyncedAt,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to upsert branch checkpoint: %w", err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE project_repo_bindings
+			SET last_synced_sha = $2,
+				last_synced_at = $3
+			WHERE project_id = $1`,
+		projectID,
+		lastSyncedSHA,
+		lastSyncedAt,
+	); err != nil {
+		return nil, fmt.Errorf("failed to update binding checkpoint: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return &branch, nil
+}
+
 func scanProjectRepoBinding(scanner interface{ Scan(...any) error }) (ProjectRepoBinding, error) {
 	var binding ProjectRepoBinding
 	var lastSyncedSHA sql.NullString
