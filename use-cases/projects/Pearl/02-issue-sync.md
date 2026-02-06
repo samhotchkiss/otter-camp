@@ -22,6 +22,17 @@ Create a link record:
 OtterCamp issue stores link + origin.
 GitHub issue receives a **comment** with OtterCamp issue ID.
 
+## Issue Conversation Model (OtterCamp‑Native)
+- Issue comments live in **OtterCamp DB** (backend‑agnostic).
+- **Writes:** REST (`POST /api/issues/:id/comment`).
+- **Reads:** WebSocket subscription for realtime (`/ws` → subscribe `issue:<id>`).
+
+## Agent Participation UX
+- Issue header shows **owner agent**.
+- **Add Agent** button allows adding one or more agents.
+- **Inline @mention** auto‑adds an agent to the issue.
+- Agents remain until removed ("X" next to name).
+
 ## Lifecycle Rules
 - **GitHub issue opened** → OtterCamp issue created.
 - **GitHub issue updated** → OtterCamp issue updated.

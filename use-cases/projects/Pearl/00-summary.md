@@ -27,6 +27,7 @@
 
 ## Activity Feed Source (Pearl)
 - GitHub **push** events and periodic syncs write commit entries into `activity_log`.
+- Issue create/update events also write to `activity_log`.
 - These entries drive the **Dashboard Activity Feed**.
 
 ## Files in this Use Case
