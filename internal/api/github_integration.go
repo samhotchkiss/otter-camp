@@ -44,6 +44,7 @@ type GitHubIntegrationHandler struct {
 	Installations     *store.GitHubInstallationStore
 	ProjectRepos      *store.ProjectRepoStore
 	SyncJobs          *store.GitHubSyncJobStore
+	IssueStore        *store.ProjectIssueStore
 	ConnectStates     *githubConnectStateStore
 	WebhookDeliveries *githubDeliveryStore
 }
@@ -167,6 +168,7 @@ func NewGitHubIntegrationHandler(db *sql.DB) *GitHubIntegrationHandler {
 		handler.Installations = store.NewGitHubInstallationStore(db)
 		handler.ProjectRepos = store.NewProjectRepoStore(db)
 		handler.SyncJobs = store.NewGitHubSyncJobStore(db)
+		handler.IssueStore = store.NewProjectIssueStore(db)
 	}
 	return handler
 }
@@ -981,11 +983,21 @@ func (h *GitHubIntegrationHandler) GitHubWebhook(w http.ResponseWriter, r *http.
 		repoSyncQueued = queued
 	}
 
+	issueSyncProcessed := false
+	if eventType == "issues" || eventType == "pull_request" || eventType == "issue_comment" {
+		if err := h.handleIssueWebhookEvent(ctx, orgID, projectID, eventType, body, deliveryID); err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to process issue webhook event"})
+			return
+		}
+		issueSyncProcessed = true
+	}
+
 	_ = logGitHubActivity(r.Context(), h.DB, orgID, projectID, "github.webhook."+eventType, map[string]any{
 		"delivery_id":    deliveryID,
 		"repository":     payload.Repository.FullName,
 		"webhook_job_id": webhookJob.ID,
 		"repo_sync":      repoSyncQueued,
+		"issue_sync":     issueSyncProcessed,
 	})
 
 	sendJSON(w, http.StatusAccepted, map[string]any{
@@ -994,6 +1006,7 @@ func (h *GitHubIntegrationHandler) GitHubWebhook(w http.ResponseWriter, r *http.
 		"delivery_id":      deliveryID,
 		"webhook_job_id":   webhookJob.ID,
 		"repo_sync_queued": repoSyncQueued,
+		"issue_sync":       issueSyncProcessed,
 		"project_id":       projectID,
 	})
 }

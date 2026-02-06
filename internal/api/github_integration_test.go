@@ -351,6 +351,302 @@ func TestGitHubWebhookIgnoredEventType(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, rec.Code)
 }
 
+func TestGitHubWebhookIssuesOpenedEditedClosedUpsert(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-webhook-issues-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Webhook Issues Project")
+	handler := NewGitHubIntegrationHandler(db)
+	setupWebhookRepoBinding(t, handler, orgID, projectID, "samhotchkiss/otter-camp", 4322)
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret")
+
+	openedPayload := []byte(`{
+		"action":"opened",
+		"repository":{"full_name":"samhotchkiss/otter-camp"},
+		"installation":{"id":4322},
+		"issue":{
+			"number":44,
+			"title":"Issue from webhook",
+			"body":"initial body",
+			"state":"open",
+			"html_url":"https://github.com/samhotchkiss/otter-camp/issues/44"
+		}
+	}`)
+	sendGitHubWebhook(t, handler, "issues", "delivery-issues-opened", openedPayload)
+
+	editedPayload := []byte(`{
+		"action":"edited",
+		"repository":{"full_name":"samhotchkiss/otter-camp"},
+		"installation":{"id":4322},
+		"issue":{
+			"number":44,
+			"title":"Issue from webhook (edited)",
+			"body":"edited body",
+			"state":"open",
+			"html_url":"https://github.com/samhotchkiss/otter-camp/issues/44"
+		}
+	}`)
+	sendGitHubWebhook(t, handler, "issues", "delivery-issues-edited", editedPayload)
+
+	closedPayload := []byte(`{
+		"action":"closed",
+		"repository":{"full_name":"samhotchkiss/otter-camp"},
+		"installation":{"id":4322},
+		"issue":{
+			"number":44,
+			"title":"Issue from webhook (edited)",
+			"body":"edited body",
+			"state":"closed",
+			"closed_at":"2026-02-06T12:10:00Z",
+			"html_url":"https://github.com/samhotchkiss/otter-camp/issues/44"
+		}
+	}`)
+	sendGitHubWebhook(t, handler, "issues", "delivery-issues-closed", closedPayload)
+
+	issue, link := loadIssueByGitHubNumber(t, db, orgID, projectID, 44)
+	require.Equal(t, "Issue from webhook (edited)", issue.Title)
+	require.Equal(t, "closed", issue.State)
+	require.NotNil(t, issue.ClosedAt)
+	require.NotNil(t, link.GitHubURL)
+	require.Contains(t, *link.GitHubURL, "/issues/44")
+}
+
+func TestGitHubWebhookPullRequestLifecycleUpsert(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-webhook-pr-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Webhook PR Project")
+	handler := NewGitHubIntegrationHandler(db)
+	setupWebhookRepoBinding(t, handler, orgID, projectID, "samhotchkiss/otter-camp", 4323)
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret")
+
+	openedPayload := []byte(`{
+		"action":"opened",
+		"number":88,
+		"repository":{"full_name":"samhotchkiss/otter-camp"},
+		"installation":{"id":4323},
+		"pull_request":{
+			"number":88,
+			"title":"PR from webhook",
+			"body":"initial",
+			"state":"open",
+			"html_url":"https://github.com/samhotchkiss/otter-camp/pull/88",
+			"merged":false
+		}
+	}`)
+	sendGitHubWebhook(t, handler, "pull_request", "delivery-pr-opened", openedPayload)
+
+	syncPayload := []byte(`{
+		"action":"synchronize",
+		"number":88,
+		"repository":{"full_name":"samhotchkiss/otter-camp"},
+		"installation":{"id":4323},
+		"pull_request":{
+			"number":88,
+			"title":"PR from webhook (sync)",
+			"body":"sync body",
+			"state":"open",
+			"html_url":"https://github.com/samhotchkiss/otter-camp/pull/88",
+			"merged":false
+		}
+	}`)
+	sendGitHubWebhook(t, handler, "pull_request", "delivery-pr-sync", syncPayload)
+
+	closedPayload := []byte(`{
+		"action":"closed",
+		"number":88,
+		"repository":{"full_name":"samhotchkiss/otter-camp"},
+		"installation":{"id":4323},
+		"pull_request":{
+			"number":88,
+			"title":"PR from webhook (sync)",
+			"body":"sync body",
+			"state":"closed",
+			"closed_at":"2026-02-06T12:20:00Z",
+			"html_url":"https://github.com/samhotchkiss/otter-camp/pull/88",
+			"merged":true
+		}
+	}`)
+	sendGitHubWebhook(t, handler, "pull_request", "delivery-pr-closed", closedPayload)
+
+	issue, link := loadIssueByGitHubNumber(t, db, orgID, projectID, 88)
+	require.Equal(t, "PR from webhook (sync)", issue.Title)
+	require.Equal(t, "closed", issue.State)
+	require.NotNil(t, link.GitHubURL)
+	require.Contains(t, *link.GitHubURL, "/pull/88")
+}
+
+func TestGitHubWebhookIssueCommentCreatesActivity(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-webhook-comment-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Webhook Comment Project")
+	handler := NewGitHubIntegrationHandler(db)
+	setupWebhookRepoBinding(t, handler, orgID, projectID, "samhotchkiss/otter-camp", 4324)
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret")
+
+	payload := []byte(`{
+		"action":"created",
+		"repository":{"full_name":"samhotchkiss/otter-camp"},
+		"installation":{"id":4324},
+		"issue":{
+			"number":91,
+			"title":"Commented issue",
+			"body":"issue body",
+			"state":"open",
+			"html_url":"https://github.com/samhotchkiss/otter-camp/issues/91"
+		},
+		"comment":{
+			"body":"Looks good",
+			"html_url":"https://github.com/samhotchkiss/otter-camp/issues/91#issuecomment-1",
+			"user":{"login":"octocat"}
+		}
+	}`)
+	sendGitHubWebhook(t, handler, "issue_comment", "delivery-comment-created", payload)
+
+	_, _ = loadIssueByGitHubNumber(t, db, orgID, projectID, 91)
+
+	var activityCount int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM activity_log
+			WHERE org_id = $1
+			  AND project_id = $2
+			  AND action = 'github.issue_comment.created'`,
+		orgID,
+		projectID,
+	).Scan(&activityCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, activityCount)
+}
+
+func TestGitHubWebhookDuplicateDeliveryDoesNotDuplicateIssueWrites(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-webhook-dup-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Webhook Duplicate Project")
+	handler := NewGitHubIntegrationHandler(db)
+	setupWebhookRepoBinding(t, handler, orgID, projectID, "samhotchkiss/otter-camp", 4325)
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret")
+
+	payload := []byte(`{
+		"action":"opened",
+		"repository":{"full_name":"samhotchkiss/otter-camp"},
+		"installation":{"id":4325},
+		"issue":{
+			"number":77,
+			"title":"Deduped issue",
+			"body":"body",
+			"state":"open",
+			"html_url":"https://github.com/samhotchkiss/otter-camp/issues/77"
+		}
+	}`)
+
+	sendGitHubWebhook(t, handler, "issues", "delivery-dup-77", payload)
+	sendGitHubWebhook(t, handler, "issues", "delivery-dup-77", payload)
+
+	issues := listProjectIssuesForTest(t, db, orgID, projectID)
+	require.Len(t, issues, 1)
+
+	var activityCount int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM activity_log
+			WHERE org_id = $1
+			  AND project_id = $2
+			  AND action = 'github.issue.opened'`,
+		orgID,
+		projectID,
+	).Scan(&activityCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, activityCount)
+}
+
+func setupWebhookRepoBinding(
+	t *testing.T,
+	handler *GitHubIntegrationHandler,
+	orgID, projectID, repositoryFullName string,
+	installationID int64,
+) {
+	t.Helper()
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := handler.Installations.Upsert(ctx, store.UpsertGitHubInstallationInput{
+		InstallationID: installationID,
+		AccountLogin:   "the-trawl",
+		AccountType:    "Organization",
+	})
+	require.NoError(t, err)
+
+	_, err = handler.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: repositoryFullName,
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNone,
+	})
+	require.NoError(t, err)
+}
+
+func sendGitHubWebhook(
+	t *testing.T,
+	handler *GitHubIntegrationHandler,
+	eventType, deliveryID string,
+	payload []byte,
+) {
+	t.Helper()
+	signature := signGitHubPayload("webhook-secret", payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/github/webhook", bytes.NewReader(payload))
+	req.Header.Set(githubSignatureHeader, signature)
+	req.Header.Set(githubEventHeader, eventType)
+	req.Header.Set(githubDeliveryHeader, deliveryID)
+	rec := httptest.NewRecorder()
+	handler.GitHubWebhook(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+}
+
+func listProjectIssuesForTest(
+	t *testing.T,
+	db *sql.DB,
+	orgID, projectID string,
+) []store.ProjectIssue {
+	t.Helper()
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	issues, err := issueStore.ListIssues(ctx, store.ProjectIssueFilter{
+		ProjectID: projectID,
+		Limit:     200,
+	})
+	require.NoError(t, err)
+	return issues
+}
+
+func loadIssueByGitHubNumber(
+	t *testing.T,
+	db *sql.DB,
+	orgID, projectID string,
+	githubNumber int64,
+) (store.ProjectIssue, store.ProjectIssueGitHubLink) {
+	t.Helper()
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+
+	issues := listProjectIssuesForTest(t, db, orgID, projectID)
+	issueIDs := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		issueIDs = append(issueIDs, issue.ID)
+	}
+	links, err := issueStore.ListGitHubLinksByIssueIDs(ctx, issueIDs)
+	require.NoError(t, err)
+	for _, issue := range issues {
+		link, ok := links[issue.ID]
+		if !ok {
+			continue
+		}
+		if link.GitHubNumber == githubNumber {
+			return issue, link
+		}
+	}
+	t.Fatalf("github issue number %d not found", githubNumber)
+	return store.ProjectIssue{}, store.ProjectIssueGitHubLink{}
+}
+
 func TestIntegrationStatusDisconnectedByDefault(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "integration-status-org")
