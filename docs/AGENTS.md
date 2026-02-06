@@ -1,26 +1,49 @@
-# OtterCamp Agent Instructions
+# Agent Instructions for OtterCamp
 
-This document is the **source of truth** for how agents interact with OtterCamp. It applies to all agents (human or AI) producing work that OtterCamp should track.
+> This document defines how agents interact with OtterCamp. All agents (human or AI) producing work that OtterCamp should track must follow these guidelines.
 
-## Core Model
-- **Commits = activity.** The OtterCamp activity feed is driven by commits (and linked issues/PRs). If it matters, it must be committed.
-- **OtterCamp = work product layer.** GitHub is the public mirror; OtterCamp is the canonical view of work.
-- **No secrets in repos.** Never commit tokens, credentials, or private keys.
+## Core Principles
 
-## Required Workflow
-1. **Work in a repo.** All substantive work must live in a Git repo (code or content).
-2. **Commit early and often.** Each meaningful change should be committed with a clear message.
-3. **Push when done.** Push commits so OtterCamp can ingest them into the activity stream.
+**OtterCamp is your primary workspace.** Everything you create, modify, or produce gets committed and pushed here. GitHub (when connected) is a downstream sync target, not your workspace.
 
-## Create a Project + Configure the Git Remote
-Use the `otter` CLI to create/clone the project so the **remote is set correctly**.
+**Commits = activity.** The OtterCamp activity feed is driven by commits (and linked issues/PRs). If it matters, it must be committed.
+
+**No secrets in repos.** Never commit tokens, credentials, or private keys.
+
+---
+
+## The Commit-Everything Model
+
+All work product must be committed to an OtterCamp project repository:
+
+| Work Type | What to Commit |
+|-----------|----------------|
+| **Code** | Source files, configs, scripts |
+| **Writing** | Blog posts, documentation, drafts (as markdown) |
+| **Images** | Generated images, diagrams, assets |
+| **Data** | JSON, CSV, any structured output |
+| **Research** | Notes, summaries, reference materials |
+| **Design** | Mockups, assets, design docs |
+
+### Why?
+
+1. **Visibility** — Sam and the team can see what you're working on
+2. **History** — Every change is tracked with context
+3. **Collaboration** — Other agents can build on your work
+4. **Accountability** — Work that isn't committed didn't happen
+
+---
+
+## Getting Started
+
+Use the `otter` CLI to create/clone projects so the **remote is set correctly**.
 
 ### Option A — Create + clone (recommended)
 ```bash
 # Create a new OtterCamp project
 otter project create "Project Name"
 
-# Clone it locally (this sets the correct remote automatically)
+# Clone it locally (sets the correct remote automatically)
 otter clone <project-name>
 
 # Work in the repo
@@ -46,68 +69,194 @@ otter repo info <project-name>
 # then: git remote add origin <url>
 ```
 
-### Push workflow
+---
+
+## Commit Message Format (Required)
+
+Every commit must follow this format:
+
+```
+<type>(<scope>): <short description>
+
+<detailed body explaining what was done and why>
+
+Refs: #<issue-number> (if applicable)
+```
+
+### Commit Types
+
+- `feat` — New feature or capability
+- `fix` — Bug fix
+- `docs` — Documentation only
+- `content` — Blog posts, articles, creative writing
+- `assets` — Images, media, design files
+- `refactor` — Code restructuring (no functional change)
+- `chore` — Maintenance, cleanup, config changes
+
+### The Body is Required
+
+OtterCamp's activity stream surfaces the **commit body** as the expanded, human-readable description of work. If the body is empty, the feed becomes low-signal.
+
+Explain:
+- What you did
+- Why you did it
+- Any decisions you made
+- Context that would help someone understand the change
+
+**Bad:**
+```
+feat: add homepage
+```
+
+**Good:**
+```
+feat(web): add homepage with hero section and CTA
+
+Built the initial homepage layout based on Jeff G's mockups.
+Includes:
+- Hero section with tagline "Your AI Team, Organized"
+- Primary CTA button linking to /signup
+- Feature grid showing 3 key benefits
+- Responsive layout (mobile-first)
+
+Used warm gold accent (#C9A86C) per design spec.
+Kept animations subtle to avoid distraction.
+
+Refs: #42
+```
+
+---
+
+## Working with Issues
+
+### When You're Assigned an Issue
+
+1. **Read the full issue** — including comments and linked context
+2. **Comment when you start** — "Starting work — session `{sessionKey}`"
+3. **Update as you go** — check boxes, add progress comments
+4. **Commit frequently** — small commits > big commits
+5. **Close with a summary** — what was done, any follow-ups needed
+
+### Issue References in Commits
+
+Always include `Refs: #123` (or `Closes: #123`) in your commit body when the work relates to an issue.
+
+---
+
+## Project Structure
+
+Each project in OtterCamp has its own repository. The structure depends on project type:
+
+### Software Projects
+```
+/src           — source code
+/docs          — documentation
+/tests         — test files
+README.md      — project overview
+```
+
+### Content Projects
+```
+/posts         — blog posts, articles
+/drafts        — work in progress
+/assets        — images, media
+README.md      — project overview
+```
+
+### Dedicated Non-Code Repos
+
+Use these repositories when work is primarily content/book/asset production:
+
+| Domain | Repository |
+|--------|------------|
+| Long-form content, posts, drafts | `The-Trawl/content` |
+| Book manuscripts, editorial notes | `The-Trawl/three-stones-book` |
+| Logos, illustrations, social assets | `The-Trawl/brand-assets` |
+
+If your output belongs in one of these domains, commit there so activity appears in OtterCamp and history stays project-scoped.
+
+---
+
+## Push Workflow
+
 ```bash
 git add -A
-git commit -m "your message"
+git commit -m "type(scope): short description" -m "Verbose body here..."
 git push
 ```
 
-## Commit Message Format (Required)
-Commit messages must include:
+Commit early and often. Push when done so OtterCamp can ingest the activity.
 
-```
-<short subject line (≈50 chars)>
+---
 
-<verbose description body>
-```
+## Syncing with GitHub
 
-**Examples:**
-```
-feat: add onboarding email sequence
+Some projects sync with GitHub. When they do:
 
-Adds the first‑time user onboarding sequence (5 messages) with subject lines,
-copy, and send schedule. Also includes a short rationale for the sequence order.
-```
+- **Code flows both ways** — but OtterCamp is the source of truth
+- **Issues are pulled from GitHub** — external contributors can report bugs
+- **Closing an OtterCamp issue** closes the linked GitHub issue
 
-```
-fix: normalize agent last active timestamps
+You don't need to think about GitHub directly. Just commit to OtterCamp.
 
-Stores RFC3339 timestamps from OpenClaw sync and guards invalid values in the UI.
-Prevents “Invalid Date” from appearing on the Agents page.
-```
+### Manual Re-Sync (When Needed)
 
-### Why the verbose body matters
-OtterCamp’s Code Browser MVP surfaces the **commit body** as the expanded, human‑readable description of work. If the body is empty, the activity stream becomes low‑signal.
-
-## What to Commit
-- **Code changes** (features, fixes, refactors)
-- **Content** (drafts, edits, research, assets)
-- **Design** (mockups, assets, design docs)
-- **Configuration** (non‑secret settings)
-- **Documentation** (specs, notes, decisions)
-
-## What NOT to Commit
-- Secrets, API keys, tokens, private certs
-- Personal data not explicitly approved
-
-## Issue Linking (Preferred)
-When possible, include the issue ID in the commit message subject (e.g., `fix(#123): …`).
-
-## Sync Expectations
-- OtterCamp will ingest commits and display them in the Activity Feed.
-- GitHub issues may be imported and linked to OtterCamp issues (bi‑directional sync).
-- Closing issues in OtterCamp should close linked GitHub issues when the fix is pushed.
-
-## Manual Re‑Sync (Agent Trigger)
-Agents may trigger a re‑sync via API when needed:
+Agents may trigger a re-sync via API:
 
 ```
 POST /api/projects/:id/repo/sync
 POST /api/projects/:id/issues/import
 ```
 
-Use these sparingly (after a batch of commits or when GitHub updated externally).
+Use sparingly (after a batch of commits or when GitHub updated externally).
 
 ---
-Questions or updates? Open a PR or issue in `otter-camp` and tag the maintainers.
+
+## What NOT to Commit
+
+- **Secrets** — API keys, tokens, passwords (use environment variables)
+- **Large binaries** — videos, large datasets (link to external storage)
+- **Node modules / vendor deps** — these are installed, not tracked
+- **Personal notes** — use your own memory files, not project repos
+
+---
+
+## Communication
+
+### Status Updates
+
+When working on significant tasks, provide updates in the relevant Slack channel:
+- What you've done
+- What you're doing next
+- Any blockers
+
+### Asking for Help
+
+If you're stuck:
+1. Check the issue for context
+2. Check related issues/PRs
+3. Search the repo for similar patterns
+4. **Then** ask in Slack with specific context
+
+---
+
+## Quality Standards
+
+- **Test your changes** — if the project has tests, run them
+- **Follow existing patterns** — match the code style already in use
+- **Keep commits atomic** — one logical change per commit
+- **Review your own work** — read the diff before committing
+
+---
+
+## Summary
+
+1. **Commit everything** — all work goes into OtterCamp
+2. **Write good commit messages** — verbose bodies, clear intent
+3. **Reference issues** — connect your work to the task
+4. **Small commits** — commit often, push frequently
+5. **Stay visible** — update issues and Slack as you work
+
+---
+
+*Questions or updates? Open a PR or issue in `otter-camp` and tag the maintainers.*
