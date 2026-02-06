@@ -3,7 +3,8 @@
 ## Media (Images)
 - Images are **committed to the repo** (not embedded externally).
 - Display images in the editor with a preview.
-- Allow **inline comments on images** to prompt iteration.
+- **MVP:** image preview only (no inline image comments).
+- Image comments are a **post‑MVP enhancement** and should be tracked separately.
 
 ## Metadata
 - No formal metadata system in MVP.

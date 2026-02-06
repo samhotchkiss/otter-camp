@@ -15,6 +15,7 @@
 - **Project chat exists for all projects** and is not issue‑scoped.
 - **Inline feedback**: click‑to‑comment UI; backend stores comments using **CriticMarkup** `{>> comment <<}`.
 - **No external publishing** in MVP (Substack etc. later).
+- **Image comments are deferred**: MVP supports image preview only; inline image comments are post‑MVP.
 
 ## Files in this Use Case
 - `01-project-chat.md` — project‑level chat model
