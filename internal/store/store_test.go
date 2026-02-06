@@ -282,3 +282,71 @@ func TestErrorTypes(t *testing.T) {
 func strPtr(s string) *string {
 	return &s
 }
+
+func TestWithWorkspaceID_SQLInjectionAttempts(t *testing.T) {
+	// These tests verify that malicious inputs are rejected by UUID validation
+	// before reaching the fmt.Sprintf interpolation, preventing SQL injection.
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	ctx := context.Background()
+
+	injectionAttempts := []string{
+		"'; DROP TABLE users; --",
+		"a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'; DROP TABLE users; --",
+		"test\x00injection",
+		"' OR '1'='1",
+		"${env:DATABASE_URL}",
+		"{{.Env.DATABASE_URL}}",
+		"a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11\n; DROP TABLE users",
+	}
+
+	for _, attempt := range injectionAttempts {
+		t.Run(attempt[:min(20, len(attempt))], func(t *testing.T) {
+			conn, err := WithWorkspaceID(ctx, db, attempt)
+			assert.Error(t, err, "expected error for injection attempt")
+			assert.Nil(t, conn, "expected nil connection for injection attempt")
+			assert.ErrorIs(t, err, ErrInvalidWorkspace, "expected ErrInvalidWorkspace")
+		})
+	}
+}
+
+func TestWithWorkspaceTx_ValidWorkspace(t *testing.T) {
+	// Verify transaction variant works correctly with SET LOCAL
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "store-test-workspace-tx")
+	ctx := ctxWithWorkspace(orgID)
+
+	tx, err := WithWorkspaceTx(ctx, db)
+	require.NoError(t, err)
+	require.NotNil(t, tx)
+	defer tx.Rollback()
+
+	// Verify SET LOCAL worked within transaction
+	var result string
+	err = tx.QueryRowContext(ctx, "SELECT current_setting('app.org_id', true)").Scan(&result)
+	require.NoError(t, err)
+	assert.Equal(t, orgID, result)
+}
+
+func TestWithWorkspaceIDTx_ValidWorkspace(t *testing.T) {
+	// Verify explicit ID transaction variant works correctly with SET LOCAL
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "store-test-workspaceid-tx")
+	ctx := context.Background()
+
+	tx, err := WithWorkspaceIDTx(ctx, db, orgID)
+	require.NoError(t, err)
+	require.NotNil(t, tx)
+	defer tx.Rollback()
+
+	// Verify SET LOCAL worked within transaction
+	var result string
+	err = tx.QueryRowContext(ctx, "SELECT current_setting('app.org_id', true)").Scan(&result)
+	require.NoError(t, err)
+	assert.Equal(t, orgID, result)
+}
