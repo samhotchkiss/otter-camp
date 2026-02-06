@@ -146,6 +146,41 @@ func TestProjectRepoStore_UpdateBranchCheckpoint(t *testing.T) {
 	require.Equal(t, "sha-2", *binding.LastSyncedSHA)
 }
 
+func TestProjectRepoStore_UpdateLocalCloneState(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "repo-local-clone-org")
+	projectID := createTestProject(t, db, orgID, "repo-local-clone-project")
+
+	store := NewProjectRepoStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	_, err := store.UpsertBinding(ctx, UpsertProjectRepoBindingInput{
+		ProjectID:          projectID,
+		RepositoryFullName: "samhotchkiss/otter-camp",
+		DefaultBranch:      "main",
+		Enabled:            true,
+		SyncMode:           RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      RepoConflictNone,
+	})
+	require.NoError(t, err)
+
+	updated, err := store.UpdateLocalCloneState(ctx, projectID, "release/2026", "/tmp/repos/project-a")
+	require.NoError(t, err)
+	require.Equal(t, "release/2026", updated.DefaultBranch)
+	require.NotNil(t, updated.LocalRepoPath)
+	require.Equal(t, "/tmp/repos/project-a", *updated.LocalRepoPath)
+
+	fetched, err := store.GetBinding(ctx, projectID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched.LocalRepoPath)
+	require.Equal(t, "/tmp/repos/project-a", *fetched.LocalRepoPath)
+
+	_, err = store.UpdateLocalCloneState(ctx, projectID, "main", "   ")
+	require.Error(t, err)
+}
+
 func TestProjectRepoStore_IsolationAndValidation(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

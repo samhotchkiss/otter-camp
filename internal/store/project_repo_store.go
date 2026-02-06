@@ -29,6 +29,7 @@ type ProjectRepoBinding struct {
 	ProjectID          string          `json:"project_id"`
 	RepositoryFullName string          `json:"repository_full_name"`
 	DefaultBranch      string          `json:"default_branch"`
+	LocalRepoPath      *string         `json:"local_repo_path,omitempty"`
 	Enabled            bool            `json:"enabled"`
 	SyncMode           string          `json:"sync_mode"`
 	AutoSync           bool            `json:"auto_sync"`
@@ -55,6 +56,7 @@ type UpsertProjectRepoBindingInput struct {
 	ProjectID          string
 	RepositoryFullName string
 	DefaultBranch      string
+	LocalRepoPath      *string
 	Enabled            bool
 	SyncMode           string
 	AutoSync           bool
@@ -78,6 +80,7 @@ const projectRepoBindingColumns = `
 	project_id,
 	repository_full_name,
 	default_branch,
+	local_repo_path,
 	enabled,
 	sync_mode,
 	auto_sync,
@@ -158,6 +161,7 @@ func (s *ProjectRepoStore) UpsertBinding(
 			project_id,
 			repository_full_name,
 			default_branch,
+			local_repo_path,
 			enabled,
 			sync_mode,
 			auto_sync,
@@ -166,12 +170,13 @@ func (s *ProjectRepoStore) UpsertBinding(
 			conflict_state,
 			conflict_details
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
 		)
 		ON CONFLICT (project_id)
 		DO UPDATE SET
 			repository_full_name = EXCLUDED.repository_full_name,
 			default_branch = EXCLUDED.default_branch,
+			local_repo_path = EXCLUDED.local_repo_path,
 			enabled = EXCLUDED.enabled,
 			sync_mode = EXCLUDED.sync_mode,
 			auto_sync = EXCLUDED.auto_sync,
@@ -188,6 +193,7 @@ func (s *ProjectRepoStore) UpsertBinding(
 		input.ProjectID,
 		repoName,
 		defaultBranch,
+		nullableString(input.LocalRepoPath),
 		input.Enabled,
 		syncMode,
 		input.AutoSync,
@@ -436,8 +442,67 @@ func (s *ProjectRepoStore) UpdateBranchCheckpoint(
 	return &branch, nil
 }
 
+func (s *ProjectRepoStore) UpdateLocalCloneState(
+	ctx context.Context,
+	projectID string,
+	defaultBranch string,
+	localRepoPath string,
+) (*ProjectRepoBinding, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+
+	defaultBranch = strings.TrimSpace(defaultBranch)
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+
+	localRepoPath = strings.TrimSpace(localRepoPath)
+	if localRepoPath == "" {
+		return nil, fmt.Errorf("local_repo_path is required")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	binding, err := scanProjectRepoBinding(conn.QueryRowContext(
+		ctx,
+		`UPDATE project_repo_bindings
+			SET default_branch = $2,
+				local_repo_path = $3,
+				updated_at = NOW()
+			WHERE project_id = $1
+			RETURNING`+projectRepoBindingColumns,
+		projectID,
+		defaultBranch,
+		localRepoPath,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to update local clone state: %w", err)
+	}
+
+	if binding.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	return &binding, nil
+}
+
 func scanProjectRepoBinding(scanner interface{ Scan(...any) error }) (ProjectRepoBinding, error) {
 	var binding ProjectRepoBinding
+	var localRepoPath sql.NullString
 	var lastSyncedSHA sql.NullString
 	var lastSyncedAt sql.NullTime
 	if err := scanner.Scan(
@@ -446,6 +511,7 @@ func scanProjectRepoBinding(scanner interface{ Scan(...any) error }) (ProjectRep
 		&binding.ProjectID,
 		&binding.RepositoryFullName,
 		&binding.DefaultBranch,
+		&localRepoPath,
 		&binding.Enabled,
 		&binding.SyncMode,
 		&binding.AutoSync,
@@ -457,6 +523,10 @@ func scanProjectRepoBinding(scanner interface{ Scan(...any) error }) (ProjectRep
 		&binding.UpdatedAt,
 	); err != nil {
 		return binding, err
+	}
+
+	if localRepoPath.Valid {
+		binding.LocalRepoPath = &localRepoPath.String
 	}
 
 	if lastSyncedSHA.Valid {

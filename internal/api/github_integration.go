@@ -683,11 +683,16 @@ func (h *GitHubIntegrationHandler) UpdateSettings(w http.ResponseWriter, r *http
 	if request.AutoSync != nil {
 		finalAutoSync = *request.AutoSync
 	}
+	var localRepoPath *string
+	if existing != nil {
+		localRepoPath = existing.LocalRepoPath
+	}
 
 	upserted, err := h.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
 		ProjectID:          projectID,
 		RepositoryFullName: finalRepo,
 		DefaultBranch:      finalDefaultBranch,
+		LocalRepoPath:      localRepoPath,
 		Enabled:            finalEnabled,
 		SyncMode:           finalSyncMode,
 		AutoSync:           finalAutoSync,
