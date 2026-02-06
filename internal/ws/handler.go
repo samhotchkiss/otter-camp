@@ -220,7 +220,7 @@ func isWebSocketOriginAllowed(r *http.Request) bool {
 
 	if allowed := parseAllowedOrigins(os.Getenv("WS_ALLOWED_ORIGINS")); len(allowed) > 0 {
 		for _, candidate := range allowed {
-			if strings.EqualFold(origin, candidate) {
+			if matchesOriginPattern(origin, candidate) {
 				return true
 			}
 		}
@@ -245,6 +245,51 @@ func isWebSocketOriginAllowed(r *http.Request) bool {
 
 	// Treat loopback aliases as equivalent when port matches.
 	return isLoopbackHost(originHost) && isLoopbackHost(requestHost)
+}
+
+// matchesOriginPattern checks if origin matches a pattern.
+// Supports wildcard patterns like "https://*.otter.camp" where * matches any subdomain.
+func matchesOriginPattern(origin, pattern string) bool {
+	origin = strings.ToLower(strings.TrimSpace(origin))
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+
+	// Exact match
+	if origin == pattern {
+		return true
+	}
+
+	// Wildcard subdomain match: https://*.example.com
+	if strings.Contains(pattern, "://*.") {
+		// Split pattern into scheme and host parts
+		patternParts := strings.SplitN(pattern, "://", 2)
+		originParts := strings.SplitN(origin, "://", 2)
+		if len(patternParts) != 2 || len(originParts) != 2 {
+			return false
+		}
+
+		// Schemes must match
+		if patternParts[0] != originParts[0] {
+			return false
+		}
+
+		// Pattern host starts with *. — match suffix
+		patternHost := patternParts[1]
+		originHost := originParts[1]
+		if strings.HasPrefix(patternHost, "*.") {
+			suffix := patternHost[1:] // e.g., ".otter.camp"
+			// Origin host must end with the suffix (e.g., "sam.otter.camp" ends with ".otter.camp")
+			// Or origin host equals the base domain (e.g., "otter.camp" for "*.otter.camp")
+			if strings.HasSuffix(originHost, suffix) {
+				return true
+			}
+			// Also allow exact match on base domain (otter.camp matches *.otter.camp)
+			if originHost == patternHost[2:] {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func parseAllowedOrigins(raw string) []string {
