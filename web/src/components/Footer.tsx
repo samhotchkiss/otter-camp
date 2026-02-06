@@ -93,7 +93,7 @@ export default function Footer({
           </div>
         </div>
 
-        <div className="flex flex-col items-start gap-1 text-xs text-otter-muted dark:text-otter-dark-muted md:items-end">
+        <div className="flex flex-col items-start gap-2 text-xs text-otter-muted dark:text-otter-dark-muted md:items-end">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="font-semibold text-otter-text dark:text-otter-dark-text">
               v{buildInfo.version}
@@ -104,6 +104,17 @@ export default function Footer({
           <time dateTime={buildInfo.buildTime} title={buildInfo.buildTime}>
             Built {buildInfo.buildLabel}
           </time>
+          <div className="mt-1 flex flex-col items-start gap-1 md:items-end">
+            <span className="text-otter-text dark:text-otter-dark-text">Made with 💛 in Santa Fe</span>
+            <a 
+              href="https://www.seaotters.org/take-action/donate/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-otter-accent hover:underline dark:text-otter-dark-accent"
+            >
+              Donate to Real Otters 🦦
+            </a>
+          </div>
         </div>
       </div>
     </footer>

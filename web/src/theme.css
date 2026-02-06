@@ -185,6 +185,7 @@ body {
 .two-column-layout {
   display: grid;
   grid-template-columns: 1fr 360px;
+  gap: 32px;
 }
 
 .primary {

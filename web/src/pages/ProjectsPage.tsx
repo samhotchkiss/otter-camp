@@ -129,7 +129,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
       className="group cursor-pointer rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm backdrop-blur transition hover:border-[var(--accent)]/30 hover:shadow-md">
       <div className="flex items-start justify-between">
         <div className={`flex h-12 w-12 items-center justify-center rounded-xl text-2xl ${colors.bg}`}>
-          {project.emoji}
+          {project.emoji || "📁"}
         </div>
         <button
           type="button"
@@ -326,7 +326,7 @@ export default function ProjectsPage({
         <button
           type="button"
           onClick={handleCreateProject}
-          className="inline-flex items-center gap-2 rounded-xl bg-[#C9A86C] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-[#B8975B] focus:outline-none focus:ring-2 focus:ring-[#C9A86C] focus:ring-offset-2 focus:ring-offset-[var(--bg)]"
+          className="inline-flex items-center gap-2 rounded-xl bg-[#C9A86C] px-4 py-2.5 text-sm font-medium text-[#1a1a1a] shadow-sm transition hover:bg-[#B8975B] focus:outline-none focus:ring-2 focus:ring-[#C9A86C] focus:ring-offset-2 focus:ring-offset-[var(--bg)]"
         >
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
