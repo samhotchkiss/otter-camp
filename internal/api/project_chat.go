@@ -500,22 +500,25 @@ func (h *ProjectChatHandler) resolveProjectLeadAgent(
 	ctx context.Context,
 	projectID string,
 ) (string, string, error) {
-	// 0) Prefer explicit project-level primary agent setting.
-	var primarySlug, primaryName string
-	err := h.DB.QueryRowContext(ctx, `
-		SELECT a.slug, a.display_name
-		FROM projects p
-		INNER JOIN agents a ON a.id = p.primary_agent_id
-		WHERE p.id = $1
-	`, projectID).Scan(&primarySlug, &primaryName)
-	if err == nil {
-		return strings.TrimSpace(primarySlug), strings.TrimSpace(primaryName), nil
-	}
-	if err != nil && err != sql.ErrNoRows {
-		return "", "", err
+	// 0) Prefer explicit project-level primary agent setting when available.
+	if supportsProjectPrimaryAgentColumn(ctx, h.DB) {
+		var primarySlug, primaryName string
+		err := h.DB.QueryRowContext(ctx, `
+			SELECT a.slug, a.display_name
+			FROM projects p
+			INNER JOIN agents a ON a.id = p.primary_agent_id
+			WHERE p.id = $1
+		`, projectID).Scan(&primarySlug, &primaryName)
+		if err == nil {
+			return strings.TrimSpace(primarySlug), strings.TrimSpace(primaryName), nil
+		}
+		if err != nil && err != sql.ErrNoRows {
+			return "", "", err
+		}
 	}
 
 	// 1) Fall back to explicit issue owners for this project.
+	var err error
 	var ownerSlug, ownerName string
 	err = h.DB.QueryRowContext(ctx, `
 		SELECT a.slug, a.display_name

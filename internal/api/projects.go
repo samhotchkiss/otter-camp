@@ -111,30 +111,10 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query database directly (bypassing RLS for reliability)
-	query := `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
-		p.primary_agent_id, COALESCE(a.display_name, '') as lead,
-		COALESCE(t.task_count, 0) as task_count,
-		COALESCE(t.completed_count, 0) as completed_count
-		FROM projects p
-		LEFT JOIN agents a ON a.id = p.primary_agent_id
-		LEFT JOIN (
-			SELECT project_id,
-				COUNT(*) as task_count,
-				COUNT(*) FILTER (WHERE status = 'done') as completed_count
-			FROM tasks
-			WHERE org_id = $1 AND project_id IS NOT NULL
-			GROUP BY project_id
-		) t ON t.project_id = p.id
-		WHERE p.org_id = $1 ORDER BY p.created_at DESC`
-
-	rows, err := h.DB.QueryContext(r.Context(), query, workspaceID)
+	usePrimaryAgent := supportsProjectPrimaryAgentColumn(r.Context(), h.DB)
+	rows, err := h.DB.QueryContext(r.Context(), listProjectsQuery(usePrimaryAgent), workspaceID)
 	if err != nil {
-		sendJSON(w, http.StatusOK, map[string]interface{}{
-			"projects": demoProjects,
-			"total":    len(demoProjects),
-		})
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list projects"})
 		return
 	}
 	defer rows.Close()
@@ -143,21 +123,25 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p projectAPIResponse
 		var createdAt interface{}
-		var primaryAgentID sql.NullString
-		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount); err != nil {
-			continue
-		}
-		if primaryAgentID.Valid {
-			p.PrimaryAgentID = &primaryAgentID.String
+		if usePrimaryAgent {
+			var primaryAgentID sql.NullString
+			if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount); err != nil {
+				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to parse projects"})
+				return
+			}
+			if primaryAgentID.Valid {
+				p.PrimaryAgentID = &primaryAgentID.String
+			}
+		} else {
+			if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount); err != nil {
+				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to parse projects"})
+				return
+			}
 		}
 		projects = append(projects, p)
 	}
-
-	if len(projects) == 0 {
-		sendJSON(w, http.StatusOK, map[string]interface{}{
-			"projects": demoProjects,
-			"total":    len(demoProjects),
-		})
+	if err := rows.Err(); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list projects"})
 		return
 	}
 
@@ -203,29 +187,22 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query database directly (bypassing RLS for reliability)
-	query := `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
-		p.primary_agent_id, COALESCE(a.display_name, '') as lead,
-		COALESCE(t.task_count, 0) as task_count,
-		COALESCE(t.completed_count, 0) as completed_count
-		FROM projects p
-		LEFT JOIN agents a ON a.id = p.primary_agent_id
-		LEFT JOIN (
-			SELECT project_id,
-				COUNT(*) as task_count,
-				COUNT(*) FILTER (WHERE status = 'done') as completed_count
-			FROM tasks
-			WHERE org_id = $2 AND project_id IS NOT NULL
-			GROUP BY project_id
-		) t ON t.project_id = p.id
-		WHERE p.id = $1 AND p.org_id = $2`
+	usePrimaryAgent := supportsProjectPrimaryAgentColumn(r.Context(), h.DB)
 
 	var p projectAPIResponse
 	var createdAt interface{}
-	var primaryAgentID sql.NullString
-	err := h.DB.QueryRowContext(r.Context(), query, projectID, workspaceID).Scan(
-		&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount)
+	var err error
+	if usePrimaryAgent {
+		var primaryAgentID sql.NullString
+		err = h.DB.QueryRowContext(r.Context(), getProjectQuery(true), projectID, workspaceID).Scan(
+			&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount)
+		if primaryAgentID.Valid {
+			p.PrimaryAgentID = &primaryAgentID.String
+		}
+	} else {
+		err = h.DB.QueryRowContext(r.Context(), getProjectQuery(false), projectID, workspaceID).Scan(
+			&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount)
+	}
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -234,9 +211,6 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		}
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to get project"})
 		return
-	}
-	if primaryAgentID.Valid {
-		p.PrimaryAgentID = &primaryAgentID.String
 	}
 
 	sendJSON(w, http.StatusOK, p)
@@ -323,6 +297,10 @@ func (h *ProjectsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
 		return
 	}
+	if !supportsProjectPrimaryAgentColumn(r.Context(), h.DB) {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "project settings migration pending; primary agent not available yet"})
+		return
+	}
 
 	var req struct {
 		PrimaryAgentID *string `json:"primary_agent_id"`
@@ -389,4 +367,90 @@ func (h *ProjectsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 	}
 
 	h.Get(w, r)
+}
+
+func supportsProjectPrimaryAgentColumn(ctx context.Context, db *sql.DB) bool {
+	var exists bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'projects'
+			  AND column_name = 'primary_agent_id'
+		)
+	`).Scan(&exists)
+	return err == nil && exists
+}
+
+func listProjectsQuery(usePrimaryAgent bool) string {
+	if usePrimaryAgent {
+		return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
+			COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+			p.primary_agent_id, COALESCE(a.display_name, '') as lead,
+			COALESCE(t.task_count, 0) as task_count,
+			COALESCE(t.completed_count, 0) as completed_count
+			FROM projects p
+			LEFT JOIN agents a ON a.id = p.primary_agent_id
+			LEFT JOIN (
+				SELECT project_id,
+					COUNT(*) as task_count,
+					COUNT(*) FILTER (WHERE status = 'done') as completed_count
+				FROM tasks
+				WHERE org_id = $1 AND project_id IS NOT NULL
+				GROUP BY project_id
+			) t ON t.project_id = p.id
+			WHERE p.org_id = $1 ORDER BY p.created_at DESC`
+	}
+
+	return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
+		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+		COALESCE(t.task_count, 0) as task_count,
+		COALESCE(t.completed_count, 0) as completed_count
+		FROM projects p
+		LEFT JOIN (
+			SELECT project_id,
+				COUNT(*) as task_count,
+				COUNT(*) FILTER (WHERE status = 'done') as completed_count
+			FROM tasks
+			WHERE org_id = $1 AND project_id IS NOT NULL
+			GROUP BY project_id
+		) t ON t.project_id = p.id
+		WHERE p.org_id = $1 ORDER BY p.created_at DESC`
+}
+
+func getProjectQuery(usePrimaryAgent bool) string {
+	if usePrimaryAgent {
+		return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
+			COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+			p.primary_agent_id, COALESCE(a.display_name, '') as lead,
+			COALESCE(t.task_count, 0) as task_count,
+			COALESCE(t.completed_count, 0) as completed_count
+			FROM projects p
+			LEFT JOIN agents a ON a.id = p.primary_agent_id
+			LEFT JOIN (
+				SELECT project_id,
+					COUNT(*) as task_count,
+					COUNT(*) FILTER (WHERE status = 'done') as completed_count
+				FROM tasks
+				WHERE org_id = $2 AND project_id IS NOT NULL
+				GROUP BY project_id
+			) t ON t.project_id = p.id
+			WHERE p.id = $1 AND p.org_id = $2`
+	}
+
+	return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
+		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+		COALESCE(t.task_count, 0) as task_count,
+		COALESCE(t.completed_count, 0) as completed_count
+		FROM projects p
+		LEFT JOIN (
+			SELECT project_id,
+				COUNT(*) as task_count,
+				COUNT(*) FILTER (WHERE status = 'done') as completed_count
+			FROM tasks
+			WHERE org_id = $2 AND project_id IS NOT NULL
+			GROUP BY project_id
+		) t ON t.project_id = p.id
+		WHERE p.id = $1 AND p.org_id = $2`
 }

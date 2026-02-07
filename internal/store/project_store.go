@@ -34,7 +34,7 @@ func NewProjectStore(db *sql.DB) *ProjectStore {
 	return &ProjectStore{db: db}
 }
 
-const projectSelectColumns = "id, org_id, name, description, status, repo_url, primary_agent_id, local_repo_path, created_at, updated_at"
+const projectSelectColumns = "id, org_id, name, description, status, repo_url, local_repo_path, created_at, updated_at"
 
 // GetByID retrieves a project by ID within the current workspace.
 func (s *ProjectStore) GetByID(ctx context.Context, id string) (*Project, error) {
@@ -257,7 +257,6 @@ func scanProject(scanner interface{ Scan(...any) error }) (Project, error) {
 	var project Project
 	var description sql.NullString
 	var repoURL sql.NullString
-	var primaryAgentID sql.NullString
 	var localRepoPath sql.NullString
 
 	err := scanner.Scan(
@@ -267,7 +266,6 @@ func scanProject(scanner interface{ Scan(...any) error }) (Project, error) {
 		&description,
 		&project.Status,
 		&repoURL,
-		&primaryAgentID,
 		&localRepoPath,
 		&project.CreatedAt,
 		&project.UpdatedAt,
@@ -281,9 +279,6 @@ func scanProject(scanner interface{ Scan(...any) error }) (Project, error) {
 	}
 	if repoURL.Valid {
 		project.RepoURL = &repoURL.String
-	}
-	if primaryAgentID.Valid {
-		project.PrimaryAgentID = &primaryAgentID.String
 	}
 	if localRepoPath.Valid {
 		project.LocalRepoPath = &localRepoPath.String
