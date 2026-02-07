@@ -173,8 +173,8 @@ func handleProject(args []string) {
 		}
 
 		fmt.Printf("Created project: %s\n", project.Name)
-		if project.Slug != "" {
-			fmt.Printf("Slug: %s\n", project.Slug)
+		if project.Slug() != "" {
+			fmt.Printf("Slug: %s\n", project.Slug())
 		}
 		if project.RepoURL != "" {
 			fmt.Printf("Repo: %s\n", project.RepoURL)
