@@ -375,3 +375,28 @@
 - Remaining:
   - #274 Diagnostics runner + gateway log viewer
   - #275 Cron + process controls
+
+## [2026-02-07 16:45:38 MST] Completed Spec102 issue #274 (diagnostics runner + gateway logs)
+- Added backend diagnostics + log endpoints:
+  - `POST /api/admin/diagnostics`
+  - `GET /api/admin/logs`
+- Diagnostics endpoint now returns structured pass/warn/fail checks derived from current bridge/sync/host health snapshot.
+- Logs endpoint now supports `limit`, `level`, and `q` filtering and redacts sensitive tokens from message + metadata payloads.
+- Wired router registrations for new admin routes and added route-coverage assertions.
+- Expanded Connections UI with:
+  - diagnostics card (`Run` action + failing-check summary + checklist render)
+  - gateway logs panel (search + refresh + bounded tail view)
+- Added/updated tests:
+  - `internal/api/admin_connections_test.go`
+    - `TestAdminConnectionsRunDiagnosticsReturnsChecks`
+    - `TestAdminConnectionsGetLogsRedactsSensitiveTokens`
+    - `TestAdminConnectionsGetLogsRejectsInvalidLimit`
+  - `web/src/pages/ConnectionsPage.test.tsx`
+    - diagnostics render + run action + log render path
+- Validation:
+  - `go test ./internal/api -run 'TestAdminConnectionsRunDiagnosticsReturnsChecks|TestAdminConnectionsGetLogsRedactsSensitiveTokens|TestAdminConnectionsGetLogsRejectsInvalidLimit|TestProjectsAndInboxRoutesAreRegistered' -count=1`
+  - `cd web && npm test -- src/pages/ConnectionsPage.test.tsx --run`
+  - `cd web && npm run build:typecheck`
+- Pushed commit: `620c6af`
+- Remaining:
+  - #275 Cron + process controls in Connections
