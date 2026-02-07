@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { Command, CommandCategory } from "../hooks/useCommandPalette";
 import { useCommandPalette } from "../hooks/useCommandPalette";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 const CATEGORY_ORDER: CommandCategory[] = [
   "Navigation",
@@ -30,6 +31,14 @@ export default function CommandPalette({
   } = useCommandPalette();
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Focus trap for modal accessibility
+  const { containerRef } = useFocusTrap({
+    isActive: isOpen,
+    onEscape: () => onOpenChange(false),
+    returnFocusOnClose: true,
+    initialFocusRef: inputRef,
+  });
 
   useEffect(() => {
     registerCommands(commands);
@@ -137,14 +146,21 @@ export default function CommandPalette({
   return (
     <div
       className="command-palette-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 text-slate-100 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
       onClick={() => onOpenChange(false)}
+      aria-hidden="true"
     >
       <div
+        ref={containerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        aria-describedby="command-palette-description"
         className="command-palette-panel w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/95 shadow-2xl shadow-slate-950/40"
         onClick={(event) => event.stopPropagation()}
       >
+        <span id="command-palette-description" className="sr-only">
+          Search for commands, pages, and tasks. Use arrow keys to navigate, Enter to select.
+        </span>
         <div className="flex items-center gap-3 border-b border-slate-800 px-5 py-4">
           <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-800 text-lg">
             ⌘
@@ -155,6 +171,13 @@ export default function CommandPalette({
             </p>
             <input
               ref={inputRef}
+              type="text"
+              role="combobox"
+              aria-expanded="true"
+              aria-controls="command-palette-listbox"
+              aria-autocomplete="list"
+              aria-activedescendant={visibleCommands[activeIndex] ? `command-${visibleCommands[activeIndex].id}` : undefined}
+              aria-label="Search commands"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={handleKeyDown}
@@ -167,17 +190,25 @@ export default function CommandPalette({
           </div>
         </div>
 
-        <div className="max-h-[60vh] overflow-y-auto px-5 py-4">
+        <div
+          id="command-palette-listbox"
+          role="listbox"
+          aria-label="Command suggestions"
+          className="max-h-[60vh] overflow-y-auto px-5 py-4"
+        >
           {!query.trim() && recentCommands.length > 0 ? (
-            <section className="mb-6">
-              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
+            <section className="mb-6" aria-labelledby="recent-commands-heading">
+              <p id="recent-commands-heading" className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
                 Recent
               </p>
-              <div className="mt-3 space-y-2">
+              <div className="mt-3 space-y-2" role="group">
                 {recentCommands.map((command) => (
                   <button
                     key={command.id}
+                    id={`command-${command.id}`}
                     type="button"
+                    role="option"
+                    aria-selected={activeIndex === commandIndexMap.get(command.id)}
                     onClick={() => handleSelect(command)}
                     className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-slate-800/80 ${
                       activeIndex === commandIndexMap.get(command.id)
@@ -189,7 +220,7 @@ export default function CommandPalette({
                       <p className="text-sm font-semibold">{command.label}</p>
                       <p className="text-xs text-slate-500">{command.category}</p>
                     </div>
-                    <span className="text-xs text-slate-500">Recent</span>
+                    <span className="text-xs text-slate-500" aria-hidden="true">Recent</span>
                   </button>
                 ))}
               </div>
@@ -197,20 +228,23 @@ export default function CommandPalette({
           ) : null}
 
           {query.trim() ? (
-            <section>
-              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
+            <section aria-labelledby="search-results-heading">
+              <p id="search-results-heading" className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
                 Results
               </p>
-              <div className="mt-3 space-y-2">
+              <div className="mt-3 space-y-2" role="group">
                 {filteredCommands.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-800 px-4 py-6 text-center text-sm text-slate-500">
+                  <div role="status" className="rounded-xl border border-dashed border-slate-800 px-4 py-6 text-center text-sm text-slate-500">
                     No matches. Try a different keyword.
                   </div>
                 ) : (
                   filteredCommands.map((command) => (
                     <button
                       key={command.id}
+                      id={`command-${command.id}`}
                       type="button"
+                      role="option"
+                      aria-selected={activeIndex === commandIndexMap.get(command.id)}
                       onClick={() => handleSelect(command)}
                       className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-slate-800/80 ${
                         activeIndex === commandIndexMap.get(command.id)
@@ -224,7 +258,7 @@ export default function CommandPalette({
                           {command.category}
                         </p>
                       </div>
-                      <span className="text-xs text-slate-500">Enter</span>
+                      <span className="text-xs text-slate-500" aria-hidden="true">Enter</span>
                     </button>
                   ))
                 )}
@@ -238,9 +272,11 @@ export default function CommandPalette({
                   return null;
                 }
 
+                const categoryId = `category-${category.toLowerCase().replace(/\s+/g, "-")}`;
+
                 return (
-                  <div key={category}>
-                    <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
+                  <div key={category} role="group" aria-labelledby={categoryId}>
+                    <p id={categoryId} className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">
                       {category}
                     </p>
                     <div className="mt-3 space-y-2">
@@ -251,7 +287,10 @@ export default function CommandPalette({
                         return (
                           <button
                             key={command.id}
+                            id={`command-${command.id}`}
                             type="button"
+                            role="option"
+                            aria-selected={isActive}
                             onClick={() => handleSelect(command)}
                             className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-slate-800/80 ${
                               isActive
@@ -267,7 +306,7 @@ export default function CommandPalette({
                                 {command.category}
                               </p>
                             </div>
-                            <span className="text-xs text-slate-500">Enter</span>
+                            <span className="text-xs text-slate-500" aria-hidden="true">Enter</span>
                           </button>
                         );
                       })}

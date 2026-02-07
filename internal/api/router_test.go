@@ -37,7 +37,7 @@ func TestCORSMiddleware(t *testing.T) {
 	req := httptest.NewRequest(http.MethodOptions, "/health", nil)
 	req.Header.Set("Origin", "https://example.com")
 	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
-	req.Header.Set("Access-Control-Request-Headers", "Content-Type")
+	req.Header.Set("Access-Control-Request-Headers", "Content-Type, X-Org-ID")
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -52,6 +52,10 @@ func TestCORSMiddleware(t *testing.T) {
 
 	if allowMethods := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(allowMethods, http.MethodGet) {
 		t.Fatalf("expected Access-Control-Allow-Methods to include GET, got %q", allowMethods)
+	}
+
+	if allowHeaders := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(strings.ToLower(allowHeaders), "x-org-id") {
+		t.Fatalf("expected Access-Control-Allow-Headers to include X-Org-ID, got %q", allowHeaders)
 	}
 }
 

@@ -7,7 +7,17 @@ export type WebSocketMessageType =
   | "TaskCreated"
   | "TaskUpdated"
   | "TaskStatusChanged"
-  | "CommentAdded";
+  | "CommentAdded"
+  | "AgentStatusUpdated"
+  | "AgentStatusChanged"
+  | "FeedItemsAdded"
+  | "DMMessageReceived"
+  | "ExecApprovalRequested"
+  | "ExecApprovalResolved"
+  | "ProjectChatMessageCreated"
+  | "IssueCommentCreated"
+  | "IssueReviewSaved"
+  | "IssueReviewAddressed";
 
 export type WebSocketMessage =
   | {
@@ -34,17 +44,43 @@ const MESSAGE_TYPES: WebSocketMessageType[] = [
   "TaskUpdated",
   "TaskStatusChanged",
   "CommentAdded",
+  "AgentStatusUpdated",
+  "AgentStatusChanged",
+  "FeedItemsAdded",
+  "DMMessageReceived",
+  "ExecApprovalRequested",
+  "ExecApprovalResolved",
+  "ProjectChatMessageCreated",
+  "IssueCommentCreated",
+  "IssueReviewSaved",
+  "IssueReviewAddressed",
 ];
 
 const messageTypeSet = new Set<WebSocketMessageType>(MESSAGE_TYPES);
+
+const resolveApiUrl = (): string => {
+  const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+  if (configured) {
+    return configured;
+  }
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return "";
+};
+
+const API_URL = resolveApiUrl();
 
 const toWebSocketUrl = (path: string) => {
   if (typeof window === "undefined") {
     return path;
   }
 
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}${path}`;
+  // Connect to API server for WebSocket (may be different from frontend host)
+  const apiBase = API_URL || window.location.origin;
+  const apiHost = apiBase.replace(/^https?:\/\//, "");
+  const protocol = apiBase.startsWith("https") ? "wss:" : "ws:";
+  return `${protocol}//${apiHost}${path}`;
 };
 
 const parseMessage = (raw: string): WebSocketMessage => {

@@ -102,13 +102,28 @@ Within an installation, all agents have equal access. They're all the same opera
 
 **Rationale:** Agents aren't employees. They're extensions of one person. Complex permission matrices add overhead without value for solo operators.
 
-### Future: Team Permissions
+### Role-Based Capability Gates (GitHub Sync/Publish)
 
-For team plans:
-- **Owner** — Full access, billing, delete installation
-- **Admin** — Full access except billing/delete
-- **Member** — Create/modify tasks, view all
-- **Viewer** — Read-only access
+High-risk GitHub integration actions are guarded by capabilities:
+- `github.sync.manual` — manual repo/issue sync triggers
+- `github.conflict.resolve` — resolve sync conflict (`Keep GitHub`, `Keep OtterCamp`)
+- `github.publish` — publish to GitHub default branch
+- `github.integration.manage` — connect/disconnect GitHub integration
+
+Role matrix:
+- **owner** — all capabilities
+- **maintainer** — sync, conflict resolve, publish
+- **member** — manual sync only
+- **viewer** — read-only, no protected capabilities
+
+Protected endpoints return `403` with the denied capability key:
+
+```json
+{
+  "error": "forbidden",
+  "capability": "github.publish"
+}
+```
 
 ---
 

@@ -663,6 +663,91 @@ function verifyWebhook(payload, signature, timestamp, secret) {
 
 ---
 
+## GitHub Sync Ops (MVP)
+
+### GET /api/github/sync/health
+
+Returns sync queue diagnostics and live sync metrics.
+
+Query params:
+- `stuck_threshold` (optional duration, default `15m`)
+
+### GET /api/github/sync/dead-letters
+
+Lists dead-lettered sync/import/webhook jobs.
+
+Query params:
+- `limit` (optional, default `50`)
+
+### POST /api/github/sync/dead-letters/{id}/replay
+
+Re-enqueues a dead-lettered job for retry.
+
+### Pearl Workflow Endpoints
+
+#### POST /api/projects/{id}/repo/sync
+
+Queues a manual repository sync job for the project.
+
+Response highlights:
+- `job_id`
+- `status`
+- `repository_full_name`
+- `last_synced_sha`
+- `conflict_state`
+
+#### POST /api/github/webhook
+
+Processes GitHub webhook deliveries (`push`, `issues`, `pull_request`, `issue_comment`), with signature verification and dedupe.
+
+Push webhook response highlights:
+- `repo_sync_queued`
+- `commits_ingested`
+- `webhook_job_id`
+
+#### POST /api/projects/{id}/issues/import
+
+Queues manual GitHub issue import for a mapped repository.
+
+Response highlights:
+- `job.id`
+- `job.type` (`issue_import`)
+- `job.status`
+
+#### GET /api/projects/{id}/issues/status
+
+Returns issue sync state and metadata:
+- issue counts
+- last import job status
+- sync checkpoints
+- last sync error (if present)
+
+#### GET /api/projects/{id}/commits
+
+Lists project commits (including commits ingested from push webhooks and browser commits).
+
+#### GET /api/projects/{id}/commits/{sha}
+
+Returns commit metadata (subject/body/author/timestamps).
+
+#### GET /api/projects/{id}/commits/{sha}/diff
+
+Returns normalized file-diff payload from stored commit metadata.
+
+#### POST /api/projects/{id}/publish
+
+Performs publish preflight and optional push.
+- `{"dry_run": true}` for preflight-only
+- `{"dry_run": false}` to publish and run linked issue closure workflow
+
+#### POST /api/projects/{id}/repo/conflicts/resolve
+
+Resolves sync conflict state:
+- `{"action":"keep_github"}`
+- `{"action":"keep_ottercamp"}`
+
+---
+
 ## Errors
 
 ### Error Response Format
@@ -689,6 +774,23 @@ function verifyWebhook(payload, signature, timestamp, secret) {
 | `conflict` | 409 | State conflict |
 | `rate_limited` | 429 | Too many requests |
 | `internal_error` | 500 | Server error |
+
+### Capability-Scoped Forbidden Responses
+
+Endpoints that trigger protected GitHub actions include a capability key in `403` responses:
+
+```json
+{
+  "error": "forbidden",
+  "capability": "github.publish"
+}
+```
+
+Current capability keys:
+- `github.sync.manual`
+- `github.conflict.resolve`
+- `github.publish`
+- `github.integration.manage`
 
 ---
 

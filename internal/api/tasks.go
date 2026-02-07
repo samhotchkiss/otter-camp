@@ -118,6 +118,38 @@ type TaskStatusRequest struct {
 
 // ListTasks handles GET /api/tasks
 func (h *TaskHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
+	// Demo mode: return sample tasks only when explicitly requested.
+	if r.URL.Query().Get("demo") == "true" {
+		demoTasks := []map[string]interface{}{
+			{
+				"id":       "demo-1",
+				"title":    "Deploy OtterCamp v1.0",
+				"status":   "in_progress",
+				"priority": "P1",
+				"agent":    "Derek",
+				"project":  "OtterCamp",
+			},
+			{
+				"id":       "demo-2",
+				"title":    "Review blog post draft",
+				"status":   "review",
+				"priority": "P2",
+				"agent":    "Stone",
+				"project":  "Content",
+			},
+			{
+				"id":       "demo-3",
+				"title":    "Schedule social media posts",
+				"status":   "done",
+				"priority": "P3",
+				"agent":    "Nova",
+				"project":  "Marketing",
+			},
+		}
+		sendJSON(w, http.StatusOK, demoTasks)
+		return
+	}
+
 	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
 	if orgID == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing query parameter: org_id"})

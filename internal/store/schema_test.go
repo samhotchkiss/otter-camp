@@ -3,8 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
-	"os"
-	"path/filepath"
+
 	"testing"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -13,52 +12,6 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
-
-const testDatabaseURLKey = "OTTER_TEST_DATABASE_URL"
-
-func testDatabaseURL(t *testing.T) string {
-	t.Helper()
-	connStr := os.Getenv(testDatabaseURLKey)
-	if connStr == "" {
-		t.Skipf("set %s to a dedicated test database", testDatabaseURLKey)
-	}
-	return connStr
-}
-
-func migrationsDir(t *testing.T) string {
-	t.Helper()
-	dir, err := filepath.Abs(filepath.Join("..", "..", "migrations"))
-	require.NoError(t, err)
-	return dir
-}
-
-func resetDatabase(t *testing.T, connStr string) {
-	t.Helper()
-	db, err := sql.Open("postgres", connStr)
-	require.NoError(t, err)
-	defer func() {
-		_ = db.Close()
-	}()
-
-	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-	require.NoError(t, err)
-
-	m, err := migrate.New("file://"+migrationsDir(t), connStr)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, _ = m.Close()
-	})
-
-	err = m.Down()
-	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		require.NoError(t, err)
-	}
-
-	err = m.Up()
-	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		require.NoError(t, err)
-	}
-}
 
 func requirePQCode(t *testing.T, err error, code string) {
 	t.Helper()
@@ -71,19 +24,7 @@ func requirePQCode(t *testing.T, err error, code string) {
 	require.Fail(t, "expected pq.Error", "got %T: %v", err, err)
 }
 
-func insertOrganization(t *testing.T, db *sql.DB, slug string) string {
-	t.Helper()
-	var id string
-	err := db.QueryRow(
-		"INSERT INTO organizations (name, slug, tier) VALUES ($1, $2, 'free') RETURNING id",
-		"Org "+slug,
-		slug,
-	).Scan(&id)
-	require.NoError(t, err)
-	return id
-}
-
-func insertAgent(t *testing.T, db *sql.DB, orgID, slug string) string {
+func insertSchemaAgent(t *testing.T, db *sql.DB, orgID, slug string) string {
 	t.Helper()
 	var id string
 	err := db.QueryRow(
@@ -96,7 +37,7 @@ func insertAgent(t *testing.T, db *sql.DB, orgID, slug string) string {
 	return id
 }
 
-func insertProject(t *testing.T, db *sql.DB, orgID, name string) string {
+func insertSchemaProject(t *testing.T, db *sql.DB, orgID, name string) string {
 	t.Helper()
 	var id string
 	err := db.QueryRow(
@@ -108,7 +49,7 @@ func insertProject(t *testing.T, db *sql.DB, orgID, name string) string {
 	return id
 }
 
-func insertTask(t *testing.T, db *sql.DB, orgID string, projectID, agentID *string, title string) string {
+func insertSchemaTask(t *testing.T, db *sql.DB, orgID string, projectID, agentID *string, title string) string {
 	t.Helper()
 	var projectValue interface{}
 	var agentValue interface{}
@@ -130,8 +71,25 @@ func insertTask(t *testing.T, db *sql.DB, orgID string, projectID, agentID *stri
 	return id
 }
 
+func insertSchemaIssue(t *testing.T, db *sql.DB, orgID, projectID, title, state, origin string) string {
+	t.Helper()
+	var id string
+	err := db.QueryRow(
+		`INSERT INTO project_issues (org_id, project_id, issue_number, title, state, origin)
+		 VALUES ($1, $2, COALESCE((SELECT MAX(issue_number) + 1 FROM project_issues WHERE project_id = $2), 1), $3, $4, $5)
+		 RETURNING id`,
+		orgID,
+		projectID,
+		title,
+		state,
+		origin,
+	).Scan(&id)
+	require.NoError(t, err)
+	return id
+}
+
 func TestSchemaMigrationsUpDown(t *testing.T) {
-	connStr := testDatabaseURL(t)
+	connStr := getTestDatabaseURL(t)
 	db, err := sql.Open("postgres", connStr)
 	require.NoError(t, err)
 	defer func() {
@@ -141,7 +99,7 @@ func TestSchemaMigrationsUpDown(t *testing.T) {
 	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 	require.NoError(t, err)
 
-	m, err := migrate.New("file://"+migrationsDir(t), connStr)
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = m.Close()
@@ -163,23 +121,134 @@ func TestSchemaMigrationsUpDown(t *testing.T) {
 	}
 }
 
-func TestSchemaForeignKeys(t *testing.T) {
-	connStr := testDatabaseURL(t)
-	resetDatabase(t, connStr)
-
+func TestSchemaNativeIssueTablesCreateAndRollback(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
 	db, err := sql.Open("postgres", connStr)
 	require.NoError(t, err)
-	defer func() {
-		_ = db.Close()
-	}()
+	defer func() { _ = db.Close() }()
 
-	orgID := insertOrganization(t, db, "fk-org")
-	projectID := insertProject(t, db, orgID, "FK Project")
-	agentID := insertAgent(t, db, orgID, "fk-agent")
-	_ = insertTask(t, db, orgID, &projectID, &agentID, "FK Task")
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"project_issues",
+		"project_issue_github_links",
+		"project_issue_sync_checkpoints",
+	} {
+		require.True(t, schemaTableExists(t, db, table), table)
+	}
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"project_issues",
+		"project_issue_github_links",
+		"project_issue_sync_checkpoints",
+	} {
+		require.False(t, schemaTableExists(t, db, table), table)
+	}
+}
+
+func TestSchemaIssueApprovalStateMigrationMapsLegacyStatuses(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(25)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "issue-approval-migration-org")
+	projectID := createTestProject(t, db, orgID, "Issue Approval Migration Project")
+
+	var openIssueID string
+	err = db.QueryRow(
+		`INSERT INTO project_issues (org_id, project_id, issue_number, title, state, origin)
+		 VALUES ($1, $2, 1, 'Open legacy issue', 'open', 'local')
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&openIssueID)
+	require.NoError(t, err)
+
+	var closedIssueID string
+	err = db.QueryRow(
+		`INSERT INTO project_issues (org_id, project_id, issue_number, title, state, origin)
+		 VALUES ($1, $2, 2, 'Closed legacy issue', 'closed', 'local')
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&closedIssueID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var openApprovalState string
+	err = db.QueryRow(`SELECT approval_state FROM project_issues WHERE id = $1`, openIssueID).Scan(&openApprovalState)
+	require.NoError(t, err)
+	require.Equal(t, "draft", openApprovalState)
+
+	var closedApprovalState string
+	err = db.QueryRow(`SELECT approval_state FROM project_issues WHERE id = $1`, closedIssueID).Scan(&closedApprovalState)
+	require.NoError(t, err)
+	require.Equal(t, "approved", closedApprovalState)
+}
+
+func schemaTableExists(t *testing.T, db *sql.DB, name string) bool {
+	t.Helper()
+	var regclass sql.NullString
+	err := db.QueryRow("SELECT to_regclass('public.' || $1)::text", name).Scan(&regclass)
+	require.NoError(t, err)
+	return regclass.Valid && regclass.String != ""
+}
+
+func TestSchemaForeignKeys(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "fk-org")
+	projectID := insertSchemaProject(t, db, orgID, "FK Project")
+	agentID := insertSchemaAgent(t, db, orgID, "fk-agent")
+	_ = insertSchemaTask(t, db, orgID, &projectID, &agentID, "FK Task")
 
 	var missingID string
-	err = db.QueryRow("SELECT gen_random_uuid()::text").Scan(&missingID)
+	err := db.QueryRow("SELECT gen_random_uuid()::text").Scan(&missingID)
 	require.NoError(t, err)
 
 	_, err = db.Exec(
@@ -200,19 +269,13 @@ func TestSchemaForeignKeys(t *testing.T) {
 }
 
 func TestSchemaUniqueConstraints(t *testing.T) {
-	connStr := testDatabaseURL(t)
-	resetDatabase(t, connStr)
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
 
-	db, err := sql.Open("postgres", connStr)
-	require.NoError(t, err)
-	defer func() {
-		_ = db.Close()
-	}()
+	orgID := createTestOrganization(t, db, "uniq-org")
+	otherOrgID := createTestOrganization(t, db, "uniq-org-2")
 
-	orgID := insertOrganization(t, db, "uniq-org")
-	otherOrgID := insertOrganization(t, db, "uniq-org-2")
-
-	_, err = db.Exec(
+	_, err := db.Exec(
 		"INSERT INTO tags (org_id, name, color) VALUES ($1, $2, $3)",
 		orgID,
 		"backend",
@@ -236,29 +299,23 @@ func TestSchemaUniqueConstraints(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_ = insertTask(t, db, orgID, nil, nil, "First")
-	secondTaskID := insertTask(t, db, orgID, nil, nil, "Second")
+	_ = insertSchemaTask(t, db, orgID, nil, nil, "First")
+	secondTaskID := insertSchemaTask(t, db, orgID, nil, nil, "Second")
 
 	_, err = db.Exec("UPDATE tasks SET number = 1 WHERE id = $1", secondTaskID)
 	requirePQCode(t, err, "23505")
 }
 
 func TestSchemaCascadeDeletes(t *testing.T) {
-	connStr := testDatabaseURL(t)
-	resetDatabase(t, connStr)
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
 
-	db, err := sql.Open("postgres", connStr)
-	require.NoError(t, err)
-	defer func() {
-		_ = db.Close()
-	}()
+	orgID := createTestOrganization(t, db, "cascade-org")
+	agentID := insertSchemaAgent(t, db, orgID, "cascade-agent")
+	projectID := insertSchemaProject(t, db, orgID, "Cascade Project")
+	_ = insertSchemaTask(t, db, orgID, &projectID, &agentID, "Cascade Task")
 
-	orgID := insertOrganization(t, db, "cascade-org")
-	agentID := insertAgent(t, db, orgID, "cascade-agent")
-	projectID := insertProject(t, db, orgID, "Cascade Project")
-	_ = insertTask(t, db, orgID, &projectID, &agentID, "Cascade Task")
-
-	_, err = db.Exec("DELETE FROM organizations WHERE id = $1", orgID)
+	_, err := db.Exec("DELETE FROM organizations WHERE id = $1", orgID)
 	require.NoError(t, err)
 
 	var count int
@@ -276,18 +333,12 @@ func TestSchemaCascadeDeletes(t *testing.T) {
 }
 
 func TestSchemaCheckConstraints(t *testing.T) {
-	connStr := testDatabaseURL(t)
-	resetDatabase(t, connStr)
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
 
-	db, err := sql.Open("postgres", connStr)
-	require.NoError(t, err)
-	defer func() {
-		_ = db.Close()
-	}()
+	orgID := createTestOrganization(t, db, "check-org")
 
-	orgID := insertOrganization(t, db, "check-org")
-
-	_, err = db.Exec(
+	_, err := db.Exec(
 		"INSERT INTO tasks (org_id, title, status, priority) VALUES ($1, $2, $3, $4)",
 		orgID,
 		"Bad Status",
@@ -302,6 +353,44 @@ func TestSchemaCheckConstraints(t *testing.T) {
 		"Bad Priority",
 		"queued",
 		"P9",
+	)
+	requirePQCode(t, err, "23514")
+}
+
+func TestSchemaIssueParticipantAndCommentConstraints(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "issue-schema-org")
+	projectID := insertSchemaProject(t, db, orgID, "Issue Schema Project")
+	ownerAgentID := insertSchemaAgent(t, db, orgID, "issue-owner")
+	collabAgentID := insertSchemaAgent(t, db, orgID, "issue-collab")
+	issueID := insertSchemaIssue(t, db, orgID, projectID, "Schema issue", "open", "local")
+
+	_, err := db.Exec(
+		`INSERT INTO project_issue_participants (org_id, issue_id, agent_id, role)
+		 VALUES ($1, $2, $3, 'owner')`,
+		orgID,
+		issueID,
+		ownerAgentID,
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO project_issue_participants (org_id, issue_id, agent_id, role)
+		 VALUES ($1, $2, $3, 'owner')`,
+		orgID,
+		issueID,
+		collabAgentID,
+	)
+	requirePQCode(t, err, "23505")
+
+	_, err = db.Exec(
+		`INSERT INTO project_issue_comments (org_id, issue_id, author_agent_id, body)
+		 VALUES ($1, $2, $3, '')`,
+		orgID,
+		issueID,
+		ownerAgentID,
 	)
 	requirePQCode(t, err, "23514")
 }

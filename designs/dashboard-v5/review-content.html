@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Review: Building with AI Agents · otter.camp</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,400;0,700;1,400&display=swap');
+    
+    /* ========== THEME TOKENS ========== */
+    :root {
+      --font: 'Inter', -apple-system, sans-serif;
+      --font-serif: 'Merriweather', Georgia, serif;
+      --mono: 'JetBrains Mono', monospace;
+      
+      --bg: #FAF8F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F5F2ED;
+      --border: #E8E2D9;
+      --text: #2D2A26;
+      --text-muted: #8B7355;
+      --accent: #5C4A3D;
+      --accent-hover: #4A3C31;
+      --orange: #C87941;
+      --green: #5A7A5C;
+      --green-bg: rgba(90, 122, 92, 0.15);
+      --red: #B85C38;
+      --red-bg: rgba(184, 92, 56, 0.15);
+      --blue: #4A6D7C;
+      --yellow: #C4A03C;
+      --highlight: rgba(201, 168, 108, 0.3);
+    }
+    
+    [data-theme="dark"] {
+      --bg: #1A1918;
+      --surface: #252422;
+      --surface-alt: #2D2B28;
+      --border: #3D3A36;
+      --text: #FAF8F5;
+      --text-muted: #A69582;
+      --accent: #C9A86C;
+      --accent-hover: #D4B87A;
+      --green-bg: rgba(90, 122, 92, 0.2);
+      --red-bg: rgba(184, 92, 56, 0.2);
+      --highlight: rgba(201, 168, 108, 0.25);
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    
+    /* ========== LAYOUT ========== */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .topbar {
+      background: var(--accent);
+      color: var(--bg);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      text-decoration: none;
+      color: inherit;
+    }
+    
+    .logo-icon { font-size: 24px; }
+    
+    .search-trigger {
+      flex: 1;
+      max-width: 400px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .search-trigger:hover { background: rgba(255,255,255,0.2); }
+    .search-trigger-text { flex: 1; opacity: 0.7; font-size: 14px; }
+    .kbd { font-size: 12px; opacity: 0.6; font-family: var(--mono); }
+    
+    .topbar-nav {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .nav-link {
+      color: inherit;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0.8;
+      transition: all 0.15s;
+    }
+    
+    .nav-link:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+    
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-left: auto;
+    }
+    
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    
+    /* ========== REVIEW HEADER ========== */
+    .review-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 24px;
+    }
+    
+    .review-header-top {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .review-title {
+      flex: 1;
+    }
+    
+    .review-title h1 {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    
+    .review-meta {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .review-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+    
+    .btn-primary { background: var(--accent); color: var(--bg); }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-success { background: var(--green); color: white; }
+    .btn-success:hover { opacity: 0.9; }
+    .btn-danger { background: var(--red); color: white; }
+    .btn-danger:hover { opacity: 0.9; }
+    .btn-secondary { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--border); }
+    .btn-ghost { background: transparent; color: var(--text-muted); }
+    .btn-ghost:hover { background: var(--surface-alt); color: var(--text); }
+    
+    .content-meta-bar {
+      display: flex;
+      gap: 24px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    
+    .meta-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .meta-item strong { color: var(--text); font-weight: 500; }
+    
+    /* ========== MAIN LAYOUT ========== */
+    .review-main {
+      display: flex;
+      flex: 1;
+    }
+    
+    .content-preview {
+      flex: 1;
+      overflow-y: auto;
+    }
+    
+    /* ========== VIEW TOGGLE ========== */
+    .view-toggle-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px;
+      background: var(--surface-alt);
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .view-toggle {
+      display: flex;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    
+    .view-toggle-btn {
+      padding: 8px 16px;
+      border: none;
+      background: none;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    
+    .view-toggle-btn:hover { color: var(--text); }
+    .view-toggle-btn.active { background: var(--accent); color: var(--bg); }
+    
+    /* ========== RENDERED PREVIEW ========== */
+    .article-preview {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 48px 24px;
+    }
+    
+    .article-header {
+      margin-bottom: 32px;
+      text-align: center;
+    }
+    
+    .article-title {
+      font-family: var(--font-serif);
+      font-size: 36px;
+      font-weight: 700;
+      line-height: 1.3;
+      margin-bottom: 16px;
+    }
+    
+    .article-subtitle {
+      font-size: 18px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    
+    .article-byline {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 24px;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    .article-body {
+      font-family: var(--font-serif);
+      font-size: 18px;
+      line-height: 1.8;
+    }
+    
+    .article-body p {
+      margin-bottom: 24px;
+    }
+    
+    .article-body h2 {
+      font-family: var(--font);
+      font-size: 24px;
+      font-weight: 700;
+      margin-top: 48px;
+      margin-bottom: 16px;
+    }
+    
+    .article-body h3 {
+      font-family: var(--font);
+      font-size: 20px;
+      font-weight: 600;
+      margin-top: 32px;
+      margin-bottom: 12px;
+    }
+    
+    .article-body blockquote {
+      border-left: 4px solid var(--accent);
+      padding-left: 24px;
+      margin: 32px 0;
+      font-style: italic;
+      color: var(--text-muted);
+    }
+    
+    .article-body code {
+      font-family: var(--mono);
+      font-size: 15px;
+      background: var(--surface-alt);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    
+    .article-body pre {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      overflow-x: auto;
+      margin: 24px 0;
+    }
+    
+    .article-body pre code {
+      background: none;
+      padding: 0;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    
+    .article-body ul, .article-body ol {
+      margin-bottom: 24px;
+      padding-left: 24px;
+    }
+    
+    .article-body li {
+      margin-bottom: 8px;
+    }
+    
+    /* ========== TEXT HIGHLIGHT FOR COMMENTS ========== */
+    .text-highlight {
+      background: var(--highlight);
+      cursor: pointer;
+      position: relative;
+    }
+    
+    .text-highlight:hover {
+      background: rgba(201, 168, 108, 0.5);
+    }
+    
+    .highlight-marker {
+      position: absolute;
+      right: -24px;
+      top: 0;
+      width: 20px;
+      height: 20px;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: 50%;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font);
+    }
+    
+    /* ========== COMMENT POPOVER ========== */
+    .comment-popover {
+      position: absolute;
+      right: -340px;
+      top: -8px;
+      width: 320px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+      z-index: 50;
+    }
+    
+    .comment-popover-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .comment-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+    }
+    
+    .comment-author {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    
+    .comment-time {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-left: auto;
+    }
+    
+    .comment-popover-body {
+      padding: 16px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    
+    .comment-popover-quote {
+      background: var(--surface-alt);
+      border-left: 3px solid var(--accent);
+      padding: 8px 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      font-style: italic;
+      color: var(--text-muted);
+    }
+    
+    .comment-popover-actions {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+    }
+    
+    /* ========== REVIEW SIDEBAR ========== */
+    .review-sidebar {
+      width: 360px;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .review-sidebar-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    
+    .review-sidebar-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
+    
+    .review-summary {
+      margin-bottom: 24px;
+    }
+    
+    .review-summary-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+    
+    .review-summary textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 12px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--text);
+      resize: vertical;
+    }
+    
+    .review-summary textarea::placeholder { color: var(--text-muted); }
+    .review-summary textarea:focus { outline: none; border-color: var(--accent); }
+    
+    .suggestion-card {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    
+    .suggestion-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    
+    .suggestion-type {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    
+    .suggestion-type.edit {
+      background: rgba(196, 160, 60, 0.2);
+      color: var(--yellow);
+    }
+    
+    .suggestion-type.comment {
+      background: rgba(74, 109, 124, 0.2);
+      color: var(--blue);
+    }
+    
+    .suggestion-body {
+      padding: 12px;
+      font-size: 13px;
+    }
+    
+    .suggestion-original {
+      background: var(--red-bg);
+      padding: 8px 10px;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      text-decoration: line-through;
+      color: var(--text-muted);
+    }
+    
+    .suggestion-replacement {
+      background: var(--green-bg);
+      padding: 8px 10px;
+      border-radius: 4px;
+    }
+    
+    .suggestion-actions {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid var(--border);
+    }
+    
+    .review-sidebar-footer {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .review-sidebar-footer .btn {
+      justify-content: center;
+    }
+    
+    /* ========== FOOTER ========== */
+    .footer {
+      padding: 20px 24px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-alt);
+      text-align: center;
+    }
+    
+    .footer-fact {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .footer-fact strong { color: var(--accent); }
+    
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 1200px) {
+      .review-sidebar { display: none; }
+    }
+    
+    @media (max-width: 640px) {
+      .topbar {
+        padding: 12px 16px;
+        flex-wrap: wrap;
+      }
+      
+      .search-trigger {
+        order: 3;
+        max-width: 100%;
+        flex-basis: 100%;
+      }
+      
+      .topbar-nav { display: none; }
+      
+      .review-header { padding: 16px; }
+      
+      .review-header-top { flex-direction: column; }
+      
+      .review-actions {
+        width: 100%;
+      }
+      
+      .review-actions .btn {
+        flex: 1;
+        justify-content: center;
+      }
+      
+      .article-preview {
+        padding: 24px 16px;
+      }
+      
+      .article-title {
+        font-size: 28px;
+      }
+      
+      .article-body {
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- ========== TOP BAR ========== -->
+    <header class="topbar">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">🦦</span>
+        <span>otter.camp</span>
+      </a>
+      
+      <div class="search-trigger">
+        <span>🔍</span>
+        <span class="search-trigger-text">Search or command...</span>
+        <span class="kbd">⌘K</span>
+      </div>
+      
+      <nav class="topbar-nav">
+        <a href="index.html" class="nav-link">Dashboard</a>
+        <a href="inbox.html" class="nav-link">Inbox <span style="opacity:0.6">(3)</span></a>
+        <a href="project.html" class="nav-link">Projects</a>
+        <a href="agents.html" class="nav-link">Agents</a>
+        <a href="feed.html" class="nav-link">Feed</a>
+      </nav>
+      
+      <div class="topbar-right">
+        <div class="connection-status">
+          <span class="status-dot"></span>
+          <span>Live</span>
+        </div>
+        <div class="avatar">S</div>
+      </div>
+    </header>
+    
+    <!-- ========== REVIEW HEADER ========== -->
+    <div class="review-header">
+      <div class="review-header-top">
+        <div class="review-title">
+          <h1>Review: Building with AI Agents: A Practical Guide</h1>
+          <div class="review-meta">
+            <span>📝 Stone</span>
+            <span>•</span>
+            <span>CONTENT-015</span>
+            <span>•</span>
+            <span>Requested 25m ago</span>
+          </div>
+        </div>
+        <div class="review-actions">
+          <button class="btn btn-secondary">✏️ Edit</button>
+          <button class="btn btn-danger">✗ Request Changes</button>
+          <button class="btn btn-success">✓ Approve</button>
+        </div>
+      </div>
+      
+      <div class="content-meta-bar">
+        <div class="meta-item">
+          <span>📊</span>
+          <strong>2,847 words</strong>
+        </div>
+        <div class="meta-item">
+          <span>⏱️</span>
+          <strong>~12 min read</strong>
+        </div>
+        <div class="meta-item">
+          <span>💬</span>
+          <strong>3 comments</strong>
+        </div>
+        <div class="meta-item">
+          <span>✏️</span>
+          <strong>2 suggestions</strong>
+        </div>
+        <div class="meta-item">
+          <span>🏷️</span>
+          AI, Engineering, Tutorial
+        </div>
+      </div>
+    </div>
+    
+    <!-- ========== MAIN CONTENT ========== -->
+    <div class="review-main">
+      <!-- Content Preview -->
+      <main class="content-preview">
+        <div class="view-toggle-bar">
+          <div class="view-toggle">
+            <button class="view-toggle-btn active">Preview</button>
+            <button class="view-toggle-btn">Source</button>
+            <button class="view-toggle-btn">Split</button>
+          </div>
+        </div>
+        
+        <article class="article-preview">
+          <header class="article-header">
+            <h1 class="article-title">Building with AI Agents: A Practical Guide</h1>
+            <p class="article-subtitle">How to delegate effectively and stay in control when your team includes autonomous AI systems</p>
+            <div class="article-byline">
+              <span>By Sam Hotchkiss</span>
+              <span>•</span>
+              <span>February 2026</span>
+            </div>
+          </header>
+          
+          <div class="article-body">
+            <p>The first time I delegated a task to an AI agent and walked away, I felt like a parent watching their kid ride a bike without training wheels. Equal parts pride and terror. What if it crashes? What if it does something I didn't anticipate?</p>
+            
+            <p>Six months later, I run a team of 13 AI agents. They handle engineering, content, social media, email triage, and more. Some work autonomously for hours. Others check in frequently. The key insight I've learned: <span class="text-highlight" style="position: relative;">the hard part isn't getting AI to do work — it's designing systems where you stay informed without micromanaging.<span class="highlight-marker">1</span></span></p>
+            
+            <h2>The Trust Calibration Problem</h2>
+            
+            <p>When you first start working with AI agents, you face what I call the "trust calibration problem." You don't know what to trust them with. You don't know when they'll fail. And they don't know when to ask for help.</p>
+            
+            <p>This creates two failure modes:</p>
+            
+            <p><strong>Under-delegation:</strong> You check every output, approve every action, and essentially use the AI as an autocomplete. You're doing the work yourself with extra steps.</p>
+            
+            <p><strong>Over-delegation:</strong> You hand off a complex task, disappear for hours, and come back to find the agent went down a rabbit hole, burned through your API budget, or produced something completely off-base.</p>
+            
+            <p>The solution isn't to find the "right" level of trust and stay there. It's to build feedback loops that let trust calibrate itself over time.</p>
+            
+            <h2>Designing for Ambient Awareness</h2>
+            
+            <p><span class="text-highlight" style="position: relative;">The goal of a good human-AI workflow isn't to eliminate human involvement — it's to make human involvement effortless and well-timed.<span class="highlight-marker">2</span></span> You want to know what's happening without having to ask. You want to intervene when it matters without watching constantly.</p>
+            
+            <p>I call this "ambient awareness," and it requires three things:</p>
+            
+            <ol>
+              <li><strong>Status at a glance.</strong> Your dashboard should tell you the state of all work in 3 seconds. Not a wall of text — visual indicators.</li>
+              <li><strong>Escalation by exception.</strong> Agents should work quietly until something needs you. Then it should be obvious and interruptive.</li>
+              <li><strong>Audit trails you'll actually read.</strong> Every decision logged, but presented as a skimmable timeline, not a log file.</li>
+            </ol>
+            
+            <h2>The "Context Block" Pattern</h2>
+            
+            <p>Here's a specific pattern that's worked well for us: every task assigned to an agent includes a "context block" — a self-contained summary of everything needed to complete the work.</p>
+            
+            <pre><code>## Context Block
+
+**Files:** src/auth/login.ts, src/auth/session.ts
+**Decisions made:** JWT over session cookies, 24h expiry
+**Acceptance criteria:**
+- [ ] Login endpoint returns valid JWT
+- [ ] Invalid credentials return 401
+- [ ] Rate limiting prevents brute force
+**Related knowledge:** See SECURITY.md for auth patterns</code></pre>
+            
+            <p>The rule is simple: an agent should be able to pick up any task with only the context block and the codebase. No conversation history. No "remember when we discussed..." If it's not in the context block, it doesn't exist.</p>
+            
+            <p>This pattern has a secondary benefit: it forces you to think clearly about requirements before delegating. If you can't write a context block, you don't understand the task well enough to delegate it.</p>
+            
+            <h2>When to Interrupt</h2>
+            
+            <p>Not all work requires the same level of human involvement. I categorize agent tasks into three buckets:</p>
+            
+            <blockquote>
+              <p><strong>Green:</strong> Safe to complete autonomously. Internal refactoring, test writing, research synthesis.<br>
+              <strong>Yellow:</strong> Complete but hold for review. Anything customer-facing, any external communication.<br>
+              <strong>Red:</strong> Stop and ask. Spending money, deleting data, anything irreversible.</p>
+            </blockquote>
+            
+            <p>The colors aren't about risk exactly — they're about <em>reversibility</em>. Can I undo this if the agent got it wrong? If yes, let it run. If no, make it ask first.</p>
+            
+            <h2>The Crankfeed vs. The Inbox</h2>
+            
+            <p>Our system splits activity into two views: the Crankfeed and the Inbox.</p>
+            
+            <p>The <strong>Crankfeed</strong> is ambient. It's a timeline of everything happening — commits, status changes, comments. You skim it. You don't act on it. It's there for situational awareness, not task management.</p>
+            
+            <p>The <strong>Inbox</strong> is actionable. Everything in it requires a decision. Approve, reject, answer a question, unblock something. When your inbox is empty, you're done. You don't need to check anything else.</p>
+            
+            <p>The key insight: <span class="text-highlight" style="position: relative;">don't mix awareness and action. Mixing them creates anxiety — you're never sure if you're "done."<span class="highlight-marker">3</span></span> Separating them creates calm — the inbox is your todo list, the feed is just scenery.</p>
+            
+            <h2>Getting Started</h2>
+            
+            <p>If you're just starting with AI agents, here's my advice: start with a single, well-defined task. Something that takes you 30 minutes and has clear success criteria. Watch the agent work. See where it struggles. Adjust your instructions.</p>
+            
+            <p>Then gradually expand scope. Add a second task. Then a third. Build the feedback loops as you go. Trust will calibrate itself if you let it.</p>
+            
+            <p>The future isn't AI replacing human judgment — it's AI amplifying it. Your job isn't to do the work. It's to design systems where work gets done well, and you stay informed enough to steer.</p>
+            
+            <p>That's the practical reality of building with AI agents. It's less "magic automation" and more "thoughtful delegation." But once you get the patterns right, it's genuinely transformative.</p>
+            
+            <p>Your team just got a lot bigger.</p>
+          </div>
+        </article>
+      </main>
+      
+      <!-- Review Sidebar -->
+      <aside class="review-sidebar">
+        <div class="review-sidebar-header">Review Panel</div>
+        <div class="review-sidebar-body">
+          <div class="review-summary">
+            <div class="review-summary-title">Overall Feedback</div>
+            <textarea placeholder="Great piece — clear, practical, well-structured..."></textarea>
+          </div>
+          
+          <div class="review-summary-title">Comments & Suggestions (5)</div>
+          
+          <!-- Comment 1 -->
+          <div class="suggestion-card">
+            <div class="suggestion-header">
+              <span class="suggestion-type comment">Comment</span>
+              <span style="color: var(--text-muted);">¶2</span>
+            </div>
+            <div class="suggestion-body">
+              <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                "the hard part isn't getting AI to do work..."
+              </div>
+              <div style="display: flex; gap: 8px; align-items: flex-start;">
+                <div class="comment-avatar">📝</div>
+                <div>
+                  <div style="font-weight: 600; font-size: 13px;">Stone</div>
+                  <div style="margin-top: 4px; font-size: 13px;">This is the hook. Consider pulling it higher — maybe even the subtitle?</div>
+                </div>
+              </div>
+            </div>
+            <div class="suggestion-actions">
+              <button class="btn btn-ghost" style="font-size: 12px; padding: 4px 8px;">Reply</button>
+              <button class="btn btn-ghost" style="font-size: 12px; padding: 4px 8px;">✓ Resolve</button>
+            </div>
+          </div>
+          
+          <!-- Comment 2 -->
+          <div class="suggestion-card">
+            <div class="suggestion-header">
+              <span class="suggestion-type edit">Edit</span>
+              <span style="color: var(--text-muted);">¶8</span>
+            </div>
+            <div class="suggestion-body">
+              <div class="suggestion-original">
+                "make human involvement effortless and well-timed"
+              </div>
+              <div class="suggestion-replacement">
+                "make human involvement <strong>minimal</strong> and well-timed"
+              </div>
+            </div>
+            <div class="suggestion-actions">
+              <button class="btn btn-success" style="font-size: 12px; padding: 4px 8px;">Accept</button>
+              <button class="btn btn-ghost" style="font-size: 12px; padding: 4px 8px;">Reject</button>
+              <button class="btn btn-ghost" style="font-size: 12px; padding: 4px 8px;">Reply</button>
+            </div>
+          </div>
+          
+          <!-- Comment 3 -->
+          <div class="suggestion-card">
+            <div class="suggestion-header">
+              <span class="suggestion-type comment">Comment</span>
+              <span style="color: var(--text-muted);">¶19</span>
+            </div>
+            <div class="suggestion-body">
+              <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                "don't mix awareness and action"
+              </div>
+              <div style="display: flex; gap: 8px; align-items: flex-start;">
+                <div class="comment-avatar">📝</div>
+                <div>
+                  <div style="font-weight: 600; font-size: 13px;">Stone</div>
+                  <div style="margin-top: 4px; font-size: 13px;">Strong point. Could be its own callout box.</div>
+                </div>
+              </div>
+            </div>
+            <div class="suggestion-actions">
+              <button class="btn btn-ghost" style="font-size: 12px; padding: 4px 8px;">Reply</button>
+              <button class="btn btn-ghost" style="font-size: 12px; padding: 4px 8px;">✓ Resolve</button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="review-sidebar-footer">
+          <button class="btn btn-success">✓ Approve</button>
+          <button class="btn btn-danger">✗ Request Changes</button>
+          <button class="btn btn-secondary">💬 Comment Only</button>
+        </div>
+      </aside>
+    </div>
+    
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+      <div class="footer-fact">
+        <span>🦦</span>
+        <span><strong>Otter fact:</strong> Otters have a pouch of loose skin under their forearms to store food while swimming.</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

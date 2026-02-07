@@ -34,6 +34,9 @@ Unlike GitHub (designed for human teams) or Linear (designed for human velocity)
 | [ONBOARDING.md](ONBOARDING.md) | First-time user experience |
 | [SECURITY.md](SECURITY.md) | Security model and practices |
 | [ROADMAP.md](ROADMAP.md) | Development phases and milestones |
+| [EDITOR-CAPABILITY-MATRIX.md](EDITOR-CAPABILITY-MATRIX.md) | MVP file-type editor behavior contract |
+| [PEARL-IMPLEMENTATION.md](PEARL-IMPLEMENTATION.md) | Implemented Pearl workflow, E2E coverage, and runbooks |
+| [OPENCLAW-SECRETS.md](OPENCLAW-SECRETS.md) | Required OpenClaw secrets and deployment verification steps |
 
 ---
 

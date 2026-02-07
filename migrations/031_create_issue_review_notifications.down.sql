@@ -1,0 +1,3 @@
+DROP POLICY IF EXISTS project_issue_review_notifications_org_isolation ON project_issue_review_notifications;
+DROP INDEX IF EXISTS project_issue_review_notifications_org_issue_idx;
+DROP TABLE IF EXISTS project_issue_review_notifications;

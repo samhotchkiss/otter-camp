@@ -1,0 +1,183 @@
+name: E2E Tests (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to test against'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      base_url:
+        description: 'Custom base URL (overrides environment selection)'
+        required: false
+        type: string
+      notify_on_failure:
+        description: 'Create GitHub issue on failure'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  e2e:
+    name: E2E Tests - ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      
+      - name: Determine base URL
+        id: url
+        run: |
+          if [ -n "${{ inputs.base_url }}" ]; then
+            echo "base_url=${{ inputs.base_url }}" >> $GITHUB_OUTPUT
+          elif [ "${{ inputs.environment }}" = "production" ]; then
+            echo "base_url=https://otter-camp.up.railway.app" >> $GITHUB_OUTPUT
+          else
+            echo "base_url=https://staging-otter-camp.up.railway.app" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+      
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps
+      
+      - name: Run E2E tests
+        working-directory: web
+        run: npx playwright test
+        env:
+          CI: true
+          BASE_URL: ${{ steps.url.outputs.base_url }}
+      
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results-${{ inputs.environment }}-${{ github.run_number }}
+          path: web/test-results/
+          retention-days: 14
+      
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-${{ inputs.environment }}-${{ github.run_number }}
+          path: web/playwright-report/
+          retention-days: 14
+      
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: failure-screenshots-${{ inputs.environment }}-${{ github.run_number }}
+          path: web/test-results/**/*.png
+          retention-days: 14
+      
+      - name: Upload videos
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: failure-videos-${{ inputs.environment }}-${{ github.run_number }}
+          path: web/test-results/**/*.webm
+          retention-days: 14
+
+  notify-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: e2e
+    if: failure() && inputs.notify_on_failure
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Create GitHub Issue on Failure
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const environment = '${{ inputs.environment }}';
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 E2E Tests Failed on ${environment}`,
+              body: `## E2E Test Failure Report
+            
+            **Environment:** ${environment}
+            **Triggered by:** @${context.actor}
+            **Run:** [View workflow run](${runUrl})
+            **Time:** ${new Date().toISOString()}
+            
+            ### Next Steps
+            1. Check the [workflow run](${runUrl}) for details
+            2. Download the artifacts for screenshots and videos
+            3. Review the Playwright report
+            
+            ### Artifacts
+            - Test results
+            - Playwright HTML report
+            - Failure screenshots
+            - Failure videos
+            
+            ---
+            *This issue was automatically created by the E2E workflow.*`,
+              labels: ['bug', 'e2e-failure', 'automated']
+            });
+
+      - name: Post to Slack (optional)
+        if: vars.SLACK_WEBHOOK_URL != ''
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": "🚨 E2E Tests Failed",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "🚨 E2E Tests Failed on ${{ inputs.environment }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:*\n${{ inputs.environment }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Triggered by:*\n${{ github.actor }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Run"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }' \
+            "${{ vars.SLACK_WEBHOOK_URL }}"

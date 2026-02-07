@@ -2031,3 +2031,50 @@ gitclaw_websocket_messages_total{direction="out"}
 ---
 
 *End of Architecture Document*
+
+
+---
+
+## Dashboard Activity Feed Data Source
+
+The dashboard **Your Feed** section reads from `GET /api/feed?org_id=<uuid>` which queries the `activity_log` table in Postgres. Activity records are written by:
+
+- **OpenClaw agents** via `POST /api/feed/push` (bridge or agent integration).
+- **Webhook status events** handled in `internal/webhook/handlers.go` (`logActivity`).
+
+The web UI maps these feed items into the dashboard cards (actor, description, type badge, relative timestamp).
+
+---
+
+## Pearl GitHub Workflow (Implemented)
+
+### Runtime Flow
+
+1. GitHub webhook enters `POST /api/github/webhook`.
+2. Delivery is signature-validated and deduplicated.
+3. Webhook job is queued (`github_sync_jobs`, type `webhook`).
+4. Push events:
+- ingest commit records into project commit store
+- enqueue repo sync jobs (type `repo_sync`)
+5. Issue/PR/comment events:
+- upsert project issues + GitHub links
+- record issue activity events
+6. Poll fallback (`githubsync.RepoDriftPoller`) checks default branch heads on interval and enqueues repo sync jobs if drift exists.
+7. Human-triggered publish (`POST /api/projects/{id}/publish`) performs preflight checks, pushes local branch to remote default branch, then closes linked GitHub issues with idempotent comment+close operations.
+
+### Data Ownership
+
+- GitHub sync jobs and queue state: `github_sync_jobs`
+- Issue mappings: `project_issue_github_links`
+- Commit ingestion and browser commits: `project_commits`
+- Repo sync checkpoints and conflict state: `project_repo_bindings`, `project_repo_active_branches`
+- Activity/audit trail: `activity_log`
+
+### Recovery + Operations Hooks
+
+- Queue and quota health: `GET /api/github/sync/health`
+- Dead-letter inspection: `GET /api/github/sync/dead-letters`
+- Dead-letter replay: `POST /api/github/sync/dead-letters/{id}/replay`
+- Manual repo resync: `POST /api/projects/{id}/repo/sync`
+- Manual issue import: `POST /api/projects/{id}/issues/import`
+- Conflict resolution: `POST /api/projects/{id}/repo/conflicts/resolve`
