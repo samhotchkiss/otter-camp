@@ -53,6 +53,13 @@ otter auth login --token oc_git_<token> --org <org-id>
 
 This token works for both **git operations** (clone/push) and **API calls** (CLI commands).
 
+**Important:** The org must be set (defaultOrg) or the API will return *demo projects* (`proj-1..4`).
+
+### 1b. Clone via OtterCamp git
+```bash
+git clone https://x:<oc_git_token>@api.otter.camp/git/<org-id>/<project-id>.git
+```
+
 ### 2. Set your git identity
 
 Each agent identifies itself via git author info:
