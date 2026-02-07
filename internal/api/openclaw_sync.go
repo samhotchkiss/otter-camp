@@ -208,11 +208,16 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		role := agentRoles[agentID]
 		avatar := agentAvatars[agentID]
 
-		// Calculate status based on activity
+		// Calculate status based on sync freshness vs activity
 		updatedAt := time.Unix(session.UpdatedAt/1000, 0)
 		timeSinceUpdate := time.Since(updatedAt)
+		syncAt := payload.Timestamp
+		if syncAt.IsZero() {
+			syncAt = now
+		}
+		timeSinceSync := time.Since(syncAt)
 		var status string
-		if timeSinceUpdate < 5*time.Minute {
+		if timeSinceSync < 2*time.Minute {
 			status = "online"
 		} else if timeSinceUpdate < 30*time.Minute {
 			status = "busy"
