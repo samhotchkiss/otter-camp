@@ -123,3 +123,15 @@
   - `go test ./internal/api ./internal/store -count=1`
 - Remaining: Spec001 implementation complete. Next: create Spec002 issue breakdown and execute in order.
 
+
+## [2026-02-07 15:39:47 MST] Spec002 issue stack created
+- Created ordered GitHub issues with tests:
+  - #264 tree API
+  - #265 blob API
+  - #266 Files tab + browser shell
+  - #267 file viewer modes
+  - #268 create linked issue from file browser
+  - #269 end-to-end Technonymous review loop hardening
+- Starting implementation with #264 now.
+- Remaining:
+  - Implement and push #264 → #269 in order.
