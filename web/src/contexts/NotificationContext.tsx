@@ -9,6 +9,9 @@ import {
 } from "react";
 import { useWS } from "./WebSocketContext";
 
+const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+const ORG_STORAGE_KEY = "otter-camp-org-id";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,6 +185,20 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
   const [filter, setFilter] = useState<NotificationFilter>("all");
   const { lastMessage } = useWS();
 
+  const getRequestHeaders = useCallback((): HeadersInit => {
+    const headers: Record<string, string> = {};
+    const token = (window.localStorage.getItem("otter_camp_token") ?? "").trim();
+    const orgID = (window.localStorage.getItem(ORG_STORAGE_KEY) ?? "").trim();
+
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    if (orgID) {
+      headers["X-Org-ID"] = orgID;
+    }
+    return headers;
+  }, []);
+
   // Calculate unread count
   const unreadCount = useMemo(
     () => notifications.filter((n) => !n.read).length,
@@ -199,7 +216,9 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
   const refreshNotifications = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await fetch("/api/notifications");
+      const response = await fetch(`${API_URL}/api/notifications`, {
+        headers: getRequestHeaders(),
+      });
       if (response.ok) {
         const data = await response.json();
         const parsed = (data as unknown[])
@@ -212,7 +231,7 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [getRequestHeaders]);
 
   // Initial load
   useEffect(() => {
@@ -236,46 +255,58 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
   // Mark single notification as read
   const markAsRead = useCallback(async (id: string) => {
     try {
-      await fetch(`/api/notifications/${id}/read`, { method: "POST" });
+      await fetch(`${API_URL}/api/notifications/${id}/read`, {
+        method: "POST",
+        headers: getRequestHeaders(),
+      });
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, read: true } : n))
       );
     } catch (error) {
       console.error("Failed to mark notification as read:", error);
     }
-  }, []);
+  }, [getRequestHeaders]);
 
   // Mark single notification as unread
   const markAsUnread = useCallback(async (id: string) => {
     try {
-      await fetch(`/api/notifications/${id}/unread`, { method: "POST" });
+      await fetch(`${API_URL}/api/notifications/${id}/unread`, {
+        method: "POST",
+        headers: getRequestHeaders(),
+      });
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, read: false } : n))
       );
     } catch (error) {
       console.error("Failed to mark notification as unread:", error);
     }
-  }, []);
+  }, [getRequestHeaders]);
 
   // Mark all as read
   const markAllAsRead = useCallback(async () => {
     try {
-      await fetch("/api/notifications/read-all", { method: "POST" });
+      await fetch(`${API_URL}/api/notifications/read-all`, {
+        method: "POST",
+        headers: getRequestHeaders(),
+      });
       setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     } catch (error) {
       console.error("Failed to mark all notifications as read:", error);
     }
-  }, []);
+  }, [getRequestHeaders]);
 
   // Delete notification
   const deleteNotification = useCallback(async (id: string) => {
     try {
-      await fetch(`/api/notifications/${id}`, { method: "DELETE" });
+      await fetch(`${API_URL}/api/notifications/${id}`, {
+        method: "DELETE",
+        headers: getRequestHeaders(),
+      });
       setNotifications((prev) => prev.filter((n) => n.id !== id));
     } catch (error) {
       console.error("Failed to delete notification:", error);
     }
-  }, []);
+  }, [getRequestHeaders]);
 
   const value: NotificationContextValue = {
     notifications,
