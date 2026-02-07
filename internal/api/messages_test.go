@@ -129,6 +129,21 @@ func addRouteParam(req *http.Request, key, value string) *http.Request {
 	return req.WithContext(ctx)
 }
 
+type fakeOpenClawDispatcher struct {
+	connected bool
+	err       error
+	calls     []interface{}
+}
+
+func (f *fakeOpenClawDispatcher) SendToOpenClaw(event interface{}) error {
+	f.calls = append(f.calls, event)
+	return f.err
+}
+
+func (f *fakeOpenClawDispatcher) IsConnected() bool {
+	return f.connected
+}
+
 func TestMessageCRUDTaskThread(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "messages-org")
@@ -274,4 +289,124 @@ func TestMessageListDMThreadPagination(t *testing.T) {
 	threadRR := httptest.NewRecorder()
 	handler.ListThreadMessages(threadRR, threadReq)
 	require.Equal(t, http.StatusOK, threadRR.Code)
+}
+
+func TestCreateMessageDMBridgeOfflineReturnsServiceUnavailable(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-offline-org")
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_itsalive",
+		"content":     "Hello Ivy",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	handler := &MessageHandler{
+		OpenClawDispatcher: &fakeOpenClawDispatcher{connected: false},
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+
+	var count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
+}
+
+func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-success-org")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, NOW())`,
+		"itsalive",
+		"Ivy",
+		"online",
+		"agent:itsalive:main",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_itsalive",
+		"content":     "Please create a file",
+		"sender_id":   "sam-user",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, "dm.message", event.Type)
+	require.Equal(t, orgID, event.OrgID)
+	require.Equal(t, "dm_itsalive", event.Data.ThreadID)
+	require.Equal(t, "itsalive", event.Data.AgentID)
+	require.Equal(t, "agent:itsalive:main", event.Data.SessionKey)
+	require.Equal(t, "Please create a file", event.Data.Content)
+	require.Equal(t, "sam-user", event.Data.SenderID)
+	require.Equal(t, "user", event.Data.SenderType)
+	require.Equal(t, "Sam", event.Data.SenderName)
+
+	var count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
+func TestCreateMessageDMDispatchFailureRollsBackMessage(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-failure-org")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, NOW())`,
+		"itsalive",
+		"Ivy",
+		"online",
+		"agent:itsalive:main",
+	)
+	require.NoError(t, err)
+
+	handler := &MessageHandler{
+		OpenClawDispatcher: &fakeOpenClawDispatcher{
+			connected: true,
+			err:       errors.New("send failed"),
+		},
+	}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_itsalive",
+		"content":     "Can you review this?",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusBadGateway, rr.Code)
+
+	var count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
 }

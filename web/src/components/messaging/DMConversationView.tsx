@@ -277,6 +277,9 @@ export default function DMConversationView({
           body: JSON.stringify({
             thread_id: computedThreadId,
             content,
+            sender_id: currentUserId,
+            sender_type: "user",
+            sender_name: currentUserName,
             ...(orgId ? { org_id: orgId } : {}),
           }),
         });

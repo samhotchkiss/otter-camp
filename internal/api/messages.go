@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,8 @@ const (
 	defaultThreadPageSize = 20
 	maxThreadPageSize     = 100
 )
+
+var dmThreadAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 
 // Message represents a task or DM message payload.
 type Message struct {
@@ -50,7 +53,37 @@ type messageRow struct {
 	UpdatedAt       time.Time
 }
 
-type MessageHandler struct{}
+type MessageHandler struct {
+	OpenClawDispatcher openClawMessageDispatcher
+}
+
+type openClawMessageDispatcher interface {
+	SendToOpenClaw(event interface{}) error
+	IsConnected() bool
+}
+
+type dmDispatchTarget struct {
+	AgentID    string
+	SessionKey string
+}
+
+type openClawDMDispatchEvent struct {
+	Type      string                 `json:"type"`
+	Timestamp time.Time              `json:"timestamp"`
+	OrgID     string                 `json:"org_id"`
+	Data      openClawDMDispatchData `json:"data"`
+}
+
+type openClawDMDispatchData struct {
+	MessageID  string `json:"message_id"`
+	ThreadID   string `json:"thread_id"`
+	AgentID    string `json:"agent_id"`
+	SessionKey string `json:"session_key,omitempty"`
+	Content    string `json:"content"`
+	SenderID   string `json:"sender_id,omitempty"`
+	SenderType string `json:"sender_type,omitempty"`
+	SenderName string `json:"sender_name,omitempty"`
+}
 
 type messageListResponse struct {
 	Messages   []Message `json:"messages"`
@@ -142,8 +175,21 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	dispatchTarget, shouldDispatch, statusCode, dispatchErr := h.resolveDMDispatchTarget(r.Context(), db, req)
+	if dispatchErr != nil {
+		sendJSON(w, statusCode, errorResponse{Error: dispatchErr.Error()})
+		return
+	}
+
+	tx, err := db.BeginTx(r.Context(), nil)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create message"})
+		return
+	}
+	defer tx.Rollback()
+
 	var messageID string
-	err = db.QueryRowContext(r.Context(), `
+	err = tx.QueryRowContext(r.Context(), `
 		INSERT INTO comments (
 			org_id,
 			task_id,
@@ -174,8 +220,20 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := linkAttachmentsToMessage(db, messageID, req.Attachments); err != nil {
+	if err := linkAttachmentsToMessage(r.Context(), tx, messageID, req.Attachments); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to link attachments"})
+		return
+	}
+
+	if shouldDispatch {
+		if err := h.dispatchDMMessageToOpenClaw(orgID, messageID, req, dispatchTarget); err != nil {
+			sendJSON(w, http.StatusBadGateway, errorResponse{Error: "failed to deliver message to agent"})
+			return
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create message"})
 		return
 	}
 
@@ -292,7 +350,7 @@ func (h *MessageHandler) UpdateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if updateReq.Attachments != nil {
-		if err := linkAttachmentsToMessage(db, messageID, *updateReq.Attachments); err != nil {
+		if err := linkAttachmentsToMessage(r.Context(), db, messageID, *updateReq.Attachments); err != nil {
 			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to link attachments"})
 			return
 		}
@@ -680,7 +738,27 @@ func resolveMessageOrgID(ctx context.Context, db *sql.DB, req createMessageReque
 	}
 
 	if req.ThreadID != nil {
+		threadID := strings.TrimSpace(*req.ThreadID)
+		if threadID != "" {
+			// Existing threads carry org scoping via stored messages.
+			var orgID string
+			err := db.QueryRowContext(
+				ctx,
+				`SELECT org_id FROM comments WHERE thread_id = $1 ORDER BY created_at DESC LIMIT 1`,
+				threadID,
+			).Scan(&orgID)
+			if err == nil {
+				return orgID, nil
+			}
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return "", errors.New("failed to load thread")
+			}
+		}
+
 		if agentID := parseDMThreadAgentID(*req.ThreadID); agentID != "" {
+			if !uuidRegex.MatchString(agentID) {
+				return "", errors.New("missing org_id")
+			}
 			var orgID string
 			err := db.QueryRowContext(ctx, `SELECT org_id FROM agents WHERE id = $1`, agentID).Scan(&orgID)
 			if err == nil {
@@ -701,10 +779,99 @@ func parseDMThreadAgentID(threadID string) string {
 		return ""
 	}
 	agentID := strings.TrimPrefix(threadID, "dm_")
-	if !uuidRegex.MatchString(agentID) {
+	if !dmThreadAgentIDPattern.MatchString(agentID) {
 		return ""
 	}
 	return agentID
+}
+
+func (h *MessageHandler) resolveDMDispatchTarget(
+	ctx context.Context,
+	db *sql.DB,
+	req createMessageRequest,
+) (dmDispatchTarget, bool, int, error) {
+	if req.ThreadID == nil {
+		return dmDispatchTarget{}, false, 0, nil
+	}
+
+	if isAgentAuthoredMessage(req) {
+		return dmDispatchTarget{}, false, 0, nil
+	}
+
+	agentID := parseDMThreadAgentID(*req.ThreadID)
+	if agentID == "" {
+		return dmDispatchTarget{}, false, 0, nil
+	}
+
+	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
+		return dmDispatchTarget{}, true, http.StatusServiceUnavailable, errors.New("agent bridge offline; message was not delivered")
+	}
+
+	var target dmDispatchTarget
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE id = $1`,
+		agentID,
+	).Scan(&target.AgentID, &target.SessionKey)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return dmDispatchTarget{}, true, http.StatusBadRequest, errors.New("unknown agent thread")
+		}
+		return dmDispatchTarget{}, true, http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+	}
+
+	if strings.TrimSpace(target.SessionKey) == "" {
+		return dmDispatchTarget{}, true, http.StatusServiceUnavailable, errors.New("agent session unavailable; message was not delivered")
+	}
+
+	return target, true, 0, nil
+}
+
+func (h *MessageHandler) dispatchDMMessageToOpenClaw(
+	orgID string,
+	messageID string,
+	req createMessageRequest,
+	target dmDispatchTarget,
+) error {
+	if h.OpenClawDispatcher == nil {
+		return errors.New("openclaw dispatcher unavailable")
+	}
+
+	threadID := ""
+	if req.ThreadID != nil {
+		threadID = strings.TrimSpace(*req.ThreadID)
+	}
+
+	event := openClawDMDispatchEvent{
+		Type:      "dm.message",
+		Timestamp: time.Now().UTC(),
+		OrgID:     orgID,
+		Data: openClawDMDispatchData{
+			MessageID:  messageID,
+			ThreadID:   threadID,
+			AgentID:    target.AgentID,
+			SessionKey: strings.TrimSpace(target.SessionKey),
+			Content:    req.Content,
+		},
+	}
+	if req.SenderID != nil {
+		event.Data.SenderID = strings.TrimSpace(*req.SenderID)
+	}
+	if req.SenderType != nil {
+		event.Data.SenderType = strings.TrimSpace(*req.SenderType)
+	}
+	if req.SenderName != nil {
+		event.Data.SenderName = strings.TrimSpace(*req.SenderName)
+	}
+
+	return h.OpenClawDispatcher.SendToOpenClaw(event)
+}
+
+func isAgentAuthoredMessage(req createMessageRequest) bool {
+	if req.SenderType == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(*req.SenderType), "agent")
 }
 
 func loadMessageByID(ctx context.Context, db *sql.DB, messageID string) (Message, error) {
@@ -798,12 +965,16 @@ func buildMessageFromRow(row messageRow) (Message, error) {
 	return msg, nil
 }
 
-func linkAttachmentsToMessage(db *sql.DB, messageID string, attachments []AttachmentMetadata) error {
+type messageAttachmentLinker interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func linkAttachmentsToMessage(ctx context.Context, db messageAttachmentLinker, messageID string, attachments []AttachmentMetadata) error {
 	for _, attachment := range attachments {
 		if strings.TrimSpace(attachment.ID) == "" {
 			continue
 		}
-		if _, err := db.Exec(`UPDATE attachments SET comment_id = $1 WHERE id = $2`, messageID, attachment.ID); err != nil {
+		if _, err := db.ExecContext(ctx, `UPDATE attachments SET comment_id = $1 WHERE id = $2`, messageID, attachment.ID); err != nil {
 			return err
 		}
 	}

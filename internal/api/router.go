@@ -72,7 +72,8 @@ func NewRouter() http.Handler {
 	feedPushHandler := NewFeedPushHandler(hub)
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
 	taskHandler := &TaskHandler{Hub: hub}
-	messageHandler := &MessageHandler{}
+	openClawWSHandler := ws.NewOpenClawHandler(hub)
+	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
 	workflowsHandler := &WorkflowsHandler{DB: db}
@@ -255,7 +256,7 @@ func NewRouter() http.Handler {
 
 	// WebSocket handlers
 	r.Handle("/ws", websocketHandler)
-	r.Handle("/ws/openclaw", ws.NewOpenClawHandler(hub))
+	r.Handle("/ws/openclaw", openClawWSHandler)
 
 	// Static file fallback for frontend SPA (must be last)
 	r.Get("/*", handleRoot)
