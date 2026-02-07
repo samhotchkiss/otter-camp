@@ -91,9 +91,17 @@ type openClawProjectChatDispatchEvent struct {
 type openClawProjectChatDispatchData struct {
 	MessageID  string `json:"message_id"`
 	ProjectID  string `json:"project_id"`
+	AgentID    string `json:"agent_id"`
+	AgentName  string `json:"agent_name,omitempty"`
 	SessionKey string `json:"session_key"`
 	Content    string `json:"content"`
 	Author     string `json:"author,omitempty"`
+}
+
+type projectChatDispatchTarget struct {
+	AgentID    string
+	AgentName  string
+	SessionKey string
 }
 
 func (h *ProjectChatHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -197,6 +205,12 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	target, shouldDispatch, dispatchWarning, dispatchErr := h.resolveProjectChatDispatchTarget(r.Context(), projectID, req.SenderType)
+	if dispatchErr != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to resolve project chat target"})
+		return
+	}
+
 	message, err := h.ChatStore.Create(r.Context(), store.CreateProjectChatMessageInput{
 		ProjectID: projectID,
 		Author:    req.Author,
@@ -208,15 +222,18 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := toProjectChatPayload(*message)
-	delivery := dmDeliveryStatus{Attempted: false, Delivered: false}
-	if req.SenderType != "agent" {
-		delivery.Attempted = true
-		if err := h.dispatchProjectChatMessageToOpenClaw(r.Context(), payload); err != nil {
-			delivery.Delivered = false
+	delivery := dmDeliveryStatus{
+		Attempted: shouldDispatch,
+		Delivered: false,
+	}
+	if shouldDispatch {
+		if err := h.dispatchProjectChatMessageToOpenClaw(r.Context(), payload, target); err != nil {
 			delivery.Error = "agent delivery unavailable; message was saved"
 		} else {
 			delivery.Delivered = true
 		}
+	} else if dispatchWarning != "" {
+		delivery.Error = dispatchWarning
 	}
 
 	h.broadcastProjectChatCreated(r.Context(), payload)
@@ -414,21 +431,21 @@ func projectChatChannel(projectID string) string {
 	return "project:" + strings.TrimSpace(projectID) + ":chat"
 }
 
-func projectChatSessionKey(orgID, projectID string) string {
-	return fmt.Sprintf("project:%s:%s:chat", strings.TrimSpace(orgID), strings.TrimSpace(projectID))
+func projectChatSessionKey(agentID, projectID string) string {
+	return fmt.Sprintf("agent:%s:project:%s", strings.TrimSpace(agentID), strings.TrimSpace(projectID))
 }
 
 func (h *ProjectChatHandler) dispatchProjectChatMessageToOpenClaw(
 	ctx context.Context,
 	message projectChatMessagePayload,
+	target projectChatDispatchTarget,
 ) error {
-	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
-		return fmt.Errorf("openclaw dispatcher unavailable")
-	}
-
 	workspaceID := middleware.WorkspaceFromContext(ctx)
 	if workspaceID == "" {
 		return fmt.Errorf("missing workspace")
+	}
+	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
+		return fmt.Errorf("openclaw dispatcher unavailable")
 	}
 
 	event := openClawProjectChatDispatchEvent{
@@ -438,13 +455,90 @@ func (h *ProjectChatHandler) dispatchProjectChatMessageToOpenClaw(
 		Data: openClawProjectChatDispatchData{
 			MessageID:  message.ID,
 			ProjectID:  message.ProjectID,
-			SessionKey: projectChatSessionKey(workspaceID, message.ProjectID),
+			AgentID:    target.AgentID,
+			AgentName:  target.AgentName,
+			SessionKey: target.SessionKey,
 			Content:    message.Body,
 			Author:     message.Author,
 		},
 	}
 
 	return h.OpenClawDispatcher.SendToOpenClaw(event)
+}
+
+func (h *ProjectChatHandler) resolveProjectChatDispatchTarget(
+	ctx context.Context,
+	projectID string,
+	senderType string,
+) (projectChatDispatchTarget, bool, string, error) {
+	if senderType == "agent" {
+		return projectChatDispatchTarget{}, false, "", nil
+	}
+	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
+		return projectChatDispatchTarget{}, false, "agent bridge offline; message was saved but not delivered", nil
+	}
+	if h.DB == nil {
+		return projectChatDispatchTarget{}, false, "project agent unavailable; message was saved but not delivered", nil
+	}
+
+	agentID, agentName, err := h.resolveProjectLeadAgent(ctx, projectID)
+	if err != nil {
+		return projectChatDispatchTarget{}, false, "", err
+	}
+	if agentID == "" {
+		return projectChatDispatchTarget{}, false, "project agent unavailable; message was saved but not delivered", nil
+	}
+
+	return projectChatDispatchTarget{
+		AgentID:    agentID,
+		AgentName:  agentName,
+		SessionKey: projectChatSessionKey(agentID, projectID),
+	}, true, "", nil
+}
+
+func (h *ProjectChatHandler) resolveProjectLeadAgent(
+	ctx context.Context,
+	projectID string,
+) (string, string, error) {
+	// 1) Prefer explicit issue owners for this project.
+	var ownerSlug, ownerName string
+	err := h.DB.QueryRowContext(ctx, `
+		SELECT a.slug, a.display_name
+		FROM project_issue_participants pip
+		INNER JOIN project_issues pi ON pi.id = pip.issue_id
+		INNER JOIN agents a ON a.id = pip.agent_id
+		WHERE pi.project_id = $1
+		  AND pip.removed_at IS NULL
+		  AND pip.role = 'owner'
+		GROUP BY a.slug, a.display_name
+		ORDER BY COUNT(*) DESC, a.display_name ASC
+		LIMIT 1
+	`, projectID).Scan(&ownerSlug, &ownerName)
+	if err == nil {
+		return strings.TrimSpace(ownerSlug), strings.TrimSpace(ownerName), nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return "", "", err
+	}
+
+	// 2) Fall back to most frequently assigned agent on project tasks.
+	var assigneeSlug, assigneeName string
+	err = h.DB.QueryRowContext(ctx, `
+		SELECT a.slug, a.display_name
+		FROM tasks t
+		INNER JOIN agents a ON a.id = t.assigned_agent_id
+		WHERE t.project_id = $1
+		GROUP BY a.slug, a.display_name
+		ORDER BY COUNT(*) DESC, MAX(t.updated_at) DESC
+		LIMIT 1
+	`, projectID).Scan(&assigneeSlug, &assigneeName)
+	if err == nil {
+		return strings.TrimSpace(assigneeSlug), strings.TrimSpace(assigneeName), nil
+	}
+	if err == sql.ErrNoRows {
+		return "", "", nil
+	}
+	return "", "", err
 }
 
 func toProjectChatPayload(message store.ProjectChatMessage) projectChatMessagePayload {

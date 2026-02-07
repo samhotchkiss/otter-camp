@@ -107,11 +107,28 @@ func TestProjectChatHandlerCreateDispatchesToOpenClaw(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "project-chat-dispatch-org")
 	projectID := insertProjectTestProject(t, db, orgID, "Project Dispatch")
+	ownerID := insertMessageTestAgent(t, db, orgID, "stone")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := testCtxWithWorkspace(orgID)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Dispatch routing issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	_, err = issueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: ownerID,
+		Role:    "owner",
+	})
+	require.NoError(t, err)
 
 	dispatcher := &fakeOpenClawDispatcher{connected: true}
 	handler := &ProjectChatHandler{
 		ProjectStore:       store.NewProjectStore(db),
 		ChatStore:          store.NewProjectChatStore(db),
+		DB:                 db,
 		OpenClawDispatcher: dispatcher,
 	}
 	router := newProjectChatTestRouter(handler)
@@ -133,7 +150,9 @@ func TestProjectChatHandlerCreateDispatchesToOpenClaw(t *testing.T) {
 	require.Equal(t, projectID, event.Data.ProjectID)
 	require.Equal(t, "Please review this project update", event.Data.Content)
 	require.Equal(t, "Sam", event.Data.Author)
-	require.Equal(t, projectChatSessionKey(orgID, projectID), event.Data.SessionKey)
+	require.Equal(t, "stone", event.Data.AgentID)
+	require.Equal(t, "Agent stone", event.Data.AgentName)
+	require.Equal(t, projectChatSessionKey("stone", projectID), event.Data.SessionKey)
 
 	var resp struct {
 		Message  projectChatMessagePayload `json:"message"`
@@ -175,6 +194,80 @@ func TestProjectChatHandlerCreateAgentSenderSkipsOpenClawDispatch(t *testing.T) 
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.False(t, resp.Delivery.Attempted)
 	require.False(t, resp.Delivery.Delivered)
+}
+
+func TestProjectChatHandlerCreateDispatchesToTaskAssigneeWhenNoOwner(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-dispatch-assignee-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Dispatch Assignee")
+	assigneeID := insertMessageTestAgent(t, db, orgID, "stone")
+
+	_, err := db.Exec(
+		`INSERT INTO tasks (org_id, project_id, assigned_agent_id, title, status, priority)
+		 VALUES ($1, $2, $3, $4, 'queued', 'P2')`,
+		orgID,
+		projectID,
+		assigneeID,
+		"Assignee routing task",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &ProjectChatHandler{
+		ProjectStore:       store.NewProjectStore(db),
+		ChatStore:          store.NewProjectChatStore(db),
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"Route this to assigned lead"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawProjectChatDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, "stone", event.Data.AgentID)
+	require.Equal(t, projectChatSessionKey("stone", projectID), event.Data.SessionKey)
+}
+
+func TestProjectChatHandlerCreateWarnsWhenProjectLeadUnavailable(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-dispatch-unavailable-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Dispatch Unavailable")
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &ProjectChatHandler{
+		ProjectStore:       store.NewProjectStore(db),
+		ChatStore:          store.NewProjectChatStore(db),
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"Hello?"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 0)
+
+	var resp struct {
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.False(t, resp.Delivery.Attempted)
+	require.False(t, resp.Delivery.Delivered)
+	require.Equal(t, "project agent unavailable; message was saved but not delivered", resp.Delivery.Error)
 }
 
 func TestProjectChatHandlerSearchSupportsFilters(t *testing.T) {

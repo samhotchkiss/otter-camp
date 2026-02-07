@@ -74,6 +74,8 @@ type ProjectChatDispatchEvent = {
   data?: {
     message_id?: string;
     project_id?: string;
+    agent_id?: string;
+    agent_name?: string;
     session_key?: string;
     content?: string;
     author?: string;
@@ -85,6 +87,7 @@ type SessionContext = {
   orgID?: string;
   threadID?: string;
   agentID?: string;
+  agentName?: string;
   projectID?: string;
 };
 
@@ -425,7 +428,11 @@ async function persistAssistantReplyToOtterCamp(params: {
     }
 
     const body = {
-      author: params.assistantName?.trim() || 'Assistant',
+      author:
+        params.assistantName?.trim() ||
+        getTrimmedString(context.agentName) ||
+        getTrimmedString(context.agentID) ||
+        'Assistant',
       body: content,
       sender_type: 'agent',
     };
@@ -582,12 +589,14 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
 
 async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): Promise<void> {
   const projectID = getTrimmedString(event.data?.project_id);
+  const agentID = getTrimmedString(event.data?.agent_id);
+  const agentName = getTrimmedString(event.data?.agent_name);
   const content = getTrimmedString(event.data?.content);
   const orgID = getTrimmedString(event.org_id);
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
   const sessionKey =
     getTrimmedString(event.data?.session_key) ||
-    (orgID && projectID ? `project:${orgID}:${projectID}:chat` : '');
+    (agentID && projectID ? `agent:${agentID}:project:${projectID}` : '');
 
   if (!sessionKey || !projectID || !orgID || !content) {
     console.warn('[bridge] skipped project.chat.message with missing org/project/session/content');
@@ -597,6 +606,8 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
   sessionContexts.set(sessionKey, {
     kind: 'project_chat',
     orgID,
+    agentID,
+    agentName,
     projectID,
   });
 
