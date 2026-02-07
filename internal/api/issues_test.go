@@ -167,6 +167,161 @@ func TestIssuesHandlerCommentCreateValidatesAndPersists(t *testing.T) {
 	require.Equal(t, "Looks good", detail.Comments[0].Body)
 }
 
+func TestIssuesHandlerPatchIssueUpdatesAndClearsWorkTrackingFields(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-patch-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Patch Project")
+	ownerAgentID := insertMessageTestAgent(t, db, orgID, "issue-patch-owner")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Patchable issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore: issueStore,
+	}
+	router := newIssueTestRouter(handler)
+
+	setReqBody := `{
+		"owner_agent_id":"` + ownerAgentID + `",
+		"work_status":"in_progress",
+		"priority":"P0",
+		"due_at":"2026-02-12T09:00:00Z",
+		"next_step":"Prepare review notes",
+		"next_step_due_at":"2026-02-11T09:00:00Z"
+	}`
+	setReq := httptest.NewRequest(http.MethodPatch, "/api/issues/"+issue.ID+"?org_id="+orgID, bytes.NewReader([]byte(setReqBody)))
+	setRec := httptest.NewRecorder()
+	router.ServeHTTP(setRec, setReq)
+	require.Equal(t, http.StatusOK, setRec.Code)
+
+	var updated issueSummaryPayload
+	require.NoError(t, json.NewDecoder(setRec.Body).Decode(&updated))
+	require.NotNil(t, updated.OwnerAgentID)
+	require.Equal(t, ownerAgentID, *updated.OwnerAgentID)
+	require.Equal(t, store.IssueWorkStatusInProgress, updated.WorkStatus)
+	require.Equal(t, store.IssuePriorityP0, updated.Priority)
+	require.NotNil(t, updated.DueAt)
+	require.NotNil(t, updated.NextStepDueAt)
+	require.NotNil(t, updated.NextStep)
+	require.Equal(t, "Prepare review notes", *updated.NextStep)
+
+	clearReqBody := `{
+		"due_at":"",
+		"next_step":"",
+		"next_step_due_at":""
+	}`
+	clearReq := httptest.NewRequest(http.MethodPatch, "/api/issues/"+issue.ID+"?org_id="+orgID, bytes.NewReader([]byte(clearReqBody)))
+	clearRec := httptest.NewRecorder()
+	router.ServeHTTP(clearRec, clearReq)
+	require.Equal(t, http.StatusOK, clearRec.Code)
+
+	var cleared issueSummaryPayload
+	require.NoError(t, json.NewDecoder(clearRec.Body).Decode(&cleared))
+	require.Nil(t, cleared.DueAt)
+	require.Nil(t, cleared.NextStep)
+	require.Nil(t, cleared.NextStepDueAt)
+}
+
+func TestIssuesHandlerPatchIssueRejectsInvalidTransitionsAndValues(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-patch-validate-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Patch Validate Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Patch validation issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	invalidTransitionReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"work_status":"done"}`)),
+	)
+	invalidTransitionRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidTransitionRec, invalidTransitionReq)
+	require.Equal(t, http.StatusBadRequest, invalidTransitionRec.Code)
+
+	invalidPriorityReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"priority":"P9"}`)),
+	)
+	invalidPriorityRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidPriorityRec, invalidPriorityReq)
+	require.Equal(t, http.StatusBadRequest, invalidPriorityRec.Code)
+}
+
+func TestIssuesHandlerListSupportsOwnerWorkStatusAndPriorityFilters(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-list-work-filters-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue List Work Filters Project")
+	ownerA := insertMessageTestAgent(t, db, orgID, "issue-list-owner-a")
+	ownerB := insertMessageTestAgent(t, db, orgID, "issue-list-owner-b")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+
+	_, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Owner A in progress",
+		Origin:       "local",
+		OwnerAgentID: &ownerA,
+		WorkStatus:   store.IssueWorkStatusInProgress,
+		Priority:     store.IssuePriorityP1,
+	})
+	require.NoError(t, err)
+	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Owner B blocked",
+		Origin:       "local",
+		OwnerAgentID: &ownerB,
+		WorkStatus:   store.IssueWorkStatusBlocked,
+		Priority:     store.IssuePriorityP3,
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	filterReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/issues?org_id="+orgID+"&project_id="+projectID+"&owner_agent_id="+ownerA+"&work_status=in_progress&priority=P1",
+		nil,
+	)
+	filterRec := httptest.NewRecorder()
+	router.ServeHTTP(filterRec, filterReq)
+	require.Equal(t, http.StatusOK, filterRec.Code)
+
+	var listResp issueListResponse
+	require.NoError(t, json.NewDecoder(filterRec.Body).Decode(&listResp))
+	require.Len(t, listResp.Items, 1)
+	require.Equal(t, "Owner A in progress", listResp.Items[0].Title)
+	require.Equal(t, store.IssueWorkStatusInProgress, listResp.Items[0].WorkStatus)
+	require.Equal(t, store.IssuePriorityP1, listResp.Items[0].Priority)
+	require.NotNil(t, listResp.Items[0].OwnerAgentID)
+	require.Equal(t, ownerA, *listResp.Items[0].OwnerAgentID)
+
+	invalidFilterReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/issues?org_id="+orgID+"&project_id="+projectID+"&priority=P9",
+		nil,
+	)
+	invalidFilterRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidFilterRec, invalidFilterReq)
+	require.Equal(t, http.StatusBadRequest, invalidFilterRec.Code)
+}
+
 func TestIssuesHandlerCreateIssueCreatesStandaloneIssueWithWorkTrackingFields(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-create-org")

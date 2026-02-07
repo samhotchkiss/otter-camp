@@ -88,3 +88,19 @@
 - Validation run: `go test ./internal/api -count=1`.
 - Remaining (Spec001): #260, #261, #262, #263.
 
+## [2026-02-07 15:28:04 MST] Completed Spec001 Issues #260 and #261 validation coverage
+- Added API tests for `PATCH /api/issues/{id}` work-tracking updates:
+  - partial updates for owner/work_status/priority/due fields
+  - nullable field clearing (`due_at`, `next_step`, `next_step_due_at`)
+  - invalid transition and invalid priority rejection
+- Added API tests for issue list filters:
+  - combined `owner_agent_id`, `work_status`, and `priority` filters
+  - invalid filter value rejection path
+- Added router registration assertion for `PATCH /api/issues/{id}`.
+- Validation runs:
+  - `go test ./internal/api -count=1`
+  - `go test ./internal/store -count=1`
+  - `web: npm run build:typecheck`
+- Remaining (Spec001): #262, #263 (CLI issue command set).
+- Global chat update delivered: clear-session is now available for DM/project/issue chats, with session divider markers persisted across chat types.
+
