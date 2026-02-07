@@ -26,6 +26,53 @@ export type DMConversationViewProps = {
   className?: string;
 };
 
+function getStoredAuthContext() {
+  if (typeof window === "undefined") {
+    return { token: "", orgId: "" };
+  }
+
+  const token = (window.localStorage.getItem("otter_camp_token") ?? "").trim();
+  const orgId = (window.localStorage.getItem("otter-camp-org-id") ?? "").trim();
+  return { token, orgId };
+}
+
+function buildRequestHeaders({
+  token,
+  includeJSONContentType = false,
+}: {
+  token: string;
+  includeJSONContentType?: boolean;
+}): HeadersInit {
+  const headers: Record<string, string> = {};
+
+  if (includeJSONContentType) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  return headers;
+}
+
+async function toResponseError(
+  response: Response,
+  fallbackMessage: string,
+): Promise<Error> {
+  const contentType = response.headers.get("Content-Type") ?? "";
+  if (contentType.includes("application/json")) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: string; message?: string }
+      | null;
+    const message = payload?.error ?? payload?.message;
+    if (message) {
+      return new Error(message);
+    }
+  }
+
+  return new Error(fallbackMessage);
+}
+
 function AgentAvatar({
   agent,
   size = "md",
@@ -100,6 +147,7 @@ export default function DMConversationView({
 
   const fetchMessages = useCallback(
     async (cursor?: string) => {
+      const { token, orgId } = getStoredAuthContext();
       const params = new URLSearchParams({
         thread_id: computedThreadId,
         limit: String(pageSize),
@@ -107,10 +155,15 @@ export default function DMConversationView({
       if (cursor) {
         params.set("cursor", cursor);
       }
+      if (orgId) {
+        params.set("org_id", orgId);
+      }
 
-      const response = await fetch(`${apiEndpoint}?${params}`);
+      const response = await fetch(`${apiEndpoint}?${params}`, {
+        headers: buildRequestHeaders({ token }),
+      });
       if (!response.ok) {
-        throw new Error("Failed to fetch messages");
+        throw await toResponseError(response, "Failed to fetch messages");
       }
 
       const data = await response.json();
@@ -217,14 +270,19 @@ export default function DMConversationView({
       if (onSendMessage) {
         await onSendMessage(content);
       } else {
+        const { token, orgId } = getStoredAuthContext();
         const response = await fetch(apiEndpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ thread_id: computedThreadId, content }),
+          headers: buildRequestHeaders({ token, includeJSONContentType: true }),
+          body: JSON.stringify({
+            thread_id: computedThreadId,
+            content,
+            ...(orgId ? { org_id: orgId } : {}),
+          }),
         });
 
         if (!response.ok) {
-          throw new Error("Failed to send message");
+          throw await toResponseError(response, "Failed to send message");
         }
 
         const data = await response.json();

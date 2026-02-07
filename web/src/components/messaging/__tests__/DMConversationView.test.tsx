@@ -17,6 +17,7 @@ globalThis.fetch = mockFetch as unknown as typeof fetch;
 describe("DMConversationView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
   });
 
   it("fetches and renders initial messages", async () => {
@@ -59,5 +60,41 @@ describe("DMConversationView", () => {
     expect(url).toContain("/api/messages?");
     expect(url).toContain("thread_id=dm_agent-1");
     expect(screen.getByText(/1 message/i)).toBeInTheDocument();
+  });
+
+  it("passes org and bearer auth context on message fetch", async () => {
+    window.localStorage.setItem("otter-camp-org-id", "org-123");
+    window.localStorage.setItem("otter_camp_token", "token-123");
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          messages: [],
+          hasMore: false,
+          totalCount: 0,
+        }),
+      headers: {
+        get: () => "application/json",
+      },
+    });
+
+    const agent: Agent = {
+      id: "agent-2",
+      name: "Agent Two",
+      status: "offline",
+    };
+
+    render(<DMConversationView agent={agent} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Start a conversation with Agent Two/i)).toBeInTheDocument();
+    });
+
+    const call = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(call[0]).toContain("org_id=org-123");
+    expect(call[1].headers).toMatchObject({
+      Authorization: "Bearer token-123",
+    });
   });
 });

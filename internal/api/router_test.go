@@ -89,3 +89,17 @@ func TestNotFoundHandler(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
 	}
 }
+
+func TestMessagesRouteIsRegistered(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/messages?thread_id=dm_test", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/messages route to be registered, got status %d", rec.Code)
+	}
+}

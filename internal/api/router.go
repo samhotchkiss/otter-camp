@@ -72,6 +72,7 @@ func NewRouter() http.Handler {
 	feedPushHandler := NewFeedPushHandler(hub)
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
 	taskHandler := &TaskHandler{Hub: hub}
+	messageHandler := &MessageHandler{}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
 	workflowsHandler := &WorkflowsHandler{DB: db}
@@ -236,6 +237,12 @@ func NewRouter() http.Handler {
 		r.Get("/sync/agents", openclawSyncHandler.GetAgents)
 		r.Patch("/tasks/{id}", taskHandler.UpdateTask)
 		r.Patch("/tasks/{id}/status", taskHandler.UpdateTaskStatus)
+		r.Get("/messages", messageHandler.ListMessages)
+		r.Post("/messages", messageHandler.CreateMessage)
+		r.Get("/messages/{id}", messageHandler.GetMessage)
+		r.Put("/messages/{id}", messageHandler.UpdateMessage)
+		r.Delete("/messages/{id}", messageHandler.DeleteMessage)
+		r.Get("/threads/{id}/messages", messageHandler.ListThreadMessages)
 		r.Post("/messages/attachments", attachmentsHandler.Upload)
 		r.Get("/attachments/{id}", attachmentsHandler.GetAttachment)
 		r.Get("/export", HandleExport)
