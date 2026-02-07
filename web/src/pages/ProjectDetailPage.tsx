@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProjectChatPanel from "../components/project/ProjectChatPanel";
-import ProjectCommitBrowser from "../components/project/ProjectCommitBrowser";
+import ProjectFileBrowser from "../components/project/ProjectFileBrowser";
 import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
@@ -214,7 +214,7 @@ function ActivityItem({ activity }: { activity: Activity }) {
   );
 }
 
-type TabKey = "board" | "list" | "activity" | "chat" | "code" | "issues" | "settings";
+type TabKey = "board" | "list" | "activity" | "chat" | "files" | "issues" | "settings";
 
 export default function ProjectDetailPage() {
   const { id, issueId } = useParams<{ id: string; issueId?: string }>();
@@ -474,7 +474,7 @@ export default function ProjectDetailPage() {
     { key: "list", label: "List" },
     { key: "activity", label: "Activity" },
     { key: "chat", label: "Chat", badge: chatUnreadCount > 0 ? chatUnreadCount : undefined },
-    { key: "code", label: "Code" },
+    { key: "files", label: "Files" },
     { key: "issues", label: "Issues" },
     { key: "settings", label: "Settings" },
   ];
@@ -706,7 +706,7 @@ export default function ProjectDetailPage() {
         />
       </div>
 
-      {activeTab === "code" && <ProjectCommitBrowser projectId={project.id} />}
+      {activeTab === "files" && <ProjectFileBrowser projectId={project.id} />}
 
       {activeTab === "issues" && (
         <div className={`grid gap-4 ${issueId ? "xl:grid-cols-[minmax(320px,420px)_1fr]" : "grid-cols-1"}`}>

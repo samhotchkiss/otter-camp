@@ -184,3 +184,24 @@
   - #267 rich file viewers
   - #268 create issue from file browser
   - #269 Technonymous review-loop hardening
+
+## [2026-02-07 15:52:36 MST] Completed Spec002 issue #266 (Files tab + browser shell)
+- Added `ProjectFileBrowser` (`web/src/components/project/ProjectFileBrowser.tsx`) with:
+  - Files/Commit-history toggle inside the Files tab.
+  - Tree listing + breadcrumb navigation.
+  - File selection that fetches blob data.
+  - Loading/error/retry handling for tree and blob requests.
+- Updated `ProjectDetailPage` to:
+  - Rename tab key from `code` to `files`.
+  - Rename label from `Code` to `Files`.
+  - Render `ProjectFileBrowser` for the Files tab.
+- Added tests:
+  - `web/src/components/project/ProjectFileBrowser.test.tsx`
+  - `web/src/pages/ProjectDetailPage.test.tsx`
+- Validation:
+  - `cd web && npm test -- src/components/project/ProjectFileBrowser.test.tsx src/pages/ProjectDetailPage.test.tsx --run`
+  - `cd web && npm run build:typecheck`
+- Remaining:
+  - #267 rich file viewers
+  - #268 create issue from file browser
+  - #269 Technonymous review-loop hardening
