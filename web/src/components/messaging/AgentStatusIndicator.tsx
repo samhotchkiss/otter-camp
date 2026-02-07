@@ -2,9 +2,9 @@ import { memo, useMemo } from "react";
 import type { AgentStatus } from "./types";
 
 const STATUS_STYLES: Record<AgentStatus, string> = {
-  online: "bg-emerald-500 shadow-emerald-500/50",
-  busy: "bg-amber-500 shadow-amber-500/50 animate-pulse",
-  offline: "bg-slate-500",
+  online: "bg-[var(--accent)] shadow-[var(--accent)]/50",
+  busy: "bg-[var(--orange)] shadow-[var(--orange)]/50 animate-pulse",
+  offline: "bg-[var(--text-muted)]",
 };
 
 const STATUS_LABELS: Record<AgentStatus, string> = {
@@ -43,7 +43,7 @@ function AgentStatusIndicatorComponent({
     return (
       <span className="inline-flex items-center gap-2" role="status" aria-label={label}>
         <span className={dotClassName} aria-hidden="true" />
-        <span className="text-xs text-slate-400">{label}</span>
+        <span className="text-xs text-[var(--text-muted)]">{label}</span>
       </span>
     );
   }
@@ -61,4 +61,3 @@ function AgentStatusIndicatorComponent({
 const AgentStatusIndicator = memo(AgentStatusIndicatorComponent);
 
 export default AgentStatusIndicator;
-

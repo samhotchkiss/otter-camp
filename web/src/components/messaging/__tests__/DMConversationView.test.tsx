@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import DMConversationView from "../DMConversationView";
 import type { Agent } from "../types";
 
@@ -133,5 +133,60 @@ describe("DMConversationView", () => {
     });
 
     expect(screen.getByText("Agent")).toBeInTheDocument();
+  });
+
+  it("sends on Enter and keeps newline behavior for Shift+Enter", async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            messages: [],
+            hasMore: false,
+            totalCount: 0,
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            message: {
+              id: "m-sent-1",
+              thread_id: "dm_agent-1",
+              sender_id: "current-user",
+              sender_name: "You",
+              sender_type: "user",
+              content: "Hello with Enter",
+              created_at: new Date().toISOString(),
+            },
+            delivery: { attempted: true, delivered: true },
+          }),
+      });
+
+    const agent: Agent = {
+      id: "agent-1",
+      name: "Agent One",
+      status: "online",
+      role: "Helper",
+    };
+
+    render(<DMConversationView agent={agent} />);
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Message Agent One...")).toBeInTheDocument();
+    });
+
+    const input = screen.getByPlaceholderText("Message Agent One...");
+    fireEvent.change(input, { target: { value: "Hello with Enter" } });
+
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+
+    const postCall = mockFetch.mock.calls[1] as [string, RequestInit];
+    expect(postCall[1]?.method).toBe("POST");
+    expect(String(postCall[1]?.body ?? "")).toContain("Hello with Enter");
+    expect(screen.getByText("Delivered to bridge")).toBeInTheDocument();
   });
 });

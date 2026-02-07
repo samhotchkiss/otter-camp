@@ -26,6 +26,13 @@ export type DMConversationViewProps = {
   className?: string;
 };
 
+type DeliveryIndicatorTone = "neutral" | "success" | "warning";
+
+type DeliveryIndicator = {
+  tone: DeliveryIndicatorTone;
+  text: string;
+};
+
 function getStoredAuthContext() {
   if (typeof window === "undefined") {
     return { token: "", orgId: "" };
@@ -170,11 +177,11 @@ function AgentAvatar({
           alt={agent.name}
           loading="lazy"
           decoding="async"
-          className={`${sizeStyles[size]} rounded-full object-cover ring-2 ring-emerald-500/30`}
+          className={`${sizeStyles[size]} rounded-full object-cover ring-2 ring-[var(--accent)]/30`}
         />
       ) : (
         <div
-          className={`${sizeStyles[size]} flex items-center justify-center rounded-full bg-emerald-500/20 font-semibold text-emerald-300 ring-2 ring-emerald-500/30`}
+          className={`${sizeStyles[size]} flex items-center justify-center rounded-full bg-[var(--accent)]/20 font-semibold text-[var(--accent)] ring-2 ring-[var(--accent)]/30`}
         >
           {getInitials(agent.name)}
         </div>
@@ -184,7 +191,7 @@ function AgentAvatar({
         <AgentStatusIndicator
           status={agent.status}
           size="sm"
-          className="absolute bottom-0 right-0 border-2 border-slate-900"
+          className="absolute bottom-0 right-0 border-2 border-[var(--surface)]"
         />
       ) : null}
     </div>
@@ -212,6 +219,7 @@ export default function DMConversationView({
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deliveryIndicator, setDeliveryIndicator] = useState<DeliveryIndicator | null>(null);
   const [pagination, setPagination] = useState<PaginationInfo>({
     hasMore: false,
   });
@@ -251,9 +259,9 @@ export default function DMConversationView({
       }
 
       const data = await response.json();
-      const rawMessages = Array.isArray(data.messages) ? data.messages : [];
+      const rawMessages: unknown[] = Array.isArray(data.messages) ? data.messages : [];
       const normalizedMessages = rawMessages
-        .map((message) => normalizeMessage(message, messageDefaults))
+        .map((message: unknown) => normalizeMessage(message, messageDefaults))
         .filter((message): message is DMMessage => message !== null);
       return {
         messages: normalizedMessages,
@@ -273,6 +281,7 @@ export default function DMConversationView({
     const loadInitialMessages = async () => {
       setIsLoading(true);
       setError(null);
+      setDeliveryIndicator(null);
       setMessages([]);
       setPagination({ hasMore: false });
 
@@ -321,12 +330,18 @@ export default function DMConversationView({
 
     const data = lastMessage.data as {
       threadId?: string;
+      thread_id?: string;
       message?: unknown;
     };
 
-    if (data.threadId !== computedThreadId || !data.message) return;
+    const eventThreadID = data.threadId ?? data.thread_id;
+    if (eventThreadID !== computedThreadId || !data.message) return;
     const nextMessage = normalizeMessage(data.message, messageDefaults);
     if (!nextMessage) return;
+
+    if (nextMessage.senderType === "agent") {
+      setDeliveryIndicator({ tone: "success", text: "Agent replied" });
+    }
 
     setMessages((prev) => {
       if (prev.some((m) => m.id === nextMessage.id)) {
@@ -342,6 +357,7 @@ export default function DMConversationView({
 
     setIsSending(true);
     setError(null);
+    setDeliveryIndicator({ tone: "neutral", text: "Sending..." });
 
     const optimisticMessage: DMMessage = {
       id: `temp-${Date.now()}`,
@@ -391,6 +407,14 @@ export default function DMConversationView({
         if (typeof data?.delivery?.error === "string" && data.delivery.error.trim()) {
           setError(data.delivery.error.trim());
         }
+
+        if (data?.delivery?.delivered === true) {
+          setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
+        } else if (typeof data?.delivery?.error === "string" && data.delivery.error.trim()) {
+          setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
+        } else {
+          setDeliveryIndicator({ tone: "neutral", text: "Saved" });
+        }
       }
 
       wsSend({
@@ -400,6 +424,7 @@ export default function DMConversationView({
     } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticMessage.id));
       setError(err instanceof Error ? err.message : "Failed to send message");
+      setDeliveryIndicator({ tone: "warning", text: "Send failed; not saved" });
       setInputValue(content);
     } finally {
       setIsSending(false);
@@ -423,7 +448,11 @@ export default function DMConversationView({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
       event.preventDefault();
       handleSend();
     }
@@ -437,16 +466,29 @@ export default function DMConversationView({
   };
 
   const statusTextClassName = useMemo(() => {
-    if (agent.status === "online") return "text-emerald-400";
-    if (agent.status === "busy") return "text-amber-400";
-    return "text-slate-500";
+    if (agent.status === "online") return "text-[var(--accent)]";
+    if (agent.status === "busy") return "text-[var(--orange)]";
+    return "text-[var(--text-muted)]";
   }, [agent.status]);
+
+  const deliveryIndicatorClassName = useMemo(() => {
+    if (!deliveryIndicator) {
+      return "";
+    }
+    if (deliveryIndicator.tone === "success") {
+      return "border-[var(--green)]/40 bg-[var(--green)]/15 text-[var(--green)]";
+    }
+    if (deliveryIndicator.tone === "warning") {
+      return "border-[var(--orange)]/40 bg-[var(--orange)]/15 text-[var(--orange)]";
+    }
+    return "border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text-muted)]";
+  }, [deliveryIndicator]);
 
   if (isLoading) {
     return (
-      <div className="flex h-96 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900/95">
-        <div className="flex items-center gap-3 text-slate-400">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-emerald-500" />
+      <div className="flex h-96 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
+        <div className="flex items-center gap-3 text-[var(--text-muted)]">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--accent)]" />
           <span>Loading conversation...</span>
         </div>
       </div>
@@ -457,22 +499,22 @@ export default function DMConversationView({
 
   return (
     <div
-      className={`flex h-[500px] flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/95 shadow-xl ${className}`}
+      className={`flex h-[500px] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-xl ${className}`}
     >
-      <div className="flex items-center gap-4 border-b border-slate-800 px-5 py-3">
+      <div className="flex items-center gap-4 border-b border-[var(--border)] px-5 py-3">
         <AgentAvatar agent={agent} size="md" />
         <div className="flex-1">
-          <h3 className="font-semibold text-slate-200">{agent.name}</h3>
+          <h3 className="font-semibold text-[var(--text)]">{agent.name}</h3>
           <div className="flex items-center gap-2">
             {agent.role ? (
-              <span className="text-xs text-slate-500">{agent.role}</span>
+              <span className="text-xs text-[var(--text-muted)]">{agent.role}</span>
             ) : null}
             <span className={`text-xs capitalize ${statusTextClassName}`}>
               {agent.status}
             </span>
           </div>
         </div>
-        <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-400">
+        <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 text-xs text-[var(--text-muted)]">
           {messageCount} {messageCount === 1 ? "message" : "messages"}
         </span>
       </div>
@@ -480,6 +522,7 @@ export default function DMConversationView({
       <MessageHistory
         messages={messages}
         currentUserId={currentUserId}
+        threadId={computedThreadId}
         agent={agent}
         hasMore={pagination.hasMore}
         isLoadingMore={isLoadingMore}
@@ -487,14 +530,22 @@ export default function DMConversationView({
       />
 
       {error ? (
-        <div className="border-t border-red-900/50 bg-red-950/50 px-5 py-2">
-          <p className="text-sm text-red-400">{error}</p>
+        <div className="border-t border-[var(--red)]/40 bg-[var(--red)]/15 px-5 py-2">
+          <p className="text-sm text-[var(--red)]">{error}</p>
+        </div>
+      ) : null}
+
+      {deliveryIndicator ? (
+        <div className="border-t border-[var(--border)]/70 px-5 py-1.5">
+          <p className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] ${deliveryIndicatorClassName}`}>
+            {deliveryIndicator.text}
+          </p>
         </div>
       ) : null}
 
       <form
         onSubmit={handleSubmit}
-        className="flex items-end gap-3 border-t border-slate-800 px-5 py-4"
+        className="flex items-end gap-3 border-t border-[var(--border)] px-5 py-4"
       >
         <textarea
           ref={inputRef}
@@ -505,16 +556,16 @@ export default function DMConversationView({
           placeholder={`Message ${agent.name}...`}
           rows={1}
           disabled={isSending}
-          className="flex-1 resize-none rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
+          className="flex-1 resize-none rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={!inputValue.trim() || isSending}
-          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-white transition hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-[#1A1918] transition hover:bg-[var(--accent-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="Send message"
         >
           {isSending ? (
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-[#1A1918]/30 border-t-[#1A1918]" />
           ) : (
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -528,9 +579,10 @@ export default function DMConversationView({
         </button>
       </form>
 
-      <div className="border-t border-slate-800/50 bg-slate-950/50 px-5 py-1.5">
-        <p className="text-[10px] text-slate-600">
-          Press <span className="font-medium">Cmd/Ctrl + Enter</span> to send
+      <div className="border-t border-[var(--border)]/70 bg-[var(--surface-alt)]/40 px-5 py-1.5">
+        <p className="text-[10px] text-[var(--text-muted)]">
+          Press <span className="font-medium">Enter</span> to send,{" "}
+          <span className="font-medium">Shift + Enter</span> for a new line
         </p>
       </div>
     </div>

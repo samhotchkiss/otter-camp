@@ -13,8 +13,8 @@ function MessageAvatar({
 }) {
   const bgColor =
     senderType === "agent"
-      ? "bg-emerald-500/20 text-emerald-300"
-      : "bg-sky-500/20 text-sky-300";
+      ? "bg-[var(--accent)]/20 text-[var(--accent)]"
+      : "bg-[var(--surface-alt)] text-[var(--text)]";
 
   if (avatarUrl) {
     return (
@@ -23,7 +23,7 @@ function MessageAvatar({
         alt={name}
         loading="lazy"
         decoding="async"
-        className="h-8 w-8 rounded-full object-cover ring-2 ring-slate-700"
+        className="h-8 w-8 rounded-full object-cover ring-2 ring-[var(--border)]"
       />
     );
   }
@@ -46,10 +46,10 @@ function MessageBubble({
   isOwnMessage: boolean;
 }) {
   const bubbleStyle = isOwnMessage
-    ? "bg-sky-600 text-white"
+    ? "bg-[var(--accent)] text-[#1A1918]"
     : message.senderType === "agent"
-      ? "bg-emerald-900/50 text-emerald-100 border border-emerald-700/50"
-      : "bg-slate-800 text-slate-200";
+      ? "border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)]"
+      : "bg-[var(--surface-alt)] text-[var(--text)]";
 
   return (
     <div
@@ -64,11 +64,11 @@ function MessageBubble({
         className={`flex max-w-[75%] flex-col ${isOwnMessage ? "items-end" : "items-start"}`}
       >
         <div className="mb-1 flex items-center gap-2">
-          <span className="text-xs font-medium text-slate-400">
+          <span className="text-xs font-medium text-[var(--text-muted)]">
             {message.senderName}
           </span>
           {message.senderType === "agent" && (
-            <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
+            <span className="rounded-full bg-[var(--accent)]/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--accent)]">
               Agent
             </span>
           )}
@@ -78,7 +78,7 @@ function MessageBubble({
             {message.content}
           </p>
         </div>
-        <span className="mt-1 text-[10px] text-slate-500">
+        <span className="mt-1 text-[10px] text-[var(--text-muted)]">
           {formatTimestamp(message.createdAt)}
         </span>
       </div>
@@ -88,9 +88,9 @@ function MessageBubble({
 
 function AgentAvatarFallback({ agent }: { agent: Agent }) {
   const statusStyles: Record<AgentStatus, string> = {
-    online: "bg-emerald-500 shadow-emerald-500/50",
-    busy: "bg-amber-500 shadow-amber-500/50",
-    offline: "bg-slate-500",
+    online: "bg-[var(--accent)] shadow-[var(--accent)]/50",
+    busy: "bg-[var(--orange)] shadow-[var(--orange)]/50",
+    offline: "bg-[var(--text-muted)]",
   };
 
   return (
@@ -101,15 +101,15 @@ function AgentAvatarFallback({ agent }: { agent: Agent }) {
           alt={agent.name}
           loading="lazy"
           decoding="async"
-          className="h-12 w-12 rounded-full object-cover ring-2 ring-emerald-500/30"
+          className="h-12 w-12 rounded-full object-cover ring-2 ring-[var(--accent)]/30"
         />
       ) : (
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/20 text-base font-semibold text-emerald-300 ring-2 ring-emerald-500/30">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent)]/20 text-base font-semibold text-[var(--accent)] ring-2 ring-[var(--accent)]/30">
           {getInitials(agent.name)}
         </div>
       )}
       <span
-        className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-slate-900 shadow-lg ${statusStyles[agent.status]}`}
+        className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[var(--surface)] shadow-lg ${statusStyles[agent.status]}`}
         title={agent.status.charAt(0).toUpperCase() + agent.status.slice(1)}
       />
     </div>
@@ -128,11 +128,11 @@ function LoadMoreButton({
       type="button"
       onClick={onClick}
       disabled={isLoading}
-      className="mx-auto flex items-center gap-2 rounded-full bg-slate-800 px-4 py-1.5 text-xs text-slate-400 transition hover:bg-slate-700 hover:text-slate-300 disabled:opacity-50"
+      className="mx-auto flex items-center gap-2 rounded-full bg-[var(--surface-alt)] px-4 py-1.5 text-xs text-[var(--text-muted)] transition hover:bg-[var(--border)] hover:text-[var(--text)] disabled:opacity-50"
     >
       {isLoading ? (
         <>
-          <div className="h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-sky-500" />
+          <div className="h-3 w-3 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--accent)]" />
           Loading...
         </>
       ) : (
@@ -159,6 +159,7 @@ function LoadMoreButton({
 export type MessageHistoryProps = {
   messages: DMMessage[];
   currentUserId: string;
+  threadId?: string;
   agent?: Agent;
   hasMore?: boolean;
   isLoadingMore?: boolean;
@@ -169,6 +170,7 @@ export type MessageHistoryProps = {
 export default function MessageHistory({
   messages,
   currentUserId,
+  threadId,
   agent,
   hasMore = false,
   isLoadingMore = false,
@@ -200,6 +202,14 @@ export default function MessageHistory({
       pendingPrependRef.current = false;
     }
   }, [isLoadingMore, onLoadMore]);
+
+  useEffect(() => {
+    prevMessageCountRef.current = 0;
+    pendingPrependRef.current = false;
+    requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView({ behavior: "auto" });
+    });
+  }, [threadId]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -237,7 +247,7 @@ export default function MessageHistory({
       )}
 
       {messages.length === 0 ? (
-        <div className="flex h-full flex-col items-center justify-center text-slate-500">
+        <div className="flex h-full flex-col items-center justify-center text-[var(--text-muted)]">
           {agent ? <AgentAvatarFallback agent={agent} /> : null}
           <p className="mt-3 text-sm">
             {agent ? `Start a conversation with ${agent.name}` : "No messages yet"}
@@ -258,4 +268,3 @@ export default function MessageHistory({
     </div>
   );
 }
-
