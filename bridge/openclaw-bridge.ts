@@ -21,6 +21,8 @@ const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || '';
 const OTTERCAMP_URL = process.env.OTTERCAMP_URL || 'https://api.otter.camp';
 const OTTERCAMP_TOKEN = process.env.OTTERCAMP_TOKEN || '';
 const OTTERCAMP_WS_SECRET = process.env.OPENCLAW_WS_SECRET || '';
+const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
+const MAX_TRACKED_RUN_IDS = 2000;
 
 interface OpenClawSession {
   key: string;
@@ -74,10 +76,13 @@ type SessionContext = {
 
 let openClawWS: WebSocket | null = null;
 let otterCampWS: WebSocket | null = null;
+let otterCampReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let otterCampReconnectAttempts = 0;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
 const sessionContexts = new Map<string, SessionContext>();
 const deliveredRunIDs = new Set<string>();
+const deliveredRunIDOrder: string[] = [];
 
 const genId = () => `req-${++requestId}`;
 
@@ -101,19 +106,6 @@ function parseAgentIDFromSessionKey(sessionKey: string): string {
     return '';
   }
   return match[1].trim();
-}
-
-function resolveThreadID(sessionKey: string, context: SessionContext | undefined): string {
-  const fromContext = getTrimmedString(context?.threadID);
-  if (fromContext) {
-    return fromContext;
-  }
-
-  const agentID = getTrimmedString(context?.agentID) || parseAgentIDFromSessionKey(sessionKey);
-  if (!agentID) {
-    return '';
-  }
-  return `dm_${agentID}`;
 }
 
 function extractMessageContent(value: unknown): string {
@@ -146,6 +138,61 @@ function extractMessageContent(value: unknown): string {
     getTrimmedString(record.body) ||
     ''
   );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetryStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function markRunIDDelivered(runID: string): void {
+  const normalized = runID.trim();
+  if (!normalized || deliveredRunIDs.has(normalized)) {
+    return;
+  }
+  deliveredRunIDs.add(normalized);
+  deliveredRunIDOrder.push(normalized);
+
+  while (deliveredRunIDOrder.length > MAX_TRACKED_RUN_IDS) {
+    const stale = deliveredRunIDOrder.shift();
+    if (stale) {
+      deliveredRunIDs.delete(stale);
+    }
+  }
+}
+
+async function fetchWithRetry(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  label: string,
+): Promise<Response> {
+  let attempt = 0;
+  for (;;) {
+    attempt += 1;
+    try {
+      const response = await fetch(input, init);
+      if (!shouldRetryStatus(response.status) || attempt > FETCH_RETRY_DELAYS_MS.length) {
+        return response;
+      }
+      const delay = FETCH_RETRY_DELAYS_MS[attempt - 1];
+      console.warn(
+        `[bridge] ${label} received ${response.status}; retrying in ${delay}ms (attempt ${attempt + 1})`,
+      );
+      await sleep(delay);
+    } catch (err) {
+      if (attempt > FETCH_RETRY_DELAYS_MS.length) {
+        throw err;
+      }
+      const delay = FETCH_RETRY_DELAYS_MS[attempt - 1];
+      console.warn(
+        `[bridge] ${label} network error; retrying in ${delay}ms (attempt ${attempt + 1})`,
+      );
+      await sleep(delay);
+    }
+  }
 }
 
 function normalizeModeArg(value: string | undefined): 'once' | 'continuous' {
@@ -316,15 +363,21 @@ async function persistAssistantReplyToOtterCamp(params: {
   }
 
   const context = sessionContexts.get(sessionKey);
-  const threadID = resolveThreadID(sessionKey, context);
-  if (!threadID) {
-    console.warn(`[bridge] skipped assistant reply without thread mapping for session ${sessionKey}`);
+  if (!context) {
+    // Ignore non-DM assistant activity (e.g. cron/system sessions).
     return;
   }
 
-  const agentID = getTrimmedString(context?.agentID) || parseAgentIDFromSessionKey(sessionKey);
+  const orgID = getTrimmedString(context.orgID);
+  const threadID = getTrimmedString(context.threadID);
+  if (!orgID || !threadID || !threadID.startsWith('dm_')) {
+    return;
+  }
+
+  const agentID = getTrimmedString(context.agentID) || parseAgentIDFromSessionKey(sessionKey);
   const senderName = agentID ? agentID : 'Agent';
   const body: Record<string, unknown> = {
+    org_id: orgID,
     thread_id: threadID,
     content,
     sender_type: 'agent',
@@ -333,25 +386,22 @@ async function persistAssistantReplyToOtterCamp(params: {
   if (agentID) {
     body.sender_id = agentID;
   }
-  if (context?.orgID) {
-    body.org_id = context.orgID;
-  }
 
-  const response = await fetch(`${OTTERCAMP_URL}/api/messages`, {
+  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
     },
     body: JSON.stringify(body),
-  });
+  }, 'persist assistant reply');
   if (!response.ok) {
     const snippet = (await response.text().catch(() => '')).slice(0, 300);
     throw new Error(`message persist failed: ${response.status} ${response.statusText} ${snippet}`.trim());
   }
 
   if (params.runID) {
-    deliveredRunIDs.add(params.runID);
+    markRunIDDelivered(params.runID);
   }
   console.log(
     `[bridge] persisted assistant reply to ${threadID}${params.runID ? ` (run_id=${params.runID})` : ''}`,
@@ -377,6 +427,9 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
 
   const sessionKey = getTrimmedString(payload.sessionKey) || getTrimmedString(payload.session_key);
   if (!sessionKey) {
+    return;
+  }
+  if (!sessionContexts.has(sessionKey)) {
     return;
   }
 
@@ -426,14 +479,14 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   };
 
   const url = `${OTTERCAMP_URL}/api/sync/openclaw`;
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
     },
     body: JSON.stringify(payload),
-  });
+  }, 'push sync snapshot');
 
   if (!response.ok) {
     throw new Error(`sync push failed: ${response.status} ${response.statusText}`);
@@ -478,12 +531,21 @@ function connectOtterCampDispatchSocket(): void {
     return;
   }
 
+  if (otterCampWS && (otterCampWS.readyState === WebSocket.OPEN || otterCampWS.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
   const wsURL = buildOtterCampWSURL();
   console.log(`[bridge] connecting to OtterCamp websocket ${wsURL}`);
 
   otterCampWS = new WebSocket(wsURL);
 
   otterCampWS.on('open', () => {
+    otterCampReconnectAttempts = 0;
+    if (otterCampReconnectTimer) {
+      clearTimeout(otterCampReconnectTimer);
+      otterCampReconnectTimer = null;
+    }
     console.log('[bridge] connected to OtterCamp /ws/openclaw');
   });
 
@@ -503,11 +565,15 @@ function connectOtterCampDispatchSocket(): void {
     console.warn(`[bridge] OtterCamp websocket closed (${code}) ${reason.toString()}`);
     otterCampWS = null;
 
-    setTimeout(() => {
-      if (!otterCampWS) {
-        connectOtterCampDispatchSocket();
-      }
-    }, 2000);
+    const reconnectDelay = Math.min(30000, 1000 * Math.pow(2, otterCampReconnectAttempts));
+    otterCampReconnectAttempts += 1;
+    if (otterCampReconnectTimer) {
+      clearTimeout(otterCampReconnectTimer);
+    }
+    otterCampReconnectTimer = setTimeout(() => {
+      otterCampReconnectTimer = null;
+      connectOtterCampDispatchSocket();
+    }, reconnectDelay);
   });
 
   otterCampWS.on('error', (err) => {
