@@ -22,8 +22,13 @@ export type AgentCardProps = {
 /**
  * Get initials from a name for avatar fallback.
  */
-function getInitials(name: string): string {
-  return name
+function getInitials(name: unknown): string {
+  const safeName = typeof name === "string" ? name.trim() : "";
+  if (!safeName) {
+    return "?";
+  }
+
+  return safeName
     .split(" ")
     .map((part) => part[0])
     .slice(0, 2)
@@ -47,9 +52,10 @@ const AVATAR_COLORS = [
 ];
 
 function getAvatarColor(name: string): { bg: string; text: string } {
+  const safeName = typeof name === "string" ? name : "";
   let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = ((hash << 5) - hash) + name.charCodeAt(i);
+  for (let i = 0; i < safeName.length; i++) {
+    hash = ((hash << 5) - hash) + safeName.charCodeAt(i);
     hash = hash & hash;
   }
   const index = Math.abs(hash) % AVATAR_COLORS.length;

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatLastActive } from "../AgentCard";
+import { render, screen } from "@testing-library/react";
+import AgentCard, { type AgentCardData, formatLastActive } from "../AgentCard";
 
 describe("formatLastActive", () => {
   afterEach(() => {
@@ -20,5 +21,16 @@ describe("formatLastActive", () => {
 
     expect(formatLastActive("2023-12-31T23:58:00Z")).toBe("2m ago");
     expect(formatLastActive("2023-12-31T23:59:30Z")).toBe("Just now");
+  });
+
+  it("falls back to '?' initials when agent name is missing", () => {
+    const brokenAgent = {
+      id: "agent-1",
+      status: "online",
+    } as unknown as AgentCardData;
+
+    render(<AgentCard agent={brokenAgent} />);
+
+    expect(screen.getByText("?")).toBeInTheDocument();
   });
 });
