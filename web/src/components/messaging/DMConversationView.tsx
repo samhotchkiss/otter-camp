@@ -13,6 +13,8 @@ import AgentStatusIndicator from "./AgentStatusIndicator";
 import type { Agent, DMMessage, PaginationInfo } from "./types";
 import { getInitials } from "./utils";
 
+const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+
 export type DMConversationViewProps = {
   agent: Agent;
   threadId?: string;
@@ -74,7 +76,7 @@ export default function DMConversationView({
   currentUserId = "current-user",
   currentUserName = "You",
   onSendMessage,
-  apiEndpoint = "/api/messages",
+  apiEndpoint = `${API_URL}/api/messages`,
   pageSize = 20,
   className = "",
 }: DMConversationViewProps) {
@@ -377,4 +379,3 @@ export default function DMConversationView({
     </div>
   );
 }
-
