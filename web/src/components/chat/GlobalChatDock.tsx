@@ -30,11 +30,31 @@ export default function GlobalChatDock() {
   const [resettingProjectSession, setResettingProjectSession] = useState(false);
   const [resetProjectError, setResetProjectError] = useState<string | null>(null);
 
+  const visibleConversations = useMemo(() => {
+    if (conversations.length > 0) {
+      return conversations;
+    }
+    if (selectedConversation) {
+      return [selectedConversation];
+    }
+    return [];
+  }, [conversations, selectedConversation]);
+
   useEffect(() => {
     if (isOpen && selectedKey) {
       markConversationRead(selectedKey);
     }
   }, [isOpen, markConversationRead, selectedKey]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && isOpen) {
+        setDockOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isOpen, setDockOpen]);
 
   useEffect(() => {
     setResetProjectError(null);
@@ -131,7 +151,15 @@ export default function GlobalChatDock() {
               className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
               aria-label="Collapse global chat"
             >
-              Collapse
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={() => setDockOpen(false)}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border)] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
+              aria-label="Close global chat"
+            >
+              ×
             </button>
           </div>
         </header>
@@ -141,15 +169,15 @@ export default function GlobalChatDock() {
           </div>
         ) : null}
 
-        <div className="grid h-[min(72vh,620px)] grid-cols-[260px_1fr]">
-          <aside className="border-r border-[var(--border)] bg-[var(--surface-alt)]/50">
-            <div className="max-h-full overflow-y-auto p-2">
-              {conversations.length === 0 ? (
+        <div className="grid h-[min(72vh,620px)] max-h-[calc(100vh-2rem)] grid-cols-[260px_1fr]">
+          <aside className="min-h-0 border-r border-[var(--border)] bg-[var(--surface-alt)]/50">
+            <div className="h-full overflow-y-auto p-2">
+              {visibleConversations.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-[var(--border)] p-4 text-xs text-[var(--text-muted)]">
                   Start a chat from Agents, Projects, or an Issue thread.
                 </div>
               ) : (
-                conversations.map((conversation) => {
+                visibleConversations.map((conversation) => {
                   const active = selectedKey === conversation.key;
                   return (
                     <button
@@ -166,7 +194,9 @@ export default function GlobalChatDock() {
                       }`}
                     >
                       <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="truncate text-sm font-semibold text-[var(--text)]">{conversation.title}</span>
+                        <span className="truncate text-sm font-semibold text-[var(--text)]">
+                          {conversation.title || "Untitled chat"}
+                        </span>
                         {conversation.unreadCount > 0 ? (
                           <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[var(--red)] px-1 text-[10px] font-semibold text-white">
                             {conversation.unreadCount > 9 ? "9+" : conversation.unreadCount}
@@ -189,12 +219,14 @@ export default function GlobalChatDock() {
             </div>
           </aside>
 
-          <div className="flex h-full flex-col">
+          <div className="flex h-full min-h-0 flex-col">
             {selectedConversation ? (
               <>
                 <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2">
                   <div>
-                    <h3 className="text-sm font-semibold text-[var(--text)]">{selectedConversation.title}</h3>
+                    <h3 className="text-sm font-semibold text-[var(--text)]">
+                      {selectedConversation.title || "Untitled chat"}
+                    </h3>
                     <p className="text-xs text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
                   </div>
                 </div>

@@ -588,9 +588,15 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       }
 
       const existing = prev[index];
+      const mergedTitle = existing.title || conversation.title;
+      const mergedContextLabel = existing.contextLabel || conversation.contextLabel;
+      const mergedSubtitle = existing.subtitle || conversation.subtitle;
       const merged: GlobalChatConversation = {
         ...existing,
         ...conversation,
+        title: mergedTitle,
+        contextLabel: mergedContextLabel,
+        subtitle: mergedSubtitle,
         unreadCount: shouldIncrementUnread
           ? existing.unreadCount + 1
           : existing.unreadCount,

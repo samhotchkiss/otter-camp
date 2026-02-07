@@ -228,6 +228,21 @@ function deliveryIndicatorClass(indicator: DeliveryIndicator): string {
   return "border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text-muted)]";
 }
 
+function normalizeDeliveryErrorText(raw: unknown): string {
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return "";
+  }
+  const message = raw.trim();
+  const lower = message.toLowerCase();
+  if (lower.includes("bridge offline")) {
+    return `${message} (bridge process needs to be running)`;
+  }
+  if (lower.includes("delivery unavailable")) {
+    return `${message} (message saved; retry after bridge reconnects)`;
+  }
+  return message;
+}
+
 export default function GlobalChatSurface({
   conversation,
   onConversationTouched,
@@ -615,7 +630,7 @@ export default function GlobalChatSurface({
         if (payload?.delivery?.delivered === true) {
           setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
         } else if (typeof payload?.delivery?.error === "string" && payload.delivery.error.trim() !== "") {
-          setError(payload.delivery.error);
+          setError(normalizeDeliveryErrorText(payload.delivery.error));
           setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
         } else {
           setDeliveryIndicator({ tone: "neutral", text: "Saved" });
@@ -660,7 +675,7 @@ export default function GlobalChatSurface({
         if (payload?.delivery?.delivered === true) {
           setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
         } else if (typeof payload?.delivery?.error === "string" && payload.delivery.error.trim() !== "") {
-          setError(payload.delivery.error);
+          setError(normalizeDeliveryErrorText(payload.delivery.error));
           setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
         } else {
           setDeliveryIndicator({ tone: "neutral", text: "Saved" });
@@ -709,7 +724,7 @@ export default function GlobalChatSurface({
         if (payload?.delivery?.delivered === true) {
           setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
         } else if (typeof payload?.delivery?.error === "string" && payload.delivery.error.trim() !== "") {
-          setError(payload.delivery.error);
+          setError(normalizeDeliveryErrorText(payload.delivery.error));
           setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
         } else {
           setDeliveryIndicator({ tone: "neutral", text: "Saved" });
@@ -801,7 +816,7 @@ export default function GlobalChatSurface({
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <MessageHistory
         messages={messages}
         currentUserId={conversation.type === "issue" ? issueAuthorID || currentUserID : currentUserID}
