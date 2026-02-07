@@ -44,3 +44,13 @@
 - Validation run: ok  	github.com/samhotchkiss/otter-camp/internal/store	0.010s.
 - Remaining (Spec001): #258, #259, #260, #261, #262, #263.
 
+## [2026-02-07 15:11:15 MST] Progress log correction for #257 entry
+- Correcting prior malformed markdown line caused by shell interpolation while logging.
+- Completed Spec001 Issue #257 details:
+  - Added migration `038_add_issue_work_tracking_columns` for `project_issues`.
+  - Added columns: `owner_agent_id`, `work_status`, `priority`, `due_at`, `next_step`, `next_step_due_at`.
+  - Added DB check constraints for `work_status` and `priority` values.
+  - Added indexes for project+status, project+owner, and project+priority query paths.
+  - Added test `TestProjectIssueStore_WorkTrackingSchemaDefaultsAndConstraints` to verify defaults and constraint enforcement.
+- Remaining (Spec001): #258, #259, #260, #261, #262, #263.
+
