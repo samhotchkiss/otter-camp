@@ -83,7 +83,7 @@ func NewRouter() http.Handler {
 	githubPullRequestsHandler := &GitHubPullRequestsHandler{}
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 	projectChatHandler := &ProjectChatHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
-	issuesHandler := &IssuesHandler{Hub: hub}
+	issuesHandler := &IssuesHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
 	projectCommitsHandler := &ProjectCommitsHandler{}
 	knowledgeHandler := &KnowledgeHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
@@ -188,6 +188,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat/search", projectChatHandler.Search)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages", projectChatHandler.Create)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/reset", projectChatHandler.ResetSession)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages/{messageID}/save-to-notes", projectChatHandler.SaveToNotes)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/bootstrap", projectChatHandler.BootstrapContent)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/assets", projectChatHandler.UploadContentAsset)

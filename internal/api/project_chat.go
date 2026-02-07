@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,9 @@ const (
 	maxProjectChatPageSize     = 200
 	defaultProjectChatSearch   = 20
 	maxProjectChatSearch       = 100
+
+	projectChatSessionResetAuthor = "__otter_session__"
+	projectChatSessionResetPrefix = "project_chat_session_reset:"
 )
 
 type ProjectChatHandler struct {
@@ -196,6 +200,10 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "author is required"})
 		return
 	}
+	if req.Author == projectChatSessionResetAuthor {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "author is reserved"})
+		return
+	}
 	if req.Body == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "body is required"})
 		return
@@ -240,6 +248,44 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusCreated, map[string]interface{}{
 		"message":  payload,
 		"delivery": delivery,
+	})
+}
+
+func (h *ProjectChatHandler) ResetSession(w http.ResponseWriter, r *http.Request) {
+	if h.ProjectStore == nil || h.ChatStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+
+	if err := h.requireProjectAccess(r.Context(), projectID); err != nil {
+		handleProjectChatStoreError(w, err)
+		return
+	}
+
+	sessionID := strconv.FormatInt(time.Now().UTC().UnixNano(), 36)
+	markerBody := buildProjectChatSessionResetBody(sessionID)
+
+	message, err := h.ChatStore.Create(r.Context(), store.CreateProjectChatMessageInput{
+		ProjectID: projectID,
+		Author:    projectChatSessionResetAuthor,
+		Body:      markerBody,
+	})
+	if err != nil {
+		handleProjectChatStoreError(w, err)
+		return
+	}
+
+	payload := toProjectChatPayload(*message)
+	h.broadcastProjectChatCreated(r.Context(), payload)
+	sendJSON(w, http.StatusCreated, map[string]any{
+		"message":    payload,
+		"session_id": sessionID,
 	})
 }
 
@@ -431,8 +477,28 @@ func projectChatChannel(projectID string) string {
 	return "project:" + strings.TrimSpace(projectID) + ":chat"
 }
 
-func projectChatSessionKey(agentID, projectID string) string {
-	return fmt.Sprintf("agent:%s:project:%s", strings.TrimSpace(agentID), strings.TrimSpace(projectID))
+func projectChatSessionKey(agentID, projectID, sessionID string) string {
+	base := fmt.Sprintf("agent:%s:project:%s", strings.TrimSpace(agentID), strings.TrimSpace(projectID))
+	if strings.TrimSpace(sessionID) == "" {
+		return base
+	}
+	return base + ":session:" + strings.TrimSpace(sessionID)
+}
+
+func buildProjectChatSessionResetBody(sessionID string) string {
+	return projectChatSessionResetPrefix + strings.TrimSpace(sessionID)
+}
+
+func parseProjectChatSessionResetID(body string) (string, bool) {
+	trimmed := strings.TrimSpace(body)
+	if !strings.HasPrefix(trimmed, projectChatSessionResetPrefix) {
+		return "", false
+	}
+	sessionID := strings.TrimSpace(strings.TrimPrefix(trimmed, projectChatSessionResetPrefix))
+	if sessionID == "" {
+		return "", false
+	}
+	return sessionID, true
 }
 
 func (h *ProjectChatHandler) dispatchProjectChatMessageToOpenClaw(
@@ -489,11 +555,51 @@ func (h *ProjectChatHandler) resolveProjectChatDispatchTarget(
 		return projectChatDispatchTarget{}, false, "project agent unavailable; message was saved but not delivered", nil
 	}
 
+	sessionID, err := h.resolveActiveProjectChatSessionID(ctx, projectID)
+	if err != nil {
+		return projectChatDispatchTarget{}, false, "", err
+	}
+
 	return projectChatDispatchTarget{
 		AgentID:    agentID,
 		AgentName:  agentName,
-		SessionKey: projectChatSessionKey(agentID, projectID),
+		SessionKey: projectChatSessionKey(agentID, projectID, sessionID),
 	}, true, "", nil
+}
+
+func (h *ProjectChatHandler) resolveActiveProjectChatSessionID(
+	ctx context.Context,
+	projectID string,
+) (string, error) {
+	if h.DB == nil {
+		return "", nil
+	}
+
+	var markerBody string
+	err := h.DB.QueryRowContext(
+		ctx,
+		`SELECT body
+		 FROM project_chat_messages
+		 WHERE project_id = $1
+		   AND author = $2
+		   AND body LIKE $3
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`,
+		strings.TrimSpace(projectID),
+		projectChatSessionResetAuthor,
+		projectChatSessionResetPrefix+"%",
+	).Scan(&markerBody)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	sessionID, ok := parseProjectChatSessionResetID(markerBody)
+	if !ok {
+		return "", nil
+	}
+	return sessionID, nil
 }
 
 func (h *ProjectChatHandler) resolveProjectLeadAgent(

@@ -4,6 +4,8 @@ import { useWS } from "../../contexts/WebSocketContext";
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
+const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
+const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
 
 type ProjectChatMessage = {
   id: string;
@@ -14,6 +16,8 @@ type ProjectChatMessage = {
   updated_at: string;
   optimistic?: boolean;
   failed?: boolean;
+  isSessionReset?: boolean;
+  sessionID?: string;
 };
 
 type ProjectChatSearchItem = {
@@ -72,6 +76,13 @@ function normalizeMessage(input: unknown): ProjectChatMessage | null {
     typeof record.updated_at === "string"
       ? record.updated_at
       : createdAt;
+  const isSessionReset =
+    author === PROJECT_CHAT_SESSION_RESET_AUTHOR &&
+    typeof body === "string" &&
+    body.startsWith(PROJECT_CHAT_SESSION_RESET_PREFIX);
+  const sessionID = isSessionReset
+    ? body.slice(PROJECT_CHAT_SESSION_RESET_PREFIX.length).trim()
+    : undefined;
 
   if (!id || !projectID || !author || !body) {
     return null;
@@ -84,6 +95,8 @@ function normalizeMessage(input: unknown): ProjectChatMessage | null {
     body,
     created_at: createdAt,
     updated_at: updatedAt,
+    isSessionReset,
+    sessionID,
   };
 }
 
@@ -131,6 +144,8 @@ export default function ProjectChatPanel({
   const [searchItems, setSearchItems] = useState<ProjectChatSearchItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [deliveryIndicator, setDeliveryIndicator] = useState<DeliveryIndicator | null>(null);
+  const [resettingSession, setResettingSession] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
 
   const { connected, lastMessage, sendMessage } = useWS();
   const searchTimeoutRef = useRef<number | null>(null);
@@ -243,9 +258,17 @@ export default function ProjectChatPanel({
       return;
     }
 
+    if (incoming.isSessionReset) {
+      setDeliveryIndicator({ tone: "neutral", text: "Started new session" });
+    }
+
     const incomingAuthor = incoming.author.trim().toLowerCase();
     const currentAuthorNormalized = currentAuthor.trim().toLowerCase();
-    if (incomingAuthor !== "" && incomingAuthor !== currentAuthorNormalized) {
+    if (
+      !incoming.isSessionReset &&
+      incomingAuthor !== "" &&
+      incomingAuthor !== currentAuthorNormalized
+    ) {
       clearAwaitingResponseTimeout();
       setSendError(null);
       setDeliveryIndicator({ tone: "success", text: "Agent replied" });
@@ -274,6 +297,42 @@ export default function ProjectChatPanel({
       setUnreadCount((count) => count + 1);
     }
   }, [active, currentAuthor, lastMessage, projectId]);
+
+  const resetChatSession = async (): Promise<void> => {
+    if (!projectId || !orgID || resettingSession) {
+      return;
+    }
+    setResettingSession(true);
+    setResetError(null);
+    try {
+      const response = await fetch(
+        `${API_URL}/api/projects/${projectId}/chat/reset?org_id=${encodeURIComponent(orgID)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to reset chat session");
+      }
+      const payload = await response.json();
+      const marker = normalizeMessage(payload?.message);
+      if (marker) {
+        setMessages((prev) => {
+          if (prev.some((message) => message.id === marker.id)) {
+            return prev;
+          }
+          return sortByCreatedDesc([marker, ...prev]);
+        });
+      }
+      setDeliveryIndicator({ tone: "neutral", text: "Started new session" });
+    } catch (error) {
+      setResetError(error instanceof Error ? error.message : "Failed to reset chat session");
+    } finally {
+      setResettingSession(false);
+    }
+  };
 
   useEffect(() => {
     if (searchTimeoutRef.current !== null) {
@@ -514,9 +573,22 @@ export default function ProjectChatPanel({
       <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
         <header className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-[var(--text)]">Project Chat</h2>
-          <span className="text-xs text-[var(--text-muted)]">
-            {messages.length} message{messages.length === 1 ? "" : "s"}
-          </span>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                void resetChatSession();
+              }}
+              disabled={resettingSession}
+              className="rounded-md border border-[var(--border)] px-2.5 py-1 text-[11px] font-medium text-[var(--text)] hover:bg-[var(--surface-alt)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {resettingSession ? "Resetting..." : "Reset chat session"}
+            </button>
+            <span className="text-xs text-[var(--text-muted)]">
+              {messages.filter((message) => !message.isSessionReset).length} message
+              {messages.filter((message) => !message.isSessionReset).length === 1 ? "" : "s"}
+            </span>
+          </div>
         </header>
 
         <div className="mb-4 max-h-[420px] space-y-3 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] p-3">
@@ -527,39 +599,63 @@ export default function ProjectChatPanel({
           ) : displayMessages.length === 0 ? (
             <p className="text-sm text-[var(--text-muted)]">No project chat messages yet.</p>
           ) : (
-            displayMessages.map((message) => (
-              <article
-                key={message.id}
-                className={`rounded-lg border p-3 text-sm ${
-                  message.failed
-                    ? "border-red-300 bg-red-50 dark:border-red-900/60 dark:bg-red-950/20"
-                    : "border-[var(--border)] bg-[var(--surface)]"
-                }`}
-                data-testid="project-chat-message"
-              >
-                <div className="mb-1 flex items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
-                  <span className="font-semibold text-[var(--text)]">{message.author}</span>
-                  <span>{formatMessageTime(message.created_at)}</span>
-                </div>
-                <p className="whitespace-pre-wrap text-[var(--text)]">{message.body}</p>
-                {message.optimistic ? (
-                  <p className="mt-2 text-xs text-amber-600 dark:text-amber-300">Sending...</p>
-                ) : null}
-                {message.failed ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void sendChatMessage(message.body, message);
-                    }}
-                    className="mt-2 text-xs font-semibold text-red-600 hover:underline dark:text-red-300"
+            displayMessages.map((message) => {
+              if (message.isSessionReset) {
+                return (
+                  <div
+                    key={message.id}
+                    className="my-2 rounded-lg border border-[#C9A86C]/45 bg-[#C9A86C]/12 px-3 py-2 text-center"
+                    data-testid="project-chat-session-divider"
                   >
-                    Retry send
-                  </button>
-                ) : null}
-              </article>
-            ))
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#C9A86C]">
+                      New chat session started
+                    </p>
+                    <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                      {formatMessageTime(message.created_at)}
+                    </p>
+                  </div>
+                );
+              }
+              return (
+                <article
+                  key={message.id}
+                  className={`rounded-lg border p-3 text-sm ${
+                    message.failed
+                      ? "border-red-300 bg-red-50 dark:border-red-900/60 dark:bg-red-950/20"
+                      : "border-[var(--border)] bg-[var(--surface)]"
+                  }`}
+                  data-testid="project-chat-message"
+                >
+                  <div className="mb-1 flex items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
+                    <span className="font-semibold text-[var(--text)]">{message.author}</span>
+                    <span>{formatMessageTime(message.created_at)}</span>
+                  </div>
+                  <p className="whitespace-pre-wrap text-[var(--text)]">{message.body}</p>
+                  {message.optimistic ? (
+                    <p className="mt-2 text-xs text-amber-600 dark:text-amber-300">Sending...</p>
+                  ) : null}
+                  {message.failed ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void sendChatMessage(message.body, message);
+                      }}
+                      className="mt-2 text-xs font-semibold text-red-600 hover:underline dark:text-red-300"
+                    >
+                      Retry send
+                    </button>
+                  ) : null}
+                </article>
+              );
+            })
           )}
         </div>
+
+        {resetError ? (
+          <div className="mb-3 rounded-lg border border-[var(--red)]/40 bg-[var(--red)]/15 px-3 py-2 text-sm text-[var(--red)]">
+            {resetError}
+          </div>
+        ) : null}
 
         {sendError ? (
           <div className="mb-3 rounded-lg border border-[var(--red)]/40 bg-[var(--red)]/15 px-3 py-2 text-sm text-[var(--red)]">

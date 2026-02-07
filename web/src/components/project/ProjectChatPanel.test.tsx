@@ -248,4 +248,54 @@ describe("ProjectChatPanel", () => {
       screen.getByText("agent bridge offline; message was saved but not delivered"),
     ).toBeInTheDocument();
   });
+
+  it("resets project chat session and renders a visible divider while preserving history", async () => {
+    const sendMessage = vi.fn();
+    vi.mocked(useWS).mockReturnValue({
+      connected: true,
+      lastMessage: null,
+      sendMessage,
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/chat/reset")) {
+        expect(init?.method).toBe("POST");
+        return mockJSONResponse({
+          message: {
+            id: "reset-1",
+            project_id: "proj-1",
+            author: "__otter_session__",
+            body: "project_chat_session_reset:session-1",
+            created_at: "2026-02-07T10:05:00Z",
+            updated_at: "2026-02-07T10:05:00Z",
+          },
+          session_id: "session-1",
+        });
+      }
+      return mockJSONResponse({
+        messages: [
+          {
+            id: "msg-1",
+            project_id: "proj-1",
+            author: "Stone",
+            body: "Earlier thread message",
+            created_at: "2026-02-07T10:00:00Z",
+            updated_at: "2026-02-07T10:00:00Z",
+          },
+        ],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const user = userEvent.setup();
+    render(<ProjectChatPanel projectId="proj-1" active />);
+    expect(await screen.findByText("Earlier thread message")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Reset chat session" }));
+
+    expect(await screen.findByTestId("project-chat-session-divider")).toBeInTheDocument();
+    expect(screen.getByText("Earlier thread message")).toBeInTheDocument();
+    expect(screen.getByText("Started new session")).toBeInTheDocument();
+  });
 });

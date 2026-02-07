@@ -266,6 +266,7 @@ func (s *ProjectChatStore) Search(ctx context.Context, input SearchProjectChatIn
 	where := []string{
 		`org_id = $1`,
 		`project_id = $2`,
+		`author <> '__otter_session__'`,
 		`search_document @@ plainto_tsquery('english', $3)`,
 	}
 	args := []any{workspaceID, projectID, query}

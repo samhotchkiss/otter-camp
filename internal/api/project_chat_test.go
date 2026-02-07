@@ -24,6 +24,7 @@ func newProjectChatTestRouter(handler *ProjectChatHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/chat", handler.List)
 	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/chat/search", handler.Search)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/chat/messages", handler.Create)
+	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/chat/reset", handler.ResetSession)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/chat/messages/{messageID}/save-to-notes", handler.SaveToNotes)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/content/bootstrap", handler.BootstrapContent)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/content/assets", handler.UploadContentAsset)
@@ -101,6 +102,74 @@ func TestProjectChatHandlerCreateValidatesPayload(t *testing.T) {
 	missingWorkspaceRec := httptest.NewRecorder()
 	router.ServeHTTP(missingWorkspaceRec, missingWorkspaceReq)
 	require.Equal(t, http.StatusUnauthorized, missingWorkspaceRec.Code)
+
+	reservedAuthorReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"__otter_session__","body":"x"}`)),
+	)
+	reservedAuthorRec := httptest.NewRecorder()
+	router.ServeHTTP(reservedAuthorRec, reservedAuthorReq)
+	require.Equal(t, http.StatusBadRequest, reservedAuthorRec.Code)
+}
+
+func TestProjectChatHandlerResetSessionCreatesMarkerAndDispatchesUsingNewSessionKey(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-reset-session-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Reset Session")
+	ownerID := insertMessageTestAgent(t, db, orgID, "stone")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := testCtxWithWorkspace(orgID)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Dispatch routing issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	_, err = issueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: ownerID,
+		Role:    "owner",
+	})
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &ProjectChatHandler{
+		ProjectStore:       store.NewProjectStore(db),
+		ChatStore:          store.NewProjectChatStore(db),
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	resetReq := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/chat/reset?org_id="+orgID, nil)
+	resetRec := httptest.NewRecorder()
+	router.ServeHTTP(resetRec, resetReq)
+	require.Equal(t, http.StatusCreated, resetRec.Code)
+
+	var resetResp struct {
+		Message   projectChatMessagePayload `json:"message"`
+		SessionID string                    `json:"session_id"`
+	}
+	require.NoError(t, json.NewDecoder(resetRec.Body).Decode(&resetResp))
+	require.Equal(t, projectChatSessionResetAuthor, resetResp.Message.Author)
+	require.Equal(t, buildProjectChatSessionResetBody(resetResp.SessionID), resetResp.Message.Body)
+	require.NotEmpty(t, resetResp.SessionID)
+
+	createReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"Message after reset"}`)),
+	)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawProjectChatDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, projectChatSessionKey("stone", projectID, resetResp.SessionID), event.Data.SessionKey)
 }
 
 func TestProjectChatHandlerCreateDispatchesToOpenClaw(t *testing.T) {
@@ -152,7 +221,7 @@ func TestProjectChatHandlerCreateDispatchesToOpenClaw(t *testing.T) {
 	require.Equal(t, "Sam", event.Data.Author)
 	require.Equal(t, "stone", event.Data.AgentID)
 	require.Equal(t, "Agent stone", event.Data.AgentName)
-	require.Equal(t, projectChatSessionKey("stone", projectID), event.Data.SessionKey)
+	require.Equal(t, projectChatSessionKey("stone", projectID, ""), event.Data.SessionKey)
 
 	var resp struct {
 		Message  projectChatMessagePayload `json:"message"`
@@ -234,7 +303,7 @@ func TestProjectChatHandlerCreateDispatchesToTaskAssigneeWhenNoOwner(t *testing.
 	event, ok := dispatcher.calls[0].(openClawProjectChatDispatchEvent)
 	require.True(t, ok)
 	require.Equal(t, "stone", event.Data.AgentID)
-	require.Equal(t, projectChatSessionKey("stone", projectID), event.Data.SessionKey)
+	require.Equal(t, projectChatSessionKey("stone", projectID, ""), event.Data.SessionKey)
 }
 
 func TestProjectChatHandlerCreateWarnsWhenProjectLeadUnavailable(t *testing.T) {
@@ -301,7 +370,7 @@ func TestProjectChatHandlerCreateDispatchesToPrimaryProjectAgent(t *testing.T) {
 	event, ok := dispatcher.calls[0].(openClawProjectChatDispatchEvent)
 	require.True(t, ok)
 	require.Equal(t, "stone-primary", event.Data.AgentID)
-	require.Equal(t, projectChatSessionKey("stone-primary", projectID), event.Data.SessionKey)
+	require.Equal(t, projectChatSessionKey("stone-primary", projectID, ""), event.Data.SessionKey)
 }
 
 func TestProjectChatHandlerSearchSupportsFilters(t *testing.T) {
