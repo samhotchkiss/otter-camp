@@ -103,3 +103,24 @@ func TestMessagesRouteIsRegistered(t *testing.T) {
 		t.Fatalf("expected /api/messages route to be registered, got status %d", rec.Code)
 	}
 }
+
+func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	orgID := "00000000-0000-0000-0000-000000000001"
+
+	reqProjects := httptest.NewRequest(http.MethodGet, "/api/projects?org_id="+orgID, nil)
+	recProjects := httptest.NewRecorder()
+	router.ServeHTTP(recProjects, reqProjects)
+	if recProjects.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/projects route to be registered, got status %d", recProjects.Code)
+	}
+
+	reqInbox := httptest.NewRequest(http.MethodGet, "/api/inbox?org_id="+orgID, nil)
+	recInbox := httptest.NewRecorder()
+	router.ServeHTTP(recInbox, reqInbox)
+	if recInbox.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/inbox route to be registered, got status %d", recInbox.Code)
+	}
+}
