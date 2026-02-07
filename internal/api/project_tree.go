@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -33,6 +35,14 @@ type projectTreeResponse struct {
 	Ref     string             `json:"ref"`
 	Path    string             `json:"path"`
 	Entries []projectTreeEntry `json:"entries"`
+}
+
+type projectBlobResponse struct {
+	Ref      string `json:"ref"`
+	Path     string `json:"path"`
+	Content  string `json:"content"`
+	Size     int64  `json:"size"`
+	Encoding string `json:"encoding"`
 }
 
 type gitRepoMode string
@@ -115,6 +125,82 @@ func (h *ProjectTreeHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 		Ref:     ref,
 		Path:    responsePath,
 		Entries: entries,
+	})
+}
+
+func (h *ProjectTreeHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
+	if h.ProjectStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+
+	repoPath, repoMode, defaultRef, err := h.resolveBrowseRepository(r.Context(), projectID)
+	if err != nil {
+		handleProjectCommitStoreError(w, err)
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		ref = defaultRef
+	}
+	if ref == "" {
+		ref = "HEAD"
+	}
+
+	rawPath := r.URL.Query().Get("path")
+	if strings.TrimSpace(rawPath) == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "path is required"})
+		return
+	}
+	normalizedPath, err := normalizeRepositoryPath(rawPath)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	if normalizedPath == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "path must point to a file"})
+		return
+	}
+
+	objectSpec := ref + ":" + normalizedPath
+	objectType, err := readGitObjectType(r.Context(), repoPath, repoMode, objectSpec)
+	if err != nil {
+		status, message := classifyGitBrowseError(err)
+		sendJSON(w, status, errorResponse{Error: message})
+		return
+	}
+	if objectType != "blob" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "path must point to a file"})
+		return
+	}
+
+	contentBytes, err := runGitBrowseCommand(r.Context(), repoPath, repoMode, "show", objectSpec)
+	if err != nil {
+		status, message := classifyGitBrowseError(err)
+		sendJSON(w, status, errorResponse{Error: message})
+		return
+	}
+
+	encoding := "base64"
+	content := base64.StdEncoding.EncodeToString(contentBytes)
+	if utf8.Valid(contentBytes) && !bytes.Contains(contentBytes, []byte{0}) {
+		encoding = "utf-8"
+		content = string(contentBytes)
+	}
+
+	sendJSON(w, http.StatusOK, projectBlobResponse{
+		Ref:      ref,
+		Path:     "/" + normalizedPath,
+		Content:  content,
+		Size:     int64(len(contentBytes)),
+		Encoding: encoding,
 	})
 }
 

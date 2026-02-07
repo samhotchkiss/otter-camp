@@ -201,6 +201,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}", projectCommitsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}/diff", projectCommitsHandler.Diff)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/tree", projectTreeHandler.GetTree)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/blob", projectTreeHandler.GetBlob)
 		r.With(middleware.OptionalWorkspace).Get("/knowledge", knowledgeHandler.List)
 		r.With(middleware.OptionalWorkspace).Post("/knowledge/import", knowledgeHandler.Import)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)

@@ -1,7 +1,4 @@
-# Issue #101: Files Tab + Technonymous Review Flow
-
-> ⚠️ **NOT READY FOR WORK** — This issue is still being specced. Do not begin implementation until this banner is removed.
-
+# Issue #2: Files Tab + Technonymous Review Flow
 
 ## Problem Statement
 

@@ -45,8 +45,8 @@ Tier 3 is the most demanding — if we build for Tier 3, Tiers 1 and 2 are cover
 | **VPS provisioning** — spin up new instances, install OpenClaw | Tier 3 | Future issue |
 | **OpenClaw updates** — apply updates remotely through Otter Camp | Tier 3 | #102 |
 | **Monitoring & alerting** — know when something breaks without user reporting | Tier 3 | #102 |
-| **Issue/project management** — all work tracking in the web UI | All tiers | #100 |
-| **File browsing & editing** — view and edit repo contents in browser | All tiers | #101 |
+| **Issue/project management** — all work tracking in the web UI | All tiers | #1 |
+| **File browsing & editing** — view and edit repo contents in browser | All tiers | #2 |
 | **Multi-tenant isolation** — multiple customers on shared infrastructure | Tier 2 + 3 | Existing (org model) |
 | **Bridge auto-connect** — seamless connection between OpenClaw and Otter Camp | Tier 2 + 3 | #102 |
 
@@ -87,8 +87,8 @@ These are future work. The current issues (#100-#103) build the foundation that 
 
 | Issue | Description | Tier Coverage |
 |-------|-------------|---------------|
-| #100 | Issues as single work tracking primitive | All tiers |
-| #101 | Files tab + review flow | All tiers |
+| #1 | Issues as single work tracking primitive | All tiers |
+| #2 | Files tab + review flow | All tiers |
 | #102 | Connections & diagnostics page | Tier 2 + 3 (critical for 3) |
 | #103 | Agent management interface | All tiers (critical for 3) |
 
