@@ -144,10 +144,14 @@ func getFeedDB() (*sql.DB, error) {
 }
 
 func buildFeedQuery(orgID, action string, limit, offset int) (string, []interface{}) {
+<<<<<<< HEAD
 	conditions := []string{
 		"org_id = $1",
 		"action NOT LIKE 'project_chat.%'",
 	}
+=======
+	conditions := []string{"org_id = $1"}
+>>>>>>> 9f623eb (feat(6a): add activity feed API endpoint with pagination)
 	args := []interface{}{orgID}
 
 	if action != "" {
