@@ -298,3 +298,26 @@
   - #273 Admin gateway + agent remediation actions
   - #274 Diagnostics runner + gateway log viewer
   - #275 Cron + process controls
+
+## [2026-02-07 16:21:51 MST] Completed Spec102 issue #271 (Connections UI + route + nav)
+- Added new `ConnectionsPage` with:
+  - Bridge health card (connected/disconnected, last sync, reconnect count)
+  - Host diagnostics card (hostname, OS/arch, gateway + node metadata)
+  - GitHub sync summary card (stuck jobs + dead letter count)
+  - Session summary + agent sessions table with stalled indicator
+  - Error + retry state handling
+- Wired routing and navigation:
+  - Added lazy route `/connections` in `web/src/router.tsx`
+  - Added "Connections" item in top nav/mobile nav in `DashboardLayout`
+- Added frontend tests:
+  - `ConnectionsPage.test.tsx` (load/render + retry on error)
+  - `router.test.tsx` (route registration)
+  - `DashboardLayout.test.tsx` (nav visibility)
+- Validation:
+  - `cd web && npm test -- src/pages/ConnectionsPage.test.tsx src/router.test.tsx src/layouts/DashboardLayout.test.tsx --run`
+  - `cd web && npm run build:typecheck`
+- Remaining:
+  - #272 Connection event log store + API
+  - #273 Admin gateway + agent remediation actions
+  - #274 Diagnostics runner + gateway log viewer
+  - #275 Cron + process controls

@@ -19,6 +19,7 @@ const InboxPage = lazy(() => lazyWithChunkRetry(() => import("./pages/InboxPage"
 const ProjectDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ProjectDetailPage")));
 const WorkflowsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/WorkflowsPage")));
 const KnowledgePage = lazy(() => lazyWithChunkRetry(() => import("./pages/KnowledgePage")));
+const ConnectionsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ConnectionsPage")));
 
 /**
  * Suspense wrapper for lazy-loaded routes with loading fallback.
@@ -100,6 +101,10 @@ export const router = createBrowserRouter([
       {
         path: "knowledge",
         element: <KnowledgePage />,
+      },
+      {
+        path: "connections",
+        element: <ConnectionsPage />,
       },
     ],
   },

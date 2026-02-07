@@ -34,6 +34,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "agents", label: "Agents", href: "/agents" },
   { id: "workflows", label: "Workflows", href: "/workflows" },
   { id: "knowledge", label: "Knowledge", href: "/knowledge" },
+  { id: "connections", label: "Connections", href: "/connections" },
   { id: "feed", label: "Feed", href: "/feed" },
 ];
 
