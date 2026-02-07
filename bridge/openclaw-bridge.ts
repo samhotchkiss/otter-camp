@@ -118,7 +118,7 @@ async function connectToOpenClaw(): Promise<void> {
                 mode: 'backend',
               },
               role: 'operator',
-              scopes: ['operator.read'],
+              scopes: ['operator.read', 'operator.admin'],
               caps: [],
               commands: [],
               permissions: {},
@@ -271,6 +271,12 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
       `[bridge] delivered dm.message to ${sessionKey} (message_id=${event.data?.message_id || 'n/a'})`,
     );
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('missing scope')) {
+      console.error(
+        '[bridge] OpenClaw token lacks required send scope. Ensure connect requests include operator.admin and token permits it.',
+      );
+    }
     console.error(`[bridge] failed to deliver dm.message to ${sessionKey}:`, err);
   }
 }
