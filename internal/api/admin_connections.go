@@ -4,9 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
+
+	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
 type openClawConnectionStatus interface {
@@ -16,6 +20,7 @@ type openClawConnectionStatus interface {
 type AdminConnectionsHandler struct {
 	DB              *sql.DB
 	OpenClawHandler openClawConnectionStatus
+	EventStore      *store.ConnectionEventStore
 }
 
 type adminConnectionsSession struct {
@@ -53,6 +58,11 @@ type adminConnectionsResponse struct {
 	Sessions    []adminConnectionsSession      `json:"sessions"`
 	Summary     adminConnectionsSessionSummary `json:"summary"`
 	GeneratedAt time.Time                      `json:"generated_at"`
+}
+
+type adminConnectionEventsResponse struct {
+	Events []store.ConnectionEvent `json:"events"`
+	Total  int                     `json:"total"`
 }
 
 func (h *AdminConnectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -245,4 +255,39 @@ func isSessionStalled(contextTokens int, updatedAt time.Time) bool {
 		return false
 	}
 	return time.Since(updatedAt) > 2*time.Hour
+}
+
+func (h *AdminConnectionsHandler) GetEvents(w http.ResponseWriter, r *http.Request) {
+	if h.EventStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "connection event store unavailable"})
+		return
+	}
+
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "limit must be a positive integer"})
+			return
+		}
+		limit = parsed
+	}
+
+	events, err := h.EventStore.List(r.Context(), limit)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrNoWorkspace):
+			sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
+		case errors.Is(err, store.ErrForbidden):
+			sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
+		default:
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list connection events"})
+		}
+		return
+	}
+
+	sendJSON(w, http.StatusOK, adminConnectionEventsResponse{
+		Events: events,
+		Total:  len(events),
+	})
 }

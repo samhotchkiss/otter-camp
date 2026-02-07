@@ -321,3 +321,29 @@
   - #273 Admin gateway + agent remediation actions
   - #274 Diagnostics runner + gateway log viewer
   - #275 Cron + process controls
+
+## [2026-02-07 16:26:45 MST] Completed Spec102 issue #272 (connection events store + API)
+- Added migration pair:
+  - `039_create_connection_events.up.sql`
+  - `039_create_connection_events.down.sql`
+- Added workspace-scoped store:
+  - `internal/store/connection_event_store.go`
+  - supports create/list + explicit workspace create helper for service-level emitters
+- Added store tests:
+  - `TestConnectionEventStoreCreateAndList`
+  - `TestConnectionEventStoreWorkspaceIsolation`
+- Added schema migration verification:
+  - `TestSchemaConnectionEventsTableCreateAndRollback`
+- Added admin events API:
+  - `GET /api/admin/events` via `AdminConnectionsHandler.GetEvents`
+  - router registration included
+- Added API test:
+  - `TestAdminConnectionsGetEventsReturnsWorkspaceScopedRows`
+- Validation:
+  - `go test ./internal/store -run 'TestConnectionEventStore|TestSchemaConnectionEventsTableCreateAndRollback'`
+  - `go test ./internal/api -run 'TestAdminConnectionsGetEventsReturnsWorkspaceScopedRows|TestAdminConnectionsGetReturnsDiagnosticsAndSessionSummary|TestAdminConnectionsGetHandlesMissingDiagnosticsMetadata|TestProjectsAndInboxRoutesAreRegistered'`
+  - `go test ./...` (fails in pre-existing `internal/ws` tests unrelated to this change: missing symbols in `handler_test.go`)
+- Remaining:
+  - #273 Admin gateway + agent remediation actions
+  - #274 Diagnostics runner + gateway log viewer
+  - #275 Cron + process controls

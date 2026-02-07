@@ -144,4 +144,11 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 	if recAdminConnections.Code == http.StatusNotFound {
 		t.Fatalf("expected /api/admin/connections route to be registered, got status %d", recAdminConnections.Code)
 	}
+
+	reqAdminEvents := httptest.NewRequest(http.MethodGet, "/api/admin/events?org_id="+orgID, nil)
+	recAdminEvents := httptest.NewRecorder()
+	router.ServeHTTP(recAdminEvents, reqAdminEvents)
+	if recAdminEvents.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/events route to be registered, got status %d", recAdminEvents.Code)
+	}
 }

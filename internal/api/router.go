@@ -101,6 +101,7 @@ func NewRouter() http.Handler {
 		githubSyncJobStore = store.NewGitHubSyncJobStore(db)
 		projectRepoStore = store.NewProjectRepoStore(db)
 		activityStore = store.NewActivityStore(db)
+		adminConnectionsHandler.EventStore = store.NewConnectionEventStore(db)
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
 		githubSyncHealthHandler.Store = githubSyncJobStore
 		githubPullRequestsHandler.Store = store.NewGitHubIssuePRStore(db)
@@ -262,6 +263,7 @@ func NewRouter() http.Handler {
 		// Admin endpoints
 		r.With(middleware.OptionalWorkspace).Post("/admin/init-repos", HandleAdminInitRepos(db))
 		r.With(middleware.OptionalWorkspace).Get("/admin/connections", adminConnectionsHandler.Get)
+		r.With(middleware.OptionalWorkspace).Get("/admin/events", adminConnectionsHandler.GetEvents)
 	})
 
 	// WebSocket handlers

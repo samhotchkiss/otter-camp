@@ -1,12 +1,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,4 +100,38 @@ func TestAdminConnectionsGetHandlesMissingDiagnosticsMetadata(t *testing.T) {
 	require.Nil(t, payload.Host)
 	require.Empty(t, payload.Sessions)
 	require.Equal(t, 0, payload.Summary.Total)
+}
+
+func TestAdminConnectionsGetEventsReturnsWorkspaceScopedRows(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgA := insertMessageTestOrganization(t, db, "conn-events-org-a")
+	orgB := insertMessageTestOrganization(t, db, "conn-events-org-b")
+
+	eventStore := store.NewConnectionEventStore(db)
+	_, err := eventStore.Create(testCtxWithWorkspace(orgA), store.CreateConnectionEventInput{
+		EventType: "bridge.connected",
+		Message:   "org A connected",
+	})
+	require.NoError(t, err)
+	_, err = eventStore.Create(testCtxWithWorkspace(orgB), store.CreateConnectionEventInput{
+		EventType: "bridge.connected",
+		Message:   "org B connected",
+	})
+	require.NoError(t, err)
+
+	handler := &AdminConnectionsHandler{
+		DB:         db,
+		EventStore: eventStore,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/events?limit=10", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgA))
+	rec := httptest.NewRecorder()
+	handler.GetEvents(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminConnectionEventsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Len(t, payload.Events, 1)
+	require.Equal(t, "org A connected", payload.Events[0].Message)
 }

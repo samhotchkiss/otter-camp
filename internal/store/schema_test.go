@@ -230,6 +230,41 @@ func TestSchemaIssueApprovalStateMigrationMapsLegacyStatuses(t *testing.T) {
 	require.Equal(t, "approved", closedApprovalState)
 }
 
+func TestSchemaConnectionEventsTableCreateAndRollback(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	require.True(t, schemaTableExists(t, db, "connection_events"))
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	require.False(t, schemaTableExists(t, db, "connection_events"))
+}
+
 func schemaTableExists(t *testing.T, db *sql.DB, name string) bool {
 	t.Helper()
 	var regclass sql.NullString
