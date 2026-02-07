@@ -71,7 +71,7 @@ export default function GlobalChatDock() {
     );
   }, [totalUnread]);
 
-  const handleResetProjectSession = useCallback(async () => {
+  const handleClearProjectSession = useCallback(async () => {
     if (!selectedConversation || selectedConversation.type !== "project") {
       return;
     }
@@ -98,11 +98,11 @@ export default function GlobalChatDock() {
       );
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
-        throw new Error(payload?.error ?? "Failed to reset chat session");
+        throw new Error(payload?.error ?? "Failed to clear chat session");
       }
       setRefreshVersion((version) => version + 1);
     } catch (error) {
-      setResetProjectError(error instanceof Error ? error.message : "Failed to reset chat session");
+      setResetProjectError(error instanceof Error ? error.message : "Failed to clear chat session");
     } finally {
       setResettingProjectSession(false);
     }
@@ -137,12 +137,12 @@ export default function GlobalChatDock() {
               <button
                 type="button"
                 onClick={() => {
-                  void handleResetProjectSession();
+                  void handleClearProjectSession();
                 }}
                 disabled={resettingProjectSession}
                 className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {resettingProjectSession ? "Resetting..." : "Reset session"}
+                {resettingProjectSession ? "Clearing..." : "Clear session"}
               </button>
             ) : null}
             <button
@@ -229,6 +229,18 @@ export default function GlobalChatDock() {
                     </h3>
                     <p className="text-xs text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
                   </div>
+                  {selectedConversation.type === "project" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleClearProjectSession();
+                      }}
+                      disabled={resettingProjectSession}
+                      className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {resettingProjectSession ? "Clearing..." : "Clear session"}
+                    </button>
+                  ) : null}
                 </div>
                 <div className="min-h-0 flex-1">
                   <GlobalChatSurface

@@ -52,6 +52,31 @@ type CreateProjectIssueInput struct {
 	ClosedAt      *time.Time
 }
 
+type UpdateProjectIssueWorkTrackingInput struct {
+	IssueID string
+
+	SetOwnerAgentID bool
+	OwnerAgentID    *string
+
+	SetWorkStatus bool
+	WorkStatus    string
+
+	SetPriority bool
+	Priority    string
+
+	SetDueAt bool
+	DueAt    *time.Time
+
+	SetNextStep bool
+	NextStep    *string
+
+	SetNextStepDueAt bool
+	NextStepDueAt    *time.Time
+
+	SetState bool
+	State    string
+}
+
 type UpsertProjectIssueFromGitHubInput struct {
 	ProjectID          string
 	RepositoryFullName string
@@ -307,7 +332,7 @@ func canTransitionIssueWorkStatus(currentStatus, nextStatus string) bool {
 	case IssueWorkStatusReview:
 		return next == IssueWorkStatusInProgress || next == IssueWorkStatusDone || next == IssueWorkStatusCancelled
 	case IssueWorkStatusDone, IssueWorkStatusCancelled:
-		return false
+		return next == IssueWorkStatusQueued
 	default:
 		return false
 	}
@@ -686,6 +711,172 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to update work_status: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (s *ProjectIssueStore) UpdateIssueWorkTracking(
+	ctx context.Context,
+	input UpdateProjectIssueWorkTrackingInput,
+) (*ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID := strings.TrimSpace(input.IssueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
+			FROM project_issues
+			WHERE id = $1
+			FOR UPDATE`,
+		issueID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to load issue: %w", err)
+	}
+	if current.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	nextOwnerAgentID := current.OwnerAgentID
+	if input.SetOwnerAgentID {
+		normalizedOwner, err := normalizeOptionalIssueAgentID(input.OwnerAgentID)
+		if err != nil {
+			return nil, err
+		}
+		if normalizedOwner != nil {
+			if err := ensureAgentVisible(ctx, tx, *normalizedOwner); err != nil {
+				return nil, err
+			}
+		}
+		nextOwnerAgentID = normalizedOwner
+	}
+
+	currentWorkStatus := normalizeIssueWorkStatus(current.WorkStatus)
+	if currentWorkStatus == "" {
+		currentWorkStatus = defaultIssueWorkStatusForState(current.State)
+	}
+	nextWorkStatus := currentWorkStatus
+	if input.SetWorkStatus {
+		normalizedWorkStatus := normalizeIssueWorkStatus(input.WorkStatus)
+		if !isValidIssueWorkStatus(normalizedWorkStatus) {
+			return nil, fmt.Errorf("invalid work_status")
+		}
+		if !canTransitionIssueWorkStatus(currentWorkStatus, normalizedWorkStatus) {
+			return nil, fmt.Errorf("invalid work_status transition")
+		}
+		nextWorkStatus = normalizedWorkStatus
+	}
+
+	nextPriority := normalizeIssuePriority(current.Priority)
+	if nextPriority == "" {
+		nextPriority = IssuePriorityP2
+	}
+	if input.SetPriority {
+		normalizedPriority := normalizeIssuePriority(input.Priority)
+		if !isValidIssuePriority(normalizedPriority) {
+			return nil, fmt.Errorf("invalid priority")
+		}
+		nextPriority = normalizedPriority
+	}
+
+	nextDueAt := current.DueAt
+	if input.SetDueAt {
+		nextDueAt = input.DueAt
+	}
+
+	nextNextStep := current.NextStep
+	if input.SetNextStep {
+		nextNextStep = normalizeOptionalIssueText(input.NextStep)
+	}
+
+	nextNextStepDueAt := current.NextStepDueAt
+	if input.SetNextStepDueAt {
+		nextNextStepDueAt = input.NextStepDueAt
+	}
+
+	if nextNextStepDueAt != nil && nextNextStep == nil {
+		return nil, fmt.Errorf("next_step is required when next_step_due_at is set")
+	}
+
+	nextState := normalizeIssueState(current.State)
+	if nextState == "" {
+		nextState = "open"
+	}
+
+	if input.SetState {
+		normalizedState := normalizeIssueState(input.State)
+		if !isValidIssueState(normalizedState) {
+			return nil, fmt.Errorf("invalid state")
+		}
+		nextState = normalizedState
+	}
+
+	if nextWorkStatus == IssueWorkStatusDone || nextWorkStatus == IssueWorkStatusCancelled {
+		nextState = "closed"
+	}
+	if nextState == "open" && (nextWorkStatus == IssueWorkStatusDone || nextWorkStatus == IssueWorkStatusCancelled) {
+		if currentWorkStatus != nextWorkStatus {
+			return nil, fmt.Errorf("open issues cannot use terminal work_status")
+		}
+		if !canTransitionIssueWorkStatus(currentWorkStatus, IssueWorkStatusQueued) {
+			return nil, fmt.Errorf("invalid work_status transition")
+		}
+		nextWorkStatus = IssueWorkStatusQueued
+	}
+	if nextState == "closed" && nextWorkStatus != IssueWorkStatusDone && nextWorkStatus != IssueWorkStatusCancelled {
+		if !canTransitionIssueWorkStatus(currentWorkStatus, IssueWorkStatusDone) {
+			return nil, fmt.Errorf("invalid work_status transition")
+		}
+		nextWorkStatus = IssueWorkStatusDone
+	}
+
+	updated, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`UPDATE project_issues
+			SET owner_agent_id = $2,
+				work_status = $3,
+				priority = $4,
+				due_at = $5,
+				next_step = $6,
+				next_step_due_at = $7,
+				state = $8,
+				closed_at = CASE
+					WHEN $8 = 'closed' THEN COALESCE(closed_at, NOW())
+					ELSE NULL
+				END
+			WHERE id = $1
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
+		issueID,
+		nullableString(nextOwnerAgentID),
+		nextWorkStatus,
+		nextPriority,
+		nextDueAt,
+		nullableString(nextNextStep),
+		nextNextStepDueAt,
+		nextState,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to update issue work tracking: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

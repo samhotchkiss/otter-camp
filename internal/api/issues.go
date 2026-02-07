@@ -45,6 +45,11 @@ type issueSummaryPayload struct {
 	ApprovalState            string  `json:"approval_state"`
 	Kind                     string  `json:"kind"`
 	OwnerAgentID             *string `json:"owner_agent_id,omitempty"`
+	WorkStatus               string  `json:"work_status"`
+	Priority                 string  `json:"priority"`
+	DueAt                    *string `json:"due_at,omitempty"`
+	NextStep                 *string `json:"next_step,omitempty"`
+	NextStepDueAt            *string `json:"next_step_due_at,omitempty"`
 	LastActivityAt           string  `json:"last_activity_at"`
 	GitHubNumber             *int64  `json:"github_number,omitempty"`
 	GitHubURL                *string `json:"github_url,omitempty"`
@@ -124,6 +129,16 @@ type issueListResponse struct {
 	Total int                   `json:"total"`
 }
 
+type issuePatchRequest struct {
+	OwnerAgentID  *string `json:"owner_agent_id,omitempty"`
+	WorkStatus    *string `json:"work_status,omitempty"`
+	Priority      *string `json:"priority,omitempty"`
+	DueAt         *string `json:"due_at,omitempty"`
+	NextStep      *string `json:"next_step,omitempty"`
+	NextStepDueAt *string `json:"next_step_due_at,omitempty"`
+	State         *string `json:"state,omitempty"`
+}
+
 const maxLinkedIssueDocumentBytes = 512 * 1024
 
 func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +165,18 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("kind")); raw != "" {
 		kind = &raw
 	}
+	var ownerAgentID *string
+	if raw := strings.TrimSpace(r.URL.Query().Get("owner_agent_id")); raw != "" {
+		ownerAgentID = &raw
+	}
+	var workStatus *string
+	if raw := strings.TrimSpace(r.URL.Query().Get("work_status")); raw != "" {
+		workStatus = &raw
+	}
+	var priority *string
+	if raw := strings.TrimSpace(r.URL.Query().Get("priority")); raw != "" {
+		priority = &raw
+	}
 
 	limit := 100
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
@@ -162,11 +189,14 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	issues, err := h.IssueStore.ListIssues(r.Context(), store.ProjectIssueFilter{
-		ProjectID: projectID,
-		State:     state,
-		Origin:    origin,
-		Kind:      kind,
-		Limit:     limit,
+		ProjectID:    projectID,
+		State:        state,
+		Origin:       origin,
+		Kind:         kind,
+		OwnerAgentID: ownerAgentID,
+		WorkStatus:   workStatus,
+		Priority:     priority,
+		Limit:        limit,
 	})
 	if err != nil {
 		handleIssueStoreError(w, err)
@@ -577,6 +607,101 @@ func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
 }
 
+func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if issueID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
+		return
+	}
+
+	var req issuePatchRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	hasUpdate := req.OwnerAgentID != nil ||
+		req.WorkStatus != nil ||
+		req.Priority != nil ||
+		req.DueAt != nil ||
+		req.NextStep != nil ||
+		req.NextStepDueAt != nil ||
+		req.State != nil
+	if !hasUpdate {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "no fields to update"})
+		return
+	}
+
+	dueAt, err := parseOptionalRFC3339(req.DueAt, "due_at")
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	nextStepDueAt, err := parseOptionalRFC3339(req.NextStepDueAt, "next_step_due_at")
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
+	input := store.UpdateProjectIssueWorkTrackingInput{
+		IssueID: issueID,
+
+		SetOwnerAgentID: req.OwnerAgentID != nil,
+		OwnerAgentID:    req.OwnerAgentID,
+
+		SetWorkStatus: req.WorkStatus != nil,
+		SetPriority:   req.Priority != nil,
+		SetDueAt:      req.DueAt != nil,
+		SetNextStep:   req.NextStep != nil,
+		SetNextStepDueAt: req.NextStepDueAt != nil,
+		SetState:         req.State != nil,
+	}
+	if req.WorkStatus != nil {
+		input.WorkStatus = *req.WorkStatus
+	}
+	if req.Priority != nil {
+		input.Priority = *req.Priority
+	}
+	if req.State != nil {
+		input.State = *req.State
+	}
+	if req.DueAt != nil {
+		input.DueAt = dueAt
+	}
+	if req.NextStep != nil {
+		input.NextStep = req.NextStep
+	}
+	if req.NextStepDueAt != nil {
+		input.NextStepDueAt = nextStepDueAt
+	}
+
+	updated, err := h.IssueStore.UpdateIssueWorkTracking(r.Context(), input)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
+}
+
 func (h *IssuesHandler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 	if h.IssueStore == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
@@ -699,7 +824,21 @@ func toIssueSummaryPayload(
 		ApprovalState:  issue.ApprovalState,
 		Kind:           inferIssueKind(link),
 		OwnerAgentID:   ownerAgentIDFromParticipants(participants),
+		WorkStatus:     issue.WorkStatus,
+		Priority:       issue.Priority,
+		NextStep:       issue.NextStep,
 		LastActivityAt: issue.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+	if payload.OwnerAgentID == nil && issue.OwnerAgentID != nil {
+		payload.OwnerAgentID = issue.OwnerAgentID
+	}
+	if issue.DueAt != nil {
+		formatted := issue.DueAt.UTC().Format(time.RFC3339)
+		payload.DueAt = &formatted
+	}
+	if issue.NextStepDueAt != nil {
+		formatted := issue.NextStepDueAt.UTC().Format(time.RFC3339)
+		payload.NextStepDueAt = &formatted
 	}
 	if link != nil {
 		payload.GitHubNumber = &link.GitHubNumber
