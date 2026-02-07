@@ -152,3 +152,16 @@
   - #267 rich file viewers
   - #268 create issue from file browser
   - #269 Technonymous review-loop hardening
+
+## [2026-02-07 15:44:15 MST] Progress log correction for #264 entry
+- Correcting prior malformed shell-interpolated lines in the previous log entry.
+- Completed Spec002 #264 details:
+  - Wired backend route: `GET /api/projects/{id}/tree`.
+  - Added tests in `internal/api/project_tree_test.go` for root listing, subdirectory listing, traversal rejection, invalid repo-path handling, and route registration.
+  - Validation run: `go test ./internal/api -count=1`.
+- Remaining:
+  - #265 blob API
+  - #266 files tab/browser shell
+  - #267 rich file viewers
+  - #268 create issue from file browser
+  - #269 Technonymous review-loop hardening
