@@ -1,13 +1,53 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+
+type Org = {
+  id: string;
+  name: string;
+  slug: string;
+};
 
 export default function OrgPickerPage() {
-  const [orgId, setOrgId] = useState("");
+  const [orgs, setOrgs] = useState<Org[]>([]);
+  const [selected, setSelected] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const loadOrgs = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const token = localStorage.getItem("otter_camp_token");
+        const res = await fetch(`${API_URL}/api/orgs`, {
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+        if (!res.ok) {
+          throw new Error("Failed to load orgs");
+        }
+        const data = await res.json();
+        const list = data.orgs || [];
+        setOrgs(list);
+        if (list.length === 1) {
+          setSelected(list[0].id);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load orgs");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadOrgs();
+  }, []);
 
   const handleSave = () => {
-    const trimmed = orgId.trim();
+    const trimmed = selected.trim();
     if (!trimmed) {
-      setError("Org ID is required");
+      setError("Select an organization to continue");
       return;
     }
     localStorage.setItem("otter-camp-org-id", trimmed);
@@ -20,29 +60,35 @@ export default function OrgPickerPage() {
         <div className="login-header">
           <div className="login-logo">🦦</div>
           <h1 className="login-title">Choose your organization</h1>
-          <p className="login-subtitle">Enter the org ID to continue</p>
+          <p className="login-subtitle">Select the workspace you want to use</p>
         </div>
 
         <div className="login-card">
           {error && <div className="login-error">{error}</div>}
-          <div className="form-group">
-            <label htmlFor="orgId" className="form-label">
-              Organization ID
-            </label>
-            <input
-              id="orgId"
-              type="text"
-              className="form-input"
-              placeholder="a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
-              value={orgId}
-              onChange={(e) => setOrgId(e.target.value)}
-            />
-            <p className="form-hint">
-              Ask your admin for the organization ID if you don’t know it.
-            </p>
-          </div>
+          {isLoading ? (
+            <p className="form-hint">Loading organizations...</p>
+          ) : (
+            <div className="form-group">
+              <label htmlFor="orgId" className="form-label">
+                Organization
+              </label>
+              <select
+                id="orgId"
+                className="form-input"
+                value={selected}
+                onChange={(e) => setSelected(e.target.value)}
+              >
+                <option value="">Select an organization</option>
+                {orgs.map((org) => (
+                  <option key={org.id} value={org.id}>
+                    {org.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
-          <button type="button" className="btn btn-primary" onClick={handleSave}>
+          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={isLoading}>
             Continue
           </button>
         </div>
