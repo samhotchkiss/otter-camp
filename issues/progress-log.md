@@ -54,3 +54,24 @@
   - Added test `TestProjectIssueStore_WorkTrackingSchemaDefaultsAndConstraints` to verify defaults and constraint enforcement.
 - Remaining (Spec001): #258, #259, #260, #261, #262, #263.
 
+## [2026-02-07 15:15:52 MST] Created Spec001 GitHub issue stack and completed #258
+- Created ordered Spec001 issues:
+  - #257 `[Spec001][Phase1] Add project_issues work-tracking schema migration`
+  - #258 `[Spec001][Phase1] Update issue store model for owner/status/priority/due fields`
+  - #259 `[Spec001][Phase1] Add POST /api/projects/{id}/issues standalone issue creation endpoint`
+  - #260 `[Spec001][Phase1] Add PATCH /api/issues/{id} work-tracking update + transition endpoint`
+  - #261 `[Spec001][Phase1] Extend issue list/detail APIs with owner/status/priority filters`
+  - #262 `[Spec001][Phase2] CLI issue commands: create/list/view/comment`
+  - #263 `[Spec001][Phase2] CLI issue commands: assign/close/reopen and --mine`
+- Completed #258 implementation:
+  - Extended `ProjectIssue` and create/list filter models with owner/work-status/priority/due/next-step fields.
+  - Added work-status + priority normalization/validation helpers.
+  - Added work-status transition state machine and `TransitionWorkStatus` store method.
+  - Updated issue create/upsert/list/get/document queries and scanners to round-trip new columns.
+  - Added new store tests:
+    - `TestProjectIssueStore_CreateIssuePersistsWorkTrackingFields`
+    - `TestProjectIssueStore_ListIssuesFiltersByOwnerStatusAndPriority`
+    - `TestProjectIssueStore_TransitionWorkStatusEnforcesStateMachine`
+- Validation run: `go test ./internal/store -count=1`.
+- Remaining (Spec001): #259, #260, #261, #262, #263.
+

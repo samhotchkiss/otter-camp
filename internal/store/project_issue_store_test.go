@@ -162,6 +162,163 @@ func TestProjectIssueStore_UpsertIssueFromGitHubIsIdempotentAndUpdatesFields(t *
 	require.NotNil(t, links[second.ID].GitHubURL)
 }
 
+func TestProjectIssueStore_CreateIssuePersistsWorkTrackingFields(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-work-fields-org")
+	projectID := createTestProject(t, db, orgID, "Issue Work Fields Project")
+	ownerAgentID := createIssueTestAgent(t, db, orgID, "issue-owner")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	dueAt := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Second)
+	nextStepDueAt := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
+	nextStep := "Ship first draft to review"
+
+	created, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Build issue-first workflow",
+		Origin:        "local",
+		OwnerAgentID:  &ownerAgentID,
+		WorkStatus:    IssueWorkStatusInProgress,
+		Priority:      IssuePriorityP1,
+		DueAt:         &dueAt,
+		NextStep:      &nextStep,
+		NextStepDueAt: &nextStepDueAt,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created.OwnerAgentID)
+	require.Equal(t, ownerAgentID, *created.OwnerAgentID)
+	require.Equal(t, IssueWorkStatusInProgress, created.WorkStatus)
+	require.Equal(t, IssuePriorityP1, created.Priority)
+	require.NotNil(t, created.DueAt)
+	require.NotNil(t, created.NextStep)
+	require.NotNil(t, created.NextStepDueAt)
+	require.Equal(t, dueAt.UTC().Format(time.RFC3339), created.DueAt.UTC().Format(time.RFC3339))
+	require.Equal(t, nextStep, *created.NextStep)
+	require.Equal(t, nextStepDueAt.UTC().Format(time.RFC3339), created.NextStepDueAt.UTC().Format(time.RFC3339))
+
+	loaded, err := issueStore.GetIssueByID(ctx, created.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded.OwnerAgentID)
+	require.Equal(t, ownerAgentID, *loaded.OwnerAgentID)
+	require.Equal(t, IssueWorkStatusInProgress, loaded.WorkStatus)
+	require.Equal(t, IssuePriorityP1, loaded.Priority)
+	require.NotNil(t, loaded.DueAt)
+	require.NotNil(t, loaded.NextStep)
+	require.NotNil(t, loaded.NextStepDueAt)
+}
+
+func TestProjectIssueStore_ListIssuesFiltersByOwnerStatusAndPriority(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-filter-fields-org")
+	projectID := createTestProject(t, db, orgID, "Issue Filter Fields Project")
+	ownerAgentID := createIssueTestAgent(t, db, orgID, "issue-filter-owner")
+	otherAgentID := createIssueTestAgent(t, db, orgID, "issue-filter-other")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	_, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Owner issue #1",
+		Origin:       "local",
+		OwnerAgentID: &ownerAgentID,
+		WorkStatus:   IssueWorkStatusInProgress,
+		Priority:     IssuePriorityP1,
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Owner issue #2",
+		Origin:       "local",
+		OwnerAgentID: &otherAgentID,
+		WorkStatus:   IssueWorkStatusBlocked,
+		Priority:     IssuePriorityP3,
+	})
+	require.NoError(t, err)
+
+	ownerFilter := ownerAgentID
+	filteredByOwner, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID:    projectID,
+		OwnerAgentID: &ownerFilter,
+	})
+	require.NoError(t, err)
+	require.Len(t, filteredByOwner, 1)
+	require.NotNil(t, filteredByOwner[0].OwnerAgentID)
+	require.Equal(t, ownerAgentID, *filteredByOwner[0].OwnerAgentID)
+
+	workStatusFilter := IssueWorkStatusBlocked
+	filteredByStatus, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID:  projectID,
+		WorkStatus: &workStatusFilter,
+	})
+	require.NoError(t, err)
+	require.Len(t, filteredByStatus, 1)
+	require.Equal(t, IssueWorkStatusBlocked, filteredByStatus[0].WorkStatus)
+
+	priorityFilter := IssuePriorityP1
+	filteredByPriority, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID: projectID,
+		Priority:  &priorityFilter,
+	})
+	require.NoError(t, err)
+	require.Len(t, filteredByPriority, 1)
+	require.Equal(t, IssuePriorityP1, filteredByPriority[0].Priority)
+
+	badStatus := "invalid"
+	_, err = issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID:  projectID,
+		WorkStatus: &badStatus,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "work_status")
+}
+
+func TestProjectIssueStore_TransitionWorkStatusEnforcesStateMachine(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-work-transition-org")
+	projectID := createTestProject(t, db, orgID, "Issue Work Transition Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Transition work state",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusQueued, issue.WorkStatus)
+
+	inProgress, err := issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusInProgress)
+	require.NoError(t, err)
+	require.Equal(t, "open", inProgress.State)
+	require.Equal(t, IssueWorkStatusInProgress, inProgress.WorkStatus)
+
+	review, err := issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusReview)
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusReview, review.WorkStatus)
+
+	done, err := issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusDone)
+	require.NoError(t, err)
+	require.Equal(t, "closed", done.State)
+	require.Equal(t, IssueWorkStatusDone, done.WorkStatus)
+	require.NotNil(t, done.ClosedAt)
+
+	_, err = issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusInProgress)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "transition")
+
+	_, err = issueStore.TransitionWorkStatus(ctx, issue.ID, "unknown")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "work_status")
+}
+
 func TestProjectIssueStore_CreateIssuePersistsAndValidatesLinkedDocumentAndApprovalState(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
