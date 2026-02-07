@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import LoginPage from "../pages/LoginPage";
+import OrgPickerPage from "../pages/OrgPickerPage";
 
 type ProtectedRouteProps = {
   children: ReactNode;
@@ -24,6 +25,11 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   if (!isAuthenticated) {
     return <LoginPage />;
+  }
+
+  const orgId = localStorage.getItem('otter-camp-org-id');
+  if (!orgId) {
+    return <OrgPickerPage />;
   }
 
   return <>{children}</>;

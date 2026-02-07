@@ -185,10 +185,10 @@ const fetchSearchResults = async (
   const url = new URL(`${API_BASE}/api/search`, window.location.origin);
   url.searchParams.set("q", query);
   
-  // Use demo mode if no orgId or on demo subdomain
-  if (!orgId || isDemoMode()) {
+  // Use demo mode only on demo subdomain
+  if (isDemoMode()) {
     url.searchParams.set("demo", "true");
-  } else {
+  } else if (orgId) {
     url.searchParams.set("org_id", orgId);
   }
 
