@@ -34,15 +34,83 @@ All work product must be committed to an OtterCamp project repository:
 
 ---
 
+## Authentication Setup
+
+Before using OtterCamp, configure your token and org:
+
+### 1. Set your token
+
+All agents share a single git token (one per human/org). Set it in your environment:
+
+```bash
+export OTTER_TOKEN="oc_git_<token>"
+```
+
+Or configure via CLI:
+```bash
+otter auth login --token oc_git_<token> --org <org-id>
+```
+
+This token works for both **git operations** (clone/push) and **API calls** (CLI commands).
+
+### 2. Set your git identity
+
+Each agent identifies itself via git author info:
+
+```bash
+git config --global user.name "Your Agent Name"
+git config --global user.email "your-name@otter.camp"
+```
+
+Examples:
+```bash
+# Stone (content agent)
+git config --global user.name "Stone"
+git config --global user.email "stone@otter.camp"
+
+# Derek (engineering lead)
+git config --global user.name "Derek"
+git config --global user.email "derek@otter.camp"
+```
+
+The token authenticates the org. The git author identifies which agent made the commit.
+
+---
+
 ## Getting Started
 
 Use the `otter` CLI to create/clone projects so the **remote is set correctly**.
 Full CLI usage: `docs/CLI.md`.
 
+### Git Hosting + Tokens (Important)
+OtterCamp uses two token types, but **agents should use the git token** (prefix `oc_git_`) for both **git** and **API/CLI** access.
+
+**Required setup for agents:**
+```bash
+# Store token + org scope (prevents demo data)
+otter auth login --token <oc_git_...> --org <org-id>
+
+# Verify API access
+otter whoami
+otter project list
+```
+
+**Why org matters:** if the org isn’t set, `/api/projects` returns demo projects (`proj-1..4`). Setting `--org` (defaultOrg) ensures real data.
+
+**Clone via OtterCamp git:**
+```bash
+git clone https://x:<oc_git_token>@api.otter.camp/git/<org-id>/<project-id>.git
+```
+
+**Create a project (CLI parses flags):**
+```bash
+otter project create "Technonymous" --description "Sam's Substack blog on intentional living, technology, and parenting"
+```
+
 ### Option A — Create + clone (recommended)
 ```bash
 # Create a new OtterCamp project
-otter project create "Project Name"
+otter project create "Project Name" --description "What this project is about"
 
 # Clone it locally (sets the correct remote automatically)
 otter clone <project-name>
@@ -51,14 +119,26 @@ otter clone <project-name>
 cd ~/Documents/OtterCamp/<project-name>
 ```
 
-### Option B — Project already exists
+### Option B — Clone existing project
 ```bash
 # Clone existing project (remote set automatically)
 otter clone <project-name>
 cd ~/Documents/OtterCamp/<project-name>
 ```
 
-### Option C — Repo exists locally, add the remote
+### Option C — Manual git clone (if CLI unavailable)
+
+Every OtterCamp project has a git repo at:
+```
+https://api.otter.camp/git/<org-id>/<project-id>.git
+```
+
+Clone with token auth:
+```bash
+git clone https://x:<token>@api.otter.camp/git/<org-id>/<project-id>.git <project-name>
+```
+
+### Option D — Repo exists locally, add the remote
 If you already have a local repo, add the OtterCamp remote:
 ```bash
 otter remote add <project-name>
