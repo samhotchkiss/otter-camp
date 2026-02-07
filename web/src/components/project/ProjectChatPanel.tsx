@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useWS } from "../../contexts/WebSocketContext";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
@@ -26,6 +26,13 @@ type ProjectChatPanelProps = {
   projectId: string;
   active: boolean;
   onUnreadChange?: (count: number) => void;
+};
+
+type DeliveryIndicatorTone = "neutral" | "success" | "warning";
+
+type DeliveryIndicator = {
+  tone: DeliveryIndicatorTone;
+  text: string;
 };
 
 function getStoredOrgID(): string {
@@ -114,6 +121,7 @@ export default function ProjectChatPanel({
 }: ProjectChatPanelProps) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ProjectChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -122,11 +130,21 @@ export default function ProjectChatPanel({
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchItems, setSearchItems] = useState<ProjectChatSearchItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [deliveryIndicator, setDeliveryIndicator] = useState<DeliveryIndicator | null>(null);
 
   const { connected, lastMessage, sendMessage } = useWS();
   const searchTimeoutRef = useRef<number | null>(null);
+  const awaitingResponseTimeoutRef = useRef<number | null>(null);
 
   const orgID = useMemo(() => getStoredOrgID(), [projectId]);
+  const currentAuthor = useMemo(() => getCurrentAuthor(), [projectId]);
+
+  const clearAwaitingResponseTimeout = () => {
+    if (awaitingResponseTimeoutRef.current !== null) {
+      window.clearTimeout(awaitingResponseTimeoutRef.current);
+      awaitingResponseTimeoutRef.current = null;
+    }
+  };
 
   useEffect(() => {
     onUnreadChange?.(unreadCount);
@@ -138,6 +156,12 @@ export default function ProjectChatPanel({
     }
     setUnreadCount(0);
   }, [active]);
+
+  useEffect(() => {
+    return () => {
+      clearAwaitingResponseTimeout();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -219,6 +243,14 @@ export default function ProjectChatPanel({
       return;
     }
 
+    const incomingAuthor = incoming.author.trim().toLowerCase();
+    const currentAuthorNormalized = currentAuthor.trim().toLowerCase();
+    if (incomingAuthor !== "" && incomingAuthor !== currentAuthorNormalized) {
+      clearAwaitingResponseTimeout();
+      setSendError(null);
+      setDeliveryIndicator({ tone: "success", text: "Agent replied" });
+    }
+
     setMessages((prev) => {
       const withoutOptimisticDuplicate = prev.filter((existing) => {
         if (!existing.optimistic) {
@@ -241,7 +273,7 @@ export default function ProjectChatPanel({
     if (!active) {
       setUnreadCount((count) => count + 1);
     }
-  }, [active, lastMessage, projectId]);
+  }, [active, currentAuthor, lastMessage, projectId]);
 
   useEffect(() => {
     if (searchTimeoutRef.current !== null) {
@@ -368,6 +400,8 @@ export default function ProjectChatPanel({
     });
 
     setSending(true);
+    setSendError(null);
+    setDeliveryIndicator({ tone: "neutral", text: "Sending..." });
     try {
       const response = await fetch(
         `${API_URL}/api/projects/${projectId}/chat/messages?org_id=${encodeURIComponent(orgID)}`,
@@ -401,6 +435,32 @@ export default function ProjectChatPanel({
         }
         return sortByCreatedDesc(next);
       });
+
+      const delivery = payload?.delivery as
+        | { attempted?: boolean; delivered?: boolean; error?: string }
+        | undefined;
+      const deliveryError =
+        typeof delivery?.error === "string" ? delivery.error.trim() : "";
+      if (deliveryError) {
+        setSendError(deliveryError);
+      } else {
+        setSendError(null);
+      }
+
+      clearAwaitingResponseTimeout();
+      if (delivery?.delivered === true) {
+        setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
+        awaitingResponseTimeoutRef.current = window.setTimeout(() => {
+          setDeliveryIndicator({
+            tone: "warning",
+            text: "Delivered; waiting for agent response",
+          });
+        }, 20000);
+      } else if (deliveryError) {
+        setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
+      } else {
+        setDeliveryIndicator({ tone: "neutral", text: "Saved" });
+      }
     } catch {
       setMessages((prev) =>
         prev.map((message) =>
@@ -413,6 +473,8 @@ export default function ProjectChatPanel({
             : message
         )
       );
+      setSendError("Send failed; message not saved");
+      setDeliveryIndicator({ tone: "warning", text: "Send failed; not saved" });
     } finally {
       setSending(false);
     }
@@ -422,6 +484,30 @@ export default function ProjectChatPanel({
     event.preventDefault();
     await sendChatMessage(draft);
   };
+
+  const onDraftKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault();
+      void sendChatMessage(draft);
+    }
+  };
+
+  const deliveryIndicatorClassName = useMemo(() => {
+    if (!deliveryIndicator) {
+      return "";
+    }
+    if (deliveryIndicator.tone === "success") {
+      return "border-[var(--green)]/40 bg-[var(--green)]/15 text-[var(--green)]";
+    }
+    if (deliveryIndicator.tone === "warning") {
+      return "border-[var(--orange)]/40 bg-[var(--orange)]/15 text-[var(--orange)]";
+    }
+    return "border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text-muted)]";
+  }, [deliveryIndicator]);
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
@@ -475,10 +561,27 @@ export default function ProjectChatPanel({
           )}
         </div>
 
+        {sendError ? (
+          <div className="mb-3 rounded-lg border border-[var(--red)]/40 bg-[var(--red)]/15 px-3 py-2 text-sm text-[var(--red)]">
+            {sendError}
+          </div>
+        ) : null}
+
+        {deliveryIndicator ? (
+          <div className="mb-3">
+            <p
+              className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] ${deliveryIndicatorClassName}`}
+            >
+              {deliveryIndicator.text}
+            </p>
+          </div>
+        ) : null}
+
         <form onSubmit={onSubmit} className="space-y-3">
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={onDraftKeyDown}
             placeholder="Share an idea for this project..."
             className="min-h-[88px] w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
           />
@@ -491,6 +594,10 @@ export default function ProjectChatPanel({
               {sending ? "Sending..." : "Send"}
             </button>
           </div>
+          <p className="text-[11px] text-[var(--text-muted)]">
+            Press <span className="font-medium">Enter</span> to send,{" "}
+            <span className="font-medium">Shift + Enter</span> for a new line
+          </p>
         </form>
       </section>
 

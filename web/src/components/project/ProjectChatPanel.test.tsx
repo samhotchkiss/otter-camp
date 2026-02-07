@@ -82,6 +82,10 @@ describe("ProjectChatPanel", () => {
             created_at: "2026-02-07T10:01:00Z",
             updated_at: "2026-02-07T10:01:00Z",
           },
+          delivery: {
+            attempted: true,
+            delivered: true,
+          },
         });
       }
       return mockJSONResponse({ messages: [] });
@@ -100,6 +104,7 @@ describe("ProjectChatPanel", () => {
       expect(screen.queryByText("Sending...")).not.toBeInTheDocument();
     });
     expect(screen.getByText("Ship this tonight")).toBeInTheDocument();
+    expect(screen.getByText("Delivered to bridge")).toBeInTheDocument();
   });
 
   it("runs chat search and clear resets to thread view", async () => {
@@ -197,5 +202,50 @@ describe("ProjectChatPanel", () => {
     rerender(<ProjectChatPanel projectId="proj-1" active={false} />);
 
     expect(await screen.findByText("Realtime from websocket")).toBeInTheDocument();
+    expect(screen.getByText("Agent replied")).toBeInTheDocument();
+  });
+
+  it("shows saved pending delivery lifecycle when bridge reports warning", async () => {
+    const sendMessage = vi.fn();
+    vi.mocked(useWS).mockReturnValue({
+      connected: true,
+      lastMessage: null,
+      sendMessage,
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/chat/messages")) {
+        const body = JSON.parse(String(init?.body));
+        return mockJSONResponse({
+          message: {
+            id: "msg-warning",
+            project_id: "proj-1",
+            author: body.author,
+            body: body.body,
+            created_at: "2026-02-07T10:04:00Z",
+            updated_at: "2026-02-07T10:04:00Z",
+          },
+          delivery: {
+            attempted: false,
+            delivered: false,
+            error: "agent bridge offline; message was saved but not delivered",
+          },
+        });
+      }
+      return mockJSONResponse({ messages: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const user = userEvent.setup();
+    render(<ProjectChatPanel projectId="proj-1" active />);
+
+    await user.type(screen.getByPlaceholderText("Share an idea for this project..."), "Check delivery");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Saved; delivery pending")).toBeInTheDocument();
+    expect(
+      screen.getByText("agent bridge offline; message was saved but not delivered"),
+    ).toBeInTheDocument();
   });
 });
