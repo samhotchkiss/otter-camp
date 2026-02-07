@@ -491,3 +491,31 @@
   padding: 24px;
   z-index: 1000;
 }
+
+@keyframes palette-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes palette-scale {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.command-palette-overlay {
+  animation: palette-fade 160ms ease-out;
+}
+
+.command-palette-panel {
+  animation: palette-scale 200ms ease-out;
+}
