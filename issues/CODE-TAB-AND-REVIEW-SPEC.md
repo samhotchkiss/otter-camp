@@ -1,20 +1,20 @@
-# Otter Camp: Code Tab + Technonymous Review Flow
+# Otter Camp: Files Tab + Technonymous Review Flow
 
 ## Problem Statement
 
 Two issues with the current project detail view:
 
-1. **The "Code" tab is empty** — When viewing a project with committed files (e.g., Technonymous), the Code tab shows nothing. It currently renders `<ProjectCommitBrowser>` which is a commit history viewer, not a file/tree browser.
+1. **The "Files" tab is empty** (currently labeled "Code" — rename to "Files") — When viewing a project with committed files (e.g., Technonymous), the tab shows nothing. It currently renders `<ProjectCommitBrowser>` which is a commit history viewer, not a file/tree browser.
 
 2. **The Technonymous PR-like review flow is not fully wired** — The use case specs (`use-cases/projects/Technonymous/`) describe a workflow where each blog post is treated like a PR: create issue → link document → inline review → approve. Parts of this exist in the codebase but the end-to-end flow may not be connected.
 
 ---
 
-## Part 1: Code Tab — File Browser
+## Part 1: Files Tab — File Browser
 
 ### Current State
 
-The "Code" tab (`activeTab === "code"`) renders `<ProjectCommitBrowser projectId={project.id} />` (in `web/src/pages/ProjectDetailPage.tsx`).
+The tab is currently labeled "Code" — **rename to "Files"**. It uses `activeTab === "code"` and renders `<ProjectCommitBrowser projectId={project.id} />` (in `web/src/pages/ProjectDetailPage.tsx`). Rename the tab key to `"files"` and label to `"Files"` in the `tabs` array.
 
 `ProjectCommitBrowser` (`web/src/components/project/ProjectCommitBrowser.tsx`) fetches from:
 - `GET /api/projects/{id}/commits` — returns commit list
@@ -99,7 +99,7 @@ Replace or augment the Code tab to show a file tree browser with file content vi
 #### Files to create/modify (Frontend):
 
 - **New: `web/src/components/project/ProjectFileBrowser.tsx`** — File tree + content viewer
-- **Modify: `web/src/pages/ProjectDetailPage.tsx`** — Update Code tab to render `ProjectFileBrowser` (optionally keep `ProjectCommitBrowser` as a sub-view)
+- **Modify: `web/src/pages/ProjectDetailPage.tsx`** — Rename "Code" tab to "Files" (key `"files"`, label `"Files"`), render `ProjectFileBrowser` (optionally keep `ProjectCommitBrowser` as a sub-view)
 
 ---
 
@@ -183,7 +183,7 @@ Run the Technonymous project through the full flow on sam.otter.camp:
 
 ## Part 3: Priority Order
 
-1. **File tree API + UI** (Code tab) — This is the most visible gap. Users expect to browse files.
+1. **File tree API + UI** (Files tab) — This is the most visible gap. Users expect to browse files.
 2. **Verify issue-as-PR flow** — Test end-to-end, fix any broken connections
 3. **Issue creation from file browser** — "Create issue for this file" action in the Code tab
 4. **Agent notification wiring** — Ensure review saves trigger agent notifications via OpenClaw
