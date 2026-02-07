@@ -223,3 +223,18 @@
 - Remaining:
   - #268 create issue from file browser
   - #269 Technonymous review-loop hardening
+
+## [2026-02-07 15:59:37 MST] Completed Spec002 issue #268 (create issue from file browser)
+- Added `Create issue for this file` action in `ProjectFileBrowser` for eligible linked-review files (`/posts/*.md`).
+- Implementation details:
+  - Calls `POST /api/projects/{id}/issues/link` with `document_path`.
+  - Navigates to the created issue thread route on success (`/projects/{id}/issues/{issue_id}`).
+  - Surfaces actionable inline errors on API failure.
+- Added tests in `web/src/components/project/ProjectFileBrowser.test.tsx` for:
+  - successful linked issue creation + navigation
+  - API failure error handling
+- Validation:
+  - `cd web && npm test -- src/components/project/ProjectFileBrowser.test.tsx src/pages/ProjectDetailPage.test.tsx --run`
+  - `cd web && npm run build:typecheck`
+- Remaining:
+  - #269 Technonymous review-loop hardening

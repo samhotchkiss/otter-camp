@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useNavigate } from "react-router-dom";
 import MarkdownPreview from "../content-review/MarkdownPreview";
 import { resolveEditorForPath } from "../content-review/editorModeResolver";
 import ProjectCommitBrowser from "./ProjectCommitBrowser";
@@ -93,7 +94,10 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
   const [blobError, setBlobError] = useState<string | null>(null);
   const [blobRefreshKey, setBlobRefreshKey] = useState(0);
   const [markdownViewMode, setMarkdownViewMode] = useState<MarkdownViewMode>("render");
+  const [creatingIssue, setCreatingIssue] = useState(false);
+  const [createIssueError, setCreateIssueError] = useState<string | null>(null);
 
+  const navigate = useNavigate();
   const orgID = getOrgID();
 
   useEffect(() => {
@@ -205,6 +209,10 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
     () => (selectedFilePath ? resolveEditorForPath(selectedFilePath) : null),
     [selectedFilePath],
   );
+  const canCreateLinkedIssue = useMemo(
+    () => Boolean(selectedFilePath && /^\/posts\/.+\.md$/i.test(selectedFilePath)),
+    [selectedFilePath],
+  );
 
   const prefersDark = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -213,6 +221,7 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
 
   useEffect(() => {
     setMarkdownViewMode("render");
+    setCreateIssueError(null);
   }, [selectedFilePath]);
 
   function handleOpenEntry(entry: ProjectTreeEntry): void {
@@ -222,6 +231,37 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
       return;
     }
     setSelectedFilePath(normalizeAbsolutePath(entry.path));
+  }
+
+  async function handleCreateIssueForFile(): Promise<void> {
+    if (!projectId || !orgID || !selectedFilePath || !canCreateLinkedIssue) {
+      return;
+    }
+
+    setCreatingIssue(true);
+    setCreateIssueError(null);
+    try {
+      const url = new URL(`${API_URL}/api/projects/${projectId}/issues/link`);
+      url.searchParams.set("org_id", orgID);
+      const response = await fetch(url.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document_path: selectedFilePath }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to create linked issue");
+      }
+      const payload = (await response.json()) as { id: string };
+      if (!payload.id) {
+        throw new Error("Issue creation succeeded but response was missing id");
+      }
+      navigate(`/projects/${projectId}/issues/${payload.id}`);
+    } catch (error) {
+      setCreateIssueError(error instanceof Error ? error.message : "Failed to create linked issue");
+    } finally {
+      setCreatingIssue(false);
+    }
   }
 
   if (mode === "commits") {
@@ -355,14 +395,32 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <p className="truncate text-sm font-medium text-[var(--text)]">{selectedFilePath}</p>
-                <button
-                  type="button"
-                  className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-alt)]"
-                  onClick={() => setBlobRefreshKey((value) => value + 1)}
-                >
-                  Reload
-                </button>
+                <div className="flex items-center gap-2">
+                  {canCreateLinkedIssue && (
+                    <button
+                      type="button"
+                      className="rounded border border-[#C9A86C] bg-[#C9A86C]/20 px-2 py-1 text-xs text-[#C9A86C] hover:bg-[#C9A86C]/30 disabled:opacity-60"
+                      onClick={() => void handleCreateIssueForFile()}
+                      disabled={creatingIssue}
+                    >
+                      {creatingIssue ? "Creating issue..." : "Create issue for this file"}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-alt)]"
+                    onClick={() => setBlobRefreshKey((value) => value + 1)}
+                  >
+                    Reload
+                  </button>
+                </div>
               </div>
+
+              {createIssueError && (
+                <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                  {createIssueError}
+                </div>
+              )}
 
               {blobLoading && (
                 <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text-muted)]">

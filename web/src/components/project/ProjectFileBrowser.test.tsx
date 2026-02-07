@@ -3,6 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ProjectFileBrowser from "./ProjectFileBrowser";
 
+const navigateMock = vi.fn();
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+  };
+});
+
 vi.mock("./ProjectCommitBrowser", () => ({
   default: ({ projectId }: { projectId: string }) => (
     <div data-testid="project-commit-browser">Commit browser for {projectId}</div>
@@ -22,6 +32,7 @@ describe("ProjectFileBrowser", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockReset();
+    navigateMock.mockReset();
     localStorage.clear();
     localStorage.setItem("otter-camp-org-id", "org-123");
   });
@@ -144,6 +155,75 @@ describe("ProjectFileBrowser", () => {
     render(<ProjectFileBrowser projectId="project-1" />);
     await user.click(await screen.findByRole("button", { name: /draft\.md/i }));
     expect(await screen.findByText("Unable to render file preview for this payload.")).toBeInTheDocument();
+  });
+
+  it("creates a linked issue from eligible files and navigates to the issue thread", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          ref: "main",
+          path: "/",
+          entries: [{ name: "2026-02-07-post.md", type: "file", path: "posts/2026-02-07-post.md", size: 42 }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          ref: "main",
+          path: "/posts/2026-02-07-post.md",
+          content: "# Draft",
+          size: 7,
+          encoding: "utf-8",
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "issue-123",
+          issue_number: 12,
+          title: "Review: 2026 02 07 post",
+        }),
+      );
+
+    render(<ProjectFileBrowser projectId="project-1" />);
+    await user.click(await screen.findByRole("button", { name: /2026-02-07-post\.md/i }));
+    await user.click(await screen.findByRole("button", { name: "Create issue for this file" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/projects/project-1/issues/link?"),
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(navigateMock).toHaveBeenCalledWith("/projects/project-1/issues/issue-123");
+    });
+  });
+
+  it("shows an actionable error when linked issue creation fails", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          ref: "main",
+          path: "/",
+          entries: [{ name: "2026-02-07-post.md", type: "file", path: "posts/2026-02-07-post.md", size: 42 }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          ref: "main",
+          path: "/posts/2026-02-07-post.md",
+          content: "# Draft",
+          size: 7,
+          encoding: "utf-8",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ error: "document_path must point to /posts/*.md" }, false));
+
+    render(<ProjectFileBrowser projectId="project-1" />);
+    await user.click(await screen.findByRole("button", { name: /2026-02-07-post\.md/i }));
+    await user.click(await screen.findByRole("button", { name: "Create issue for this file" }));
+
+    expect(await screen.findByText("document_path must point to /posts/*.md")).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it("surfaces tree fetch errors and retries", async () => {
