@@ -206,23 +206,19 @@ async function sendRequest(method: string, params: Record<string, unknown> = {})
   });
 }
 
-async function sendMessageToSession(sessionKey: string, content: string): Promise<void> {
-  const attempts: Array<Record<string, unknown>> = [
-    { sessionKey, message: content },
-    { key: sessionKey, message: content },
-  ];
+async function sendMessageToSession(
+  sessionKey: string,
+  content: string,
+  messageID?: string,
+): Promise<void> {
+  const idempotencyKey =
+    (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-  let lastError: unknown;
-  for (const params of attempts) {
-    try {
-      await sendRequest('sessions.send', params);
-      return;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error('sessions.send failed');
+  await sendRequest('chat.send', {
+    idempotencyKey,
+    sessionKey,
+    message: content,
+  });
 }
 
 async function fetchSessions(): Promise<OpenClawSession[]> {
@@ -266,7 +262,7 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   }
 
   try {
-    await sendMessageToSession(sessionKey, content);
+    await sendMessageToSession(sessionKey, content, event.data?.message_id);
     console.log(
       `[bridge] delivered dm.message to ${sessionKey} (message_id=${event.data?.message_id || 'n/a'})`,
     );
