@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -532,6 +533,7 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name  string `json:"name"`
 		Email string `json:"email"`
+		Org   string `json:"org"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req) // Ignore errors, use defaults
 
@@ -557,19 +559,33 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a demo org if needed
+	// Create org (default to user's name if not provided)
+	orgName := strings.TrimSpace(req.Org)
+	if orgName == "" {
+		orgName = strings.TrimSpace(req.Name)
+	}
+	if orgName == "" {
+		orgName = "OtterCamp"
+	}
+	orgSlug := slugifyOrg(orgName)
+	if orgSlug == "" {
+		orgSlug = "ottercamp"
+	}
+
 	var orgID string
 	if err := db.QueryRowContext(
 		r.Context(),
-		`INSERT INTO organizations (name, slug) VALUES ('Demo Org', 'demo') 
-		 ON CONFLICT (slug) DO UPDATE SET name = 'Demo Org' 
+		`INSERT INTO organizations (name, slug) VALUES ($1, $2)
+		 ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
 		 RETURNING id`,
+		orgName,
+		orgSlug,
 	).Scan(&orgID); err != nil {
-		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create demo org"})
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create org"})
 		return
 	}
 
-	// Create a demo user
+	// Create user
 	var userID string
 	if err := db.QueryRowContext(
 		r.Context(),
@@ -581,7 +597,7 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 		req.Name,
 		req.Email,
 	).Scan(&userID); err != nil {
-		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create demo user"})
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create user"})
 		return
 	}
 
@@ -653,14 +669,14 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userID, userName, userEmail string
+	var orgID, userID, userName, userEmail string
 	var expiresAt time.Time
 	err = db.QueryRowContext(r.Context(),
-		`SELECT s.user_id, s.expires_at, u.display_name, u.email 
+		`SELECT s.org_id, s.user_id, s.expires_at, u.display_name, u.email 
 		 FROM sessions s 
 		 JOIN users u ON s.user_id = u.id 
 		 WHERE s.token = $1`,
-		token).Scan(&userID, &expiresAt, &userName, &userEmail)
+		token).Scan(&orgID, &userID, &expiresAt, &userName, &userEmail)
 
 	if err != nil || time.Now().After(expiresAt) {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid or expired token"})
@@ -679,7 +695,13 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 	})
 
 	sendJSON(w, http.StatusOK, map[string]interface{}{
-		"valid": true,
+		"valid":         true,
+		"org_id":        orgID,
+		"session_token": token,
+		"expires_at":    expiresAt.Format(time.RFC3339),
+		"user_id":       userID,
+		"name":          userName,
+		"email":         userEmail,
 		"user": User{
 			ID:    userID,
 			Name:  userName,
@@ -694,4 +716,16 @@ func allowInsecureMagicTokenValidation() bool {
 		value = strings.ToLower(strings.TrimSpace(os.Getenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION")))
 	}
 	return value == "1" || value == "true" || value == "yes"
+}
+
+var slugifyOrgRegex = regexp.MustCompile(`[^a-z0-9]+`)
+
+func slugifyOrg(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	slug := slugifyOrgRegex.ReplaceAllString(name, "-")
+	slug = strings.Trim(slug, "-")
+	return slug
 }

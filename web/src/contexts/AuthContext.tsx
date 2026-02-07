@@ -19,7 +19,7 @@ type AuthContextValue = {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (email: string, name?: string) => void;
+  login: (email: string, name?: string, org?: string) => Promise<void>;
   requestLogin: (orgId: string) => Promise<AuthRequest>;
   exchangeToken: (requestId: string, token: string) => Promise<void>;
   logout: () => void;
@@ -67,30 +67,51 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const params = new URLSearchParams(window.location.search);
     const magicToken = params.get('auth');
     
-    // Valid magic link tokens (MVP: hardcoded, will be replaced with DB)
-    const VALID_TOKENS = [
-      'otter-sam-2026',      // Sam's magic link
-      'sam',                  // Short alias
-    ];
-    
-    // Magic link auth - validate token before allowing login
-    if (magicToken && VALID_TOKENS.includes(magicToken)) {
-      const samUser: User = {
-        id: 'sam',
-        email: 'sam@otter.camp',
-        name: 'Sam',
-      };
-      localStorage.setItem(TOKEN_KEY, magicToken);
-      localStorage.setItem(USER_KEY, JSON.stringify(samUser));
-      // Set org_id for Sam's organization (MVP: hardcoded)
-      localStorage.setItem('otter-camp-org-id', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
-      setUser(samUser);
-      
-      // Remove auth param from URL
-      params.delete('auth');
-      const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
-      window.history.replaceState({}, '', newUrl);
-      setIsLoading(false);
+    if (magicToken) {
+      // Validate magic link token via API
+      fetch(`${API_URL}/api/auth/validate?token=${encodeURIComponent(magicToken)}`)
+        .then(res => {
+          if (!res.ok) throw new Error('Invalid token');
+          return res.json();
+        })
+        .then(data => {
+          const validatedUser: User = {
+            id: data.user_id || data.user?.id || 'user',
+            email: data.email || data.user?.email || '',
+            name: data.name || data.user?.name || 'User',
+          };
+          const orgId = data.org_id || '';
+          const sessionToken = data.session_token || magicToken;
+          const expiresAt = data.expires_at || '';
+
+          localStorage.setItem(TOKEN_KEY, sessionToken);
+          localStorage.setItem(USER_KEY, JSON.stringify(validatedUser));
+          if (orgId) localStorage.setItem('otter-camp-org-id', orgId);
+          if (expiresAt) localStorage.setItem(TOKEN_EXP_KEY, expiresAt);
+          setUser(validatedUser);
+
+          // Remove auth param from URL
+          params.delete('auth');
+          const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+          window.history.replaceState({}, '', newUrl);
+          setIsLoading(false);
+        })
+        .catch(() => {
+          // Fallback: check hardcoded tokens for backward compat (Sam's shortcuts)
+          const LEGACY_TOKENS = ['otter-sam-2026', 'sam'];
+          if (LEGACY_TOKENS.includes(magicToken)) {
+            const samUser: User = { id: 'sam', email: 'sam@otter.camp', name: 'Sam' };
+            localStorage.setItem(TOKEN_KEY, magicToken);
+            localStorage.setItem(USER_KEY, JSON.stringify(samUser));
+            localStorage.setItem('otter-camp-org-id', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
+            setUser(samUser);
+          }
+          // Remove auth param from URL
+          params.delete('auth');
+          const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+          window.history.replaceState({}, '', newUrl);
+          setIsLoading(false);
+        });
       return;
     }
     

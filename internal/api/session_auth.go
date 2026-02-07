@@ -30,7 +30,7 @@ func requireSessionIdentity(ctx context.Context, db *sql.DB, r *http.Request) (s
 	}
 	var identity sessionIdentity
 	var err error
-	if strings.HasPrefix(token, "oc_sess_") {
+	if strings.HasPrefix(token, "oc_sess_") || strings.HasPrefix(token, "oc_magic_") {
 		err = db.QueryRowContext(
 			ctx,
 			`SELECT s.org_id::text, s.user_id::text, COALESCE(u.role, 'owner')
