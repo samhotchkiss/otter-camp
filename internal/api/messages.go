@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 const (
@@ -56,6 +57,7 @@ type messageRow struct {
 
 type MessageHandler struct {
 	OpenClawDispatcher openClawMessageDispatcher
+	Hub                *ws.Hub
 }
 
 type openClawMessageDispatcher interface {
@@ -258,6 +260,7 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load message"})
 		return
 	}
+	h.broadcastDMMessage(orgID, message)
 
 	sendJSON(w, http.StatusOK, map[string]interface{}{
 		"message":  message,
@@ -891,6 +894,55 @@ func isAgentAuthoredMessage(req createMessageRequest) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(*req.SenderType), "agent")
+}
+
+func (h *MessageHandler) broadcastDMMessage(orgID string, message Message) {
+	if h.Hub == nil {
+		return
+	}
+
+	event, ok := buildDMMessageBroadcastEvent(message)
+	if !ok {
+		return
+	}
+
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+
+	h.Hub.Broadcast(orgID, payload)
+}
+
+func buildDMMessageBroadcastEvent(message Message) (map[string]interface{}, bool) {
+	if message.ThreadID == nil {
+		return nil, false
+	}
+
+	threadID := strings.TrimSpace(*message.ThreadID)
+	if threadID == "" {
+		return nil, false
+	}
+
+	data := map[string]interface{}{
+		"threadId":  threadID,
+		"thread_id": threadID,
+		"message":   message,
+	}
+
+	if preview := strings.TrimSpace(message.Content); preview != "" {
+		data["preview"] = preview
+	}
+	if message.SenderName != nil {
+		if from := strings.TrimSpace(*message.SenderName); from != "" {
+			data["from"] = from
+		}
+	}
+
+	return map[string]interface{}{
+		"type": "DMMessageReceived",
+		"data": data,
+	}, true
 }
 
 func loadMessageByID(ctx context.Context, db *sql.DB, messageID string) (Message, error) {

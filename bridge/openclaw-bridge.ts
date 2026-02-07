@@ -5,7 +5,8 @@
  * Responsibilities:
  * 1) Pull sessions from OpenClaw and push sync snapshots to Otter Camp.
  * 2) Keep /ws/openclaw connected so Otter Camp can dispatch dm.message events.
- * 3) Forward dm.message events to OpenClaw via sessions.send.
+ * 3) Forward dm.message events to OpenClaw via chat.send.
+ * 4) Persist OpenClaw assistant replies back into Otter Camp DM threads.
  *
  * Usage:
  *   OPENCLAW_TOKEN=... OTTERCAMP_URL=https://api.otter.camp npx tsx bridge/openclaw-bridge.ts
@@ -52,22 +53,100 @@ type PendingRequest = {
 
 type DMDispatchEvent = {
   type?: string;
+  org_id?: string;
   data?: {
     thread_id?: string;
     session_key?: string;
     content?: string;
     message_id?: string;
     agent_id?: string;
+    sender_id?: string;
+    sender_type?: string;
     sender_name?: string;
   };
+};
+
+type SessionContext = {
+  orgID?: string;
+  threadID?: string;
+  agentID?: string;
 };
 
 let openClawWS: WebSocket | null = null;
 let otterCampWS: WebSocket | null = null;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
+const sessionContexts = new Map<string, SessionContext>();
+const deliveredRunIDs = new Set<string>();
 
 const genId = () => `req-${++requestId}`;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function getTrimmedString(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.trim();
+}
+
+function parseAgentIDFromSessionKey(sessionKey: string): string {
+  const match = /^agent:([^:]+):/i.exec(sessionKey.trim());
+  if (!match || !match[1]) {
+    return '';
+  }
+  return match[1].trim();
+}
+
+function resolveThreadID(sessionKey: string, context: SessionContext | undefined): string {
+  const fromContext = getTrimmedString(context?.threadID);
+  if (fromContext) {
+    return fromContext;
+  }
+
+  const agentID = getTrimmedString(context?.agentID) || parseAgentIDFromSessionKey(sessionKey);
+  if (!agentID) {
+    return '';
+  }
+  return `dm_${agentID}`;
+}
+
+function extractMessageContent(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => {
+        if (typeof entry === 'string') {
+          return entry.trim();
+        }
+        const record = asRecord(entry);
+        if (!record) {
+          return '';
+        }
+        return getTrimmedString(record.text) || getTrimmedString(record.content) || getTrimmedString(record.body);
+      })
+      .filter(Boolean);
+    return parts.join('\n').trim();
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return '';
+  }
+  return (
+    getTrimmedString(record.content) ||
+    getTrimmedString(record.text) ||
+    getTrimmedString(record.body) ||
+    ''
+  );
+}
 
 function normalizeModeArg(value: string | undefined): 'once' | 'continuous' {
   if (!value) {
@@ -156,6 +235,10 @@ async function connectToOpenClaw(): Promise<void> {
           }
           return;
         }
+
+        if (msg.type === 'event') {
+          void handleOpenClawEvent(msg);
+        }
       } catch (err) {
         console.error('[bridge] failed to parse OpenClaw message:', err);
       }
@@ -221,6 +304,111 @@ async function sendMessageToSession(
   });
 }
 
+async function persistAssistantReplyToOtterCamp(params: {
+  sessionKey: string;
+  content: string;
+  runID?: string;
+}): Promise<void> {
+  const sessionKey = getTrimmedString(params.sessionKey);
+  const content = params.content.trim();
+  if (!sessionKey || !content) {
+    return;
+  }
+
+  const context = sessionContexts.get(sessionKey);
+  const threadID = resolveThreadID(sessionKey, context);
+  if (!threadID) {
+    console.warn(`[bridge] skipped assistant reply without thread mapping for session ${sessionKey}`);
+    return;
+  }
+
+  const agentID = getTrimmedString(context?.agentID) || parseAgentIDFromSessionKey(sessionKey);
+  const senderName = agentID ? agentID : 'Agent';
+  const body: Record<string, unknown> = {
+    thread_id: threadID,
+    content,
+    sender_type: 'agent',
+    sender_name: senderName,
+  };
+  if (agentID) {
+    body.sender_id = agentID;
+  }
+  if (context?.orgID) {
+    body.org_id = context.orgID;
+  }
+
+  const response = await fetch(`${OTTERCAMP_URL}/api/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    throw new Error(`message persist failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+  }
+
+  if (params.runID) {
+    deliveredRunIDs.add(params.runID);
+  }
+  console.log(
+    `[bridge] persisted assistant reply to ${threadID}${params.runID ? ` (run_id=${params.runID})` : ''}`,
+  );
+}
+
+async function handleOpenClawEvent(message: Record<string, unknown>): Promise<void> {
+  const eventName = getTrimmedString(message.event).toLowerCase();
+  const payload = asRecord(message.payload) || asRecord(message.data);
+  if (!payload) {
+    return;
+  }
+
+  // Listen for assistant completions and persist them to DM threads.
+  if (eventName !== 'chat') {
+    return;
+  }
+
+  const state = getTrimmedString(payload.state).toLowerCase();
+  if (state !== 'final') {
+    return;
+  }
+
+  const sessionKey = getTrimmedString(payload.sessionKey) || getTrimmedString(payload.session_key);
+  if (!sessionKey) {
+    return;
+  }
+
+  const runID = getTrimmedString(payload.runId) || getTrimmedString(payload.run_id);
+  if (runID && deliveredRunIDs.has(runID)) {
+    return;
+  }
+
+  const messageRecord = asRecord(payload.message);
+  const role = (
+    getTrimmedString(messageRecord?.role) || getTrimmedString(payload.role) || 'assistant'
+  ).toLowerCase();
+  if (role && role !== 'assistant') {
+    return;
+  }
+
+  const content = extractMessageContent(messageRecord?.content ?? payload.content);
+  if (!content) {
+    return;
+  }
+
+  try {
+    await persistAssistantReplyToOtterCamp({
+      sessionKey,
+      content,
+      runID: runID || undefined,
+    });
+  } catch (err) {
+    console.error(`[bridge] failed to persist assistant reply for ${sessionKey}:`, err);
+  }
+}
+
 async function fetchSessions(): Promise<OpenClawSession[]> {
   const response = (await sendRequest('sessions.list', {
     limit: 50,
@@ -260,6 +448,13 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
     console.warn('[bridge] skipped dm.message with missing session key or content');
     return;
   }
+
+  sessionContexts.set(sessionKey, {
+    orgID: getTrimmedString(event.org_id),
+    threadID: getTrimmedString(event.data?.thread_id),
+    agentID:
+      getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(sessionKey),
+  });
 
   try {
     await sendMessageToSession(sessionKey, content, event.data?.message_id);
