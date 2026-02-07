@@ -157,6 +157,25 @@ func TestProjectsHandlerUpdateSettingsRejectsCrossWorkspaceAgent(t *testing.T) {
 	require.False(t, projectPrimary.Valid)
 }
 
+func TestProjectsHandlerUpdateSettingsRejectsNonUUIDPrimaryAgent(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-settings-invalid-id-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Settings Invalid ID")
+
+	handler := &ProjectsHandler{DB: db}
+	body := []byte(`{"primary_agent_id":"stone"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/projects/"+projectID+"/settings?org_id="+orgID, bytes.NewReader(body))
+	req = addRouteParam(req, "id", projectID)
+	rec := httptest.NewRecorder()
+	handler.UpdateSettings(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var projectPrimary sql.NullString
+	err := db.QueryRow("SELECT primary_agent_id FROM projects WHERE id = $1", projectID).Scan(&projectPrimary)
+	require.NoError(t, err)
+	require.False(t, projectPrimary.Valid)
+}
+
 func TestProjectsHandlerUpdateSettingsClearsPrimaryAgent(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "projects-settings-clear-org")

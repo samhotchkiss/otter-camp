@@ -49,6 +49,9 @@ type AgentOption = {
   name: string;
 };
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 type ApiTask = {
   id: string;
   title: string;
@@ -251,20 +254,25 @@ export default function ProjectDetailPage() {
         setProject(projectData);
         setSelectedPrimaryAgentID(projectData.primary_agent_id || "");
         
-        // Fetch agents to map IDs to names
-        const agentsRes = await fetch(`${API_URL}/api/sync/agents`);
+        // Fetch canonical workspace agents (UUID-backed) for mapping and settings.
+        const agentsUrl = orgId
+          ? `${API_URL}/api/agents?org_id=${encodeURIComponent(orgId)}`
+          : `${API_URL}/api/agents`;
+        const agentsRes = await fetch(agentsUrl);
         if (agentsRes.ok) {
           const agentsData = await agentsRes.json();
           const parsedAgents: AgentOption[] = [];
           for (const raw of (agentsData.agents || [])) {
             const agent = raw as { id?: string; name?: string; display_name?: string };
             if (!agent.id || typeof agent.id !== "string") continue;
+            if (!UUID_REGEX.test(agent.id.trim())) continue;
             const agentName =
               (typeof agent.name === "string" && agent.name.trim()) ||
               (typeof agent.display_name === "string" && agent.display_name.trim()) ||
               agent.id;
-            agentIdToName[agent.id] = agentName;
-            parsedAgents.push({ id: agent.id, name: agentName });
+            const agentID = agent.id.trim();
+            agentIdToName[agentID] = agentName;
+            parsedAgents.push({ id: agentID, name: agentName });
           }
           parsedAgents.sort((a, b) => a.name.localeCompare(b.name));
           setAvailableAgents(parsedAgents);
