@@ -24,8 +24,9 @@ type EnrichedFeedItem struct {
 	CreatedAt time.Time       `json:"created_at"`
 
 	// Related entities
-	TaskTitle *string `json:"task_title,omitempty"`
-	AgentName *string `json:"agent_name,omitempty"`
+	TaskTitle   *string `json:"task_title,omitempty"`
+	AgentName   *string `json:"agent_name,omitempty"`
+	ProjectName *string `json:"project_name,omitempty"`
 
 	// Computed summary
 	Summary string `json:"summary,omitempty"`
@@ -281,13 +282,31 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		metadata := item.Metadata
+		if len(metadata) == 0 {
+			metadata = json.RawMessage("{}")
+		}
+		if item.Type == "git.push" {
+			projectID := extractMetadataString(metadata, "project_id")
+			if projectID != "" {
+				metadata = mergeMetadata(metadata, map[string]string{
+					"project_url": buildProjectURL(r, projectID),
+				})
+			}
+			if item.ProjectName != nil && *item.ProjectName != "" {
+				metadata = mergeMetadata(metadata, map[string]string{
+					"project_name": *item.ProjectName,
+				})
+			}
+		}
+
 		feedItem := &feed.Item{
 			ID:        item.ID,
 			OrgID:     item.OrgID,
 			TaskID:    item.TaskID,
 			AgentID:   item.AgentID,
 			Type:      item.Type,
-			Metadata:  item.Metadata,
+			Metadata:  metadata,
 			CreatedAt: item.CreatedAt,
 			TaskTitle: item.TaskTitle,
 			AgentName: item.AgentName,
@@ -426,10 +445,12 @@ func buildEnrichedFeedQuery(orgID string, types []string, from, to *time.Time, l
 			a.metadata,
 			a.created_at,
 			t.title AS task_title,
-			ag.display_name AS agent_name
+			ag.display_name AS agent_name,
+			p.name AS project_name
 		FROM activity_log a
 		LEFT JOIN tasks t ON a.task_id = t.id
 		LEFT JOIN agents ag ON a.agent_id = ag.id
+		LEFT JOIN projects p ON p.org_id = a.org_id AND p.id::text = (a.metadata->>'project_id')
 		WHERE ` + strings.Join(conditions, " AND ") +
 		fmt.Sprintf(" ORDER BY a.created_at DESC LIMIT $%d OFFSET $%d", limitPos, offsetPos)
 
@@ -444,6 +465,7 @@ func scanEnrichedFeedItem(scanner interface{ Scan(...any) error }) (EnrichedFeed
 	var metadataBytes []byte
 	var taskTitle sql.NullString
 	var agentName sql.NullString
+	var projectName sql.NullString
 
 	err := scanner.Scan(
 		&item.ID,
@@ -455,6 +477,7 @@ func scanEnrichedFeedItem(scanner interface{ Scan(...any) error }) (EnrichedFeed
 		&item.CreatedAt,
 		&taskTitle,
 		&agentName,
+		&projectName,
 	)
 	if err != nil {
 		return item, err
@@ -471,6 +494,9 @@ func scanEnrichedFeedItem(scanner interface{ Scan(...any) error }) (EnrichedFeed
 	}
 	if agentName.Valid {
 		item.AgentName = &agentName.String
+	}
+	if projectName.Valid {
+		item.ProjectName = &projectName.String
 	}
 	if len(metadataBytes) == 0 {
 		item.Metadata = json.RawMessage("{}")
@@ -497,4 +523,49 @@ func parseDateTime(s string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("invalid date format: %s", s)
+}
+
+func buildProjectURL(r *http.Request, projectID string) string {
+	if projectID == "" {
+		return ""
+	}
+	base := getPublicBaseURL(r)
+	if strings.Contains(base, "api.otter.camp") {
+		base = "https://sam.otter.camp"
+	}
+	return strings.TrimRight(base, "/") + "/projects/" + projectID
+}
+
+func mergeMetadata(existing json.RawMessage, extra map[string]string) json.RawMessage {
+	merged := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &merged)
+	}
+	for k, v := range extra {
+		if v == "" {
+			continue
+		}
+		merged[k] = v
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return existing
+	}
+	return out
+}
+
+func extractMetadataString(metadata json.RawMessage, key string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(metadata, &m); err != nil {
+		return ""
+	}
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }

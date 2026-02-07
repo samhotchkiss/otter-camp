@@ -18,6 +18,7 @@ const TYPE_CONFIG: Record<string, ActivityTypeConfig> = {
   task_status_changed: { label: "Status Change", icon: "🔄" },
   dispatch: { label: "Dispatch", icon: "📤" },
   assignment: { label: "Assignment", icon: "👤" },
+  "git.push": { label: "Git Push", icon: "⬆️" },
 };
 
 export function getTypeConfig(type: string): ActivityTypeConfig {
@@ -139,6 +140,11 @@ export function getActivityDescription(input: DescriptionInput): string {
       if (repo && msg) return `committed to ${repo}: "${truncate(msg, 80)}"`;
       if (repo) return `committed to ${repo}`;
       return msg ? `committed: "${truncate(msg, 80)}"` : "made a commit";
+    }
+    case "git.push": {
+      const project = getMetadataString(metadata, "project_name") || getMetadataString(metadata, "project_id");
+      if (project) return `git push to ${project}`;
+      return "git push";
     }
     case "message": {
       const preview = getMetadataString(metadata, "preview");

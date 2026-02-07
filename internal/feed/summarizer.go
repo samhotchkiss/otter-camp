@@ -98,6 +98,16 @@ func (s *Summarizer) Summarize(item *Item) string {
 		}
 		return fmt.Sprintf("%s made a commit", agent)
 
+	case "git.push":
+		project := extractMetadataString(item.Metadata, "project_name")
+		if project == "" {
+			project = extractMetadataString(item.Metadata, "project_id")
+		}
+		if project != "" {
+			return fmt.Sprintf("Git push to %s", project)
+		}
+		return "Git push"
+
 	case "dispatch":
 		if task != "" {
 			return fmt.Sprintf("Task \"%s\" dispatched to %s", task, agent)
