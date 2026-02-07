@@ -85,6 +85,7 @@ func NewRouter() http.Handler {
 	projectChatHandler := &ProjectChatHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
 	issuesHandler := &IssuesHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
 	projectCommitsHandler := &ProjectCommitsHandler{}
+	projectTreeHandler := &ProjectTreeHandler{}
 	knowledgeHandler := &KnowledgeHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
@@ -115,6 +116,8 @@ func NewRouter() http.Handler {
 		projectCommitsHandler.ProjectStore = projectStore
 		projectCommitsHandler.CommitStore = store.NewProjectCommitStore(db)
 		projectCommitsHandler.ProjectRepos = projectRepoStore
+		projectTreeHandler.ProjectStore = projectStore
+		projectTreeHandler.ProjectRepos = projectRepoStore
 		projectIssueSyncHandler.Projects = projectStore
 		projectIssueSyncHandler.ProjectRepos = githubIntegrationHandler.ProjectRepos
 		projectIssueSyncHandler.Installations = githubIntegrationHandler.Installations
@@ -197,6 +200,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits", projectCommitsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}", projectCommitsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}/diff", projectCommitsHandler.Diff)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/tree", projectTreeHandler.GetTree)
 		r.With(middleware.OptionalWorkspace).Get("/knowledge", knowledgeHandler.List)
 		r.With(middleware.OptionalWorkspace).Post("/knowledge/import", knowledgeHandler.Import)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)

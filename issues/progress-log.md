@@ -135,3 +135,20 @@
 - Starting implementation with #264 now.
 - Remaining:
   - Implement and push #264 → #269 in order.
+
+## [2026-02-07 15:43:57 MST] Completed Spec002 issue #264 (tree API)
+- Wired backend route: .
+- Added tree API tests in  for:
+  - root tree listing
+  - subdirectory immediate children
+  - traversal path rejection
+  - invalid repo-path conflict handling
+  - route registration
+- Validation:
+  - ok  	github.com/samhotchkiss/otter-camp/internal/api	0.019s
+- Remaining:
+  - #265 blob API
+  - #266 files tab/browser shell
+  - #267 rich file viewers
+  - #268 create issue from file browser
+  - #269 Technonymous review-loop hardening

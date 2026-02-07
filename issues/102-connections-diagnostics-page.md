@@ -1,4 +1,7 @@
-# Issue #3: Connections & Diagnostics Page
+# Issue #102: Connections & Diagnostics Page
+
+> ⚠️ **NOT READY FOR WORK** — This issue is still being specced. Do not begin implementation until this banner is removed.
+
 
 ## Problem
 

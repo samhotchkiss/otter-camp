@@ -39,16 +39,16 @@ Tier 3 is the most demanding — if we build for Tier 3, Tiers 1 and 2 are cover
 
 | Capability | Needed For | Related Issue |
 |-----------|------------|---------------|
-| **Full agent lifecycle management** — add, configure, retire agents entirely from web UI | Tier 3 (user never touches CLI) | #4 |
-| **OpenClaw config management** — read, edit, apply config without SSH | Tier 3 | #4 |
-| **Remote diagnostics & remediation** — restart gateway, port bump, view logs from browser | Tier 3 (no SSH access) | #3 |
+| **Full agent lifecycle management** — add, configure, retire agents entirely from web UI | Tier 3 (user never touches CLI) | #103 |
+| **OpenClaw config management** — read, edit, apply config without SSH | Tier 3 | #103 |
+| **Remote diagnostics & remediation** — restart gateway, port bump, view logs from browser | Tier 3 (no SSH access) | #102 |
 | **VPS provisioning** — spin up new instances, install OpenClaw | Tier 3 | Future issue |
-| **OpenClaw updates** — apply updates remotely through Otter Camp | Tier 3 | #3 |
-| **Monitoring & alerting** — know when something breaks without user reporting | Tier 3 | #3 |
-| **Issue/project management** — all work tracking in the web UI | All tiers | #1 |
-| **File browsing & editing** — view and edit repo contents in browser | All tiers | #2 |
+| **OpenClaw updates** — apply updates remotely through Otter Camp | Tier 3 | #102 |
+| **Monitoring & alerting** — know when something breaks without user reporting | Tier 3 | #102 |
+| **Issue/project management** — all work tracking in the web UI | All tiers | #100 |
+| **File browsing & editing** — view and edit repo contents in browser | All tiers | #101 |
 | **Multi-tenant isolation** — multiple customers on shared infrastructure | Tier 2 + 3 | Existing (org model) |
-| **Bridge auto-connect** — seamless connection between OpenClaw and Otter Camp | Tier 2 + 3 | #3 |
+| **Bridge auto-connect** — seamless connection between OpenClaw and Otter Camp | Tier 2 + 3 | #102 |
 
 ### Bridge as the Critical Layer
 
@@ -79,7 +79,7 @@ For Tier 3, the bridge becomes the remote management agent. It must:
 - VPS provisioning automation
 - Multi-region deployment
 
-These are future work. The current issues (#1-#4) build the foundation that all three tiers need.
+These are future work. The current issues (#100-#103) build the foundation that all three tiers need.
 
 ---
 
@@ -87,10 +87,10 @@ These are future work. The current issues (#1-#4) build the foundation that all 
 
 | Issue | Description | Tier Coverage |
 |-------|-------------|---------------|
-| #1 | Issues as single work tracking primitive | All tiers |
-| #2 | Files tab + review flow | All tiers |
-| #3 | Connections & diagnostics page | Tier 2 + 3 (critical for 3) |
-| #4 | Agent management interface | All tiers (critical for 3) |
+| #100 | Issues as single work tracking primitive | All tiers |
+| #101 | Files tab + review flow | All tiers |
+| #102 | Connections & diagnostics page | Tier 2 + 3 (critical for 3) |
+| #103 | Agent management interface | All tiers (critical for 3) |
 
 ---
 

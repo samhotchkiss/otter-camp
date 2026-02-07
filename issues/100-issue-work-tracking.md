@@ -1,4 +1,7 @@
-# Issue #1: Issues as the Single Work Tracking Primitive
+# Issue #100: Issues as the Single Work Tracking Primitive
+
+> ⚠️ **NOT READY FOR WORK** — This issue is still being specced. Do not begin implementation until this banner is removed.
+
 
 ## Context
 
