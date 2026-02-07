@@ -341,6 +341,10 @@ describe("useWebSocket", () => {
       "DMMessageReceived",
       "ExecApprovalRequested",
       "ExecApprovalResolved",
+      "ProjectChatMessageCreated",
+      "IssueCommentCreated",
+      "IssueReviewSaved",
+      "IssueReviewAddressed",
     ];
 
     const { result } = renderHook(() => useWebSocket());
