@@ -256,6 +256,7 @@ func handleRemote(args []string) {
 		flags := flag.NewFlagSet("remote add", flag.ExitOnError)
 		force := flags.Bool("force", false, "overwrite origin if exists")
 		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
 		_ = flags.Parse(args[1:])
 		if len(flags.Args()) == 0 {
 			die("project name or id required")
@@ -275,18 +276,34 @@ func handleRemote(args []string) {
 		repoRoot, err := gitRepoRoot()
 		dieIf(err)
 
-		if origin, _ := gitRemoteURL(repoRoot, "origin"); origin != "" && !*force {
+		existing, _ := gitRemoteURL(repoRoot, "origin")
+		if existing != "" && !*force {
 			die("origin already set; re-run with --force to overwrite")
 		}
 
-		if origin, _ := gitRemoteURL(repoRoot, "origin"); origin != "" && *force {
+		action := "added"
+		if existing != "" {
 			dieIf(exec.Command("git", "-C", repoRoot, "remote", "set-url", "origin", project.RepoURL).Run())
-			fmt.Println("Updated origin to", project.RepoURL)
-			return
+			action = "updated"
+		} else {
+			dieIf(exec.Command("git", "-C", repoRoot, "remote", "add", "origin", project.RepoURL).Run())
 		}
 
-		dieIf(exec.Command("git", "-C", repoRoot, "remote", "add", "origin", project.RepoURL).Run())
-		fmt.Println("Added origin", project.RepoURL)
+		if *jsonOut {
+			payload, _ := json.MarshalIndent(map[string]string{
+				"action":   action,
+				"remote":   "origin",
+				"repo_url": project.RepoURL,
+				"project":  project.Name,
+			}, "", "  ")
+			fmt.Println(string(payload))
+			return
+		}
+		if action == "updated" {
+			fmt.Println("Updated origin to", project.RepoURL)
+		} else {
+			fmt.Println("Added origin", project.RepoURL)
+		}
 	default:
 		fmt.Println("usage: otter remote add <project> [--force]")
 		os.Exit(1)
