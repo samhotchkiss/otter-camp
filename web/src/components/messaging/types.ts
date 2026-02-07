@@ -31,6 +31,10 @@ export type DMMessage = {
   senderAvatarUrl?: string;
   content: string;
   createdAt: string;
+  optimistic?: boolean;
+  failed?: boolean;
+  isSessionReset?: boolean;
+  sessionID?: string;
 };
 
 /**

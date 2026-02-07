@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, useRef, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import AgentCard, { type AgentCardData } from "../components/AgentCard";
-import AgentDM, { type AgentStatus } from "../components/AgentDM";
+import { type AgentStatus } from "../components/AgentDM";
 import { useWS } from "../contexts/WebSocketContext";
+import { useGlobalChat } from "../contexts/GlobalChatContext";
 
 /**
  * Status filter options including "all".
@@ -164,11 +165,11 @@ function AgentsPageComponent({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [selectedAgent, setSelectedAgent] = useState<AgentCardData | null>(null);
   const [columns, setColumns] = useState(GRID_COLUMNS.lg);
   const parentRef = useRef<HTMLDivElement>(null);
 
   const { lastMessage, connected } = useWS();
+  const { openConversation } = useGlobalChat();
 
   // Responsive column count
   useEffect(() => {
@@ -316,17 +317,6 @@ function AgentsPageComponent({
         )
       );
 
-      // Update selected agent if it's the one that changed
-      setSelectedAgent((prev) =>
-        prev && prev.id === agentId
-          ? {
-              ...prev,
-              status: status ?? prev.status,
-              currentTask: currentTask ?? prev.currentTask,
-              lastActive: lastActive ?? prev.lastActive,
-            }
-          : prev
-      );
     }
   }, [lastMessage]);
 
@@ -363,32 +353,20 @@ function AgentsPageComponent({
 
   // Handle card click - memoized
   const handleAgentClick = useCallback((agent: AgentCardData) => {
-    setSelectedAgent(agent);
-  }, []);
-
-  // Close DM modal - memoized
-  const handleCloseDM = useCallback(() => {
-    setSelectedAgent(null);
-  }, []);
-
-  // Handle backdrop click
-  const handleBackdropClick = useCallback((event: React.MouseEvent) => {
-    if (event.target === event.currentTarget) {
-      handleCloseDM();
-    }
-  }, [handleCloseDM]);
-
-  // Handle escape key to close modal
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && selectedAgent) {
-        handleCloseDM();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedAgent, handleCloseDM]);
+    openConversation({
+      type: "dm",
+      agent: {
+        id: agent.id,
+        name: agent.name,
+        status: agent.status,
+        avatarUrl: agent.avatarUrl,
+        role: agent.role,
+      },
+      title: agent.name,
+      contextLabel: "Direct message",
+      subtitle: agent.role || "Agent chat",
+    });
+  }, [openConversation]);
 
   // Filter button handlers - memoized
   const handleFilterAll = useCallback(() => setStatusFilter("all"), []);
@@ -534,49 +512,6 @@ function AgentsPageComponent({
                 </div>
               );
             })}
-          </div>
-        </div>
-      )}
-
-      {/* DM Modal */}
-      {selectedAgent && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-          onClick={handleBackdropClick}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="dm-modal-title"
-        >
-          <div className="w-full max-w-2xl">
-            {/* Close button */}
-            <div className="mb-2 flex justify-end">
-              <button
-                type="button"
-                onClick={handleCloseDM}
-                className="rounded-full bg-[var(--surface)] p-2 text-[var(--text-muted)] transition hover:bg-[var(--surface-alt)] hover:text-[var(--text)]"
-                aria-label="Close"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                  className="h-5 w-5"
-                >
-                  <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
-                </svg>
-              </button>
-            </div>
-
-            {/* DM Component */}
-            <AgentDM
-              agent={{
-                id: selectedAgent.id,
-                name: selectedAgent.name,
-                avatarUrl: selectedAgent.avatarUrl,
-                status: selectedAgent.status,
-                role: selectedAgent.role,
-              }}
-            />
           </div>
         </div>
       )}

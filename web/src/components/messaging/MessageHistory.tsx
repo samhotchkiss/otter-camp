@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { Agent, AgentStatus, DMMessage, MessageSenderType } from "./types";
 import { formatTimestamp, getInitials } from "./utils";
+import MessageMarkdown from "./MessageMarkdown";
+
+const SCROLL_BOTTOM_THRESHOLD_PX = 40;
 
 function MessageAvatar({
   name,
@@ -41,10 +44,28 @@ function MessageAvatar({
 function MessageBubble({
   message,
   isOwnMessage,
+  onRetryMessage,
 }: {
   message: DMMessage;
   isOwnMessage: boolean;
+  onRetryMessage?: (message: DMMessage) => void;
 }) {
+  if (message.isSessionReset) {
+    return (
+      <div
+        className="my-2 rounded-lg border border-[#C9A86C]/45 bg-[#C9A86C]/12 px-3 py-2 text-center"
+        data-testid="project-chat-session-divider"
+      >
+        <p className="text-xs font-semibold uppercase tracking-wide text-[#C9A86C]">
+          New chat session started
+        </p>
+        <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+          {formatTimestamp(message.createdAt)}
+        </p>
+      </div>
+    );
+  }
+
   const bubbleStyle = isOwnMessage
     ? "bg-[var(--accent)] text-[#1A1918]"
     : message.senderType === "agent"
@@ -74,10 +95,28 @@ function MessageBubble({
           )}
         </div>
         <div className={`rounded-2xl px-4 py-2.5 ${bubbleStyle}`}>
-          <p className="whitespace-pre-wrap text-sm leading-relaxed">
-            {message.content}
-          </p>
+          <MessageMarkdown
+            markdown={message.content}
+            className="text-sm leading-relaxed"
+          />
         </div>
+        {message.optimistic ? (
+          <p className="mt-1 text-[10px] text-[var(--orange)]">Sending...</p>
+        ) : null}
+        {message.failed ? (
+          <div className="mt-1 flex items-center gap-2">
+            <p className="text-[10px] text-[var(--red)]">Send failed</p>
+            {onRetryMessage ? (
+              <button
+                type="button"
+                onClick={() => onRetryMessage(message)}
+                className="rounded border border-[var(--red)]/50 px-1.5 py-0.5 text-[10px] font-medium text-[var(--red)] transition hover:bg-[var(--red)]/10"
+              >
+                Retry
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <span className="mt-1 text-[10px] text-[var(--text-muted)]">
           {formatTimestamp(message.createdAt)}
         </span>
@@ -164,6 +203,7 @@ export type MessageHistoryProps = {
   hasMore?: boolean;
   isLoadingMore?: boolean;
   onLoadMore?: () => Promise<void> | void;
+  onRetryMessage?: (message: DMMessage) => void;
   className?: string;
 };
 
@@ -175,6 +215,7 @@ export default function MessageHistory({
   hasMore = false,
   isLoadingMore = false,
   onLoadMore,
+  onRetryMessage,
   className = "",
 }: MessageHistoryProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -183,6 +224,7 @@ export default function MessageHistory({
   const prevMessageCountRef = useRef(messages.length);
   const pendingPrependRef = useRef(false);
   const scrollSnapshotRef = useRef({ scrollHeight: 0, scrollTop: 0 });
+  const pinnedToBottomRef = useRef(true);
 
   const handleLoadMore = useCallback(async () => {
     if (!onLoadMore || isLoadingMore) return;
@@ -206,10 +248,21 @@ export default function MessageHistory({
   useEffect(() => {
     prevMessageCountRef.current = 0;
     pendingPrependRef.current = false;
+    pinnedToBottomRef.current = true;
     requestAnimationFrame(() => {
       endRef.current?.scrollIntoView({ behavior: "auto" });
     });
   }, [threadId]);
+
+  const handleScroll = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    pinnedToBottomRef.current =
+      distanceFromBottom <= SCROLL_BOTTOM_THRESHOLD_PX;
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -229,15 +282,18 @@ export default function MessageHistory({
     const prevCount = prevMessageCountRef.current;
     prevMessageCountRef.current = messages.length;
     if (messages.length > prevCount) {
-      endRef.current?.scrollIntoView({
-        behavior: prevCount === 0 ? "auto" : "smooth",
-      });
+      if (prevCount === 0 || pinnedToBottomRef.current) {
+        endRef.current?.scrollIntoView({
+          behavior: prevCount === 0 ? "auto" : "smooth",
+        });
+      }
     }
   }, [messages]);
 
   return (
     <div
       ref={containerRef}
+      onScroll={handleScroll}
       className={`flex-1 overflow-y-auto px-5 py-4 ${className}`}
     >
       {hasMore && onLoadMore && (
@@ -260,6 +316,7 @@ export default function MessageHistory({
               key={message.id}
               message={message}
               isOwnMessage={message.senderId === currentUserId}
+              onRetryMessage={onRetryMessage}
             />
           ))}
           <div ref={endRef} />

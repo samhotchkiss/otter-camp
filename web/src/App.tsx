@@ -12,6 +12,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import DemoBanner from "./components/DemoBanner";
 import { isDemoMode } from "./lib/demo";
 import { router } from "./router";
+import { GlobalChatProvider } from "./contexts/GlobalChatContext";
 
 export default function App() {
   // In demo mode, skip auth entirely
@@ -21,13 +22,15 @@ export default function App() {
         <DemoBanner />
         <ToastProvider>
           <WebSocketProvider>
-            <WebSocketOrgSubscriber />
-            <NotificationProvider>
-              <SkipLink targetId="main-content" />
-              <RouterProvider router={router} />
-              <WebSocketToastHandler />
-              <ToastContainer />
-            </NotificationProvider>
+            <GlobalChatProvider>
+              <WebSocketOrgSubscriber />
+              <NotificationProvider>
+                <SkipLink targetId="main-content" />
+                <RouterProvider router={router} />
+                <WebSocketToastHandler />
+                <ToastContainer />
+              </NotificationProvider>
+            </GlobalChatProvider>
           </WebSocketProvider>
         </ToastProvider>
       </LiveRegionProvider>
@@ -41,13 +44,15 @@ export default function App() {
         <AuthProvider>
           <ProtectedRoute>
             <WebSocketProvider>
-              <WebSocketOrgSubscriber />
-              <NotificationProvider>
-                <SkipLink targetId="main-content" />
-                <RouterProvider router={router} />
-                <WebSocketToastHandler />
-                <ToastContainer />
-              </NotificationProvider>
+              <GlobalChatProvider>
+                <WebSocketOrgSubscriber />
+                <NotificationProvider>
+                  <SkipLink targetId="main-content" />
+                  <RouterProvider router={router} />
+                  <WebSocketToastHandler />
+                  <ToastContainer />
+                </NotificationProvider>
+              </GlobalChatProvider>
             </WebSocketProvider>
           </ProtectedRoute>
         </AuthProvider>

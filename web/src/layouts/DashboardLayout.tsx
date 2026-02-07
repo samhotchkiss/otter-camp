@@ -17,6 +17,7 @@ import { useWS } from "../contexts/WebSocketContext";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
 import DemoBanner from "../components/DemoBanner";
 import GlobalSearch from "../components/GlobalSearch";
+import GlobalChatDock from "../components/chat/GlobalChatDock";
 import { isDemoMode } from "../lib/demo";
 import { api } from "../lib/api";
 
@@ -284,6 +285,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           </span>
         </div>
       </footer>
+
+      <GlobalChatDock />
 
       {/* Keyboard Shortcuts Help Modal */}
       <ShortcutsHelpModal isOpen={isShortcutsHelpOpen} onClose={closeShortcutsHelp} />

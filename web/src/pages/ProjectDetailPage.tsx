@@ -6,6 +6,7 @@ import ProjectChatPanel from "../components/project/ProjectChatPanel";
 import ProjectCommitBrowser from "../components/project/ProjectCommitBrowser";
 import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
+import { useGlobalChat } from "../contexts/GlobalChatContext";
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
@@ -230,6 +231,7 @@ export default function ProjectDetailPage() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
+  const { upsertConversation, openConversation } = useGlobalChat();
 
   // Fetch project and tasks
   useEffect(() => {
@@ -343,6 +345,67 @@ export default function ProjectDetailPage() {
     
     fetchData();
   }, [id]);
+
+  useEffect(() => {
+    if (!project) {
+      return;
+    }
+    upsertConversation({
+      type: "project",
+      projectId: project.id,
+      title: project.name,
+      contextLabel: `Project • ${project.name}`,
+      subtitle: "Project chat",
+    });
+  }, [project, upsertConversation]);
+
+  useEffect(() => {
+    if (!project) {
+      return;
+    }
+
+    if (activeTab === "chat") {
+      openConversation(
+        {
+          type: "project",
+          projectId: project.id,
+          title: project.name,
+          contextLabel: `Project • ${project.name}`,
+          subtitle: "Project chat",
+        },
+        { focus: true, openDock: true },
+      );
+    }
+  }, [activeTab, openConversation, project]);
+
+  useEffect(() => {
+    if (!project || !issueId) {
+      return;
+    }
+    upsertConversation({
+      type: "issue",
+      issueId,
+      title: `Issue ${issueId.slice(0, 8)}`,
+      contextLabel: `Issue • ${project.name}`,
+      subtitle: "Issue conversation",
+    });
+  }, [issueId, project, upsertConversation]);
+
+  useEffect(() => {
+    if (!project || !issueId || activeTab !== "issues") {
+      return;
+    }
+    openConversation(
+      {
+        type: "issue",
+        issueId,
+        title: `Issue ${issueId.slice(0, 8)}`,
+        contextLabel: `Issue • ${project.name}`,
+        subtitle: "Issue conversation",
+      },
+      { focus: true, openDock: true },
+    );
+  }, [activeTab, issueId, openConversation, project]);
 
   const tasksByColumn = useMemo(() => {
     const grouped: Record<string, Task[]> = {};

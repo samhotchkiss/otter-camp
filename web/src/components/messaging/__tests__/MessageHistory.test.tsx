@@ -66,5 +66,56 @@ describe("MessageHistory", () => {
     await user.click(screen.getByRole("button", { name: /Load earlier/i }));
     expect(onLoadMore).toHaveBeenCalledTimes(1);
   });
-});
 
+  it("shows failed message state and retries", async () => {
+    const user = userEvent.setup();
+    const onRetryMessage = vi.fn();
+
+    const messages: DMMessage[] = [
+      {
+        id: "failed-1",
+        threadId: "dm_agent-1",
+        senderId: "user-1",
+        senderName: "You",
+        senderType: "user",
+        content: "Please run this",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        failed: true,
+      },
+    ];
+
+    render(
+      <MessageHistory
+        messages={messages}
+        currentUserId="user-1"
+        agent={agent}
+        onRetryMessage={onRetryMessage}
+      />,
+    );
+
+    expect(screen.getByText("Send failed")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Retry/i }));
+    expect(onRetryMessage).toHaveBeenCalledTimes(1);
+    expect(onRetryMessage).toHaveBeenCalledWith(messages[0]);
+  });
+
+  it("renders session reset divider entries", () => {
+    const messages: DMMessage[] = [
+      {
+        id: "reset-1",
+        threadId: "project:abc",
+        senderId: "session-reset",
+        senderName: "Session",
+        senderType: "agent",
+        content: "",
+        createdAt: "2026-02-07T12:00:00.000Z",
+        isSessionReset: true,
+      },
+    ];
+
+    render(<MessageHistory messages={messages} currentUserId="user-1" agent={agent} />);
+
+    expect(screen.getByTestId("project-chat-session-divider")).toBeInTheDocument();
+    expect(screen.getByText(/New chat session started/i)).toBeInTheDocument();
+  });
+});
