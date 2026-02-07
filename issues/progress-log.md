@@ -75,3 +75,16 @@
 - Validation run: `go test ./internal/store -count=1`.
 - Remaining (Spec001): #259, #260, #261, #262, #263.
 
+## [2026-02-07 15:18:24 MST] Completed Spec001 Issue #259 (standalone issue creation API)
+- Added `POST /api/projects/{id}/issues` in `internal/api/issues.go` and wired route in `internal/api/router.go`.
+- Endpoint now supports standalone issue creation with work-tracking fields:
+  - `title`, `body`, `owner_agent_id`, `priority`, `work_status`, `state`, `approval_state`, `due_at`, `next_step`, `next_step_due_at`
+- Added RFC3339 parsing/validation for due-date fields.
+- Owner assignment also creates/ensures owner participant for compatibility with existing participant-based flows.
+- Added handler coverage:
+  - `TestIssuesHandlerCreateIssueCreatesStandaloneIssueWithWorkTrackingFields`
+  - `TestIssuesHandlerCreateIssueValidatesPayload`
+- Added router regression check to confirm `/api/projects/{id}/issues` registration.
+- Validation run: `go test ./internal/api -count=1`.
+- Remaining (Spec001): #260, #261, #262, #263.
+

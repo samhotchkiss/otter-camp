@@ -123,4 +123,11 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 	if recInbox.Code == http.StatusNotFound {
 		t.Fatalf("expected /api/inbox route to be registered, got status %d", recInbox.Code)
 	}
+
+	reqCreateIssue := httptest.NewRequest(http.MethodPost, "/api/projects/"+orgID+"/issues?org_id="+orgID, strings.NewReader(`{"title":"hello"}`))
+	recCreateIssue := httptest.NewRecorder()
+	router.ServeHTTP(recCreateIssue, reqCreateIssue)
+	if recCreateIssue.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/projects/{id}/issues route to be registered, got status %d", recCreateIssue.Code)
+	}
 }

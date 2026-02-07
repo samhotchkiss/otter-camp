@@ -31,6 +31,7 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}/review/history/{sha}", handler.ReviewVersion)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/participants", handler.AddParticipant)
 	router.With(middleware.OptionalWorkspace).Delete("/api/issues/{id}/participants/{agentID}", handler.RemoveParticipant)
+	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues", handler.CreateIssue)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues/link", handler.CreateLinkedIssue)
 	return router
 }
@@ -163,6 +164,100 @@ func TestIssuesHandlerCommentCreateValidatesAndPersists(t *testing.T) {
 	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&detail))
 	require.Len(t, detail.Comments, 1)
 	require.Equal(t, "Looks good", detail.Comments[0].Body)
+}
+
+func TestIssuesHandlerCreateIssueCreatesStandaloneIssueWithWorkTrackingFields(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-create-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Create Project")
+	ownerAgentID := insertMessageTestAgent(t, db, orgID, "issue-create-owner")
+
+	issueStore := store.NewProjectIssueStore(db)
+	handler := &IssuesHandler{
+		IssueStore:   issueStore,
+		ProjectStore: store.NewProjectStore(db),
+	}
+	router := newIssueTestRouter(handler)
+
+	dueAt := "2026-02-10T18:00:00Z"
+	nextStepDueAt := "2026-02-09T18:00:00Z"
+	body := `{
+		"title":"Implement standalone issue create endpoint",
+		"body":"Use issue-first workflow",
+		"owner_agent_id":"` + ownerAgentID + `",
+		"priority":"P1",
+		"work_status":"in_progress",
+		"due_at":"` + dueAt + `",
+		"next_step":"Add API tests",
+		"next_step_due_at":"` + nextStepDueAt + `"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/issues?org_id="+orgID, bytes.NewReader([]byte(body)))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var summary issueSummaryPayload
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&summary))
+	require.NotEmpty(t, summary.ID)
+	require.Equal(t, "Implement standalone issue create endpoint", summary.Title)
+
+	created, err := issueStore.GetIssueByID(issueTestCtx(orgID), summary.ID)
+	require.NoError(t, err)
+	require.NotNil(t, created.OwnerAgentID)
+	require.Equal(t, ownerAgentID, *created.OwnerAgentID)
+	require.Equal(t, store.IssueWorkStatusInProgress, created.WorkStatus)
+	require.Equal(t, store.IssuePriorityP1, created.Priority)
+	require.NotNil(t, created.DueAt)
+	require.Equal(t, dueAt, created.DueAt.UTC().Format(time.RFC3339))
+	require.NotNil(t, created.NextStep)
+	require.Equal(t, "Add API tests", *created.NextStep)
+	require.NotNil(t, created.NextStepDueAt)
+	require.Equal(t, nextStepDueAt, created.NextStepDueAt.UTC().Format(time.RFC3339))
+
+	participants, err := issueStore.ListParticipants(issueTestCtx(orgID), summary.ID, false)
+	require.NoError(t, err)
+	require.Len(t, participants, 1)
+	require.Equal(t, ownerAgentID, participants[0].AgentID)
+	require.Equal(t, "owner", participants[0].Role)
+}
+
+func TestIssuesHandlerCreateIssueValidatesPayload(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-create-validate-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Create Validate Project")
+
+	handler := &IssuesHandler{
+		IssueStore:   store.NewProjectIssueStore(db),
+		ProjectStore: store.NewProjectStore(db),
+	}
+	router := newIssueTestRouter(handler)
+
+	missingTitleReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues?org_id="+orgID,
+		bytes.NewReader([]byte(`{"body":"missing title"}`)),
+	)
+	missingTitleRec := httptest.NewRecorder()
+	router.ServeHTTP(missingTitleRec, missingTitleReq)
+	require.Equal(t, http.StatusBadRequest, missingTitleRec.Code)
+
+	invalidOwnerReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues?org_id="+orgID,
+		bytes.NewReader([]byte(`{"title":"Invalid owner","owner_agent_id":"bad-id"}`)),
+	)
+	invalidOwnerRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidOwnerRec, invalidOwnerReq)
+	require.Equal(t, http.StatusBadRequest, invalidOwnerRec.Code)
+
+	invalidDueAtReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues?org_id="+orgID,
+		bytes.NewReader([]byte(`{"title":"Invalid due","due_at":"not-a-date"}`)),
+	)
+	invalidDueAtRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidDueAtRec, invalidDueAtReq)
+	require.Equal(t, http.StatusBadRequest, invalidDueAtRec.Code)
 }
 
 func TestIssuesHandlerCommentCreateDispatchesToOpenClawOwner(t *testing.T) {

@@ -196,6 +196,98 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusOK, issueListResponse{Items: items, Total: len(items)})
 }
 
+func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil || h.ProjectStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+	if _, err := h.ProjectStore.GetByID(r.Context(), projectID); err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	var req struct {
+		Title         string  `json:"title"`
+		Body          *string `json:"body"`
+		OwnerAgentID  *string `json:"owner_agent_id"`
+		Priority      string  `json:"priority"`
+		WorkStatus    string  `json:"work_status"`
+		State         string  `json:"state"`
+		ApprovalState string  `json:"approval_state"`
+		DueAt         *string `json:"due_at"`
+		NextStep      *string `json:"next_step"`
+		NextStepDueAt *string `json:"next_step_due_at"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "title is required"})
+		return
+	}
+
+	dueAt, err := parseOptionalRFC3339(req.DueAt, "due_at")
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	nextStepDueAt, err := parseOptionalRFC3339(req.NextStepDueAt, "next_step_due_at")
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
+	issue, err := h.IssueStore.CreateIssue(r.Context(), store.CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         title,
+		Body:          req.Body,
+		State:         req.State,
+		Origin:        "local",
+		DocumentPath:  nil,
+		ApprovalState: req.ApprovalState,
+		OwnerAgentID:  req.OwnerAgentID,
+		WorkStatus:    req.WorkStatus,
+		Priority:      req.Priority,
+		DueAt:         dueAt,
+		NextStep:      req.NextStep,
+		NextStepDueAt: nextStepDueAt,
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	if issue.OwnerAgentID != nil {
+		if _, err := h.IssueStore.AddParticipant(r.Context(), store.AddProjectIssueParticipantInput{
+			IssueID: issue.ID,
+			AgentID: *issue.OwnerAgentID,
+			Role:    "owner",
+		}); err != nil {
+			handleIssueStoreError(w, err)
+			return
+		}
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), issue.ID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusCreated, toIssueSummaryPayload(*issue, participants, nil))
+}
+
 func (h *IssuesHandler) CreateLinkedIssue(w http.ResponseWriter, r *http.Request) {
 	if h.IssueStore == nil || h.ProjectStore == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
@@ -891,6 +983,22 @@ func (h *IssuesHandler) logIssueApproved(
 		"issue_state":    updated.State,
 		"closed_at":      updated.ClosedAt,
 	})
+}
+
+func parseOptionalRFC3339(value *string, fieldName string) (*time.Time, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be RFC3339 timestamp", fieldName)
+	}
+	utc := parsed.UTC()
+	return &utc, nil
 }
 
 func handleIssueStoreError(w http.ResponseWriter, err error) {

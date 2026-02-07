@@ -213,6 +213,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/history/{sha}", issuesHandler.ReviewVersion)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/participants", issuesHandler.AddParticipant)
 		r.With(middleware.OptionalWorkspace).Delete("/issues/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues", issuesHandler.CreateIssue)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues/link", issuesHandler.CreateLinkedIssue)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/issues/import", projectIssueSyncHandler.ManualImport)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/issues/status", projectIssueSyncHandler.Status)
