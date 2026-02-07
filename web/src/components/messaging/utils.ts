@@ -26,8 +26,13 @@ export function formatTimestamp(isoString: string): string {
 /**
  * Get initials from a name for avatar fallback.
  */
-export function getInitials(name: string): string {
-  return name
+export function getInitials(name: string | null | undefined): string {
+  const safeName = (name ?? "").trim();
+  if (!safeName) {
+    return "?";
+  }
+
+  return safeName
     .split(" ")
     .map((part) => part[0])
     .slice(0, 2)
@@ -37,4 +42,3 @@ export function getInitials(name: string): string {
 
 // Alias for backwards compatibility
 export const formatMessageTimestamp = formatTimestamp;
-

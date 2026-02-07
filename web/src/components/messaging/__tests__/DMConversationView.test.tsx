@@ -97,4 +97,41 @@ describe("DMConversationView", () => {
       Authorization: "Bearer token-123",
     });
   });
+
+  it("normalizes malformed message payloads without crashing", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          messages: [
+            {
+              id: "m-fallback",
+              threadId: "dm_agent-1",
+              senderId: "agent-1",
+              content: "Hello with missing sender fields",
+              createdAt: new Date().toISOString(),
+            },
+          ],
+          hasMore: false,
+          totalCount: 1,
+        }),
+    });
+
+    const agent: Agent = {
+      id: "agent-1",
+      name: "Agent One",
+      status: "online",
+      role: "Helper",
+    };
+
+    render(<DMConversationView agent={agent} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Hello with missing sender fields"),
+      ).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Agent")).toBeInTheDocument();
+  });
 });

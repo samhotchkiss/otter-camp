@@ -73,6 +73,80 @@ async function toResponseError(
   return new Error(fallbackMessage);
 }
 
+function getNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeSenderType(value: unknown): "user" | "agent" | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "user" || normalized === "agent") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeMessage(
+  raw: unknown,
+  defaults: {
+    threadId: string;
+    currentUserId: string;
+    currentUserName: string;
+    agentId: string;
+    agentName: string;
+  },
+): DMMessage | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const message = raw as Record<string, unknown>;
+  const senderId =
+    getNonEmptyString(message.senderId) ??
+    getNonEmptyString(message.sender_id) ??
+    "";
+
+  const senderType =
+    normalizeSenderType(message.senderType) ??
+    normalizeSenderType(message.sender_type) ??
+    (senderId === defaults.agentId ? "agent" : "user");
+  const senderName =
+    getNonEmptyString(message.senderName) ??
+    getNonEmptyString(message.sender_name) ??
+    (senderType === "agent" ? defaults.agentName : "User");
+
+  return {
+    id:
+      getNonEmptyString(message.id) ??
+      `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    threadId:
+      getNonEmptyString(message.threadId) ??
+      getNonEmptyString(message.thread_id) ??
+      defaults.threadId,
+    senderId:
+      senderId ||
+      (senderType === "agent" ? defaults.agentId : defaults.currentUserId),
+    senderName,
+    senderType,
+    senderAvatarUrl:
+      getNonEmptyString(message.senderAvatarUrl) ??
+      getNonEmptyString(message.sender_avatar_url),
+    content:
+      getNonEmptyString(message.content) ??
+      (typeof message.content === "string" ? message.content : ""),
+    createdAt:
+      getNonEmptyString(message.createdAt) ??
+      getNonEmptyString(message.created_at) ??
+      new Date().toISOString(),
+  };
+}
+
 function AgentAvatar({
   agent,
   size = "md",
@@ -144,6 +218,16 @@ export default function DMConversationView({
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { lastMessage, sendMessage: wsSend } = useWS();
+  const messageDefaults = useMemo(
+    () => ({
+      threadId: computedThreadId,
+      currentUserId,
+      currentUserName,
+      agentId: agent.id,
+      agentName: agent.name,
+    }),
+    [agent.id, agent.name, computedThreadId, currentUserId, currentUserName],
+  );
 
   const fetchMessages = useCallback(
     async (cursor?: string) => {
@@ -167,8 +251,12 @@ export default function DMConversationView({
       }
 
       const data = await response.json();
+      const rawMessages = Array.isArray(data.messages) ? data.messages : [];
+      const normalizedMessages = rawMessages
+        .map((message) => normalizeMessage(message, messageDefaults))
+        .filter((message): message is DMMessage => message !== null);
       return {
-        messages: (data.messages || []) as DMMessage[],
+        messages: normalizedMessages,
         pagination: {
           hasMore: data.hasMore ?? false,
           nextCursor: data.nextCursor,
@@ -176,7 +264,7 @@ export default function DMConversationView({
         } as PaginationInfo,
       };
     },
-    [apiEndpoint, computedThreadId, pageSize],
+    [apiEndpoint, computedThreadId, messageDefaults, pageSize],
   );
 
   useEffect(() => {
@@ -233,18 +321,20 @@ export default function DMConversationView({
 
     const data = lastMessage.data as {
       threadId?: string;
-      message?: DMMessage;
+      message?: unknown;
     };
 
     if (data.threadId !== computedThreadId || !data.message) return;
+    const nextMessage = normalizeMessage(data.message, messageDefaults);
+    if (!nextMessage) return;
 
     setMessages((prev) => {
-      if (prev.some((m) => m.id === data.message!.id)) {
+      if (prev.some((m) => m.id === nextMessage.id)) {
         return prev;
       }
-      return [...prev, data.message!];
+      return [...prev, nextMessage];
     });
-  }, [computedThreadId, lastMessage]);
+  }, [computedThreadId, lastMessage, messageDefaults]);
 
   const handleSend = useCallback(async () => {
     const content = inputValue.trim();
@@ -289,13 +379,18 @@ export default function DMConversationView({
         }
 
         const data = await response.json();
+        const serverMessage = normalizeMessage(data.message, messageDefaults);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === optimisticMessage.id
-              ? { ...m, ...data.message, id: data.message?.id || m.id }
+              ? serverMessage ?? m
               : m,
           ),
         );
+
+        if (typeof data?.delivery?.error === "string" && data.delivery.error.trim()) {
+          setError(data.delivery.error.trim());
+        }
       }
 
       wsSend({
@@ -315,6 +410,7 @@ export default function DMConversationView({
     computedThreadId,
     currentUserId,
     currentUserName,
+    messageDefaults,
     inputValue,
     isSending,
     onSendMessage,
