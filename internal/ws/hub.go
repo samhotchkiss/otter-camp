@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -11,21 +10,15 @@ import (
 type MessageType string
 
 const (
-	MessageTaskCreated               MessageType = "TaskCreated"
-	MessageTaskUpdated               MessageType = "TaskUpdated"
-	MessageTaskStatusChanged         MessageType = "TaskStatusChanged"
-	MessageCommentAdded              MessageType = "CommentAdded"
-	MessageProjectChatMessageCreated MessageType = "ProjectChatMessageCreated"
-	MessageIssueCommentCreated       MessageType = "IssueCommentCreated"
-	MessageIssueReviewSaved          MessageType = "IssueReviewSaved"
-	MessageIssueReviewAddressed      MessageType = "IssueReviewAddressed"
-	MessageGitPush                   MessageType = "GitPush"
+	MessageTaskCreated       MessageType = "TaskCreated"
+	MessageTaskUpdated       MessageType = "TaskUpdated"
+	MessageTaskStatusChanged MessageType = "TaskStatusChanged"
+	MessageCommentAdded      MessageType = "CommentAdded"
 )
 
 // BroadcastMessage packages a payload for an org-scoped broadcast.
 type BroadcastMessage struct {
 	OrgID   string
-	Topic   string
 	Payload []byte
 }
 
@@ -63,9 +56,6 @@ func (h *Hub) Run() {
 				if client.OrgID() != message.OrgID {
 					continue
 				}
-				if message.Topic != "" && !client.IsSubscribedToTopic(message.Topic) {
-					continue
-				}
 				select {
 				case client.Send <- message.Payload:
 				default:
@@ -79,52 +69,24 @@ func (h *Hub) Run() {
 
 // Broadcast sends a payload to all clients in an org.
 func (h *Hub) Broadcast(orgID string, payload []byte) {
-	h.BroadcastTopic(orgID, "", payload)
-}
-
-// BroadcastTopic sends a payload to all clients in an org subscribed to a topic.
-// An empty topic broadcasts to every client in the org.
-func (h *Hub) BroadcastTopic(orgID, topic string, payload []byte) {
-	h.broadcast <- BroadcastMessage{
-		OrgID:   strings.TrimSpace(orgID),
-		Topic:   strings.TrimSpace(topic),
-		Payload: payload,
-	}
-}
-
-// Register adds a client to the hub.
-func (h *Hub) Register(client *Client) {
-	if client == nil {
-		return
-	}
-	h.register <- client
-}
-
-// Unregister removes a client from the hub.
-func (h *Hub) Unregister(client *Client) {
-	if client == nil {
-		return
-	}
-	h.unregister <- client
+	h.broadcast <- BroadcastMessage{OrgID: orgID, Payload: payload}
 }
 
 // Client represents a websocket connection.
 type Client struct {
-	Conn   *websocket.Conn
-	Hub    *Hub
-	Send   chan []byte
-	mu     sync.RWMutex
-	orgID  string
-	topics map[string]struct{}
+	Conn  *websocket.Conn
+	Hub   *Hub
+	Send  chan []byte
+	mu    sync.RWMutex
+	orgID string
 }
 
 // NewClient returns a client ready for registration.
 func NewClient(hub *Hub, conn *websocket.Conn) *Client {
 	return &Client{
-		Conn:   conn,
-		Hub:    hub,
-		Send:   make(chan []byte, 256),
-		topics: make(map[string]struct{}),
+		Conn: conn,
+		Hub:  hub,
+		Send: make(chan []byte, 256),
 	}
 }
 
@@ -140,38 +102,4 @@ func (c *Client) SetOrgID(orgID string) {
 	c.mu.Lock()
 	c.orgID = orgID
 	c.mu.Unlock()
-}
-
-// SubscribeTopic subscribes the client to a topic.
-func (c *Client) SubscribeTopic(topic string) {
-	topic = strings.TrimSpace(topic)
-	if topic == "" {
-		return
-	}
-	c.mu.Lock()
-	c.topics[topic] = struct{}{}
-	c.mu.Unlock()
-}
-
-// UnsubscribeTopic removes a topic subscription for the client.
-func (c *Client) UnsubscribeTopic(topic string) {
-	topic = strings.TrimSpace(topic)
-	if topic == "" {
-		return
-	}
-	c.mu.Lock()
-	delete(c.topics, topic)
-	c.mu.Unlock()
-}
-
-// IsSubscribedToTopic reports whether the client is currently subscribed to topic.
-func (c *Client) IsSubscribedToTopic(topic string) bool {
-	topic = strings.TrimSpace(topic)
-	if topic == "" {
-		return true
-	}
-	c.mu.RLock()
-	_, ok := c.topics[topic]
-	c.mu.RUnlock()
-	return ok
 }

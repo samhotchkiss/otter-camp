@@ -1,14 +1,8 @@
 package ws
 
 import (
-	"context"
 	"encoding/json"
-	"net"
 	"net/http"
-	"net/url"
-	"os"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -24,21 +18,14 @@ const (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin:     isWebSocketOriginAllowed,
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
 }
-
-var orgIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
-var topicPattern = regexp.MustCompile(`^[a-zA-Z0-9:_-]{1,160}$`)
 
 // Handler upgrades HTTP connections to websocket clients.
 type Handler struct {
-	Hub             *Hub
-	IssueAuthorizer IssueSubscriptionAuthorizer
-}
-
-// IssueSubscriptionAuthorizer validates issue-channel subscription access.
-type IssueSubscriptionAuthorizer interface {
-	CanSubscribeIssue(ctx context.Context, orgID, issueID string) (bool, error)
+	Hub *Hub
 }
 
 // ServeHTTP implements http.Handler.
@@ -49,23 +36,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := NewClient(h.Hub, conn)
-	h.Hub.Register(client)
+	h.Hub.register <- client
 
 	go client.WritePump()
-	client.ReadPump(h.IssueAuthorizer)
+	client.ReadPump()
 }
 
 type clientMessage struct {
-	Type    string `json:"type"`
-	OrgID   string `json:"org_id"`
-	Topic   string `json:"topic"`
-	Channel string `json:"channel"`
+	Type  string `json:"type"`
+	OrgID string `json:"org_id"`
 }
 
 // ReadPump pumps messages from the websocket connection.
-func (c *Client) ReadPump(issueAuthorizer IssueSubscriptionAuthorizer) {
+func (c *Client) ReadPump() {
 	defer func() {
-		c.Hub.Unregister(c)
+		c.Hub.unregister <- c
 		c.Conn.Close()
 	}()
 
@@ -86,77 +71,13 @@ func (c *Client) ReadPump(issueAuthorizer IssueSubscriptionAuthorizer) {
 			continue
 		}
 
-		processClientMessage(c, payload, issueAuthorizer)
-	}
-}
-
-func processClientMessage(c *Client, payload clientMessage, issueAuthorizer IssueSubscriptionAuthorizer) {
-	switch payload.Type {
-	case "subscribe":
-		orgID := strings.TrimSpace(payload.OrgID)
-		if isAllowedSubscriptionOrgID(orgID) {
-			c.SetOrgID(orgID)
-		}
-
-		topic := topicFromClientMessage(payload)
-		if !isAllowedSubscriptionTopic(topic) {
-			return
-		}
-		if !isAuthorizedTopicSubscription(context.Background(), c.OrgID(), topic, issueAuthorizer) {
-			return
-		}
-		c.SubscribeTopic(topic)
-	case "unsubscribe":
-		topic := topicFromClientMessage(payload)
-		if isAllowedSubscriptionTopic(topic) {
-			c.UnsubscribeTopic(topic)
+		switch payload.Type {
+		case "subscribe":
+			if payload.OrgID != "" {
+				c.SetOrgID(payload.OrgID)
+			}
 		}
 	}
-}
-
-func topicFromClientMessage(payload clientMessage) string {
-	topic := strings.TrimSpace(payload.Topic)
-	if topic == "" {
-		topic = strings.TrimSpace(payload.Channel)
-	}
-	return topic
-}
-
-func isAuthorizedTopicSubscription(
-	ctx context.Context,
-	orgID, topic string,
-	issueAuthorizer IssueSubscriptionAuthorizer,
-) bool {
-	issueID, issueTopic := issueIDFromTopic(topic)
-	if !issueTopic {
-		return true
-	}
-	if issueID == "" {
-		return false
-	}
-	if !isAllowedSubscriptionOrgID(orgID) {
-		return false
-	}
-	if issueAuthorizer == nil {
-		return false
-	}
-	allowed, err := issueAuthorizer.CanSubscribeIssue(ctx, orgID, issueID)
-	if err != nil {
-		return false
-	}
-	return allowed
-}
-
-func issueIDFromTopic(topic string) (string, bool) {
-	topic = strings.TrimSpace(topic)
-	if !strings.HasPrefix(topic, "issue:") {
-		return "", false
-	}
-	issueID := strings.TrimSpace(strings.TrimPrefix(topic, "issue:"))
-	if !orgIDPattern.MatchString(issueID) {
-		return "", true
-	}
-	return issueID, true
 }
 
 // WritePump pumps messages from the hub to the websocket connection.
@@ -185,156 +106,5 @@ func (c *Client) WritePump() {
 				return
 			}
 		}
-	}
-}
-
-func isAllowedSubscriptionOrgID(orgID string) bool {
-	if orgID == "" {
-		return false
-	}
-	if orgID == "demo" || orgID == "default" {
-		return true
-	}
-	return orgIDPattern.MatchString(orgID)
-}
-
-func isAllowedSubscriptionTopic(topic string) bool {
-	topic = strings.TrimSpace(topic)
-	if topic == "" {
-		return false
-	}
-	return topicPattern.MatchString(topic)
-}
-
-func isWebSocketOriginAllowed(r *http.Request) bool {
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" {
-		// Non-browser clients may omit Origin.
-		return true
-	}
-
-	parsedOrigin, err := url.Parse(origin)
-	if err != nil || parsedOrigin.Host == "" {
-		return false
-	}
-
-	if allowed := parseAllowedOrigins(os.Getenv("WS_ALLOWED_ORIGINS")); len(allowed) > 0 {
-		for _, candidate := range allowed {
-			if matchesOriginPattern(origin, candidate) {
-				return true
-			}
-		}
-		return false
-	}
-
-	originHost, originPort := splitHostPort(parsedOrigin.Host, parsedOrigin.Scheme)
-	requestScheme := "http"
-	if r.TLS != nil {
-		requestScheme = "https"
-	}
-	requestHost, requestPort := splitHostPort(strings.TrimSpace(r.Host), requestScheme)
-	if originHost == "" || requestHost == "" {
-		return false
-	}
-	if !strings.EqualFold(originPort, requestPort) {
-		return false
-	}
-	if strings.EqualFold(originHost, requestHost) {
-		return true
-	}
-
-	// Treat loopback aliases as equivalent when port matches.
-	return isLoopbackHost(originHost) && isLoopbackHost(requestHost)
-}
-
-// matchesOriginPattern checks if origin matches a pattern.
-// Supports wildcard patterns like "https://*.otter.camp" where * matches any subdomain.
-func matchesOriginPattern(origin, pattern string) bool {
-	origin = strings.ToLower(strings.TrimSpace(origin))
-	pattern = strings.ToLower(strings.TrimSpace(pattern))
-
-	// Exact match
-	if origin == pattern {
-		return true
-	}
-
-	// Wildcard subdomain match: https://*.example.com
-	if strings.Contains(pattern, "://*.") {
-		// Split pattern into scheme and host parts
-		patternParts := strings.SplitN(pattern, "://", 2)
-		originParts := strings.SplitN(origin, "://", 2)
-		if len(patternParts) != 2 || len(originParts) != 2 {
-			return false
-		}
-
-		// Schemes must match
-		if patternParts[0] != originParts[0] {
-			return false
-		}
-
-		// Pattern host starts with *. — match suffix
-		patternHost := patternParts[1]
-		originHost := originParts[1]
-		if strings.HasPrefix(patternHost, "*.") {
-			suffix := patternHost[1:] // e.g., ".otter.camp"
-			// Origin host must end with the suffix (e.g., "sam.otter.camp" ends with ".otter.camp")
-			// Or origin host equals the base domain (e.g., "otter.camp" for "*.otter.camp")
-			if strings.HasSuffix(originHost, suffix) {
-				return true
-			}
-			// Also allow exact match on base domain (otter.camp matches *.otter.camp)
-			if originHost == patternHost[2:] {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func parseAllowedOrigins(raw string) []string {
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-
-	out := make([]string, 0)
-	for _, part := range strings.Split(raw, ",") {
-		candidate := strings.TrimSpace(strings.TrimRight(part, "/"))
-		if candidate != "" {
-			out = append(out, candidate)
-		}
-	}
-	return out
-}
-
-func splitHostPort(hostport, scheme string) (string, string) {
-	hostport = strings.TrimSpace(hostport)
-	if hostport == "" {
-		return "", ""
-	}
-
-	host, port, err := net.SplitHostPort(hostport)
-	if err != nil {
-		host = hostport
-		switch strings.ToLower(scheme) {
-		case "http", "ws":
-			port = "80"
-		case "https", "wss":
-			port = "443"
-		default:
-			port = ""
-		}
-	}
-
-	host = strings.Trim(host, "[]")
-	return strings.ToLower(host), port
-}
-
-func isLoopbackHost(host string) bool {
-	switch strings.ToLower(strings.Trim(host, "[]")) {
-	case "localhost", "127.0.0.1", "::1":
-		return true
-	default:
-		return false
 	}
 }
