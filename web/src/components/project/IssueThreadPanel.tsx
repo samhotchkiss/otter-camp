@@ -194,6 +194,20 @@ function parseIssueCommentEvent(
   };
 }
 
+function parseIssueEventIssueID(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+  const record = payload as Record<string, unknown>;
+  if (typeof record.issue_id === "string") {
+    return record.issue_id;
+  }
+  if (typeof record.issueId === "string") {
+    return record.issueId;
+  }
+  return "";
+}
+
 function formatTimestamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {
@@ -331,6 +345,7 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
   const [reviewChanges, setReviewChanges] = useState<IssueReviewChangesResponse | null>(null);
   const [reviewChangesLoading, setReviewChangesLoading] = useState(false);
   const [reviewChangesError, setReviewChangesError] = useState<string | null>(null);
+  const [reviewRealtimeRefreshNonce, setReviewRealtimeRefreshNonce] = useState(0);
 
   const { lastMessage } = useWS();
 
@@ -423,7 +438,7 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [issueID]);
+  }, [issueID, reviewRealtimeRefreshNonce]);
 
   useEffect(() => {
     const orgID = getOrgID();
@@ -469,7 +484,7 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [issue?.document_path, issueID]);
+  }, [issue?.document_path, issueID, reviewRealtimeRefreshNonce]);
 
   useEffect(() => {
     const orgID = getOrgID();
@@ -517,23 +532,33 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [issue?.document_path, issueID]);
+  }, [issue?.document_path, issueID, reviewRealtimeRefreshNonce]);
 
   useEffect(() => {
-    if (!lastMessage || lastMessage.type !== "IssueCommentCreated") {
+    if (!lastMessage) {
       return;
     }
-    const incoming = parseIssueCommentEvent(lastMessage.data, issueID);
-    if (!incoming) {
+    if (lastMessage.type === "IssueCommentCreated") {
+      const incoming = parseIssueCommentEvent(lastMessage.data, issueID);
+      if (!incoming) {
+        return;
+      }
+
+      setComments((prev) => {
+        if (prev.some((existing) => existing.id === incoming.id)) {
+          return prev;
+        }
+        return sortComments([...prev, incoming]);
+      });
       return;
     }
 
-    setComments((prev) => {
-      if (prev.some((existing) => existing.id === incoming.id)) {
-        return prev;
+    if (lastMessage.type === "IssueReviewSaved" || lastMessage.type === "IssueReviewAddressed") {
+      const eventIssueID = parseIssueEventIssueID(lastMessage.data);
+      if (eventIssueID === issueID) {
+        setReviewRealtimeRefreshNonce((value) => value + 1);
       }
-      return sortComments([...prev, incoming]);
-    });
+    }
   }, [issueID, lastMessage]);
 
   async function handleOpenReviewVersion(sha: string): Promise<void> {

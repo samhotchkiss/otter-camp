@@ -238,3 +238,21 @@
   - `cd web && npm run build:typecheck`
 - Remaining:
   - #269 Technonymous review-loop hardening
+
+## [2026-02-07 16:06:31 MST] Completed Spec002 issue #269 (review-loop hardening)
+- Expanded backend review-loop verification:
+  - Added reviewer notification row assertion after address flow (`project_issue_review_notifications` with `addressed_for_reviewer`).
+  - Added websocket regression test for `IssueReviewAddressed` event payload broadcast to issue subscribers.
+- Expanded frontend realtime regression coverage:
+  - Added realtime test ensuring review history + review changes refresh when `IssueReviewAddressed` arrives for the active issue.
+  - Added negative-path assertion that events for other issue IDs do not trigger refresh.
+- Updated `IssueThreadPanel` websocket handling to react to review lifecycle events:
+  - Parses issue IDs from review events.
+  - Triggers a targeted refresh of issue/review state when the active issue receives `IssueReviewSaved` or `IssueReviewAddressed`.
+- Validation:
+  - `go test ./internal/api -run 'TestIssuesHandler(SaveReview|AddressReview|ReviewChanges|ReviewHistory|TechnonymousMode)|TestResolveReviewDiffBaseSHAFallback|TestBuildReviewVersionAddressedSummaryDeterministic'`
+  - `cd web && npm test -- src/components/project/IssueThreadPanel.test.tsx src/components/project/IssueThreadPanel.realtime.test.tsx --run`
+  - `cd web && npm run build:typecheck`
+- Remaining:
+  - Spec002 implementation complete.
+  - Next queued specs in folder: `102-connections-diagnostics-page.md`, `103-agent-management.md`.
