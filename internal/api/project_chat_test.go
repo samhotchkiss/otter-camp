@@ -88,10 +88,93 @@ func TestProjectChatHandlerCreateValidatesPayload(t *testing.T) {
 	router.ServeHTTP(badRec, badReq)
 	require.Equal(t, http.StatusBadRequest, badRec.Code)
 
+	invalidSenderTypeReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"x","sender_type":"robot"}`)),
+	)
+	invalidSenderTypeRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidSenderTypeRec, invalidSenderTypeReq)
+	require.Equal(t, http.StatusBadRequest, invalidSenderTypeRec.Code)
+
 	missingWorkspaceReq := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/chat/messages", bytes.NewReader([]byte(`{"author":"Sam","body":"x"}`)))
 	missingWorkspaceRec := httptest.NewRecorder()
 	router.ServeHTTP(missingWorkspaceRec, missingWorkspaceReq)
 	require.Equal(t, http.StatusUnauthorized, missingWorkspaceRec.Code)
+}
+
+func TestProjectChatHandlerCreateDispatchesToOpenClaw(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-dispatch-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Dispatch")
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &ProjectChatHandler{
+		ProjectStore:       store.NewProjectStore(db),
+		ChatStore:          store.NewProjectChatStore(db),
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"Please review this project update"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawProjectChatDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, "project.chat.message", event.Type)
+	require.Equal(t, orgID, event.OrgID)
+	require.Equal(t, projectID, event.Data.ProjectID)
+	require.Equal(t, "Please review this project update", event.Data.Content)
+	require.Equal(t, "Sam", event.Data.Author)
+	require.Equal(t, projectChatSessionKey(orgID, projectID), event.Data.SessionKey)
+
+	var resp struct {
+		Message  projectChatMessagePayload `json:"message"`
+		Delivery dmDeliveryStatus          `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.True(t, resp.Delivery.Attempted)
+	require.True(t, resp.Delivery.Delivered)
+	require.NotEmpty(t, resp.Message.ID)
+}
+
+func TestProjectChatHandlerCreateAgentSenderSkipsOpenClawDispatch(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-agent-sender-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Agent Sender")
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &ProjectChatHandler{
+		ProjectStore:       store.NewProjectStore(db),
+		ChatStore:          store.NewProjectChatStore(db),
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Stone","body":"Assistant reply","sender_type":"agent"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 0)
+
+	var resp struct {
+		Message  projectChatMessagePayload `json:"message"`
+		Delivery dmDeliveryStatus          `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.False(t, resp.Delivery.Attempted)
+	require.False(t, resp.Delivery.Delivered)
 }
 
 func TestProjectChatHandlerSearchSupportsFilters(t *testing.T) {

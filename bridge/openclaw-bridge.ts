@@ -68,10 +68,24 @@ type DMDispatchEvent = {
   };
 };
 
+type ProjectChatDispatchEvent = {
+  type?: string;
+  org_id?: string;
+  data?: {
+    message_id?: string;
+    project_id?: string;
+    session_key?: string;
+    content?: string;
+    author?: string;
+  };
+};
+
 type SessionContext = {
+  kind?: 'dm' | 'project_chat';
   orgID?: string;
   threadID?: string;
   agentID?: string;
+  projectID?: string;
 };
 
 let openClawWS: WebSocket | null = null;
@@ -355,6 +369,7 @@ async function persistAssistantReplyToOtterCamp(params: {
   sessionKey: string;
   content: string;
   runID?: string;
+  assistantName?: string;
 }): Promise<void> {
   const sessionKey = getTrimmedString(params.sessionKey);
   const content = params.content.trim();
@@ -368,36 +383,65 @@ async function persistAssistantReplyToOtterCamp(params: {
     return;
   }
 
-  const orgID = getTrimmedString(context.orgID);
-  const threadID = getTrimmedString(context.threadID);
-  if (!orgID || !threadID || !threadID.startsWith('dm_')) {
+  if (context.kind === 'dm') {
+    const orgID = getTrimmedString(context.orgID);
+    const threadID = getTrimmedString(context.threadID);
+    if (!orgID || !threadID || !threadID.startsWith('dm_')) {
+      return;
+    }
+
+    const agentID = getTrimmedString(context.agentID) || parseAgentIDFromSessionKey(sessionKey);
+    const senderName = params.assistantName?.trim() || (agentID ? agentID : 'Agent');
+    const body: Record<string, unknown> = {
+      org_id: orgID,
+      thread_id: threadID,
+      content,
+      sender_type: 'agent',
+      sender_name: senderName,
+    };
+    if (agentID) {
+      body.sender_id = agentID;
+    }
+
+    const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+      },
+      body: JSON.stringify(body),
+    }, 'persist assistant dm reply');
+    if (!response.ok) {
+      const snippet = (await response.text().catch(() => '')).slice(0, 300);
+      throw new Error(`message persist failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+    }
+  } else if (context.kind === 'project_chat') {
+    const orgID = getTrimmedString(context.orgID);
+    const projectID = getTrimmedString(context.projectID);
+    if (!orgID || !projectID) {
+      return;
+    }
+
+    const body = {
+      author: params.assistantName?.trim() || 'Assistant',
+      body: content,
+      sender_type: 'agent',
+    };
+    const url = `${OTTERCAMP_URL}/api/projects/${encodeURIComponent(projectID)}/chat/messages?org_id=${encodeURIComponent(orgID)}`;
+    const response = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+      },
+      body: JSON.stringify(body),
+    }, 'persist assistant project-chat reply');
+    if (!response.ok) {
+      const snippet = (await response.text().catch(() => '')).slice(0, 300);
+      throw new Error(`project chat persist failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+    }
+  } else {
     return;
-  }
-
-  const agentID = getTrimmedString(context.agentID) || parseAgentIDFromSessionKey(sessionKey);
-  const senderName = agentID ? agentID : 'Agent';
-  const body: Record<string, unknown> = {
-    org_id: orgID,
-    thread_id: threadID,
-    content,
-    sender_type: 'agent',
-    sender_name: senderName,
-  };
-  if (agentID) {
-    body.sender_id = agentID;
-  }
-
-  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
-    },
-    body: JSON.stringify(body),
-  }, 'persist assistant reply');
-  if (!response.ok) {
-    const snippet = (await response.text().catch(() => '')).slice(0, 300);
-    throw new Error(`message persist failed: ${response.status} ${response.statusText} ${snippet}`.trim());
   }
 
   if (params.runID) {
@@ -439,6 +483,12 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
   }
 
   const messageRecord = asRecord(payload.message);
+  const assistantName =
+    getTrimmedString(messageRecord?.author) ||
+    getTrimmedString(messageRecord?.sender_name) ||
+    getTrimmedString(payload.author) ||
+    getTrimmedString(payload.agent_name) ||
+    undefined;
   const role = (
     getTrimmedString(messageRecord?.role) || getTrimmedString(payload.role) || 'assistant'
   ).toLowerCase();
@@ -456,6 +506,7 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
       sessionKey,
       content,
       runID: runID || undefined,
+      assistantName,
     });
   } catch (err) {
     console.error(`[bridge] failed to persist assistant reply for ${sessionKey}:`, err);
@@ -503,6 +554,7 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   }
 
   sessionContexts.set(sessionKey, {
+    kind: 'dm',
     orgID: getTrimmedString(event.org_id),
     threadID: getTrimmedString(event.data?.thread_id),
     agentID:
@@ -522,6 +574,42 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
       );
     }
     console.error(`[bridge] failed to deliver dm.message to ${sessionKey}:`, err);
+  }
+}
+
+async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): Promise<void> {
+  const projectID = getTrimmedString(event.data?.project_id);
+  const content = getTrimmedString(event.data?.content);
+  const orgID = getTrimmedString(event.org_id);
+  const messageID = getTrimmedString(event.data?.message_id) || undefined;
+  const sessionKey =
+    getTrimmedString(event.data?.session_key) ||
+    (orgID && projectID ? `project:${orgID}:${projectID}:chat` : '');
+
+  if (!sessionKey || !projectID || !orgID || !content) {
+    console.warn('[bridge] skipped project.chat.message with missing org/project/session/content');
+    return;
+  }
+
+  sessionContexts.set(sessionKey, {
+    kind: 'project_chat',
+    orgID,
+    projectID,
+  });
+
+  try {
+    await sendMessageToSession(sessionKey, content, messageID);
+    console.log(
+      `[bridge] delivered project.chat.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('missing scope')) {
+      console.error(
+        '[bridge] OpenClaw token lacks required send scope. Ensure connect requests include operator.admin and token permits it.',
+      );
+    }
+    console.error(`[bridge] failed to deliver project.chat.message to ${sessionKey}:`, err);
   }
 }
 
@@ -551,11 +639,14 @@ function connectOtterCampDispatchSocket(): void {
 
   otterCampWS.on('message', (data) => {
     try {
-      const event = JSON.parse(data.toString()) as DMDispatchEvent;
-      if (event.type !== 'dm.message') {
+      const event = JSON.parse(data.toString()) as DMDispatchEvent | ProjectChatDispatchEvent;
+      if (event.type === 'dm.message') {
+        void handleDMDispatchEvent(event as DMDispatchEvent);
         return;
       }
-      void handleDMDispatchEvent(event);
+      if (event.type === 'project.chat.message') {
+        void handleProjectChatDispatchEvent(event as ProjectChatDispatchEvent);
+      }
     } catch (err) {
       console.error('[bridge] failed to parse OtterCamp websocket message:', err);
     }

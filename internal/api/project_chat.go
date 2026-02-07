@@ -26,16 +26,18 @@ const (
 )
 
 type ProjectChatHandler struct {
-	ProjectStore *store.ProjectStore
-	ChatStore    *store.ProjectChatStore
-	IssueStore   *store.ProjectIssueStore
-	DB           *sql.DB
-	Hub          *ws.Hub
+	ProjectStore       *store.ProjectStore
+	ChatStore          *store.ProjectChatStore
+	IssueStore         *store.ProjectIssueStore
+	DB                 *sql.DB
+	Hub                *ws.Hub
+	OpenClawDispatcher openClawMessageDispatcher
 }
 
 type createProjectChatMessageRequest struct {
-	Author string `json:"author"`
-	Body   string `json:"body"`
+	Author     string `json:"author"`
+	Body       string `json:"body"`
+	SenderType string `json:"sender_type,omitempty"`
 }
 
 type projectChatMessagePayload struct {
@@ -77,6 +79,21 @@ type projectChatMessageCreatedEvent struct {
 	Type    ws.MessageType            `json:"type"`
 	Channel string                    `json:"channel"`
 	Message projectChatMessagePayload `json:"message"`
+}
+
+type openClawProjectChatDispatchEvent struct {
+	Type      string                          `json:"type"`
+	Timestamp time.Time                       `json:"timestamp"`
+	OrgID     string                          `json:"org_id"`
+	Data      openClawProjectChatDispatchData `json:"data"`
+}
+
+type openClawProjectChatDispatchData struct {
+	MessageID  string `json:"message_id"`
+	ProjectID  string `json:"project_id"`
+	SessionKey string `json:"session_key"`
+	Content    string `json:"content"`
+	Author     string `json:"author,omitempty"`
 }
 
 func (h *ProjectChatHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +180,22 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
 		return
 	}
+	req.Author = strings.TrimSpace(req.Author)
+	req.Body = strings.TrimSpace(req.Body)
+	req.SenderType = strings.TrimSpace(strings.ToLower(req.SenderType))
+
+	if req.Author == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "author is required"})
+		return
+	}
+	if req.Body == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "body is required"})
+		return
+	}
+	if req.SenderType != "" && req.SenderType != "user" && req.SenderType != "agent" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid sender_type"})
+		return
+	}
 
 	message, err := h.ChatStore.Create(r.Context(), store.CreateProjectChatMessageInput{
 		ProjectID: projectID,
@@ -175,8 +208,22 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := toProjectChatPayload(*message)
+	delivery := dmDeliveryStatus{Attempted: false, Delivered: false}
+	if req.SenderType != "agent" {
+		delivery.Attempted = true
+		if err := h.dispatchProjectChatMessageToOpenClaw(r.Context(), payload); err != nil {
+			delivery.Delivered = false
+			delivery.Error = "agent delivery unavailable; message was saved"
+		} else {
+			delivery.Delivered = true
+		}
+	}
+
 	h.broadcastProjectChatCreated(r.Context(), payload)
-	sendJSON(w, http.StatusCreated, map[string]projectChatMessagePayload{"message": payload})
+	sendJSON(w, http.StatusCreated, map[string]interface{}{
+		"message":  payload,
+		"delivery": delivery,
+	})
 }
 
 func (h *ProjectChatHandler) Search(w http.ResponseWriter, r *http.Request) {
@@ -365,6 +412,39 @@ func (h *ProjectChatHandler) broadcastProjectChatCreated(ctx context.Context, me
 
 func projectChatChannel(projectID string) string {
 	return "project:" + strings.TrimSpace(projectID) + ":chat"
+}
+
+func projectChatSessionKey(orgID, projectID string) string {
+	return fmt.Sprintf("project:%s:%s:chat", strings.TrimSpace(orgID), strings.TrimSpace(projectID))
+}
+
+func (h *ProjectChatHandler) dispatchProjectChatMessageToOpenClaw(
+	ctx context.Context,
+	message projectChatMessagePayload,
+) error {
+	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
+		return fmt.Errorf("openclaw dispatcher unavailable")
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return fmt.Errorf("missing workspace")
+	}
+
+	event := openClawProjectChatDispatchEvent{
+		Type:      "project.chat.message",
+		Timestamp: time.Now().UTC(),
+		OrgID:     workspaceID,
+		Data: openClawProjectChatDispatchData{
+			MessageID:  message.ID,
+			ProjectID:  message.ProjectID,
+			SessionKey: projectChatSessionKey(workspaceID, message.ProjectID),
+			Content:    message.Body,
+			Author:     message.Author,
+		},
+	}
+
+	return h.OpenClawDispatcher.SendToOpenClaw(event)
 }
 
 func toProjectChatPayload(message store.ProjectChatMessage) projectChatMessagePayload {
