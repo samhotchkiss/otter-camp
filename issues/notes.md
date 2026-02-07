@@ -8,3 +8,8 @@
   2. Extend auth/session payload to include agent identity where applicable.
 - Once that exists, CLI can resolve `--mine` automatically without env var setup.
 
+
+## [2026-02-07 16:12:10 MST] Spec 103 implementation status
+- `103-agent-management.md` currently contains a blocking banner: **"NOT READY FOR WORK"**.
+- I am intentionally not implementing Spec 103 yet to follow the spec guardrail.
+- Action needed from Sam: remove the banner (or add an explicit go-ahead note in the spec) when ready for implementation.

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -31,6 +32,8 @@ var (
 	memoryAgentStates  = make(map[string]*AgentState)
 	memoryAgentConfigs = make(map[string]*OpenClawAgentConfig)
 	memoryLastSync     time.Time
+	memoryHostDiag     *OpenClawHostDiagnostics
+	memoryBridgeDiag   *OpenClawBridgeDiagnostics
 )
 
 // OpenClawSession represents a session from OpenClaw's sessions_list
@@ -72,13 +75,58 @@ type OpenClawAgentConfig struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
+type OpenClawHostNetworkInterface struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Family  string `json:"family"`
+}
+
+// OpenClawHostDiagnostics captures bridge host health metadata for diagnostics pages.
+type OpenClawHostDiagnostics struct {
+	Hostname             string                         `json:"hostname,omitempty"`
+	OS                   string                         `json:"os,omitempty"`
+	Arch                 string                         `json:"arch,omitempty"`
+	Platform             string                         `json:"platform,omitempty"`
+	UptimeSeconds        int64                          `json:"uptime_seconds,omitempty"`
+	LoadAvg              []float64                      `json:"load_avg,omitempty"`
+	CPUModel             string                         `json:"cpu_model,omitempty"`
+	CPUCores             int                            `json:"cpu_cores,omitempty"`
+	MemoryTotalBytes     int64                          `json:"memory_total_bytes,omitempty"`
+	MemoryUsedBytes      int64                          `json:"memory_used_bytes,omitempty"`
+	MemoryAvailableBytes int64                          `json:"memory_available_bytes,omitempty"`
+	DiskTotalBytes       int64                          `json:"disk_total_bytes,omitempty"`
+	DiskUsedBytes        int64                          `json:"disk_used_bytes,omitempty"`
+	DiskFreeBytes        int64                          `json:"disk_free_bytes,omitempty"`
+	NetworkInterfaces    []OpenClawHostNetworkInterface `json:"network_interfaces,omitempty"`
+	GatewayPID           int                            `json:"gateway_pid,omitempty"`
+	GatewayVersion       string                         `json:"gateway_version,omitempty"`
+	GatewayBuild         string                         `json:"gateway_build,omitempty"`
+	GatewayPort          int                            `json:"gateway_port,omitempty"`
+	GatewayUptimeSeconds int64                          `json:"gateway_uptime_seconds,omitempty"`
+	NodeVersion          string                         `json:"node_version,omitempty"`
+	OllamaVersion        string                         `json:"ollama_version,omitempty"`
+	OllamaModelsLoaded   []string                       `json:"ollama_models_loaded,omitempty"`
+}
+
+// OpenClawBridgeDiagnostics captures runtime bridge metrics.
+type OpenClawBridgeDiagnostics struct {
+	UptimeSeconds      int64 `json:"uptime_seconds,omitempty"`
+	ReconnectCount     int   `json:"reconnect_count,omitempty"`
+	LastSyncDurationMS int64 `json:"last_sync_duration_ms,omitempty"`
+	SyncCountTotal     int64 `json:"sync_count_total,omitempty"`
+	DispatchQueueDepth int   `json:"dispatch_queue_depth,omitempty"`
+	ErrorsLastHour     int   `json:"errors_last_hour,omitempty"`
+}
+
 // SyncPayload is the payload sent from OpenClaw bridge
 type SyncPayload struct {
-	Type      string            `json:"type"` // "full" or "delta"
-	Timestamp time.Time         `json:"timestamp"`
-	Agents    []OpenClawAgent   `json:"agents,omitempty"`
-	Sessions  []OpenClawSession `json:"sessions,omitempty"`
-	Source    string            `json:"source"` // "bridge" or "webhook"
+	Type      string                     `json:"type"` // "full" or "delta"
+	Timestamp time.Time                  `json:"timestamp"`
+	Agents    []OpenClawAgent            `json:"agents,omitempty"`
+	Sessions  []OpenClawSession          `json:"sessions,omitempty"`
+	Host      *OpenClawHostDiagnostics   `json:"host,omitempty"`
+	Bridge    *OpenClawBridgeDiagnostics `json:"bridge,omitempty"`
+	Source    string                     `json:"source"` // "bridge" or "webhook"
 }
 
 // SyncResponse is returned after processing sync
@@ -329,6 +377,24 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// Update sync metadata
 	memoryLastSync = now // Always update memory
+	if payload.Host != nil {
+		host := *payload.Host
+		memoryHostDiag = &host
+		if db != nil {
+			if err := upsertSyncMetadataJSON(r.Context(), db, "openclaw_host_diagnostics", payload.Host, now); err != nil {
+				log.Printf("Failed to persist host diagnostics metadata: %v", err)
+			}
+		}
+	}
+	if payload.Bridge != nil {
+		bridge := *payload.Bridge
+		memoryBridgeDiag = &bridge
+		if db != nil {
+			if err := upsertSyncMetadataJSON(r.Context(), db, "openclaw_bridge_diagnostics", payload.Bridge, now); err != nil {
+				log.Printf("Failed to persist bridge diagnostics metadata: %v", err)
+			}
+		}
+	}
 	if db != nil {
 		_, _ = db.Exec(`
 			INSERT INTO sync_metadata (key, value, updated_at)
@@ -660,4 +726,24 @@ func formatTimeSince(t time.Time) string {
 		return "1 day ago"
 	}
 	return fmt.Sprintf("%d days ago", days)
+}
+
+func upsertSyncMetadataJSON(ctx context.Context, db *sql.DB, key string, value interface{}, now time.Time) error {
+	if db == nil {
+		return nil
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(
+		ctx,
+		`INSERT INTO sync_metadata (key, value, updated_at)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+		key,
+		string(payload),
+		now,
+	)
+	return err
 }

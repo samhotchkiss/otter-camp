@@ -78,6 +78,7 @@ func NewRouter() http.Handler {
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
 	workflowsHandler := &WorkflowsHandler{DB: db}
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
+	adminConnectionsHandler := &AdminConnectionsHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	githubSyncDeadLettersHandler := &GitHubSyncDeadLettersHandler{}
 	githubSyncHealthHandler := &GitHubSyncHealthHandler{}
 	githubPullRequestsHandler := &GitHubPullRequestsHandler{}
@@ -260,6 +261,7 @@ func NewRouter() http.Handler {
 
 		// Admin endpoints
 		r.With(middleware.OptionalWorkspace).Post("/admin/init-repos", HandleAdminInitRepos(db))
+		r.With(middleware.OptionalWorkspace).Get("/admin/connections", adminConnectionsHandler.Get)
 	})
 
 	// WebSocket handlers

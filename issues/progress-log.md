@@ -256,3 +256,45 @@
 - Remaining:
   - Spec002 implementation complete.
   - Next queued specs in folder: `102-connections-diagnostics-page.md`, `103-agent-management.md`.
+
+## [2026-02-07 16:12:10 MST] Spec102 decomposition complete; beginning implementation
+- Broke `102-connections-diagnostics-page.md` into ordered, test-scoped GitHub issues:
+  - #270 `[Spec102][Phase1]` Bridge diagnostics sync + admin connections summary API
+  - #271 `[Spec102][Phase1]` Connections page UI + route + nav
+  - #272 `[Spec102][Phase2]` Connection event log store + API
+  - #273 `[Spec102][Phase2]` Admin gateway + agent remediation actions
+  - #274 `[Spec102][Phase3]` Diagnostics runner + gateway log viewer
+  - #275 `[Spec102][Phase3]` Cron + process controls in Connections
+- Build order selected to maximize immediate value while keeping issues small:
+  1) backend summary API (#270)
+  2) connections page shell (#271)
+  3) event log + remediation flows (#272/#273)
+  4) diagnostics, logs, cron/process controls (#274/#275)
+- Next in-progress: #270 (backend diagnostics ingestion + `/api/admin/connections`).
+
+## [2026-02-07 16:17:02 MST] Completed Spec102 issue #270 (diagnostics sync + admin connections API)
+- Backend sync payload now accepts optional diagnostics snapshots:
+  - `host` (`OpenClawHostDiagnostics`)
+  - `bridge` (`OpenClawBridgeDiagnostics`)
+- Sync handler persistence updates:
+  - Stores diagnostics JSON in `sync_metadata` (`openclaw_host_diagnostics`, `openclaw_bridge_diagnostics`)
+  - Maintains in-memory fallback snapshots when DB is unavailable
+- Added new admin endpoint:
+  - `GET /api/admin/connections`
+  - Returns bridge websocket status, last sync health, host diagnostics, bridge diagnostics, and session summary (including basic stall detection)
+- Router wired for endpoint registration:
+  - `/api/admin/connections`
+- Added tests:
+  - `TestOpenClawSyncHandlePersistsDiagnosticsMetadata`
+  - `TestAdminConnectionsGetReturnsDiagnosticsAndSessionSummary`
+  - `TestAdminConnectionsGetHandlesMissingDiagnosticsMetadata`
+  - Router registration assertion for `/api/admin/connections`
+- Validation:
+  - `go test ./internal/api -run 'TestOpenClawSyncHandlePersistsDiagnosticsMetadata|TestAdminConnectionsGetReturnsDiagnosticsAndSessionSummary|TestAdminConnectionsGetHandlesMissingDiagnosticsMetadata|TestProjectsAndInboxRoutesAreRegistered|TestRequireOpenClawSyncAuth|TestOpenClawDispatchQueuePullAndAck'`
+  - `go test ./internal/api`
+- Remaining:
+  - #271 Connections page UI + route + nav
+  - #272 Connection event log store + API
+  - #273 Admin gateway + agent remediation actions
+  - #274 Diagnostics runner + gateway log viewer
+  - #275 Cron + process controls

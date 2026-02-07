@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -91,6 +92,61 @@ func TestRequireOpenClawSyncAuth_BackwardCompatibleTokenVariable(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, status)
 	}
+}
+
+func TestOpenClawSyncHandlePersistsDiagnosticsMetadata(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	handler := &OpenClawSyncHandler{DB: db}
+
+	payload := SyncPayload{
+		Type:      "full",
+		Timestamp: time.Now().UTC(),
+		Source:    "bridge",
+		Host: &OpenClawHostDiagnostics{
+			Hostname:        "Mac-Studio",
+			OS:              "Darwin 25.2.0",
+			Arch:            "arm64",
+			GatewayPort:     18791,
+			NodeVersion:     "v25.4.0",
+			MemoryUsedBytes: 48318382080,
+		},
+		Bridge: &OpenClawBridgeDiagnostics{
+			UptimeSeconds:      123456,
+			ReconnectCount:     3,
+			LastSyncDurationMS: 45,
+			SyncCountTotal:     8920,
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var hostValue string
+	err = db.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'openclaw_host_diagnostics'`).Scan(&hostValue)
+	require.NoError(t, err)
+	require.NotEmpty(t, hostValue)
+	var hostDiag OpenClawHostDiagnostics
+	require.NoError(t, json.Unmarshal([]byte(hostValue), &hostDiag))
+	require.Equal(t, "Mac-Studio", hostDiag.Hostname)
+	require.Equal(t, 18791, hostDiag.GatewayPort)
+
+	var bridgeValue string
+	err = db.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'openclaw_bridge_diagnostics'`).Scan(&bridgeValue)
+	require.NoError(t, err)
+	require.NotEmpty(t, bridgeValue)
+	var bridgeDiag OpenClawBridgeDiagnostics
+	require.NoError(t, json.Unmarshal([]byte(bridgeValue), &bridgeDiag))
+	require.Equal(t, 3, bridgeDiag.ReconnectCount)
+	require.Equal(t, int64(8920), bridgeDiag.SyncCountTotal)
 }
 
 func TestOpenClawDispatchQueuePullAndAck(t *testing.T) {
