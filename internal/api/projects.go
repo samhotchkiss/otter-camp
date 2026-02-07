@@ -18,6 +18,20 @@ type ProjectsHandler struct {
 	DB    *sql.DB
 }
 
+type projectAPIResponse struct {
+	ID             string  `json:"id"`
+	OrgID          string  `json:"org_id,omitempty"`
+	Name           string  `json:"name"`
+	Description    string  `json:"description,omitempty"`
+	RepoURL        string  `json:"repo_url,omitempty"`
+	Status         string  `json:"status"`
+	Lead           string  `json:"lead,omitempty"`
+	PrimaryAgentID *string `json:"primary_agent_id,omitempty"`
+	CreatedAt      string  `json:"created_at,omitempty"`
+	TaskCount      int     `json:"taskCount"`
+	CompletedCount int     `json:"completedCount"`
+}
+
 // Demo projects for when database is unavailable
 var demoProjects = []map[string]interface{}{
 	{
@@ -100,9 +114,11 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// Query database directly (bypassing RLS for reliability)
 	query := `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
 		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+		p.primary_agent_id, COALESCE(a.display_name, '') as lead,
 		COALESCE(t.task_count, 0) as task_count,
 		COALESCE(t.completed_count, 0) as completed_count
 		FROM projects p
+		LEFT JOIN agents a ON a.id = p.primary_agent_id
 		LEFT JOIN (
 			SELECT project_id,
 				COUNT(*) as task_count,
@@ -123,24 +139,16 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type Project struct {
-		ID             string `json:"id"`
-		OrgID          string `json:"org_id,omitempty"`
-		Name           string `json:"name"`
-		Description    string `json:"description,omitempty"`
-		RepoURL        string `json:"repo_url,omitempty"`
-		Status         string `json:"status"`
-		CreatedAt      string `json:"created_at,omitempty"`
-		TaskCount      int    `json:"taskCount"`
-		CompletedCount int    `json:"completedCount"`
-	}
-
-	projects := make([]Project, 0)
+	projects := make([]projectAPIResponse, 0)
 	for rows.Next() {
-		var p Project
+		var p projectAPIResponse
 		var createdAt interface{}
-		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount); err != nil {
+		var primaryAgentID sql.NullString
+		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount); err != nil {
 			continue
+		}
+		if primaryAgentID.Valid {
+			p.PrimaryAgentID = &primaryAgentID.String
 		}
 		projects = append(projects, p)
 	}
@@ -198,9 +206,11 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	// Query database directly (bypassing RLS for reliability)
 	query := `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
 		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+		p.primary_agent_id, COALESCE(a.display_name, '') as lead,
 		COALESCE(t.task_count, 0) as task_count,
 		COALESCE(t.completed_count, 0) as completed_count
 		FROM projects p
+		LEFT JOIN agents a ON a.id = p.primary_agent_id
 		LEFT JOIN (
 			SELECT project_id,
 				COUNT(*) as task_count,
@@ -211,22 +221,11 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		) t ON t.project_id = p.id
 		WHERE p.id = $1 AND p.org_id = $2`
 
-	type Project struct {
-		ID             string `json:"id"`
-		OrgID          string `json:"org_id,omitempty"`
-		Name           string `json:"name"`
-		Description    string `json:"description,omitempty"`
-		RepoURL        string `json:"repo_url,omitempty"`
-		Status         string `json:"status"`
-		CreatedAt      string `json:"created_at,omitempty"`
-		TaskCount      int    `json:"taskCount"`
-		CompletedCount int    `json:"completedCount"`
-	}
-
-	var p Project
+	var p projectAPIResponse
 	var createdAt interface{}
+	var primaryAgentID sql.NullString
 	err := h.DB.QueryRowContext(r.Context(), query, projectID, workspaceID).Scan(
-		&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount)
+		&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -235,6 +234,9 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		}
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to get project"})
 		return
+	}
+	if primaryAgentID.Valid {
+		p.PrimaryAgentID = &primaryAgentID.String
 	}
 
 	sendJSON(w, http.StatusOK, p)
@@ -293,4 +295,98 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusCreated, project)
+}
+
+// UpdateSettings updates project-scoped settings.
+func (h *ProjectsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project ID is required"})
+		return
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.URL.Query().Get("org_id"))
+	}
+	if workspaceID == "" {
+		if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+			workspaceID = identity.OrgID
+		}
+	}
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+		return
+	}
+
+	var req struct {
+		PrimaryAgentID *string `json:"primary_agent_id"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	if req.PrimaryAgentID != nil {
+		trimmed := strings.TrimSpace(*req.PrimaryAgentID)
+		if trimmed == "" {
+			req.PrimaryAgentID = nil
+		} else {
+			req.PrimaryAgentID = &trimmed
+		}
+	}
+	if err := validateOptionalUUID(req.PrimaryAgentID, "primary_agent_id"); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
+	if req.PrimaryAgentID != nil {
+		var exists bool
+		err := h.DB.QueryRowContext(
+			r.Context(),
+			"SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1 AND org_id = $2)",
+			*req.PrimaryAgentID,
+			workspaceID,
+		).Scan(&exists)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate primary agent"})
+			return
+		}
+		if !exists {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "primary_agent_id not found in workspace"})
+			return
+		}
+	}
+
+	result, err := h.DB.ExecContext(
+		r.Context(),
+		`UPDATE projects
+		 SET primary_agent_id = $1
+		 WHERE id = $2 AND org_id = $3`,
+		nullableString(req.PrimaryAgentID),
+		projectID,
+		workspaceID,
+	)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update project settings"})
+		return
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to confirm project settings update"})
+		return
+	}
+	if rowsAffected == 0 {
+		sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
+		return
+	}
+
+	h.Get(w, r)
 }

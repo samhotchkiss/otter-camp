@@ -270,6 +270,40 @@ func TestProjectChatHandlerCreateWarnsWhenProjectLeadUnavailable(t *testing.T) {
 	require.Equal(t, "project agent unavailable; message was saved but not delivered", resp.Delivery.Error)
 }
 
+func TestProjectChatHandlerCreateDispatchesToPrimaryProjectAgent(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-primary-agent-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Primary Agent")
+	primaryAgentID := insertMessageTestAgent(t, db, orgID, "stone-primary")
+
+	_, err := db.Exec("UPDATE projects SET primary_agent_id = $1 WHERE id = $2", primaryAgentID, projectID)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &ProjectChatHandler{
+		ProjectStore:       store.NewProjectStore(db),
+		ChatStore:          store.NewProjectChatStore(db),
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"Use the configured primary agent"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawProjectChatDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, "stone-primary", event.Data.AgentID)
+	require.Equal(t, projectChatSessionKey("stone-primary", projectID), event.Data.SessionKey)
+}
+
 func TestProjectChatHandlerSearchSupportsFilters(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "project-chat-search-api-org")

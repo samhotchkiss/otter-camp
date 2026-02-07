@@ -23,15 +23,15 @@ var (
 
 // ExportData represents the complete workspace export structure.
 type ExportData struct {
-	Version     string           `json:"version"`
-	ExportedAt  time.Time        `json:"exported_at"`
-	OrgID       string           `json:"org_id"`
-	Tasks       []ExportTask     `json:"tasks"`
-	Projects    []ExportProject  `json:"projects"`
-	Agents      []ExportAgent    `json:"agents"`
-	Activities  []ExportActivity `json:"activities"`
-	TaskCount   int              `json:"task_count"`
-	TotalItems  int              `json:"total_items"`
+	Version    string           `json:"version"`
+	ExportedAt time.Time        `json:"exported_at"`
+	OrgID      string           `json:"org_id"`
+	Tasks      []ExportTask     `json:"tasks"`
+	Projects   []ExportProject  `json:"projects"`
+	Agents     []ExportAgent    `json:"agents"`
+	Activities []ExportActivity `json:"activities"`
+	TaskCount  int              `json:"task_count"`
+	TotalItems int              `json:"total_items"`
 }
 
 // ExportTask represents a task in the export.
@@ -52,13 +52,14 @@ type ExportTask struct {
 
 // ExportProject represents a project in the export.
 type ExportProject struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description *string   `json:"description,omitempty"`
-	Status      string    `json:"status"`
-	RepoURL     *string   `json:"repo_url,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Description    *string   `json:"description,omitempty"`
+	Status         string    `json:"status"`
+	RepoURL        *string   `json:"repo_url,omitempty"`
+	PrimaryAgentID *string   `json:"primary_agent_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // ExportAgent represents an agent in the export.
@@ -86,38 +87,38 @@ type ExportActivity struct {
 
 // ImportRequest represents the import request body.
 type ImportRequest struct {
-	Data      ExportData `json:"data"`
-	Mode      string     `json:"mode"` // "merge" or "replace"
-	DryRun    bool       `json:"dry_run"`
+	Data   ExportData `json:"data"`
+	Mode   string     `json:"mode"` // "merge" or "replace"
+	DryRun bool       `json:"dry_run"`
 }
 
 // ImportResult represents the result of an import operation.
 type ImportResult struct {
-	Success       bool     `json:"success"`
-	DryRun        bool     `json:"dry_run"`
-	TasksImported int      `json:"tasks_imported"`
-	TasksSkipped  int      `json:"tasks_skipped"`
-	ProjectsImported int   `json:"projects_imported"`
-	ProjectsSkipped  int   `json:"projects_skipped"`
-	AgentsImported int     `json:"agents_imported"`
-	AgentsSkipped  int     `json:"agents_skipped"`
-	Errors        []string `json:"errors,omitempty"`
-	Warnings      []string `json:"warnings,omitempty"`
+	Success          bool     `json:"success"`
+	DryRun           bool     `json:"dry_run"`
+	TasksImported    int      `json:"tasks_imported"`
+	TasksSkipped     int      `json:"tasks_skipped"`
+	ProjectsImported int      `json:"projects_imported"`
+	ProjectsSkipped  int      `json:"projects_skipped"`
+	AgentsImported   int      `json:"agents_imported"`
+	AgentsSkipped    int      `json:"agents_skipped"`
+	Errors           []string `json:"errors,omitempty"`
+	Warnings         []string `json:"warnings,omitempty"`
 }
 
 // ValidationResult represents the result of validating import data.
 type ValidationResult struct {
-	Valid        bool     `json:"valid"`
-	Version      string   `json:"version"`
-	OrgID        string   `json:"org_id"`
-	ExportedAt   string   `json:"exported_at"`
-	TaskCount    int      `json:"task_count"`
-	ProjectCount int      `json:"project_count"`
-	AgentCount   int      `json:"agent_count"`
-	ActivityCount int     `json:"activity_count"`
-	TotalItems   int      `json:"total_items"`
-	Errors       []string `json:"errors,omitempty"`
-	Warnings     []string `json:"warnings,omitempty"`
+	Valid         bool     `json:"valid"`
+	Version       string   `json:"version"`
+	OrgID         string   `json:"org_id"`
+	ExportedAt    string   `json:"exported_at"`
+	TaskCount     int      `json:"task_count"`
+	ProjectCount  int      `json:"project_count"`
+	AgentCount    int      `json:"agent_count"`
+	ActivityCount int      `json:"activity_count"`
+	TotalItems    int      `json:"total_items"`
+	Errors        []string `json:"errors,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
 }
 
 // HandleExport handles GET /api/export
@@ -325,7 +326,7 @@ func exportTasks(ctx context.Context, db *sql.DB, orgID string) ([]ExportTask, e
 }
 
 func exportProjects(ctx context.Context, db *sql.DB, orgID string) ([]ExportProject, error) {
-	query := `SELECT id, name, description, status, repo_url, created_at, updated_at 
+	query := `SELECT id, name, description, status, repo_url, primary_agent_id, created_at, updated_at 
 		FROM projects WHERE org_id = $1 ORDER BY created_at DESC`
 
 	rows, err := db.QueryContext(ctx, query, orgID)
@@ -337,11 +338,11 @@ func exportProjects(ctx context.Context, db *sql.DB, orgID string) ([]ExportProj
 	projects := make([]ExportProject, 0)
 	for rows.Next() {
 		var project ExportProject
-		var description, repoURL sql.NullString
+		var description, repoURL, primaryAgentID sql.NullString
 
 		err := rows.Scan(
 			&project.ID, &project.Name, &description, &project.Status,
-			&repoURL, &project.CreatedAt, &project.UpdatedAt,
+			&repoURL, &primaryAgentID, &project.CreatedAt, &project.UpdatedAt,
 		)
 		if err != nil {
 			return nil, err
@@ -352,6 +353,9 @@ func exportProjects(ctx context.Context, db *sql.DB, orgID string) ([]ExportProj
 		}
 		if repoURL.Valid {
 			project.RepoURL = &repoURL.String
+		}
+		if primaryAgentID.Valid {
+			project.PrimaryAgentID = &primaryAgentID.String
 		}
 
 		projects = append(projects, project)
@@ -444,17 +448,17 @@ func exportActivities(ctx context.Context, db *sql.DB, orgID string) ([]ExportAc
 
 func validateImportData(data ExportData) ValidationResult {
 	result := ValidationResult{
-		Valid:        true,
-		Version:      data.Version,
-		OrgID:        data.OrgID,
-		ExportedAt:   data.ExportedAt.Format(time.RFC3339),
-		TaskCount:    len(data.Tasks),
-		ProjectCount: len(data.Projects),
-		AgentCount:   len(data.Agents),
+		Valid:         true,
+		Version:       data.Version,
+		OrgID:         data.OrgID,
+		ExportedAt:    data.ExportedAt.Format(time.RFC3339),
+		TaskCount:     len(data.Tasks),
+		ProjectCount:  len(data.Projects),
+		AgentCount:    len(data.Agents),
 		ActivityCount: len(data.Activities),
-		TotalItems:   len(data.Tasks) + len(data.Projects) + len(data.Agents) + len(data.Activities),
-		Errors:       make([]string, 0),
-		Warnings:     make([]string, 0),
+		TotalItems:    len(data.Tasks) + len(data.Projects) + len(data.Agents) + len(data.Activities),
+		Errors:        make([]string, 0),
+		Warnings:      make([]string, 0),
 	}
 
 	// Check version
@@ -621,18 +625,19 @@ func importProject(ctx context.Context, tx *sql.Tx, orgID string, project Export
 		status = "active"
 	}
 
-	query := `INSERT INTO projects (id, org_id, name, description, status, repo_url, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	query := `INSERT INTO projects (id, org_id, name, description, status, repo_url, primary_agent_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
 			status = EXCLUDED.status,
 			repo_url = EXCLUDED.repo_url,
+			primary_agent_id = EXCLUDED.primary_agent_id,
 			updated_at = EXCLUDED.updated_at`
 
 	_, err = tx.ExecContext(ctx, query,
 		project.ID, orgID, project.Name, nullableString(project.Description),
-		status, nullableString(project.RepoURL), project.CreatedAt, project.UpdatedAt,
+		status, nullableString(project.RepoURL), nullableString(project.PrimaryAgentID), project.CreatedAt, project.UpdatedAt,
 	)
 
 	return err == nil, err
