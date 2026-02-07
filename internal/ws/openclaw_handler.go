@@ -3,6 +3,7 @@ package ws
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -21,6 +22,8 @@ type OpenClawHandler struct {
 	mu         sync.RWMutex
 	authSecret string
 }
+
+var ErrOpenClawNotConnected = errors.New("openclaw bridge not connected")
 
 // NewOpenClawHandler creates a handler for OpenClaw connections.
 func NewOpenClawHandler(hub *Hub) *OpenClawHandler {
@@ -180,7 +183,7 @@ func (h *OpenClawHandler) SendToOpenClaw(event interface{}) error {
 	h.mu.RUnlock()
 
 	if conn == nil {
-		return nil // No connection, silently ignore
+		return ErrOpenClawNotConnected
 	}
 
 	data, err := json.Marshal(event)

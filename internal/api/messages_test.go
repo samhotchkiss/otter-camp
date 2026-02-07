@@ -19,6 +19,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/lib/pq"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 	"github.com/stretchr/testify/require"
 )
 
@@ -137,6 +138,9 @@ type fakeOpenClawDispatcher struct {
 
 func (f *fakeOpenClawDispatcher) SendToOpenClaw(event interface{}) error {
 	f.calls = append(f.calls, event)
+	if f.err == nil && !f.connected {
+		return ws.ErrOpenClawNotConnected
+	}
 	return f.err
 }
 
@@ -327,14 +331,20 @@ func TestCreateMessageDMBridgeOfflinePersistsMessageWithDeliveryWarning(t *testi
 	}
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &createResp))
 	require.NotEmpty(t, createResp.Message.ID)
-	require.False(t, createResp.Delivery.Attempted)
+	require.True(t, createResp.Delivery.Attempted)
 	require.False(t, createResp.Delivery.Delivered)
-	require.Equal(t, "agent bridge offline; message was saved but not delivered", createResp.Delivery.Error)
+	require.Equal(t, openClawDispatchQueuedWarning, createResp.Delivery.Error)
+	require.Len(t, handler.OpenClawDispatcher.(*fakeOpenClawDispatcher).calls, 1)
 
 	var count int
 	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
+
+	var queued int
+	err = db.QueryRow(`SELECT COUNT(*) FROM openclaw_dispatch_queue WHERE event_type = 'dm.message'`).Scan(&queued)
+	require.NoError(t, err)
+	require.Equal(t, 1, queued)
 }
 
 func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
@@ -432,7 +442,7 @@ func TestCreateMessageDMDispatchFailurePersistsMessageWithDeliveryWarning(t *tes
 	require.NotEmpty(t, createResp.Message.ID)
 	require.True(t, createResp.Delivery.Attempted)
 	require.False(t, createResp.Delivery.Delivered)
-	require.Equal(t, "agent delivery unavailable; message was saved", createResp.Delivery.Error)
+	require.Equal(t, openClawDispatchQueuedWarning, createResp.Delivery.Error)
 
 	var count int
 	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)

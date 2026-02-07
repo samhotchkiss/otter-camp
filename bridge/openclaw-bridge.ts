@@ -23,6 +23,7 @@ const OTTERCAMP_TOKEN = process.env.OTTERCAMP_TOKEN || '';
 const OTTERCAMP_WS_SECRET = process.env.OPENCLAW_WS_SECRET || '';
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
 const MAX_TRACKED_RUN_IDS = 2000;
+const DISPATCH_QUEUE_POLL_INTERVAL_MS = 5000;
 
 interface OpenClawSession {
   key: string;
@@ -102,6 +103,14 @@ type IssueCommentDispatchEvent = {
   };
 };
 
+type DispatchQueueJob = {
+  id: number;
+  event_type?: string;
+  payload?: Record<string, unknown>;
+  claim_token?: string;
+  attempts?: number;
+};
+
 type SessionContext = {
   kind?: 'dm' | 'project_chat' | 'issue_comment';
   orgID?: string;
@@ -120,6 +129,7 @@ let openClawWS: WebSocket | null = null;
 let otterCampWS: WebSocket | null = null;
 let otterCampReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let otterCampReconnectAttempts = 0;
+let isDispatchQueuePolling = false;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
 const sessionContexts = new Map<string, SessionContext>();
@@ -685,6 +695,109 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   }
 }
 
+async function pullDispatchQueueJobs(limit = 50): Promise<DispatchQueueJob[]> {
+  const url = new URL('/api/sync/openclaw/dispatch/pending', OTTERCAMP_URL);
+  url.searchParams.set('limit', String(limit));
+  const response = await fetchWithRetry(url.toString(), {
+    method: 'GET',
+    headers: {
+      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    },
+  }, 'pull queued dispatch jobs');
+
+  if (!response.ok) {
+    throw new Error(`dispatch queue pull failed: ${response.status} ${response.statusText}`);
+  }
+
+  const payload = (await response.json().catch(() => ({}))) as { jobs?: DispatchQueueJob[] };
+  if (!Array.isArray(payload.jobs)) {
+    return [];
+  }
+  return payload.jobs;
+}
+
+async function ackDispatchQueueJob(
+  jobID: number,
+  claimToken: string,
+  success: boolean,
+  errorMessage?: string,
+): Promise<void> {
+  const url = `${OTTERCAMP_URL}/api/sync/openclaw/dispatch/${encodeURIComponent(String(jobID))}/ack`;
+  const response = await fetchWithRetry(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    },
+    body: JSON.stringify({
+      claim_token: claimToken,
+      success,
+      error: errorMessage || '',
+    }),
+  }, `ack dispatch queue job ${jobID}`);
+
+  if (!response.ok) {
+    const text = (await response.text().catch(() => '')).slice(0, 240);
+    throw new Error(`dispatch queue ack failed: ${response.status} ${response.statusText} ${text}`.trim());
+  }
+}
+
+async function processDispatchQueue(): Promise<void> {
+  if (isDispatchQueuePolling) {
+    return;
+  }
+  isDispatchQueuePolling = true;
+
+  try {
+    const jobs = await pullDispatchQueueJobs(50);
+    if (jobs.length === 0) {
+      return;
+    }
+
+    for (const job of jobs) {
+      const jobID = Number(job.id);
+      const claimToken = getTrimmedString(job.claim_token);
+      if (!Number.isFinite(jobID) || jobID <= 0 || !claimToken) {
+        continue;
+      }
+
+      const eventType = getTrimmedString(job.event_type);
+      const payload = asRecord(job.payload);
+      if (!eventType || !payload) {
+        try {
+          await ackDispatchQueueJob(jobID, claimToken, false, 'invalid dispatch payload');
+        } catch (ackErr) {
+          console.error(`[bridge] failed to ack invalid dispatch job ${jobID}:`, ackErr);
+        }
+        continue;
+      }
+
+      try {
+        if (eventType === 'dm.message') {
+          await handleDMDispatchEvent(payload as DMDispatchEvent);
+        } else if (eventType === 'project.chat.message') {
+          await handleProjectChatDispatchEvent(payload as ProjectChatDispatchEvent);
+        } else if (eventType === 'issue.comment.message') {
+          await handleIssueCommentDispatchEvent(payload as IssueCommentDispatchEvent);
+        } else {
+          throw new Error(`unsupported event type: ${eventType}`);
+        }
+        await ackDispatchQueueJob(jobID, claimToken, true);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[bridge] failed processing queued dispatch job ${jobID}:`, err);
+        try {
+          await ackDispatchQueueJob(jobID, claimToken, false, message);
+        } catch (ackErr) {
+          console.error(`[bridge] failed to ack dispatch failure for job ${jobID}:`, ackErr);
+        }
+      }
+    }
+  } finally {
+    isDispatchQueuePolling = false;
+  }
+}
+
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   const sessionKey = (event.data?.session_key || '').trim();
   const content = (event.data?.content || '').trim();
@@ -715,6 +828,7 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
       );
     }
     console.error(`[bridge] failed to deliver dm.message to ${sessionKey}:`, err);
+    throw err;
   }
 }
 
@@ -755,6 +869,7 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
       );
     }
     console.error(`[bridge] failed to deliver project.chat.message to ${sessionKey}:`, err);
+    throw err;
   }
 }
 
@@ -806,6 +921,7 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
       );
     }
     console.error(`[bridge] failed to deliver issue.comment.message to ${sessionKey}:`, err);
+    throw err;
   }
 }
 
@@ -837,15 +953,15 @@ function connectOtterCampDispatchSocket(): void {
     try {
       const event = JSON.parse(data.toString()) as DMDispatchEvent | ProjectChatDispatchEvent | IssueCommentDispatchEvent;
       if (event.type === 'dm.message') {
-        void handleDMDispatchEvent(event as DMDispatchEvent);
+        void handleDMDispatchEvent(event as DMDispatchEvent).catch(() => {});
         return;
       }
       if (event.type === 'project.chat.message') {
-        void handleProjectChatDispatchEvent(event as ProjectChatDispatchEvent);
+        void handleProjectChatDispatchEvent(event as ProjectChatDispatchEvent).catch(() => {});
         return;
       }
       if (event.type === 'issue.comment.message') {
-        void handleIssueCommentDispatchEvent(event as IssueCommentDispatchEvent);
+        void handleIssueCommentDispatchEvent(event as IssueCommentDispatchEvent).catch(() => {});
       }
     } catch (err) {
       console.error('[bridge] failed to parse OtterCamp websocket message:', err);
@@ -895,6 +1011,9 @@ async function runContinuous(): Promise<void> {
   const firstSessions = await fetchSessions();
   await pushToOtterCamp(firstSessions);
   console.log(`[bridge] initial sync complete (${firstSessions.length} sessions)`);
+  await processDispatchQueue().catch((err) => {
+    console.error('[bridge] initial dispatch queue drain failed:', err);
+  });
 
   setInterval(async () => {
     try {
@@ -905,6 +1024,14 @@ async function runContinuous(): Promise<void> {
       console.error('[bridge] periodic sync failed:', err);
     }
   }, 30000);
+
+  setInterval(async () => {
+    try {
+      await processDispatchQueue();
+    } catch (err) {
+      console.error('[bridge] periodic dispatch queue drain failed:', err);
+    }
+  }, DISPATCH_QUEUE_POLL_INTERVAL_MS);
 
   console.log('[bridge] running continuously (Ctrl+C to stop)');
 }

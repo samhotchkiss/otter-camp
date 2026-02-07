@@ -237,6 +237,8 @@ func NewRouter() http.Handler {
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Get("/github/sync/dead-letters", githubSyncDeadLettersHandler.List)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/github/sync/dead-letters/{id}/replay", githubSyncDeadLettersHandler.Replay)
 		r.Post("/sync/openclaw", openclawSyncHandler.Handle)
+		r.Get("/sync/openclaw/dispatch/pending", openclawSyncHandler.PullDispatchQueue)
+		r.Post("/sync/openclaw/dispatch/{id}/ack", openclawSyncHandler.AckDispatchQueue)
 		r.Get("/sync/agents", openclawSyncHandler.GetAgents)
 		r.Patch("/tasks/{id}", taskHandler.UpdateTask)
 		r.Patch("/tasks/{id}/status", taskHandler.UpdateTaskStatus)

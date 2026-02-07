@@ -233,6 +233,61 @@ func TestProjectChatHandlerCreateDispatchesToOpenClaw(t *testing.T) {
 	require.NotEmpty(t, resp.Message.ID)
 }
 
+func TestProjectChatHandlerCreateQueuesWhenBridgeOffline(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-dispatch-queued-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Dispatch Queued")
+	ownerID := insertMessageTestAgent(t, db, orgID, "stone")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := testCtxWithWorkspace(orgID)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Dispatch routing issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	_, err = issueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: ownerID,
+		Role:    "owner",
+	})
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: false}
+	handler := &ProjectChatHandler{
+		ProjectStore:       store.NewProjectStore(db),
+		ChatStore:          store.NewProjectChatStore(db),
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"Please review this project update"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	var resp struct {
+		Message  projectChatMessagePayload `json:"message"`
+		Delivery dmDeliveryStatus          `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.True(t, resp.Delivery.Attempted)
+	require.False(t, resp.Delivery.Delivered)
+	require.Equal(t, openClawDispatchQueuedWarning, resp.Delivery.Error)
+
+	var queued int
+	err = db.QueryRow(`SELECT COUNT(*) FROM openclaw_dispatch_queue WHERE event_type = 'project.chat.message'`).Scan(&queued)
+	require.NoError(t, err)
+	require.Equal(t, 1, queued)
+}
+
 func TestProjectChatHandlerCreateAgentSenderSkipsOpenClawDispatch(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "project-chat-agent-sender-org")

@@ -306,15 +306,20 @@ func TestIssuesHandlerCommentCreateWarnsWhenBridgeOffline(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
-	require.Len(t, dispatcher.calls, 0)
+	require.Len(t, dispatcher.calls, 1)
 
 	var payload struct {
 		Delivery dmDeliveryStatus `json:"delivery"`
 	}
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.False(t, payload.Delivery.Attempted)
+	require.True(t, payload.Delivery.Attempted)
 	require.False(t, payload.Delivery.Delivered)
-	require.Equal(t, "agent bridge offline; message was saved but not delivered", payload.Delivery.Error)
+	require.Equal(t, openClawDispatchQueuedWarning, payload.Delivery.Error)
+
+	var queued int
+	err = db.QueryRow(`SELECT COUNT(*) FROM openclaw_dispatch_queue WHERE event_type = 'issue.comment.message'`).Scan(&queued)
+	require.NoError(t, err)
+	require.Equal(t, 1, queued)
 }
 
 func TestIssuesHandlerParticipantAddRemove(t *testing.T) {

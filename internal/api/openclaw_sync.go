@@ -9,9 +9,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
@@ -86,6 +88,24 @@ type SyncResponse struct {
 	AgentsReceived   int       `json:"agents_received"`
 	SessionsReceived int       `json:"sessions_received"`
 	Message          string    `json:"message,omitempty"`
+}
+
+type openClawDispatchQueuePullResponse struct {
+	Jobs []openClawDispatchQueueJobPayload `json:"jobs"`
+}
+
+type openClawDispatchQueueJobPayload struct {
+	ID         int64           `json:"id"`
+	EventType  string          `json:"event_type"`
+	Payload    json.RawMessage `json:"payload"`
+	ClaimToken string          `json:"claim_token"`
+	Attempts   int             `json:"attempts"`
+}
+
+type openClawDispatchQueueAckRequest struct {
+	ClaimToken string `json:"claim_token"`
+	Success    bool   `json:"success"`
+	Error      string `json:"error,omitempty"`
 }
 
 // AgentState represents the current state of an agent for the frontend
@@ -337,6 +357,116 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		SessionsReceived: processedCount,
 		Message:          fmt.Sprintf("Synced %d agents to database", processedCount),
 	})
+}
+
+func (h *OpenClawSyncHandler) PullDispatchQueue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	if status, err := requireOpenClawSyncAuth(r); err != nil {
+		sendJSON(w, status, errorResponse{Error: err.Error()})
+		return
+	}
+
+	db := h.DB
+	if db == nil {
+		if dbConn, err := store.DB(); err == nil {
+			db = dbConn
+		}
+	}
+	if db == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database unavailable"})
+		return
+	}
+
+	limit := defaultOpenClawDispatchPullLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid limit"})
+			return
+		}
+		limit = parsed
+	}
+	limit = sanitizeOpenClawDispatchPullLimit(limit)
+
+	jobs, err := claimOpenClawDispatchJobs(r.Context(), db, limit)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to claim dispatch jobs"})
+		return
+	}
+
+	payload := make([]openClawDispatchQueueJobPayload, 0, len(jobs))
+	for _, job := range jobs {
+		payload = append(payload, openClawDispatchQueueJobPayload{
+			ID:         job.ID,
+			EventType:  job.EventType,
+			Payload:    job.Payload,
+			ClaimToken: job.ClaimToken,
+			Attempts:   job.Attempts,
+		})
+	}
+
+	sendJSON(w, http.StatusOK, openClawDispatchQueuePullResponse{Jobs: payload})
+}
+
+func (h *OpenClawSyncHandler) AckDispatchQueue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	if status, err := requireOpenClawSyncAuth(r); err != nil {
+		sendJSON(w, status, errorResponse{Error: err.Error()})
+		return
+	}
+
+	rawID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if rawID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "id is required"})
+		return
+	}
+	id, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || id <= 0 {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid id"})
+		return
+	}
+
+	var req openClawDispatchQueueAckRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	req.ClaimToken = strings.TrimSpace(req.ClaimToken)
+	if req.ClaimToken == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "claim_token is required"})
+		return
+	}
+
+	db := h.DB
+	if db == nil {
+		if dbConn, err := store.DB(); err == nil {
+			db = dbConn
+		}
+	}
+	if db == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database unavailable"})
+		return
+	}
+
+	ok, err := ackOpenClawDispatchJob(r.Context(), db, id, req.ClaimToken, req.Success, req.Error)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to acknowledge dispatch job"})
+		return
+	}
+	if !ok {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "dispatch claim is invalid or expired"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func requireOpenClawSyncAuth(r *http.Request) (int, error) {

@@ -245,11 +245,29 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if shouldDispatch {
-		if err := h.dispatchDMMessageToOpenClaw(orgID, messageID, req, dispatchTarget); err != nil {
+		event := h.buildDMDispatchEvent(orgID, messageID, req, dispatchTarget)
+		dedupeKey := fmt.Sprintf("dm.message:%s", messageID)
+		queuedForRetry := false
+		if queued, err := enqueueOpenClawDispatchEvent(r.Context(), db, orgID, event.Type, dedupeKey, event); err != nil {
+			log.Printf("dm dispatch enqueue failed for message %s: %v", messageID, err)
+		} else {
+			queuedForRetry = queued
+		}
+
+		if err := h.dispatchDMMessageToOpenClaw(event); err != nil {
 			log.Printf("dm dispatch failed for message %s: %v", messageID, err)
-			delivery.Error = "agent delivery unavailable; message was saved"
+			if queuedForRetry {
+				delivery.Error = openClawDispatchQueuedWarning
+			} else {
+				delivery.Error = "agent delivery unavailable; message was saved"
+			}
 		} else {
 			delivery.Delivered = true
+			if queuedForRetry {
+				if err := markOpenClawDispatchDeliveredByKey(r.Context(), db, dedupeKey); err != nil {
+					log.Printf("failed to mark dm dispatch delivered for message %s: %v", messageID, err)
+				}
+			}
 		}
 	} else if dispatchWarning != "" {
 		delivery.Error = dispatchWarning
@@ -842,23 +860,15 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 		return dmDispatchTarget{}, false, "agent session unavailable; message was saved but not delivered", 0, nil
 	}
 
-	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
-		return dmDispatchTarget{}, false, "agent bridge offline; message was saved but not delivered", 0, nil
-	}
-
 	return target, true, "", 0, nil
 }
 
-func (h *MessageHandler) dispatchDMMessageToOpenClaw(
+func (h *MessageHandler) buildDMDispatchEvent(
 	orgID string,
 	messageID string,
 	req createMessageRequest,
 	target dmDispatchTarget,
-) error {
-	if h.OpenClawDispatcher == nil {
-		return errors.New("openclaw dispatcher unavailable")
-	}
-
+) openClawDMDispatchEvent {
 	threadID := ""
 	if req.ThreadID != nil {
 		threadID = strings.TrimSpace(*req.ThreadID)
@@ -886,6 +896,13 @@ func (h *MessageHandler) dispatchDMMessageToOpenClaw(
 		event.Data.SenderName = strings.TrimSpace(*req.SenderName)
 	}
 
+	return event
+}
+
+func (h *MessageHandler) dispatchDMMessageToOpenClaw(event openClawDMDispatchEvent) error {
+	if h.OpenClawDispatcher == nil {
+		return ws.ErrOpenClawNotConnected
+	}
 	return h.OpenClawDispatcher.SendToOpenClaw(event)
 }
 

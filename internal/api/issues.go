@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -357,10 +358,32 @@ func (h *IssuesHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		Delivered: false,
 	}
 	if shouldDispatch {
-		if err := h.dispatchIssueCommentToOpenClaw(r.Context(), issueID, response, req.SenderType, target); err != nil {
+		event, err := h.buildIssueCommentDispatchEvent(r.Context(), issueID, response, req.SenderType, target)
+		if err != nil {
 			delivery.Error = "agent delivery unavailable; message was saved"
 		} else {
-			delivery.Delivered = true
+			dedupeKey := fmt.Sprintf("issue.comment.message:%s", response.ID)
+			queuedForRetry := false
+			if queued, queueErr := enqueueOpenClawDispatchEvent(r.Context(), h.DB, event.OrgID, event.Type, dedupeKey, event); queueErr != nil {
+				log.Printf("issue comment dispatch enqueue failed for comment %s: %v", response.ID, queueErr)
+			} else {
+				queuedForRetry = queued
+			}
+
+			if err := h.dispatchIssueCommentToOpenClaw(event); err != nil {
+				if queuedForRetry {
+					delivery.Error = openClawDispatchQueuedWarning
+				} else {
+					delivery.Error = "agent delivery unavailable; message was saved"
+				}
+			} else {
+				delivery.Delivered = true
+				if queuedForRetry {
+					if err := markOpenClawDispatchDeliveredByKey(r.Context(), h.DB, dedupeKey); err != nil {
+						log.Printf("failed to mark issue comment dispatch delivered for comment %s: %v", response.ID, err)
+					}
+				}
+			}
 		}
 	} else if dispatchWarning != "" {
 		delivery.Error = dispatchWarning
@@ -661,9 +684,6 @@ func (h *IssuesHandler) resolveIssueCommentDispatchTarget(
 	if senderType == "agent" {
 		return issueCommentDispatchTarget{}, false, "", nil
 	}
-	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
-		return issueCommentDispatchTarget{}, false, "agent bridge offline; message was saved but not delivered", nil
-	}
 	if h.DB == nil {
 		return issueCommentDispatchTarget{}, false, "issue agent unavailable; message was saved but not delivered", nil
 	}
@@ -719,19 +739,16 @@ func (h *IssuesHandler) resolveIssueCommentDispatchTarget(
 	return target, true, "", nil
 }
 
-func (h *IssuesHandler) dispatchIssueCommentToOpenClaw(
+func (h *IssuesHandler) buildIssueCommentDispatchEvent(
 	ctx context.Context,
 	issueID string,
 	comment issueCommentPayload,
 	senderType string,
 	target issueCommentDispatchTarget,
-) error {
+) (openClawIssueCommentDispatchEvent, error) {
 	workspaceID := middleware.WorkspaceFromContext(ctx)
 	if workspaceID == "" {
-		return errors.New("missing workspace")
-	}
-	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
-		return errors.New("openclaw dispatcher unavailable")
+		return openClawIssueCommentDispatchEvent{}, errors.New("missing workspace")
 	}
 
 	event := openClawIssueCommentDispatchEvent{
@@ -753,6 +770,15 @@ func (h *IssuesHandler) dispatchIssueCommentToOpenClaw(
 			AuthorAgentID:    strings.TrimSpace(comment.AuthorAgentID),
 			SenderType:       strings.TrimSpace(senderType),
 		},
+	}
+	return event, nil
+}
+
+func (h *IssuesHandler) dispatchIssueCommentToOpenClaw(
+	event openClawIssueCommentDispatchEvent,
+) error {
+	if h.OpenClawDispatcher == nil {
+		return ws.ErrOpenClawNotConnected
 	}
 	return h.OpenClawDispatcher.SendToOpenClaw(event)
 }

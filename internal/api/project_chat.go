@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -235,10 +236,32 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Delivered: false,
 	}
 	if shouldDispatch {
-		if err := h.dispatchProjectChatMessageToOpenClaw(r.Context(), payload, target); err != nil {
+		event, err := h.buildProjectChatDispatchEvent(r.Context(), payload, target)
+		if err != nil {
 			delivery.Error = "agent delivery unavailable; message was saved"
 		} else {
-			delivery.Delivered = true
+			dedupeKey := fmt.Sprintf("project.chat.message:%s", payload.ID)
+			queuedForRetry := false
+			if queued, queueErr := enqueueOpenClawDispatchEvent(r.Context(), h.DB, event.OrgID, event.Type, dedupeKey, event); queueErr != nil {
+				log.Printf("project chat dispatch enqueue failed for message %s: %v", payload.ID, queueErr)
+			} else {
+				queuedForRetry = queued
+			}
+
+			if err := h.dispatchProjectChatMessageToOpenClaw(event); err != nil {
+				if queuedForRetry {
+					delivery.Error = openClawDispatchQueuedWarning
+				} else {
+					delivery.Error = "agent delivery unavailable; message was saved"
+				}
+			} else {
+				delivery.Delivered = true
+				if queuedForRetry {
+					if err := markOpenClawDispatchDeliveredByKey(r.Context(), h.DB, dedupeKey); err != nil {
+						log.Printf("failed to mark project chat dispatch delivered for message %s: %v", payload.ID, err)
+					}
+				}
+			}
 		}
 	} else if dispatchWarning != "" {
 		delivery.Error = dispatchWarning
@@ -501,17 +524,14 @@ func parseProjectChatSessionResetID(body string) (string, bool) {
 	return sessionID, true
 }
 
-func (h *ProjectChatHandler) dispatchProjectChatMessageToOpenClaw(
+func (h *ProjectChatHandler) buildProjectChatDispatchEvent(
 	ctx context.Context,
 	message projectChatMessagePayload,
 	target projectChatDispatchTarget,
-) error {
+) (openClawProjectChatDispatchEvent, error) {
 	workspaceID := middleware.WorkspaceFromContext(ctx)
 	if workspaceID == "" {
-		return fmt.Errorf("missing workspace")
-	}
-	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
-		return fmt.Errorf("openclaw dispatcher unavailable")
+		return openClawProjectChatDispatchEvent{}, fmt.Errorf("missing workspace")
 	}
 
 	event := openClawProjectChatDispatchEvent{
@@ -529,6 +549,15 @@ func (h *ProjectChatHandler) dispatchProjectChatMessageToOpenClaw(
 		},
 	}
 
+	return event, nil
+}
+
+func (h *ProjectChatHandler) dispatchProjectChatMessageToOpenClaw(
+	event openClawProjectChatDispatchEvent,
+) error {
+	if h.OpenClawDispatcher == nil {
+		return ws.ErrOpenClawNotConnected
+	}
 	return h.OpenClawDispatcher.SendToOpenClaw(event)
 }
 
@@ -539,9 +568,6 @@ func (h *ProjectChatHandler) resolveProjectChatDispatchTarget(
 ) (projectChatDispatchTarget, bool, string, error) {
 	if senderType == "agent" {
 		return projectChatDispatchTarget{}, false, "", nil
-	}
-	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
-		return projectChatDispatchTarget{}, false, "agent bridge offline; message was saved but not delivered", nil
 	}
 	if h.DB == nil {
 		return projectChatDispatchTarget{}, false, "project agent unavailable; message was saved but not delivered", nil
