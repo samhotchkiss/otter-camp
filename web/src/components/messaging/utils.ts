@@ -26,15 +26,23 @@ export function formatTimestamp(isoString: string): string {
 /**
  * Get initials from a name for avatar fallback.
  */
-export function getInitials(name: string | null | undefined): string {
-  const safeName = (name ?? "").trim();
+export function getInitials(name: unknown): string {
+  let normalized = "";
+  if (typeof name === "string") {
+    normalized = name;
+  } else if (typeof name === "number" && Number.isFinite(name)) {
+    normalized = String(name);
+  }
+
+  const safeName = normalized.trim();
   if (!safeName) {
     return "?";
   }
 
   return safeName
-    .split(" ")
-    .map((part) => part[0])
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0))
     .slice(0, 2)
     .join("")
     .toUpperCase();
