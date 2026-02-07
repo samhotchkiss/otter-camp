@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
+
 	_ "github.com/lib/pq"
 )
 
@@ -51,6 +53,16 @@ func FeedHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orgID := strings.TrimSpace(r.URL.Query().Get("org_id"))
+	if orgID == "" {
+		orgID = middleware.WorkspaceFromContext(r.Context())
+	}
+	if orgID == "" {
+		if db, err := getFeedDB(); err == nil {
+			if identity, err := requireSessionIdentity(r.Context(), db, r); err == nil {
+				orgID = identity.OrgID
+			}
+		}
+	}
 	if orgID == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing query parameter: org_id"})
 		return

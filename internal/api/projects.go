@@ -78,12 +78,22 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if workspaceID == "" {
 		workspaceID = r.URL.Query().Get("org_id")
 	}
+	// Fall back to session token's org if available
+	if workspaceID == "" {
+		if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+			workspaceID = identity.OrgID
+		}
+	}
 
 	if workspaceID == "" {
-		sendJSON(w, http.StatusOK, map[string]interface{}{
-			"projects": demoProjects,
-			"total":    len(demoProjects),
-		})
+		if r.URL.Query().Get("demo") == "true" {
+			sendJSON(w, http.StatusOK, map[string]interface{}{
+				"projects": demoProjects,
+				"total":    len(demoProjects),
+			})
+			return
+		}
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
 		return
 	}
 
@@ -174,6 +184,11 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if workspaceID == "" {
 		workspaceID = r.URL.Query().Get("org_id")
 	}
+	if workspaceID == "" {
+		if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+			workspaceID = identity.OrgID
+		}
+	}
 
 	if workspaceID == "" {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
@@ -233,6 +248,11 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+			workspaceID = identity.OrgID
+		}
+	}
 	if workspaceID == "" {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
 		return
