@@ -82,13 +82,38 @@ type ProjectChatDispatchEvent = {
   };
 };
 
+type IssueCommentDispatchEvent = {
+  type?: string;
+  org_id?: string;
+  data?: {
+    message_id?: string;
+    issue_id?: string;
+    project_id?: string;
+    issue_number?: number;
+    issue_title?: string;
+    document_path?: string;
+    agent_id?: string;
+    agent_name?: string;
+    responder_agent_id?: string;
+    author_agent_id?: string;
+    sender_type?: string;
+    session_key?: string;
+    content?: string;
+  };
+};
+
 type SessionContext = {
-  kind?: 'dm' | 'project_chat';
+  kind?: 'dm' | 'project_chat' | 'issue_comment';
   orgID?: string;
   threadID?: string;
   agentID?: string;
   agentName?: string;
   projectID?: string;
+  issueID?: string;
+  issueNumber?: number;
+  issueTitle?: string;
+  documentPath?: string;
+  responderAgentID?: string;
 };
 
 let openClawWS: WebSocket | null = null;
@@ -98,6 +123,7 @@ let otterCampReconnectAttempts = 0;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
 const sessionContexts = new Map<string, SessionContext>();
+const contextPrimedSessions = new Set<string>();
 const deliveredRunIDs = new Set<string>();
 const deliveredRunIDOrder: string[] = [];
 
@@ -123,6 +149,80 @@ function parseAgentIDFromSessionKey(sessionKey: string): string {
     return '';
   }
   return match[1].trim();
+}
+
+function buildContextEnvelope(context: SessionContext): string {
+  const lines: string[] = ['You are responding inside OtterCamp.'];
+  if (context.kind === 'dm') {
+    lines.push('Surface: direct message chat.');
+    if (context.threadID) {
+      lines.push(`Thread ID: ${context.threadID}.`);
+    }
+    if (context.agentID) {
+      lines.push(`Target agent identity: ${context.agentID}.`);
+    }
+  } else if (context.kind === 'project_chat') {
+    lines.push('Surface: project chat.');
+    if (context.projectID) {
+      lines.push(`Project ID: ${context.projectID}.`);
+    }
+    if (context.agentName || context.agentID) {
+      lines.push(`Primary project agent: ${context.agentName || context.agentID}.`);
+    }
+  } else if (context.kind === 'issue_comment') {
+    lines.push('Surface: issue thread comment.');
+    if (context.projectID) {
+      lines.push(`Project ID: ${context.projectID}.`);
+    }
+    if (context.issueID) {
+      const issueLabel =
+        typeof context.issueNumber === 'number' && Number.isFinite(context.issueNumber)
+          ? `#${context.issueNumber} (${context.issueID})`
+          : context.issueID;
+      lines.push(`Issue: ${issueLabel}.`);
+    }
+    if (context.issueTitle) {
+      lines.push(`Issue title: ${context.issueTitle}.`);
+    }
+    if (context.documentPath) {
+      lines.push(`Linked issue document: ${context.documentPath}.`);
+    }
+    if (context.agentName || context.agentID) {
+      lines.push(`Issue owner agent: ${context.agentName || context.agentID}.`);
+    }
+  }
+  lines.push('Load relevant AGENTS.md and project docs before taking action.');
+  return `[OTTERCAMP_CONTEXT]\n${lines.map((line) => `- ${line}`).join('\n')}\n[/OTTERCAMP_CONTEXT]`;
+}
+
+function buildContextReminder(context: SessionContext): string {
+  if (context.kind === 'project_chat') {
+    return `Project chat (${context.projectID || 'unknown project'})`;
+  }
+  if (context.kind === 'issue_comment') {
+    const issueLabel =
+      typeof context.issueNumber === 'number' && Number.isFinite(context.issueNumber)
+        ? `#${context.issueNumber}`
+        : context.issueID || 'unknown issue';
+    return `Issue thread ${issueLabel} (${context.projectID || 'unknown project'})`;
+  }
+  return `DM thread (${context.threadID || 'unknown thread'})`;
+}
+
+function withSessionContext(sessionKey: string, rawContent: string): string {
+  const content = rawContent.trim();
+  if (!content) {
+    return '';
+  }
+  const context = sessionContexts.get(sessionKey);
+  if (!context) {
+    return content;
+  }
+  if (!contextPrimedSessions.has(sessionKey)) {
+    contextPrimedSessions.add(sessionKey);
+    return `${buildContextEnvelope(context)}\n\n${content}`;
+  }
+  return `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]\n\n${content}`;
 }
 
 function extractMessageContent(value: unknown): string {
@@ -360,11 +460,15 @@ async function sendMessageToSession(
 ): Promise<void> {
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const contextualContent = withSessionContext(sessionKey, content);
+  if (!contextualContent) {
+    return;
+  }
 
   await sendRequest('chat.send', {
     idempotencyKey,
     sessionKey,
-    message: content,
+    message: contextualContent,
   });
 }
 
@@ -450,6 +554,33 @@ async function persistAssistantReplyToOtterCamp(params: {
       throw new Error(`project chat persist failed: ${response.status} ${response.statusText} ${snippet}`.trim());
     }
     persistedTarget = `project:${projectID}`;
+  } else if (context.kind === 'issue_comment') {
+    const orgID = getTrimmedString(context.orgID);
+    const issueID = getTrimmedString(context.issueID);
+    const responderAgentID = getTrimmedString(context.responderAgentID);
+    if (!orgID || !issueID || !responderAgentID) {
+      return;
+    }
+
+    const body = {
+      author_agent_id: responderAgentID,
+      body: content,
+      sender_type: 'agent',
+    };
+    const url = `${OTTERCAMP_URL}/api/issues/${encodeURIComponent(issueID)}/comments?org_id=${encodeURIComponent(orgID)}`;
+    const response = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+      },
+      body: JSON.stringify(body),
+    }, 'persist assistant issue reply');
+    if (!response.ok) {
+      const snippet = (await response.text().catch(() => '')).slice(0, 300);
+      throw new Error(`issue comment persist failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+    }
+    persistedTarget = `issue:${issueID}`;
   } else {
     return;
   }
@@ -627,6 +758,57 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
   }
 }
 
+async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent): Promise<void> {
+  const issueID = getTrimmedString(event.data?.issue_id);
+  const projectID = getTrimmedString(event.data?.project_id);
+  const agentID = getTrimmedString(event.data?.agent_id);
+  const agentName = getTrimmedString(event.data?.agent_name);
+  const responderAgentID = getTrimmedString(event.data?.responder_agent_id);
+  const issueTitle = getTrimmedString(event.data?.issue_title);
+  const documentPath = getTrimmedString(event.data?.document_path);
+  const content = getTrimmedString(event.data?.content);
+  const orgID = getTrimmedString(event.org_id);
+  const messageID = getTrimmedString(event.data?.message_id) || undefined;
+  const parsedIssueNumber = Number(event.data?.issue_number);
+  const issueNumber = Number.isFinite(parsedIssueNumber) ? parsedIssueNumber : undefined;
+  const sessionKey =
+    getTrimmedString(event.data?.session_key) ||
+    (agentID && issueID ? `agent:${agentID}:issue:${issueID}` : '');
+
+  if (!sessionKey || !issueID || !projectID || !orgID || !content) {
+    console.warn('[bridge] skipped issue.comment.message with missing org/project/issue/session/content');
+    return;
+  }
+
+  sessionContexts.set(sessionKey, {
+    kind: 'issue_comment',
+    orgID,
+    projectID,
+    issueID,
+    issueNumber,
+    issueTitle,
+    documentPath,
+    agentID,
+    agentName,
+    responderAgentID,
+  });
+
+  try {
+    await sendMessageToSession(sessionKey, content, messageID);
+    console.log(
+      `[bridge] delivered issue.comment.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('missing scope')) {
+      console.error(
+        '[bridge] OpenClaw token lacks required send scope. Ensure connect requests include operator.admin and token permits it.',
+      );
+    }
+    console.error(`[bridge] failed to deliver issue.comment.message to ${sessionKey}:`, err);
+  }
+}
+
 function connectOtterCampDispatchSocket(): void {
   if (!OTTERCAMP_WS_SECRET) {
     console.warn('[bridge] OPENCLAW_WS_SECRET not set; dm.message dispatch disabled');
@@ -653,13 +835,17 @@ function connectOtterCampDispatchSocket(): void {
 
   otterCampWS.on('message', (data) => {
     try {
-      const event = JSON.parse(data.toString()) as DMDispatchEvent | ProjectChatDispatchEvent;
+      const event = JSON.parse(data.toString()) as DMDispatchEvent | ProjectChatDispatchEvent | IssueCommentDispatchEvent;
       if (event.type === 'dm.message') {
         void handleDMDispatchEvent(event as DMDispatchEvent);
         return;
       }
       if (event.type === 'project.chat.message') {
         void handleProjectChatDispatchEvent(event as ProjectChatDispatchEvent);
+        return;
+      }
+      if (event.type === 'issue.comment.message') {
+        void handleIssueCommentDispatchEvent(event as IssueCommentDispatchEvent);
       }
     } catch (err) {
       console.error('[bridge] failed to parse OtterCamp websocket message:', err);

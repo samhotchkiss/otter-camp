@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path"
@@ -21,12 +22,13 @@ import (
 )
 
 type IssuesHandler struct {
-	IssueStore   *store.ProjectIssueStore
-	ProjectStore *store.ProjectStore
-	CommitStore  *store.ProjectCommitStore
-	ProjectRepos *store.ProjectRepoStore
-	DB           *sql.DB
-	Hub          *ws.Hub
+	IssueStore         *store.ProjectIssueStore
+	ProjectStore       *store.ProjectStore
+	CommitStore        *store.ProjectCommitStore
+	ProjectRepos       *store.ProjectRepoStore
+	DB                 *sql.DB
+	Hub                *ws.Hub
+	OpenClawDispatcher openClawMessageDispatcher
 }
 
 type issueSummaryPayload struct {
@@ -64,6 +66,11 @@ type issueCommentPayload struct {
 	UpdatedAt     string `json:"updated_at"`
 }
 
+type issueCommentCreateResponse struct {
+	issueCommentPayload
+	Delivery *dmDeliveryStatus `json:"delivery,omitempty"`
+}
+
 type issueDetailPayload struct {
 	Issue        issueSummaryPayload       `json:"issue"`
 	Participants []issueParticipantPayload `json:"participants"`
@@ -75,6 +82,40 @@ type issueCommentCreatedEvent struct {
 	Channel string              `json:"channel"`
 	IssueID string              `json:"issue_id"`
 	Comment issueCommentPayload `json:"comment"`
+}
+
+type openClawIssueCommentDispatchEvent struct {
+	Type      string                           `json:"type"`
+	Timestamp time.Time                        `json:"timestamp"`
+	OrgID     string                           `json:"org_id"`
+	Data      openClawIssueCommentDispatchData `json:"data"`
+}
+
+type openClawIssueCommentDispatchData struct {
+	MessageID        string `json:"message_id"`
+	IssueID          string `json:"issue_id"`
+	ProjectID        string `json:"project_id"`
+	IssueNumber      int64  `json:"issue_number,omitempty"`
+	IssueTitle       string `json:"issue_title,omitempty"`
+	DocumentPath     string `json:"document_path,omitempty"`
+	AgentID          string `json:"agent_id"`
+	AgentName        string `json:"agent_name,omitempty"`
+	ResponderAgentID string `json:"responder_agent_id"`
+	SessionKey       string `json:"session_key"`
+	Content          string `json:"content"`
+	AuthorAgentID    string `json:"author_agent_id,omitempty"`
+	SenderType       string `json:"sender_type,omitempty"`
+}
+
+type issueCommentDispatchTarget struct {
+	ProjectID        string
+	IssueNumber      int64
+	IssueTitle       string
+	DocumentPath     string
+	AgentSlug        string
+	AgentName        string
+	ResponderAgentID string
+	SessionKey       string
 }
 
 type issueListResponse struct {
@@ -270,11 +311,27 @@ func (h *IssuesHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AuthorAgentID string `json:"author_agent_id"`
 		Body          string `json:"body"`
+		SenderType    string `json:"sender_type,omitempty"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	req.SenderType = strings.TrimSpace(strings.ToLower(req.SenderType))
+	if req.SenderType != "" && req.SenderType != "user" && req.SenderType != "agent" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid sender_type"})
+		return
+	}
+
+	target, shouldDispatch, dispatchWarning, dispatchErr := h.resolveIssueCommentDispatchTarget(
+		r.Context(),
+		issueID,
+		req.SenderType,
+	)
+	if dispatchErr != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to resolve issue chat target"})
 		return
 	}
 
@@ -295,9 +352,25 @@ func (h *IssuesHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:     comment.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:     comment.UpdatedAt.UTC().Format(time.RFC3339),
 	}
+	delivery := &dmDeliveryStatus{
+		Attempted: shouldDispatch,
+		Delivered: false,
+	}
+	if shouldDispatch {
+		if err := h.dispatchIssueCommentToOpenClaw(r.Context(), issueID, response, req.SenderType, target); err != nil {
+			delivery.Error = "agent delivery unavailable; message was saved"
+		} else {
+			delivery.Delivered = true
+		}
+	} else if dispatchWarning != "" {
+		delivery.Error = dispatchWarning
+	}
 
 	h.broadcastIssueCommentCreated(r.Context(), issueID, response)
-	sendJSON(w, http.StatusCreated, response)
+	sendJSON(w, http.StatusCreated, issueCommentCreateResponse{
+		issueCommentPayload: response,
+		Delivery:            delivery,
+	})
 }
 
 func (h *IssuesHandler) TransitionApprovalState(w http.ResponseWriter, r *http.Request) {
@@ -574,6 +647,114 @@ func (h *IssuesHandler) broadcastIssueCommentCreated(
 
 func issueChannel(issueID string) string {
 	return "issue:" + strings.TrimSpace(issueID)
+}
+
+func issueCommentSessionKey(agentSlug, issueID string) string {
+	return fmt.Sprintf("agent:%s:issue:%s", strings.TrimSpace(agentSlug), strings.TrimSpace(issueID))
+}
+
+func (h *IssuesHandler) resolveIssueCommentDispatchTarget(
+	ctx context.Context,
+	issueID string,
+	senderType string,
+) (issueCommentDispatchTarget, bool, string, error) {
+	if senderType == "agent" {
+		return issueCommentDispatchTarget{}, false, "", nil
+	}
+	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
+		return issueCommentDispatchTarget{}, false, "agent bridge offline; message was saved but not delivered", nil
+	}
+	if h.DB == nil {
+		return issueCommentDispatchTarget{}, false, "issue agent unavailable; message was saved but not delivered", nil
+	}
+
+	var target issueCommentDispatchTarget
+	err := h.DB.QueryRowContext(ctx, `
+		SELECT
+			pi.project_id,
+			pi.issue_number,
+			pi.title,
+			COALESCE(pi.document_path, ''),
+			COALESCE(owner.agent_id, ''),
+			COALESCE(a.slug, ''),
+			COALESCE(a.display_name, '')
+		FROM project_issues pi
+		LEFT JOIN LATERAL (
+			SELECT pip.agent_id
+			FROM project_issue_participants pip
+			WHERE pip.issue_id = pi.id
+			  AND pip.role = 'owner'
+			  AND pip.removed_at IS NULL
+			ORDER BY pip.joined_at ASC
+			LIMIT 1
+		) owner ON true
+		LEFT JOIN agents a ON a.id = owner.agent_id
+		WHERE pi.id = $1
+	`, strings.TrimSpace(issueID)).Scan(
+		&target.ProjectID,
+		&target.IssueNumber,
+		&target.IssueTitle,
+		&target.DocumentPath,
+		&target.ResponderAgentID,
+		&target.AgentSlug,
+		&target.AgentName,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return issueCommentDispatchTarget{}, false, "issue not found", nil
+		}
+		return issueCommentDispatchTarget{}, false, "", err
+	}
+
+	target.ProjectID = strings.TrimSpace(target.ProjectID)
+	target.IssueTitle = strings.TrimSpace(target.IssueTitle)
+	target.DocumentPath = strings.TrimSpace(target.DocumentPath)
+	target.ResponderAgentID = strings.TrimSpace(target.ResponderAgentID)
+	target.AgentSlug = strings.TrimSpace(target.AgentSlug)
+	target.AgentName = strings.TrimSpace(target.AgentName)
+	if target.ResponderAgentID == "" || target.AgentSlug == "" {
+		return issueCommentDispatchTarget{}, false, "issue agent unavailable; message was saved but not delivered", nil
+	}
+	target.SessionKey = issueCommentSessionKey(target.AgentSlug, issueID)
+	return target, true, "", nil
+}
+
+func (h *IssuesHandler) dispatchIssueCommentToOpenClaw(
+	ctx context.Context,
+	issueID string,
+	comment issueCommentPayload,
+	senderType string,
+	target issueCommentDispatchTarget,
+) error {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return errors.New("missing workspace")
+	}
+	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
+		return errors.New("openclaw dispatcher unavailable")
+	}
+
+	event := openClawIssueCommentDispatchEvent{
+		Type:      "issue.comment.message",
+		Timestamp: time.Now().UTC(),
+		OrgID:     workspaceID,
+		Data: openClawIssueCommentDispatchData{
+			MessageID:        comment.ID,
+			IssueID:          strings.TrimSpace(issueID),
+			ProjectID:        target.ProjectID,
+			IssueNumber:      target.IssueNumber,
+			IssueTitle:       target.IssueTitle,
+			DocumentPath:     target.DocumentPath,
+			AgentID:          target.AgentSlug,
+			AgentName:        target.AgentName,
+			ResponderAgentID: target.ResponderAgentID,
+			SessionKey:       target.SessionKey,
+			Content:          comment.Body,
+			AuthorAgentID:    strings.TrimSpace(comment.AuthorAgentID),
+			SenderType:       strings.TrimSpace(senderType),
+		},
+	}
+	return h.OpenClawDispatcher.SendToOpenClaw(event)
 }
 
 func normalizeLinkedPostPath(raw string) (string, error) {

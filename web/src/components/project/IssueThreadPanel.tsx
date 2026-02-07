@@ -36,6 +36,21 @@ type IssueComment = {
   failed?: boolean;
 };
 
+type DeliveryTone = "neutral" | "success" | "warning";
+
+type DeliveryIndicator = {
+  tone: DeliveryTone;
+  text: string;
+};
+
+type IssueCommentCreateResponse = IssueComment & {
+  delivery?: {
+    attempted?: boolean;
+    delivered?: boolean;
+    error?: string;
+  };
+};
+
 type IssueDetailResponse = {
   issue: IssueSummary;
   participants: IssueParticipant[];
@@ -294,6 +309,7 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [issue, setIssue] = useState<IssueSummary | null>(null);
   const [comments, setComments] = useState<IssueComment[]>([]);
+  const [deliveryIndicator, setDeliveryIndicator] = useState<DeliveryIndicator | null>(null);
   const [participants, setParticipants] = useState<IssueParticipant[]>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [visibleCount, setVisibleCount] = useState(COMMENTS_PAGE_SIZE);
@@ -623,6 +639,7 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
           body: JSON.stringify({
             author_agent_id: commentAuthorID,
             body,
+            sender_type: "user",
           }),
         },
       );
@@ -630,7 +647,14 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
         const payload = await response.json().catch(() => null);
         throw new Error(payload?.error ?? "Failed to post comment");
       }
-      const persistedComment = await response.json() as IssueComment;
+      const payload = await response.json() as IssueCommentCreateResponse;
+      const persistedComment: IssueComment = {
+        id: payload.id,
+        author_agent_id: payload.author_agent_id,
+        body: payload.body,
+        created_at: payload.created_at,
+        updated_at: payload.updated_at,
+      };
       setComments((prev) =>
         sortComments(
           prev.map((existing) =>
@@ -638,6 +662,13 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
           ),
         )
       );
+      if (payload.delivery?.delivered) {
+        setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
+      } else if (typeof payload.delivery?.error === "string" && payload.delivery.error.trim()) {
+        setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
+      } else {
+        setDeliveryIndicator({ tone: "neutral", text: "Saved" });
+      }
       await autoAddMentionedParticipants(body);
     } catch {
       setComments((prev) =>
@@ -647,6 +678,7 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
           ),
         )
       );
+      setDeliveryIndicator({ tone: "warning", text: "Send failed; not saved" });
     } finally {
       setSubmittingComment(false);
     }
@@ -1095,6 +1127,21 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
           </div>
 
           <form className="space-y-2" onSubmit={handlePostComment}>
+            {deliveryIndicator && (
+              <div className="flex">
+                <p
+                  className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] ${
+                    deliveryIndicator.tone === "success"
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                      : deliveryIndicator.tone === "warning"
+                        ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                        : "border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text-muted)]"
+                  }`}
+                >
+                  {deliveryIndicator.text}
+                </p>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <label className="text-xs font-semibold text-[var(--text-muted)]" htmlFor="issue-comment-author">
                 Comment as

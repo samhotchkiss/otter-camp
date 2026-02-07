@@ -165,6 +165,158 @@ func TestIssuesHandlerCommentCreateValidatesAndPersists(t *testing.T) {
 	require.Equal(t, "Looks good", detail.Comments[0].Body)
 }
 
+func TestIssuesHandlerCommentCreateDispatchesToOpenClawOwner(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-comment-dispatch-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Dispatch Project")
+	ownerAgentID := insertMessageTestAgent(t, db, orgID, "stone")
+	authorAgentID := insertMessageTestAgent(t, db, orgID, "sam")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue for dispatch",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	_, err = issueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: ownerAgentID,
+		Role:    "owner",
+	})
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/comments?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author_agent_id":"`+authorAgentID+`","body":"Please take a look","sender_type":"user"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawIssueCommentDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, "issue.comment.message", event.Type)
+	require.Equal(t, orgID, event.OrgID)
+	require.Equal(t, issue.ID, event.Data.IssueID)
+	require.Equal(t, projectID, event.Data.ProjectID)
+	require.Equal(t, "Please take a look", event.Data.Content)
+	require.Equal(t, "stone", event.Data.AgentID)
+	require.Equal(t, "Agent stone", event.Data.AgentName)
+	require.Equal(t, ownerAgentID, event.Data.ResponderAgentID)
+	require.Equal(t, issueCommentSessionKey("stone", issue.ID), event.Data.SessionKey)
+	require.Equal(t, authorAgentID, event.Data.AuthorAgentID)
+	require.Equal(t, "user", event.Data.SenderType)
+
+	var payload struct {
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.True(t, payload.Delivery.Attempted)
+	require.True(t, payload.Delivery.Delivered)
+}
+
+func TestIssuesHandlerCommentCreateAgentSenderSkipsOpenClawDispatch(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-comment-agent-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Agent Sender Project")
+	authorAgentID := insertMessageTestAgent(t, db, orgID, "stone")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue for assistant reply",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/comments?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author_agent_id":"`+authorAgentID+`","body":"Assistant reply","sender_type":"agent"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 0)
+
+	var payload struct {
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.False(t, payload.Delivery.Attempted)
+	require.False(t, payload.Delivery.Delivered)
+}
+
+func TestIssuesHandlerCommentCreateWarnsWhenBridgeOffline(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-comment-offline-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Offline Project")
+	ownerAgentID := insertMessageTestAgent(t, db, orgID, "stone")
+	authorAgentID := insertMessageTestAgent(t, db, orgID, "sam")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue for offline bridge",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	_, err = issueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: ownerAgentID,
+		Role:    "owner",
+	})
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: false}
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/comments?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author_agent_id":"`+authorAgentID+`","body":"Hello owner"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 0)
+
+	var payload struct {
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.False(t, payload.Delivery.Attempted)
+	require.False(t, payload.Delivery.Delivered)
+	require.Equal(t, "agent bridge offline; message was saved but not delivered", payload.Delivery.Error)
+}
+
 func TestIssuesHandlerParticipantAddRemove(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-participants-org")
