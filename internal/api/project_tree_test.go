@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 func newProjectTreeTestRouter(handler *ProjectTreeHandler) http.Handler {
 	router := chi.NewRouter()
 	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/tree", handler.GetTree)
+	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/blob", handler.GetBlob)
 	return router
 }
 
@@ -60,6 +62,12 @@ func seedProjectTreeFixtureRepo(t *testing.T, localRepoPath string) {
 	))
 	require.NoError(t, os.MkdirAll(filepath.Join(localRepoPath, "notes"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(localRepoPath, "notes", "todo.txt"), []byte("todo"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(localRepoPath, "assets"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(localRepoPath, "assets", "sample.bin"),
+		[]byte{0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x01},
+		0o644,
+	))
 	runGitTest(t, localRepoPath, "add", ".")
 	runGitTest(t, localRepoPath, "commit", "-m", "seed file browser tree fixtures")
 }
@@ -177,4 +185,89 @@ func TestProjectTreeHandlerRouteIsRegistered(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	require.NotEqual(t, http.StatusNotFound, rec.Code)
+
+	blobReq := httptest.NewRequest(http.MethodGet, "/api/projects/project-1/blob?org_id=org-1&path=/README.md", nil)
+	blobRec := httptest.NewRecorder()
+	router.ServeHTTP(blobRec, blobReq)
+	require.NotEqual(t, http.StatusNotFound, blobRec.Code)
+}
+
+func TestProjectTreeHandlerBlobReturnsUTF8AndBase64(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-blob-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Blob")
+	fixture := newPublishRepoFixture(t)
+	seedProjectTreeFixtureRepo(t, fixture.LocalPath)
+	seedProjectTreeRepoBinding(t, db, orgID, projectID, fixture.LocalPath)
+
+	handler := &ProjectTreeHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ProjectRepos: store.NewProjectRepoStore(db),
+	}
+	router := newProjectTreeTestRouter(handler)
+
+	textReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/blob?org_id="+orgID+"&ref=main&path=/posts/2026-02-07-tree-test.md",
+		nil,
+	)
+	textRec := httptest.NewRecorder()
+	router.ServeHTTP(textRec, textReq)
+	require.Equal(t, http.StatusOK, textRec.Code)
+
+	var textPayload projectBlobResponse
+	require.NoError(t, json.NewDecoder(textRec.Body).Decode(&textPayload))
+	require.Equal(t, "utf-8", textPayload.Encoding)
+	require.Equal(t, "/posts/2026-02-07-tree-test.md", textPayload.Path)
+	require.Contains(t, textPayload.Content, "# Tree test")
+	require.Greater(t, textPayload.Size, int64(0))
+
+	binaryReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/blob?org_id="+orgID+"&ref=main&path=/assets/sample.bin",
+		nil,
+	)
+	binaryRec := httptest.NewRecorder()
+	router.ServeHTTP(binaryRec, binaryReq)
+	require.Equal(t, http.StatusOK, binaryRec.Code)
+
+	var binaryPayload projectBlobResponse
+	require.NoError(t, json.NewDecoder(binaryRec.Body).Decode(&binaryPayload))
+	require.Equal(t, "base64", binaryPayload.Encoding)
+	decoded, decodeErr := base64.StdEncoding.DecodeString(binaryPayload.Content)
+	require.NoError(t, decodeErr)
+	require.Equal(t, []byte{0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x01}, decoded)
+}
+
+func TestProjectTreeHandlerBlobRejectsDirectoryAndUnknownPath(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-blob-validate-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Blob Validate")
+	fixture := newPublishRepoFixture(t)
+	seedProjectTreeFixtureRepo(t, fixture.LocalPath)
+	seedProjectTreeRepoBinding(t, db, orgID, projectID, fixture.LocalPath)
+
+	handler := &ProjectTreeHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ProjectRepos: store.NewProjectRepoStore(db),
+	}
+	router := newProjectTreeTestRouter(handler)
+
+	dirReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/blob?org_id="+orgID+"&path=/posts",
+		nil,
+	)
+	dirRec := httptest.NewRecorder()
+	router.ServeHTTP(dirRec, dirReq)
+	require.Equal(t, http.StatusBadRequest, dirRec.Code)
+
+	missingReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/blob?org_id="+orgID+"&path=/posts/does-not-exist.md",
+		nil,
+	)
+	missingRec := httptest.NewRecorder()
+	router.ServeHTTP(missingRec, missingReq)
+	require.Equal(t, http.StatusNotFound, missingRec.Code)
 }

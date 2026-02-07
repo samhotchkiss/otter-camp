@@ -1,8 +1,5 @@
 # Issue #102: Connections & Diagnostics Page
 
-> ⚠️ **NOT READY FOR WORK** — This issue is still being specced. Do not begin implementation until this banner is removed.
-
-
 ## Problem
 
 When Sam is away from the Mac Studio, there's no way to see if things are healthy or fix problems remotely. Known recurring issues:
