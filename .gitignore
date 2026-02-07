@@ -36,3 +36,11 @@ web/playwright-report/
 web/playwright/.cache/
 bridge/.env
 otter
+
+# Codex duplicate artifacts (spaces in filenames)
+*\ 2.*
+*\ 3.*
+*\ 4.*
+*\ 2
+*\ 3
+*\ 4
