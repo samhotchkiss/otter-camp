@@ -66,6 +66,7 @@ func NewRouter() http.Handler {
 	})
 
 	r.Get("/health", handleHealth)
+	r.Get("/api/feed", FeedHandler)
 
 	webhookHandler := &WebhookHandler{Hub: hub}
 	feedPushHandler := NewFeedPushHandler(hub)
