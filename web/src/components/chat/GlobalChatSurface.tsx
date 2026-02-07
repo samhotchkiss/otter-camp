@@ -19,6 +19,7 @@ const ORG_STORAGE_KEY = "otter-camp-org-id";
 const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
 const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
+const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
 const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000];
 
 type DeliveryTone = "neutral" | "success" | "warning";
@@ -90,6 +91,17 @@ function normalizeTimestamp(value: unknown): string {
   return value;
 }
 
+function extractSessionResetID(content: string): string | null {
+  const trimmed = content.trim();
+  if (trimmed.startsWith(PROJECT_CHAT_SESSION_RESET_PREFIX)) {
+    return trimmed.slice(PROJECT_CHAT_SESSION_RESET_PREFIX.length).trim() || "session";
+  }
+  if (trimmed.startsWith(CHAT_SESSION_RESET_PREFIX)) {
+    return trimmed.slice(CHAT_SESSION_RESET_PREFIX.length).trim() || "session";
+  }
+  return null;
+}
+
 function normalizeThreadMessage(
   raw: unknown,
   fallbackThreadID: string,
@@ -120,6 +132,23 @@ function normalizeThreadMessage(
   const senderID = rawSenderID || (senderType === "agent" ? `agent:${senderName}` : currentUserID);
   const content =
     (typeof record.content === "string" && record.content) || "";
+  const resetSessionID = extractSessionResetID(content);
+  if (resetSessionID !== null) {
+    return {
+      id,
+      threadId:
+        (typeof record.threadId === "string" && record.threadId) ||
+        (typeof record.thread_id === "string" && record.thread_id) ||
+        fallbackThreadID,
+      senderId: "session-reset",
+      senderName: "Session",
+      senderType: "agent",
+      content: "",
+      createdAt: normalizeTimestamp(record.createdAt ?? record.created_at),
+      isSessionReset: true,
+      sessionID: resetSessionID,
+    };
+  }
 
   return {
     id,
@@ -160,8 +189,8 @@ function normalizeProjectMessage(
   if (projectID !== expectedProjectID) {
     return null;
   }
-  if (author === PROJECT_CHAT_SESSION_RESET_AUTHOR && body.startsWith(PROJECT_CHAT_SESSION_RESET_PREFIX)) {
-    const sessionID = body.slice(PROJECT_CHAT_SESSION_RESET_PREFIX.length).trim();
+  const resetSessionID = extractSessionResetID(body);
+  if ((author === PROJECT_CHAT_SESSION_RESET_AUTHOR || author === "Session") && resetSessionID !== null) {
     return {
       id,
       threadId: threadID,
@@ -171,7 +200,7 @@ function normalizeProjectMessage(
       content: "",
       createdAt: normalizeTimestamp(record.created_at),
       isSessionReset: true,
-      sessionID: sessionID || undefined,
+      sessionID: resetSessionID,
     };
   }
 
@@ -202,6 +231,20 @@ function normalizeIssueComment(
   const body = typeof record.body === "string" ? record.body : "";
   if (!id || !authorID || !body) {
     return null;
+  }
+  const resetSessionID = extractSessionResetID(body);
+  if (resetSessionID !== null) {
+    return {
+      id,
+      threadId: threadID,
+      senderId: "session-reset",
+      senderName: "Session",
+      senderType: "agent",
+      content: "",
+      createdAt: normalizeTimestamp(record.created_at),
+      isSessionReset: true,
+      sessionID: resetSessionID,
+    };
   }
 
   const senderName = agentNameByID.get(authorID) ?? authorID;

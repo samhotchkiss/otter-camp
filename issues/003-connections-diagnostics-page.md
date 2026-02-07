@@ -29,10 +29,22 @@ The page shows the health of all connections and provides actions to fix common 
 |-------|--------|-------------|
 | Connection status | `OpenClawHandler.IsConnected()` | 🟢 Connected / 🔴 Disconnected |
 | Last sync timestamp | `agent_sync_state` table or in-memory `memoryLastSync` | When the last full sync was received |
+| Sync latency | Time between syncs | Average and max over last hour |
 | Bridge uptime | Bridge process start time | How long the bridge has been running |
-| Gateway version | Sync payload or `/health` | OpenClaw version on the host |
+| Bridge reconnect count | Bridge tracks internally | How many times WS reconnected since start |
+| Gateway version | Sync payload or `/health` | OpenClaw build (e.g., `2026.2.6-3 build 85ed6c7`) |
 | Gateway PID | Sync payload | Process ID of the gateway |
-| Host info | Sync payload | Hostname, OS, uptime, load average |
+| Gateway port | Sync payload | Current port (e.g., 18791) |
+| Gateway uptime | Sync payload | Time since gateway process started |
+| Node.js version | Sync payload | Runtime version (e.g., v25.4.0) |
+| Host hostname | Sync payload | Machine name |
+| Host OS | Sync payload | e.g., Darwin 25.2.0 (arm64) |
+| Host uptime | Sync payload | System uptime (not just gateway) |
+| Load average | Sync payload | 1m, 5m, 15m load |
+| Memory | Sync payload | Total / used / available (GB) |
+| Disk | Sync payload | Total / used / free (TB) |
+| CPU | Sync payload | Chip model, core count (e.g., M1 Ultra, 20 cores) |
+| Network | Sync payload | Local IP, public IP (if detectable), active interfaces |
 
 ### Data Source
 
@@ -44,22 +56,49 @@ The bridge (`bridge/openclaw-bridge.ts`) already pushes sync payloads to `POST /
   "timestamp": "...",
   "host": {
     "hostname": "Mac-Studio",
-    "os": "Darwin 25.2.0 (arm64)",
+    "os": "Darwin 25.2.0",
+    "arch": "arm64",
+    "platform": "darwin",
     "uptime_seconds": 543200,
     "load_avg": [3.2, 2.8, 2.5],
-    "memory_total_gb": 128,
-    "memory_used_gb": 45,
-    "disk_free_gb": 4600,
+    "cpu_model": "Apple M1 Ultra",
+    "cpu_cores": 20,
+    "memory_total_bytes": 137438953472,
+    "memory_used_bytes": 48318382080,
+    "memory_available_bytes": 89120571392,
+    "disk_total_bytes": 8001563222016,
+    "disk_used_bytes": 3401563222016,
+    "disk_free_bytes": 4600000000000,
+    "network_interfaces": [
+      { "name": "en0", "address": "192.168.1.50", "family": "IPv4" }
+    ],
     "gateway_pid": 16314,
     "gateway_version": "2026.2.6-3",
-    "gateway_port": 18791
+    "gateway_build": "85ed6c7",
+    "gateway_port": 18791,
+    "gateway_uptime_seconds": 234567,
+    "node_version": "v25.4.0",
+    "ollama_version": "0.15.1",
+    "ollama_models_loaded": ["llama3.1:70b"]
+  },
+  "bridge": {
+    "uptime_seconds": 123456,
+    "reconnect_count": 3,
+    "last_sync_duration_ms": 45,
+    "sync_count_total": 8920,
+    "dispatch_queue_depth": 0,
+    "errors_last_hour": 2
   },
   "agents": [...],
   "sessions": [...]
 }
 ```
 
-The bridge can gather this from the host via `os` module and OpenClaw's status endpoints.
+The bridge gathers this from:
+- `os` module: hostname, uptime, load, memory, cpu, network
+- `openclaw status` or gateway API: version, PID, port
+- `ollama list`: loaded models
+- Internal bridge state: reconnect count, sync stats
 
 ---
 
@@ -72,19 +111,38 @@ A table/card grid showing all agent sessions:
 | Field | Description |
 |-------|-------------|
 | Agent name | e.g., "Frank", "Derek", "Stone" |
+| Agent slot | e.g., "main", "2b", "three-stones" |
 | Status | 🟢 Online / 🟡 Busy / 🔴 Offline / ⚠️ Stalled |
 | Model | Current model (e.g., `claude-opus-4-6`) |
-| Context tokens | Current token usage |
-| Last active | Time since last activity |
-| Channel | Current channel (slack, etc.) |
-| Aborted | Whether last run was aborted |
+| Context tokens | Current token usage with color coding (green < 100k, yellow 100-150k, red > 150k) |
+| Total tokens | Lifetime token count for the session |
+| Last active | Time since last activity (relative + absolute timestamp) |
+| Session key | The OpenClaw session key |
+| Session ID | The internal session ID |
+| Channel | Current channel (slack, discord, etc.) |
+| Last channel target | Last `to` / `accountId` used |
+| Heartbeat interval | How often the agent checks in (from config) |
+| Aborted last run | Whether the last run was aborted (⚠️ flag) |
+| Transcript path | Path to the session transcript file on host |
 
 ### Stall Detection
 
-Flag a session as "stalled" if:
+Flag a session as "stalled" (⚠️) if any of:
 - `abortedLastRun` is true
-- Last activity > 30 minutes and session is supposed to be active (has heartbeat)
-- Context tokens > 150k (approaching limits)
+- Last activity > 2× heartbeat interval and session has heartbeat configured
+- Context tokens > 150k (approaching OpenClaw's effective limit given system prompt overhead)
+- Session hasn't been seen in sync data for > 2 sync cycles
+
+### Session Detail Expandable
+
+Clicking an agent row expands to show:
+- Full session metadata JSON (raw, copyable)
+- Recent cron jobs associated with this agent (from OpenClaw cron list)
+- Error count in last hour
+- Suggested actions based on state:
+  - Stalled → "Reset Session" button
+  - High tokens → "Session may need restart to clear context"
+  - Aborted → "Last run failed — check logs"
 
 ### Data Source
 
@@ -163,15 +221,118 @@ These are the key remediation actions Sam can trigger from the browser:
 **What it does:** Streams recent gateway logs to the browser.
 
 **Implementation:**
-1. Bridge reads last N lines from the OpenClaw log file
+1. Bridge reads last N lines from the OpenClaw log file (typically `~/.openclaw/logs/`)
 2. Pushes via WebSocket or returns via API
-3. Frontend shows scrollable log viewer
+3. Frontend shows scrollable log viewer with auto-scroll
 
-**UI:** Expandable log panel at the bottom of the page.
+**UI:** Expandable log panel at the bottom of the page. Features:
+- Tail mode (auto-scroll new lines)
+- Filter by level (error, warn, info, debug)
+- Filter by agent name
+- Search/grep within logs
+- Copy log selection to clipboard
+- Timestamp display (absolute and relative)
+
+### 4f. Run Diagnostics
+
+**What it does:** Runs a suite of health checks and reports results.
+
+**Implementation:**
+1. Frontend calls `POST /api/admin/diagnostics`
+2. Bridge executes a diagnostic script that checks:
+   - Gateway process health (`openclaw gateway status`)
+   - Port availability (is the gateway port actually listening?)
+   - API responsiveness (can the gateway respond to a health check?)
+   - Disk space remaining
+   - Memory pressure
+   - Ollama service health (`ollama list`)
+   - Network connectivity (can reach api.otter.camp from host?)
+   - Pending cron jobs
+   - Stuck/zombie processes
+3. Returns structured results with pass/fail/warn per check
+
+**UI:** "Run Diagnostics" button → shows a checklist of results as they complete:
+```
+✅ Gateway process running (PID 16314)
+✅ Port 18791 listening
+✅ Gateway API responding (12ms)
+✅ Disk space OK (4.6TB free)
+⚠️ Memory usage high (92GB / 128GB)
+✅ Ollama running (3 models loaded)
+✅ Network: api.otter.camp reachable (45ms)
+❌ Agent "Stone" stalled (no activity in 3h)
+⚠️ 2 cron jobs failed in last hour
+```
+
+### 4g. Emergency Stop
+
+**What it does:** Stops the gateway entirely (all agents go offline).
+
+**Implementation:** `openclaw gateway stop` via bridge.
+
+**UI:** Red button, double-confirmation ("This will take ALL agents offline. Type 'STOP' to confirm.")
+
+### 4h. Port Bump
+
+**What it does:** Bumps the gateway port to fix WS corruption (known recurring issue).
+
+**Implementation:**
+1. Bridge reads current config
+2. Increments `gateway.port` by 1
+3. Applies config and restarts gateway
+
+**UI:** Button labeled "Fix WebSocket (Port Bump)" with explanation tooltip: "Bumps the gateway port to clear corrupted WebSocket state. This is a known fix for connection issues."
 
 ---
 
-## Section 5: Connection History / Event Log
+## Section 5: Cron Jobs Status
+
+### Display
+
+Table showing all active cron jobs:
+
+| Field | Description |
+|-------|-------------|
+| Job name | Human-readable name |
+| Job ID | UUID |
+| Schedule | Cron expression or interval |
+| Session target | main / isolated |
+| Payload type | systemEvent / agentTurn |
+| Last run | When it last fired |
+| Last status | success / error |
+| Next run | When it will fire next |
+| Enabled | Toggle on/off |
+
+### Actions
+- **Enable/disable** individual jobs
+- **Force run** a job immediately
+- **View run history** for a specific job
+
+### Data Source
+Bridge can query OpenClaw cron API and relay to Otter Camp.
+
+---
+
+## Section 6: Process List
+
+Show active background processes (exec sessions) on the host:
+
+| Field | Description |
+|-------|-------------|
+| Session ID | exec session identifier |
+| Command | What's running (truncated) |
+| PID | OS process ID |
+| Status | running / completed / failed |
+| Duration | How long it's been running |
+| Agent | Which agent spawned it |
+
+### Actions
+- **Kill process** — terminate a stuck background process
+- **View output** — stream stdout/stderr
+
+---
+
+## Section 7: Connection History / Event Log
 
 A timeline showing connection events:
 - Bridge connected/disconnected

@@ -3,6 +3,7 @@ import { useGlobalChat } from "../../contexts/GlobalChatContext";
 import GlobalChatSurface from "./GlobalChatSurface";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
 
 function conversationTypeLabel(type: "dm" | "project" | "issue"): string {
   if (type === "project") {
@@ -71,8 +72,8 @@ export default function GlobalChatDock() {
     );
   }, [totalUnread]);
 
-  const handleClearProjectSession = useCallback(async () => {
-    if (!selectedConversation || selectedConversation.type !== "project") {
+  const handleClearSession = useCallback(async () => {
+    if (!selectedConversation) {
       return;
     }
 
@@ -86,20 +87,90 @@ export default function GlobalChatDock() {
     setResetProjectError(null);
     try {
       const token = (window.localStorage.getItem("otter_camp_token") ?? "").trim();
-      const response = await fetch(
-        `${API_URL}/api/projects/${selectedConversation.projectId}/chat/reset?org_id=${encodeURIComponent(orgID)}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      const headers = {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+      const resetMarker = `${CHAT_SESSION_RESET_PREFIX}${Date.now().toString(36)}`;
+
+      if (selectedConversation.type === "project") {
+        const response = await fetch(
+          `${API_URL}/api/projects/${selectedConversation.projectId}/chat/reset?org_id=${encodeURIComponent(orgID)}`,
+          {
+            method: "POST",
+            headers,
           },
-        },
-      );
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.error ?? "Failed to clear chat session");
+        );
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to clear chat session");
+        }
+      } else if (selectedConversation.type === "dm") {
+        const response = await fetch(`${API_URL}/api/messages`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            org_id: orgID,
+            thread_id: selectedConversation.threadId,
+            content: resetMarker,
+            sender_type: "agent",
+            sender_name: "Session",
+            sender_id: "session-reset",
+          }),
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to clear chat session");
+        }
+      } else {
+        const issueResponse = await fetch(
+          `${API_URL}/api/issues/${selectedConversation.issueId}?org_id=${encodeURIComponent(orgID)}`,
+          {
+            method: "GET",
+            headers,
+            cache: "no-store",
+          },
+        );
+        if (!issueResponse.ok) {
+          const payload = await issueResponse.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to resolve issue participant for reset");
+        }
+        const issuePayload = (await issueResponse.json()) as {
+          participants?: Array<{
+            agent_id: string;
+            role: "owner" | "collaborator";
+            removed_at?: string | null;
+          }>;
+        };
+        const activeParticipants = Array.isArray(issuePayload.participants)
+          ? issuePayload.participants.filter((entry) => !entry.removed_at)
+          : [];
+        const ownerAgentID =
+          activeParticipants.find((entry) => entry.role === "owner")?.agent_id ??
+          activeParticipants[0]?.agent_id ??
+          "";
+        if (!ownerAgentID) {
+          throw new Error("No issue participant available to anchor reset marker");
+        }
+
+        const response = await fetch(
+          `${API_URL}/api/issues/${selectedConversation.issueId}/comments?org_id=${encodeURIComponent(orgID)}`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              author_agent_id: ownerAgentID,
+              body: resetMarker,
+              sender_type: "agent",
+            }),
+          },
+        );
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to clear chat session");
+        }
       }
+
       setRefreshVersion((version) => version + 1);
     } catch (error) {
       setResetProjectError(error instanceof Error ? error.message : "Failed to clear chat session");
@@ -133,18 +204,16 @@ export default function GlobalChatDock() {
             {unreadBadge}
           </div>
           <div className="flex items-center gap-2">
-            {selectedConversation?.type === "project" ? (
-              <button
-                type="button"
-                onClick={() => {
-                  void handleClearProjectSession();
-                }}
-                disabled={resettingProjectSession}
-                className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {resettingProjectSession ? "Clearing..." : "Clear session"}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                void handleClearSession();
+              }}
+              disabled={resettingProjectSession || !selectedConversation}
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {resettingProjectSession ? "Clearing..." : "Clear session"}
+            </button>
             <button
               type="button"
               onClick={toggleDock}
@@ -229,18 +298,16 @@ export default function GlobalChatDock() {
                     </h3>
                     <p className="text-xs text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
                   </div>
-                  {selectedConversation.type === "project" ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleClearProjectSession();
-                      }}
-                      disabled={resettingProjectSession}
-                      className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {resettingProjectSession ? "Clearing..." : "Clear session"}
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleClearSession();
+                    }}
+                    disabled={resettingProjectSession}
+                    className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {resettingProjectSession ? "Clearing..." : "Clear session"}
+                  </button>
                 </div>
                 <div className="min-h-0 flex-1">
                   <GlobalChatSurface
