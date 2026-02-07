@@ -12,8 +12,6 @@ import type { DMMessage } from "../messaging/types";
 import MessageHistory from "../messaging/MessageHistory";
 import type {
   GlobalChatConversation,
-  GlobalIssueConversation,
-  GlobalProjectConversation,
 } from "../../contexts/GlobalChatContext";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
@@ -143,7 +141,8 @@ function normalizeThreadMessage(
 
 function normalizeProjectMessage(
   raw: unknown,
-  conversation: GlobalProjectConversation,
+  expectedProjectID: string,
+  threadID: string,
   currentUserName: string,
   currentUserID: string,
 ): ChatMessage | null {
@@ -158,14 +157,14 @@ function normalizeProjectMessage(
   if (!id || !projectID || !author || !body) {
     return null;
   }
-  if (projectID !== conversation.projectId) {
+  if (projectID !== expectedProjectID) {
     return null;
   }
   if (author === PROJECT_CHAT_SESSION_RESET_AUTHOR && body.startsWith(PROJECT_CHAT_SESSION_RESET_PREFIX)) {
     const sessionID = body.slice(PROJECT_CHAT_SESSION_RESET_PREFIX.length).trim();
     return {
       id,
-      threadId: conversation.key,
+      threadId: threadID,
       senderId: "session-reset",
       senderName: "Session",
       senderType: "agent",
@@ -179,7 +178,7 @@ function normalizeProjectMessage(
   const isUser = author.toLowerCase() === currentUserName.toLowerCase();
   return {
     id,
-    threadId: conversation.key,
+    threadId: threadID,
     senderId: isUser ? currentUserID : `agent:${author}`,
     senderName: isUser ? currentUserName : author,
     senderType: isUser ? "user" : "agent",
@@ -190,7 +189,7 @@ function normalizeProjectMessage(
 
 function normalizeIssueComment(
   raw: unknown,
-  conversation: GlobalIssueConversation,
+  threadID: string,
   agentNameByID: Map<string, string>,
   authorAgentID: string,
 ): ChatMessage | null {
@@ -210,7 +209,7 @@ function normalizeIssueComment(
 
   return {
     id,
-    threadId: conversation.key,
+    threadId: threadID,
     senderId: authorID,
     senderName,
     senderType: isUser ? "user" : "agent",
@@ -262,22 +261,29 @@ export default function GlobalChatSurface({
   const onConversationTouchedRef = useRef(onConversationTouched);
   const postSendRefreshTimersRef = useRef<number[]>([]);
   const { lastMessage } = useWS();
+  const conversationType = conversation.type;
+  const conversationKey = conversation.key;
+  const conversationTitle = conversation.title;
+  const conversationContextLabel = conversation.contextLabel;
+  const dmThreadID = conversationType === "dm" ? conversation.threadId : "";
+  const projectID = conversationType === "project" ? conversation.projectId : "";
+  const issueID = conversationType === "issue" ? conversation.issueId : "";
 
   useEffect(() => {
     onConversationTouchedRef.current = onConversationTouched;
   }, [onConversationTouched]);
 
-  const orgID = useMemo(() => getStoredOrgID(), [conversation.key]);
-  const token = useMemo(() => getAuthToken(), [conversation.key]);
-  const currentUserName = useMemo(() => getCurrentUserName(), [conversation.key]);
+  const orgID = useMemo(() => getStoredOrgID(), [conversationKey]);
+  const token = useMemo(() => getAuthToken(), [conversationKey]);
+  const currentUserName = useMemo(() => getCurrentUserName(), [conversationKey]);
   const currentUserID = useMemo(() => `user:${currentUserName.toLowerCase()}`, [currentUserName]);
 
   const threadID = useMemo(() => {
-    if (conversation.type === "dm") {
-      return conversation.threadId;
+    if (conversationType === "dm") {
+      return dmThreadID;
     }
-    return conversation.key;
-  }, [conversation]);
+    return conversationKey;
+  }, [conversationKey, conversationType, dmThreadID]);
 
   const requestHeaders = useMemo(() => {
     const headers: Record<string, string> = {
@@ -318,10 +324,10 @@ export default function GlobalChatSurface({
     }
 
     try {
-      if (conversation.type === "dm") {
+      if (conversationType === "dm") {
         const params = new URLSearchParams({
           org_id: orgID,
-          thread_id: conversation.threadId,
+          thread_id: dmThreadID,
           limit: "100",
         });
         const response = await fetch(`${API_URL}/api/messages?${params.toString()}`, {
@@ -336,7 +342,7 @@ export default function GlobalChatSurface({
         const normalized = Array.isArray(payload.messages)
           ? payload.messages
               .map((entry: unknown) =>
-                normalizeThreadMessage(entry, conversation.threadId, currentUserName, currentUserID),
+                normalizeThreadMessage(entry, dmThreadID, currentUserName, currentUserID),
               )
               .filter((entry: ChatMessage | null): entry is ChatMessage => entry !== null)
           : [];
@@ -345,8 +351,8 @@ export default function GlobalChatSurface({
         return;
       }
 
-      if (conversation.type === "project") {
-        const url = new URL(`${API_URL}/api/projects/${conversation.projectId}/chat`);
+      if (conversationType === "project") {
+        const url = new URL(`${API_URL}/api/projects/${projectID}/chat`);
         url.searchParams.set("org_id", orgID);
         url.searchParams.set("limit", "100");
 
@@ -365,7 +371,8 @@ export default function GlobalChatSurface({
               .map((entry: unknown) =>
                 normalizeProjectMessage(
                   entry,
-                  conversation,
+                  projectID,
+                  conversationKey,
                   currentUserName,
                   currentUserID,
                 ),
@@ -379,7 +386,7 @@ export default function GlobalChatSurface({
         return;
       }
 
-      const issueURL = new URL(`${API_URL}/api/issues/${conversation.issueId}`);
+      const issueURL = new URL(`${API_URL}/api/issues/${issueID}`);
       issueURL.searchParams.set("org_id", orgID);
       const agentsURL = new URL(`${API_URL}/api/agents`);
       agentsURL.searchParams.set("org_id", orgID);
@@ -416,7 +423,7 @@ export default function GlobalChatSurface({
 
       const normalized = Array.isArray(issuePayload.comments)
         ? issuePayload.comments
-            .map((entry) => normalizeIssueComment(entry, conversation, agentMap, defaultAuthor))
+            .map((entry) => normalizeIssueComment(entry, conversationKey, agentMap, defaultAuthor))
             .filter((entry: ChatMessage | null): entry is ChatMessage => entry !== null)
         : [];
       normalized.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
@@ -433,10 +440,14 @@ export default function GlobalChatSurface({
       }
     }
   }, [
-    conversation,
+    conversationKey,
+    conversationType,
     currentUserID,
     currentUserName,
+    dmThreadID,
+    issueID,
     orgID,
+    projectID,
     requestHeaders,
     touchConversation,
   ]);
@@ -450,14 +461,14 @@ export default function GlobalChatSurface({
     return () => {
       clearPostSendRefreshTimers();
     };
-  }, [clearPostSendRefreshTimers, conversation.key]);
+  }, [clearPostSendRefreshTimers, conversationKey]);
 
   useEffect(() => {
     if (!lastMessage) {
       return;
     }
 
-    if (conversation.type === "dm" && lastMessage.type === "DMMessageReceived") {
+    if (conversationType === "dm" && lastMessage.type === "DMMessageReceived") {
       if (!lastMessage.data || typeof lastMessage.data !== "object") {
         return;
       }
@@ -466,13 +477,13 @@ export default function GlobalChatSurface({
         (typeof payload.threadId === "string" && payload.threadId) ||
         (typeof payload.thread_id === "string" && payload.thread_id) ||
         "";
-      if (eventThreadID !== conversation.threadId) {
+      if (eventThreadID !== dmThreadID) {
         return;
       }
 
       const normalized = normalizeThreadMessage(
         payload.message ?? payload,
-        conversation.threadId,
+        dmThreadID,
         currentUserName,
         currentUserID,
       );
@@ -494,10 +505,11 @@ export default function GlobalChatSurface({
       return;
     }
 
-    if (conversation.type === "project" && lastMessage.type === "ProjectChatMessageCreated") {
+    if (conversationType === "project" && lastMessage.type === "ProjectChatMessageCreated") {
       const normalized = normalizeProjectMessage(
         lastMessage.data,
-        conversation,
+        projectID,
+        conversationKey,
         currentUserName,
         currentUserID,
       );
@@ -524,16 +536,16 @@ export default function GlobalChatSurface({
       return;
     }
 
-    if (conversation.type === "issue" && lastMessage.type === "IssueCommentCreated") {
+    if (conversationType === "issue" && lastMessage.type === "IssueCommentCreated") {
       if (!lastMessage.data || typeof lastMessage.data !== "object") {
         return;
       }
       const payload = lastMessage.data as Record<string, unknown>;
-      const issueID =
+      const eventIssueID =
         (typeof payload.issue_id === "string" && payload.issue_id) ||
         (typeof payload.issueId === "string" && payload.issueId) ||
         "";
-      if (issueID !== conversation.issueId) {
+      if (eventIssueID !== issueID) {
         return;
       }
       const comment =
@@ -546,7 +558,7 @@ export default function GlobalChatSurface({
 
       const normalized = normalizeIssueComment(
         comment,
-        conversation,
+        conversationKey,
         issueAgentNameByID,
         issueAuthorID,
       );
@@ -569,9 +581,13 @@ export default function GlobalChatSurface({
       });
     }
   }, [
-    conversation,
+    conversationKey,
+    conversationType,
     currentUserID,
     currentUserName,
+    dmThreadID,
+    issueID,
+    projectID,
     issueAgentNameByID,
     issueAuthorID,
     lastMessage,
@@ -597,8 +613,8 @@ export default function GlobalChatSurface({
     const optimisticMessage: ChatMessage = {
       id: optimisticID,
       threadId: threadID,
-      senderId: conversation.type === "issue" ? issueAuthorID || currentUserID : currentUserID,
-      senderName: conversation.type === "issue"
+      senderId: conversationType === "issue" ? issueAuthorID || currentUserID : currentUserID,
+      senderName: conversationType === "issue"
         ? (issueAgentNameByID.get(issueAuthorID) ?? currentUserName)
         : currentUserName,
       senderType: "user",
@@ -627,13 +643,13 @@ export default function GlobalChatSurface({
     touchConversation();
 
     try {
-      if (conversation.type === "dm") {
+      if (conversationType === "dm") {
         const response = await fetch(`${API_URL}/api/messages`, {
           method: "POST",
           headers: requestHeaders,
           body: JSON.stringify({
             org_id: orgID,
-            thread_id: conversation.threadId,
+            thread_id: dmThreadID,
             content: body,
             sender_type: "user",
             sender_name: currentUserName,
@@ -648,7 +664,7 @@ export default function GlobalChatSurface({
         const payload = await response.json();
         const persisted = normalizeThreadMessage(
           payload.message,
-          conversation.threadId,
+          dmThreadID,
           currentUserName,
           currentUserID,
         );
@@ -678,8 +694,8 @@ export default function GlobalChatSurface({
         } else {
           setDeliveryIndicator({ tone: "neutral", text: "Saved" });
         }
-      } else if (conversation.type === "project") {
-        const url = new URL(`${API_URL}/api/projects/${conversation.projectId}/chat/messages`);
+      } else if (conversationType === "project") {
+        const url = new URL(`${API_URL}/api/projects/${projectID}/chat/messages`);
         url.searchParams.set("org_id", orgID);
 
         const response = await fetch(url.toString(), {
@@ -699,7 +715,8 @@ export default function GlobalChatSurface({
         const payload = await response.json();
         const persisted = normalizeProjectMessage(
           payload.message,
-          conversation,
+          projectID,
+          conversationKey,
           currentUserName,
           currentUserID,
         );
@@ -734,7 +751,7 @@ export default function GlobalChatSurface({
           throw new Error("No issue author configured for this thread");
         }
 
-        const url = new URL(`${API_URL}/api/issues/${conversation.issueId}/comments`);
+        const url = new URL(`${API_URL}/api/issues/${issueID}/comments`);
         url.searchParams.set("org_id", orgID);
 
         const response = await fetch(url.toString(), {
@@ -754,7 +771,7 @@ export default function GlobalChatSurface({
         const payload = await response.json();
         const persisted = normalizeIssueComment(
           payload,
-          conversation,
+          conversationKey,
           issueAgentNameByID,
           issueAuthorID,
         );
@@ -804,13 +821,17 @@ export default function GlobalChatSurface({
       inputRef.current?.focus();
     }
   }, [
-    conversation,
+    conversationKey,
+    conversationType,
     currentUserID,
     currentUserName,
     draft,
+    dmThreadID,
     issueAgentNameByID,
     issueAuthorID,
+    issueID,
     orgID,
+    projectID,
     requestHeaders,
     sending,
     threadID,
@@ -853,12 +874,12 @@ export default function GlobalChatSurface({
 
   const pseudoAgent = useMemo(
     () => ({
-      id: conversation.key,
-      name: conversation.title,
+      id: conversationKey,
+      name: conversationTitle,
       status: "online" as const,
-      role: conversation.contextLabel,
+      role: conversationContextLabel,
     }),
-    [conversation.contextLabel, conversation.key, conversation.title],
+    [conversationContextLabel, conversationKey, conversationTitle],
   );
 
   if (loading) {
@@ -876,7 +897,7 @@ export default function GlobalChatSurface({
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <MessageHistory
         messages={messages}
-        currentUserId={conversation.type === "issue" ? issueAuthorID || currentUserID : currentUserID}
+        currentUserId={conversationType === "issue" ? issueAuthorID || currentUserID : currentUserID}
         threadId={threadID}
         agent={pseudoAgent}
         onRetryMessage={handleRetryMessage}
@@ -903,14 +924,14 @@ export default function GlobalChatSurface({
           onChange={(event) => setDraft(event.target.value)}
           onInput={onDraftInput}
           onKeyDown={onDraftKeyDown}
-          placeholder={`Message ${conversation.title}...`}
+          placeholder={`Message ${conversationTitle}...`}
           rows={1}
-          disabled={sending || (conversation.type === "issue" && issueAuthorID === "")}
+          disabled={sending || (conversationType === "issue" && issueAuthorID === "")}
           className="flex-1 resize-none rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:opacity-50"
         />
         <button
           type="submit"
-          disabled={sending || draft.trim() === "" || (conversation.type === "issue" && issueAuthorID === "")}
+          disabled={sending || draft.trim() === "" || (conversationType === "issue" && issueAuthorID === "")}
           className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-[#1A1918] transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="Send message"
         >
