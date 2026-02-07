@@ -104,3 +104,22 @@
 - Remaining (Spec001): #262, #263 (CLI issue command set).
 - Global chat update delivered: clear-session is now available for DM/project/issue chats, with session divider markers persisted across chat types.
 
+## [2026-02-07 15:32:25 MST] Completed Spec001 Issues #262 and #263 (CLI issue commands)
+- Added `otter issue` command group with subcommands:
+  - `create`, `list`, `view`, `comment`, `assign`, `close`, `reopen`
+- Added API client support in `internal/ottercli/client.go`:
+  - `ListAgents`, `ResolveAgent`
+  - `CreateIssue`, `ListIssues`, `GetIssue`, `PatchIssue`, `CommentIssue`
+- Added issue reference resolution logic:
+  - UUID issue IDs accepted directly
+  - numeric refs (`#123`/`123`) resolved within `--project`
+- Added `--mine` support on `otter issue list` (uses `OTTER_AGENT_ID` for identity).
+- Added tests:
+  - `internal/ottercli/client_test.go` (issue APIs + agent resolution)
+  - `cmd/otter/main_test.go` (issue ref helper parsing)
+- Validation runs:
+  - `go test ./internal/ottercli -count=1`
+  - `go test ./cmd/otter -count=1`
+  - `go test ./internal/api ./internal/store -count=1`
+- Remaining: Spec001 implementation complete. Next: create Spec002 issue breakdown and execute in order.
+
