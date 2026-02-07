@@ -24,6 +24,7 @@ INSERT INTO projects (
     sqlc.arg(repo_url)
 )
 RETURNING id, org_id, name, description, status, repo_url, local_repo_path, created_at, updated_at;
+RETURNING id, org_id, name, description, status, repo_url, local_repo_path, created_at, updated_at;
 
 -- name: UpdateProject :one
 UPDATE projects
@@ -33,4 +34,5 @@ SET
     status = sqlc.arg(status),
     repo_url = sqlc.arg(repo_url)
 WHERE id = sqlc.arg(id)
+RETURNING id, org_id, name, description, status, repo_url, local_repo_path, created_at, updated_at;
 RETURNING id, org_id, name, description, status, repo_url, local_repo_path, created_at, updated_at;
