@@ -251,18 +251,6 @@ README.md      — project overview
 README.md      — project overview
 ```
 
-### Dedicated Non-Code Repos
-
-Use these repositories when work is primarily content/book/asset production:
-
-| Domain | Repository |
-|--------|------------|
-| Long-form content, posts, drafts | `The-Trawl/content` |
-| Book manuscripts, editorial notes | `The-Trawl/three-stones-book` |
-| Logos, illustrations, social assets | `The-Trawl/brand-assets` |
-
-If your output belongs in one of these domains, commit there so activity appears in OtterCamp and history stays project-scoped.
-
 ---
 
 ## Push Workflow
@@ -347,4 +335,4 @@ If you're stuck:
 
 ---
 
-*Questions or updates? Open a PR or issue in `otter-camp` and tag the maintainers.*
+*Questions or updates? Create a task in OtterCamp and assign to the relevant maintainer.*
