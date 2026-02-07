@@ -90,6 +90,23 @@ func TestIssuesHandlerSaveReviewCreatesSingleCommitAndCheckpoint(t *testing.T) {
 	checkpoint, err := issueStore.GetReviewCheckpoint(testCtxWithWorkspace(orgID), issue.ID)
 	require.NoError(t, err)
 	require.Equal(t, payload.ReviewCommitSHA, checkpoint.LastReviewCommitSHA)
+
+	var ownerNotificationCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM project_issue_review_notifications
+			WHERE org_id = $1
+			  AND issue_id = $2
+			  AND notification_type = $3
+			  AND target_agent_id = $4
+			  AND review_commit_sha = $5`,
+		orgID,
+		issue.ID,
+		store.IssueReviewNotificationSavedForOwner,
+		ownerID,
+		payload.ReviewCommitSHA,
+	).Scan(&ownerNotificationCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, ownerNotificationCount)
 }
 
 func TestIssuesHandlerSaveReviewBroadcastsOwnerNotificationEvent(t *testing.T) {
