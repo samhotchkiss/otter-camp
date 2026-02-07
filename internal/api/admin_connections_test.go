@@ -224,3 +224,95 @@ func TestAdminConnectionsPingAgentQueuesWhenBridgeOffline(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, queuedCount)
 }
+
+func TestAdminConnectionsRunDiagnosticsReturnsChecks(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-diagnostics-org")
+
+	_, err := db.Exec(
+		`INSERT INTO sync_metadata (key, value, updated_at)
+		 VALUES
+		    ('last_sync', $1, NOW()),
+		    ('openclaw_host_diagnostics', $2, NOW()),
+		    ('openclaw_bridge_diagnostics', $3, NOW())
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+		time.Now().UTC().Format(time.RFC3339),
+		`{"memory_total_bytes":1000,"memory_used_bytes":920,"disk_free_bytes":536870912000}`,
+		`{"dispatch_queue_depth":3}`,
+	)
+	require.NoError(t, err)
+
+	handler := &AdminConnectionsHandler{
+		DB:              db,
+		OpenClawHandler: &fakeOpenClawConnectionStatus{connected: false},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/diagnostics", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.RunDiagnostics(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminDiagnosticsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.NotEmpty(t, payload.Checks)
+
+	checkByKey := map[string]adminDiagnosticCheck{}
+	for _, check := range payload.Checks {
+		checkByKey[check.Key] = check
+	}
+	require.Equal(t, "fail", checkByKey["bridge.connection"].Status)
+	require.Equal(t, "warn", checkByKey["dispatch.queue_depth"].Status)
+	require.Equal(t, "fail", checkByKey["host.memory"].Status)
+}
+
+func TestAdminConnectionsGetLogsRedactsSensitiveTokens(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-logs-redact-org")
+	eventStore := store.NewConnectionEventStore(db)
+
+	_, err := eventStore.Create(testCtxWithWorkspace(orgID), store.CreateConnectionEventInput{
+		EventType: "sync.failed",
+		Severity:  store.ConnectionEventSeverityError,
+		Message:   "failed with token oc_git_secret123 and Bearer abc.def.ghi",
+		Metadata:  json.RawMessage(`{"token":"oc_git_secret123"}`),
+	})
+	require.NoError(t, err)
+
+	handler := &AdminConnectionsHandler{
+		DB:         db,
+		EventStore: eventStore,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/logs?limit=10", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.GetLogs(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminLogsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Len(t, payload.Items, 1)
+	require.NotContains(t, payload.Items[0].Message, "oc_git_secret123")
+	require.NotContains(t, payload.Items[0].Message, "Bearer abc.def.ghi")
+	require.Contains(t, payload.Items[0].Message, "[REDACTED]")
+}
+
+func TestAdminConnectionsGetLogsRejectsInvalidLimit(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-logs-invalid-limit-org")
+	handler := &AdminConnectionsHandler{
+		DB:         db,
+		EventStore: store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/logs?limit=abc", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.GetLogs(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "limit must be a positive integer", payload.Error)
+}

@@ -59,6 +59,26 @@ describe("ConnectionsPage", () => {
       if (url.includes("/api/github/sync/dead-letters")) {
         return mockJSONResponse({ items: [{ id: "dl-1" }, { id: "dl-2" }] });
       }
+      if (url.includes("/api/admin/logs")) {
+        return mockJSONResponse({
+          items: [
+            {
+              id: "log-1",
+              timestamp: "2026-02-07T16:00:20Z",
+              level: "warning",
+              event_type: "sync.failed",
+              message: "sync push failed: 502 [REDACTED]",
+            },
+          ],
+          total: 1,
+        });
+      }
+      if (url.includes("/api/admin/diagnostics")) {
+        return mockJSONResponse({
+          checks: [{ key: "bridge.connection", status: "pass", message: "bridge connected" }],
+          generated_at: "2026-02-07T16:00:30Z",
+        });
+      }
       throw new Error(`unexpected url ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -70,6 +90,10 @@ describe("ConnectionsPage", () => {
     expect(screen.getByText("Mac-Studio")).toBeInTheDocument();
     expect(screen.getByText("Dead letters: 2")).toBeInTheDocument();
     expect(screen.getByText("Frank")).toBeInTheDocument();
+    expect(screen.getByText("sync push failed: 502 [REDACTED]")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(await screen.findByText("bridge.connection")).toBeInTheDocument();
   });
 
   it("shows error state and retries successfully", async () => {
@@ -93,6 +117,12 @@ describe("ConnectionsPage", () => {
       }
       if (url.includes("/api/github/sync/dead-letters")) {
         return mockJSONResponse({ items: [] });
+      }
+      if (url.includes("/api/admin/logs")) {
+        return mockJSONResponse({ items: [], total: 0 });
+      }
+      if (url.includes("/api/admin/diagnostics")) {
+        return mockJSONResponse({ checks: [], generated_at: "2026-02-07T16:10:10Z" });
       }
       throw new Error(`unexpected url ${url}`);
     });

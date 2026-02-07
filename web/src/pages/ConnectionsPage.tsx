@@ -74,6 +74,26 @@ type GitHubDeadLettersResponse = {
   items?: unknown[];
 };
 
+type DiagnosticsResponse = {
+  checks: Array<{
+    key: string;
+    status: "pass" | "warn" | "fail";
+    message: string;
+  }>;
+  generated_at: string;
+};
+
+type LogsResponse = {
+  items: Array<{
+    id: string;
+    timestamp: string;
+    level: string;
+    event_type: string;
+    message: string;
+  }>;
+  total: number;
+};
+
 function formatRelativeOrUnknown(raw?: string): string {
   if (!raw) {
     return "Unknown";
@@ -99,6 +119,13 @@ export default function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionsResponse | null>(null);
   const [githubHealth, setGitHubHealth] = useState<GitHubSyncHealthResponse | null>(null);
   const [deadLetterCount, setDeadLetterCount] = useState<number | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsResponse | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  const [logs, setLogs] = useState<LogsResponse["items"]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
+  const [logSearch, setLogSearch] = useState("");
 
   const orgID = useMemo(() => {
     try {
@@ -107,6 +134,24 @@ export default function ConnectionsPage() {
       return "";
     }
   }, []);
+
+  const loadLogs = useCallback(async () => {
+    if (!orgID) {
+      return;
+    }
+    setLogsLoading(true);
+    setLogsError(null);
+    try {
+      const suffix = `?org_id=${encodeURIComponent(orgID)}`;
+      const payload = await apiFetch<LogsResponse>(`/api/admin/logs${suffix}&limit=100`);
+      setLogs(Array.isArray(payload.items) ? payload.items : []);
+    } catch (err) {
+      setLogs([]);
+      setLogsError(err instanceof Error ? err.message : "Failed to load logs");
+    } finally {
+      setLogsLoading(false);
+    }
+  }, [orgID]);
 
   const load = useCallback(async () => {
     if (!orgID) {
@@ -138,13 +183,36 @@ export default function ConnectionsPage() {
       } else {
         setDeadLetterCount(null);
       }
+
+      await loadLogs();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load connection diagnostics");
       setConnections(null);
       setGitHubHealth(null);
       setDeadLetterCount(null);
+      setLogs([]);
+      setDiagnostics(null);
     } finally {
       setLoading(false);
+    }
+  }, [loadLogs, orgID]);
+
+  const runDiagnostics = useCallback(async () => {
+    if (!orgID) {
+      return;
+    }
+    setDiagnosticsLoading(true);
+    setDiagnosticsError(null);
+    try {
+      const suffix = `?org_id=${encodeURIComponent(orgID)}`;
+      const payload = await apiFetch<DiagnosticsResponse>(`/api/admin/diagnostics${suffix}`, {
+        method: "POST",
+      });
+      setDiagnostics(payload);
+    } catch (err) {
+      setDiagnosticsError(err instanceof Error ? err.message : "Failed to run diagnostics");
+    } finally {
+      setDiagnosticsLoading(false);
     }
   }, [orgID]);
 
@@ -185,7 +253,7 @@ export default function ConnectionsPage() {
 
       {!loading && !error && connections && (
         <div className="space-y-6">
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-4">
             <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Bridge</p>
               <p
@@ -236,6 +304,28 @@ export default function ConnectionsPage() {
                 Queue states: {githubHealth?.queue_depth?.length ?? 0}
               </p>
             </article>
+
+            <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Diagnostics</p>
+                <button
+                  type="button"
+                  className="rounded-lg bg-[#C9A86C] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#b79658] disabled:opacity-60"
+                  disabled={diagnosticsLoading}
+                  onClick={() => void runDiagnostics()}
+                >
+                  {diagnosticsLoading ? "Running..." : "Run"}
+                </button>
+              </div>
+              {diagnosticsError && (
+                <p className="mt-2 text-xs text-red-700">{diagnosticsError}</p>
+              )}
+              {diagnostics && diagnostics.checks.length > 0 && (
+                <p className="mt-2 text-xs text-[var(--text-muted)]">
+                  {diagnostics.checks.filter((check) => check.status === "fail").length} failing checks
+                </p>
+              )}
+            </article>
           </div>
 
           <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -250,6 +340,25 @@ export default function ConnectionsPage() {
             <p className="mt-2 text-xs text-[var(--text-muted)]">
               Memory used: {formatBytes(connections.host?.memory_used_bytes)} / {formatBytes(connections.host?.memory_total_bytes)}
             </p>
+
+            {diagnostics && diagnostics.checks.length > 0 && (
+              <ul className="mt-3 space-y-1 text-xs">
+                {diagnostics.checks.map((check) => (
+                  <li
+                    key={check.key}
+                    className={`rounded border px-2 py-1 ${
+                      check.status === "pass"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                        : check.status === "warn"
+                          ? "border-amber-200 bg-amber-50 text-amber-800"
+                          : "border-red-200 bg-red-50 text-red-800"
+                    }`}
+                  >
+                    <span className="font-semibold">{check.key}</span>: {check.message}
+                  </li>
+                ))}
+              </ul>
+            )}
           </article>
 
           <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -302,6 +411,58 @@ export default function ConnectionsPage() {
                 </tbody>
               </table>
             </div>
+          </article>
+
+          <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-[var(--text)]">Gateway Logs</h2>
+              <div className="flex items-center gap-2">
+                <input
+                  value={logSearch}
+                  onChange={(event) => setLogSearch(event.target.value)}
+                  placeholder="Search logs..."
+                  className="rounded-md border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-1 text-xs text-[var(--text)]"
+                />
+                <button
+                  type="button"
+                  className="rounded-md border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-alt)]"
+                  onClick={() => void loadLogs()}
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+            {logsError && (
+              <p className="mt-2 text-xs text-red-700">{logsError}</p>
+            )}
+            {logsLoading && (
+              <p className="mt-2 text-xs text-[var(--text-muted)]">Loading logs...</p>
+            )}
+            {!logsLoading && (
+              <div className="mt-2 max-h-64 overflow-y-auto rounded border border-[var(--border)] bg-[var(--surface-alt)]">
+                {logs
+                  .filter((item) => {
+                    if (!logSearch.trim()) {
+                      return true;
+                    }
+                    const query = logSearch.trim().toLowerCase();
+                    return item.message.toLowerCase().includes(query) || item.event_type.toLowerCase().includes(query);
+                  })
+                  .slice(0, 80)
+                  .map((item) => (
+                    <div key={item.id} className="border-b border-[var(--border)]/60 px-3 py-2 text-xs">
+                      <p className="text-[var(--text-muted)]">
+                        {new Date(item.timestamp).toLocaleString()} · {item.level}
+                      </p>
+                      <p className="font-semibold text-[var(--text)]">{item.event_type}</p>
+                      <p className="text-[var(--text-muted)]">{item.message}</p>
+                    </div>
+                  ))}
+                {logs.length === 0 && (
+                  <p className="px-3 py-3 text-xs text-[var(--text-muted)]">No logs available.</p>
+                )}
+              </div>
+            )}
           </article>
         </div>
       )}

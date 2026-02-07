@@ -267,6 +267,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)
+		r.With(middleware.OptionalWorkspace).Post("/admin/diagnostics", adminConnectionsHandler.RunDiagnostics)
+		r.With(middleware.OptionalWorkspace).Get("/admin/logs", adminConnectionsHandler.GetLogs)
 	})
 
 	// WebSocket handlers

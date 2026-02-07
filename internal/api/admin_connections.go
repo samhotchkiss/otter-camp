@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,6 +72,31 @@ type adminConnectionEventsResponse struct {
 	Total  int                     `json:"total"`
 }
 
+type adminDiagnosticCheck struct {
+	Key     string `json:"key"`
+	Status  string `json:"status"` // pass|warn|fail
+	Message string `json:"message"`
+}
+
+type adminDiagnosticsResponse struct {
+	Checks      []adminDiagnosticCheck `json:"checks"`
+	GeneratedAt time.Time              `json:"generated_at"`
+}
+
+type adminLogsResponse struct {
+	Items []adminLogItem `json:"items"`
+	Total int            `json:"total"`
+}
+
+type adminLogItem struct {
+	ID        string          `json:"id"`
+	Timestamp time.Time       `json:"timestamp"`
+	Level     string          `json:"level"`
+	EventType string          `json:"event_type"`
+	Message   string          `json:"message"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+}
+
 type openClawAdminCommandEvent struct {
 	Type      string                   `json:"type"`
 	Timestamp time.Time                `json:"timestamp"`
@@ -98,6 +124,8 @@ const (
 	adminCommandActionAgentPing      = "agent.ping"
 	adminCommandActionAgentReset     = "agent.reset"
 )
+
+var sensitiveTokenPattern = regexp.MustCompile(`(?i)(oc_git_[a-z0-9]+|bearer\s+[a-z0-9._-]+)`)
 
 func (h *AdminConnectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	sessions := h.loadSessions(r.Context())
@@ -440,6 +468,219 @@ func mustMarshalJSON(value interface{}) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return payload
+}
+
+func (h *AdminConnectionsHandler) RunDiagnostics(w http.ResponseWriter, r *http.Request) {
+	checks := make([]adminDiagnosticCheck, 0, 8)
+
+	connected := h.OpenClawHandler != nil && h.OpenClawHandler.IsConnected()
+	if connected {
+		checks = append(checks, adminDiagnosticCheck{
+			Key:     "bridge.connection",
+			Status:  "pass",
+			Message: "OpenClaw bridge websocket connected",
+		})
+	} else {
+		checks = append(checks, adminDiagnosticCheck{
+			Key:     "bridge.connection",
+			Status:  "fail",
+			Message: "OpenClaw bridge websocket disconnected",
+		})
+	}
+
+	lastSync := h.loadLastSync(r.Context())
+	if lastSync == nil {
+		checks = append(checks, adminDiagnosticCheck{
+			Key:     "sync.freshness",
+			Status:  "fail",
+			Message: "No sync timestamp available",
+		})
+	} else if time.Since(*lastSync) < 2*time.Minute {
+		checks = append(checks, adminDiagnosticCheck{
+			Key:     "sync.freshness",
+			Status:  "pass",
+			Message: "Last sync is within freshness window",
+		})
+	} else {
+		checks = append(checks, adminDiagnosticCheck{
+			Key:     "sync.freshness",
+			Status:  "warn",
+			Message: "Last sync is stale",
+		})
+	}
+
+	bridgeDiag := h.loadBridgeDiagnostics(r.Context())
+	if bridgeDiag != nil {
+		switch {
+		case bridgeDiag.DispatchQueueDepth > 25:
+			checks = append(checks, adminDiagnosticCheck{
+				Key:     "dispatch.queue_depth",
+				Status:  "fail",
+				Message: fmt.Sprintf("Dispatch queue depth high (%d)", bridgeDiag.DispatchQueueDepth),
+			})
+		case bridgeDiag.DispatchQueueDepth > 0:
+			checks = append(checks, adminDiagnosticCheck{
+				Key:     "dispatch.queue_depth",
+				Status:  "warn",
+				Message: fmt.Sprintf("Dispatch queue has pending jobs (%d)", bridgeDiag.DispatchQueueDepth),
+			})
+		default:
+			checks = append(checks, adminDiagnosticCheck{
+				Key:     "dispatch.queue_depth",
+				Status:  "pass",
+				Message: "Dispatch queue is clear",
+			})
+		}
+	}
+
+	host := h.loadHostDiagnostics(r.Context())
+	if host == nil || host.MemoryTotalBytes <= 0 {
+		checks = append(checks, adminDiagnosticCheck{
+			Key:     "host.memory",
+			Status:  "warn",
+			Message: "Memory diagnostics unavailable",
+		})
+	} else {
+		usage := float64(host.MemoryUsedBytes) / float64(host.MemoryTotalBytes)
+		switch {
+		case usage >= 0.9:
+			checks = append(checks, adminDiagnosticCheck{
+				Key:     "host.memory",
+				Status:  "fail",
+				Message: fmt.Sprintf("Memory pressure high (%.0f%% used)", usage*100),
+			})
+		case usage >= 0.75:
+			checks = append(checks, adminDiagnosticCheck{
+				Key:     "host.memory",
+				Status:  "warn",
+				Message: fmt.Sprintf("Memory usage elevated (%.0f%% used)", usage*100),
+			})
+		default:
+			checks = append(checks, adminDiagnosticCheck{
+				Key:     "host.memory",
+				Status:  "pass",
+				Message: fmt.Sprintf("Memory usage healthy (%.0f%% used)", usage*100),
+			})
+		}
+	}
+
+	if host == nil || host.DiskFreeBytes <= 0 {
+		checks = append(checks, adminDiagnosticCheck{
+			Key:     "host.disk",
+			Status:  "warn",
+			Message: "Disk diagnostics unavailable",
+		})
+	} else {
+		freeGB := float64(host.DiskFreeBytes) / (1024 * 1024 * 1024)
+		switch {
+		case freeGB < 25:
+			checks = append(checks, adminDiagnosticCheck{
+				Key:     "host.disk",
+				Status:  "fail",
+				Message: fmt.Sprintf("Low disk free space (%.1f GB)", freeGB),
+			})
+		case freeGB < 100:
+			checks = append(checks, adminDiagnosticCheck{
+				Key:     "host.disk",
+				Status:  "warn",
+				Message: fmt.Sprintf("Disk free space warning (%.1f GB)", freeGB),
+			})
+		default:
+			checks = append(checks, adminDiagnosticCheck{
+				Key:     "host.disk",
+				Status:  "pass",
+				Message: fmt.Sprintf("Disk free space healthy (%.1f GB)", freeGB),
+			})
+		}
+	}
+
+	sendJSON(w, http.StatusOK, adminDiagnosticsResponse{
+		Checks:      checks,
+		GeneratedAt: time.Now().UTC(),
+	})
+}
+
+func (h *AdminConnectionsHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
+	if h.EventStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "connection event store unavailable"})
+		return
+	}
+
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "limit must be a positive integer"})
+			return
+		}
+		if parsed > 1000 {
+			parsed = 1000
+		}
+		limit = parsed
+	}
+	levelFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("level")))
+	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+
+	events, err := h.EventStore.List(r.Context(), limit)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrNoWorkspace):
+			sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
+		case errors.Is(err, store.ErrForbidden):
+			sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
+		default:
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list logs"})
+		}
+		return
+	}
+
+	items := make([]adminLogItem, 0, len(events))
+	for _, event := range events {
+		level := strings.ToLower(strings.TrimSpace(event.Severity))
+		if levelFilter != "" && level != levelFilter {
+			continue
+		}
+		message := redactSensitive(event.Message)
+		if search != "" && !strings.Contains(strings.ToLower(message), search) && !strings.Contains(strings.ToLower(event.EventType), search) {
+			continue
+		}
+		items = append(items, adminLogItem{
+			ID:        event.ID,
+			Timestamp: event.CreatedAt,
+			Level:     level,
+			EventType: event.EventType,
+			Message:   message,
+			Metadata:  redactSensitiveJSON(event.Metadata),
+		})
+	}
+
+	sendJSON(w, http.StatusOK, adminLogsResponse{
+		Items: items,
+		Total: len(items),
+	})
+}
+
+func redactSensitive(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	return sensitiveTokenPattern.ReplaceAllString(trimmed, "[REDACTED]")
+}
+
+func redactSensitiveJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	redacted := redactSensitive(string(raw))
+	if strings.TrimSpace(redacted) == "" {
+		return json.RawMessage(`{}`)
+	}
+	if !json.Valid([]byte(redacted)) {
+		payload, _ := json.Marshal(map[string]string{"raw": redacted})
+		return payload
+	}
+	return json.RawMessage(redacted)
 }
 
 func (h *AdminConnectionsHandler) GetEvents(w http.ResponseWriter, r *http.Request) {

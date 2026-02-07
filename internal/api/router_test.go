@@ -172,4 +172,18 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 	if recAgentReset.Code == http.StatusNotFound {
 		t.Fatalf("expected /api/admin/agents/{id}/reset route to be registered, got status %d", recAgentReset.Code)
 	}
+
+	reqDiagnostics := httptest.NewRequest(http.MethodPost, "/api/admin/diagnostics?org_id="+orgID, nil)
+	recDiagnostics := httptest.NewRecorder()
+	router.ServeHTTP(recDiagnostics, reqDiagnostics)
+	if recDiagnostics.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/diagnostics route to be registered, got status %d", recDiagnostics.Code)
+	}
+
+	reqLogs := httptest.NewRequest(http.MethodGet, "/api/admin/logs?org_id="+orgID, nil)
+	recLogs := httptest.NewRecorder()
+	router.ServeHTTP(recLogs, reqLogs)
+	if recLogs.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/logs route to be registered, got status %d", recLogs.Code)
+	}
 }
