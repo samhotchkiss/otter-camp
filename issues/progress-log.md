@@ -347,3 +347,31 @@
   - #273 Admin gateway + agent remediation actions
   - #274 Diagnostics runner + gateway log viewer
   - #275 Cron + process controls
+
+## [2026-02-07 16:32:20 MST] Completed Spec102 issue #273 (admin remediation actions)
+- Added admin command endpoints:
+  - `POST /api/admin/gateway/restart`
+  - `POST /api/admin/agents/{id}/ping`
+  - `POST /api/admin/agents/{id}/reset`
+- Dispatch behavior:
+  - Builds `admin.command` websocket event envelope
+  - Attempts immediate bridge dispatch (`SendToOpenClaw`)
+  - Falls back to `openclaw_dispatch_queue` when bridge is unavailable
+  - Marks queued command delivered when immediate dispatch succeeds
+- Added command lifecycle event logging (best effort) via `connection_events`:
+  - `admin.command.dispatched`
+  - `admin.command.queued`
+- Bridge updates (`bridge/openclaw-bridge.ts`):
+  - Handles `admin.command` events from websocket and queued dispatch path
+  - Implements action whitelist + handlers for `gateway.restart`, `agent.ping`, `agent.reset`
+  - Adds guarded command execution helper (`openclaw` CLI only)
+- Added tests:
+  - `TestAdminConnectionsRestartGatewayDispatchesCommand`
+  - `TestAdminConnectionsPingAgentQueuesWhenBridgeOffline`
+  - router registration assertions for admin action routes
+- Validation:
+  - `go test ./internal/api -run 'TestAdminConnectionsRestartGatewayDispatchesCommand|TestAdminConnectionsPingAgentQueuesWhenBridgeOffline|TestAdminConnectionsGetEventsReturnsWorkspaceScopedRows|TestProjectsAndInboxRoutesAreRegistered'`
+  - `go test ./internal/api`
+- Remaining:
+  - #274 Diagnostics runner + gateway log viewer
+  - #275 Cron + process controls

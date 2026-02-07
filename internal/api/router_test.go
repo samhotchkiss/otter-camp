@@ -151,4 +151,25 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 	if recAdminEvents.Code == http.StatusNotFound {
 		t.Fatalf("expected /api/admin/events route to be registered, got status %d", recAdminEvents.Code)
 	}
+
+	reqGatewayRestart := httptest.NewRequest(http.MethodPost, "/api/admin/gateway/restart?org_id="+orgID, nil)
+	recGatewayRestart := httptest.NewRecorder()
+	router.ServeHTTP(recGatewayRestart, reqGatewayRestart)
+	if recGatewayRestart.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/gateway/restart route to be registered, got status %d", recGatewayRestart.Code)
+	}
+
+	reqAgentPing := httptest.NewRequest(http.MethodPost, "/api/admin/agents/main/ping?org_id="+orgID, nil)
+	recAgentPing := httptest.NewRecorder()
+	router.ServeHTTP(recAgentPing, reqAgentPing)
+	if recAgentPing.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents/{id}/ping route to be registered, got status %d", recAgentPing.Code)
+	}
+
+	reqAgentReset := httptest.NewRequest(http.MethodPost, "/api/admin/agents/main/reset?org_id="+orgID, nil)
+	recAgentReset := httptest.NewRecorder()
+	router.ServeHTTP(recAgentReset, reqAgentReset)
+	if recAgentReset.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents/{id}/reset route to be registered, got status %d", recAgentReset.Code)
+	}
 }

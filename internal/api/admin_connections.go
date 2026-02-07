@@ -5,16 +5,22 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 type openClawConnectionStatus interface {
 	IsConnected() bool
+	SendToOpenClaw(event interface{}) error
 }
 
 type AdminConnectionsHandler struct {
@@ -64,6 +70,34 @@ type adminConnectionEventsResponse struct {
 	Events []store.ConnectionEvent `json:"events"`
 	Total  int                     `json:"total"`
 }
+
+type openClawAdminCommandEvent struct {
+	Type      string                   `json:"type"`
+	Timestamp time.Time                `json:"timestamp"`
+	OrgID     string                   `json:"org_id"`
+	Data      openClawAdminCommandData `json:"data"`
+}
+
+type openClawAdminCommandData struct {
+	CommandID  string `json:"command_id"`
+	Action     string `json:"action"`
+	AgentID    string `json:"agent_id,omitempty"`
+	SessionKey string `json:"session_key,omitempty"`
+}
+
+type adminCommandDispatchResponse struct {
+	OK        bool   `json:"ok"`
+	Queued    bool   `json:"queued"`
+	CommandID string `json:"command_id"`
+	Action    string `json:"action"`
+	Message   string `json:"message"`
+}
+
+const (
+	adminCommandActionGatewayRestart = "gateway.restart"
+	adminCommandActionAgentPing      = "agent.ping"
+	adminCommandActionAgentReset     = "agent.reset"
+)
 
 func (h *AdminConnectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	sessions := h.loadSessions(r.Context())
@@ -255,6 +289,157 @@ func isSessionStalled(contextTokens int, updatedAt time.Time) bool {
 		return false
 	}
 	return time.Since(updatedAt) > 2*time.Hour
+}
+
+func (h *AdminConnectionsHandler) RestartGateway(w http.ResponseWriter, r *http.Request) {
+	h.dispatchAdminCommand(w, r, adminCommandActionGatewayRestart, "")
+}
+
+func (h *AdminConnectionsHandler) PingAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if agentID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id is required"})
+		return
+	}
+	h.dispatchAdminCommand(w, r, adminCommandActionAgentPing, agentID)
+}
+
+func (h *AdminConnectionsHandler) ResetAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if agentID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id is required"})
+		return
+	}
+	h.dispatchAdminCommand(w, r, adminCommandActionAgentReset, agentID)
+}
+
+func (h *AdminConnectionsHandler) dispatchAdminCommand(
+	w http.ResponseWriter,
+	r *http.Request,
+	action string,
+	agentID string,
+) {
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
+		return
+	}
+
+	commandID := fmt.Sprintf("cmd-%d", time.Now().UTC().UnixNano())
+	event := openClawAdminCommandEvent{
+		Type:      "admin.command",
+		Timestamp: time.Now().UTC(),
+		OrgID:     workspaceID,
+		Data: openClawAdminCommandData{
+			CommandID: commandID,
+			Action:    action,
+			AgentID:   strings.TrimSpace(agentID),
+		},
+	}
+	if event.Data.AgentID != "" {
+		event.Data.SessionKey = fmt.Sprintf("agent:%s:main", event.Data.AgentID)
+	}
+
+	dedupeKey := fmt.Sprintf("admin.command:%s", commandID)
+	queuedForRetry := false
+	if h.DB != nil {
+		queued, err := enqueueOpenClawDispatchEvent(r.Context(), h.DB, workspaceID, event.Type, dedupeKey, event)
+		if err == nil {
+			queuedForRetry = queued
+		}
+	}
+
+	if h.OpenClawHandler == nil {
+		if queuedForRetry {
+			h.logConnectionEventBestEffort(r.Context(), workspaceID, store.CreateConnectionEventInput{
+				EventType: "admin.command.queued",
+				Severity:  store.ConnectionEventSeverityWarning,
+				Message:   fmt.Sprintf("%s queued while bridge was unavailable", action),
+				Metadata:  mustMarshalJSON(map[string]string{"command_id": commandID, "action": action, "agent_id": agentID}),
+			})
+			sendJSON(w, http.StatusAccepted, adminCommandDispatchResponse{
+				OK:        true,
+				Queued:    true,
+				CommandID: commandID,
+				Action:    action,
+				Message:   "bridge unavailable; command queued",
+			})
+			return
+		}
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "openclaw bridge unavailable"})
+		return
+	}
+
+	if err := h.OpenClawHandler.SendToOpenClaw(event); err != nil {
+		if queuedForRetry {
+			h.logConnectionEventBestEffort(r.Context(), workspaceID, store.CreateConnectionEventInput{
+				EventType: "admin.command.queued",
+				Severity:  store.ConnectionEventSeverityWarning,
+				Message:   fmt.Sprintf("%s queued after bridge delivery failure", action),
+				Metadata: mustMarshalJSON(map[string]string{
+					"command_id": commandID,
+					"action":     action,
+					"agent_id":   agentID,
+					"error":      err.Error(),
+				}),
+			})
+			sendJSON(w, http.StatusAccepted, adminCommandDispatchResponse{
+				OK:        true,
+				Queued:    true,
+				CommandID: commandID,
+				Action:    action,
+				Message:   "bridge unavailable; command queued",
+			})
+			return
+		}
+		if errors.Is(err, ws.ErrOpenClawNotConnected) {
+			sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "openclaw bridge unavailable"})
+			return
+		}
+		sendJSON(w, http.StatusBadGateway, errorResponse{Error: "failed to dispatch command to bridge"})
+		return
+	}
+
+	if queuedForRetry {
+		_ = markOpenClawDispatchDeliveredByKey(r.Context(), h.DB, dedupeKey)
+	}
+	h.logConnectionEventBestEffort(r.Context(), workspaceID, store.CreateConnectionEventInput{
+		EventType: "admin.command.dispatched",
+		Severity:  store.ConnectionEventSeverityInfo,
+		Message:   fmt.Sprintf("%s dispatched to bridge", action),
+		Metadata: mustMarshalJSON(map[string]string{
+			"command_id": commandID,
+			"action":     action,
+			"agent_id":   agentID,
+		}),
+	})
+
+	sendJSON(w, http.StatusOK, adminCommandDispatchResponse{
+		OK:        true,
+		Queued:    false,
+		CommandID: commandID,
+		Action:    action,
+		Message:   "command dispatched",
+	})
+}
+
+func (h *AdminConnectionsHandler) logConnectionEventBestEffort(
+	ctx context.Context,
+	workspaceID string,
+	input store.CreateConnectionEventInput,
+) {
+	if h.EventStore == nil || workspaceID == "" {
+		return
+	}
+	_, _ = h.EventStore.CreateWithWorkspaceID(ctx, workspaceID, input)
+}
+
+func mustMarshalJSON(value interface{}) json.RawMessage {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return payload
 }
 
 func (h *AdminConnectionsHandler) GetEvents(w http.ResponseWriter, r *http.Request) {

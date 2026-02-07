@@ -13,3 +13,11 @@
 - `103-agent-management.md` currently contains a blocking banner: **"NOT READY FOR WORK"**.
 - I am intentionally not implementing Spec 103 yet to follow the spec guardrail.
 - Action needed from Sam: remove the banner (or add an explicit go-ahead note in the spec) when ready for implementation.
+
+## [2026-02-07 16:32:20 MST] Bridge command actions validation note
+- I added bridge-side handling for `admin.command` actions (`gateway.restart`, `agent.ping`, `agent.reset`).
+- Backend tests cover API dispatch + queue fallback, but there is currently no automated TypeScript/unit harness for `bridge/openclaw-bridge.ts` in this repo.
+- Recommended manual validation once online:
+  1. Start bridge in continuous mode.
+  2. Call `POST /api/admin/gateway/restart` with `org_id`.
+  3. Confirm bridge logs command receipt/execution and queue acks.

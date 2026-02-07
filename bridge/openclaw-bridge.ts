@@ -15,9 +15,11 @@
 
 import WebSocket from 'ws';
 import crypto from 'node:crypto';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 const OPENCLAW_HOST = process.env.OPENCLAW_HOST || '127.0.0.1';
 const OPENCLAW_PORT = process.env.OPENCLAW_PORT || '18791';
@@ -108,6 +110,17 @@ type IssueCommentDispatchEvent = {
   };
 };
 
+type AdminCommandDispatchEvent = {
+  type?: string;
+  org_id?: string;
+  data?: {
+    command_id?: string;
+    action?: string;
+    agent_id?: string;
+    session_key?: string;
+  };
+};
+
 type DispatchQueueJob = {
   id: number;
   event_type?: string;
@@ -149,6 +162,7 @@ const deliveredRunIDs = new Set<string>();
 const deliveredRunIDOrder: string[] = [];
 
 const genId = () => `req-${++requestId}`;
+const execFileAsync = promisify(execFile);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -928,6 +942,8 @@ async function processDispatchQueue(): Promise<void> {
           await handleProjectChatDispatchEvent(payload as ProjectChatDispatchEvent);
         } else if (eventType === 'issue.comment.message') {
           await handleIssueCommentDispatchEvent(payload as IssueCommentDispatchEvent);
+        } else if (eventType === 'admin.command') {
+          await handleAdminCommandDispatchEvent(payload as AdminCommandDispatchEvent);
         } else {
           throw new Error(`unsupported event type: ${eventType}`);
         }
@@ -1074,6 +1090,62 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   }
 }
 
+async function runOpenClawCommand(args: string[]): Promise<void> {
+  const { stdout, stderr } = await execFileAsync('openclaw', args, {
+    timeout: 60_000,
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  if (stdout?.trim()) {
+    console.log(`[bridge] openclaw ${args.join(' ')} stdout: ${stdout.trim()}`);
+  }
+  if (stderr?.trim()) {
+    console.warn(`[bridge] openclaw ${args.join(' ')} stderr: ${stderr.trim()}`);
+  }
+}
+
+async function handleAdminCommandDispatchEvent(event: AdminCommandDispatchEvent): Promise<void> {
+  const action = getTrimmedString(event.data?.action);
+  const commandID = getTrimmedString(event.data?.command_id) || 'n/a';
+  const agentID = getTrimmedString(event.data?.agent_id);
+  const sessionKey = getTrimmedString(event.data?.session_key) || (agentID ? `agent:${agentID}:main` : '');
+
+  if (!action) {
+    throw new Error('admin.command missing action');
+  }
+
+  if (action === 'gateway.restart') {
+    await runOpenClawCommand(['gateway', 'restart']);
+    console.log(`[bridge] executed admin.command gateway.restart (${commandID})`);
+    return;
+  }
+
+  if (action === 'agent.ping') {
+    if (!sessionKey) {
+      throw new Error('agent.ping missing session_key/agent_id');
+    }
+    await sendMessageToSession(sessionKey, '[OtterCamp admin ping] Please confirm you are responsive.', commandID);
+    console.log(`[bridge] executed admin.command agent.ping for ${sessionKey} (${commandID})`);
+    return;
+  }
+
+  if (action === 'agent.reset') {
+    if (!sessionKey) {
+      throw new Error('agent.reset missing session_key/agent_id');
+    }
+    // Prefer targeted reset if supported; fall back to gateway restart for known bridge recovery path.
+    try {
+      await runOpenClawCommand(['sessions', 'reset', '--session', sessionKey]);
+    } catch (err) {
+      console.warn(`[bridge] targeted reset failed for ${sessionKey}; falling back to gateway restart:`, err);
+      await runOpenClawCommand(['gateway', 'restart']);
+    }
+    console.log(`[bridge] executed admin.command agent.reset for ${sessionKey} (${commandID})`);
+    return;
+  }
+
+  throw new Error(`unsupported admin command action: ${action}`);
+}
+
 function connectOtterCampDispatchSocket(): void {
   if (!OTTERCAMP_WS_SECRET) {
     console.warn('[bridge] OPENCLAW_WS_SECRET not set; dm.message dispatch disabled');
@@ -1100,7 +1172,7 @@ function connectOtterCampDispatchSocket(): void {
 
   otterCampWS.on('message', (data) => {
     try {
-      const event = JSON.parse(data.toString()) as DMDispatchEvent | ProjectChatDispatchEvent | IssueCommentDispatchEvent;
+      const event = JSON.parse(data.toString()) as DMDispatchEvent | ProjectChatDispatchEvent | IssueCommentDispatchEvent | AdminCommandDispatchEvent;
       if (event.type === 'dm.message') {
         void handleDMDispatchEvent(event as DMDispatchEvent).catch(() => {});
         return;
@@ -1111,6 +1183,12 @@ function connectOtterCampDispatchSocket(): void {
       }
       if (event.type === 'issue.comment.message') {
         void handleIssueCommentDispatchEvent(event as IssueCommentDispatchEvent).catch(() => {});
+        return;
+      }
+      if (event.type === 'admin.command') {
+        void handleAdminCommandDispatchEvent(event as AdminCommandDispatchEvent).catch((err) => {
+          console.error('[bridge] failed to execute admin.command:', err);
+        });
       }
     } catch (err) {
       console.error('[bridge] failed to parse OtterCamp websocket message:', err);
