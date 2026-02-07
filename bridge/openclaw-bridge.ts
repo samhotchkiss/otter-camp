@@ -382,6 +382,7 @@ async function persistAssistantReplyToOtterCamp(params: {
     // Ignore non-DM assistant activity (e.g. cron/system sessions).
     return;
   }
+  let persistedTarget = sessionKey;
 
   if (context.kind === 'dm') {
     const orgID = getTrimmedString(context.orgID);
@@ -415,6 +416,7 @@ async function persistAssistantReplyToOtterCamp(params: {
       const snippet = (await response.text().catch(() => '')).slice(0, 300);
       throw new Error(`message persist failed: ${response.status} ${response.statusText} ${snippet}`.trim());
     }
+    persistedTarget = threadID;
   } else if (context.kind === 'project_chat') {
     const orgID = getTrimmedString(context.orgID);
     const projectID = getTrimmedString(context.projectID);
@@ -440,6 +442,7 @@ async function persistAssistantReplyToOtterCamp(params: {
       const snippet = (await response.text().catch(() => '')).slice(0, 300);
       throw new Error(`project chat persist failed: ${response.status} ${response.statusText} ${snippet}`.trim());
     }
+    persistedTarget = `project:${projectID}`;
   } else {
     return;
   }
@@ -448,7 +451,7 @@ async function persistAssistantReplyToOtterCamp(params: {
     markRunIDDelivered(params.runID);
   }
   console.log(
-    `[bridge] persisted assistant reply to ${threadID}${params.runID ? ` (run_id=${params.runID})` : ''}`,
+    `[bridge] persisted assistant reply to ${persistedTarget}${params.runID ? ` (run_id=${params.runID})` : ''}`,
   );
 }
 
