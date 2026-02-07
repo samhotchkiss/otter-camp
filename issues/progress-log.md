@@ -165,3 +165,22 @@
   - #267 rich file viewers
   - #268 create issue from file browser
   - #269 Technonymous review-loop hardening
+
+## [2026-02-07 15:46:55 MST] Completed Spec002 issue #265 (blob API)
+- Added backend route: `GET /api/projects/{id}/blob`.
+- Blob API behavior:
+  - UTF-8 text files return `encoding: "utf-8"` with raw content.
+  - Binary files return `encoding: "base64"`.
+  - Directory blob requests are rejected with 400.
+- Added tests in `internal/api/project_tree_test.go` for:
+  - utf-8 blob response
+  - base64 blob response
+  - directory rejection
+  - unknown path not found
+  - blob route registration
+- Validation run: `go test ./internal/api -count=1`.
+- Remaining:
+  - #266 files tab/browser shell
+  - #267 rich file viewers
+  - #268 create issue from file browser
+  - #269 Technonymous review-loop hardening
