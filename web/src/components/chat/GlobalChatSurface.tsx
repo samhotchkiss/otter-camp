@@ -22,6 +22,7 @@ const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
 const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
 const CHAT_POLL_INTERVAL_MS = 4000;
+const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000];
 
 type DeliveryTone = "neutral" | "success" | "warning";
 
@@ -259,7 +260,13 @@ export default function GlobalChatSurface({
   const [issueAgentNameByID, setIssueAgentNameByID] = useState<Map<string, string>>(new Map());
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const onConversationTouchedRef = useRef(onConversationTouched);
+  const postSendRefreshTimersRef = useRef<number[]>([]);
   const { lastMessage } = useWS();
+
+  useEffect(() => {
+    onConversationTouchedRef.current = onConversationTouched;
+  }, [onConversationTouched]);
 
   const orgID = useMemo(() => getStoredOrgID(), [conversation.key]);
   const token = useMemo(() => getAuthToken(), [conversation.key]);
@@ -284,8 +291,15 @@ export default function GlobalChatSurface({
   }, [token]);
 
   const touchConversation = useCallback(() => {
-    onConversationTouched?.();
-  }, [onConversationTouched]);
+    onConversationTouchedRef.current?.();
+  }, []);
+
+  const clearPostSendRefreshTimers = useCallback(() => {
+    for (const timerID of postSendRefreshTimersRef.current) {
+      window.clearTimeout(timerID);
+    }
+    postSendRefreshTimersRef.current = [];
+  }, []);
 
   const loadConversation = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true;
@@ -313,6 +327,7 @@ export default function GlobalChatSurface({
         });
         const response = await fetch(`${API_URL}/api/messages?${params.toString()}`, {
           headers: requestHeaders,
+          cache: "no-store",
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => null);
@@ -338,6 +353,7 @@ export default function GlobalChatSurface({
 
         const response = await fetch(url.toString(), {
           headers: requestHeaders,
+          cache: "no-store",
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => null);
@@ -370,8 +386,8 @@ export default function GlobalChatSurface({
       agentsURL.searchParams.set("org_id", orgID);
 
       const [issueResponse, agentsResponse] = await Promise.all([
-        fetch(issueURL.toString(), { headers: requestHeaders }),
-        fetch(agentsURL.toString(), { headers: requestHeaders }),
+        fetch(issueURL.toString(), { headers: requestHeaders, cache: "no-store" }),
+        fetch(agentsURL.toString(), { headers: requestHeaders, cache: "no-store" }),
       ]);
 
       if (!issueResponse.ok) {
@@ -431,13 +447,15 @@ export default function GlobalChatSurface({
   }, [loadConversation, refreshVersion]);
 
   useEffect(() => {
+    clearPostSendRefreshTimers();
     const timer = window.setInterval(() => {
       void loadConversation({ silent: true });
     }, CHAT_POLL_INTERVAL_MS);
     return () => {
       window.clearInterval(timer);
+      clearPostSendRefreshTimers();
     };
-  }, [loadConversation]);
+  }, [clearPostSendRefreshTimers, conversation.key, loadConversation]);
 
   useEffect(() => {
     if (!lastMessage) {
@@ -468,6 +486,7 @@ export default function GlobalChatSurface({
       }
 
       if (normalized.senderType === "agent") {
+        clearPostSendRefreshTimers();
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
       }
 
@@ -492,6 +511,7 @@ export default function GlobalChatSurface({
       }
 
       if (normalized.senderType === "agent") {
+        clearPostSendRefreshTimers();
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
       }
       if (normalized.isSessionReset) {
@@ -540,6 +560,7 @@ export default function GlobalChatSurface({
       }
 
       if (normalized.senderType === "agent") {
+        clearPostSendRefreshTimers();
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
       }
 
@@ -559,6 +580,7 @@ export default function GlobalChatSurface({
     issueAgentNameByID,
     issueAuthorID,
     lastMessage,
+    clearPostSendRefreshTimers,
   ]);
 
   const sendMessage = useCallback(async (bodyOverride?: string, retryMessageID?: string) => {
@@ -572,6 +594,7 @@ export default function GlobalChatSurface({
     setError(null);
     setSending(true);
     setDeliveryIndicator({ tone: "neutral", text: "Sending..." });
+    clearPostSendRefreshTimers();
 
     const optimisticID = isRetry
       ? retryMessageID!.trim()
@@ -648,6 +671,12 @@ export default function GlobalChatSurface({
 
         if (payload?.delivery?.delivered === true) {
           setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
+          for (const delay of POST_SEND_REFRESH_DELAYS_MS) {
+            const timerID = window.setTimeout(() => {
+              void loadConversation({ silent: true });
+            }, delay);
+            postSendRefreshTimersRef.current.push(timerID);
+          }
         } else if (typeof payload?.delivery?.error === "string" && payload.delivery.error.trim() !== "") {
           setError(normalizeDeliveryErrorText(payload.delivery.error));
           setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
@@ -693,6 +722,12 @@ export default function GlobalChatSurface({
 
         if (payload?.delivery?.delivered === true) {
           setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
+          for (const delay of POST_SEND_REFRESH_DELAYS_MS) {
+            const timerID = window.setTimeout(() => {
+              void loadConversation({ silent: true });
+            }, delay);
+            postSendRefreshTimersRef.current.push(timerID);
+          }
         } else if (typeof payload?.delivery?.error === "string" && payload.delivery.error.trim() !== "") {
           setError(normalizeDeliveryErrorText(payload.delivery.error));
           setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
@@ -742,6 +777,12 @@ export default function GlobalChatSurface({
 
         if (payload?.delivery?.delivered === true) {
           setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
+          for (const delay of POST_SEND_REFRESH_DELAYS_MS) {
+            const timerID = window.setTimeout(() => {
+              void loadConversation({ silent: true });
+            }, delay);
+            postSendRefreshTimersRef.current.push(timerID);
+          }
         } else if (typeof payload?.delivery?.error === "string" && payload.delivery.error.trim() !== "") {
           setError(normalizeDeliveryErrorText(payload.delivery.error));
           setDeliveryIndicator({ tone: "warning", text: "Saved; delivery pending" });
@@ -779,6 +820,8 @@ export default function GlobalChatSurface({
     sending,
     threadID,
     touchConversation,
+    loadConversation,
+    clearPostSendRefreshTimers,
   ]);
 
   const handleRetryMessage = useCallback(

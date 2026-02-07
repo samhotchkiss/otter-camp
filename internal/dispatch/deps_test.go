@@ -10,7 +10,7 @@ func TestCanDispatchSatisfied(t *testing.T) {
 	deps := Dependencies{
 		"task-b": {"task-a", "task-c"},
 	}
-	status := map[string]TaskStatus{
+	status := map[string]DepStatus{
 		"task-a": StatusDone,
 		"task-c": StatusDone,
 	}
@@ -24,7 +24,7 @@ func TestCanDispatchBlocked(t *testing.T) {
 	deps := Dependencies{
 		"task-b": {"task-a", "task-c"},
 	}
-	status := map[string]TaskStatus{
+	status := map[string]DepStatus{
 		"task-a": StatusDone,
 		"task-c": StatusInProgress,
 	}
@@ -38,7 +38,7 @@ func TestCanDispatchMissingStatus(t *testing.T) {
 	deps := Dependencies{
 		"task-b": {"task-a"},
 	}
-	status := map[string]TaskStatus{}
+	status := map[string]DepStatus{}
 
 	_, err := CanDispatch("task-b", deps, status)
 	require.Error(t, err)
@@ -63,7 +63,7 @@ func TestOnComplete(t *testing.T) {
 		"task-c": {"task-a", "task-b"},
 		"task-d": {"task-a"},
 	}
-	status := map[string]TaskStatus{
+	status := map[string]DepStatus{
 		"task-a": StatusInProgress,
 		"task-b": StatusQueued,
 		"task-c": StatusQueued,
@@ -80,7 +80,7 @@ func TestOnCompleteCircular(t *testing.T) {
 		"task-a": {"task-b"},
 		"task-b": {"task-a"},
 	}
-	status := map[string]TaskStatus{
+	status := map[string]DepStatus{
 		"task-a": StatusDone,
 		"task-b": StatusQueued,
 	}

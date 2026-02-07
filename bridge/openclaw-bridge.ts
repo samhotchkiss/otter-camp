@@ -14,6 +14,10 @@
  */
 
 import WebSocket from 'ws';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const OPENCLAW_HOST = process.env.OPENCLAW_HOST || '127.0.0.1';
 const OPENCLAW_PORT = process.env.OPENCLAW_PORT || '18791';
@@ -24,6 +28,7 @@ const OTTERCAMP_WS_SECRET = process.env.OPENCLAW_WS_SECRET || '';
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
 const MAX_TRACKED_RUN_IDS = 2000;
 const DISPATCH_QUEUE_POLL_INTERVAL_MS = 5000;
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 interface OpenClawSession {
   key: string;
@@ -125,6 +130,12 @@ type SessionContext = {
   responderAgentID?: string;
 };
 
+type DeviceIdentity = {
+  deviceId: string;
+  publicKeyPem: string;
+  privateKeyPem: string;
+};
+
 let openClawWS: WebSocket | null = null;
 let otterCampWS: WebSocket | null = null;
 let otterCampReconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -159,6 +170,100 @@ function parseAgentIDFromSessionKey(sessionKey: string): string {
     return '';
   }
   return match[1].trim();
+}
+
+function base64UrlEncode(buf: Buffer): string {
+  return buf.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
+}
+
+function derivePublicKeyRaw(publicKeyPem: string): Buffer {
+  const spki = crypto.createPublicKey(publicKeyPem).export({
+    type: 'spki',
+    format: 'der',
+  }) as Buffer;
+  if (
+    spki.length === ED25519_SPKI_PREFIX.length + 32 &&
+    spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
+  ) {
+    return spki.subarray(ED25519_SPKI_PREFIX.length);
+  }
+  return spki;
+}
+
+function resolveOpenClawStateDir(): string {
+  const envDir = getTrimmedString(process.env.OPENCLAW_STATE_DIR);
+  if (envDir) {
+    return envDir;
+  }
+  return path.join(os.homedir(), '.openclaw');
+}
+
+function resolveOpenClawIdentityPath(fileName: string): string {
+  return path.join(resolveOpenClawStateDir(), 'identity', fileName);
+}
+
+function loadDeviceIdentity(): DeviceIdentity | null {
+  try {
+    const raw = fs.readFileSync(resolveOpenClawIdentityPath('device.json'), 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const deviceId = getTrimmedString(parsed.deviceId);
+    const publicKeyPem = getTrimmedString(parsed.publicKeyPem);
+    const privateKeyPem = getTrimmedString(parsed.privateKeyPem);
+    if (!deviceId || !publicKeyPem || !privateKeyPem) {
+      return null;
+    }
+    return { deviceId, publicKeyPem, privateKeyPem };
+  } catch {
+    return null;
+  }
+}
+
+function loadDeviceRoleToken(deviceId: string, role: string): string {
+  try {
+    const raw = fs.readFileSync(resolveOpenClawIdentityPath('device-auth.json'), 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const storedDeviceID = getTrimmedString(parsed.deviceId);
+    if (!storedDeviceID || storedDeviceID !== deviceId) {
+      return '';
+    }
+    const tokens = asRecord(parsed.tokens);
+    const roleEntry = asRecord(tokens?.[role]);
+    return getTrimmedString(roleEntry?.token);
+  } catch {
+    return '';
+  }
+}
+
+function buildDeviceAuthPayload(params: {
+  deviceId: string;
+  clientId: string;
+  clientMode: string;
+  role: string;
+  scopes: string[];
+  signedAtMs: number;
+  token: string;
+  nonce?: string;
+}): string {
+  const version = params.nonce ? 'v2' : 'v1';
+  const base = [
+    version,
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role,
+    params.scopes.join(','),
+    String(params.signedAtMs),
+    params.token,
+  ];
+  if (params.nonce) {
+    base.push(params.nonce);
+  }
+  return base.join('|');
+}
+
+function signDevicePayload(privateKeyPem: string, payload: string): string {
+  const signature = crypto.sign(null, Buffer.from(payload, 'utf8'), crypto.createPrivateKey(privateKeyPem));
+  return base64UrlEncode(signature);
 }
 
 function buildContextEnvelope(context: SessionContext): string {
@@ -356,6 +461,49 @@ async function connectToOpenClaw(): Promise<void> {
         const msg = JSON.parse(data.toString()) as Record<string, unknown>;
 
         if (msg.type === 'event' && msg.event === 'connect.challenge') {
+          const role = 'operator';
+          const scopes = ['operator.read', 'operator.admin'];
+          const clientID = 'gateway-client';
+          const clientMode = 'backend';
+          const challengePayload = asRecord((msg as { payload?: unknown }).payload) || asRecord((msg as { data?: unknown }).data);
+          const nonce = getTrimmedString(challengePayload?.nonce) || undefined;
+          const deviceIdentity = loadDeviceIdentity();
+          const deviceToken = deviceIdentity ? loadDeviceRoleToken(deviceIdentity.deviceId, role) : '';
+          const authToken = OPENCLAW_TOKEN || deviceToken;
+
+          let device:
+            | {
+                id: string;
+                publicKey: string;
+                signature: string;
+                signedAt: number;
+                nonce?: string;
+              }
+            | undefined;
+
+          if (deviceIdentity) {
+            const signedAtMs = Date.now();
+            const signaturePayload = buildDeviceAuthPayload({
+              deviceId: deviceIdentity.deviceId,
+              clientId: clientID,
+              clientMode,
+              role,
+              scopes,
+              signedAtMs,
+              token: authToken || '',
+              nonce,
+            });
+            device = {
+              id: deviceIdentity.deviceId,
+              publicKey: base64UrlEncode(derivePublicKeyRaw(deviceIdentity.publicKeyPem)),
+              signature: signDevicePayload(deviceIdentity.privateKeyPem, signaturePayload),
+              signedAt: signedAtMs,
+              ...(nonce ? { nonce } : {}),
+            };
+          } else {
+            console.warn('[bridge] device identity not found; OpenClaw may reject connect');
+          }
+
           const connectId = genId();
           const connectMsg = {
             type: 'req',
@@ -365,17 +513,18 @@ async function connectToOpenClaw(): Promise<void> {
               minProtocol: 3,
               maxProtocol: 3,
               client: {
-                id: 'gateway-client',
+                id: clientID,
                 version: '1.0.0',
                 platform: 'macos',
-                mode: 'backend',
+                mode: clientMode,
               },
-              role: 'operator',
-              scopes: ['operator.read', 'operator.admin'],
+              role,
+              scopes,
               caps: [],
               commands: [],
               permissions: {},
-              auth: OPENCLAW_TOKEN ? { token: OPENCLAW_TOKEN } : undefined,
+              auth: authToken ? { token: authToken } : undefined,
+              device,
               locale: 'en-US',
               userAgent: 'ottercamp-bridge/1.0.0',
             },

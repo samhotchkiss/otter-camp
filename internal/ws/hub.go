@@ -14,6 +14,11 @@ const (
 	MessageTaskUpdated       MessageType = "TaskUpdated"
 	MessageTaskStatusChanged MessageType = "TaskStatusChanged"
 	MessageCommentAdded      MessageType = "CommentAdded"
+	MessageGitPush                    MessageType = "GitPush"
+	MessageIssueReviewAddressed       MessageType = "IssueReviewAddressed"
+	MessageIssueReviewSaved           MessageType = "IssueReviewSaved"
+	MessageIssueCommentCreated        MessageType = "IssueCommentCreated"
+	MessageProjectChatMessageCreated  MessageType = "ProjectChatMessageCreated"
 )
 
 // BroadcastMessage packages a payload for an org-scoped broadcast.
@@ -72,6 +77,21 @@ func (h *Hub) Broadcast(orgID string, payload []byte) {
 	h.broadcast <- BroadcastMessage{OrgID: orgID, Payload: payload}
 }
 
+// BroadcastTopic sends a typed message to all clients in an org.
+func (h *Hub) BroadcastTopic(orgID string, topic string, payload []byte) {
+	h.broadcast <- BroadcastMessage{OrgID: orgID, Payload: payload}
+}
+
+// Register adds a client to the hub.
+func (h *Hub) Register(c *Client) {
+	h.register <- c
+}
+
+// Unregister removes a client from the hub.
+func (h *Hub) Unregister(c *Client) {
+	h.unregister <- c
+}
+
 // Client represents a websocket connection.
 type Client struct {
 	Conn  *websocket.Conn
@@ -96,6 +116,9 @@ func (c *Client) OrgID() string {
 	defer c.mu.RUnlock()
 	return c.orgID
 }
+
+// SubscribeTopic is a no-op placeholder for topic-based subscriptions.
+func (c *Client) SubscribeTopic(topic string) {}
 
 // SetOrgID updates the org id for the client.
 func (c *Client) SetOrgID(orgID string) {

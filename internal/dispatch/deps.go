@@ -7,17 +7,17 @@ import (
 	"strings"
 )
 
-// TaskStatus represents the lifecycle status of a task for dependency resolution.
-type TaskStatus string
+// DepStatus represents the lifecycle status of a task for dependency resolution.
+type DepStatus string
 
 const (
-	StatusQueued     TaskStatus = "queued"
-	StatusDispatched TaskStatus = "dispatched"
-	StatusInProgress TaskStatus = "in_progress"
-	StatusBlocked    TaskStatus = "blocked"
-	StatusReview     TaskStatus = "review"
-	StatusDone       TaskStatus = "done"
-	StatusCancelled  TaskStatus = "cancelled"
+	StatusQueued     DepStatus = "queued"
+	StatusDispatched DepStatus = "dispatched"
+	StatusInProgress DepStatus = "in_progress"
+	StatusBlocked    DepStatus = "blocked"
+	StatusReview     DepStatus = "review"
+	StatusDone       DepStatus = "done"
+	StatusCancelled  DepStatus = "cancelled"
 )
 
 // Dependencies maps a task ID to the list of task IDs it depends on.
@@ -43,7 +43,7 @@ func (e *CircularDependencyError) Error() string {
 }
 
 // CanDispatch determines if a task's dependencies are satisfied.
-func CanDispatch(taskID string, deps Dependencies, status map[string]TaskStatus) (bool, error) {
+func CanDispatch(taskID string, deps Dependencies, status map[string]DepStatus) (bool, error) {
 	if status == nil {
 		return false, errors.New("status map is nil")
 	}
@@ -64,7 +64,7 @@ func CanDispatch(taskID string, deps Dependencies, status map[string]TaskStatus)
 }
 
 // OnComplete marks a task complete and returns dependent tasks now eligible for dispatch.
-func OnComplete(completedID string, deps Dependencies, status map[string]TaskStatus) ([]string, error) {
+func OnComplete(completedID string, deps Dependencies, status map[string]DepStatus) ([]string, error) {
 	if status == nil {
 		return nil, errors.New("status map is nil")
 	}

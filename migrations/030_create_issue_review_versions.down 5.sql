@@ -1,4 +1,0 @@
-DROP POLICY IF EXISTS project_issue_review_versions_org_isolation ON project_issue_review_versions;
-DROP TRIGGER IF EXISTS project_issue_review_versions_updated_at_trg ON project_issue_review_versions;
-DROP INDEX IF EXISTS project_issue_review_versions_issue_created_idx;
-DROP TABLE IF EXISTS project_issue_review_versions;

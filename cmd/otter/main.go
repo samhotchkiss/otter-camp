@@ -52,8 +52,7 @@ Commands:
   clone            Clone a project repo
   remote add       Add origin remote for project
   repo info        Show repo URL for project
-  version          Show CLI version
-`)
+  version          Show CLI version`)
 }
 
 func handleAuth(args []string) {

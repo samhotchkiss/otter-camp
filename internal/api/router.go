@@ -50,6 +50,15 @@ func NewRouter() http.Handler {
 	r.Patch("/api/tasks/{id}", taskHandler.UpdateTask)
 	r.Patch("/api/tasks/{id}/status", taskHandler.UpdateTaskStatus)
 
+	r.Get("/api/command-search", CommandSearchHandler)
+
+	msgHandler := &MessageHandler{Hub: hub}
+	r.Get("/api/messages", msgHandler.ListMessages)
+	r.Post("/api/messages", msgHandler.CreateMessage)
+	r.Get("/api/messages/{id}", msgHandler.GetMessage)
+	r.Put("/api/messages/{id}", msgHandler.UpdateMessage)
+	r.Delete("/api/messages/{id}", msgHandler.DeleteMessage)
+
 	return r
 }
 

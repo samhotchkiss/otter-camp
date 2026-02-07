@@ -1,3 +1,0 @@
-DROP TABLE IF EXISTS sessions;
-DROP TABLE IF EXISTS auth_requests;
-DROP TABLE IF EXISTS users;

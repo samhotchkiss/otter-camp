@@ -1,8 +1,0 @@
-# Force fresh build by disabling cache
-[phases.install]
-cmds = ["npm ci --prefer-offline"]
-
-[phases.build]
-cmds = ["npm run build"]
-
-# Cache bust timestamp: 2026-02-05-12:11
