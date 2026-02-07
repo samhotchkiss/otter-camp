@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -62,6 +63,50 @@ func TestProjectIssueStore_GitHubLinkUpsertIsIdempotent(t *testing.T) {
 	err = db.QueryRow("SELECT COUNT(*) FROM project_issue_github_links WHERE issue_id = $1", issue.ID).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
+}
+
+func TestProjectIssueStore_WorkTrackingSchemaDefaultsAndConstraints(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-work-tracking-schema-org")
+	projectID := createTestProject(t, db, orgID, "Issue Work Tracking Schema Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Schema default verification issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	var workStatus string
+	var priority string
+	var ownerAgentID sql.NullString
+	var dueAt sql.NullTime
+	var nextStep sql.NullString
+	var nextStepDueAt sql.NullTime
+	err = db.QueryRowContext(
+		ctx,
+		`SELECT work_status, priority, owner_agent_id, due_at, next_step, next_step_due_at
+			FROM project_issues
+			WHERE id = $1`,
+		issue.ID,
+	).Scan(&workStatus, &priority, &ownerAgentID, &dueAt, &nextStep, &nextStepDueAt)
+	require.NoError(t, err)
+	require.Equal(t, "queued", workStatus)
+	require.Equal(t, "P2", priority)
+	require.False(t, ownerAgentID.Valid)
+	require.False(t, dueAt.Valid)
+	require.False(t, nextStep.Valid)
+	require.False(t, nextStepDueAt.Valid)
+
+	_, err = db.ExecContext(ctx, `UPDATE project_issues SET work_status = 'not-a-status' WHERE id = $1`, issue.ID)
+	require.Error(t, err)
+
+	_, err = db.ExecContext(ctx, `UPDATE project_issues SET priority = 'P9' WHERE id = $1`, issue.ID)
+	require.Error(t, err)
 }
 
 func TestProjectIssueStore_UpsertIssueFromGitHubIsIdempotentAndUpdatesFields(t *testing.T) {

@@ -33,3 +33,14 @@
   - Create ordered GitHub issue breakdown for Spec 002 with tests
   - Implement Spec 002 issues one-by-one with commits/pushes
 
+## [2026-02-07 15:10:51 MST] Completed Spec001 Issue #257 (schema migration)
+- Added migration  with new  columns:
+  - , , , , , 
+- Added DB constraints for  and  plus project-scoped indexes for status/owner/priority queries.
+- Added store-level DB test  validating:
+  - defaults (, )
+  - nullable fields remain null by default
+  - invalid status/priority writes are rejected.
+- Validation run: ok  	github.com/samhotchkiss/otter-camp/internal/store	0.010s.
+- Remaining (Spec001): #258, #259, #260, #261, #262, #263.
+
