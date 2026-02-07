@@ -86,6 +86,7 @@ type Project struct {
 	ID          string `json:"id"`
 	OrgID       string `json:"org_id"`
 	Name        string `json:"name"`
+	Slug        string `json:"slug"`
 	Description string `json:"description"`
 	RepoURL     string `json:"repo_url"`
 	Status      string `json:"status"`
