@@ -41,6 +41,12 @@ type Project = {
   status?: string;
   lead?: string;
   repo_url?: string;
+  primary_agent_id?: string;
+};
+
+type AgentOption = {
+  id: string;
+  name: string;
 };
 
 type ApiTask = {
@@ -216,6 +222,11 @@ export default function ProjectDetailPage() {
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [availableAgents, setAvailableAgents] = useState<AgentOption[]>([]);
+  const [selectedPrimaryAgentID, setSelectedPrimaryAgentID] = useState<string>("");
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
 
   // Fetch project and tasks
   useEffect(() => {
@@ -238,14 +249,25 @@ export default function ProjectDetailPage() {
         }
         const projectData = await projectRes.json();
         setProject(projectData);
+        setSelectedPrimaryAgentID(projectData.primary_agent_id || "");
         
         // Fetch agents to map IDs to names
         const agentsRes = await fetch(`${API_URL}/api/sync/agents`);
         if (agentsRes.ok) {
           const agentsData = await agentsRes.json();
-          for (const agent of (agentsData.agents || [])) {
-            agentIdToName[agent.id] = agent.name;
+          const parsedAgents: AgentOption[] = [];
+          for (const raw of (agentsData.agents || [])) {
+            const agent = raw as { id?: string; name?: string; display_name?: string };
+            if (!agent.id || typeof agent.id !== "string") continue;
+            const agentName =
+              (typeof agent.name === "string" && agent.name.trim()) ||
+              (typeof agent.display_name === "string" && agent.display_name.trim()) ||
+              agent.id;
+            agentIdToName[agent.id] = agentName;
+            parsedAgents.push({ id: agent.id, name: agentName });
           }
+          parsedAgents.sort((a, b) => a.name.localeCompare(b.name));
+          setAvailableAgents(parsedAgents);
         }
         
         // Fetch tasks for this project
@@ -390,6 +412,44 @@ export default function ProjectDetailPage() {
     navigate(`/tasks/${task.id}`);
   };
 
+  const primaryAgentName =
+    project.lead ||
+    (project.primary_agent_id ? agentIdToName[project.primary_agent_id] : undefined);
+
+  const handleSaveSettings = async () => {
+    if (!id) return;
+    setSettingsError(null);
+    setSettingsSuccess(null);
+    setIsSavingSettings(true);
+    try {
+      const orgId = localStorage.getItem('otter-camp-org-id');
+      const settingsUrl = orgId
+        ? `${API_URL}/api/projects/${id}/settings?org_id=${encodeURIComponent(orgId)}`
+        : `${API_URL}/api/projects/${id}/settings`;
+      const response = await fetch(settingsUrl, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          primary_agent_id: selectedPrimaryAgentID || null,
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(
+          (payload && (payload.error || payload.message)) || "Failed to save project settings",
+        );
+      }
+      const updatedProject = await response.json();
+      setProject(updatedProject);
+      setSelectedPrimaryAgentID(updatedProject.primary_agent_id || "");
+      setSettingsSuccess("Project settings saved.");
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : "Failed to save project settings");
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
   return (
     <div className="flex min-h-full flex-col">
       {/* Breadcrumb */}
@@ -422,10 +482,10 @@ export default function ProjectDetailPage() {
               </div>
               <span>•</span>
               <span>{activeTaskCount} active task{activeTaskCount !== 1 ? "s" : ""}</span>
-              {project.lead && (
+              {primaryAgentName && (
                 <>
                   <span>•</span>
-                  <span>Lead: {project.lead}</span>
+                  <span>Lead: {primaryAgentName}</span>
                 </>
               )}
             </div>
@@ -436,6 +496,7 @@ export default function ProjectDetailPage() {
           <div className="flex gap-3">
             <button
               type="button"
+              onClick={() => setActiveTab("settings")}
               className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-medium text-[var(--text)] transition hover:bg-[var(--surface-alt)]"
             >
               Settings
@@ -594,9 +655,52 @@ export default function ProjectDetailPage() {
           <h2 className="mb-4 text-lg font-semibold text-[var(--text)]">
             Project Settings
           </h2>
-          <p className="text-sm text-[var(--text-muted)]">
-            Project settings coming soon...
-          </p>
+          <div className="max-w-xl space-y-5">
+            <div>
+              <label
+                htmlFor="primary-agent"
+                className="mb-2 block text-sm font-medium text-[var(--text)]"
+              >
+                Primary Agent
+              </label>
+              <p className="mb-2 text-xs text-[var(--text-muted)]">
+                This agent will be used as the default owner for project chat routing.
+              </p>
+              <select
+                id="primary-agent"
+                value={selectedPrimaryAgentID}
+                onChange={(event) => setSelectedPrimaryAgentID(event.target.value)}
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)]"
+              >
+                <option value="">No primary agent</option>
+                {availableAgents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {settingsError ? (
+              <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                {settingsError}
+              </div>
+            ) : null}
+            {settingsSuccess ? (
+              <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+                {settingsSuccess}
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              disabled={isSavingSettings}
+              onClick={handleSaveSettings}
+              className="rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#B8975B] disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {isSavingSettings ? "Saving..." : "Save settings"}
+            </button>
+          </div>
         </div>
       )}
     </div>
