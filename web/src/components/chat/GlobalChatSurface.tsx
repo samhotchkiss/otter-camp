@@ -21,6 +21,7 @@ const ORG_STORAGE_KEY = "otter-camp-org-id";
 const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
 const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
+const CHAT_POLL_INTERVAL_MS = 4000;
 
 type DeliveryTone = "neutral" | "success" | "warning";
 
@@ -286,17 +287,22 @@ export default function GlobalChatSurface({
     onConversationTouched?.();
   }, [onConversationTouched]);
 
-  const loadConversation = useCallback(async () => {
+  const loadConversation = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
     if (!orgID) {
       setMessages([]);
-      setLoading(false);
-      setError("Missing organization context");
+      if (!silent) {
+        setLoading(false);
+        setError("Missing organization context");
+      }
       return;
     }
 
-    setLoading(true);
-    setError(null);
-    setDeliveryIndicator(null);
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+      setDeliveryIndicator(null);
+    }
 
     try {
       if (conversation.type === "dm") {
@@ -402,10 +408,14 @@ export default function GlobalChatSurface({
       setMessages(normalized);
       touchConversation();
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load chat");
-      setMessages([]);
+      if (!silent) {
+        setError(loadError instanceof Error ? loadError.message : "Failed to load chat");
+        setMessages([]);
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [
     conversation,
@@ -419,6 +429,15 @@ export default function GlobalChatSurface({
   useEffect(() => {
     void loadConversation();
   }, [loadConversation, refreshVersion]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadConversation({ silent: true });
+    }, CHAT_POLL_INTERVAL_MS);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [loadConversation]);
 
   useEffect(() => {
     if (!lastMessage) {
