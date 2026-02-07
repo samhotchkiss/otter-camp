@@ -205,3 +205,21 @@
   - #267 rich file viewers
   - #268 create issue from file browser
   - #269 Technonymous review-loop hardening
+
+## [2026-02-07 15:56:40 MST] Completed Spec002 issue #267 (rich file viewers)
+- Upgraded `ProjectFileBrowser` viewer modes by file type:
+  - Markdown files: Render/Source toggle using `MarkdownPreview`.
+  - Code files: syntax-highlighted preview (`react-syntax-highlighter`).
+  - Image files: inline preview from base64 blob payload.
+  - Invalid payload/type combinations: safe fallback warning.
+- Added/expanded tests in `web/src/components/project/ProjectFileBrowser.test.tsx` for:
+  - markdown render/source toggle
+  - code syntax preview rendering
+  - image preview rendering
+  - safe fallback for bad payload mode
+- Validation:
+  - `cd web && npm test -- src/components/project/ProjectFileBrowser.test.tsx src/pages/ProjectDetailPage.test.tsx --run`
+  - `cd web && npm run build:typecheck`
+- Remaining:
+  - #268 create issue from file browser
+  - #269 Technonymous review-loop hardening

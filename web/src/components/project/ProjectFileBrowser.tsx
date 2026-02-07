@@ -1,4 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
+import MarkdownPreview from "../content-review/MarkdownPreview";
+import { resolveEditorForPath } from "../content-review/editorModeResolver";
 import ProjectCommitBrowser from "./ProjectCommitBrowser";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
@@ -9,6 +13,7 @@ type ProjectFileBrowserProps = {
 };
 
 type BrowserMode = "files" | "commits";
+type MarkdownViewMode = "render" | "source";
 
 type ProjectTreeEntry = {
   name: string;
@@ -52,6 +57,28 @@ function formatBytes(bytes: number | undefined): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function detectLanguage(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".ts") || lower.endsWith(".tsx")) return "typescript";
+  if (lower.endsWith(".js") || lower.endsWith(".jsx")) return "javascript";
+  if (lower.endsWith(".py")) return "python";
+  if (lower.endsWith(".go")) return "go";
+  if (lower.endsWith(".json")) return "json";
+  if (lower.endsWith(".sql")) return "sql";
+  if (lower.endsWith(".sh")) return "bash";
+  return "text";
+}
+
+function mimeTypeForPath(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  return "application/octet-stream";
+}
+
 export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProps) {
   const [mode, setMode] = useState<BrowserMode>("files");
   const [currentPath, setCurrentPath] = useState("/");
@@ -65,6 +92,7 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
   const [blobLoading, setBlobLoading] = useState(false);
   const [blobError, setBlobError] = useState<string | null>(null);
   const [blobRefreshKey, setBlobRefreshKey] = useState(0);
+  const [markdownViewMode, setMarkdownViewMode] = useState<MarkdownViewMode>("render");
 
   const orgID = getOrgID();
 
@@ -172,6 +200,20 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
     }
     return crumbs;
   }, [currentPath]);
+
+  const selectedResolution = useMemo(
+    () => (selectedFilePath ? resolveEditorForPath(selectedFilePath) : null),
+    [selectedFilePath],
+  );
+
+  const prefersDark = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? false;
+  }, []);
+
+  useEffect(() => {
+    setMarkdownViewMode("render");
+  }, [selectedFilePath]);
 
   function handleOpenEntry(entry: ProjectTreeEntry): void {
     if (entry.type === "dir") {
@@ -341,20 +383,86 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
                 </div>
               )}
 
-              {!blobLoading && !blobError && blob?.encoding === "utf-8" && (
+              {!blobLoading && !blobError && blob?.encoding === "utf-8" && selectedResolution?.editorMode === "markdown" && (
+                <div className="space-y-3">
+                  <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-1">
+                    <button
+                      type="button"
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        markdownViewMode === "render"
+                          ? "bg-[var(--surface)] text-[var(--text)]"
+                          : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                      }`}
+                      onClick={() => setMarkdownViewMode("render")}
+                    >
+                      Render
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${
+                        markdownViewMode === "source"
+                          ? "bg-[var(--surface)] text-[var(--text)]"
+                          : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                      }`}
+                      onClick={() => setMarkdownViewMode("source")}
+                    >
+                      Source
+                    </button>
+                  </div>
+                  {markdownViewMode === "render" ? (
+                    <div data-testid="file-markdown-render">
+                      <MarkdownPreview markdown={blob.content} />
+                    </div>
+                  ) : (
+                    <pre
+                      className="max-h-[560px] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-3 text-xs text-[var(--text)]"
+                      data-testid="file-markdown-source"
+                    >
+                      {blob.content}
+                    </pre>
+                  )}
+                </div>
+              )}
+
+              {!blobLoading && !blobError && blob?.encoding === "utf-8" && selectedResolution?.editorMode === "code" && (
+                <div
+                  className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-alt)]"
+                  data-testid="file-code-preview"
+                >
+                  <SyntaxHighlighter
+                    language={detectLanguage(selectedFilePath)}
+                    style={prefersDark ? oneDark : oneLight}
+                    customStyle={{ margin: 0, borderRadius: 0, minHeight: "120px" }}
+                  >
+                    {blob.content}
+                  </SyntaxHighlighter>
+                </div>
+              )}
+
+              {!blobLoading && !blobError && blob?.encoding === "utf-8" && (selectedResolution?.editorMode === "text" || !selectedResolution) && (
                 <pre className="max-h-[560px] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-3 text-xs text-[var(--text)]">
                   {blob.content}
                 </pre>
               )}
 
-              {!blobLoading && !blobError && blob?.encoding === "base64" && (
+              {!blobLoading && !blobError && blob?.encoding === "base64" && selectedResolution?.editorMode === "image" && (
                 <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-3">
-                  <p className="text-xs text-[var(--text-muted)]">
-                    Binary file ({formatBytes(blob.size)}). Base64 preview shown below.
-                  </p>
-                  <pre className="max-h-[420px] overflow-auto rounded border border-[var(--border)] bg-[var(--surface)] p-2 text-[11px] text-[var(--text-muted)]">
-                    {blob.content}
-                  </pre>
+                  <img
+                    src={`data:${mimeTypeForPath(selectedFilePath)};base64,${blob.content}`}
+                    alt={selectedFilePath}
+                    className="max-h-[560px] w-full rounded-lg border border-[var(--border)] object-contain"
+                    data-testid="file-image-preview"
+                  />
+                  <p className="text-[11px] text-[var(--text-muted)]">{formatBytes(blob.size)}</p>
+                </div>
+              )}
+
+              {!blobLoading && !blobError && blob && (
+                (blob.encoding === "utf-8" && selectedResolution?.editorMode === "image") ||
+                (blob.encoding === "base64" && selectedResolution?.editorMode !== "image")
+              ) && (
+                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+                  Unable to render file preview for this payload.
                 </div>
               )}
             </div>
