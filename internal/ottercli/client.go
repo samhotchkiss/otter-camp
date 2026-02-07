@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -132,6 +133,23 @@ func (c *Client) CreateProject(input map[string]interface{}) (Project, error) {
 	return project, nil
 }
 
+// Slug returns a filesystem-safe slug derived from the project name.
+func (p Project) Slug() string {
+	return slugify(p.Name)
+}
+
+// slugify converts a name to a lowercase, hyphen-separated, filesystem-safe string.
+func slugify(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	s = strings.ReplaceAll(s, " ", "-")
+	s = regexp.MustCompile(`[^a-z0-9\-]+`).ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		return "project"
+	}
+	return s
+}
+
 func (c *Client) FindProject(query string) (Project, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -141,9 +159,10 @@ func (c *Client) FindProject(query string) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
+	querySlug := slugify(query)
 	var matches []Project
 	for _, p := range projects {
-		if strings.EqualFold(p.ID, query) || strings.EqualFold(p.Name, query) {
+		if strings.EqualFold(p.ID, query) || strings.EqualFold(p.Name, query) || p.Slug() == querySlug {
 			matches = append(matches, p)
 		}
 	}
