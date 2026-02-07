@@ -97,15 +97,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
           setIsLoading(false);
         })
         .catch(() => {
-          // Fallback: check hardcoded tokens for backward compat (Sam's shortcuts)
-          const LEGACY_TOKENS = ['otter-sam-2026', 'sam'];
-          if (LEGACY_TOKENS.includes(magicToken)) {
-            const samUser: User = { id: 'sam', email: 'sam@otter.camp', name: 'Sam' };
-            localStorage.setItem(TOKEN_KEY, magicToken);
-            localStorage.setItem(USER_KEY, JSON.stringify(samUser));
-            localStorage.setItem('otter-camp-org-id', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
-            setUser(samUser);
-          }
           // Remove auth param from URL
           params.delete('auth');
           const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
@@ -186,16 +177,26 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setUser(null);
   }, []);
 
-  // Simple login for MVP - just sets the user directly
-  const login = useCallback((email: string, name?: string) => {
-    const newUser: User = {
-      id: email.split('@')[0] || 'user',
-      email,
-      name: name || email.split('@')[0] || 'User',
-    };
-    localStorage.setItem(TOKEN_KEY, 'magic-link-token');
-    localStorage.setItem(USER_KEY, JSON.stringify(newUser));
-    setUser(newUser);
+  // Magic-link login for MVP
+  const login = useCallback(async (email: string, name?: string, org?: string) => {
+    const response = await fetch(`${API_URL}/api/auth/magic`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, name, org }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Failed to create magic link" }));
+      throw new Error(error.error || "Failed to create magic link");
+    }
+
+    const data = await response.json();
+    if (data?.url) {
+      window.location.href = data.url;
+      return;
+    }
+
+    throw new Error("Magic link response missing URL");
   }, []);
 
   const value: AuthContextValue = {

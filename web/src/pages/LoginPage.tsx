@@ -10,6 +10,8 @@ import { useAuth } from "../contexts/AuthContext";
 export default function LoginPage() {
   const { login } = useAuth();
   const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [org, setOrg] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,20 +22,13 @@ export default function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      // For now, just simulate magic link sent
-      // In production, this would call the API to send a magic link
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await login(email, name, org);
       setEmailSent(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send magic link");
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  // Quick login for testing (Sam's request: simple magic link)
-  const handleQuickLogin = () => {
-    login("sam@hotchkiss.me", "Sam");
   };
 
   return (
@@ -58,6 +53,36 @@ export default function LoginPage() {
 
               <form onSubmit={handleSubmit}>
                 <div className="form-group">
+                  <label htmlFor="name" className="form-label">
+                    Name
+                  </label>
+                  <input
+                    id="name"
+                    type="text"
+                    className="form-input"
+                    placeholder="Your name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    autoComplete="name"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="org" className="form-label">
+                    Organization
+                  </label>
+                  <input
+                    id="org"
+                    type="text"
+                    className="form-input"
+                    placeholder="Your org name"
+                    value={org}
+                    onChange={(e) => setOrg(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group">
                   <label htmlFor="email" className="form-label">
                     Email address
                   </label>
@@ -70,10 +95,9 @@ export default function LoginPage() {
                     onChange={(e) => setEmail(e.target.value)}
                     required
                     autoComplete="email"
-                    autoFocus
                   />
                   <p className="form-hint">
-                    We'll send you a magic link to sign in
+                    We'll generate a magic link to sign in
                   </p>
                 </div>
 
@@ -82,27 +106,19 @@ export default function LoginPage() {
                   className="btn btn-primary"
                   disabled={isSubmitting}
                 >
-                  {isSubmitting ? "Sending..." : "Send Magic Link"}
+                  {isSubmitting ? "Sending..." : "Generate Magic Link"}
                 </button>
               </form>
-
-              <div className="divider">or continue with</div>
-
-              <div className="alt-login">
-                <button type="button" className="btn btn-oauth" onClick={handleQuickLogin}>
-                  🔑 OpenClaw Token
-                </button>
-              </div>
             </>
           ) : (
             <div className="login-success">
               <div className="success-icon">✉️</div>
               <h2 className="success-title">Check your email</h2>
               <p className="success-text">
-                We sent a magic link to <strong>{email}</strong>
+                We generated a magic link for <strong>{email}</strong>
               </p>
               <p className="success-hint">
-                Click the link in the email to sign in. It expires in 10 minutes.
+                If you weren't redirected automatically, check the URL bar for the auth link.
               </p>
               <button
                 type="button"
