@@ -1,4 +1,4 @@
-# Otter Camp: Files Tab + Technonymous Review Flow
+# Issue #2: Files Tab + Technonymous Review Flow
 
 ## Problem Statement
 

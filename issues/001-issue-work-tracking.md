@@ -1,4 +1,4 @@
-# Otter Camp: Issues as the Single Work Tracking Primitive
+# Issue #1: Issues as the Single Work Tracking Primitive
 
 ## Context
 
