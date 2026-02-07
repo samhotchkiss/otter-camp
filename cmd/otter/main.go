@@ -132,6 +132,7 @@ func handleProject(args []string) {
 	switch args[0] {
 	case "create":
 		flags := flag.NewFlagSet("project create", flag.ExitOnError)
+		slug := flags.String("slug", "", "custom project slug")
 		description := flags.String("description", "", "project description")
 		status := flags.String("status", "", "status (active|archived|completed)")
 		repoURL := flags.String("repo-url", "", "repo URL")
@@ -150,6 +151,9 @@ func handleProject(args []string) {
 		client, _ := ottercli.NewClient(cfg, *org)
 
 		payload := map[string]interface{}{"name": name}
+		if strings.TrimSpace(*slug) != "" {
+			payload["slug"] = *slug
+		}
 		if strings.TrimSpace(*description) != "" {
 			payload["description"] = *description
 		}
@@ -164,12 +168,15 @@ func handleProject(args []string) {
 		dieIf(err)
 
 		if *jsonOut {
-			payload, _ := json.MarshalIndent(project, "", "  ")
-			fmt.Println(string(payload))
+			out, _ := json.MarshalIndent(project, "", "  ")
+			fmt.Println(string(out))
 			return
 		}
 
 		fmt.Printf("Created project: %s\n", project.Name)
+		if project.Slug != "" {
+			fmt.Printf("Slug: %s\n", project.Slug)
+		}
 		if project.RepoURL != "" {
 			fmt.Printf("Repo: %s\n", project.RepoURL)
 		}
