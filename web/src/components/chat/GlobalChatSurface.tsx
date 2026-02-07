@@ -21,7 +21,6 @@ const ORG_STORAGE_KEY = "otter-camp-org-id";
 const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
 const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
-const CHAT_POLL_INTERVAL_MS = 4000;
 const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000];
 
 type DeliveryTone = "neutral" | "success" | "warning";
@@ -448,14 +447,10 @@ export default function GlobalChatSurface({
 
   useEffect(() => {
     clearPostSendRefreshTimers();
-    const timer = window.setInterval(() => {
-      void loadConversation({ silent: true });
-    }, CHAT_POLL_INTERVAL_MS);
     return () => {
-      window.clearInterval(timer);
       clearPostSendRefreshTimers();
     };
-  }, [clearPostSendRefreshTimers, conversation.key, loadConversation]);
+  }, [clearPostSendRefreshTimers, conversation.key]);
 
   useEffect(() => {
     if (!lastMessage) {
