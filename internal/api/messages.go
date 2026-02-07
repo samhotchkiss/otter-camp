@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -115,6 +116,12 @@ type cursorToken struct {
 	ID        string
 }
 
+type dmDeliveryStatus struct {
+	Attempted bool   `json:"attempted"`
+	Delivered bool   `json:"delivered"`
+	Error     string `json:"error,omitempty"`
+}
+
 // CreateMessage handles POST /api/messages.
 func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -175,7 +182,7 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dispatchTarget, shouldDispatch, statusCode, dispatchErr := h.resolveDMDispatchTarget(r.Context(), db, req)
+	dispatchTarget, shouldDispatch, dispatchWarning, statusCode, dispatchErr := h.resolveDMDispatchTarget(r.Context(), db, req)
 	if dispatchErr != nil {
 		sendJSON(w, statusCode, errorResponse{Error: dispatchErr.Error()})
 		return
@@ -225,16 +232,25 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if shouldDispatch {
-		if err := h.dispatchDMMessageToOpenClaw(orgID, messageID, req, dispatchTarget); err != nil {
-			sendJSON(w, http.StatusBadGateway, errorResponse{Error: "failed to deliver message to agent"})
-			return
-		}
-	}
-
 	if err := tx.Commit(); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create message"})
 		return
+	}
+
+	delivery := dmDeliveryStatus{
+		Attempted: shouldDispatch,
+		Delivered: false,
+	}
+
+	if shouldDispatch {
+		if err := h.dispatchDMMessageToOpenClaw(orgID, messageID, req, dispatchTarget); err != nil {
+			log.Printf("dm dispatch failed for message %s: %v", messageID, err)
+			delivery.Error = "agent delivery unavailable; message was saved"
+		} else {
+			delivery.Delivered = true
+		}
+	} else if dispatchWarning != "" {
+		delivery.Error = dispatchWarning
 	}
 
 	message, err := loadMessageByID(r.Context(), db, messageID)
@@ -243,7 +259,10 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendJSON(w, http.StatusOK, map[string]Message{"message": message})
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"message":  message,
+		"delivery": delivery,
+	})
 }
 
 // GetMessage handles GET /api/messages/{id}.
@@ -789,22 +808,18 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 	ctx context.Context,
 	db *sql.DB,
 	req createMessageRequest,
-) (dmDispatchTarget, bool, int, error) {
+) (dmDispatchTarget, bool, string, int, error) {
 	if req.ThreadID == nil {
-		return dmDispatchTarget{}, false, 0, nil
+		return dmDispatchTarget{}, false, "", 0, nil
 	}
 
 	if isAgentAuthoredMessage(req) {
-		return dmDispatchTarget{}, false, 0, nil
+		return dmDispatchTarget{}, false, "", 0, nil
 	}
 
 	agentID := parseDMThreadAgentID(*req.ThreadID)
 	if agentID == "" {
-		return dmDispatchTarget{}, false, 0, nil
-	}
-
-	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
-		return dmDispatchTarget{}, true, http.StatusServiceUnavailable, errors.New("agent bridge offline; message was not delivered")
+		return dmDispatchTarget{}, false, "", 0, nil
 	}
 
 	var target dmDispatchTarget
@@ -815,16 +830,20 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 	).Scan(&target.AgentID, &target.SessionKey)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return dmDispatchTarget{}, true, http.StatusBadRequest, errors.New("unknown agent thread")
+			return dmDispatchTarget{}, false, "agent session unavailable; message was saved but not delivered", 0, nil
 		}
-		return dmDispatchTarget{}, true, http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+		return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
 	}
 
 	if strings.TrimSpace(target.SessionKey) == "" {
-		return dmDispatchTarget{}, true, http.StatusServiceUnavailable, errors.New("agent session unavailable; message was not delivered")
+		return dmDispatchTarget{}, false, "agent session unavailable; message was saved but not delivered", 0, nil
 	}
 
-	return target, true, 0, nil
+	if h.OpenClawDispatcher == nil || !h.OpenClawDispatcher.IsConnected() {
+		return dmDispatchTarget{}, false, "agent bridge offline; message was saved but not delivered", 0, nil
+	}
+
+	return target, true, "", 0, nil
 }
 
 func (h *MessageHandler) dispatchDMMessageToOpenClaw(

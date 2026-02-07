@@ -291,9 +291,18 @@ func TestMessageListDMThreadPagination(t *testing.T) {
 	require.Equal(t, http.StatusOK, threadRR.Code)
 }
 
-func TestCreateMessageDMBridgeOfflineReturnsServiceUnavailable(t *testing.T) {
+func TestCreateMessageDMBridgeOfflinePersistsMessageWithDeliveryWarning(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-offline-org")
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, NOW())`,
+		"itsalive",
+		"Ivy",
+		"online",
+		"agent:itsalive:main",
+	)
+	require.NoError(t, err)
 
 	payload := map[string]interface{}{
 		"org_id":      orgID,
@@ -310,12 +319,22 @@ func TestCreateMessageDMBridgeOfflineReturnsServiceUnavailable(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
 	handler.CreateMessage(rr, req)
-	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var createResp struct {
+		Message  Message          `json:"message"`
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &createResp))
+	require.NotEmpty(t, createResp.Message.ID)
+	require.False(t, createResp.Delivery.Attempted)
+	require.False(t, createResp.Delivery.Delivered)
+	require.Equal(t, "agent bridge offline; message was saved but not delivered", createResp.Delivery.Error)
 
 	var count int
 	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
 	require.NoError(t, err)
-	require.Equal(t, 0, count)
+	require.Equal(t, 1, count)
 }
 
 func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
@@ -370,7 +389,7 @@ func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
-func TestCreateMessageDMDispatchFailureRollsBackMessage(t *testing.T) {
+func TestCreateMessageDMDispatchFailurePersistsMessageWithDeliveryWarning(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-failure-org")
 
@@ -403,10 +422,20 @@ func TestCreateMessageDMDispatchFailureRollsBackMessage(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
 	handler.CreateMessage(rr, req)
-	require.Equal(t, http.StatusBadGateway, rr.Code)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var createResp struct {
+		Message  Message          `json:"message"`
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &createResp))
+	require.NotEmpty(t, createResp.Message.ID)
+	require.True(t, createResp.Delivery.Attempted)
+	require.False(t, createResp.Delivery.Delivered)
+	require.Equal(t, "agent delivery unavailable; message was saved", createResp.Delivery.Error)
 
 	var count int
 	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
 	require.NoError(t, err)
-	require.Equal(t, 0, count)
+	require.Equal(t, 1, count)
 }
