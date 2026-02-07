@@ -1,12 +1,15 @@
 #!/usr/bin/env npx tsx
 /**
- * OpenClaw → Otter Camp Bridge
- * 
- * This script connects to the OpenClaw Gateway WebSocket and pushes
- * session/agent data to api.otter.camp in real-time.
- * 
+ * OpenClaw <-> Otter Camp Bridge
+ *
+ * Responsibilities:
+ * 1) Pull sessions from OpenClaw and push sync snapshots to Otter Camp.
+ * 2) Keep /ws/openclaw connected so Otter Camp can dispatch dm.message events.
+ * 3) Forward dm.message events to OpenClaw via sessions.send.
+ *
  * Usage:
- *   OPENCLAW_TOKEN=xxx OTTERCAMP_URL=https://api.otter.camp npx tsx bridge/openclaw-bridge.ts
+ *   OPENCLAW_TOKEN=... OTTERCAMP_URL=https://api.otter.camp npx tsx bridge/openclaw-bridge.ts
+ *   OPENCLAW_TOKEN=... OPENCLAW_WS_SECRET=... npx tsx bridge/openclaw-bridge.ts --continuous
  */
 
 import WebSocket from 'ws';
@@ -16,6 +19,7 @@ const OPENCLAW_PORT = process.env.OPENCLAW_PORT || '18791';
 const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || '';
 const OTTERCAMP_URL = process.env.OTTERCAMP_URL || 'https://api.otter.camp';
 const OTTERCAMP_TOKEN = process.env.OTTERCAMP_TOKEN || '';
+const OTTERCAMP_WS_SECRET = process.env.OPENCLAW_WS_SECRET || '';
 
 interface OpenClawSession {
   key: string;
@@ -41,33 +45,64 @@ interface SessionsListResponse {
   sessions: OpenClawSession[];
 }
 
-let ws: WebSocket | null = null;
+type PendingRequest = {
+  resolve: (value: unknown) => void;
+  reject: (reason?: unknown) => void;
+};
+
+type DMDispatchEvent = {
+  type?: string;
+  data?: {
+    thread_id?: string;
+    session_key?: string;
+    content?: string;
+    message_id?: string;
+    agent_id?: string;
+    sender_name?: string;
+  };
+};
+
+let openClawWS: WebSocket | null = null;
+let otterCampWS: WebSocket | null = null;
 let requestId = 0;
+const pendingRequests = new Map<string, PendingRequest>();
+
 const genId = () => `req-${++requestId}`;
-let pendingRequests = new Map<string, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>();
-let challengeNonce: string | null = null;
+
+function normalizeModeArg(value: string | undefined): 'once' | 'continuous' {
+  if (!value) {
+    return 'once';
+  }
+  const normalized = value.replace(/^--/, '').trim().toLowerCase();
+  return normalized === 'continuous' ? 'continuous' : 'once';
+}
+
+function buildOtterCampWSURL(): string {
+  const url = new URL(OTTERCAMP_URL);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '/ws/openclaw';
+  if (OTTERCAMP_WS_SECRET) {
+    url.searchParams.set('token', OTTERCAMP_WS_SECRET);
+  }
+  return url.toString();
+}
 
 async function connectToOpenClaw(): Promise<void> {
   return new Promise((resolve, reject) => {
     const url = `ws://${OPENCLAW_HOST}:${OPENCLAW_PORT}`;
-    console.log(`Connecting to OpenClaw at ${url}...`);
-    
-    ws = new WebSocket(url);
-    
-    ws.on('open', () => {
-      console.log('WebSocket connected, waiting for challenge...');
+    console.log(`[bridge] connecting to OpenClaw gateway at ${url}`);
+
+    openClawWS = new WebSocket(url);
+
+    openClawWS.on('open', () => {
+      console.log('[bridge] OpenClaw socket opened, waiting for challenge');
     });
-    
-    ws.on('message', async (data) => {
+
+    openClawWS.on('message', (data) => {
       try {
-        const msg = JSON.parse(data.toString());
-        
-        // Handle challenge event - gateway sends this first
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+
         if (msg.type === 'event' && msg.event === 'connect.challenge') {
-          console.log('Received connect challenge');
-          challengeNonce = msg.payload?.nonce;
-          
-          // Send connect request with auth
           const connectId = genId();
           const connectMsg = {
             type: 'req',
@@ -89,101 +124,112 @@ async function connectToOpenClaw(): Promise<void> {
               permissions: {},
               auth: OPENCLAW_TOKEN ? { token: OPENCLAW_TOKEN } : undefined,
               locale: 'en-US',
-              userAgent: 'openclaw-cli/1.0.0',
+              userAgent: 'ottercamp-bridge/1.0.0',
             },
           };
-          
-          // Register a handler for the connect response
+
           pendingRequests.set(connectId, {
             resolve: () => {
-              console.log('Connected to OpenClaw Gateway');
+              console.log('[bridge] connected to OpenClaw gateway');
               resolve();
             },
-            reject: (err) => {
-              reject(err);
-            }
+            reject: (err) => reject(err),
           });
-          
-          console.log('Sending connect request with token:', OPENCLAW_TOKEN ? 'present' : 'missing');
-          ws!.send(JSON.stringify(connectMsg));
+
+          openClawWS!.send(JSON.stringify(connectMsg));
           return;
         }
-        
-        // Handle response
+
         if (msg.type === 'res') {
-          const pending = pendingRequests.get(msg.id);
-          if (pending) {
-            pendingRequests.delete(msg.id);
-            if (msg.ok) {
-              pending.resolve(msg.payload);
-            } else {
-              pending.reject(new Error(msg.error?.message || 'Request failed'));
-            }
+          const responseID = typeof msg.id === 'string' ? msg.id : '';
+          const pending = pendingRequests.get(responseID);
+          if (!pending) {
+            return;
+          }
+
+          pendingRequests.delete(responseID);
+          if (msg.ok) {
+            pending.resolve((msg as { payload?: unknown }).payload);
+          } else {
+            const maybeError = msg as { error?: { message?: string } };
+            pending.reject(new Error(maybeError.error?.message || 'request failed'));
           }
           return;
         }
-        
-        // Handle other events
-        if (msg.type === 'event') {
-          console.log(`Event: ${msg.event}`);
-        }
       } catch (err) {
-        console.error('Failed to parse message:', err);
+        console.error('[bridge] failed to parse OpenClaw message:', err);
       }
     });
-    
-    ws.on('error', (err) => {
-      console.error('WebSocket error:', err);
+
+    openClawWS.on('error', (err) => {
+      console.error('[bridge] OpenClaw socket error:', err);
       reject(err);
     });
-    
-    ws.on('close', (code, reason) => {
-      console.log(`Disconnected from OpenClaw - code: ${code}, reason: ${reason.toString()}`);
-      ws = null;
+
+    openClawWS.on('close', (code, reason) => {
+      console.warn(`[bridge] OpenClaw socket closed (${code}) ${reason.toString()}`);
+      openClawWS = null;
     });
-    
-    // Timeout for connection
+
     setTimeout(() => {
-      reject(new Error('Connection timeout'));
+      reject(new Error('OpenClaw connection timeout'));
     }, 30000);
   });
 }
 
 async function sendRequest(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    throw new Error('Not connected to OpenClaw');
+  if (!openClawWS || openClawWS.readyState !== WebSocket.OPEN) {
+    throw new Error('not connected to OpenClaw');
   }
-  
+
   const id = genId();
-  
+
   return new Promise((resolve, reject) => {
     pendingRequests.set(id, { resolve, reject });
-    
-    const msg = {
-      type: 'req',
-      id,
-      method,
-      params,
-    };
-    
-    ws!.send(JSON.stringify(msg));
-    
-    // Timeout after 30 seconds
+
+    openClawWS!.send(
+      JSON.stringify({
+        type: 'req',
+        id,
+        method,
+        params,
+      }),
+    );
+
     setTimeout(() => {
-      if (pendingRequests.has(id)) {
-        pendingRequests.delete(id);
-        reject(new Error('Request timeout'));
+      if (!pendingRequests.has(id)) {
+        return;
       }
+      pendingRequests.delete(id);
+      reject(new Error(`request timeout for ${method}`));
     }, 30000);
   });
 }
 
+async function sendMessageToSession(sessionKey: string, content: string): Promise<void> {
+  const attempts: Array<Record<string, unknown>> = [
+    { sessionKey, message: content },
+    { key: sessionKey, message: content },
+  ];
+
+  let lastError: unknown;
+  for (const params of attempts) {
+    try {
+      await sendRequest('sessions.send', params);
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('sessions.send failed');
+}
+
 async function fetchSessions(): Promise<OpenClawSession[]> {
-  // Use the sessions.list method
-  const response = await sendRequest('sessions.list', {
+  const response = (await sendRequest('sessions.list', {
     limit: 50,
-  }) as SessionsListResponse;
-  
+  })) as SessionsListResponse;
+
   return response.sessions || [];
 }
 
@@ -194,25 +240,82 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
     sessions,
     source: 'bridge',
   };
-  
+
   const url = `${OTTERCAMP_URL}/api/sync/openclaw`;
-  console.log(`Pushing ${sessions.length} sessions to ${url}...`);
-  
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(OTTERCAMP_TOKEN ? { 'Authorization': `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
     },
     body: JSON.stringify(payload),
   });
-  
+
   if (!response.ok) {
-    throw new Error(`Push failed: ${response.status} ${response.statusText}`);
+    throw new Error(`sync push failed: ${response.status} ${response.statusText}`);
   }
-  
-  const result = await response.json();
-  console.log('Push result:', result);
+}
+
+async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
+  const sessionKey = (event.data?.session_key || '').trim();
+  const content = (event.data?.content || '').trim();
+
+  if (!sessionKey || !content) {
+    console.warn('[bridge] skipped dm.message with missing session key or content');
+    return;
+  }
+
+  try {
+    await sendMessageToSession(sessionKey, content);
+    console.log(
+      `[bridge] delivered dm.message to ${sessionKey} (message_id=${event.data?.message_id || 'n/a'})`,
+    );
+  } catch (err) {
+    console.error(`[bridge] failed to deliver dm.message to ${sessionKey}:`, err);
+  }
+}
+
+function connectOtterCampDispatchSocket(): void {
+  if (!OTTERCAMP_WS_SECRET) {
+    console.warn('[bridge] OPENCLAW_WS_SECRET not set; dm.message dispatch disabled');
+    return;
+  }
+
+  const wsURL = buildOtterCampWSURL();
+  console.log(`[bridge] connecting to OtterCamp websocket ${wsURL}`);
+
+  otterCampWS = new WebSocket(wsURL);
+
+  otterCampWS.on('open', () => {
+    console.log('[bridge] connected to OtterCamp /ws/openclaw');
+  });
+
+  otterCampWS.on('message', (data) => {
+    try {
+      const event = JSON.parse(data.toString()) as DMDispatchEvent;
+      if (event.type !== 'dm.message') {
+        return;
+      }
+      void handleDMDispatchEvent(event);
+    } catch (err) {
+      console.error('[bridge] failed to parse OtterCamp websocket message:', err);
+    }
+  });
+
+  otterCampWS.on('close', (code, reason) => {
+    console.warn(`[bridge] OtterCamp websocket closed (${code}) ${reason.toString()}`);
+    otterCampWS = null;
+
+    setTimeout(() => {
+      if (!otterCampWS) {
+        connectOtterCampDispatchSocket();
+      }
+    }, 2000);
+  });
+
+  otterCampWS.on('error', (err) => {
+    console.error('[bridge] OtterCamp websocket error:', err);
+  });
 }
 
 async function runOnce(): Promise<void> {
@@ -220,42 +323,48 @@ async function runOnce(): Promise<void> {
     await connectToOpenClaw();
     const sessions = await fetchSessions();
     await pushToOtterCamp(sessions);
-    console.log('Sync complete');
+    console.log(`[bridge] sync complete (${sessions.length} sessions)`);
   } catch (err) {
-    console.error('Sync failed:', err);
+    console.error('[bridge] one-shot sync failed:', err);
     process.exit(1);
   } finally {
-    if (ws) {
-      ws.close();
+    if (openClawWS) {
+      openClawWS.close();
     }
   }
 }
 
 async function runContinuous(): Promise<void> {
   await connectToOpenClaw();
-  
-  // Initial sync
-  const sessions = await fetchSessions();
-  await pushToOtterCamp(sessions);
-  
-  // Sync every 30 seconds
+  connectOtterCampDispatchSocket();
+
+  const firstSessions = await fetchSessions();
+  await pushToOtterCamp(firstSessions);
+  console.log(`[bridge] initial sync complete (${firstSessions.length} sessions)`);
+
   setInterval(async () => {
     try {
       const sessions = await fetchSessions();
       await pushToOtterCamp(sessions);
+      console.log(`[bridge] periodic sync complete (${sessions.length} sessions)`);
     } catch (err) {
-      console.error('Periodic sync failed:', err);
+      console.error('[bridge] periodic sync failed:', err);
     }
   }, 30000);
-  
-  console.log('Bridge running in continuous mode (Ctrl+C to stop)');
+
+  console.log('[bridge] running continuously (Ctrl+C to stop)');
 }
 
-// Main
-const mode = process.argv[2] || 'once';
+const mode = normalizeModeArg(process.argv[2]);
 
 if (mode === 'continuous') {
-  runContinuous().catch(console.error);
+  runContinuous().catch((err) => {
+    console.error('[bridge] fatal error in continuous mode:', err);
+    process.exit(1);
+  });
 } else {
-  runOnce().catch(console.error);
+  runOnce().catch((err) => {
+    console.error('[bridge] fatal error in one-shot mode:', err);
+    process.exit(1);
+  });
 }
