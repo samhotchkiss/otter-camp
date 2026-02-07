@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/samhotchkiss/otter-camp/internal/ottercli"
@@ -204,18 +203,39 @@ func handleClone(args []string) {
 	target := *pathFlag
 	if target == "" {
 		root := filepath.Join(userHomeDir(), "Documents", "OtterCamp")
-		target = filepath.Join(root, safeDirName(project.Name))
-	}
-
-	if *jsonOut {
-		payload, _ := json.MarshalIndent(map[string]string{"repo_url": project.RepoURL, "path": target}, "", "  ")
-		fmt.Println(string(payload))
+		target = filepath.Join(root, project.Slug())
 	}
 
 	cmd := exec.Command("git", "clone", project.RepoURL, target)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	dieIf(cmd.Run())
+	if !*jsonOut {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
+	if err := cmd.Run(); err != nil {
+		if *jsonOut {
+			printJSON(map[string]interface{}{
+				"ok":     false,
+				"data":   nil,
+				"errors": []map[string]string{{"code": "CLONE_FAILED", "message": err.Error()}},
+			})
+		}
+		die(err.Error())
+	}
+
+	if *jsonOut {
+		printJSON(map[string]interface{}{
+			"ok": true,
+			"data": map[string]string{
+				"project":  project.Name,
+				"slug":     project.Slug(),
+				"repo_url": project.RepoURL,
+				"path":     target,
+			},
+			"errors": []interface{}{},
+		})
+	} else {
+		fmt.Printf("Cloned %s into %s\n", project.Name, target)
+	}
 }
 
 func handleRemote(args []string) {
@@ -354,15 +374,9 @@ func gitRemoteURL(repoRoot, name string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func safeDirName(input string) string {
-	name := strings.ToLower(strings.TrimSpace(input))
-	name = strings.ReplaceAll(name, " ", "-")
-	name = regexp.MustCompile(`[^a-z0-9\-]+`).ReplaceAllString(name, "-")
-	name = strings.Trim(name, "-")
-	if name == "" {
-		return "project"
-	}
-	return name
+func printJSON(v interface{}) {
+	payload, _ := json.MarshalIndent(v, "", "  ")
+	fmt.Println(string(payload))
 }
 
 func userHomeDir() string {
