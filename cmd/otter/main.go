@@ -703,20 +703,7 @@ func handleIssue(args []string) {
 		issue, err := client.GetIssue(issueID)
 		dieIf(err)
 
-		if *jsonOut {
-			printJSON(issue)
-			return
-		}
-		fmt.Printf("Issue #%d (%s)\n", issue.IssueNumber, issue.ID)
-		fmt.Printf("Title: %s\n", issue.Title)
-		fmt.Printf("State: %s / %s\n", issue.State, issue.WorkStatus)
-		fmt.Printf("Priority: %s\n", issue.Priority)
-		if issue.OwnerAgentID != nil {
-			fmt.Printf("Owner: %s\n", resolveAgentName(client, *issue.OwnerAgentID))
-		}
-		if issue.Body != nil {
-			fmt.Printf("\n%s\n", strings.TrimSpace(*issue.Body))
-		}
+		fmt.Print(issueViewOutput(client, issue, *jsonOut))
 
 	case "comment":
 		flags := flag.NewFlagSet("issue comment", flag.ExitOnError)
@@ -843,6 +830,26 @@ func resolveAgentName(client *ottercli.Client, agentID string) string {
 		return agent.Name
 	}
 	return agentID
+}
+
+func issueViewOutput(client *ottercli.Client, issue ottercli.Issue, jsonOut bool) string {
+	if jsonOut {
+		payload, _ := json.MarshalIndent(issue, "", "  ")
+		return string(payload) + "\n"
+	}
+
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Issue #%d (%s)\n", issue.IssueNumber, issue.ID)
+	fmt.Fprintf(&builder, "Title: %s\n", issue.Title)
+	fmt.Fprintf(&builder, "State: %s / %s\n", issue.State, issue.WorkStatus)
+	fmt.Fprintf(&builder, "Priority: %s\n", issue.Priority)
+	if issue.OwnerAgentID != nil {
+		fmt.Fprintf(&builder, "Owner: %s\n", resolveAgentName(client, *issue.OwnerAgentID))
+	}
+	if issue.Body != nil {
+		fmt.Fprintf(&builder, "\n%s\n", strings.TrimSpace(*issue.Body))
+	}
+	return builder.String()
 }
 
 func resolveIssueCommentAuthorRef(client *ottercli.Client, explicitAuthorRef, envAuthorRef string) (string, error) {

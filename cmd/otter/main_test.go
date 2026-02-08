@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -317,5 +318,70 @@ func TestResolveIssueCommentAuthorRef(t *testing.T) {
 				t.Fatalf("whoamiCalls = %d, want %d", whoamiCalls, tt.wantWhoamiCalls)
 			}
 		})
+	}
+}
+
+func TestIssueViewOutputResolvesOwnerName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agents" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agents":[{"id":"agent-1","name":"Stone","slug":"stone"}]}`))
+	}))
+	defer server.Close()
+
+	client := &ottercli.Client{
+		BaseURL: server.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    server.Client(),
+	}
+
+	ownerID := "agent-1"
+	body := "Details"
+	output := issueViewOutput(client, ottercli.Issue{
+		ID:           "issue-1",
+		IssueNumber:  7,
+		Title:        "View output test",
+		State:        "open",
+		WorkStatus:   "queued",
+		Priority:     "P2",
+		OwnerAgentID: &ownerID,
+		Body:         &body,
+	}, false)
+
+	if !strings.Contains(output, "Owner: Stone") {
+		t.Fatalf("expected owner name in output, got:\n%s", output)
+	}
+	if strings.Contains(output, "Owner: agent-1") {
+		t.Fatalf("expected owner id to be resolved, got:\n%s", output)
+	}
+}
+
+func TestIssueViewOutputJSON(t *testing.T) {
+	ownerID := "agent-1"
+	output := issueViewOutput(nil, ottercli.Issue{
+		ID:           "issue-1",
+		ProjectID:    "project-1",
+		IssueNumber:  8,
+		Title:        "JSON output test",
+		State:        "open",
+		WorkStatus:   "queued",
+		Priority:     "P1",
+		OwnerAgentID: &ownerID,
+	}, true)
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		t.Fatalf("expected valid JSON output, got error: %v\noutput: %s", err, output)
+	}
+	if payload["id"] != "issue-1" {
+		t.Fatalf("payload id = %#v, want issue-1", payload["id"])
+	}
+	if payload["work_status"] != "queued" {
+		t.Fatalf("payload work_status = %#v, want queued", payload["work_status"])
 	}
 }
