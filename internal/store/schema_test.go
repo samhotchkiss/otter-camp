@@ -429,3 +429,83 @@ func TestSchemaIssueParticipantAndCommentConstraints(t *testing.T) {
 	)
 	requirePQCode(t, err, "23514")
 }
+
+func TestSchemaProjectChatAttachmentColumnsAndForeignKey(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var hasProjectChatAttachments bool
+	err := db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'project_chat_messages'
+			  AND column_name = 'attachments'
+		)`,
+	).Scan(&hasProjectChatAttachments)
+	require.NoError(t, err)
+	require.True(t, hasProjectChatAttachments)
+
+	var hasAttachmentChatMessageID bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'attachments'
+			  AND column_name = 'chat_message_id'
+		)`,
+	).Scan(&hasAttachmentChatMessageID)
+	require.NoError(t, err)
+	require.True(t, hasAttachmentChatMessageID)
+
+	var projectChatAttachmentsIdx sql.NullString
+	err = db.QueryRow(
+		`SELECT to_regclass('public.project_chat_messages_attachments_idx')::text`,
+	).Scan(&projectChatAttachmentsIdx)
+	require.NoError(t, err)
+	require.True(t, projectChatAttachmentsIdx.Valid)
+
+	var attachmentsChatMessageIdx sql.NullString
+	err = db.QueryRow(
+		`SELECT to_regclass('public.attachments_chat_message_idx')::text`,
+	).Scan(&attachmentsChatMessageIdx)
+	require.NoError(t, err)
+	require.True(t, attachmentsChatMessageIdx.Valid)
+
+	orgID := createTestOrganization(t, db, "chat-attachment-schema-org")
+	projectID := insertSchemaProject(t, db, orgID, "Chat Attachment Schema Project")
+
+	var chatMessageID string
+	err = db.QueryRow(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body)
+		 VALUES ($1, $2, 'Sam', 'attachment test')
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&chatMessageID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO attachments (org_id, chat_message_id, filename, size_bytes, mime_type, storage_key, url)
+		 VALUES ($1, $2, 'file.txt', 12, 'text/plain', $3, '/uploads/test/file.txt')`,
+		orgID,
+		chatMessageID,
+		"schema-test-chat-message-link-"+chatMessageID,
+	)
+	require.NoError(t, err)
+
+	var missingMessageID string
+	err = db.QueryRow(`SELECT gen_random_uuid()::text`).Scan(&missingMessageID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO attachments (org_id, chat_message_id, filename, size_bytes, mime_type, storage_key, url)
+		 VALUES ($1, $2, 'missing.txt', 1, 'text/plain', $3, '/uploads/test/missing.txt')`,
+		orgID,
+		missingMessageID,
+		"schema-test-missing-chat-message-"+missingMessageID,
+	)
+	requirePQCode(t, err, "23503")
+}
