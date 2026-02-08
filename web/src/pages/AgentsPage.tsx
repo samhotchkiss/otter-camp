@@ -4,6 +4,7 @@ import AgentCard, { type AgentCardData } from "../components/AgentCard";
 import { type AgentStatus } from "../components/AgentDM";
 import { useWS } from "../contexts/WebSocketContext";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
+import useEmissions from "../hooks/useEmissions";
 
 /**
  * Status filter options including "all".
@@ -170,6 +171,7 @@ function AgentsPageComponent({
 
   const { lastMessage, connected } = useWS();
   const { openConversation } = useGlobalChat();
+  const { latestBySource } = useEmissions({ limit: 200 });
 
   // Responsive column count
   useEffect(() => {
@@ -329,13 +331,29 @@ function AgentsPageComponent({
     return result;
   }, [agents]);
 
+  const agentsWithLiveActivity = useMemo(() => {
+    return agents.map((agent) => {
+      const latestEmission = latestBySource.get(agent.id);
+      if (!latestEmission) {
+        return agent;
+      }
+      return {
+        ...agent,
+        lastEmission: {
+          summary: latestEmission.summary,
+          timestamp: latestEmission.timestamp,
+        },
+      };
+    });
+  }, [agents, latestBySource]);
+
   // Filter agents by status - memoized
   const filteredAgents = useMemo(() => {
     if (statusFilter === "all") {
-      return agents;
+      return agentsWithLiveActivity;
     }
-    return agents.filter((agent) => agent.status === statusFilter);
-  }, [agents, statusFilter]);
+    return agentsWithLiveActivity.filter((agent) => agent.status === statusFilter);
+  }, [agentsWithLiveActivity, statusFilter]);
 
   // Calculate rows for virtualization
   const rowCount = useMemo(() => 

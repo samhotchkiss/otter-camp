@@ -9,6 +9,8 @@ import { api, type ActionItem, type FeedApiItem, type FeedItem, type Project } f
 import { getActivityDescription, formatRelativeTime, getTypeConfig, normalizeMetadata } from "../components/activity/activityFormat";
 import { getInitials } from "../components/messaging/utils";
 import { isDemoMode } from "../lib/demo";
+import useEmissions from "../hooks/useEmissions";
+import EmissionTicker from "../components/EmissionTicker";
 
 /**
  * Dashboard - Two-column layout matching Jeff G's mockups
@@ -181,6 +183,35 @@ export default function Dashboard() {
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { emissions } = useEmissions({ limit: 30 });
+
+  const liveProjectStatus = useMemo(() => {
+    const now = Date.now();
+    const statusByProject = new Map<string, "live-active" | "live-recent">();
+
+    for (const emission of emissions) {
+      const projectID = emission.scope?.project_id?.trim();
+      if (!projectID) {
+        continue;
+      }
+
+      const emittedAt = new Date(emission.timestamp).getTime();
+      if (Number.isNaN(emittedAt)) {
+        continue;
+      }
+
+      const ageSeconds = Math.floor((now - emittedAt) / 1000);
+      if (ageSeconds <= 60) {
+        statusByProject.set(projectID, "live-active");
+        continue;
+      }
+      if (ageSeconds <= 300 && !statusByProject.has(projectID)) {
+        statusByProject.set(projectID, "live-recent");
+      }
+    }
+
+    return statusByProject;
+  }, [emissions]);
 
   // Fetch feed data from API
   useEffect(() => {
@@ -357,6 +388,15 @@ export default function Dashboard() {
             <span className="section-count muted">{feedItems.length}</span>
           </header>
 
+          <div className="live-ticker">
+            <span className="live-pill">LIVE</span>
+            <EmissionTicker
+              emissions={emissions}
+              limit={5}
+              emptyText="No live emissions yet"
+            />
+          </div>
+
           <div className="card">
             {feedItems.length === 0 && !isLoading && (
               <div className="empty-state">No activity yet.</div>
@@ -424,9 +464,11 @@ export default function Dashboard() {
             const total = project.taskCount ?? 0;
             const done = project.completedCount ?? 0;
             const desc = total > 0 ? `${done}/${total} tasks` : "No tasks yet";
+            const projectStatusClass =
+              liveProjectStatus.get(project.id) || project.status || "idle";
             return (
               <div key={project.id} className="project-item">
-                <div className={`project-status ${project.status || "active"}`}></div>
+                <div className={`project-status ${projectStatusClass}`}></div>
                 <div className="project-info">
                   <div className="project-name">{project.name}</div>
                   <div className="project-desc">{desc}</div>
@@ -487,6 +529,27 @@ export default function Dashboard() {
           color: var(--text-muted);
           font-size: 13px;
           padding: 12px;
+        }
+
+        .live-ticker {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 10px;
+          padding: 10px 12px;
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          background: var(--surface);
+        }
+
+        .live-pill {
+          border-radius: 999px;
+          padding: 2px 8px;
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.05em;
+          background: #ef4444;
+          color: #fff;
         }
 
         .last-sync {
@@ -693,6 +756,15 @@ export default function Dashboard() {
         
         .project-status.idle {
           background: var(--text-muted);
+        }
+
+        .project-status.live-active {
+          background: var(--green);
+          box-shadow: 0 0 0 4px rgba(74, 222, 128, 0.2);
+        }
+
+        .project-status.live-recent {
+          background: #f59e0b;
         }
         
         .project-info {

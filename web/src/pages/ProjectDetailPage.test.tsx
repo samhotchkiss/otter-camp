@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ProjectDetailPage from "./ProjectDetailPage";
+import useEmissions from "../hooks/useEmissions";
 
 vi.mock("../components/project/ProjectFileBrowser", () => ({
   default: ({ projectId }: { projectId: string }) => (
@@ -29,6 +30,10 @@ vi.mock("../contexts/GlobalChatContext", () => ({
   }),
 }));
 
+vi.mock("../hooks/useEmissions", () => ({
+  default: vi.fn(),
+}));
+
 function mockJSONResponse(body: unknown, ok = true): Response {
   return {
     ok,
@@ -44,6 +49,13 @@ describe("ProjectDetailPage files tab", () => {
     fetchMock.mockReset();
     localStorage.clear();
     localStorage.setItem("otter-camp-org-id", "org-123");
+    vi.mocked(useEmissions).mockReturnValue({
+      emissions: [],
+      latestBySource: new Map(),
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
   });
 
   it("shows Files tab and renders ProjectFileBrowser when selected", async () => {
@@ -75,5 +87,49 @@ describe("ProjectDetailPage files tab", () => {
 
     await user.click(screen.getByRole("button", { name: "Files" }));
     expect(await screen.findByTestId("project-file-browser-mock")).toBeInTheDocument();
+  });
+
+  it("renders project-scoped emission activity in board view", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+          description: "Long-form writing",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ tasks: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    vi.mocked(useEmissions).mockReturnValue({
+      emissions: [
+        {
+          id: "em-1",
+          source_type: "agent",
+          source_id: "agent-1",
+          kind: "status",
+          summary: "Project scoped emission",
+          timestamp: "2026-02-08T12:00:00Z",
+          scope: { project_id: "project-1" },
+        },
+      ],
+      latestBySource: new Map(),
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    expect(screen.getByText("Project scoped emission")).toBeInTheDocument();
   });
 });
