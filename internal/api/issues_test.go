@@ -959,6 +959,115 @@ func TestIssuesHandlerCreateIssueValidatesPayload(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, invalidDueAtRec.Code)
 }
 
+func TestIssuesHandlerQueueNotificationDispatch(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-queue-notify-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Queue Notify Project")
+	unassignedProjectID := insertProjectTestProject(t, db, orgID, "Issue Queue Notify Unassigned Project")
+	plannerAgentID := insertMessageTestAgent(t, db, orgID, "issue-queue-notify-planner")
+	workerAgentID := insertMessageTestAgent(t, db, orgID, "issue-queue-notify-worker")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	_, err := issueStore.UpsertIssueRoleAssignment(ctx, store.UpsertIssueRoleAssignmentInput{
+		ProjectID: projectID,
+		Role:      "planner",
+		AgentID:   &plannerAgentID,
+	})
+	require.NoError(t, err)
+	_, err = issueStore.UpsertIssueRoleAssignment(ctx, store.UpsertIssueRoleAssignmentInput{
+		ProjectID: projectID,
+		Role:      "worker",
+		AgentID:   &workerAgentID,
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore:   issueStore,
+		ProjectStore: store.NewProjectStore(db),
+		DB:           db,
+	}
+	router := newIssueTestRouter(handler)
+
+	createReadyReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues?org_id="+orgID,
+		bytes.NewReader([]byte(`{"title":"Planner queued issue","work_status":"ready"}`)),
+	)
+	createReadyRec := httptest.NewRecorder()
+	router.ServeHTTP(createReadyRec, createReadyReq)
+	require.Equal(t, http.StatusCreated, createReadyRec.Code)
+
+	var readyIssue issueSummaryPayload
+	require.NoError(t, json.NewDecoder(createReadyRec.Body).Decode(&readyIssue))
+
+	createPlanningReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues?org_id="+orgID,
+		bytes.NewReader([]byte(`{"title":"Worker queue candidate","work_status":"planning"}`)),
+	)
+	createPlanningRec := httptest.NewRecorder()
+	router.ServeHTTP(createPlanningRec, createPlanningReq)
+	require.Equal(t, http.StatusCreated, createPlanningRec.Code)
+
+	var planningIssue issueSummaryPayload
+	require.NoError(t, json.NewDecoder(createPlanningRec.Body).Decode(&planningIssue))
+
+	patchReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+planningIssue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"work_status":"ready_for_work"}`)),
+	)
+	patchRec := httptest.NewRecorder()
+	router.ServeHTTP(patchRec, patchReq)
+	require.Equal(t, http.StatusOK, patchRec.Code)
+
+	unassignedReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+unassignedProjectID+"/issues?org_id="+orgID,
+		bytes.NewReader([]byte(`{"title":"No assignment issue","work_status":"ready"}`)),
+	)
+	unassignedRec := httptest.NewRecorder()
+	router.ServeHTTP(unassignedRec, unassignedReq)
+	require.Equal(t, http.StatusCreated, unassignedRec.Code)
+
+	rows, err := db.Query(
+		`SELECT event_type, payload
+			FROM openclaw_dispatch_queue
+			WHERE event_type = 'issue.queue.available'
+			ORDER BY id ASC`,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var events []openClawIssueQueueDispatchEvent
+	for rows.Next() {
+		var eventType string
+		var payload []byte
+		require.NoError(t, rows.Scan(&eventType, &payload))
+		require.Equal(t, "issue.queue.available", eventType)
+		var event openClawIssueQueueDispatchEvent
+		require.NoError(t, json.Unmarshal(payload, &event))
+		events = append(events, event)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, events, 2)
+
+	require.Equal(t, readyIssue.ID, events[0].Data.IssueID)
+	require.Equal(t, readyIssue.IssueNumber, events[0].Data.IssueNumber)
+	require.Equal(t, projectID, events[0].Data.ProjectID)
+	require.Equal(t, "planner", events[0].Data.Role)
+	require.Equal(t, store.IssueWorkStatusReady, events[0].Data.WorkStatus)
+	require.Equal(t, plannerAgentID, events[0].Data.AgentID)
+
+	require.Equal(t, planningIssue.ID, events[1].Data.IssueID)
+	require.Equal(t, planningIssue.IssueNumber, events[1].Data.IssueNumber)
+	require.Equal(t, projectID, events[1].Data.ProjectID)
+	require.Equal(t, "worker", events[1].Data.Role)
+	require.Equal(t, store.IssueWorkStatusReadyForWork, events[1].Data.WorkStatus)
+	require.Equal(t, workerAgentID, events[1].Data.AgentID)
+}
+
 func TestIssuesHandlerCommentCreateDispatchesToOpenClawOwner(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-comment-dispatch-org")

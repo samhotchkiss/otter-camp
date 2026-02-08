@@ -114,6 +114,24 @@ type openClawIssueCommentDispatchData struct {
 	SenderType       string `json:"sender_type,omitempty"`
 }
 
+type openClawIssueQueueDispatchEvent struct {
+	Type      string                         `json:"type"`
+	Timestamp time.Time                      `json:"timestamp"`
+	OrgID     string                         `json:"org_id"`
+	Data      openClawIssueQueueDispatchData `json:"data"`
+}
+
+type openClawIssueQueueDispatchData struct {
+	ProjectID     string  `json:"project_id"`
+	IssueID       string  `json:"issue_id"`
+	IssueNumber   int64   `json:"issue_number"`
+	IssueTitle    string  `json:"issue_title,omitempty"`
+	ParentIssueID *string `json:"parent_issue_id,omitempty"`
+	Role          string  `json:"role"`
+	WorkStatus    string  `json:"work_status"`
+	AgentID       string  `json:"agent_id"`
+}
+
 type issueCommentDispatchTarget struct {
 	ProjectID        string
 	IssueNumber      int64
@@ -487,6 +505,8 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.enqueueIssueQueueNotification(r.Context(), nil, issue)
+
 	sendJSON(w, http.StatusCreated, toIssueSummaryPayload(*issue, participants, nil))
 }
 
@@ -817,6 +837,15 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 		return
 	}
+
+	var before *store.ProjectIssue
+	if req.WorkStatus != nil {
+		before, err = h.IssueStore.GetIssueByID(r.Context(), issueID)
+		if err != nil {
+			handleIssueStoreError(w, err)
+			return
+		}
+	}
 	nextStepDueAt, err := parseOptionalRFC3339(req.NextStepDueAt, "next_step_due_at")
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
@@ -862,6 +891,8 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
+
+	h.enqueueIssueQueueNotification(r.Context(), before, updated)
 
 	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
 	if err != nil {
@@ -941,6 +972,12 @@ func (h *IssuesHandler) ReleaseIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	before, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
 	updated, err := h.IssueStore.ReleaseIssue(r.Context(), issueID)
 	if err != nil {
 		handleIssueStoreError(w, err)
@@ -951,6 +988,8 @@ func (h *IssuesHandler) ReleaseIssue(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
+
+	h.enqueueIssueQueueNotification(r.Context(), before, updated)
 
 	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
 	if err != nil {
@@ -1184,6 +1223,84 @@ func (h *IssuesHandler) syncIssueOwnerParticipant(ctx context.Context, issueID s
 	}
 
 	return nil
+}
+
+func queueRoleForIssueWorkStatus(workStatus string) (string, bool) {
+	switch strings.TrimSpace(strings.ToLower(workStatus)) {
+	case store.IssueWorkStatusReady:
+		return "planner", true
+	case store.IssueWorkStatusReadyForWork:
+		return "worker", true
+	case store.IssueWorkStatusReview:
+		return "reviewer", true
+	default:
+		return "", false
+	}
+}
+
+func (h *IssuesHandler) enqueueIssueQueueNotification(
+	ctx context.Context,
+	before *store.ProjectIssue,
+	after *store.ProjectIssue,
+) {
+	if h.DB == nil || h.IssueStore == nil || after == nil {
+		return
+	}
+
+	role, ok := queueRoleForIssueWorkStatus(after.WorkStatus)
+	if !ok {
+		return
+	}
+	if before != nil && strings.EqualFold(strings.TrimSpace(before.WorkStatus), strings.TrimSpace(after.WorkStatus)) {
+		return
+	}
+
+	assignments, err := h.IssueStore.ListIssueRoleAssignments(ctx, after.ProjectID)
+	if err != nil {
+		log.Printf("issue queue notification skipped for issue %s: %v", after.ID, err)
+		return
+	}
+
+	assignedAgentID := ""
+	for _, assignment := range assignments {
+		if assignment.Role != role || assignment.AgentID == nil {
+			continue
+		}
+		assignedAgentID = strings.TrimSpace(*assignment.AgentID)
+		if assignedAgentID != "" {
+			break
+		}
+	}
+	if assignedAgentID == "" {
+		return
+	}
+
+	workStatus := strings.TrimSpace(strings.ToLower(after.WorkStatus))
+	event := openClawIssueQueueDispatchEvent{
+		Type:      "issue.queue.available",
+		Timestamp: time.Now().UTC(),
+		OrgID:     strings.TrimSpace(after.OrgID),
+		Data: openClawIssueQueueDispatchData{
+			ProjectID:     strings.TrimSpace(after.ProjectID),
+			IssueID:       strings.TrimSpace(after.ID),
+			IssueNumber:   after.IssueNumber,
+			IssueTitle:    strings.TrimSpace(after.Title),
+			ParentIssueID: after.ParentIssueID,
+			Role:          role,
+			WorkStatus:    workStatus,
+			AgentID:       assignedAgentID,
+		},
+	}
+	dedupeKey := fmt.Sprintf(
+		"issue.queue.available:%s:%s:%s:%d",
+		event.Data.IssueID,
+		event.Data.Role,
+		event.Data.WorkStatus,
+		after.UpdatedAt.UTC().UnixNano(),
+	)
+	if _, err := enqueueOpenClawDispatchEvent(ctx, h.DB, event.OrgID, event.Type, dedupeKey, event); err != nil {
+		log.Printf("failed to enqueue issue queue notification for issue %s: %v", after.ID, err)
+	}
 }
 
 func (h *IssuesHandler) broadcastIssueCommentCreated(
