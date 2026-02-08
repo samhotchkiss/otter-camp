@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -200,6 +200,151 @@ describe("ProjectDetailPage files tab", () => {
     expect(fetchedURLs.some((url) => url.includes("/api/tasks?"))).toBe(false);
     expect(screen.getByText("1 item waiting on you")).toBeInTheDocument();
     expect(screen.getByText("2 active issues")).toBeInTheDocument();
+  });
+
+  it("groups issue work status values into board columns and removes legacy task controls", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-queued",
+              issue_number: 101,
+              title: "Queued issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "ready",
+              priority: "P2",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-planning",
+              issue_number: 102,
+              title: "Planning issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "planning",
+              priority: "P2",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-ready-for-work",
+              issue_number: 103,
+              title: "Ready for work issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "ready_for_work",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-in-progress",
+              issue_number: 104,
+              title: "In progress issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-review",
+              issue_number: 105,
+              title: "Review issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "review",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-blocked",
+              issue_number: 106,
+              title: "Blocked issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "blocked",
+              priority: "P0",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-flagged",
+              issue_number: 107,
+              title: "Flagged issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "flagged",
+              priority: "P0",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-done",
+              issue_number: 108,
+              title: "Done issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              work_status: "done",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-cancelled",
+              issue_number: 109,
+              title: "Cancelled issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              work_status: "cancelled",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+
+    const queuedColumn = screen.getByTestId("board-column-queued");
+    const inProgressColumn = screen.getByTestId("board-column-in_progress");
+    const reviewColumn = screen.getByTestId("board-column-review");
+    const doneColumn = screen.getByTestId("board-column-done");
+
+    expect(within(queuedColumn).getByText("Queued issue")).toBeInTheDocument();
+    expect(within(queuedColumn).getByText("Planning issue")).toBeInTheDocument();
+    expect(within(queuedColumn).getByText("Ready for work issue")).toBeInTheDocument();
+    expect(within(inProgressColumn).getByText("In progress issue")).toBeInTheDocument();
+    expect(within(reviewColumn).getByText("Review issue")).toBeInTheDocument();
+    expect(within(reviewColumn).getByText("Blocked issue")).toBeInTheDocument();
+    expect(within(reviewColumn).getByText("Flagged issue")).toBeInTheDocument();
+    expect(within(doneColumn).getByText("Done issue")).toBeInTheDocument();
+    expect(within(doneColumn).getByText("Cancelled issue")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\+ Add Task/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("No tasks")).not.toBeInTheDocument();
   });
 
   it("submits New Issue request to project chat endpoint", async () => {

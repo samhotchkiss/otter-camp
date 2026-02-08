@@ -75,6 +75,7 @@ type ApiIssue = {
 
 type Task = {
   id: string;
+  issueNumber?: number;
   title: string;
   status:
     | "queued"
@@ -135,9 +136,9 @@ type TaskColumn = {
 };
 
 const COLUMNS: TaskColumn[] = [
-  { key: "queued", title: "📋 Queued", statuses: ["queued", "dispatched"] },
+  { key: "queued", title: "📋 Queued", statuses: ["queued", "dispatched", "ready", "planning", "ready_for_work"] },
   { key: "in_progress", title: "🔨 In Progress", statuses: ["in_progress"] },
-  { key: "review", title: "👀 Review", statuses: ["review", "blocked"] },
+  { key: "review", title: "👀 Review", statuses: ["review", "blocked", "flagged"] },
   { key: "done", title: "✅ Done", statuses: ["done", "cancelled"] },
 ];
 
@@ -219,6 +220,11 @@ function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
           : "border-[var(--border)] hover:border-[#C9A86C]/50"
       } ${task.status === "done" ? "opacity-70" : ""}`}
     >
+      {typeof task.issueNumber === "number" && (
+        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+          #{task.issueNumber}
+        </p>
+      )}
       <h4 className="mb-3 text-sm font-semibold text-[var(--text)]">
         {task.title}
       </h4>
@@ -243,16 +249,21 @@ function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
 }
 
 function BoardColumn({
+  columnKey,
   title,
   tasks,
   onTaskClick,
 }: {
+  columnKey: string;
   title: string;
   tasks: Task[];
   onTaskClick?: (task: Task) => void;
 }) {
   return (
-    <div className="flex w-80 flex-shrink-0 flex-col rounded-xl bg-[var(--surface-alt)]">
+    <div
+      className="flex w-80 flex-shrink-0 flex-col rounded-xl bg-[var(--surface-alt)]"
+      data-testid={`board-column-${columnKey}`}
+    >
       <div className="flex items-center gap-3 border-b border-[var(--border)] px-5 py-4">
         <span className="text-sm font-bold text-[var(--text)]">{title}</span>
         <span className="rounded-full bg-[var(--surface)] px-2.5 py-0.5 text-xs font-semibold text-[var(--text-muted)]">
@@ -265,16 +276,10 @@ function BoardColumn({
         ))}
         {tasks.length === 0 && (
           <div className="py-8 text-center text-sm text-[var(--text-muted)]">
-            No tasks
+            No issues
           </div>
         )}
       </div>
-      <button
-        type="button"
-        className="mx-3 mb-3 rounded-lg border-2 border-dashed border-[var(--border)] bg-transparent py-3 text-sm text-[var(--text-muted)] transition hover:border-[#C9A86C] hover:text-[#C9A86C]"
-      >
-        + Add Task
-      </button>
     </div>
   );
 }
@@ -421,6 +426,7 @@ export default function ProjectDetailPage() {
               : "Unassigned";
             return {
               id: raw.id,
+              issueNumber: issue.issue_number ?? legacyTask.number,
               title: raw.title,
               status,
               priority,
@@ -842,6 +848,7 @@ export default function ProjectDetailPage() {
             {COLUMNS.map((col) => (
               <BoardColumn
                 key={col.key}
+                columnKey={col.key}
                 title={col.title}
                 tasks={tasksByColumn[col.key] || []}
                 onTaskClick={handleTaskClick}
