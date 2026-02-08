@@ -1,8 +1,7 @@
 // Cache bust: 2026-02-05-11:15
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, type FormEvent } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import LoadingSpinner from "../components/LoadingSpinner";
-import ProjectChatPanel from "../components/project/ProjectChatPanel";
 import ProjectFileBrowser from "../components/project/ProjectFileBrowser";
 import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
@@ -52,6 +51,7 @@ type AgentOption = {
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 
 type ApiTask = {
   id: string;
@@ -81,6 +81,28 @@ type Activity = {
   highlight: string;
   timeAgo: string;
 };
+
+function getCurrentAuthorName(): string {
+  try {
+    const candidate = (localStorage.getItem(USER_NAME_STORAGE_KEY) ?? "").trim();
+    if (candidate !== "") {
+      return candidate;
+    }
+  } catch {
+    // ignore localStorage failures
+  }
+  return "You";
+}
+
+function buildProjectIssueRequestMessage(projectName: string, issueTitle: string): string {
+  return [
+    "New issue request",
+    `Project: ${projectName}`,
+    `Title: ${issueTitle}`,
+    "",
+    "Please create a new project issue for this request.",
+  ].join("\n");
+}
 
 // Agent ID to name mapping (from database)
 const agentIdToName: Record<string, string> = {};
@@ -214,7 +236,7 @@ function ActivityItem({ activity }: { activity: Activity }) {
   );
 }
 
-type TabKey = "board" | "list" | "activity" | "chat" | "files" | "issues" | "settings";
+type TabKey = "board" | "list" | "activity" | "files" | "issues" | "settings";
 
 export default function ProjectDetailPage() {
   const { id, issueId } = useParams<{ id: string; issueId?: string }>();
@@ -223,11 +245,14 @@ export default function ProjectDetailPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
-  const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [availableAgents, setAvailableAgents] = useState<AgentOption[]>([]);
   const [selectedPrimaryAgentID, setSelectedPrimaryAgentID] = useState<string>("");
+  const [newIssueDraft, setNewIssueDraft] = useState("");
+  const [isSubmittingIssueRequest, setIsSubmittingIssueRequest] = useState(false);
+  const [newIssueError, setNewIssueError] = useState<string | null>(null);
+  const [newIssueSuccess, setNewIssueSuccess] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
@@ -360,25 +385,6 @@ export default function ProjectDetailPage() {
   }, [project, upsertConversation]);
 
   useEffect(() => {
-    if (!project) {
-      return;
-    }
-
-    if (activeTab === "chat") {
-      openConversation(
-        {
-          type: "project",
-          projectId: project.id,
-          title: project.name,
-          contextLabel: `Project • ${project.name}`,
-          subtitle: "Project chat",
-        },
-        { focus: true, openDock: true },
-      );
-    }
-  }, [activeTab, openConversation, project]);
-
-  useEffect(() => {
     if (!project || !issueId) {
       return;
     }
@@ -473,7 +479,6 @@ export default function ProjectDetailPage() {
     { key: "board", label: "Board" },
     { key: "list", label: "List" },
     { key: "activity", label: "Activity" },
-    { key: "chat", label: "Chat", badge: chatUnreadCount > 0 ? chatUnreadCount : undefined },
     { key: "files", label: "Files" },
     { key: "issues", label: "Issues" },
     { key: "settings", label: "Settings" },
@@ -521,6 +526,75 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const openProjectChat = () => {
+    if (!project) {
+      return;
+    }
+    openConversation(
+      {
+        type: "project",
+        projectId: project.id,
+        title: project.name,
+        contextLabel: `Project • ${project.name}`,
+        subtitle: "Project chat",
+      },
+      { focus: true, openDock: true },
+    );
+  };
+
+  const handleSubmitIssueRequest = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!project || !id) {
+      return;
+    }
+    const issueTitle = newIssueDraft.trim();
+    if (issueTitle === "") {
+      return;
+    }
+
+    setIsSubmittingIssueRequest(true);
+    setNewIssueError(null);
+    setNewIssueSuccess(null);
+    try {
+      const orgId = localStorage.getItem("otter-camp-org-id");
+      const createMessageUrl = orgId
+        ? `${API_URL}/api/projects/${id}/chat/messages?org_id=${encodeURIComponent(orgId)}`
+        : `${API_URL}/api/projects/${id}/chat/messages`;
+      const response = await fetch(createMessageUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          author: getCurrentAuthorName(),
+          body: buildProjectIssueRequestMessage(project.name, issueTitle),
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to submit issue request");
+      }
+
+      const payload = await response.json().catch(() => null);
+      const delivery = payload?.delivery as
+        | { delivered?: boolean; error?: string }
+        | undefined;
+      const deliveryError =
+        typeof delivery?.error === "string" ? delivery.error.trim() : "";
+      if (deliveryError) {
+        setNewIssueSuccess("Issue request saved; bridge delivery pending.");
+      } else if (delivery?.delivered) {
+        setNewIssueSuccess("Issue request sent to the project agent.");
+      } else {
+        setNewIssueSuccess("Issue request saved.");
+      }
+      setNewIssueDraft("");
+      openProjectChat();
+    } catch (err) {
+      setNewIssueError(err instanceof Error ? err.message : "Failed to submit issue request");
+    } finally {
+      setIsSubmittingIssueRequest(false);
+    }
+  };
+
   return (
     <div className="flex min-h-full flex-col">
       {/* Breadcrumb */}
@@ -564,7 +638,14 @@ export default function ProjectDetailPage() {
               <p className="mt-2 text-sm text-[var(--text-muted)]">{project.description}</p>
             )}
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={openProjectChat}
+              className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-medium text-[var(--text)] transition hover:bg-[var(--surface-alt)]"
+            >
+              Chat
+            </button>
             <button
               type="button"
               onClick={() => setActiveTab("settings")}
@@ -572,14 +653,47 @@ export default function ProjectDetailPage() {
             >
               Settings
             </button>
-            <button
-              type="button"
-              className="rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#B8975B]"
-            >
-              + New Task
-            </button>
+            <form onSubmit={handleSubmitIssueRequest} className="flex items-center gap-2">
+              <label htmlFor="new-issue-title" className="sr-only">
+                New issue
+              </label>
+              <input
+                id="new-issue-title"
+                type="text"
+                value={newIssueDraft}
+                onChange={(event) => {
+                  setNewIssueDraft(event.target.value);
+                  if (newIssueError) {
+                    setNewIssueError(null);
+                  }
+                  if (newIssueSuccess) {
+                    setNewIssueSuccess(null);
+                  }
+                }}
+                placeholder="New issue..."
+                className="w-56 rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)]"
+              />
+              <button
+                type="submit"
+                disabled={isSubmittingIssueRequest || newIssueDraft.trim() === ""}
+                className="rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#B8975B] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSubmittingIssueRequest ? "Sending..." : "New Issue"}
+              </button>
+            </form>
           </div>
         </div>
+        {(newIssueError || newIssueSuccess) && (
+          <div
+            className={`mt-4 rounded-lg border px-3 py-2 text-sm ${
+              newIssueError
+                ? "border-red-500/40 bg-red-500/10 text-red-300"
+                : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+            }`}
+          >
+            {newIssueError || newIssueSuccess}
+          </div>
+        )}
       </header>
 
       {/* Tabs */}
@@ -697,14 +811,6 @@ export default function ProjectDetailPage() {
           </div>
         </div>
       )}
-
-      <div className={activeTab === "chat" ? "block" : "hidden"}>
-        <ProjectChatPanel
-          projectId={project.id}
-          active={activeTab === "chat"}
-          onUnreadChange={setChatUnreadCount}
-        />
-      </div>
 
       {activeTab === "files" && <ProjectFileBrowser projectId={project.id} />}
 
