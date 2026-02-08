@@ -396,6 +396,7 @@ func (c *Client) CommentIssue(issueID, authorAgentID, body string) error {
 	payload, err := json.Marshal(map[string]string{
 		"author_agent_id": authorAgentID,
 		"body":            body,
+		"sender_type":     "agent",
 	})
 	if err != nil {
 		return err
