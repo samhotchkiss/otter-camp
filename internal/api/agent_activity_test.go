@@ -405,6 +405,41 @@ func TestAgentActivityListByAgentHandler(t *testing.T) {
 	require.Contains(t, invalidProjectRec.Body.String(), "project_id must be a UUID")
 }
 
+func TestAgentTimelineEvents(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "activity-timeline-events-org")
+
+	handler := &AgentActivityHandler{DB: db}
+	router := newAgentActivityTestRouter(handler)
+
+	startedAt := time.Date(2026, 2, 8, 20, 0, 0, 0, time.UTC)
+	seedAgentActivityEvents(t, handler, orgID, []store.CreateAgentActivityEventInput{
+		{
+			ID:        "01HZZ000000000000000000A01",
+			AgentID:   "Frank",
+			Trigger:   "chat.slack",
+			Channel:   "slack",
+			Summary:   "Replied in #engineering",
+			Status:    "completed",
+			StartedAt: startedAt,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/agents/main/activity?org_id=%s&limit=20", orgID),
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp listAgentActivityResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Items, 1)
+	require.Equal(t, "Replied in #engineering", resp.Items[0].Summary)
+}
+
 func TestAgentActivityRecentHandler(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgA := insertMessageTestOrganization(t, db, "activity-list-recent-org-a")

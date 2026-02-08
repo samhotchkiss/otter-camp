@@ -305,22 +305,8 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		role := agentRoles[agentID]
 		avatar := agentAvatars[agentID]
 
-		// Calculate status based on sync freshness vs activity
 		updatedAt := time.Unix(session.UpdatedAt/1000, 0)
-		timeSinceUpdate := time.Since(updatedAt)
-		syncAt := payload.Timestamp
-		if syncAt.IsZero() {
-			syncAt = now
-		}
-		timeSinceSync := time.Since(syncAt)
-		var status string
-		if timeSinceSync < 2*time.Minute {
-			status = "online"
-		} else if timeSinceUpdate < 30*time.Minute {
-			status = "busy"
-		} else {
-			status = "offline"
-		}
+		status := deriveAgentStatus(updatedAt, session.ContextTokens)
 
 		lastSeen := normalizeLastSeenTimestamp(updatedAt)
 		currentTask := normalizeCurrentTask(session.DisplayName)
@@ -706,7 +692,7 @@ func (h *OpenClawSyncHandler) getAgentsFromDB(db *sql.DB) ([]AgentState, error) 
 			a.Avatar = avatar.String
 		}
 		if currentTask.Valid {
-			a.CurrentTask = currentTask.String
+			a.CurrentTask = normalizeCurrentTask(currentTask.String)
 		}
 		if lastSeen.Valid {
 			a.LastSeen = lastSeen.String
@@ -726,6 +712,7 @@ func (h *OpenClawSyncHandler) getAgentsFromDB(db *sql.DB) ([]AgentState, error) 
 		if contextTokens.Valid {
 			a.ContextTokens = int(contextTokens.Int64)
 		}
+		a.Status = deriveAgentStatus(a.UpdatedAt, a.ContextTokens)
 
 		agents = append(agents, a)
 	}
@@ -771,6 +758,23 @@ func formatTimeSince(t time.Time) string {
 		return "1 day ago"
 	}
 	return fmt.Sprintf("%d days ago", days)
+}
+
+func deriveAgentStatus(updatedAt time.Time, contextTokens int) string {
+	if updatedAt.IsZero() {
+		return "offline"
+	}
+	if isSessionStalled(contextTokens, updatedAt) {
+		return "offline"
+	}
+	elapsed := time.Since(updatedAt)
+	if elapsed < 2*time.Minute {
+		return "online"
+	}
+	if elapsed < 30*time.Minute {
+		return "busy"
+	}
+	return "offline"
 }
 
 func upsertSyncMetadataJSON(ctx context.Context, db *sql.DB, key string, value interface{}, now time.Time) error {
