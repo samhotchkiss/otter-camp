@@ -84,6 +84,6 @@ describe("AgentDetailPage", () => {
       expect(urls.length).toBeGreaterThanOrEqual(2);
     });
 
-    expect(urls.at(-1)).toContain("status=failed");
+    expect(urls[urls.length - 1]).toContain("status=failed");
   });
 });
