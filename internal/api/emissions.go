@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 const defaultEmissionBufferSize = 100
@@ -133,6 +134,12 @@ func min(a, b int) int {
 
 type EmissionsHandler struct {
 	Buffer *EmissionBuffer
+	Hub    emissionBroadcaster
+}
+
+type emissionBroadcaster interface {
+	Broadcast(orgID string, payload []byte)
+	BroadcastTopic(orgID string, topic string, payload []byte)
 }
 
 type emissionIngestRequest struct {
@@ -208,6 +215,7 @@ func (h *EmissionsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 
 	for _, emission := range normalized {
 		h.Buffer.Push(emission)
+		h.broadcastEmission(workspaceID, emission)
 	}
 
 	sendJSON(w, http.StatusAccepted, map[string]any{
@@ -303,4 +311,33 @@ func normalizeEmission(input Emission) (Emission, error) {
 	}
 
 	return input, nil
+}
+
+type emissionReceivedEvent struct {
+	Type     ws.MessageType `json:"type"`
+	Emission Emission       `json:"emission"`
+}
+
+func (h *EmissionsHandler) broadcastEmission(orgID string, emission Emission) {
+	if h.Hub == nil {
+		return
+	}
+	payload, err := json.Marshal(emissionReceivedEvent{
+		Type:     ws.MessageEmissionReceived,
+		Emission: emission,
+	})
+	if err != nil {
+		return
+	}
+	h.Hub.Broadcast(orgID, payload)
+
+	if emission.Scope == nil {
+		return
+	}
+	if emission.Scope.ProjectID != nil && strings.TrimSpace(*emission.Scope.ProjectID) != "" {
+		h.Hub.BroadcastTopic(orgID, "project:"+strings.TrimSpace(*emission.Scope.ProjectID), payload)
+	}
+	if emission.Scope.IssueID != nil && strings.TrimSpace(*emission.Scope.IssueID) != "" {
+		h.Hub.BroadcastTopic(orgID, "issue:"+strings.TrimSpace(*emission.Scope.IssueID), payload)
+	}
 }
