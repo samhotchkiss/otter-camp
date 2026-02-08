@@ -129,11 +129,42 @@ func handleWhoami(args []string) {
 
 func handleProject(args []string) {
 	if len(args) == 0 {
-		fmt.Println("usage: otter project create <name>")
+		fmt.Println("usage: otter project <list|create> ...")
 		os.Exit(1)
 	}
 
 	switch args[0] {
+	case "list":
+		flags := flag.NewFlagSet("project list", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		projects, err := client.ListProjects()
+		dieIf(err)
+
+		if *jsonOut {
+			out, _ := json.MarshalIndent(projects, "", "  ")
+			fmt.Println(string(out))
+			return
+		}
+
+		if len(projects) == 0 {
+			fmt.Println("No projects found.")
+			return
+		}
+		for _, p := range projects {
+			slug := p.Slug()
+			if slug != "" {
+				fmt.Printf("%-30s  %s\n", p.Name, slug)
+			} else {
+				fmt.Println(p.Name)
+			}
+		}
 	case "create":
 		flags := flag.NewFlagSet("project create", flag.ExitOnError)
 		slug := flags.String("slug", "", "custom project slug")
@@ -185,7 +216,7 @@ func handleProject(args []string) {
 			fmt.Printf("Repo: %s\n", project.RepoURL)
 		}
 	default:
-		fmt.Println("usage: otter project create <name>")
+		fmt.Println("usage: otter project <list|create> ...")
 		os.Exit(1)
 	}
 }
