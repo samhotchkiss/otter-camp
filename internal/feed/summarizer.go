@@ -103,10 +103,43 @@ func (s *Summarizer) Summarize(item *Item) string {
 		if project == "" {
 			project = extractMetadataString(item.Metadata, "project_id")
 		}
-		if project != "" {
-			return fmt.Sprintf("Git push to %s", project)
+		branch := extractMetadataString(item.Metadata, "branch")
+		if branch == "" {
+			branch = extractMetadataString(item.Metadata, "ref")
 		}
-		return "Git push"
+		if branch == "" {
+			branch = extractMetadataString(item.Metadata, "ref_name")
+		}
+		message := extractMetadataString(item.Metadata, "commit_message")
+		if message == "" {
+			message = extractMetadataString(item.Metadata, "head_commit_message")
+		}
+		if message == "" {
+			message = extractMetadataString(item.Metadata, "message")
+		}
+		if len(message) > 60 {
+			message = message[:57] + "..."
+		}
+
+		if project != "" && branch != "" && message != "" {
+			return fmt.Sprintf("%s pushed to %s (%s): \"%s\"", agent, project, branch, message)
+		}
+		if branch != "" && message != "" {
+			return fmt.Sprintf("%s pushed to %s: \"%s\"", agent, branch, message)
+		}
+		if project != "" && message != "" {
+			return fmt.Sprintf("%s pushed to %s: \"%s\"", agent, project, message)
+		}
+		if project != "" && branch != "" {
+			return fmt.Sprintf("%s pushed to %s (%s)", agent, project, branch)
+		}
+		if branch != "" {
+			return fmt.Sprintf("%s pushed to %s", agent, branch)
+		}
+		if project != "" {
+			return fmt.Sprintf("%s pushed to %s", agent, project)
+		}
+		return fmt.Sprintf("%s pushed changes", agent)
 
 	case "dispatch":
 		if task != "" {
