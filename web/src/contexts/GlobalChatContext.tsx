@@ -87,6 +87,7 @@ type GlobalChatContextValue = {
   toggleDock: () => void;
   selectConversation: (key: string) => void;
   markConversationRead: (key: string) => void;
+  removeConversation: (key: string) => void;
   openConversation: (
     input: OpenConversationInput,
     options?: OpenConversationOptions,
@@ -866,6 +867,11 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const removeConversation = useCallback((key: string) => {
+    setConversations((prev) => prev.filter((entry) => entry.key !== key));
+    setSelectedKey((current) => (current === key ? null : current));
+  }, []);
+
   useEffect(() => {
     if (!lastMessage) {
       return;
@@ -944,6 +950,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       toggleDock: () => setIsOpen((open) => !open),
       selectConversation: setSelectedKey,
       markConversationRead,
+      removeConversation,
       openConversation,
       upsertConversation,
     }),
@@ -951,6 +958,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       conversations,
       isOpen,
       markConversationRead,
+      removeConversation,
       openConversation,
       selectedConversation,
       selectedKey,

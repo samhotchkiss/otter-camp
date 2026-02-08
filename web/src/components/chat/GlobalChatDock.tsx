@@ -26,6 +26,7 @@ export default function GlobalChatDock() {
     toggleDock,
     selectConversation,
     markConversationRead,
+    removeConversation,
   } = useGlobalChat();
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [resettingProjectSession, setResettingProjectSession] = useState(false);
@@ -329,6 +330,9 @@ export default function GlobalChatDock() {
                   <GlobalChatSurface
                     conversation={selectedConversation}
                     refreshVersion={refreshVersion}
+                    onRemoveConversation={() => {
+                      removeConversation(selectedConversation.key);
+                    }}
                     onConversationTouched={() => {
                       if (selectedConversation.unreadCount > 0) {
                         markConversationRead(selectedConversation.key);
