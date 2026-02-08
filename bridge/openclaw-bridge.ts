@@ -19,6 +19,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 const OPENCLAW_HOST = process.env.OPENCLAW_HOST || '127.0.0.1';
@@ -135,7 +136,7 @@ type IssueCommentDispatchEvent = {
   };
 };
 
-type QuestionnaireQuestion = {
+export type QuestionnaireQuestion = {
   id: string;
   text: string;
   type: 'text' | 'textarea' | 'boolean' | 'select' | 'multiselect' | 'number' | 'date';
@@ -143,7 +144,7 @@ type QuestionnaireQuestion = {
   options?: string[];
 };
 
-type QuestionnairePayload = {
+export type QuestionnairePayload = {
   id: string;
   contextType?: string;
   contextID?: string;
@@ -494,7 +495,7 @@ function normalizeQuestionnaireType(value: unknown): QuestionnaireQuestion['type
   }
 }
 
-function normalizeQuestionnairePayload(raw: unknown): QuestionnairePayload | null {
+export function normalizeQuestionnairePayload(raw: unknown): QuestionnairePayload | null {
   const record = asRecord(raw);
   if (!record) {
     return null;
@@ -553,7 +554,7 @@ function normalizeQuestionnairePayload(raw: unknown): QuestionnairePayload | nul
   };
 }
 
-function formatQuestionnaireForFallback(questionnaire: QuestionnairePayload): string {
+export function formatQuestionnaireForFallback(questionnaire: QuestionnairePayload): string {
   const lines: string[] = [];
   lines.push('[QUESTIONNAIRE]');
   lines.push(`Questionnaire ID: ${questionnaire.id}`);
@@ -582,7 +583,7 @@ function formatQuestionnaireForFallback(questionnaire: QuestionnairePayload): st
   return lines.join('\n');
 }
 
-function parseNumberedAnswers(content: string): Map<number, string> {
+export function parseNumberedAnswers(content: string): Map<number, string> {
   const lines = content.split(/\r?\n/);
   const answers = new Map<number, string>();
   let currentIndex = -1;
@@ -626,7 +627,7 @@ function parseBooleanText(value: string): boolean | null {
   return null;
 }
 
-function parseQuestionnaireAnswer(
+export function parseQuestionnaireAnswer(
   question: QuestionnaireQuestion,
   rawAnswer: string,
 ): { value: unknown; valid: boolean } {
@@ -698,7 +699,7 @@ function parseQuestionnaireAnswer(
   }
 }
 
-function parseNumberedQuestionnaireResponse(
+export function parseNumberedQuestionnaireResponse(
   content: string,
   questionnaire: QuestionnairePayload,
 ): {
@@ -1929,14 +1930,28 @@ async function runContinuous(): Promise<void> {
 
 const mode = normalizeModeArg(process.argv[2]);
 
-if (mode === 'continuous') {
-  runContinuous().catch((err) => {
-    console.error('[bridge] fatal error in continuous mode:', err);
-    process.exit(1);
-  });
-} else {
-  runOnce().catch((err) => {
-    console.error('[bridge] fatal error in one-shot mode:', err);
-    process.exit(1);
-  });
+function isDirectExecution(): boolean {
+  const entryPath = process.argv[1];
+  if (!entryPath) {
+    return false;
+  }
+  try {
+    return import.meta.url === pathToFileURL(entryPath).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
+  if (mode === 'continuous') {
+    runContinuous().catch((err) => {
+      console.error('[bridge] fatal error in continuous mode:', err);
+      process.exit(1);
+    });
+  } else {
+    runOnce().catch((err) => {
+      console.error('[bridge] fatal error in one-shot mode:', err);
+      process.exit(1);
+    });
+  }
 }
