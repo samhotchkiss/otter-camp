@@ -33,6 +33,7 @@ const (
 type ProjectChatHandler struct {
 	ProjectStore       *store.ProjectStore
 	ChatStore          *store.ProjectChatStore
+	QuestionnaireStore *store.QuestionnaireStore
 	IssueStore         *store.ProjectIssueStore
 	DB                 *sql.DB
 	Hub                *ws.Hub
@@ -57,9 +58,10 @@ type projectChatMessagePayload struct {
 }
 
 type projectChatListResponse struct {
-	Messages   []projectChatMessagePayload `json:"messages"`
-	HasMore    bool                        `json:"has_more"`
-	NextCursor string                      `json:"next_cursor,omitempty"`
+	Messages       []projectChatMessagePayload `json:"messages"`
+	Questionnaires []questionnairePayload      `json:"questionnaires"`
+	HasMore        bool                        `json:"has_more"`
+	NextCursor     string                      `json:"next_cursor,omitempty"`
 }
 
 type projectChatSearchItem struct {
@@ -157,6 +159,24 @@ func (h *ProjectChatHandler) List(w http.ResponseWriter, r *http.Request) {
 	for _, message := range messages {
 		payload = append(payload, toProjectChatPayload(message))
 	}
+	questionnaires := make([]questionnairePayload, 0)
+	if h.QuestionnaireStore != nil {
+		records, listErr := h.QuestionnaireStore.ListByContext(
+			r.Context(),
+			store.QuestionnaireContextProjectChat,
+			projectID,
+		)
+		if listErr != nil {
+			handleQuestionnaireStoreError(w, listErr)
+			return
+		}
+		payloads, mapErr := mapQuestionnairePayloads(records)
+		if mapErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load questionnaires"})
+			return
+		}
+		questionnaires = payloads
+	}
 
 	nextCursor := ""
 	if hasMore && len(messages) > 0 {
@@ -165,9 +185,10 @@ func (h *ProjectChatHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, projectChatListResponse{
-		Messages:   payload,
-		HasMore:    hasMore,
-		NextCursor: nextCursor,
+		Messages:       payload,
+		Questionnaires: questionnaires,
+		HasMore:        hasMore,
+		NextCursor:     nextCursor,
 	})
 }
 

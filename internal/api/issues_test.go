@@ -167,6 +167,110 @@ func TestIssuesHandlerCommentCreateValidatesAndPersists(t *testing.T) {
 	require.Equal(t, "Looks good", detail.Comments[0].Body)
 }
 
+func TestIssuesHandlerGetIncludesQuestionnaires(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-questionnaire-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Questionnaire Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	questionnaireStore := store.NewQuestionnaireStore(db)
+	ctx := issueTestCtx(orgID)
+
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue with questionnaire",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	issueQuestionnaire, err := questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextIssue,
+		ContextID:   issue.ID,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Protocol?","type":"select","options":["WebSocket","Polling"],"required":true}]`),
+	})
+	require.NoError(t, err)
+
+	_, err = questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextProjectChat,
+		ContextID:   projectID,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Ignore","type":"text","required":false}]`),
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		QuestionnaireStore: questionnaireStore,
+	}
+	router := newIssueTestRouter(handler)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/issues/"+issue.ID+"?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	var detail issueDetailPayload
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&detail))
+	require.Len(t, detail.Questionnaires, 1)
+	require.Equal(t, issueQuestionnaire.ID, detail.Questionnaires[0].ID)
+	require.Equal(t, store.QuestionnaireContextIssue, detail.Questionnaires[0].ContextType)
+}
+
+func TestIssuesHandlerQuestionnaireContextIsolation(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-questionnaire-iso-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Questionnaire Isolation Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	questionnaireStore := store.NewQuestionnaireStore(db)
+	ctx := issueTestCtx(orgID)
+
+	issueA, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue A",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	issueB, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue B",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	_, err = questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextIssue,
+		ContextID:   issueA.ID,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Issue A question","type":"text","required":true}]`),
+	})
+	require.NoError(t, err)
+	_, err = questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextIssue,
+		ContextID:   issueB.ID,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Issue B question","type":"text","required":true}]`),
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		QuestionnaireStore: questionnaireStore,
+	}
+	router := newIssueTestRouter(handler)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/issues/"+issueA.ID+"?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	var detail issueDetailPayload
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&detail))
+	require.Len(t, detail.Questionnaires, 1)
+	require.Equal(t, issueA.ID, detail.Questionnaires[0].ContextID)
+}
+
 func TestIssuesHandlerPatchIssueUpdatesAndClearsWorkTrackingFields(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-patch-org")

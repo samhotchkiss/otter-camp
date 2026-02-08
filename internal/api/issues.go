@@ -24,6 +24,7 @@ import (
 
 type IssuesHandler struct {
 	IssueStore         *store.ProjectIssueStore
+	QuestionnaireStore *store.QuestionnaireStore
 	ProjectStore       *store.ProjectStore
 	CommitStore        *store.ProjectCommitStore
 	ProjectRepos       *store.ProjectRepoStore
@@ -78,9 +79,10 @@ type issueCommentCreateResponse struct {
 }
 
 type issueDetailPayload struct {
-	Issue        issueSummaryPayload       `json:"issue"`
-	Participants []issueParticipantPayload `json:"participants"`
-	Comments     []issueCommentPayload     `json:"comments"`
+	Issue          issueSummaryPayload       `json:"issue"`
+	Participants   []issueParticipantPayload `json:"participants"`
+	Comments       []issueCommentPayload     `json:"comments"`
+	Questionnaires []questionnairePayload    `json:"questionnaires"`
 }
 
 type issueCommentCreatedEvent struct {
@@ -399,6 +401,20 @@ func (h *IssuesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
+	questionnaires := make([]questionnairePayload, 0)
+	if h.QuestionnaireStore != nil {
+		records, listErr := h.QuestionnaireStore.ListByContext(r.Context(), store.QuestionnaireContextIssue, issueID)
+		if listErr != nil {
+			handleQuestionnaireStoreError(w, listErr)
+			return
+		}
+		payloads, mapErr := mapQuestionnairePayloads(records)
+		if mapErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load questionnaires"})
+			return
+		}
+		questionnaires = payloads
+	}
 	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
 	if err != nil {
 		handleIssueStoreError(w, err)
@@ -413,9 +429,10 @@ func (h *IssuesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	payload.DocumentContent = linkedDocumentContent
 
 	sendJSON(w, http.StatusOK, issueDetailPayload{
-		Issue:        payload,
-		Participants: mapIssueParticipants(participants),
-		Comments:     mapIssueComments(comments),
+		Issue:          payload,
+		Participants:   mapIssueParticipants(participants),
+		Comments:       mapIssueComments(comments),
+		Questionnaires: questionnaires,
 	})
 }
 
@@ -656,10 +673,10 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		SetOwnerAgentID: req.OwnerAgentID != nil,
 		OwnerAgentID:    req.OwnerAgentID,
 
-		SetWorkStatus: req.WorkStatus != nil,
-		SetPriority:   req.Priority != nil,
-		SetDueAt:      req.DueAt != nil,
-		SetNextStep:   req.NextStep != nil,
+		SetWorkStatus:    req.WorkStatus != nil,
+		SetPriority:      req.Priority != nil,
+		SetDueAt:         req.DueAt != nil,
+		SetNextStep:      req.NextStep != nil,
 		SetNextStepDueAt: req.NextStepDueAt != nil,
 		SetState:         req.State != nil,
 	}

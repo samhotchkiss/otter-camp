@@ -213,6 +213,18 @@ func toQuestionnairePayload(record store.Questionnaire) (questionnairePayload, e
 	}, nil
 }
 
+func mapQuestionnairePayloads(records []store.Questionnaire) ([]questionnairePayload, error) {
+	out := make([]questionnairePayload, 0, len(records))
+	for _, record := range records {
+		payload, err := toQuestionnairePayload(record)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, payload)
+	}
+	return out, nil
+}
+
 func decodeQuestionnaireQuestions(raw json.RawMessage) ([]questionnaireQuestion, error) {
 	var questions []questionnaireQuestion
 	if err := json.Unmarshal(raw, &questions); err != nil {

@@ -110,8 +110,10 @@ func NewRouter() http.Handler {
 		githubIntegrationHandler.SyncJobs = githubSyncJobStore
 		projectChatHandler.ChatStore = store.NewProjectChatStore(db)
 		projectChatHandler.IssueStore = store.NewProjectIssueStore(db)
+		projectChatHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		projectChatHandler.DB = db
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
+		issuesHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		questionnaireHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		issuesHandler.ProjectStore = projectStore
 		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
