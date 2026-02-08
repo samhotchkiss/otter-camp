@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   flushBufferedActivityEvents,
+  getBufferedActivityEventStateForTest,
   queueActivityEventsForOrg,
   resetBufferedActivityEventsForTest,
   type BridgeAgentActivityEvent,
@@ -93,5 +94,27 @@ describe('activity event buffering', () => {
 
     expect(await flushBufferedActivityEvents('retry-success')).toBe(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks events delivered only after a successful push acknowledgement', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('bad request', { status: 400, statusText: 'Bad Request' }))
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock as typeof fetch);
+
+    expect(queueActivityEventsForOrg(ORG_ID, [makeActivityEvent('evt-ack')])).toBe(1);
+
+    expect(await flushBufferedActivityEvents('ack-failure')).toBe(0);
+    expect(getBufferedActivityEventStateForTest()).toMatchObject({
+      queuedEventIDCount: 1,
+      deliveredEventIDCount: 0,
+    });
+
+    expect(await flushBufferedActivityEvents('ack-success')).toBe(1);
+    expect(getBufferedActivityEventStateForTest()).toMatchObject({
+      queuedEventIDCount: 0,
+      deliveredEventIDCount: 1,
+    });
   });
 });

@@ -975,6 +975,16 @@ export function resetBufferedActivityEventsForTest(): void {
   deliveredActivityEventIDOrder.length = 0;
 }
 
+export function getBufferedActivityEventStateForTest(): {
+  queuedEventIDCount: number;
+  deliveredEventIDCount: number;
+} {
+  return {
+    queuedEventIDCount: queuedActivityEventIDs.size,
+    deliveredEventIDCount: deliveredActivityEventIDs.size,
+  };
+}
+
 async function fetchWithRetry(
   input: RequestInfo | URL,
   init: RequestInit,
