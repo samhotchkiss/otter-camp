@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -220,5 +222,56 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 	router.ServeHTTP(recKillProcess, reqKillProcess)
 	if recKillProcess.Code == http.StatusNotFound {
 		t.Fatalf("expected /api/admin/processes/{id}/kill route to be registered, got status %d", recKillProcess.Code)
+	}
+}
+
+func TestUploadsRouteServesStoredFile(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	orgDir := "router-test-org"
+	fileName := "hello.txt"
+	content := "hello from uploads route"
+	fullDir := filepath.Join(getUploadsStorageDir(), orgDir)
+	fullPath := filepath.Join(fullDir, fileName)
+
+	requireNoErr := func(err error) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	requireNoErr(os.MkdirAll(fullDir, 0o755))
+	requireNoErr(os.WriteFile(fullPath, []byte(content), 0o644))
+	t.Cleanup(func() {
+		_ = os.Remove(fullPath)
+		_ = os.Remove(fullDir)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/uploads/"+orgDir+"/"+fileName, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if body := rec.Body.String(); body != content {
+		t.Fatalf("expected uploads body %q, got %q", content, body)
+	}
+}
+
+func TestUploadsRouteMissingFileReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	req := httptest.NewRequest(http.MethodGet, "/uploads/missing-org/missing-file.txt", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+	if strings.Contains(strings.ToLower(rec.Body.String()), "<!doctype html") {
+		t.Fatalf("expected non-HTML 404 for missing upload path, got SPA HTML fallback")
 	}
 }

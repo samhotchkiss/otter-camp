@@ -133,7 +133,7 @@ func (h *AttachmentsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Ensure uploads directory exists
-	uploadPath := filepath.Join(uploadsDir, orgID)
+	uploadPath := filepath.Join(getUploadsStorageDir(), orgID)
 	if err := os.MkdirAll(uploadPath, 0755); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create upload directory"})
 		return
@@ -314,6 +314,13 @@ func getUploadBaseURL() string {
 		return strings.TrimSuffix(baseURL, "/")
 	}
 	return defaultBaseURL
+}
+
+func getUploadsStorageDir() string {
+	if value := strings.TrimSpace(os.Getenv("UPLOADS_DIR")); value != "" {
+		return value
+	}
+	return uploadsDir
 }
 
 // isImageMimeType checks if a MIME type is an image.

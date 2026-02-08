@@ -264,6 +264,39 @@ Deploy is a **configurable action** per project:
 
 Deploy actions are composable — a project might merge to main AND trigger a webhook AND notify the human. The `auto` flag determines whether this happens immediately after review approval or waits for human confirmation.
 
+### Per-Issue Overrides
+
+Project settings are defaults. Any issue can override any of them:
+
+```json
+{
+  "title": "Redesign the onboarding flow",
+  "overrides": {
+    "planner": "jeff-g",
+    "reviewer": "sam",
+    "deploy": { "auto": false, "require_human_signoff": true },
+    "review_criteria": "Focus on mobile UX and accessibility"
+  }
+}
+```
+
+Examples of when you'd override:
+- **Different reviewer**: This issue touches billing — route to Sam, not Jeremy
+- **Force human signoff**: This deploys a breaking API change — no auto-deploy
+- **Different planner**: This is a design issue — Jeff G plans instead of Josh
+- **Custom review criteria**: "Make sure the legal language matches the template exactly"
+- **Different deploy**: This one issue needs to go to staging first, not straight to prod
+- **Skip review entirely**: Typo fix — Worker merges directly (if project allows)
+
+Overrides cascade: issue overrides > project defaults > system defaults.
+
+In the CLI:
+```bash
+otter issue create --project Technonymous --reviewer sam --deploy-manual "Sensitive legal update"
+```
+
+In the web UI: an "Override settings" expandable section on the issue detail page.
+
 ### What This Means
 
 The same pipeline handles:
