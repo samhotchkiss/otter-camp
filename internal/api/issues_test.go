@@ -626,6 +626,56 @@ func TestIssuesHandlerCommentCreateWarnsWhenBridgeOffline(t *testing.T) {
 	require.Equal(t, 1, queued)
 }
 
+func TestIssuesHandlerCommentCreateWithoutOwnerStillPersistsAndWarns(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-comment-no-owner-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue No Owner Project")
+	authorAgentID := insertMessageTestAgent(t, db, orgID, "sam")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue without owner",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/comments?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author_agent_id":"`+authorAgentID+`","body":"No owner yet"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 0)
+
+	var payload struct {
+		Body     string           `json:"body"`
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "No owner yet", payload.Body)
+	require.False(t, payload.Delivery.Attempted)
+	require.False(t, payload.Delivery.Delivered)
+	require.Equal(t, "issue agent unavailable; message was saved but not delivered", payload.Delivery.Error)
+
+	comments, err := issueStore.ListComments(ctx, issue.ID, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, comments, 1)
+	require.Equal(t, "No owner yet", comments[0].Body)
+	require.Equal(t, authorAgentID, comments[0].AuthorAgentID)
+}
+
 func TestIssuesHandlerParticipantAddRemove(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-participants-org")
