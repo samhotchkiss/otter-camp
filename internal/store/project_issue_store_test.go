@@ -319,6 +319,54 @@ func TestProjectIssueStore_TransitionWorkStatusEnforcesStateMachine(t *testing.T
 	require.Contains(t, err.Error(), "work_status")
 }
 
+func TestProjectIssueStore_UpdateIssueWorkTrackingAllowsClosingFromQueuedOrInProgress(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-update-work-tracking-close-org")
+	projectID := createTestProject(t, db, orgID, "Issue Update Work Tracking Close Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	testCases := []struct {
+		name         string
+		initialState string
+	}{
+		{
+			name:         "queued to done close payload",
+			initialState: IssueWorkStatusQueued,
+		},
+		{
+			name:         "in progress to done close payload",
+			initialState: IssueWorkStatusInProgress,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+				ProjectID:  projectID,
+				Title:      "Issue " + tc.name,
+				Origin:     "local",
+				WorkStatus: tc.initialState,
+			})
+			require.NoError(t, err)
+
+			updated, err := issueStore.UpdateIssueWorkTracking(ctx, UpdateProjectIssueWorkTrackingInput{
+				IssueID:       issue.ID,
+				SetState:      true,
+				State:         "closed",
+				SetWorkStatus: true,
+				WorkStatus:    IssueWorkStatusDone,
+			})
+			require.NoError(t, err)
+			require.Equal(t, "closed", updated.State)
+			require.Equal(t, IssueWorkStatusDone, updated.WorkStatus)
+			require.NotNil(t, updated.ClosedAt)
+		})
+	}
+}
+
 func TestProjectIssueStore_CreateIssuePersistsAndValidatesLinkedDocumentAndApprovalState(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

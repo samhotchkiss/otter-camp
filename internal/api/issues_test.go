@@ -262,6 +262,59 @@ func TestIssuesHandlerPatchIssueRejectsInvalidTransitionsAndValues(t *testing.T)
 	require.Equal(t, http.StatusBadRequest, invalidPriorityRec.Code)
 }
 
+func TestIssuesHandlerPatchIssueAllowsClosingFromQueuedOrInProgress(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-patch-close-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Patch Close Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	testCases := []struct {
+		name           string
+		initialStatus  string
+		expectedStatus string
+	}{
+		{
+			name:           "close from queued",
+			initialStatus:  store.IssueWorkStatusQueued,
+			expectedStatus: store.IssueWorkStatusDone,
+		},
+		{
+			name:           "close from in progress",
+			initialStatus:  store.IssueWorkStatusInProgress,
+			expectedStatus: store.IssueWorkStatusDone,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+				ProjectID:  projectID,
+				Title:      "Patch close " + tc.name,
+				Origin:     "local",
+				WorkStatus: tc.initialStatus,
+			})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(
+				http.MethodPatch,
+				"/api/issues/"+issue.ID+"?org_id="+orgID,
+				bytes.NewReader([]byte(`{"state":"closed","work_status":"done"}`)),
+			)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			var payload issueSummaryPayload
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+			require.Equal(t, "closed", payload.State)
+			require.Equal(t, tc.expectedStatus, payload.WorkStatus)
+		})
+	}
+}
+
 func TestIssuesHandlerListSupportsOwnerWorkStatusAndPriorityFilters(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-list-work-filters-org")
