@@ -293,4 +293,15 @@ describe("ProjectFileBrowser", () => {
     expect(await screen.findByTestId("project-commit-browser")).toBeInTheDocument();
   });
 
+  it("allows toggling to commit history even when tree load failed", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValueOnce(mockJSONResponse({ error: "tree load failed" }, false));
+
+    render(<ProjectFileBrowser projectId="project-1" />);
+    expect(await screen.findByText("tree load failed")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Commit history" }));
+    expect(await screen.findByTestId("project-commit-browser")).toBeInTheDocument();
+  });
+
 });
