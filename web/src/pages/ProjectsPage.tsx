@@ -122,11 +122,16 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
   const progress = taskCount > 0 ? Math.round((completedCount / taskCount) * 100) : 0;
   const colors = colorClasses[project.color ?? "sky"] ?? colorClasses.sky;
   const updatedAt = project.updatedAt ?? project.updated_at ?? project.createdAt ?? project.created_at;
+  const isArchived = (project.status || "").toLowerCase() === "archived";
 
   return (
     <div
+      data-testid={`project-card-${project.id}`}
       onClick={onClick}
-      className="group cursor-pointer rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm backdrop-blur transition hover:border-[var(--accent)]/30 hover:shadow-md">
+      className={`group cursor-pointer rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm backdrop-blur transition hover:border-[var(--accent)]/30 hover:shadow-md ${
+        isArchived ? "opacity-70" : ""
+      }`}
+    >
       <div className="flex items-start justify-between">
         <div className={`flex h-12 w-12 items-center justify-center rounded-xl text-2xl ${colors.bg}`}>
           {project.emoji || "📁"}
@@ -153,8 +158,14 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
       {(project.status || project.priority || project.assignee) && (
         <div className="mt-3 flex flex-wrap gap-2">
           {project.status && (
-            <span className="rounded-full bg-[var(--surface-alt)] px-3 py-1 text-xs font-medium text-[var(--text-muted)]">
-              Status: {project.status}
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-medium ${
+                isArchived
+                  ? "border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)]"
+                  : "bg-[var(--surface-alt)] text-[var(--text-muted)]"
+              }`}
+            >
+              {isArchived ? "Archived" : `Status: ${project.status}`}
             </span>
           )}
           {project.priority && (
@@ -177,8 +188,16 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
             {completedCount}/{taskCount} tasks
           </span>
         </div>
-        <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--surface-alt)]">
+        <div
+          role="progressbar"
+          aria-label={`Progress for ${project.name}`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+          className="mt-2 h-2 overflow-hidden rounded-full border border-[var(--border)] bg-[var(--bg)]/70"
+        >
           <div
+            data-testid={`project-progress-fill-${project.id}`}
             className={`h-full rounded-full transition-all ${colors.progress}`}
             style={{ width: `${progress}%` }}
           />
