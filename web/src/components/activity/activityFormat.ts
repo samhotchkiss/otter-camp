@@ -94,6 +94,14 @@ export function stripActorPrefix(summary: string, actorName: string): string {
   return rest || rawSummary;
 }
 
+function normalizeSummaryToken(value: string): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
 type DescriptionInput = {
   type: string;
   actorName?: string;
@@ -104,11 +112,22 @@ type DescriptionInput = {
 
 export function getActivityDescription(input: DescriptionInput): string {
   const summary = String(input.summary ?? "").trim();
+  const type = String(input.type ?? "");
+
   if (summary) {
-    return input.actorName ? stripActorPrefix(summary, input.actorName) : summary;
+    const resolvedSummary = input.actorName ? stripActorPrefix(summary, input.actorName) : summary;
+    const normalizedSummary = normalizeSummaryToken(resolvedSummary);
+    const normalizedType = normalizeSummaryToken(type);
+    const normalizedHumanizedType = normalizeSummaryToken(humanizeType(type));
+    if (
+      normalizedSummary &&
+      normalizedSummary !== normalizedType &&
+      normalizedSummary !== normalizedHumanizedType
+    ) {
+      return resolvedSummary;
+    }
   }
 
-  const type = String(input.type ?? "");
   const taskTitle = String(input.taskTitle ?? "").trim();
   const metadata = normalizeMetadata(input.metadata);
 
