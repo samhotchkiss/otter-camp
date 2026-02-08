@@ -1,6 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ConnectionsPage from "./ConnectionsPage";
+import useEmissions from "../hooks/useEmissions";
+
+vi.mock("../hooks/useEmissions", () => ({
+  default: vi.fn(),
+}));
 
 function mockJSONResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -10,12 +15,41 @@ function mockJSONResponse(payload: unknown, status = 200): Response {
 }
 
 describe("ConnectionsPage", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     localStorage.clear();
     localStorage.setItem("otter-camp-org-id", "00000000-0000-0000-0000-000000000001");
     localStorage.setItem("otter_camp_token", "token");
     vi.restoreAllMocks();
     vi.stubGlobal("confirm", vi.fn(() => true));
+    const now = Date.now();
+    vi.mocked(useEmissions).mockReturnValue({
+      emissions: [
+        {
+          id: "em-1",
+          source_type: "agent",
+          source_id: "agent-main",
+          kind: "status",
+          summary: "Session synced",
+          timestamp: new Date(now).toISOString(),
+        },
+        {
+          id: "em-2",
+          source_type: "agent",
+          source_id: "agent-main",
+          kind: "progress",
+          summary: "Processed queued tasks",
+          timestamp: new Date(now - (2 * 60 * 1000)).toISOString(),
+        },
+      ],
+      latestBySource: new Map(),
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
   });
 
   it("loads and renders bridge/session diagnostics from API", async () => {
@@ -136,6 +170,10 @@ describe("ConnectionsPage", () => {
     expect(screen.getByText("sync push failed: 502 [REDACTED]")).toBeInTheDocument();
     expect(screen.getByText("Hourly Heartbeat")).toBeInTheDocument();
     expect(screen.getByText("proc-1")).toBeInTheDocument();
+    expect(screen.getByText("Emission Stream")).toBeInTheDocument();
+    expect(screen.getByText("Fresh")).toBeInTheDocument();
+    expect(screen.getByText("Rate: 0.4/min (5m)")).toBeInTheDocument();
+    expect(screen.getByText("Emissions arriving in real time")).toBeInTheDocument();
 
     const runButtonsBeforeActions = screen.getAllByRole("button", { name: "Run" });
     fireEvent.click(runButtonsBeforeActions[0]);
@@ -213,5 +251,64 @@ describe("ConnectionsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try Again" }));
     expect(await screen.findByText("Disconnected")).toBeInTheDocument();
     expect(attempts).toBe(2);
+  });
+
+  it("renders stale emission diagnostics when stream is inactive", async () => {
+    const now = Date.now();
+    vi.mocked(useEmissions).mockReturnValue({
+      emissions: [
+        {
+          id: "em-old",
+          source_type: "agent",
+          source_id: "agent-main",
+          kind: "status",
+          summary: "Old heartbeat",
+          timestamp: new Date(now - (31 * 60 * 1000)).toISOString(),
+        },
+      ],
+      latestBySource: new Map(),
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/admin/connections")) {
+        return mockJSONResponse({
+          bridge: { connected: true, sync_healthy: true },
+          sessions: [],
+          summary: { total: 0, online: 0, busy: 0, offline: 0, stalled: 0 },
+          generated_at: "2026-02-07T16:10:00Z",
+        });
+      }
+      if (url.includes("/api/github/sync/health")) {
+        return mockJSONResponse({ stuck_jobs: 0, queue_depth: [] });
+      }
+      if (url.includes("/api/github/sync/dead-letters")) {
+        return mockJSONResponse({ items: [] });
+      }
+      if (url.includes("/api/admin/logs")) {
+        return mockJSONResponse({ items: [], total: 0 });
+      }
+      if (url.includes("/api/admin/diagnostics")) {
+        return mockJSONResponse({ checks: [], generated_at: "2026-02-07T16:10:10Z" });
+      }
+      if (url.includes("/api/admin/cron/jobs")) {
+        return mockJSONResponse({ items: [], total: 0 });
+      }
+      if (url.includes("/api/admin/processes")) {
+        return mockJSONResponse({ items: [], total: 0 });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<ConnectionsPage />);
+
+    expect(await screen.findByText("Emission Stream")).toBeInTheDocument();
+    expect(screen.getByText("Stale")).toBeInTheDocument();
+    expect(screen.getByText("Rate: 0.0/min (5m)")).toBeInTheDocument();
+    expect(screen.getByText("No recent emissions; check bridge/session flow")).toBeInTheDocument();
   });
 });

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import useEmissions from "../hooks/useEmissions";
 import { apiFetch } from "../lib/api";
 
 type BridgeDiagnostics = {
@@ -167,6 +168,7 @@ export default function ConnectionsPage() {
   const [processesLoading, setProcessesLoading] = useState(false);
   const [processesError, setProcessesError] = useState<string | null>(null);
   const [processActionID, setProcessActionID] = useState<string | null>(null);
+  const { emissions } = useEmissions({ limit: 120 });
 
   const orgID = useMemo(() => {
     try {
@@ -175,6 +177,70 @@ export default function ConnectionsPage() {
       return "";
     }
   }, []);
+
+  const emissionDiagnostics = useMemo(() => {
+    const nowMs = Date.now();
+    const windowMs = 5 * 60 * 1000;
+    let latestMs = 0;
+    let latestISO = "";
+    let recentCount = 0;
+
+    for (const emission of emissions) {
+      const emittedMs = new Date(emission.timestamp).getTime();
+      if (Number.isNaN(emittedMs)) {
+        continue;
+      }
+      if (emittedMs > latestMs) {
+        latestMs = emittedMs;
+        latestISO = emission.timestamp;
+      }
+      if (nowMs - emittedMs <= windowMs) {
+        recentCount += 1;
+      }
+    }
+
+    const ratePerMinute = recentCount / 5;
+    if (!latestMs) {
+      return {
+        state: "none" as const,
+        label: "No telemetry",
+        detail: "No live emissions received yet",
+        latestISO: "",
+        ratePerMinute,
+        recentCount,
+      };
+    }
+
+    const ageSeconds = Math.floor((nowMs - latestMs) / 1000);
+    if (ageSeconds <= 30) {
+      return {
+        state: "healthy" as const,
+        label: "Fresh",
+        detail: "Emissions arriving in real time",
+        latestISO,
+        ratePerMinute,
+        recentCount,
+      };
+    }
+    if (ageSeconds <= 120) {
+      return {
+        state: "warming" as const,
+        label: "Recent",
+        detail: "Emission stream is active but slowing",
+        latestISO,
+        ratePerMinute,
+        recentCount,
+      };
+    }
+    return {
+      state: "stale" as const,
+      label: "Stale",
+      detail: "No recent emissions; check bridge/session flow",
+      latestISO,
+      ratePerMinute,
+      recentCount,
+    };
+  }, [emissions]);
 
   const loadLogs = useCallback(async () => {
     if (!orgID) {
@@ -393,7 +459,7 @@ export default function ConnectionsPage() {
 
       {!loading && !error && connections && (
         <div className="space-y-6">
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-5">
             <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Bridge</p>
               <p
@@ -465,6 +531,32 @@ export default function ConnectionsPage() {
                   {diagnostics.checks.filter((check) => check.status === "fail").length} failing checks
                 </p>
               )}
+            </article>
+
+            <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Emission Stream</p>
+              <p
+                className={`mt-2 text-lg font-semibold ${
+                  emissionDiagnostics.state === "healthy"
+                    ? "text-emerald-600"
+                    : emissionDiagnostics.state === "warming"
+                      ? "text-amber-600"
+                      : emissionDiagnostics.state === "stale"
+                        ? "text-red-600"
+                        : "text-[var(--text)]"
+                }`}
+              >
+                {emissionDiagnostics.label}
+              </p>
+              <p className="mt-2 text-xs text-[var(--text-muted)]">
+                Rate: {emissionDiagnostics.ratePerMinute.toFixed(1)}/min (5m)
+              </p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                Last emission: {formatRelativeOrUnknown(emissionDiagnostics.latestISO)}
+              </p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                {emissionDiagnostics.detail}
+              </p>
             </article>
           </div>
 
