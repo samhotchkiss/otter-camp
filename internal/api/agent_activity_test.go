@@ -3,11 +3,15 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,11 +42,11 @@ func TestActivityEventsIngestHandler(t *testing.T) {
 				StartedAt:  startedAt,
 			},
 			{
-				ID:       "01HZZ000000000000000000702",
-				AgentID:  "main",
-				Trigger:  "cron.scheduled",
-				Summary:  "Ran summary cron",
-				Status:   "failed",
+				ID:        "01HZZ000000000000000000702",
+				AgentID:   "main",
+				Trigger:   "cron.scheduled",
+				Summary:   "Ran summary cron",
+				Status:    "failed",
 				StartedAt: startedAt.Add(30 * time.Second),
 				Scope: &ingestAgentActivityScope{
 					IssueNumber: intPtr(42),
@@ -177,6 +181,307 @@ func TestActivityEventsIngestHandlerValidation(t *testing.T) {
 			require.Contains(t, rec.Body.String(), tc.wantError)
 		})
 	}
+}
+
+func TestAgentActivityListByAgentHandler(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgA := insertMessageTestOrganization(t, db, "activity-list-agent-org-a")
+	orgB := insertMessageTestOrganization(t, db, "activity-list-agent-org-b")
+
+	handler := &AgentActivityHandler{DB: db}
+	router := newAgentActivityTestRouter(handler)
+
+	base := time.Date(2026, 2, 8, 18, 0, 0, 0, time.UTC)
+	projectA := "11111111-1111-1111-1111-111111111111"
+	projectB := "22222222-2222-2222-2222-222222222222"
+
+	seedAgentActivityEvents(t, handler, orgA, []store.CreateAgentActivityEventInput{
+		{
+			ID:        "01HZZ000000000000000000901",
+			AgentID:   "main",
+			Trigger:   "chat.slack",
+			Channel:   "slack",
+			Summary:   "Slack response",
+			Status:    "completed",
+			StartedAt: base,
+		},
+		{
+			ID:        "01HZZ000000000000000000902",
+			AgentID:   "main",
+			Trigger:   "cron.scheduled",
+			Channel:   "cron",
+			Summary:   "Cron failed",
+			Status:    "failed",
+			ProjectID: projectA,
+			StartedAt: base.Add(1 * time.Minute),
+		},
+		{
+			ID:        "01HZZ000000000000000000903",
+			AgentID:   "main",
+			Trigger:   "chat.telegram",
+			Channel:   "telegram",
+			Summary:   "Telegram response",
+			Status:    "completed",
+			ProjectID: projectB,
+			StartedAt: base.Add(2 * time.Minute),
+		},
+		{
+			ID:        "01HZZ000000000000000000904",
+			AgentID:   "other",
+			Trigger:   "heartbeat",
+			Channel:   "system",
+			Summary:   "Heartbeat",
+			Status:    "completed",
+			StartedAt: base.Add(3 * time.Minute),
+		},
+	})
+	seedAgentActivityEvents(t, handler, orgB, []store.CreateAgentActivityEventInput{
+		{
+			ID:        "01HZZ000000000000000000905",
+			AgentID:   "main",
+			Trigger:   "chat.slack",
+			Channel:   "slack",
+			Summary:   "Other org event",
+			Status:    "completed",
+			StartedAt: base.Add(4 * time.Minute),
+		},
+	})
+
+	firstReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/agents/main/activity?org_id=%s&limit=2", orgA),
+		nil,
+	)
+	firstRec := httptest.NewRecorder()
+	router.ServeHTTP(firstRec, firstReq)
+	require.Equal(t, http.StatusOK, firstRec.Code)
+
+	var firstResp listAgentActivityResponse
+	require.NoError(t, json.NewDecoder(firstRec.Body).Decode(&firstResp))
+	require.Len(t, firstResp.Items, 2)
+	require.Equal(t, "01HZZ000000000000000000903", firstResp.Items[0].ID)
+	require.Equal(t, "01HZZ000000000000000000902", firstResp.Items[1].ID)
+	require.Equal(t, base.Add(1*time.Minute).Format(time.RFC3339), firstResp.NextBefore)
+
+	secondReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/agents/main/activity?org_id=%s&limit=2&before=%s", orgA, firstResp.NextBefore),
+		nil,
+	)
+	secondRec := httptest.NewRecorder()
+	router.ServeHTTP(secondRec, secondReq)
+	require.Equal(t, http.StatusOK, secondRec.Code)
+
+	var secondResp listAgentActivityResponse
+	require.NoError(t, json.NewDecoder(secondRec.Body).Decode(&secondResp))
+	require.Len(t, secondResp.Items, 1)
+	require.Equal(t, "01HZZ000000000000000000901", secondResp.Items[0].ID)
+	require.Empty(t, secondResp.NextBefore)
+
+	filterReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf(
+			"/api/agents/main/activity?org_id=%s&trigger=cron.scheduled&channel=cron&status=failed&project_id=%s",
+			orgA,
+			projectA,
+		),
+		nil,
+	)
+	filterRec := httptest.NewRecorder()
+	router.ServeHTTP(filterRec, filterReq)
+	require.Equal(t, http.StatusOK, filterRec.Code)
+
+	var filterResp listAgentActivityResponse
+	require.NoError(t, json.NewDecoder(filterRec.Body).Decode(&filterResp))
+	require.Len(t, filterResp.Items, 1)
+	require.Equal(t, "01HZZ000000000000000000902", filterResp.Items[0].ID)
+
+	missingScopeReq := httptest.NewRequest(http.MethodGet, "/api/agents/main/activity", nil)
+	missingScopeRec := httptest.NewRecorder()
+	router.ServeHTTP(missingScopeRec, missingScopeReq)
+	require.Equal(t, http.StatusBadRequest, missingScopeRec.Code)
+	require.Contains(t, missingScopeRec.Body.String(), "org_id is required")
+
+	invalidBeforeReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/agents/main/activity?org_id=%s&before=not-a-time", orgA),
+		nil,
+	)
+	invalidBeforeRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidBeforeRec, invalidBeforeReq)
+	require.Equal(t, http.StatusBadRequest, invalidBeforeRec.Code)
+	require.Contains(t, invalidBeforeRec.Body.String(), "before must be RFC3339")
+
+	invalidProjectReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/agents/main/activity?org_id=%s&project_id=bad-project", orgA),
+		nil,
+	)
+	invalidProjectRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidProjectRec, invalidProjectReq)
+	require.Equal(t, http.StatusBadRequest, invalidProjectRec.Code)
+	require.Contains(t, invalidProjectRec.Body.String(), "project_id must be a UUID")
+}
+
+func TestAgentActivityRecentHandler(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgA := insertMessageTestOrganization(t, db, "activity-list-recent-org-a")
+	orgB := insertMessageTestOrganization(t, db, "activity-list-recent-org-b")
+
+	handler := &AgentActivityHandler{DB: db}
+	router := newAgentActivityTestRouter(handler)
+
+	base := time.Date(2026, 2, 8, 19, 0, 0, 0, time.UTC)
+	projectA := "33333333-3333-3333-3333-333333333333"
+
+	seedAgentActivityEvents(t, handler, orgA, []store.CreateAgentActivityEventInput{
+		{
+			ID:        "01HZZ000000000000000001001",
+			AgentID:   "main",
+			Trigger:   "chat.slack",
+			Channel:   "slack",
+			Summary:   "Slack response",
+			Status:    "completed",
+			StartedAt: base,
+		},
+		{
+			ID:        "01HZZ000000000000000001002",
+			AgentID:   "main",
+			Trigger:   "cron.scheduled",
+			Channel:   "cron",
+			Summary:   "Cron failed",
+			Status:    "failed",
+			ProjectID: projectA,
+			StartedAt: base.Add(1 * time.Minute),
+		},
+		{
+			ID:        "01HZZ000000000000000001003",
+			AgentID:   "main",
+			Trigger:   "chat.telegram",
+			Channel:   "telegram",
+			Summary:   "Telegram response",
+			Status:    "completed",
+			StartedAt: base.Add(2 * time.Minute),
+		},
+		{
+			ID:        "01HZZ000000000000000001004",
+			AgentID:   "other",
+			Trigger:   "heartbeat",
+			Channel:   "system",
+			Summary:   "Heartbeat",
+			Status:    "completed",
+			StartedAt: base.Add(3 * time.Minute),
+		},
+	})
+	seedAgentActivityEvents(t, handler, orgB, []store.CreateAgentActivityEventInput{
+		{
+			ID:        "01HZZ000000000000000001005",
+			AgentID:   "main",
+			Trigger:   "chat.slack",
+			Channel:   "slack",
+			Summary:   "Other org event",
+			Status:    "completed",
+			StartedAt: base.Add(4 * time.Minute),
+		},
+	})
+
+	firstReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/activity/recent?org_id=%s&limit=3", orgA),
+		nil,
+	)
+	firstRec := httptest.NewRecorder()
+	router.ServeHTTP(firstRec, firstReq)
+	require.Equal(t, http.StatusOK, firstRec.Code)
+
+	var firstResp listAgentActivityResponse
+	require.NoError(t, json.NewDecoder(firstRec.Body).Decode(&firstResp))
+	require.Len(t, firstResp.Items, 3)
+	require.Equal(t, "01HZZ000000000000000001004", firstResp.Items[0].ID)
+	require.Equal(t, "01HZZ000000000000000001003", firstResp.Items[1].ID)
+	require.Equal(t, "01HZZ000000000000000001002", firstResp.Items[2].ID)
+	require.Equal(t, base.Add(1*time.Minute).Format(time.RFC3339), firstResp.NextBefore)
+	for _, item := range firstResp.Items {
+		require.Equal(t, orgA, item.OrgID)
+	}
+
+	filterReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf(
+			"/api/activity/recent?org_id=%s&agent_id=main&trigger=cron.scheduled&channel=cron&status=failed&project_id=%s",
+			orgA,
+			projectA,
+		),
+		nil,
+	)
+	filterRec := httptest.NewRecorder()
+	router.ServeHTTP(filterRec, filterReq)
+	require.Equal(t, http.StatusOK, filterRec.Code)
+
+	var filterResp listAgentActivityResponse
+	require.NoError(t, json.NewDecoder(filterRec.Body).Decode(&filterResp))
+	require.Len(t, filterResp.Items, 1)
+	require.Equal(t, "01HZZ000000000000000001002", filterResp.Items[0].ID)
+
+	missingScopeReq := httptest.NewRequest(http.MethodGet, "/api/activity/recent", nil)
+	missingScopeRec := httptest.NewRecorder()
+	router.ServeHTTP(missingScopeRec, missingScopeReq)
+	require.Equal(t, http.StatusBadRequest, missingScopeRec.Code)
+	require.Contains(t, missingScopeRec.Body.String(), "org_id is required")
+
+	invalidBeforeReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/activity/recent?org_id=%s&before=not-a-time", orgA),
+		nil,
+	)
+	invalidBeforeRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidBeforeRec, invalidBeforeReq)
+	require.Equal(t, http.StatusBadRequest, invalidBeforeRec.Code)
+	require.Contains(t, invalidBeforeRec.Body.String(), "before must be RFC3339")
+
+	invalidProjectReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/activity/recent?org_id=%s&project_id=bad-project", orgA),
+		nil,
+	)
+	invalidProjectRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidProjectRec, invalidProjectReq)
+	require.Equal(t, http.StatusBadRequest, invalidProjectRec.Code)
+	require.Contains(t, invalidProjectRec.Body.String(), "project_id must be a UUID")
+}
+
+func TestAgentActivityRoutesRegistered(t *testing.T) {
+	router := NewRouter()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/activity/recent", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.NotEqual(t, http.StatusNotFound, rec.Code)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/agents/main/activity", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.NotEqual(t, http.StatusNotFound, rec.Code)
+}
+
+func seedAgentActivityEvents(
+	t *testing.T,
+	handler *AgentActivityHandler,
+	orgID string,
+	inputs []store.CreateAgentActivityEventInput,
+) {
+	t.Helper()
+
+	activityStore, err := handler.resolveStore()
+	require.NoError(t, err)
+	require.NoError(t, activityStore.CreateEvents(testCtxWithWorkspace(orgID), inputs))
+}
+
+func newAgentActivityTestRouter(handler *AgentActivityHandler) http.Handler {
+	router := chi.NewRouter()
+	router.With(middleware.OptionalWorkspace).Get("/api/agents/{id}/activity", handler.ListByAgent)
+	router.With(middleware.OptionalWorkspace).Get("/api/activity/recent", handler.ListRecent)
+	return router
 }
 
 func intPtr(v int) *int {

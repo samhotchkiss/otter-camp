@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -18,6 +22,8 @@ import (
 const (
 	maxActivityEventsBodySize = 2 << 20 // 2MB
 	maxActivityEventsBatch    = 500
+	activityListDefaultLimit  = 50
+	activityListMaxLimit      = 200
 )
 
 var activityStatusValues = map[string]struct{}{
@@ -47,26 +53,32 @@ type ingestAgentActivityScope struct {
 }
 
 type ingestAgentActivityRecord struct {
-	ID          string                   `json:"id"`
-	AgentID     string                   `json:"agent_id"`
-	SessionKey  string                   `json:"session_key,omitempty"`
-	Trigger     string                   `json:"trigger"`
-	Channel     string                   `json:"channel,omitempty"`
-	Summary     string                   `json:"summary"`
-	Detail      string                   `json:"detail,omitempty"`
+	ID          string                    `json:"id"`
+	AgentID     string                    `json:"agent_id"`
+	SessionKey  string                    `json:"session_key,omitempty"`
+	Trigger     string                    `json:"trigger"`
+	Channel     string                    `json:"channel,omitempty"`
+	Summary     string                    `json:"summary"`
+	Detail      string                    `json:"detail,omitempty"`
 	Scope       *ingestAgentActivityScope `json:"scope,omitempty"`
-	TokensUsed  int                      `json:"tokens_used"`
-	ModelUsed   string                   `json:"model_used,omitempty"`
-	DurationMs  int64                    `json:"duration_ms"`
-	Status      string                   `json:"status"`
-	StartedAt   time.Time                `json:"started_at"`
-	CompletedAt *time.Time               `json:"completed_at,omitempty"`
+	TokensUsed  int                       `json:"tokens_used"`
+	ModelUsed   string                    `json:"model_used,omitempty"`
+	DurationMs  int64                     `json:"duration_ms"`
+	Status      string                    `json:"status"`
+	StartedAt   time.Time                 `json:"started_at"`
+	CompletedAt *time.Time                `json:"completed_at,omitempty"`
 }
 
 type ingestAgentActivityEventsResponse struct {
 	OK       bool      `json:"ok"`
 	Inserted int       `json:"inserted"`
 	At       time.Time `json:"at"`
+}
+
+type listAgentActivityResponse struct {
+	Items      []store.AgentActivityEvent `json:"items"`
+	Total      int                        `json:"total"`
+	NextBefore string                     `json:"next_before,omitempty"`
 }
 
 func (h *AgentActivityHandler) IngestEvents(w http.ResponseWriter, r *http.Request) {
@@ -223,6 +235,128 @@ func normalizeActivityIngestRecord(event ingestAgentActivityRecord) (store.Creat
 	input.ThreadID = strings.TrimSpace(event.Scope.ThreadID)
 
 	return input, nil
+}
+
+func (h *AgentActivityHandler) ListByAgent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "org_id is required"})
+		return
+	}
+	agentID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if agentID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id is required"})
+		return
+	}
+	opts, err := parseAgentActivityListOptions(r.URL.Query())
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	activityStore, err := h.resolveStore()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database unavailable"})
+		return
+	}
+	items, err := activityStore.ListByAgent(r.Context(), agentID, opts)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list agent activity"})
+		return
+	}
+	resp := buildListAgentActivityResponse(items, opts.Limit)
+	sendJSON(w, http.StatusOK, resp)
+}
+
+func (h *AgentActivityHandler) ListRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "org_id is required"})
+		return
+	}
+	opts, err := parseAgentActivityListOptions(r.URL.Query())
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	opts.AgentID = strings.TrimSpace(r.URL.Query().Get("agent_id"))
+
+	activityStore, err := h.resolveStore()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database unavailable"})
+		return
+	}
+	items, err := activityStore.ListRecent(r.Context(), opts)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list recent activity"})
+		return
+	}
+	resp := buildListAgentActivityResponse(items, opts.Limit)
+	sendJSON(w, http.StatusOK, resp)
+}
+
+func parseAgentActivityListOptions(values url.Values) (store.ListAgentActivityOptions, error) {
+	opts := store.ListAgentActivityOptions{
+		Limit: activityListDefaultLimit,
+	}
+
+	limitRaw := strings.TrimSpace(values.Get("limit"))
+	if limitRaw != "" {
+		limit, err := strconv.Atoi(limitRaw)
+		if err != nil || limit <= 0 {
+			return opts, fmt.Errorf("limit must be a positive integer")
+		}
+		if limit > activityListMaxLimit {
+			limit = activityListMaxLimit
+		}
+		opts.Limit = limit
+	}
+
+	beforeRaw := strings.TrimSpace(values.Get("before"))
+	if beforeRaw != "" {
+		before, err := time.Parse(time.RFC3339, beforeRaw)
+		if err != nil {
+			return opts, fmt.Errorf("before must be RFC3339")
+		}
+		opts.Before = &before
+	}
+
+	opts.Trigger = strings.TrimSpace(values.Get("trigger"))
+	opts.Channel = strings.TrimSpace(values.Get("channel"))
+	opts.Status = strings.TrimSpace(values.Get("status"))
+	projectID := strings.TrimSpace(values.Get("project_id"))
+	if projectID != "" && !activityUUIDRegex.MatchString(projectID) {
+		return opts, fmt.Errorf("project_id must be a UUID")
+	}
+	opts.ProjectID = projectID
+	return opts, nil
+}
+
+func buildListAgentActivityResponse(items []store.AgentActivityEvent, limit int) listAgentActivityResponse {
+	resp := listAgentActivityResponse{
+		Items: items,
+		Total: len(items),
+	}
+	if len(items) == 0 {
+		return resp
+	}
+	if limit <= 0 {
+		limit = activityListDefaultLimit
+	}
+	if len(items) >= limit {
+		last := items[len(items)-1].StartedAt.UTC()
+		if !last.IsZero() {
+			resp.NextBefore = last.Format(time.RFC3339)
+		}
+	}
+	return resp
 }
 
 func (h *AgentActivityHandler) resolveStore() (*store.AgentActivityEventStore, error) {

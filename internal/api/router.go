@@ -166,6 +166,8 @@ func NewRouter() http.Handler {
 		r.Get("/feed", FeedHandlerV2)
 		r.Post("/feed", feedPushHandler.Handle)
 		r.Post("/activity/events", agentActivityHandler.IngestEvents)
+		r.With(middleware.OptionalWorkspace).Get("/activity/recent", agentActivityHandler.ListRecent)
+		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/activity", agentActivityHandler.ListByAgent)
 		r.Post("/auth/login", HandleLogin)
 		r.Post("/auth/exchange", HandleAuthExchange)
 		r.Get("/auth/exchange", HandleAuthExchange)
