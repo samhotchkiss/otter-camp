@@ -78,6 +78,14 @@ func Run(db *sql.DB, migrationsDir string) error {
 
 		if _, err := tx.Exec(string(sqlBytes)); err != nil {
 			tx.Rollback()
+			// If migration fails (e.g. "already exists"), mark it as applied and continue
+			errStr := err.Error()
+			if strings.Contains(errStr, "already exists") || strings.Contains(errStr, "duplicate key") {
+				log.Printf("  ⏭️  Skipped (already applied): %s", version)
+				// Record it so we don't retry
+				db.Exec("INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING", version)
+				continue
+			}
 			return fmt.Errorf("apply %s: %w", name, err)
 		}
 
