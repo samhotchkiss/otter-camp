@@ -324,9 +324,9 @@ func canTransitionIssueWorkStatus(currentStatus, nextStatus string) bool {
 
 	switch current {
 	case IssueWorkStatusQueued:
-		return next == IssueWorkStatusInProgress || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled
+		return next == IssueWorkStatusInProgress || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled || next == IssueWorkStatusDone
 	case IssueWorkStatusInProgress:
-		return next == IssueWorkStatusReview || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled
+		return next == IssueWorkStatusReview || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled || next == IssueWorkStatusDone
 	case IssueWorkStatusBlocked:
 		return next == IssueWorkStatusInProgress || next == IssueWorkStatusCancelled
 	case IssueWorkStatusReview:
