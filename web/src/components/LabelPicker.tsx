@@ -26,6 +26,7 @@ type LabelPickerProps = {
   onCreate: (name: string, color: string) => void | Promise<void>;
   buttonLabel?: string;
   colorOptions?: string[];
+  onOpen?: () => void | Promise<void>;
 };
 
 export default function LabelPicker({
@@ -36,6 +37,7 @@ export default function LabelPicker({
   onCreate,
   buttonLabel = "Manage labels",
   colorOptions = DEFAULT_COLOR_OPTIONS,
+  onOpen,
 }: LabelPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -63,7 +65,14 @@ export default function LabelPicker({
         aria-label={buttonLabel}
         aria-expanded={isOpen}
         className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-        onClick={() => setIsOpen((open) => !open)}
+        onClick={() =>
+          setIsOpen((open) => {
+            const next = !open;
+            if (next) {
+              void onOpen?.();
+            }
+            return next;
+          })}
       >
         <span>{buttonLabel}</span>
       </button>
