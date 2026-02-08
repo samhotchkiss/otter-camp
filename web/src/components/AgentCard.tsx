@@ -1,5 +1,6 @@
 import { memo, useCallback, useMemo } from "react";
 import type { AgentStatus } from "./AgentDM";
+import AgentLastAction, { type AgentLastActionData } from "./agents/AgentLastAction";
 
 /**
  * Extended agent info for card display.
@@ -12,11 +13,13 @@ export type AgentCardData = {
   role?: string;
   currentTask?: string;
   lastActive?: string | number | null;
+  lastAction?: AgentLastActionData;
 };
 
 export type AgentCardProps = {
   agent: AgentCardData;
   onClick?: (agent: AgentCardData) => void;
+  detailHref?: string;
 };
 
 /**
@@ -146,7 +149,7 @@ const StatusIndicator = memo(function StatusIndicator({ status }: { status: Agen
  * - Last active timestamp
  * - Click to open DM
  */
-function AgentCardComponent({ agent, onClick }: AgentCardProps) {
+function AgentCardComponent({ agent, onClick, detailHref }: AgentCardProps) {
   const handleClick = useCallback(() => {
     onClick?.(agent);
   }, [onClick, agent]);
@@ -157,6 +160,10 @@ function AgentCardComponent({ agent, onClick }: AgentCardProps) {
       onClick?.(agent);
     }
   }, [onClick, agent]);
+
+  const handleDetailLinkClick = useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.stopPropagation();
+  }, []);
 
   // Memoize computed values
   const initials = useMemo(() => getInitials(agent.name), [agent.name]);
@@ -228,6 +235,25 @@ function AgentCardComponent({ agent, onClick }: AgentCardProps) {
           </p>
         </div>
       )}
+
+      {/* Last Action */}
+      <div className="mt-3">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">
+            Last Action
+          </p>
+          {detailHref ? (
+            <a
+              href={detailHref}
+              onClick={handleDetailLinkClick}
+              className="text-xs font-semibold text-[#C9A86C] hover:underline"
+            >
+              View timeline
+            </a>
+          ) : null}
+        </div>
+        <AgentLastAction activity={agent.lastAction} />
+      </div>
 
       {/* Footer: Last Active */}
       <div className="mt-4 flex items-center justify-between border-t border-[var(--border)] pt-3">

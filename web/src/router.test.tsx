@@ -22,4 +22,8 @@ describe("router", () => {
   it("registers the connections route", () => {
     expect(hasPath(router.routes as RouteNode[], "connections")).toBe(true);
   });
+
+  it("registers the agent detail route", () => {
+    expect(hasPath(router.routes as RouteNode[], "agents/:id")).toBe(true);
+  });
 });
