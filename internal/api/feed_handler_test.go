@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -31,6 +32,20 @@ func insertFeedTask(t *testing.T, db *sql.DB, orgID, title string) string {
 		"INSERT INTO tasks (org_id, title, status, priority) VALUES ($1, $2, 'queued', 'P2') RETURNING id",
 		orgID,
 		title,
+	).Scan(&id)
+	require.NoError(t, err)
+	return id
+}
+
+func insertFeedUser(t *testing.T, db *sql.DB, orgID, subject, displayName string) string {
+	t.Helper()
+	var id string
+	err := db.QueryRow(
+		"INSERT INTO users (org_id, subject, issuer, display_name, email) VALUES ($1, $2, 'test-suite', $3, $4) RETURNING id",
+		orgID,
+		subject,
+		displayName,
+		subject+"@example.com",
 	).Scan(&id)
 	require.NoError(t, err)
 	return id
@@ -252,6 +267,76 @@ func TestFeedHandlerV2SuppressesProjectChatEvents(t *testing.T) {
 	require.Equal(t, 1, resp.Total)
 	require.Len(t, resp.Items, 1)
 	require.Equal(t, "commit", resp.Items[0].Type)
+}
+
+func TestFeedHandlerV2ResolvesGitPushActorFromMetadataUserID(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	orgID := insertFeedOrganization(t, db, "feed-git-push-user")
+	userID := insertFeedUser(t, db, orgID, "sam", "Sam")
+	insertFeedActivity(
+		t,
+		db,
+		orgID,
+		"git.push",
+		json.RawMessage(fmt.Sprintf(`{"user_id":"%s","branch":"main","commit_message":"Fix feed fallback"}`, userID)),
+		time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp PaginatedFeedResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Items, 1)
+	require.NotNil(t, resp.Items[0].AgentName)
+	require.Equal(t, "Sam", *resp.Items[0].AgentName)
+	require.Contains(t, resp.Items[0].Summary, "Fix feed fallback")
+	require.Contains(t, resp.Items[0].Summary, "main")
+}
+
+func TestFeedHandlerV2UsesSystemWhenGitPushActorCannotBeResolved(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	orgID := insertFeedOrganization(t, db, "feed-git-push-system")
+	insertFeedActivity(
+		t,
+		db,
+		orgID,
+		"git.push",
+		json.RawMessage(`{"branch":"main","commit_message":"Fallback actor"}`),
+		time.Date(2026, 2, 8, 11, 0, 0, 0, time.UTC),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp PaginatedFeedResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Items, 1)
+	require.NotNil(t, resp.Items[0].AgentName)
+	require.Equal(t, "System", *resp.Items[0].AgentName)
+	require.Contains(t, resp.Items[0].Summary, "Fallback actor")
 }
 
 func TestFeedHandlerV2FilterByDateRange(t *testing.T) {
