@@ -122,6 +122,86 @@ describe("ProjectDetailPage files tab", () => {
     );
   });
 
+  it("loads board data from project issues and computes issue-based header counts", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          agents: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440111",
+              name: "Derek",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440211",
+              issue_number: 11,
+              title: "Stuck issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440111",
+              work_status: "blocked",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "550e8400-e29b-41d4-a716-446655440212",
+              issue_number: 12,
+              title: "Active issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440111",
+              work_status: "in_progress",
+              priority: "P2",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "550e8400-e29b-41d4-a716-446655440213",
+              issue_number: 13,
+              title: "Completed issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440111",
+              work_status: "done",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+
+    const fetchedURLs = fetchMock.mock.calls.map(([input]: [unknown]) => String(input));
+    expect(fetchedURLs.some((url) => url.includes("/api/issues?"))).toBe(true);
+    expect(fetchedURLs.some((url) => url.includes("/api/tasks?"))).toBe(false);
+    expect(screen.getByText("1 item waiting on you")).toBeInTheDocument();
+    expect(screen.getByText("2 active issues")).toBeInTheDocument();
+  });
+
   it("submits New Issue request to project chat endpoint", async () => {
     const user = userEvent.setup();
     localStorage.setItem("otter-camp-user-name", "Sam");

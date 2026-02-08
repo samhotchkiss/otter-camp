@@ -64,10 +64,30 @@ type ApiTask = {
   number?: number;
 };
 
+type ApiIssue = {
+  id: string;
+  title: string;
+  issue_number?: number;
+  owner_agent_id?: string;
+  work_status?: string;
+  priority?: string;
+};
+
 type Task = {
   id: string;
   title: string;
-  status: "queued" | "in_progress" | "review" | "done" | "blocked" | "dispatched" | "cancelled";
+  status:
+    | "queued"
+    | "in_progress"
+    | "review"
+    | "done"
+    | "blocked"
+    | "dispatched"
+    | "cancelled"
+    | "ready"
+    | "planning"
+    | "ready_for_work"
+    | "flagged";
   priority: "P0" | "P1" | "P2" | "P3";
   assignee: string;
   avatarColor: string;
@@ -126,6 +146,18 @@ const LIST_STATUS_BADGE: Record<Task["status"], { label: string; className: stri
     label: "Queued",
     className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
   },
+  ready: {
+    label: "Ready",
+    className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
+  },
+  planning: {
+    label: "Planning",
+    className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
+  },
+  ready_for_work: {
+    label: "Ready for Work",
+    className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
+  },
   dispatched: {
     label: "Dispatched",
     className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
@@ -140,6 +172,10 @@ const LIST_STATUS_BADGE: Record<Task["status"], { label: string; className: stri
   },
   blocked: {
     label: "Blocked",
+    className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  },
+  flagged: {
+    label: "Flagged",
     className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
   },
   done: {
@@ -290,7 +326,7 @@ export default function ProjectDetailPage() {
   const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
   const { upsertConversation, openConversation } = useGlobalChat();
 
-  // Fetch project and tasks
+  // Fetch project and issue work items
   useEffect(() => {
     async function fetchData() {
       if (!id) return;
@@ -337,28 +373,60 @@ export default function ProjectDetailPage() {
           setAvailableAgents(parsedAgents);
         }
         
-        // Fetch tasks for this project
-        const tasksUrl = orgId 
-          ? `${API_URL}/api/tasks?org_id=${orgId}&project_id=${id}`
-          : `${API_URL}/api/tasks?project_id=${id}`;
-        const tasksRes = await fetch(tasksUrl);
-        if (tasksRes.ok) {
-          const tasksData = await tasksRes.json();
-          const apiTasks: ApiTask[] = tasksData.tasks || tasksData || [];
-          
-          // Transform API tasks to UI tasks
-          const transformedTasks: Task[] = apiTasks.map((t) => {
-            const agentName = t.assigned_agent_id ? 
-              (agentIdToName[t.assigned_agent_id] || "Unassigned") : 
-              "Unassigned";
+        // Fetch issues for this project
+        const issuesUrl = orgId
+          ? `${API_URL}/api/issues?org_id=${encodeURIComponent(orgId)}&project_id=${encodeURIComponent(id)}&limit=200`
+          : `${API_URL}/api/issues?project_id=${encodeURIComponent(id)}&limit=200`;
+        const issuesRes = await fetch(issuesUrl);
+        if (issuesRes.ok) {
+          const payload = await issuesRes.json() as
+            | { items?: ApiIssue[]; tasks?: ApiTask[] }
+            | ApiTask[]
+            | ApiIssue[];
+          const apiIssues = Array.isArray(payload)
+            ? payload
+            : Array.isArray(payload.items)
+              ? payload.items
+              : Array.isArray(payload.tasks)
+                ? payload.tasks
+                : [];
+
+          const transformedTasks: Task[] = apiIssues.map((raw) => {
+            const issue = raw as ApiIssue;
+            const legacyTask = raw as ApiTask;
+            const ownerAgentID = issue.owner_agent_id ?? legacyTask.assigned_agent_id;
+            const issueStatusRaw = issue.work_status ?? legacyTask.status ?? "queued";
+            const normalizedStatus = issueStatusRaw.trim().toLowerCase();
+            const status = (
+              normalizedStatus === "queued" ||
+              normalizedStatus === "ready" ||
+              normalizedStatus === "planning" ||
+              normalizedStatus === "ready_for_work" ||
+              normalizedStatus === "in_progress" ||
+              normalizedStatus === "review" ||
+              normalizedStatus === "blocked" ||
+              normalizedStatus === "flagged" ||
+              normalizedStatus === "done" ||
+              normalizedStatus === "cancelled" ||
+              normalizedStatus === "dispatched"
+            )
+              ? normalizedStatus
+              : "queued";
+            const priorityRaw = (issue.priority ?? legacyTask.priority ?? "P2").toUpperCase();
+            const priority = (priorityRaw === "P0" || priorityRaw === "P1" || priorityRaw === "P2" || priorityRaw === "P3")
+              ? priorityRaw
+              : "P2";
+            const agentName = ownerAgentID
+              ? (agentIdToName[ownerAgentID] || "Unassigned")
+              : "Unassigned";
             return {
-              id: t.id,
-              title: t.title,
-              status: t.status as Task["status"],
-              priority: (t.priority || "P2") as Task["priority"],
+              id: raw.id,
+              title: raw.title,
+              status,
+              priority,
               assignee: agentName,
               avatarColor: agentColors[agentName] || "var(--accent, #C9A86C)",
-              blocked: t.status === "blocked",
+              blocked: status === "blocked" || status === "flagged",
             };
           });
           setTasks(transformedTasks);
@@ -670,7 +738,7 @@ export default function ProjectDetailPage() {
                 )}
               </div>
               <span>•</span>
-              <span>{activeTaskCount} active task{activeTaskCount !== 1 ? "s" : ""}</span>
+              <span>{activeTaskCount} active issue{activeTaskCount !== 1 ? "s" : ""}</span>
               {primaryAgentName && (
                 <>
                   <span>•</span>
