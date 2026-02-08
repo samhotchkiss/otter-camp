@@ -351,6 +351,7 @@ func ensureQuestionnaireContextVisible(ctx context.Context, q Querier, contextTy
 	case QuestionnaireContextProjectChat:
 		return ensureProjectVisible(ctx, q, contextID)
 	case QuestionnaireContextTemplate:
+		// TODO: verify template exists when a templates table is introduced.
 		return nil
 	default:
 		return fmt.Errorf("invalid context_type")
