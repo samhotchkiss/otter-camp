@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   useNotifications,
   type Notification,
   type NotificationType,
 } from "../contexts/NotificationContext";
+import type { Emission } from "../hooks/useEmissions";
+import useEmissions from "../hooks/useEmissions";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -34,6 +36,20 @@ const formatTimeAgo = (date: Date): string => {
   if (diffDay < 7) return `${diffDay}d ago`;
   return date.toLocaleDateString();
 };
+
+const ACTIONABLE_KINDS = new Set(["error", "milestone", "progress"]);
+const ACTIONABLE_WINDOW_MS = 2 * 60 * 1000;
+
+function isActionableRecentEmission(emission: Emission, nowMs: number): boolean {
+  if (!ACTIONABLE_KINDS.has(emission.kind)) {
+    return false;
+  }
+  const emittedMs = new Date(emission.timestamp).getTime();
+  if (Number.isNaN(emittedMs)) {
+    return false;
+  }
+  return nowMs - emittedMs <= ACTIONABLE_WINDOW_MS;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NotificationItem
@@ -124,9 +140,17 @@ export default function NotificationBell() {
     markAsRead,
     markAllAsRead,
   } = useNotifications();
+  const { emissions } = useEmissions({ limit: 50 });
 
   // Get the 5 most recent notifications for the dropdown
   const recentNotifications = notifications.slice(0, 5);
+  const actionableEmissionCount = useMemo(() => {
+    const nowMs = Date.now();
+    return emissions.reduce((count, emission) => (
+      isActionableRecentEmission(emission, nowMs) ? count + 1 : count
+    ), 0);
+  }, [emissions]);
+  const badgeCount = unreadCount + actionableEmissionCount;
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -193,7 +217,7 @@ export default function NotificationBell() {
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         className="relative rounded-xl p-2.5 text-slate-500 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
+        aria-label={`Notifications${badgeCount > 0 ? ` (${badgeCount} alerts)` : ""}`}
         aria-expanded={isOpen}
         aria-haspopup="true"
       >
@@ -207,9 +231,12 @@ export default function NotificationBell() {
         </svg>
 
         {/* Badge */}
-        {unreadCount > 0 && (
-          <span className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-semibold text-white">
-            {unreadCount > 9 ? "9+" : unreadCount}
+        {badgeCount > 0 && (
+          <span
+            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-semibold text-white"
+            data-testid="notification-bell-badge"
+          >
+            {badgeCount > 9 ? "9+" : badgeCount}
           </span>
         )}
       </button>
