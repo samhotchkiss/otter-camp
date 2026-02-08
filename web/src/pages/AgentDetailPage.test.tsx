@@ -131,4 +131,94 @@ describe("AgentDetailPage", () => {
 
     expect(urls[urls.length - 1]).toContain("status=failed");
   });
+
+  it("loads identity and memory tabs using admin file endpoints", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/admin/agents/main") && !url.includes("/files") && !url.includes("/memory")) {
+        return new Response(
+          JSON.stringify({
+            agent: {
+              id: "main",
+              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
+              name: "Frank",
+              status: "online",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/agents/main/activity")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      if (url.includes("/api/admin/agents/main/files/SOUL.md")) {
+        return new Response(
+          JSON.stringify({
+            ref: "HEAD",
+            path: "/SOUL.md",
+            content: "# SOUL\nSteady",
+            encoding: "utf-8",
+            size: 13,
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/admin/agents/main/files")) {
+        return new Response(
+          JSON.stringify({
+            ref: "HEAD",
+            path: "/",
+            entries: [{ name: "SOUL.md", type: "file", path: "SOUL.md" }],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/admin/agents/main/memory/2026-02-08")) {
+        return new Response(
+          JSON.stringify({
+            ref: "HEAD",
+            path: "/memory/2026-02-08.md",
+            content: "# Memory\nNoted updates",
+            encoding: "utf-8",
+            size: 20,
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/admin/agents/main/memory")) {
+        return new Response(
+          JSON.stringify({
+            ref: "HEAD",
+            path: "/memory",
+            entries: [{ name: "2026-02-08.md", type: "file", path: "2026-02-08.md" }],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(
+      <MemoryRouter initialEntries={["/agents/main"]}>
+        <Routes>
+          <Route path="/agents/:id" element={<AgentDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Agent Details" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Identity" }));
+    await waitFor(() => {
+      const textarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
+      expect(textarea.value).toContain("Steady");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Memory" }));
+    await waitFor(() => {
+      const textarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
+      expect(textarea.value).toContain("Noted updates");
+    });
+  });
 });

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import AgentActivityTimeline from "../components/agents/AgentActivityTimeline";
+import AgentIdentityEditor from "../components/agents/AgentIdentityEditor";
+import AgentMemoryBrowser from "../components/agents/AgentMemoryBrowser";
 import { useAgentActivity } from "../hooks/useAgentActivity";
 
 const STATUS_OPTIONS = ["started", "completed", "failed", "timeout"];
@@ -233,15 +235,11 @@ export default function AgentDetailPage() {
       )}
 
       {activeTab === "identity" && (
-        <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--text-muted)]">
-          Identity files viewer will be enabled in the next implementation slice.
-        </section>
+        <AgentIdentityEditor agentID={id} />
       )}
 
       {activeTab === "memory" && (
-        <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--text-muted)]">
-          Memory browser will be enabled in the next implementation slice.
-        </section>
+        <AgentMemoryBrowser agentID={id} />
       )}
 
       {activeTab === "activity" && (
