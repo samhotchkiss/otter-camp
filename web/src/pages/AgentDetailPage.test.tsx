@@ -9,13 +9,28 @@ describe("AgentDetailPage", () => {
     localStorage.setItem("otter-camp-org-id", "org-123");
   });
 
-  it("loads and renders activity timeline for agent route", async () => {
+  it("loads and renders tabbed agent detail with overview data", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/sync/agents")) {
+      if (url.includes("/api/admin/agents/main")) {
         return new Response(
           JSON.stringify({
-            agents: [{ id: "main", name: "Frank", role: "Chief of Staff", status: "online" }],
+            agent: {
+              id: "main",
+              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
+              name: "Frank",
+              status: "online",
+              model: "gpt-5.2-codex",
+              heartbeat_every: "15m",
+              channel: "slack:#engineering",
+              session_key: "agent:main:main",
+              last_seen: "just now",
+            },
+            sync: {
+              current_task: "Coordinating deployment",
+              context_tokens: 4200,
+              total_tokens: 22000,
+            },
           }),
           { status: 200 },
         );
@@ -56,19 +71,36 @@ describe("AgentDetailPage", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "Agent Activity" })).toBeInTheDocument();
-    expect(await screen.findByText("Timeline for Frank (Chief of Staff)")).toBeInTheDocument();
-    expect(await screen.findByText("Ran codex-progress-summary")).toBeInTheDocument();
-    expect(screen.getByText("Cron")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Agent Details" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Identity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Memory" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+
+    expect(await screen.findByText("Frank")).toBeInTheDocument();
+    expect(await screen.findByText("gpt-5.2-codex")).toBeInTheDocument();
+    expect(await screen.findByText("15m")).toBeInTheDocument();
+    expect(await screen.findByText("Coordinating deployment")).toBeInTheDocument();
   });
 
-  it("applies filter controls to activity query", async () => {
+  it("keeps activity filters working from the activity tab", async () => {
     const urls: string[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       urls.push(url);
-      if (url.includes("/api/sync/agents")) {
-        return new Response(JSON.stringify({ agents: [] }), { status: 200 });
+      if (url.includes("/api/admin/agents/main")) {
+        return new Response(
+          JSON.stringify({
+            agent: {
+              id: "main",
+              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
+              name: "Frank",
+              status: "online",
+            },
+          }),
+          { status: 200 },
+        );
       }
       if (url.includes("/api/agents/main/activity")) {
         return new Response(JSON.stringify({ items: [] }), { status: 200 });
@@ -86,7 +118,8 @@ describe("AgentDetailPage", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "Agent Activity" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Agent Details" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
 
     fireEvent.change(screen.getByLabelText("Status"), {
       target: { value: "failed" },
