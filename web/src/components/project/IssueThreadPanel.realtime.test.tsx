@@ -1,10 +1,14 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import useEmissions from "../../hooks/useEmissions";
 import { useWS } from "../../contexts/WebSocketContext";
 import IssueThreadPanel from "./IssueThreadPanel";
 
 vi.mock("../../contexts/WebSocketContext", () => ({
   useWS: vi.fn(),
+}));
+vi.mock("../../hooks/useEmissions", () => ({
+  default: vi.fn(),
 }));
 
 function mockJSONResponse(payload: unknown, status = 200): Response {
@@ -19,6 +23,13 @@ describe("IssueThreadPanel realtime integration", () => {
     localStorage.clear();
     localStorage.setItem("otter-camp-org-id", "org-123");
     vi.restoreAllMocks();
+    vi.mocked(useEmissions).mockReturnValue({
+      emissions: [],
+      latestBySource: new Map(),
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
   });
 
   it("appends websocket comments for the active issue only", async () => {

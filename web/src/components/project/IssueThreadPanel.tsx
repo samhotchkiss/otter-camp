@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useWS } from "../../contexts/WebSocketContext";
+import AgentWorkingIndicator from "../AgentWorkingIndicator";
+import EmissionStream from "../EmissionStream";
 import WebSocketIssueSubscriber from "../WebSocketIssueSubscriber";
 import { DocumentWorkspace } from "../content-review";
 import LabelPicker from "../LabelPicker";
 import LabelPill, { type LabelOption } from "../LabelPill";
+import useEmissions from "../../hooks/useEmissions";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
@@ -415,6 +418,8 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
   const [reviewRealtimeRefreshNonce, setReviewRealtimeRefreshNonce] = useState(0);
 
   const { lastMessage } = useWS();
+  const { emissions: issueEmissions } = useEmissions({ issueId: issueID, limit: 30 });
+  const latestIssueEmission = issueEmissions.length > 0 ? issueEmissions[0] : null;
 
   useEffect(() => {
     const currentLabels = issue?.labels ?? [];
@@ -1467,6 +1472,22 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
                 Add Agent
               </button>
             </div>
+          </div>
+
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-[var(--text)]">Live Activity</h3>
+            <AgentWorkingIndicator
+              latestEmission={latestIssueEmission}
+              className="text-xs text-[var(--text-muted)]"
+              activeText="Agent is working on this issue"
+              idleText="No recent issue emissions"
+            />
+            <EmissionStream
+              emissions={issueEmissions}
+              issueId={issueID}
+              limit={5}
+              emptyText="No live issue emissions yet"
+            />
           </div>
 
           <div className="space-y-3">
