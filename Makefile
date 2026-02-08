@@ -1,4 +1,4 @@
-.PHONY: dev run build build-otter test migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
+.PHONY: dev run build build-otter install test migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
 
 # Development
 dev:
@@ -19,6 +19,20 @@ build:
 
 build-otter:
 	go build -o bin/otter ./cmd/otter
+
+install:
+	go build -o bin/otter ./cmd/otter
+	@install_bin_dir="/usr/local/bin"; \
+	if [ ! -w "$$install_bin_dir" ]; then \
+		install_bin_dir="$$HOME/.local/bin"; \
+		mkdir -p "$$install_bin_dir"; \
+	fi; \
+	ln -sf "$(PWD)/bin/otter" "$$install_bin_dir/otter"; \
+	echo "otter installed to $$install_bin_dir/otter"; \
+	case ":$$PATH:" in *":$$install_bin_dir:"*) ;; *) \
+		echo "Add $$install_bin_dir to PATH to run 'otter' directly." ;; \
+	esac; \
+	echo "Run 'otter whoami' to verify."
 
 build-web:
 	cd web && npm run build
