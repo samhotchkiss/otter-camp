@@ -8,15 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 // Run applies all pending up migrations from the given directory.
 func Run(db *sql.DB, migrationsDir string) error {
-	// Ensure migrations table exists
+	// Ensure migrations table exists (use INTEGER version to match existing tool)
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version TEXT PRIMARY KEY,
+			version INTEGER PRIMARY KEY,
 			applied_at TIMESTAMPTZ DEFAULT NOW()
 		)
 	`); err != nil {
@@ -24,14 +25,14 @@ func Run(db *sql.DB, migrationsDir string) error {
 	}
 
 	// Get applied migrations
-	applied := make(map[string]bool)
+	applied := make(map[int]bool)
 	rows, err := db.Query("SELECT version FROM schema_migrations ORDER BY version")
 	if err != nil {
 		return fmt.Errorf("query applied migrations: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var v string
+		var v int
 		if err := rows.Scan(&v); err != nil {
 			return fmt.Errorf("scan migration version: %w", err)
 		}
@@ -44,18 +45,30 @@ func Run(db *sql.DB, migrationsDir string) error {
 		return fmt.Errorf("read migrations dir: %w", err)
 	}
 
-	var pending []string
+	type migration struct {
+		name    string
+		version int
+	}
+	var pending []migration
 	for _, e := range entries {
 		name := e.Name()
 		if !strings.HasSuffix(name, ".up.sql") {
 			continue
 		}
-		version := strings.TrimSuffix(name, ".up.sql")
-		if !applied[version] {
-			pending = append(pending, name)
+		// Extract numeric prefix (e.g., "008" from "008_rls_policies.up.sql")
+		parts := strings.SplitN(name, "_", 2)
+		if len(parts) == 0 {
+			continue
+		}
+		ver, err := strconv.Atoi(parts[0])
+		if err != nil {
+			continue
+		}
+		if !applied[ver] {
+			pending = append(pending, migration{name: name, version: ver})
 		}
 	}
-	sort.Strings(pending)
+	sort.Slice(pending, func(i, j int) bool { return pending[i].version < pending[j].version })
 
 	if len(pending) == 0 {
 		log.Printf("✅ Database up to date (%d migrations applied)", len(applied))
@@ -63,8 +76,9 @@ func Run(db *sql.DB, migrationsDir string) error {
 	}
 
 	log.Printf("📦 Applying %d pending migration(s)...", len(pending))
-	for _, name := range pending {
-		version := strings.TrimSuffix(name, ".up.sql")
+	for _, m := range pending {
+		name := m.name
+		version := m.version
 		path := filepath.Join(migrationsDir, name)
 		sqlBytes, err := os.ReadFile(path)
 		if err != nil {
