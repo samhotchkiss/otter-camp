@@ -5,6 +5,8 @@ import ActivityItemRow from "./ActivityItemRow";
 import { formatRelativeTime, getTypeConfig, normalizeMetadata } from "./activityFormat";
 import { SAMPLE_ACTIVITY_ITEMS, type ActivityFeedItem } from "./sampleActivity";
 
+const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+
 type FeedApiItem = {
   id: string;
   org_id: string;
@@ -33,6 +35,11 @@ function resolveOrgId(explicit?: string): string {
   if (stored) return stored;
   const env = import.meta.env.VITE_ORG_ID as string | undefined;
   return env || "";
+}
+
+function resolveToken(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("otter_camp_token") || "";
 }
 
 function parseDateInput(value: string, endOfDay = false): Date | null {
@@ -68,7 +75,7 @@ export type ActivityPanelProps = {
 function ActivityPanelComponent({
   className = "",
   orgId,
-  apiEndpoint = "https://api.otter.camp/api/feed",
+  apiEndpoint = `${API_URL}/api/feed`,
   limit = 100,
 }: ActivityPanelProps) {
   const { connected, lastMessage, sendMessage } = useWS();
@@ -109,8 +116,15 @@ function ActivityPanelComponent({
       const url = new URL(apiEndpoint, window.location.origin);
       url.searchParams.set("org_id", org);
       url.searchParams.set("limit", String(limit));
+      const token = resolveToken();
 
-      const response = await fetch(url.toString(), { signal: controller.signal });
+      const response = await fetch(url.toString(), {
+        signal: controller.signal,
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(org ? { "X-Org-ID": org } : {}),
+        },
+      });
       if (!response.ok) {
         throw new Error(`Failed to load feed (${response.status})`);
       }

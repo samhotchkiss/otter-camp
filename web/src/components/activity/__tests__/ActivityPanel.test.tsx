@@ -211,4 +211,29 @@ describe("ActivityPanel", () => {
 
     expect(await screen.findByText(/no activity yet/i)).toBeInTheDocument();
   });
+
+  it("includes auth and org headers when requesting feed data", async () => {
+    const wsState = {
+      connected: true,
+      lastMessage: null,
+      sendMessage: vi.fn(),
+    };
+    vi.mocked(useWS).mockImplementation(() => wsState);
+
+    localStorage.setItem("otter-camp-org-id", ORG_ID);
+    localStorage.setItem("otter_camp_token", "test-token");
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ org_id: ORG_ID, items: [] }),
+    });
+
+    render(<ActivityPanel />);
+    await screen.findByText(/no activity yet/i);
+
+    expect(mockFetch).toHaveBeenCalled();
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer test-token");
+    expect((init.headers as Record<string, string>)["X-Org-ID"]).toBe(ORG_ID);
+  });
 });
