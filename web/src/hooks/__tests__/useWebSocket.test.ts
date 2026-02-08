@@ -83,11 +83,19 @@ const expectedSocketUrl = () => {
   return `${protocol}//${host}/ws`;
 };
 
+const setVisibilityState = (value: "visible" | "hidden") => {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value,
+  });
+};
+
 describe("useWebSocket", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     sockets.length = 0;
+    setVisibilityState("visible");
   });
 
   afterEach(() => {
@@ -98,6 +106,7 @@ describe("useWebSocket", () => {
     const { result } = renderHook(() => useWebSocket());
 
     expect(result.current.connected).toBe(false);
+    expect(result.current.reconnectReason).toBe("initial");
 
     act(() => {
       latestSocket().simulateOpen();
@@ -153,12 +162,40 @@ describe("useWebSocket", () => {
     act(() => {
       second.simulateOpen();
     });
+    expect(result.current.reconnectReason).toBe("backoff");
 
     act(() => {
       second.close();
       vi.advanceTimersByTime(500);
     });
     expect(MockWebSocketConstructor).toHaveBeenCalledTimes(3);
+  });
+
+  it("reconnects immediately when tab becomes visible while disconnected", () => {
+    const { result } = renderHook(() => useWebSocket());
+    const first = latestSocket();
+
+    act(() => {
+      first.simulateOpen();
+    });
+    expect(result.current.connected).toBe(true);
+
+    act(() => {
+      first.close();
+    });
+    expect(result.current.connected).toBe(false);
+
+    setVisibilityState("visible");
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(MockWebSocketConstructor).toHaveBeenCalledTimes(2);
+
+    const second = latestSocket();
+    act(() => {
+      second.simulateOpen();
+    });
+    expect(result.current.reconnectReason).toBe("visibility");
   });
 
   it("clears pending reconnect timers on unmount", () => {

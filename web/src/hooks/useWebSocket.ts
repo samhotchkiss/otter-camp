@@ -33,10 +33,13 @@ export type WebSocketSendMessage = (
   message: string | Record<string, unknown>,
 ) => boolean;
 
+export type WebSocketReconnectReason = "initial" | "backoff" | "visibility";
+
 type UseWebSocketResult = {
   connected: boolean;
   lastMessage: WebSocketMessage | null;
   sendMessage: WebSocketSendMessage;
+  reconnectReason: WebSocketReconnectReason;
 };
 
 const MESSAGE_TYPES: WebSocketMessageType[] = [
@@ -116,10 +119,12 @@ const parseMessage = (raw: string): WebSocketMessage => {
 export default function useWebSocket(): UseWebSocketResult {
   const [connected, setConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
+  const [reconnectReason, setReconnectReason] = useState<WebSocketReconnectReason>("initial");
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const shouldReconnectRef = useRef(true);
+  const connectInFlightRef = useRef(false);
 
   const sendMessage = useCallback<WebSocketSendMessage>((message) => {
     const socket = socketRef.current;
@@ -158,14 +163,24 @@ export default function useWebSocket(): UseWebSocketResult {
 
       clearReconnectTimer();
       reconnectTimerRef.current = window.setTimeout(() => {
-        connect();
+        void connect("backoff");
       }, delay);
     };
 
-    const connect = () => {
+    const connect = (reason: WebSocketReconnectReason) => {
       if (!shouldReconnectRef.current) {
         return;
       }
+      if (connectInFlightRef.current) {
+        return;
+      }
+      if (socketRef.current) {
+        const state = socketRef.current.readyState;
+        if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) {
+          return;
+        }
+      }
+      connectInFlightRef.current = true;
 
       const socket = new WebSocket(toWebSocketUrl("/ws"));
       socketRef.current = socket;
@@ -175,6 +190,8 @@ export default function useWebSocket(): UseWebSocketResult {
           return;
         }
         reconnectAttemptRef.current = 0;
+        connectInFlightRef.current = false;
+        setReconnectReason(reason);
         setConnected(true);
       };
 
@@ -197,6 +214,7 @@ export default function useWebSocket(): UseWebSocketResult {
       };
 
       socket.onerror = () => {
+        connectInFlightRef.current = false;
         socket.close();
       };
 
@@ -204,18 +222,38 @@ export default function useWebSocket(): UseWebSocketResult {
         if (!isMounted) {
           return;
         }
+        connectInFlightRef.current = false;
         setConnected(false);
         socketRef.current = null;
         scheduleReconnect();
       };
     };
 
-    connect();
+    const handleVisibilityChange = () => {
+      if (!shouldReconnectRef.current) {
+        return;
+      }
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      const socket = socketRef.current;
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      reconnectAttemptRef.current = 0;
+      clearReconnectTimer();
+      void connect("visibility");
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    connect("initial");
 
     return () => {
       isMounted = false;
       shouldReconnectRef.current = false;
+      connectInFlightRef.current = false;
       clearReconnectTimer();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
 
       if (socketRef.current) {
         socketRef.current.onopen = null;
@@ -228,5 +266,5 @@ export default function useWebSocket(): UseWebSocketResult {
     };
   }, []);
 
-  return { connected, lastMessage, sendMessage };
+  return { connected, lastMessage, sendMessage, reconnectReason };
 }

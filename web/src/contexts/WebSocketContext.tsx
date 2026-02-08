@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import useWebSocket, {
   type WebSocketMessage,
+  type WebSocketReconnectReason,
   type WebSocketSendMessage,
 } from "../hooks/useWebSocket";
 
@@ -8,6 +9,7 @@ type WebSocketContextValue = {
   connected: boolean;
   lastMessage: WebSocketMessage | null;
   sendMessage: WebSocketSendMessage;
+  reconnectReason?: WebSocketReconnectReason;
 };
 
 const WebSocketContext = createContext<WebSocketContextValue | undefined>(
