@@ -184,6 +184,9 @@ type AdminCommandDispatchEvent = {
     job_id?: string;
     process_id?: string;
     enabled?: boolean;
+    config_patch?: unknown;
+    confirm?: boolean;
+    dry_run?: boolean;
   };
 };
 
@@ -1431,6 +1434,38 @@ function fetchOpenClawConfigSnapshot(): OpenClawConfigSyncSnapshot | undefined {
   }
 }
 
+function applyJSONMergePatch(target: unknown, patch: unknown): unknown {
+  if (patch === null) {
+    return null;
+  }
+  if (Array.isArray(patch) || typeof patch !== 'object') {
+    return patch;
+  }
+
+  const targetRecord: Record<string, unknown> =
+    target && typeof target === 'object' && !Array.isArray(target) ? { ...(target as Record<string, unknown>) } : {};
+  for (const [key, patchValue] of Object.entries(patch as Record<string, unknown>)) {
+    if (patchValue === null) {
+      delete targetRecord[key];
+      continue;
+    }
+    const currentValue = targetRecord[key];
+    if (
+      patchValue &&
+      typeof patchValue === 'object' &&
+      !Array.isArray(patchValue) &&
+      currentValue &&
+      typeof currentValue === 'object' &&
+      !Array.isArray(currentValue)
+    ) {
+      targetRecord[key] = applyJSONMergePatch(currentValue, patchValue);
+      continue;
+    }
+    targetRecord[key] = patchValue;
+  }
+  return targetRecord;
+}
+
 function collectSessionDeltaActivityEvents(currentSessions: OpenClawSession[]): BridgeAgentActivityEvent[] {
   const events = buildActivityEventsFromSessionDeltas({
     previousByKey: previousSessionsByKey,
@@ -1923,12 +1958,15 @@ async function fetchProcessesSnapshot(): Promise<OpenClawProcessSnapshot[]> {
   return [];
 }
 
-async function handleAdminCommandDispatchEvent(event: AdminCommandDispatchEvent): Promise<void> {
+export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatchEvent): Promise<void> {
   const action = getTrimmedString(event.data?.action);
   const commandID = getTrimmedString(event.data?.command_id) || 'n/a';
   const agentID = getTrimmedString(event.data?.agent_id);
   const jobID = getTrimmedString(event.data?.job_id);
   const processID = getTrimmedString(event.data?.process_id);
+  const configPatch = event.data?.config_patch;
+  const confirm = event.data?.confirm === true;
+  const dryRun = event.data?.dry_run === true;
   const sessionKey = getTrimmedString(event.data?.session_key) || (agentID ? `agent:${agentID}:main` : '');
 
   if (!action) {
@@ -2002,6 +2040,46 @@ async function handleAdminCommandDispatchEvent(event: AdminCommandDispatchEvent)
       await runOpenClawCommand(['exec', 'kill', '--id', processID]);
     }
     console.log(`[bridge] executed admin.command process.kill for ${processID} (${commandID})`);
+    return;
+  }
+
+  if (action === 'config.patch') {
+    if (!confirm) {
+      throw new Error('config.patch requires confirm=true');
+    }
+    const patchObject = asRecord(configPatch);
+    if (!patchObject) {
+      throw new Error('config.patch missing config_patch object');
+    }
+    if (dryRun) {
+      console.log(`[bridge] validated admin.command config.patch dry-run (${commandID})`);
+      return;
+    }
+
+    const configPath = resolveOpenClawConfigPath();
+    let currentConfig: unknown = {};
+    try {
+      const raw = fs.readFileSync(configPath, 'utf8');
+      currentConfig = parseJSONValue(raw);
+    } catch (err) {
+      const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
+      if (code !== 'ENOENT') {
+        throw err;
+      }
+    }
+
+    const mergedConfig = applyJSONMergePatch(currentConfig, patchObject);
+    const backupPath = `${configPath}.bak.${Date.now()}`;
+    try {
+      if (fs.existsSync(configPath)) {
+        fs.copyFileSync(configPath, backupPath);
+      }
+    } catch (err) {
+      console.warn(`[bridge] failed to create config backup ${backupPath}:`, err);
+    }
+    fs.writeFileSync(configPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, 'utf8');
+    await runOpenClawCommand(['gateway', 'restart']);
+    console.log(`[bridge] executed admin.command config.patch (${commandID})`);
     return;
   }
 

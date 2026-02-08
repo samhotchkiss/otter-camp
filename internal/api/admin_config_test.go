@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,4 +88,111 @@ func TestAdminConfigListHistory(t *testing.T) {
 	require.Equal(t, 2, payload.Total)
 	require.Len(t, payload.Entries, 1)
 	require.Equal(t, "second", payload.Entries[0].Hash)
+}
+
+func TestAdminConfigPatchValidatesPayload(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-config-patch-validate")
+	handler := &AdminConfigHandler{
+		DB:              db,
+		OpenClawHandler: &fakeOpenClawConnectionStatus{connected: true},
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "requires confirm",
+			body: `{"confirm":false,"patch":{"agents":{"main":{"model":{"primary":"gpt-5.2-codex"}}}}}`,
+		},
+		{
+			name: "rejects unsupported keys",
+			body: `{"confirm":true,"patch":{"forbidden":{"foo":"bar"}}}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPatch, "/api/admin/config", strings.NewReader(tc.body))
+			req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+			rec := httptest.NewRecorder()
+			handler.Patch(rec, req)
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+		})
+	}
+}
+
+func TestAdminConfigPatchQueuesWhenBridgeUnavailable(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-config-patch-queued")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: false}
+	handler := &AdminConfigHandler{
+		DB:              db,
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/admin/config",
+		strings.NewReader(`{"confirm":true,"patch":{"agents":{"main":{"heartbeat":{"every":"15m"}}}}}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Patch(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	var payload adminCommandDispatchResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.True(t, payload.OK)
+	require.True(t, payload.Queued)
+	require.Equal(t, adminCommandActionConfigPatch, payload.Action)
+
+	var queuedCount int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM openclaw_dispatch_queue
+		 WHERE org_id = $1
+		   AND event_type = 'admin.command'
+		   AND status = 'pending'`,
+		orgID,
+	).Scan(&queuedCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, queuedCount)
+}
+
+func TestAdminConfigPatchDispatchesCommand(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-config-patch-dispatch")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+	handler := &AdminConfigHandler{
+		DB:              db,
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/admin/config",
+		strings.NewReader(`{"confirm":true,"patch":{"agents":{"main":{"model":{"primary":"gpt-5.2-codex"}}}}}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Patch(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminCommandDispatchResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.True(t, payload.OK)
+	require.False(t, payload.Queued)
+	require.Equal(t, adminCommandActionConfigPatch, payload.Action)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
+	require.True(t, ok)
+	require.Equal(t, adminCommandActionConfigPatch, event.Data.Action)
+	require.True(t, event.Data.Confirm)
+	require.False(t, event.Data.DryRun)
+	require.JSONEq(t, `{"agents":{"main":{"model":{"primary":"gpt-5.2-codex"}}}}`, string(event.Data.ConfigPatch))
 }

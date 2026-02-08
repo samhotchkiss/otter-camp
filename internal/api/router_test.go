@@ -231,6 +231,13 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 		t.Fatalf("expected /api/admin/config route to be registered, got status %d", recAdminConfig.Code)
 	}
 
+	reqAdminConfigPatch := httptest.NewRequest(http.MethodPatch, "/api/admin/config?org_id="+orgID, strings.NewReader(`{"confirm":true,"patch":{"agents":{"main":{"model":{"primary":"gpt-5.2-codex"}}}}}`))
+	recAdminConfigPatch := httptest.NewRecorder()
+	router.ServeHTTP(recAdminConfigPatch, reqAdminConfigPatch)
+	if recAdminConfigPatch.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/config PATCH route to be registered, got status %d", recAdminConfigPatch.Code)
+	}
+
 	reqAdminConfigHistory := httptest.NewRequest(http.MethodGet, "/api/admin/config/history?org_id="+orgID, nil)
 	recAdminConfigHistory := httptest.NewRecorder()
 	router.ServeHTTP(recAdminConfigHistory, reqAdminConfigHistory)

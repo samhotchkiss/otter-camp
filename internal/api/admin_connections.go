@@ -119,20 +119,26 @@ type openClawAdminCommandEvent struct {
 }
 
 type openClawAdminCommandData struct {
-	CommandID  string `json:"command_id"`
-	Action     string `json:"action"`
-	AgentID    string `json:"agent_id,omitempty"`
-	SessionKey string `json:"session_key,omitempty"`
-	JobID      string `json:"job_id,omitempty"`
-	ProcessID  string `json:"process_id,omitempty"`
-	Enabled    *bool  `json:"enabled,omitempty"`
+	CommandID   string          `json:"command_id"`
+	Action      string          `json:"action"`
+	AgentID     string          `json:"agent_id,omitempty"`
+	SessionKey  string          `json:"session_key,omitempty"`
+	JobID       string          `json:"job_id,omitempty"`
+	ProcessID   string          `json:"process_id,omitempty"`
+	Enabled     *bool           `json:"enabled,omitempty"`
+	ConfigPatch json.RawMessage `json:"config_patch,omitempty"`
+	Confirm     bool            `json:"confirm,omitempty"`
+	DryRun      bool            `json:"dry_run,omitempty"`
 }
 
 type adminCommandDispatchInput struct {
-	AgentID   string
-	JobID     string
-	ProcessID string
-	Enabled   *bool
+	AgentID     string
+	JobID       string
+	ProcessID   string
+	Enabled     *bool
+	ConfigPatch json.RawMessage
+	Confirm     bool
+	DryRun      bool
 }
 
 type adminCommandDispatchResponse struct {
@@ -151,6 +157,7 @@ const (
 	adminCommandActionCronEnable     = "cron.enable"
 	adminCommandActionCronDisable    = "cron.disable"
 	adminCommandActionProcessKill    = "process.kill"
+	adminCommandActionConfigPatch    = "config.patch"
 )
 
 var sensitiveTokenPattern = regexp.MustCompile(`(?i)(oc_git_[a-z0-9]+|bearer\s+[a-z0-9._-]+)`)
@@ -520,12 +527,15 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 		Timestamp: time.Now().UTC(),
 		OrgID:     workspaceID,
 		Data: openClawAdminCommandData{
-			CommandID: commandID,
-			Action:    action,
-			AgentID:   strings.TrimSpace(input.AgentID),
-			JobID:     strings.TrimSpace(input.JobID),
-			ProcessID: strings.TrimSpace(input.ProcessID),
-			Enabled:   input.Enabled,
+			CommandID:   commandID,
+			Action:      action,
+			AgentID:     strings.TrimSpace(input.AgentID),
+			JobID:       strings.TrimSpace(input.JobID),
+			ProcessID:   strings.TrimSpace(input.ProcessID),
+			Enabled:     input.Enabled,
+			ConfigPatch: append(json.RawMessage(nil), input.ConfigPatch...),
+			Confirm:     input.Confirm,
+			DryRun:      input.DryRun,
 		},
 	}
 	if event.Data.AgentID != "" {
@@ -546,6 +556,15 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 	}
 	if event.Data.Enabled != nil {
 		metadata["enabled"] = *event.Data.Enabled
+	}
+	if len(event.Data.ConfigPatch) > 0 {
+		metadata["config_patch"] = true
+	}
+	if event.Data.Confirm {
+		metadata["confirm"] = true
+	}
+	if event.Data.DryRun {
+		metadata["dry_run"] = true
 	}
 
 	dedupeKey := fmt.Sprintf("admin.command:%s", commandID)
