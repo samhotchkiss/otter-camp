@@ -953,7 +953,7 @@ export default function ProjectDetailPage() {
               navigate(`/projects/${project.id}/issues/${selectedIssueID}`)
             }
           />
-          {issueId && <IssueThreadPanel issueID={issueId} />}
+          {issueId && <IssueThreadPanel issueID={issueId} projectID={project.id} />}
         </div>
       )}
 

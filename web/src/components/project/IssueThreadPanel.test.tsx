@@ -256,6 +256,66 @@ describe("IssueThreadPanel", () => {
     expect(screen.getByTestId("editor-mode-markdown")).toBeInTheDocument();
   });
 
+  it("renders issue detail metadata for body, priority, work status, and assignee", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/issues/issue-1?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-1",
+            issue_number: 1,
+            title: "Metadata issue",
+            state: "open",
+            origin: "local",
+            body: "Fix the issue detail metadata rendering path.",
+            priority: "P1",
+            work_status: "in_progress",
+            owner_agent_id: "sam",
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<IssueThreadPanel issueID="issue-1" />);
+
+    expect(await screen.findByText("#1 Metadata issue")).toBeInTheDocument();
+    expect(screen.getByText("Priority: P1")).toBeInTheDocument();
+    expect(screen.getByText("Work Status: In Progress")).toBeInTheDocument();
+    expect(screen.getByText("Assignee: Sam")).toBeInTheDocument();
+    expect(screen.getByText("Fix the issue detail metadata rendering path.")).toBeInTheDocument();
+  });
+
+  it("renders project-scoped issue not-found state with back link", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/issues/missing-issue?")) {
+        return mockJSONResponse({ error: "not found" }, 404);
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<IssueThreadPanel issueID="missing-issue" projectID="project-1" />);
+
+    expect(await screen.findByRole("heading", { name: "Issue not found" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Project" })).toHaveAttribute("href", "/projects/project-1");
+    expect(screen.queryByText(/demo/i)).not.toBeInTheDocument();
+  });
+
   it("lists history and opens historical version with read-only comment rendering", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
