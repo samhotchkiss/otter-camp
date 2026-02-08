@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import FeedPage from "./FeedPage";
 
-vi.mock("../components/ActivityPanel", () => ({
+vi.mock("../components/activity/ActivityPanel", () => ({
   default: () => <div data-testid="realtime-panel">Realtime Panel</div>,
 }));
 
@@ -37,6 +37,9 @@ describe("FeedPage", () => {
           { status: 200 },
         );
       }
+      if (url.includes("/api/feed")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
       throw new Error(`unexpected url: ${url}`);
     });
 
@@ -48,7 +51,7 @@ describe("FeedPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Agent Activity" }));
 
-    expect(await screen.findByText("main · Ran codex-progress-summary")).toBeInTheDocument();
+    expect(await screen.findByText("Ran codex-progress-summary")).toBeInTheDocument();
     expect(screen.getByText("Cron")).toBeInTheDocument();
   });
 
@@ -56,6 +59,9 @@ describe("FeedPage", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/api/activity/recent")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      if (url.includes("/api/feed")) {
         return new Response(JSON.stringify({ items: [] }), { status: 200 });
       }
       throw new Error(`unexpected url: ${url}`);
@@ -68,5 +74,42 @@ describe("FeedPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Agent Activity" }));
 
     expect(await screen.findByText("No agent activity yet.")).toBeInTheDocument();
+  });
+
+  it("falls back to historical feed items when agent-activity endpoint is empty", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/activity/recent")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      if (url.includes("/api/feed")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "feed-1",
+                org_id: "org-123",
+                type: "task_status_changed",
+                created_at: "2026-02-08T13:00:00.000Z",
+                agent_name: "System",
+                task_title: "Ship feed page",
+                summary: "System changed task \"Ship feed page\" to done",
+                metadata: { new_status: "done" },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<FeedPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Agent Activity" }));
+
+    expect(await screen.findByText(/Ship feed page/i)).toBeInTheDocument();
   });
 });

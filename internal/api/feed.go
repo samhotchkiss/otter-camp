@@ -172,7 +172,7 @@ func buildFeedQuery(orgID, action string, limit, offset int) (string, []interfac
 	offsetPos := len(args) + 2
 	args = append(args, limit, offset)
 
-	query := "SELECT al.id, al.org_id, al.task_id, al.agent_id, a.display_name, al.action, al.metadata, al.created_at FROM activity_log al LEFT JOIN agents a ON al.agent_id = a.id WHERE " +
+	query := "SELECT al.id, al.org_id, al.task_id, al.agent_id, COALESCE(NULLIF(a.display_name, ''), NULLIF(u.display_name, ''), NULLIF(al.metadata->>'pusher_name', ''), NULLIF(al.metadata->>'pusher', ''), NULLIF(al.metadata->>'sender', ''), NULLIF(al.metadata->>'author_name', ''), NULLIF(al.metadata->>'author', ''), NULLIF(al.metadata->>'committer_name', ''), NULLIF(al.metadata->>'committer', ''), NULLIF(al.metadata->>'user_name', ''), 'System'), al.action, al.metadata, al.created_at FROM activity_log al LEFT JOIN agents a ON al.agent_id = a.id LEFT JOIN users u ON u.org_id = al.org_id AND u.id::text = (al.metadata->>'user_id') WHERE " +
 		strings.Join(conditions, " AND ") +
 		fmt.Sprintf(" ORDER BY al.created_at DESC LIMIT $%d OFFSET $%d", limitPos, offsetPos)
 

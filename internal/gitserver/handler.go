@@ -201,7 +201,7 @@ func (h *Handler) ReceivePack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := UserIDFromContext(r.Context())
-	h.postReceive(r.Context(), org, project, userID)
+	h.postReceive(r.Context(), org, project, userID, repoPath)
 }
 
 func resolveGitService(service string) (string, error) {
@@ -215,21 +215,34 @@ func resolveGitService(service string) (string, error) {
 	}
 }
 
-func (h *Handler) postReceive(ctx context.Context, orgID, projectID, userID string) {
-	h.logPushActivity(ctx, orgID, projectID, userID)
+func (h *Handler) postReceive(ctx context.Context, orgID, projectID, userID, repoPath string) {
+	h.logPushActivity(ctx, orgID, projectID, userID, repoPath)
 	h.broadcastPush(ctx, orgID, projectID, userID)
 	h.enqueueGitHubSync(ctx, orgID, projectID)
 }
 
-func (h *Handler) logPushActivity(ctx context.Context, orgID, projectID, userID string) {
+func (h *Handler) logPushActivity(ctx context.Context, orgID, projectID, userID, repoPath string) {
 	if h.ActivityStore == nil {
 		return
 	}
-	metadata, err := json.Marshal(map[string]any{
+	metadataMap := map[string]any{
 		"project_id": strings.TrimSpace(projectID),
 		"user_id":    strings.TrimSpace(userID),
 		"pushed_at":  time.Now().UTC(),
-	})
+	}
+	if details := readLatestPushDetails(ctx, repoPath); details != nil {
+		if details.Branch != "" {
+			metadataMap["branch"] = details.Branch
+		}
+		if details.CommitSHA != "" {
+			metadataMap["commit_sha"] = details.CommitSHA
+		}
+		if details.CommitMessage != "" {
+			metadataMap["commit_message"] = details.CommitMessage
+		}
+	}
+
+	metadata, err := json.Marshal(metadataMap)
 	if err != nil {
 		return
 	}
@@ -239,6 +252,50 @@ func (h *Handler) logPushActivity(ctx context.Context, orgID, projectID, userID 
 	}); err != nil {
 		log.Printf("[gitserver] activity log failed: %v", err)
 	}
+}
+
+type pushDetails struct {
+	Branch        string
+	CommitSHA     string
+	CommitMessage string
+}
+
+func readLatestPushDetails(ctx context.Context, repoPath string) *pushDetails {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		return nil
+	}
+
+	cmd := exec.CommandContext(
+		ctx,
+		"git",
+		"--git-dir", repoPath,
+		"for-each-ref",
+		"--sort=-committerdate",
+		"--count=1",
+		"--format=%(refname:short)|%(objectname:short)|%(subject)",
+		"refs/heads",
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	line := strings.TrimSpace(string(output))
+	if line == "" {
+		return nil
+	}
+	parts := strings.SplitN(line, "|", 3)
+	result := &pushDetails{}
+	if len(parts) > 0 {
+		result.Branch = strings.TrimSpace(parts[0])
+	}
+	if len(parts) > 1 {
+		result.CommitSHA = strings.TrimSpace(parts[1])
+	}
+	if len(parts) > 2 {
+		result.CommitMessage = strings.TrimSpace(parts[2])
+	}
+	return result
 }
 
 func (h *Handler) broadcastPush(ctx context.Context, orgID, projectID, userID string) {

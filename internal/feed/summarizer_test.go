@@ -211,6 +211,29 @@ func TestSummarizerUnknownType(t *testing.T) {
 	require.Contains(t, summary, "Mystery task")
 }
 
+func TestSummarizerGitPushIncludesBranchAndCommitMessage(t *testing.T) {
+	s := NewSummarizer()
+
+	agentName := "Sam"
+	item := &Item{
+		ID:        "test-id",
+		OrgID:     "org-id",
+		Type:      "git.push",
+		AgentName: &agentName,
+		Metadata: json.RawMessage(`{
+			"project_name":"otter-camp",
+			"branch":"main",
+			"commit_message":"Fix activity feed fallback"
+		}`),
+		CreatedAt: time.Now(),
+	}
+
+	summary := s.Summarize(item)
+	require.Contains(t, summary, "Sam")
+	require.Contains(t, summary, "main")
+	require.Contains(t, summary, "Fix activity feed fallback")
+}
+
 func TestSummarizeItems(t *testing.T) {
 	s := NewSummarizer()
 

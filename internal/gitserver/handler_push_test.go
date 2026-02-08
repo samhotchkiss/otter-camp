@@ -145,6 +145,8 @@ func TestGitHandlerReceivePackAuthorizedPushLogsActivityAndBroadcasts(t *testing
 	require.NoError(t, json.Unmarshal(calls[0].input.Metadata, &metadata))
 	require.Equal(t, projectID, metadata["project_id"])
 	require.Equal(t, userID, metadata["user_id"])
+	require.Equal(t, "main", metadata["branch"])
+	require.Equal(t, "initial", metadata["commit_message"])
 
 	select {
 	case payload := <-client.Send:

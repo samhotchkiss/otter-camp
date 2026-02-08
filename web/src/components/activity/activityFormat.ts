@@ -143,8 +143,21 @@ export function getActivityDescription(input: DescriptionInput): string {
     }
     case "git.push": {
       const project = getMetadataString(metadata, "project_name") || getMetadataString(metadata, "project_id");
-      if (project) return `git push to ${project}`;
-      return "git push";
+      const branch =
+        getMetadataString(metadata, "branch") ||
+        getMetadataString(metadata, "ref") ||
+        getMetadataString(metadata, "ref_name");
+      const commitMessage =
+        getMetadataString(metadata, "commit_message") ||
+        getMetadataString(metadata, "head_commit_message") ||
+        getMetadataString(metadata, "message");
+
+      if (branch && commitMessage) return `pushed to ${branch}: "${truncate(commitMessage, 80)}"`;
+      if (project && commitMessage) return `pushed to ${project}: "${truncate(commitMessage, 80)}"`;
+      if (project && branch) return `pushed to ${project} (${branch})`;
+      if (branch) return `pushed to ${branch}`;
+      if (project) return `pushed to ${project}`;
+      return "pushed changes";
     }
     case "message": {
       const preview = getMetadataString(metadata, "preview");

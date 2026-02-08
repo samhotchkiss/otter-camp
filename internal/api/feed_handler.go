@@ -445,11 +445,24 @@ func buildEnrichedFeedQuery(orgID string, types []string, from, to *time.Time, l
 			a.metadata,
 			a.created_at,
 			t.title AS task_title,
-			ag.display_name AS agent_name,
+			COALESCE(
+				NULLIF(ag.display_name, ''),
+				NULLIF(u.display_name, ''),
+				NULLIF(a.metadata->>'pusher_name', ''),
+				NULLIF(a.metadata->>'pusher', ''),
+				NULLIF(a.metadata->>'sender', ''),
+				NULLIF(a.metadata->>'author_name', ''),
+				NULLIF(a.metadata->>'author', ''),
+				NULLIF(a.metadata->>'committer_name', ''),
+				NULLIF(a.metadata->>'committer', ''),
+				NULLIF(a.metadata->>'user_name', ''),
+				'System'
+			) AS agent_name,
 			p.name AS project_name
 		FROM activity_log a
 		LEFT JOIN tasks t ON a.task_id = t.id
 		LEFT JOIN agents ag ON a.agent_id = ag.id
+		LEFT JOIN users u ON u.org_id = a.org_id AND u.id::text = (a.metadata->>'user_id')
 		LEFT JOIN projects p ON p.org_id = a.org_id AND p.id::text = (a.metadata->>'project_id')
 		WHERE ` + strings.Join(conditions, " AND ") +
 		fmt.Sprintf(" ORDER BY a.created_at DESC LIMIT $%d OFFSET $%d", limitPos, offsetPos)
