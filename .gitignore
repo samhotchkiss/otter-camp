@@ -29,7 +29,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 issues/
-scripts/
+scripts/*
+!scripts/install.sh
+!scripts/install_test.sh
 
 # Testing
 coverage/
