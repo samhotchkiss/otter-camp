@@ -125,6 +125,40 @@ type Issue struct {
 	NextStepDueAt *string `json:"next_step_due_at,omitempty"`
 }
 
+type QuestionnaireQuestion struct {
+	ID          string   `json:"id"`
+	Text        string   `json:"text"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required"`
+	Options     []string `json:"options,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
+	Default     any      `json:"default,omitempty"`
+}
+
+type Questionnaire struct {
+	ID          string                  `json:"id"`
+	ContextType string                  `json:"context_type"`
+	ContextID   string                  `json:"context_id"`
+	Author      string                  `json:"author"`
+	Title       *string                 `json:"title,omitempty"`
+	Questions   []QuestionnaireQuestion `json:"questions"`
+	Responses   map[string]any          `json:"responses,omitempty"`
+	RespondedBy *string                 `json:"responded_by,omitempty"`
+	RespondedAt *string                 `json:"responded_at,omitempty"`
+	CreatedAt   string                  `json:"created_at"`
+}
+
+type CreateIssueQuestionnaireInput struct {
+	Author    string                  `json:"author"`
+	Title     *string                 `json:"title,omitempty"`
+	Questions []QuestionnaireQuestion `json:"questions"`
+}
+
+type RespondIssueQuestionnaireInput struct {
+	RespondedBy string         `json:"responded_by"`
+	Responses   map[string]any `json:"responses"`
+}
+
 type issueListResponse struct {
 	Items []Issue `json:"items"`
 	Total int     `json:"total"`
@@ -465,4 +499,74 @@ func (c *Client) CommentIssue(issueID, authorAgentID, body string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return c.do(req, nil)
+}
+
+func (c *Client) AskIssueQuestionnaire(issueID string, input CreateIssueQuestionnaireInput) (Questionnaire, error) {
+	if err := c.requireAuth(); err != nil {
+		return Questionnaire{}, err
+	}
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return Questionnaire{}, errors.New("issue id is required")
+	}
+	input.Author = strings.TrimSpace(input.Author)
+	if input.Author == "" {
+		return Questionnaire{}, errors.New("author is required")
+	}
+	if len(input.Questions) == 0 {
+		return Questionnaire{}, errors.New("at least one question is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return Questionnaire{}, err
+	}
+	req, err := c.newRequest(
+		http.MethodPost,
+		"/api/issues/"+url.PathEscape(issueID)+"/questionnaire",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return Questionnaire{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var questionnaire Questionnaire
+	if err := c.do(req, &questionnaire); err != nil {
+		return Questionnaire{}, err
+	}
+	return questionnaire, nil
+}
+
+func (c *Client) RespondIssueQuestionnaire(questionnaireID string, input RespondIssueQuestionnaireInput) (Questionnaire, error) {
+	if err := c.requireAuth(); err != nil {
+		return Questionnaire{}, err
+	}
+	questionnaireID = strings.TrimSpace(questionnaireID)
+	if questionnaireID == "" {
+		return Questionnaire{}, errors.New("questionnaire id is required")
+	}
+	input.RespondedBy = strings.TrimSpace(input.RespondedBy)
+	if input.RespondedBy == "" {
+		return Questionnaire{}, errors.New("responded_by is required")
+	}
+	if len(input.Responses) == 0 {
+		return Questionnaire{}, errors.New("at least one response is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return Questionnaire{}, err
+	}
+	req, err := c.newRequest(
+		http.MethodPost,
+		"/api/questionnaires/"+url.PathEscape(questionnaireID)+"/response",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return Questionnaire{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var questionnaire Questionnaire
+	if err := c.do(req, &questionnaire); err != nil {
+		return Questionnaire{}, err
+	}
+	return questionnaire, nil
 }

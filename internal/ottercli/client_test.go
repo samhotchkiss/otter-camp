@@ -164,6 +164,121 @@ func TestClientResolveAgentByName(t *testing.T) {
 	}
 }
 
+func TestClientAskIssueQuestionnaire(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		gotBody = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/issues/issue-1/questionnaire" {
+			_, _ = w.Write([]byte(`{"id":"qn-1","context_type":"issue","context_id":"issue-1","author":"Sam","title":"Design choices","questions":[{"id":"q1","text":"Protocol?","type":"select","required":true,"options":["WebSocket","Polling"]}],"created_at":"2026-02-08T17:10:00Z"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"not found"}`))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
+
+	title := "Design choices"
+	created, err := client.AskIssueQuestionnaire("issue-1", CreateIssueQuestionnaireInput{
+		Author: "Sam",
+		Title:  &title,
+		Questions: []QuestionnaireQuestion{
+			{
+				ID:       "q1",
+				Text:     "Protocol?",
+				Type:     "select",
+				Required: true,
+				Options:  []string{"WebSocket", "Polling"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AskIssueQuestionnaire() error = %v", err)
+	}
+	if created.ID != "qn-1" {
+		t.Fatalf("AskIssueQuestionnaire() id = %q, want qn-1", created.ID)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/issues/issue-1/questionnaire" {
+		t.Fatalf("AskIssueQuestionnaire request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["author"] != "Sam" || gotBody["title"] != "Design choices" {
+		t.Fatalf("AskIssueQuestionnaire payload = %#v", gotBody)
+	}
+	questions, ok := gotBody["questions"].([]interface{})
+	if !ok || len(questions) != 1 {
+		t.Fatalf("AskIssueQuestionnaire questions payload = %#v", gotBody["questions"])
+	}
+}
+
+func TestClientRespondIssueQuestionnaire(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		gotBody = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/questionnaires/qn-1/response" {
+			_, _ = w.Write([]byte(`{"id":"qn-1","context_type":"issue","context_id":"issue-1","author":"Sam","questions":[{"id":"q1","text":"Protocol?","type":"select","required":true,"options":["WebSocket","Polling"]}],"responses":{"q1":"WebSocket"},"responded_by":"Riley","responded_at":"2026-02-08T17:12:00Z","created_at":"2026-02-08T17:10:00Z"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"not found"}`))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
+
+	responded, err := client.RespondIssueQuestionnaire("qn-1", RespondIssueQuestionnaireInput{
+		RespondedBy: "Riley",
+		Responses: map[string]any{
+			"q1": "WebSocket",
+			"q2": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("RespondIssueQuestionnaire() error = %v", err)
+	}
+	if responded.ID != "qn-1" {
+		t.Fatalf("RespondIssueQuestionnaire() id = %q, want qn-1", responded.ID)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/questionnaires/qn-1/response" {
+		t.Fatalf("RespondIssueQuestionnaire request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["responded_by"] != "Riley" {
+		t.Fatalf("RespondIssueQuestionnaire payload responded_by = %#v", gotBody["responded_by"])
+	}
+	responses, ok := gotBody["responses"].(map[string]interface{})
+	if !ok || responses["q1"] != "WebSocket" || responses["q2"] != true {
+		t.Fatalf("RespondIssueQuestionnaire payload responses = %#v", gotBody["responses"])
+	}
+}
+
 func TestClientProjectMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 	var gotMethod string
 	var gotPath string

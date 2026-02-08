@@ -536,7 +536,7 @@ func handleRepo(args []string) {
 
 func handleIssue(args []string) {
 	if len(args) == 0 {
-		fmt.Println("usage: otter issue <create|list|view|comment|assign|close|reopen> ...")
+		fmt.Println("usage: otter issue <create|list|view|comment|ask|respond|assign|close|reopen> ...")
 		os.Exit(1)
 	}
 
@@ -760,6 +760,100 @@ func handleIssue(args []string) {
 		dieIf(client.CommentIssue(issueID, agent.ID, body))
 		fmt.Println("Comment added.")
 
+	case "ask":
+		flags := flag.NewFlagSet("issue ask", flag.ExitOnError)
+		projectRef := flags.String("project", "", "project name or id (required for issue number)")
+		author := flags.String("author", "", "questionnaire author name (defaults to whoami name)")
+		title := flags.String("title", "", "questionnaire title")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		var questionSpecs cliRepeatedFlag
+		flags.Var(&questionSpecs, "question", "question JSON (repeatable)")
+		_ = flags.Parse(args[1:])
+
+		if len(flags.Args()) == 0 {
+			die("usage: otter issue ask <issue-id-or-number> --question '{\"id\":\"q1\",\"text\":\"...\",\"type\":\"text\"}'")
+		}
+		issueRef := strings.TrimSpace(flags.Args()[0])
+		questions, err := parseIssueAskQuestions(questionSpecs)
+		dieIf(err)
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		issueID, err := resolveIssueID(client, strings.TrimSpace(*projectRef), issueRef)
+		dieIf(err)
+
+		authorName := strings.TrimSpace(*author)
+		if authorName == "" {
+			if whoami, whoErr := client.WhoAmI(); whoErr == nil {
+				authorName = strings.TrimSpace(whoami.User.Name)
+			}
+		}
+		if authorName == "" {
+			die("--author is required when user identity cannot be inferred")
+		}
+
+		var titlePtr *string
+		if trimmedTitle := strings.TrimSpace(*title); trimmedTitle != "" {
+			titlePtr = &trimmedTitle
+		}
+
+		created, err := client.AskIssueQuestionnaire(issueID, ottercli.CreateIssueQuestionnaireInput{
+			Author:    authorName,
+			Title:     titlePtr,
+			Questions: questions,
+		})
+		dieIf(err)
+		if *jsonOut {
+			printJSON(created)
+			return
+		}
+		fmt.Printf("Created questionnaire %s on issue %s\n", created.ID, issueID)
+		fmt.Printf("Questions: %d\n", len(created.Questions))
+
+	case "respond":
+		flags := flag.NewFlagSet("issue respond", flag.ExitOnError)
+		respondedBy := flags.String("responded-by", "", "respondent name (defaults to whoami name)")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		var responseSpecs cliRepeatedFlag
+		flags.Var(&responseSpecs, "response", "response entry as question_id=value (repeatable)")
+		_ = flags.Parse(args[1:])
+
+		if len(flags.Args()) == 0 {
+			die("usage: otter issue respond <questionnaire-id> --response q1=true --response q2='\"text\"'")
+		}
+		questionnaireID := strings.TrimSpace(flags.Args()[0])
+		responses, err := parseIssueRespondEntries(responseSpecs)
+		dieIf(err)
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		responder := strings.TrimSpace(*respondedBy)
+		if responder == "" {
+			if whoami, whoErr := client.WhoAmI(); whoErr == nil {
+				responder = strings.TrimSpace(whoami.User.Name)
+			}
+		}
+		if responder == "" {
+			die("--responded-by is required when user identity cannot be inferred")
+		}
+
+		updated, err := client.RespondIssueQuestionnaire(questionnaireID, ottercli.RespondIssueQuestionnaireInput{
+			RespondedBy: responder,
+			Responses:   responses,
+		})
+		dieIf(err)
+		if *jsonOut {
+			printJSON(updated)
+			return
+		}
+		fmt.Printf("Submitted questionnaire response for %s\n", updated.ID)
+
 	case "assign":
 		flags := flag.NewFlagSet("issue assign", flag.ExitOnError)
 		projectRef := flags.String("project", "", "project name or id (required for issue number)")
@@ -846,7 +940,7 @@ func handleIssue(args []string) {
 		fmt.Printf("Reopened issue #%d\n", updated.IssueNumber)
 
 	default:
-		fmt.Println("usage: otter issue <create|list|view|comment|assign|close|reopen> ...")
+		fmt.Println("usage: otter issue <create|list|view|comment|ask|respond|assign|close|reopen> ...")
 		os.Exit(1)
 	}
 }
@@ -908,6 +1002,146 @@ func parsePositiveInt(raw string) (int, error) {
 		return 0, errors.New("must be > 0")
 	}
 	return value, nil
+}
+
+type cliRepeatedFlag []string
+
+func (f *cliRepeatedFlag) String() string {
+	if f == nil {
+		return ""
+	}
+	return strings.Join(*f, ",")
+}
+
+func (f *cliRepeatedFlag) Set(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return errors.New("value is required")
+	}
+	*f = append(*f, trimmed)
+	return nil
+}
+
+func parseIssueAskQuestions(specs []string) ([]ottercli.QuestionnaireQuestion, error) {
+	if len(specs) == 0 {
+		return nil, errors.New("at least one --question is required")
+	}
+
+	questions := make([]ottercli.QuestionnaireQuestion, 0, len(specs))
+	seen := make(map[string]struct{}, len(specs))
+	for _, raw := range specs {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+
+		var question ottercli.QuestionnaireQuestion
+		if err := decoder.Decode(&question); err != nil {
+			return nil, fmt.Errorf("invalid --question value %q: %w", raw, err)
+		}
+
+		id := strings.TrimSpace(question.ID)
+		if id == "" {
+			return nil, errors.New("question id is required")
+		}
+		if _, exists := seen[id]; exists {
+			return nil, fmt.Errorf("duplicate question id: %s", id)
+		}
+		seen[id] = struct{}{}
+
+		questionText := strings.TrimSpace(question.Text)
+		if questionText == "" {
+			return nil, fmt.Errorf("question %s text is required", id)
+		}
+
+		questionType := strings.TrimSpace(strings.ToLower(question.Type))
+		if questionType == "" {
+			return nil, fmt.Errorf("question %s type is required", id)
+		}
+		if !isSupportedQuestionType(questionType) {
+			return nil, fmt.Errorf("question %s has unsupported type %q", id, questionType)
+		}
+
+		options := make([]string, 0, len(question.Options))
+		optionSeen := make(map[string]struct{}, len(question.Options))
+		for _, option := range question.Options {
+			trimmed := strings.TrimSpace(option)
+			if trimmed == "" {
+				continue
+			}
+			if _, exists := optionSeen[trimmed]; exists {
+				continue
+			}
+			optionSeen[trimmed] = struct{}{}
+			options = append(options, trimmed)
+		}
+
+		if questionType == "select" || questionType == "multiselect" {
+			if len(options) == 0 {
+				return nil, fmt.Errorf("question %s requires options", id)
+			}
+		} else {
+			options = nil
+		}
+
+		placeholder := ""
+		if questionType == "text" || questionType == "textarea" {
+			placeholder = strings.TrimSpace(question.Placeholder)
+		}
+
+		questions = append(questions, ottercli.QuestionnaireQuestion{
+			ID:          id,
+			Text:        questionText,
+			Type:        questionType,
+			Required:    question.Required,
+			Options:     options,
+			Placeholder: placeholder,
+			Default:     question.Default,
+		})
+	}
+
+	return questions, nil
+}
+
+func parseIssueRespondEntries(entries []string) (map[string]any, error) {
+	if len(entries) == 0 {
+		return nil, errors.New("at least one --response is required")
+	}
+
+	responses := make(map[string]any, len(entries))
+	for _, entry := range entries {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid --response value %q; expected question_id=value", entry)
+		}
+		key := strings.TrimSpace(parts[0])
+		if key == "" {
+			return nil, fmt.Errorf("invalid --response value %q: question id is required", entry)
+		}
+		if _, exists := responses[key]; exists {
+			return nil, fmt.Errorf("duplicate response key: %s", key)
+		}
+
+		rawValue := strings.TrimSpace(parts[1])
+		if rawValue == "" {
+			return nil, fmt.Errorf("invalid --response value %q: response value is required", entry)
+		}
+
+		var value any
+		if err := json.Unmarshal([]byte(rawValue), &value); err != nil {
+			value = rawValue
+		}
+		responses[key] = value
+	}
+
+	return responses, nil
+}
+
+func isSupportedQuestionType(questionType string) bool {
+	switch questionType {
+	case "text", "textarea", "boolean", "select", "multiselect", "number", "date":
+		return true
+	default:
+		return false
+	}
 }
 
 func prompt(label string) string {

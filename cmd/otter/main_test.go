@@ -212,3 +212,86 @@ func TestProjectCreateSplitArgsSupportsInterspersedFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleIssueAskParsesQuestionSpecs(t *testing.T) {
+	questions, err := parseIssueAskQuestions([]string{
+		`{"id":"q1","text":"Realtime transport?","type":"select","required":true,"options":["WebSocket","Polling"]}`,
+		`{"id":"q2","text":"Target latency","type":"number","default":1.5}`,
+	})
+	if err != nil {
+		t.Fatalf("parseIssueAskQuestions() error = %v", err)
+	}
+	if len(questions) != 2 {
+		t.Fatalf("parseIssueAskQuestions() len = %d, want 2", len(questions))
+	}
+	if questions[0].ID != "q1" || questions[0].Type != "select" || len(questions[0].Options) != 2 {
+		t.Fatalf("unexpected first question payload: %#v", questions[0])
+	}
+	if questions[1].ID != "q2" || questions[1].Type != "number" {
+		t.Fatalf("unexpected second question payload: %#v", questions[1])
+	}
+}
+
+func TestHandleIssueAskRejectsMalformedQuestionSpecs(t *testing.T) {
+	_, err := parseIssueAskQuestions([]string{`{"id":"q1","text":"Bad"}`})
+	if err == nil || !strings.Contains(err.Error(), "type is required") {
+		t.Fatalf("expected type validation error, got %v", err)
+	}
+
+	_, err = parseIssueAskQuestions([]string{`{"id":"q1","text":"Choose","type":"select"}`})
+	if err == nil || !strings.Contains(err.Error(), "requires options") {
+		t.Fatalf("expected options validation error, got %v", err)
+	}
+
+	_, err = parseIssueAskQuestions([]string{`{not-json}`})
+	if err == nil || !strings.Contains(err.Error(), "invalid --question") {
+		t.Fatalf("expected invalid json error, got %v", err)
+	}
+}
+
+func TestHandleIssueRespondParsesKeyedResponses(t *testing.T) {
+	responses, err := parseIssueRespondEntries([]string{
+		`q1="WebSocket"`,
+		`q2=true`,
+		`q3=["Desktop web","Mobile web"]`,
+		`q4=1.5`,
+		`q5=free-form text`,
+	})
+	if err != nil {
+		t.Fatalf("parseIssueRespondEntries() error = %v", err)
+	}
+
+	if responses["q1"] != "WebSocket" {
+		t.Fatalf("q1 = %#v, want %q", responses["q1"], "WebSocket")
+	}
+	if responses["q2"] != true {
+		t.Fatalf("q2 = %#v, want true", responses["q2"])
+	}
+	if responses["q4"] != 1.5 {
+		t.Fatalf("q4 = %#v, want 1.5", responses["q4"])
+	}
+	if responses["q5"] != "free-form text" {
+		t.Fatalf("q5 = %#v, want free-form text", responses["q5"])
+	}
+	rawList, ok := responses["q3"].([]interface{})
+	if !ok || len(rawList) != 2 {
+		t.Fatalf("q3 = %#v, want 2-entry list", responses["q3"])
+	}
+}
+
+func TestHandleIssueRespondRejectsMalformedResponses(t *testing.T) {
+	_, err := parseIssueRespondEntries([]string{`=true`})
+	if err == nil || !strings.Contains(err.Error(), "question id is required") {
+		t.Fatalf("expected missing id error, got %v", err)
+	}
+
+	_, err = parseIssueRespondEntries([]string{`q1=`})
+	if err == nil || !strings.Contains(err.Error(), "response value is required") {
+		t.Fatalf("expected missing value error, got %v", err)
+	}
+
+	_, err = parseIssueRespondEntries([]string{`q1=true`, `q1=false`})
+	if err == nil || !strings.Contains(err.Error(), "duplicate response key") {
+		t.Fatalf("expected duplicate key error, got %v", err)
+	}
+}
