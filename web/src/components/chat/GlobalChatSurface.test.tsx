@@ -368,4 +368,43 @@ describe("GlobalChatSurface", () => {
       expect(screen.getByText("Agent replied")).toBeInTheDocument();
     });
   });
+
+  it("shows a clean unavailable state for orphaned project chats and allows removal", async () => {
+    const projectConversation: GlobalProjectConversation = {
+      key: "project:project-missing",
+      type: "project",
+      projectId: "project-missing",
+      title: "Project deadbeef",
+      contextLabel: "Project",
+      subtitle: "Project chat",
+      unreadCount: 0,
+      updatedAt: "2026-02-07T00:00:00.000Z",
+    };
+
+    const onRemoveConversation = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => ({ error: "project not found" }),
+      }),
+    );
+
+    render(
+      <GlobalChatSurface
+        conversation={projectConversation}
+        onRemoveConversation={onRemoveConversation}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("This project chat is no longer available.")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("project not found")).not.toBeInTheDocument();
+
+    const removeButton = screen.getByRole("button", { name: "Remove chat" });
+    fireEvent.click(removeButton);
+    expect(onRemoveConversation).toHaveBeenCalledTimes(1);
+  });
 });

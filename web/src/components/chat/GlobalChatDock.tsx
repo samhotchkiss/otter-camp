@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useGlobalChat } from "../../contexts/GlobalChatContext";
 import GlobalChatSurface from "./GlobalChatSurface";
+import { getInitials } from "../messaging/utils";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
@@ -26,6 +27,7 @@ export default function GlobalChatDock() {
     toggleDock,
     selectConversation,
     markConversationRead,
+    removeConversation,
   } = useGlobalChat();
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [resettingProjectSession, setResettingProjectSession] = useState(false);
@@ -279,9 +281,17 @@ export default function GlobalChatDock() {
                       }`}
                     >
                       <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="truncate text-sm font-semibold text-[var(--text)]">
-                          {conversation.title || "Untitled chat"}
-                        </span>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div
+                            data-testid={`chat-initials-${conversation.key}`}
+                            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-alt)] text-[10px] font-semibold text-[var(--text-muted)]"
+                          >
+                            {getInitials(conversation.title || "Untitled chat")}
+                          </div>
+                          <span className="truncate text-sm font-semibold text-[var(--text)]">
+                            {conversation.title || "Untitled chat"}
+                          </span>
+                        </div>
                         {conversation.unreadCount > 0 ? (
                           <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[var(--red)] px-1 text-[10px] font-semibold text-white">
                             {conversation.unreadCount > 9 ? "9+" : conversation.unreadCount}
@@ -329,6 +339,9 @@ export default function GlobalChatDock() {
                   <GlobalChatSurface
                     conversation={selectedConversation}
                     refreshVersion={refreshVersion}
+                    onRemoveConversation={() => {
+                      removeConversation(selectedConversation.key);
+                    }}
                     onConversationTouched={() => {
                       if (selectedConversation.unreadCount > 0) {
                         markConversationRead(selectedConversation.key);

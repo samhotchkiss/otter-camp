@@ -64,6 +64,7 @@ type ChatMessage = DMMessage & {
 type GlobalChatSurfaceProps = {
   conversation: GlobalChatConversation;
   onConversationTouched?: () => void;
+  onRemoveConversation?: () => void;
   refreshVersion?: number;
 };
 
@@ -482,6 +483,25 @@ function normalizeDeliveryErrorText(raw: unknown): string {
   return message;
 }
 
+function normalizeProjectChatLoadError(status: number, raw: unknown): {
+  message: string;
+  unavailable: boolean;
+} {
+  const message = typeof raw === "string" ? raw.trim() : "";
+  const lower = message.toLowerCase();
+  const unavailable = status === 404 || lower.includes("not found");
+  if (unavailable) {
+    return {
+      message: "This project chat is no longer available.",
+      unavailable: true,
+    };
+  }
+  return {
+    message: message || "Failed to fetch project chat",
+    unavailable: false,
+  };
+}
+
 function formatAttachmentSize(sizeBytes: number): string {
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
     return "0 B";
@@ -507,6 +527,7 @@ function buildAttachmentLinksMarkdown(attachments: ChatAttachment[]): string {
 export default function GlobalChatSurface({
   conversation,
   onConversationTouched,
+  onRemoveConversation,
   refreshVersion = 0,
 }: GlobalChatSurfaceProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -520,6 +541,7 @@ export default function GlobalChatSurface({
   const [queuedAttachments, setQueuedAttachments] = useState<ChatAttachment[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
+  const [projectConversationUnavailable, setProjectConversationUnavailable] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -631,7 +653,9 @@ export default function GlobalChatSurface({
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => null);
-          throw new Error(payload?.error ?? "Failed to fetch project chat");
+          const normalized = normalizeProjectChatLoadError(response.status, payload?.error);
+          setProjectConversationUnavailable(normalized.unavailable);
+          throw new Error(normalized.message);
         }
 
         const payload = await response.json();
@@ -650,6 +674,7 @@ export default function GlobalChatSurface({
           : [];
 
         setMessagesIfChanged(sortChatMessagesByCreatedAt(normalized));
+        setProjectConversationUnavailable(false);
         touchConversation();
         return;
       }
@@ -729,6 +754,7 @@ export default function GlobalChatSurface({
     setQueuedAttachments([]);
     setUploadingAttachments(false);
     setIsDragActive(false);
+    setProjectConversationUnavailable(false);
     return () => {
       clearPostSendRefreshTimers();
     };
@@ -1319,6 +1345,11 @@ export default function GlobalChatSurface({
     }),
     [conversationContextLabel, conversationKey, conversationTitle],
   );
+  const composerDisabled =
+    sending ||
+    uploadingAttachments ||
+    (conversationType === "issue" && issueAuthorID === "") ||
+    projectConversationUnavailable;
 
   if (loading) {
     return (
@@ -1348,7 +1379,18 @@ export default function GlobalChatSurface({
 
       {error ? (
         <div className="border-t border-[var(--red)]/40 bg-[var(--red)]/15 px-4 py-2">
-          <p className="text-sm text-[var(--red)]">{error}</p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-[var(--red)]">{error}</p>
+            {projectConversationUnavailable && onRemoveConversation ? (
+              <button
+                type="button"
+                onClick={onRemoveConversation}
+                className="shrink-0 rounded-md border border-[var(--red)]/50 px-2.5 py-1 text-xs font-medium text-[var(--red)] transition hover:bg-[var(--red)]/10"
+              >
+                Remove chat
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -1397,7 +1439,7 @@ export default function GlobalChatSurface({
         <button
           type="button"
           onClick={onOpenFilePicker}
-          disabled={sending || uploadingAttachments || (conversationType === "issue" && issueAuthorID === "")}
+          disabled={composerDisabled}
           className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="Attach files"
         >
@@ -1410,18 +1452,17 @@ export default function GlobalChatSurface({
           onInput={onDraftInput}
           onKeyDown={onDraftKeyDown}
           onPaste={onComposerPaste}
-          placeholder={`Message ${conversationTitle}...`}
+          placeholder={projectConversationUnavailable ? "Project chat unavailable" : `Message ${conversationTitle}...`}
           rows={1}
-          disabled={sending || uploadingAttachments || (conversationType === "issue" && issueAuthorID === "")}
+          disabled={composerDisabled}
           className="flex-1 resize-none rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={
-            sending ||
-            uploadingAttachments ||
+            composerDisabled ||
             (draft.trim() === "" && queuedAttachments.length === 0) ||
-            (conversationType === "issue" && issueAuthorID === "")
+            projectConversationUnavailable
           }
           className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-[#1A1918] transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="Send message"
