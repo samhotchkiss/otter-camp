@@ -1,4 +1,7 @@
 import {
+  type ChangeEvent,
+  type ClipboardEvent,
+  type DragEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -48,7 +51,17 @@ type AgentsResponse = {
   agents?: Array<{ id: string; name: string }>;
 };
 
+type ChatAttachment = {
+  id: string;
+  filename: string;
+  size_bytes: number;
+  mime_type: string;
+  url: string;
+  thumbnail_url?: string;
+};
+
 type ChatMessage = DMMessage & {
+  attachments?: ChatAttachment[];
   optimistic?: boolean;
   failed?: boolean;
 };
@@ -89,6 +102,37 @@ function normalizeTimestamp(value: unknown): string {
     return new Date().toISOString();
   }
   return value;
+}
+
+function normalizeMessageAttachments(raw: unknown): ChatAttachment[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: ChatAttachment[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    const filename = typeof record.filename === "string" ? record.filename.trim() : "";
+    const mimeType = typeof record.mime_type === "string" ? record.mime_type.trim() : "";
+    const url = typeof record.url === "string" ? record.url.trim() : "";
+    const sizeBytes = typeof record.size_bytes === "number" ? record.size_bytes : Number(record.size_bytes ?? 0);
+    if (!id || !filename || !mimeType || !url || !Number.isFinite(sizeBytes)) {
+      continue;
+    }
+    const thumbnailURL = typeof record.thumbnail_url === "string" ? record.thumbnail_url : undefined;
+    out.push({
+      id,
+      filename,
+      size_bytes: sizeBytes,
+      mime_type: mimeType,
+      url,
+      thumbnail_url: thumbnailURL,
+    });
+  }
+  return out;
 }
 
 function extractSessionResetID(content: string): string | null {
@@ -132,6 +176,10 @@ function normalizeThreadMessage(
   const senderID = rawSenderID || (senderType === "agent" ? `agent:${senderName}` : currentUserID);
   const content =
     (typeof record.content === "string" && record.content) || "";
+  const attachments = normalizeMessageAttachments(record.attachments);
+  const contentWithAttachmentFallback = content === "" && attachments.length > 0
+    ? buildAttachmentLinksMarkdown(attachments)
+    : content;
   const resetSessionID = extractSessionResetID(content);
   if (resetSessionID !== null) {
     return {
@@ -163,7 +211,8 @@ function normalizeThreadMessage(
       (typeof record.senderAvatarUrl === "string" && record.senderAvatarUrl) ||
       (typeof record.sender_avatar_url === "string" && record.sender_avatar_url) ||
       undefined,
-    content,
+    content: contentWithAttachmentFallback,
+    attachments,
     createdAt: normalizeTimestamp(record.createdAt ?? record.created_at),
   };
 }
@@ -183,9 +232,13 @@ function normalizeProjectMessage(
   const projectID = typeof record.project_id === "string" ? record.project_id : "";
   const author = typeof record.author === "string" ? record.author.trim() : "";
   const body = typeof record.body === "string" ? record.body : "";
-  if (!id || !projectID || !author || !body) {
+  const attachments = normalizeMessageAttachments(record.attachments);
+  if (!id || !projectID || !author || (body === "" && attachments.length === 0)) {
     return null;
   }
+  const contentWithAttachmentFallback = body === "" && attachments.length > 0
+    ? buildAttachmentLinksMarkdown(attachments)
+    : body;
   if (projectID !== expectedProjectID) {
     return null;
   }
@@ -211,7 +264,8 @@ function normalizeProjectMessage(
     senderId: isUser ? currentUserID : `agent:${author}`,
     senderName: isUser ? currentUserName : author,
     senderType: isUser ? "user" : "agent",
-    content: body,
+    content: contentWithAttachmentFallback,
+    attachments,
     createdAt: normalizeTimestamp(record.created_at),
   };
 }
@@ -229,9 +283,13 @@ function normalizeIssueComment(
   const id = typeof record.id === "string" ? record.id : "";
   const authorID = typeof record.author_agent_id === "string" ? record.author_agent_id : "";
   const body = typeof record.body === "string" ? record.body : "";
-  if (!id || !authorID || !body) {
+  const attachments = normalizeMessageAttachments(record.attachments);
+  if (!id || !authorID || (body === "" && attachments.length === 0)) {
     return null;
   }
+  const contentWithAttachmentFallback = body === "" && attachments.length > 0
+    ? buildAttachmentLinksMarkdown(attachments)
+    : body;
   const resetSessionID = extractSessionResetID(body);
   if (resetSessionID !== null) {
     return {
@@ -256,7 +314,8 @@ function normalizeIssueComment(
     senderId: authorID,
     senderName,
     senderType: isUser ? "user" : "agent",
-    content: body,
+    content: contentWithAttachmentFallback,
+    attachments,
     createdAt: normalizeTimestamp(record.created_at),
   };
 }
@@ -286,6 +345,28 @@ function normalizeDeliveryErrorText(raw: unknown): string {
   return message;
 }
 
+function formatAttachmentSize(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "0 B";
+  }
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function buildAttachmentLinksMarkdown(attachments: ChatAttachment[]): string {
+  if (attachments.length === 0) {
+    return "";
+  }
+  return attachments
+    .map((attachment) => `📎 [${attachment.filename}](${attachment.url})`)
+    .join("\n");
+}
+
 export default function GlobalChatSurface({
   conversation,
   onConversationTouched,
@@ -299,8 +380,12 @@ export default function GlobalChatSurface({
   const [deliveryIndicator, setDeliveryIndicator] = useState<DeliveryIndicator | null>(null);
   const [issueAuthorID, setIssueAuthorID] = useState("");
   const [issueAgentNameByID, setIssueAgentNameByID] = useState<Map<string, string>>(new Map());
+  const [queuedAttachments, setQueuedAttachments] = useState<ChatAttachment[]>([]);
+  const [uploadingAttachments, setUploadingAttachments] = useState(false);
+  const [isDragActive, setIsDragActive] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const onConversationTouchedRef = useRef(onConversationTouched);
   const postSendRefreshTimersRef = useRef<number[]>([]);
   const { lastMessage } = useWS();
@@ -501,6 +586,9 @@ export default function GlobalChatSurface({
 
   useEffect(() => {
     clearPostSendRefreshTimers();
+    setQueuedAttachments([]);
+    setUploadingAttachments(false);
+    setIsDragActive(false);
     return () => {
       clearPostSendRefreshTimers();
     };
@@ -637,9 +725,137 @@ export default function GlobalChatSurface({
     clearPostSendRefreshTimers,
   ]);
 
-  const sendMessage = useCallback(async (bodyOverride?: string, retryMessageID?: string) => {
+  const uploadSelectedFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0) {
+      return;
+    }
+    if (!orgID) {
+      setError("Missing organization context");
+      return;
+    }
+
+    setError(null);
+    setUploadingAttachments(true);
+    setDeliveryIndicator({ tone: "neutral", text: "Uploading attachments..." });
+
+    let uploadedCount = 0;
+    for (const file of files) {
+      try {
+        const formData = new FormData();
+        formData.append("org_id", orgID);
+        formData.append("file", file);
+
+        const headers: Record<string, string> = {};
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
+        }
+
+        const response = await fetch(`${API_URL}/api/messages/attachments`, {
+          method: "POST",
+          headers,
+          body: formData,
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error ?? `Failed to upload ${file.name}`);
+        }
+
+        const payload = await response.json();
+        const normalized = normalizeMessageAttachments([payload?.attachment])[0];
+        if (!normalized) {
+          throw new Error(`Invalid upload response for ${file.name}`);
+        }
+        uploadedCount += 1;
+        setQueuedAttachments((prev) => {
+          if (prev.some((attachment) => attachment.id === normalized.id)) {
+            return prev;
+          }
+          return [...prev, normalized];
+        });
+      } catch (uploadError) {
+        setError(uploadError instanceof Error ? uploadError.message : `Failed to upload ${file.name}`);
+      }
+    }
+
+    if (uploadedCount > 0) {
+      const suffix = uploadedCount === 1 ? "" : "s";
+      setDeliveryIndicator({
+        tone: "neutral",
+        text: `${uploadedCount} attachment${suffix} ready`,
+      });
+    }
+    setUploadingAttachments(false);
+  }, [orgID, token]);
+
+  const queueFilesFromInput = useCallback((input: FileList | File[] | null | undefined) => {
+    const files = Array.from(input ?? []);
+    if (files.length === 0) {
+      return;
+    }
+    void uploadSelectedFiles(files);
+  }, [uploadSelectedFiles]);
+
+  const onAttachmentInputChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    queueFilesFromInput(event.target.files);
+    event.target.value = "";
+  }, [queueFilesFromInput]);
+
+  const onComposerPaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const clipboard = event.clipboardData;
+    if (!clipboard) {
+      return;
+    }
+    const pastedFiles: File[] = [];
+    for (const item of Array.from(clipboard.items)) {
+      if (item.kind !== "file") {
+        continue;
+      }
+      const file = item.getAsFile();
+      if (file) {
+        pastedFiles.push(file);
+      }
+    }
+    if (pastedFiles.length > 0) {
+      event.preventDefault();
+      queueFilesFromInput(pastedFiles);
+    }
+  }, [queueFilesFromInput]);
+
+  const onContainerDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragActive(true);
+  }, []);
+
+  const onContainerDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return;
+    }
+    setIsDragActive(false);
+  }, []);
+
+  const onContainerDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragActive(false);
+    queueFilesFromInput(event.dataTransfer.files);
+  }, [queueFilesFromInput]);
+
+  const onOpenFilePicker = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const onRemoveQueuedAttachment = useCallback((attachmentID: string) => {
+    setQueuedAttachments((prev) => prev.filter((attachment) => attachment.id !== attachmentID));
+  }, []);
+
+  const sendMessage = useCallback(async (
+    bodyOverride?: string,
+    retryMessageID?: string,
+    attachmentOverride?: ChatAttachment[],
+  ) => {
     const body = (bodyOverride ?? draft).trim();
-    if (!body || sending || !orgID) {
+    const attachmentsForSend = attachmentOverride ?? queuedAttachments;
+    if ((body === "" && attachmentsForSend.length === 0) || sending || !orgID) {
       return;
     }
 
@@ -661,7 +877,10 @@ export default function GlobalChatSurface({
         ? (issueAgentNameByID.get(issueAuthorID) ?? currentUserName)
         : currentUserName,
       senderType: "user",
-      content: body,
+      content: body === "" && attachmentsForSend.length > 0
+        ? buildAttachmentLinksMarkdown(attachmentsForSend)
+        : body,
+      attachments: attachmentsForSend,
       createdAt: new Date().toISOString(),
       optimistic: true,
     };
@@ -694,6 +913,7 @@ export default function GlobalChatSurface({
             org_id: orgID,
             thread_id: dmThreadID,
             content: body,
+            attachments: attachmentsForSend,
             sender_type: "user",
             sender_name: currentUserName,
             sender_id: currentUserID,
@@ -737,6 +957,9 @@ export default function GlobalChatSurface({
         } else {
           setDeliveryIndicator({ tone: "neutral", text: "Saved" });
         }
+        if (!isRetry) {
+          setQueuedAttachments([]);
+        }
       } else if (conversationType === "project") {
         const url = new URL(`${API_URL}/api/projects/${projectID}/chat/messages`);
         url.searchParams.set("org_id", orgID);
@@ -747,6 +970,7 @@ export default function GlobalChatSurface({
           body: JSON.stringify({
             author: currentUserName,
             body,
+            attachment_ids: attachmentsForSend.map((attachment) => attachment.id),
             sender_type: "user",
           }),
         });
@@ -789,10 +1013,20 @@ export default function GlobalChatSurface({
         } else {
           setDeliveryIndicator({ tone: "neutral", text: "Saved" });
         }
+        if (!isRetry) {
+          setQueuedAttachments([]);
+        }
       } else {
         if (!issueAuthorID) {
           throw new Error("No issue author configured for this thread");
         }
+
+        const attachmentLinks = buildAttachmentLinksMarkdown(attachmentsForSend);
+        const issueBody = attachmentLinks === ""
+          ? body
+          : body === ""
+            ? attachmentLinks
+            : `${body}\n\n${attachmentLinks}`;
 
         const url = new URL(`${API_URL}/api/issues/${issueID}/comments`);
         url.searchParams.set("org_id", orgID);
@@ -802,7 +1036,7 @@ export default function GlobalChatSurface({
           headers: requestHeaders,
           body: JSON.stringify({
             author_agent_id: issueAuthorID,
-            body,
+            body: issueBody,
             sender_type: "user",
           }),
         });
@@ -844,6 +1078,9 @@ export default function GlobalChatSurface({
         } else {
           setDeliveryIndicator({ tone: "neutral", text: "Saved" });
         }
+        if (!isRetry) {
+          setQueuedAttachments([]);
+        }
       }
     } catch (sendError) {
       setMessages((prev) =>
@@ -874,6 +1111,7 @@ export default function GlobalChatSurface({
     issueAuthorID,
     issueID,
     orgID,
+    queuedAttachments,
     projectID,
     requestHeaders,
     sending,
@@ -885,7 +1123,8 @@ export default function GlobalChatSurface({
 
   const handleRetryMessage = useCallback(
     (message: DMMessage) => {
-      void sendMessage(message.content, message.id);
+      const retryChatMessage = message as ChatMessage;
+      void sendMessage(message.content, message.id, retryChatMessage.attachments ?? []);
     },
     [sendMessage],
   );
@@ -937,7 +1176,12 @@ export default function GlobalChatSurface({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <div
+      className={`flex h-full min-h-0 flex-col overflow-hidden ${isDragActive ? "ring-2 ring-inset ring-[var(--accent)]" : ""}`}
+      onDragOver={onContainerDragOver}
+      onDragLeave={onContainerDragLeave}
+      onDrop={onContainerDrop}
+    >
       <MessageHistory
         messages={messages}
         currentUserId={conversationType === "issue" ? issueAuthorID || currentUserID : currentUserID}
@@ -960,21 +1204,69 @@ export default function GlobalChatSurface({
         </div>
       ) : null}
 
+      {queuedAttachments.length > 0 ? (
+        <div className="border-t border-[var(--border)]/70 px-4 py-2">
+          <div className="flex flex-wrap gap-2">
+            {queuedAttachments.map((attachment) => (
+              <div
+                key={attachment.id}
+                className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-1 text-xs text-[var(--text-muted)]"
+              >
+                <span className="max-w-[220px] truncate">{attachment.filename}</span>
+                <span>{formatAttachmentSize(attachment.size_bytes)}</span>
+                <button
+                  type="button"
+                  onClick={() => onRemoveQueuedAttachment(attachment.id)}
+                  className="rounded-full px-1 text-[var(--text-muted)] transition hover:bg-[var(--border)] hover:text-[var(--text)]"
+                  aria-label={`Remove ${attachment.filename}`}
+                  disabled={sending}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <form onSubmit={onSubmit} className="flex items-end gap-3 border-t border-[var(--border)] px-4 py-3">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={onAttachmentInputChange}
+          className="hidden"
+          aria-label="Attach files"
+        />
+        <button
+          type="button"
+          onClick={onOpenFilePicker}
+          disabled={sending || uploadingAttachments || (conversationType === "issue" && issueAuthorID === "")}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label="Attach files"
+        >
+          📎
+        </button>
         <textarea
           ref={inputRef}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onInput={onDraftInput}
           onKeyDown={onDraftKeyDown}
+          onPaste={onComposerPaste}
           placeholder={`Message ${conversationTitle}...`}
           rows={1}
-          disabled={sending || (conversationType === "issue" && issueAuthorID === "")}
+          disabled={sending || uploadingAttachments || (conversationType === "issue" && issueAuthorID === "")}
           className="flex-1 resize-none rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:opacity-50"
         />
         <button
           type="submit"
-          disabled={sending || draft.trim() === "" || (conversationType === "issue" && issueAuthorID === "")}
+          disabled={
+            sending ||
+            uploadingAttachments ||
+            (draft.trim() === "" && queuedAttachments.length === 0) ||
+            (conversationType === "issue" && issueAuthorID === "")
+          }
           className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-[#1A1918] transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="Send message"
         >
