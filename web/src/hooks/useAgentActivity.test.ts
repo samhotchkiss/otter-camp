@@ -18,6 +18,7 @@ vi.mock("../contexts/WebSocketContext", () => ({
 import {
   buildAgentActivityURL,
   parseAgentActivityEvent,
+  trackProcessedRealtimeID,
   useAgentActivity,
 } from "./useAgentActivity";
 
@@ -72,6 +73,27 @@ describe("buildAgentActivityURL", () => {
     expect(url).toContain("channel=cron");
     expect(url).toContain("status=failed");
     expect(url).toContain("project_id=project-1");
+  });
+});
+
+describe("trackProcessedRealtimeID", () => {
+  it("keeps processed realtime ids bounded while preserving dedupe behavior", () => {
+    const ids = new Set<string>();
+    const order: string[] = [];
+
+    for (let i = 0; i < 1005; i += 1) {
+      expect(trackProcessedRealtimeID(ids, order, `evt-${i}`, 1000)).toBe(true);
+    }
+
+    expect(ids.size).toBe(1000);
+    expect(order).toHaveLength(1000);
+    expect(ids.has("evt-0")).toBe(false);
+    expect(ids.has("evt-4")).toBe(false);
+    expect(ids.has("evt-5")).toBe(true);
+
+    expect(trackProcessedRealtimeID(ids, order, "evt-1004", 1000)).toBe(false);
+    expect(trackProcessedRealtimeID(ids, order, "evt-0", 1000)).toBe(true);
+    expect(ids.size).toBe(1000);
   });
 });
 
