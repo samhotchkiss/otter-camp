@@ -2,8 +2,12 @@ package main
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/samhotchkiss/otter-camp/internal/ottercli"
 )
 
 func TestParsePositiveInt(t *testing.T) {
@@ -210,5 +214,108 @@ func TestProjectCreateSplitArgsSupportsInterspersedFlags(t *testing.T) {
 		if strings.Join(gotNames, "|") != strings.Join(tt.wantNames, "|") {
 			t.Fatalf("%s: names got %v want %v", tt.name, gotNames, tt.wantNames)
 		}
+	}
+}
+
+func TestResolveIssueCommentAuthorRef(t *testing.T) {
+	tests := []struct {
+		name            string
+		explicitAuthor  string
+		envAuthor       string
+		whoamiName      string
+		whoamiStatus    int
+		wantAgentID     string
+		wantErrContains string
+		wantWhoamiCalls int
+	}{
+		{
+			name:            "explicit author takes precedence",
+			explicitAuthor:  "stone",
+			envAuthor:       "ivy",
+			whoamiName:      "Sam User",
+			whoamiStatus:    http.StatusOK,
+			wantAgentID:     "agent-stone",
+			wantWhoamiCalls: 0,
+		},
+		{
+			name:            "env author used when explicit missing",
+			envAuthor:       "ivy",
+			whoamiName:      "Sam User",
+			whoamiStatus:    http.StatusOK,
+			wantAgentID:     "agent-ivy",
+			wantWhoamiCalls: 0,
+		},
+		{
+			name:            "whoami fallback when explicit and env missing",
+			whoamiName:      "Sam User",
+			whoamiStatus:    http.StatusOK,
+			wantAgentID:     "agent-sam",
+			wantWhoamiCalls: 1,
+		},
+		{
+			name:            "missing all author sources returns clear error",
+			whoamiName:      "",
+			whoamiStatus:    http.StatusOK,
+			wantErrContains: "comment requires --author or OTTER_AGENT_ID",
+			wantWhoamiCalls: 1,
+		},
+		{
+			name:            "whoami request failure still returns clear error",
+			whoamiStatus:    http.StatusInternalServerError,
+			wantErrContains: "comment requires --author or OTTER_AGENT_ID",
+			wantWhoamiCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			whoamiCalls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/agents":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"agents":[{"id":"agent-stone","name":"Stone","slug":"stone"},{"id":"agent-ivy","name":"Ivy","slug":"ivy"},{"id":"agent-sam","name":"Sam User","slug":"sam-user"}]}`))
+				case "/api/auth/validate":
+					whoamiCalls++
+					if tt.whoamiStatus >= 400 {
+						w.WriteHeader(tt.whoamiStatus)
+						_, _ = w.Write([]byte(`{"error":"validation failed"}`))
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"valid":true,"user":{"id":"user-1","name":"` + tt.whoamiName + `","email":"sam@example.com"}}`))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+					_, _ = w.Write([]byte(`{"error":"not found"}`))
+				}
+			}))
+			defer server.Close()
+
+			client := &ottercli.Client{
+				BaseURL: server.URL,
+				Token:   "token-1",
+				OrgID:   "org-1",
+				HTTP:    server.Client(),
+			}
+
+			agentID, err := resolveIssueCommentAuthorRef(client, tt.explicitAuthor, tt.envAuthor)
+			if tt.wantErrContains != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErrContains)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("error = %q, want contains %q", err.Error(), tt.wantErrContains)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.wantErrContains == "" && agentID != tt.wantAgentID {
+				t.Fatalf("agentID = %q, want %q", agentID, tt.wantAgentID)
+			}
+			if whoamiCalls != tt.wantWhoamiCalls {
+				t.Fatalf("whoamiCalls = %d, want %d", whoamiCalls, tt.wantWhoamiCalls)
+			}
+		})
 	}
 }

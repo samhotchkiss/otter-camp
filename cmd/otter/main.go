@@ -741,23 +741,10 @@ func handleIssue(args []string) {
 		dieIf(err)
 
 		authorRef := strings.TrimSpace(*author)
-		if authorRef == "" {
-			authorRef = strings.TrimSpace(os.Getenv("OTTER_AGENT_ID"))
-		}
-		if authorRef == "" {
-			// Fall back to authenticated user's name
-			resp, err := client.WhoAmI()
-			if err == nil && resp.User.Name != "" {
-				authorRef = resp.User.Name
-			}
-		}
-		if authorRef == "" {
-			die("comment requires --author or OTTER_AGENT_ID")
-		}
-		agent, err := client.ResolveAgent(authorRef)
+		agentID, err := resolveIssueCommentAuthorRef(client, authorRef, os.Getenv("OTTER_AGENT_ID"))
 		dieIf(err)
 
-		dieIf(client.CommentIssue(issueID, agent.ID, body))
+		dieIf(client.CommentIssue(issueID, agentID, body))
 		fmt.Println("Comment added.")
 
 	case "assign":
@@ -856,6 +843,27 @@ func resolveAgentName(client *ottercli.Client, agentID string) string {
 		return agent.Name
 	}
 	return agentID
+}
+
+func resolveIssueCommentAuthorRef(client *ottercli.Client, explicitAuthorRef, envAuthorRef string) (string, error) {
+	authorRef := strings.TrimSpace(explicitAuthorRef)
+	if authorRef == "" {
+		authorRef = strings.TrimSpace(envAuthorRef)
+	}
+	if authorRef == "" {
+		resp, err := client.WhoAmI()
+		if err == nil {
+			authorRef = strings.TrimSpace(resp.User.Name)
+		}
+	}
+	if authorRef == "" {
+		return "", errors.New("comment requires --author or OTTER_AGENT_ID")
+	}
+	agent, err := client.ResolveAgent(authorRef)
+	if err != nil {
+		return "", err
+	}
+	return agent.ID, nil
 }
 
 func resolveIssueID(client *ottercli.Client, projectRef, issueRef string) (string, error) {
