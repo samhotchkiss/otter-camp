@@ -25,7 +25,7 @@ function AgentActivityTimelineComponent({
 }: AgentActivityTimelineProps) {
   if (isLoading && events.length === 0) {
     return (
-      <div className={`rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500 ${className}`}>
+      <div className={`rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 text-sm text-[var(--text-muted)] ${className}`}>
         Loading activity...
       </div>
     );
@@ -41,7 +41,7 @@ function AgentActivityTimelineComponent({
 
   if (events.length === 0) {
     return (
-      <div className={`rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500 ${className}`}>
+      <div className={`rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 text-sm text-[var(--text-muted)] ${className}`}>
         {emptyMessage}
       </div>
     );
@@ -58,7 +58,7 @@ function AgentActivityTimelineComponent({
           type="button"
           onClick={onLoadMore}
           disabled={isLoadingMore}
-          className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-medium text-[var(--text)] transition hover:bg-[var(--surface-alt)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isLoadingMore ? "Loading more..." : "Load more"}
         </button>
