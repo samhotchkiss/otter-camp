@@ -565,6 +565,13 @@ func handleIssue(args []string) {
 			authorRef = strings.TrimSpace(os.Getenv("OTTER_AGENT_ID"))
 		}
 		if authorRef == "" {
+			// Fall back to authenticated user's name
+			resp, err := client.WhoAmI()
+			if err == nil && resp.User.Name != "" {
+				authorRef = resp.User.Name
+			}
+		}
+		if authorRef == "" {
 			die("comment requires --author or OTTER_AGENT_ID")
 		}
 		agent, err := client.ResolveAgent(authorRef)
