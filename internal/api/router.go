@@ -85,6 +85,7 @@ func NewRouter() http.Handler {
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 	projectChatHandler := &ProjectChatHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
 	issuesHandler := &IssuesHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
+	questionnaireHandler := &QuestionnaireHandler{}
 	projectCommitsHandler := &ProjectCommitsHandler{}
 	projectTreeHandler := &ProjectTreeHandler{}
 	knowledgeHandler := &KnowledgeHandler{}
@@ -111,6 +112,7 @@ func NewRouter() http.Handler {
 		projectChatHandler.IssueStore = store.NewProjectIssueStore(db)
 		projectChatHandler.DB = db
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
+		questionnaireHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		issuesHandler.ProjectStore = projectStore
 		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
 		issuesHandler.ProjectRepos = projectRepoStore
@@ -192,6 +194,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat/search", projectChatHandler.Search)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages", projectChatHandler.Create)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/questionnaire", questionnaireHandler.CreateProjectChatQuestionnaire)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/reset", projectChatHandler.ResetSession)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages/{messageID}/save-to-notes", projectChatHandler.SaveToNotes)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/bootstrap", projectChatHandler.BootstrapContent)
@@ -213,6 +216,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}", issuesHandler.Get)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/questionnaire", questionnaireHandler.CreateIssueQuestionnaire)
+		r.With(middleware.OptionalWorkspace).Post("/questionnaires/{id}/response", questionnaireHandler.Respond)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approval-state", issuesHandler.TransitionApprovalState)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approve", issuesHandler.Approve)
 		r.With(middleware.OptionalWorkspace).Patch("/issues/{id}", issuesHandler.PatchIssue)
