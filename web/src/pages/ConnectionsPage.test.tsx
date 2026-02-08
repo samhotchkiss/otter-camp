@@ -252,4 +252,66 @@ describe("ConnectionsPage", () => {
     expect(await screen.findByText("Disconnected")).toBeInTheDocument();
     expect(attempts).toBe(2);
   });
+
+  it("formats last-seen timestamps, renders memory N/A fallback, and shows disconnected log guidance", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/activity/recent")) {
+        return mockJSONResponse({ items: [] });
+      }
+      if (url.includes("/api/admin/connections")) {
+        return mockJSONResponse({
+          bridge: {
+            connected: false,
+            last_sync: "2026-02-08T23:20:00Z",
+            sync_healthy: false,
+          },
+          host: {
+            hostname: "Mac-Studio",
+            memory_total_bytes: 0,
+            memory_used_bytes: 0,
+          },
+          sessions: [
+            {
+              id: "main",
+              name: "Frank",
+              status: "online",
+              channel: "slack",
+              last_seen: "2026-02-08T20:25:19Z",
+              stalled: false,
+            },
+          ],
+          summary: { total: 1, online: 1, busy: 0, offline: 0, stalled: 0 },
+          generated_at: "2026-02-08T23:25:19Z",
+        });
+      }
+      if (url.includes("/api/github/sync/health")) {
+        return mockJSONResponse({ stuck_jobs: 0, queue_depth: [] });
+      }
+      if (url.includes("/api/github/sync/dead-letters")) {
+        return mockJSONResponse({ items: [] });
+      }
+      if (url.includes("/api/admin/logs")) {
+        return mockJSONResponse({ items: [], total: 0 });
+      }
+      if (url.includes("/api/admin/diagnostics")) {
+        return mockJSONResponse({ checks: [], generated_at: "2026-02-08T23:25:19Z" });
+      }
+      if (url.includes("/api/admin/cron/jobs")) {
+        return mockJSONResponse({ items: [], total: 0 });
+      }
+      if (url.includes("/api/admin/processes")) {
+        return mockJSONResponse({ items: [], total: 0 });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<ConnectionsPage />);
+
+    expect(await screen.findByText("Connections & Diagnostics")).toBeInTheDocument();
+    expect(screen.getByText("Memory used: N/A / N/A")).toBeInTheDocument();
+    expect(screen.queryByText("2026-02-08T20:25:19Z")).not.toBeInTheDocument();
+    expect(screen.getByText("Connect bridge to view logs.")).toBeInTheDocument();
+  });
 });

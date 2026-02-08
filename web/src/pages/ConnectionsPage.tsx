@@ -148,10 +148,44 @@ function formatRelativeOrUnknown(raw?: string): string {
 
 function formatBytes(raw?: number): string {
   if (!raw || raw <= 0) {
-    return "Unknown";
+    return "N/A";
   }
   const gb = raw / (1024 ** 3);
   return `${gb.toFixed(1)} GB`;
+}
+
+function formatSessionLastSeen(raw?: string): string {
+  if (!raw) {
+    return "Unknown";
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "Unknown";
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    return trimmed;
+  }
+  const elapsedMs = Date.now() - parsed.getTime();
+  if (elapsedMs < 0) {
+    return parsed.toLocaleString();
+  }
+  const elapsedMinutes = Math.floor(elapsedMs / 60000);
+  if (elapsedMinutes < 1) {
+    return "Just now";
+  }
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}m ago`;
+  }
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) {
+    return `${elapsedHours}h ago`;
+  }
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  if (elapsedDays < 7) {
+    return `${elapsedDays}d ago`;
+  }
+  return parsed.toLocaleString();
 }
 
 export default function ConnectionsPage() {
@@ -604,7 +638,7 @@ export default function ConnectionsPage() {
                       <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">{session.model ?? "Unknown"}</td>
                       <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">{session.context_tokens ?? 0}</td>
                       <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">{session.channel ?? "—"}</td>
-                      <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">{session.last_seen || "Unknown"}</td>
+                      <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">{formatSessionLastSeen(session.last_seen)}</td>
                       <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">
                         {activity ? (
                           <div className="space-y-0.5">
@@ -682,7 +716,9 @@ export default function ConnectionsPage() {
                     </div>
                   ))}
                 {logs.length === 0 && (
-                  <p className="px-3 py-3 text-xs text-[var(--text-muted)]">No logs available.</p>
+                  <p className="px-3 py-3 text-xs text-[var(--text-muted)]">
+                    {connections.bridge.connected ? "No logs available." : "Connect bridge to view logs."}
+                  </p>
                 )}
               </div>
             )}
