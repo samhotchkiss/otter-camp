@@ -95,24 +95,28 @@ func Run(db *sql.DB, migrationsDir string) error {
 			// If migration fails (e.g. "already exists"), mark it as applied and continue
 			errStr := err.Error()
 			if strings.Contains(errStr, "already exists") || strings.Contains(errStr, "duplicate key") {
-				log.Printf("  ⏭️  Skipped (already applied): %s", version)
+				log.Printf("  ⏭️  Skipped (already applied): %d", version)
 				// Record it so we don't retry
-				db.Exec("INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING", version)
+				db.Exec("INSERT INTO schema_migrations (version, dirty) VALUES ($1, false) ON CONFLICT DO NOTHING", version)
 				continue
 			}
 			return fmt.Errorf("apply %s: %w", name, err)
 		}
 
-		if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("record %s: %w", name, err)
+		// Insert with dirty=false; handle both schemas (with/without dirty column)
+		if _, err := tx.Exec("INSERT INTO schema_migrations (version, dirty) VALUES ($1, false)", version); err != nil {
+			// Fallback: table might not have dirty column
+			if _, err2 := tx.Exec("INSERT INTO schema_migrations (version) VALUES ($1)", version); err2 != nil {
+				tx.Rollback()
+				return fmt.Errorf("record %s: %w", name, err2)
+			}
 		}
 
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit %s: %w", name, err)
 		}
 
-		log.Printf("  ✅ Applied: %s", version)
+		log.Printf("  ✅ Applied: %d", version)
 	}
 
 	log.Printf("✅ All migrations applied (%d new, %d total)", len(pending), len(applied)+len(pending))
