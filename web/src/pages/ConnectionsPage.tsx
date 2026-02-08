@@ -135,6 +135,8 @@ type SessionActivitySummary = {
   hasRecentFailure: boolean;
 };
 
+const CONNECTIONS_POLL_INTERVAL_MS = 30_000;
+
 function formatRelativeOrUnknown(raw?: string): string {
   if (!raw) {
     return "Unknown";
@@ -442,6 +444,18 @@ export default function ConnectionsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!orgID || typeof window === "undefined") {
+      return undefined;
+    }
+    const intervalID = window.setInterval(() => {
+      void load();
+    }, CONNECTIONS_POLL_INTERVAL_MS);
+    return () => {
+      window.clearInterval(intervalID);
+    };
+  }, [load, orgID]);
 
   return (
     <section className="space-y-6">
