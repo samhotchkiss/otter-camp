@@ -524,3 +524,28 @@ Previous batch (issues #7 subtasks) fully merged. Stale branch `codex/3-nav-clea
   - `cd web && npm run build:typecheck` ✅
 - Next up:
   - #280 attachment rendering UI in message history.
+
+## [2026-02-08 08:33:09 MST] Completed Spec004 issues #280 and #281
+- Verified #280 was already present on main in commit `5947ca3`:
+  - `web/src/components/messaging/MessageHistory.tsx` attachment rendering
+  - `web/src/components/messaging/types.ts` message attachment type support
+  - `web/src/components/messaging/__tests__/MessageHistory.test.tsx` attachment rendering tests
+  - `web/src/components/chat/GlobalChatSurface.tsx` attachment plumbing
+- Implemented #281 in backend router/file-serving path:
+  - `internal/api/router.go`
+    - Added `/uploads/*` static route using file server and strip prefix
+  - `internal/api/attachments.go`
+    - Added `getUploadsStorageDir()` (`UPLOADS_DIR` override with default `uploads`)
+    - Upload path now uses `getUploadsStorageDir()` for consistency with static serving
+  - `internal/api/router_test.go`
+    - Added `TestUploadsRouteServesStoredFile`
+    - Added `TestUploadsRouteMissingFileReturnsNotFound`
+- Validation run:
+  - `go test ./internal/api -run 'TestUploadsRouteServesStoredFile|TestUploadsRouteMissingFileReturnsNotFound|TestRouterSetup|TestNotFoundHandler' -count=1` ✅
+  - `go test ./internal/api -run 'TestUpload(MethodNotAllowed|MissingOrgID|MissingFile)|TestDetectMimeType|TestGenerateStorageKey|TestIsImageMimeType' -count=1` ✅
+  - `go test ./internal/api -count=1` ✅
+  - `cd web && npm test -- src/components/messaging/__tests__/MessageHistory.test.tsx src/components/chat/GlobalChatSurface.test.tsx --run` ✅
+  - `cd web && npm run build:typecheck` ✅
+- Remaining:
+  - Spec004 phases now complete (#277-#281 done).
+  - Next ready spec in queue is #005 (iOS reconnect toast spam).

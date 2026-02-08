@@ -223,3 +223,16 @@ Template for every entry:
   - `cd web && npm run build:typecheck` (pass)
 - Remaining work: #280 attachment rendering and #281 upload route hardening.
 - Notes: For issue chat, attachments are currently appended as markdown links since issue comment API does not yet accept attachment_ids.
+
+### 2026-02-08 08:33 MST
+- Scope: Completed Spec004 final phases by verifying #280 on main and implementing #281 uploads route hardening.
+- GitHub issues: #280, #281
+- Commits: (pending)
+- Tests run:
+  - `go test ./internal/api -run 'TestUploadsRouteServesStoredFile|TestUploadsRouteMissingFileReturnsNotFound|TestRouterSetup|TestNotFoundHandler' -count=1` (pass)
+  - `go test ./internal/api -run 'TestUpload(MethodNotAllowed|MissingOrgID|MissingFile)|TestDetectMimeType|TestGenerateStorageKey|TestIsImageMimeType' -count=1` (pass)
+  - `go test ./internal/api -count=1` (pass)
+  - `cd web && npm test -- src/components/messaging/__tests__/MessageHistory.test.tsx src/components/chat/GlobalChatSurface.test.tsx --run` (pass)
+  - `cd web && npm run build:typecheck` (pass)
+- Remaining work: Move to next ready issue spec (#005) after closing #280/#281.
+- Notes: #280 landed via existing main commit (`5947ca3`), #281 implemented in this run.
