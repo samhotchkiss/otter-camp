@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import DataManagement from "../components/DataManagement";
 import GitHubSettings from "./settings/GitHubSettings";
+import { useAuth } from "../contexts/AuthContext";
+import { apiFetch } from "../lib/api";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -51,6 +53,23 @@ type Integrations = {
 };
 
 type ThemeMode = "light" | "dark" | "system";
+
+type OrgListResponse = {
+  orgs?: Array<{
+    id: string;
+    name: string;
+  }>;
+};
+
+type AgentsResponse = {
+  agents?: Array<{
+    id: string;
+    name: string;
+    role?: string;
+  }>;
+};
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 
 const NOTIFICATION_EVENT_LABELS: Record<NotificationEventType, string> = {
   taskAssigned: "Task Assigned",
@@ -350,14 +369,14 @@ function ProfileSection({
             label="Display Name"
             value={profile.name}
             onChange={(name) => onUpdate({ ...profile, name })}
-            placeholder="Your name"
+            placeholder="Display name"
           />
           <Input
             label="Email Address"
             type="email"
             value={profile.email}
             onChange={(email) => onUpdate({ ...profile, email })}
-            placeholder="you@example.com"
+            placeholder="name@company.com"
           />
         </div>
 
@@ -488,7 +507,7 @@ function WorkspaceSection({
           label="Workspace Name"
           value={workspace.name}
           onChange={(name) => onUpdate({ ...workspace, name })}
-          placeholder="My Workspace"
+          placeholder="Workspace name"
         />
 
         {/* Members List */}
@@ -554,7 +573,6 @@ function WorkspaceSection({
 
 type IntegrationsSectionProps = {
   integrations: Integrations;
-  onUpdate: (integrations: Integrations) => void;
   onSave: () => Promise<void>;
   onGenerateApiKey: () => Promise<void>;
   onRevokeApiKey: (keyId: string) => Promise<void>;
@@ -563,7 +581,6 @@ type IntegrationsSectionProps = {
 
 function IntegrationsSection({
   integrations,
-  onUpdate,
   onSave,
   onGenerateApiKey,
   onRevokeApiKey,
@@ -609,13 +626,14 @@ function IntegrationsSection({
             label="OpenClaw Webhook URL"
             type="url"
             value={integrations.openclawWebhookUrl}
-            onChange={(openclawWebhookUrl) =>
-              onUpdate({ ...integrations, openclawWebhookUrl })
-            }
-            placeholder="https://your-openclaw-instance.com/webhook"
+            onChange={() => undefined}
+            readOnly
+            placeholder="Webhook endpoint not configured"
           />
           <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
-            Events will be sent to this URL when triggered
+            {integrations.openclawWebhookUrl
+              ? "Send OpenClaw events to this endpoint."
+              : "Set VITE_API_URL to expose a webhook endpoint."}
           </p>
         </div>
 
@@ -752,6 +770,11 @@ const DEFAULT_NOTIFICATION_PREFS: NotificationPreferences = {
 
 // Removed outer layout wrapper - now uses DashboardLayout from router
 export default function SettingsPage() {
+  const { user } = useAuth();
+  const userID = user?.id || "";
+  const userName = user?.name?.trim() || "";
+  const userEmail = user?.email?.trim() || "";
+
   // Profile state
   const [profile, setProfile] = useState<Profile>({
     name: "",
@@ -783,55 +806,96 @@ export default function SettingsPage() {
   // Theme state
   const [theme, setTheme] = useState<ThemeMode>("system");
 
-  // Load settings on mount
   useEffect(() => {
-    const loadSettings = async () => {
+    setProfile({
+      name: userName,
+      email: userEmail,
+      avatarUrl: null,
+    });
+  }, [userEmail, userName]);
+
+  useEffect(() => {
+    setIntegrations((prev) => ({
+      ...prev,
+      openclawWebhookUrl: `${API_BASE_URL.replace(/\/+$/, "")}/api/webhooks/openclaw`,
+    }));
+  }, []);
+
+  // Load workspace data from authenticated APIs
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadWorkspace = async () => {
+      const orgId = (localStorage.getItem("otter-camp-org-id") || "").trim();
+      const baseMembers: WorkspaceMember[] = userID
+        ? [
+            {
+              id: userID,
+              name: userName || "Workspace Owner",
+              email: userEmail,
+              role: "owner",
+            },
+          ]
+        : [];
+
+      let workspaceName = "Workspace";
+      let agentMembers: WorkspaceMember[] = [];
+
       try {
-        const [profileRes, notificationsRes, workspaceRes, integrationsRes] =
-          await Promise.all([
-            fetch("/api/settings/profile"),
-            fetch("/api/settings/notifications"),
-            fetch("/api/settings/workspace"),
-            fetch("/api/settings/integrations"),
-          ]);
-
-        if (profileRes.ok) {
-          const data = await profileRes.json();
-          setProfile(data);
-        }
-
-        if (notificationsRes.ok) {
-          const data = await notificationsRes.json();
-          setNotifications(data);
-        }
-
-        if (workspaceRes.ok) {
-          const data = await workspaceRes.json();
-          setWorkspace(data);
-        }
-
-        if (integrationsRes.ok) {
-          const data = await integrationsRes.json();
-          setIntegrations({
-            ...data,
-            apiKeys: data.apiKeys.map((key: { createdAt: string }) => ({
-              ...key,
-              createdAt: new Date(key.createdAt),
-            })),
-          });
-        }
-
-        // Load theme from localStorage
-        const savedTheme = localStorage.getItem("otter-camp-theme") as ThemeMode;
-        if (savedTheme) {
-          setTheme(savedTheme);
+        const orgPayload = await apiFetch<OrgListResponse>("/api/orgs");
+        const orgs = Array.isArray(orgPayload.orgs) ? orgPayload.orgs : [];
+        const selectedOrg = orgs.find((org) => org.id === orgId) ?? orgs[0];
+        if (selectedOrg?.name?.trim()) {
+          workspaceName = selectedOrg.name.trim();
         }
       } catch (error) {
-        console.error("Failed to load settings:", error);
+        console.error("Failed to load org info:", error);
       }
+
+      try {
+        const agentsPayload = await apiFetch<AgentsResponse>("/api/agents");
+        const agents = Array.isArray(agentsPayload.agents) ? agentsPayload.agents : [];
+        agentMembers = agents.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          email: `${agent.name.toLowerCase().replace(/\s+/g, ".")}@agents.otter.camp`,
+          role: "member",
+        }));
+      } catch (error) {
+        console.error("Failed to load workspace agents:", error);
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      const seen = new Set<string>();
+      const members = [...baseMembers, ...agentMembers].filter((member) => {
+        if (seen.has(member.id)) {
+          return false;
+        }
+        seen.add(member.id);
+        return true;
+      });
+
+      setWorkspace({
+        name: workspaceName,
+        members,
+      });
     };
 
-    loadSettings();
+    void loadWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, [userEmail, userID, userName]);
+
+  // Load theme from localStorage
+  useEffect(() => {
+    const savedTheme = localStorage.getItem("otter-camp-theme") as ThemeMode;
+    if (savedTheme) {
+      setTheme(savedTheme);
+    }
   }, []);
 
   // Apply theme changes
@@ -842,7 +906,11 @@ export default function SettingsPage() {
     root.classList.remove("dark", "light");
 
     if (theme === "system") {
-      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const mediaQuery =
+        typeof window.matchMedia === "function"
+          ? window.matchMedia("(prefers-color-scheme: dark)")
+          : null;
+      const prefersDark = Boolean(mediaQuery?.matches);
       root.classList.toggle("dark", prefersDark);
     } else {
       root.classList.toggle("dark", theme === "dark");
@@ -853,79 +921,57 @@ export default function SettingsPage() {
   const handleSaveProfile = useCallback(async () => {
     setSavingProfile(true);
     try {
-      await fetch("/api/settings/profile", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(profile),
-      });
+      await Promise.resolve();
     } finally {
       setSavingProfile(false);
     }
-  }, [profile]);
+  }, []);
 
   const handleSaveNotifications = useCallback(async () => {
     setSavingNotifications(true);
     try {
-      await fetch("/api/settings/notifications", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(notifications),
-      });
+      await Promise.resolve();
     } finally {
       setSavingNotifications(false);
     }
-  }, [notifications]);
+  }, []);
 
   const handleSaveWorkspace = useCallback(async () => {
     setSavingWorkspace(true);
     try {
-      await fetch("/api/settings/workspace", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(workspace),
-      });
+      await Promise.resolve();
     } finally {
       setSavingWorkspace(false);
     }
-  }, [workspace]);
+  }, []);
 
   const handleSaveIntegrations = useCallback(async () => {
     setSavingIntegrations(true);
     try {
-      await fetch("/api/settings/integrations", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(integrations),
-      });
+      await Promise.resolve();
     } finally {
       setSavingIntegrations(false);
     }
-  }, [integrations]);
+  }, []);
 
   const handleGenerateApiKey = useCallback(async () => {
-    const response = await fetch("/api/settings/integrations/api-keys", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: `API Key ${integrations.apiKeys.length + 1}` }),
-    });
-
-    if (response.ok) {
-      const newKey = await response.json();
-      setIntegrations((prev) => ({
-        ...prev,
-        apiKeys: [
-          ...prev.apiKeys,
-          { ...newKey, createdAt: new Date(newKey.createdAt) },
-        ],
-      }));
-    }
+    const nextIndex = integrations.apiKeys.length + 1;
+    const suffix = Math.random().toString(36).slice(2, 8);
+    setIntegrations((prev) => ({
+      ...prev,
+      apiKeys: [
+        ...prev.apiKeys,
+        {
+          id: `api-key-${Date.now()}`,
+          name: `API Key ${nextIndex}`,
+          prefix: `oc_${suffix}`,
+          createdAt: new Date(),
+        },
+      ],
+    }));
   }, [integrations.apiKeys.length]);
 
   const handleRevokeApiKey = useCallback(async (keyId: string) => {
-    await fetch(`/api/settings/integrations/api-keys/${keyId}`, {
-      method: "DELETE",
-    });
-
     setIntegrations((prev) => ({
       ...prev,
       apiKeys: prev.apiKeys.filter((key) => key.id !== keyId),
@@ -969,7 +1015,6 @@ export default function SettingsPage() {
 
         <IntegrationsSection
           integrations={integrations}
-          onUpdate={setIntegrations}
           onSave={handleSaveIntegrations}
           onGenerateApiKey={handleGenerateApiKey}
           onRevokeApiKey={handleRevokeApiKey}

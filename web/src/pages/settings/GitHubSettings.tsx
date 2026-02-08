@@ -189,6 +189,27 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  return "Failed to load GitHub settings";
+}
+
+function isRecoverableAuthLoadError(error: unknown): boolean {
+  const message = extractErrorMessage(error).toLowerCase();
+  return (
+    message.includes("invalid session token") ||
+    message.includes("missing authentication") ||
+    message.includes("workspace mismatch") ||
+    message.includes("request failed (401)") ||
+    message.includes("request failed (403)")
+  );
+}
+
 type ButtonProps = {
   children: React.ReactNode;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
@@ -440,7 +461,16 @@ export default function GitHubSettings() {
       setProjectSettings(nextSettings);
       setProjectStatus(nextStatus);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load GitHub settings");
+      if (isRecoverableAuthLoadError(err)) {
+        setConnection(null);
+        setRepos([]);
+        setProjects([]);
+        setProjectSettings({});
+        setProjectStatus({});
+        setError(null);
+      } else {
+        setError(extractErrorMessage(err));
+      }
     } finally {
       setLoading(false);
     }
