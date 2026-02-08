@@ -2,6 +2,18 @@
 
 This file is the working contract for any agent executing issue specs in `/Users/sam/Documents/Dev/otter-camp/issues`.
 
+## What OtterCamp Is and How It Works
+
+OtterCamp is a work management system for human + AI teams. It combines issue tracking, project coordination, chat/session routing, and Git-backed execution so work is visible and auditable end to end.
+
+How work flows through the system:
+
+- Specs define intended behavior and outcomes.
+- GitHub issues break specs into small, testable implementation units.
+- Agents execute those units with TDD and frequent commits.
+- Pushes trigger deployment and surface activity to reviewers.
+- Logs and notes provide operational context, decisions, and follow-ups.
+
 ## 1. Goal and Standard of Work
 
 - Deliver production-ready changes with test-first development.
@@ -90,10 +102,10 @@ Refs: #123
 
 You must maintain three logs:
 
-- `/Users/sam/Documents/Dev/otter-camp/issues/progress-log.md`
+- `~/Documents/Dev/otter-camp/issues/progress-log.md`
   - Append timestamped updates as work progresses.
   - Include what is done and what remains.
-- `/Users/sam/Documents/Dev/otter-camp/issues/notes.md`
+- `~/Documents/Dev/otter-camp/issues/notes.md`
   - Capture blockers, required human follow-up, spec concerns, and recommended changes.
   - If you make a spec interpretation change, document it here.
 - Execution Log section at the bottom of this file
@@ -172,3 +184,11 @@ Template for every entry:
 - Tests run: N/A (documentation change only)
 - Remaining work: Continue with next requested issue-spec execution tasks.
 - Notes: Added mandatory append-only trace format with issue numbers and commit hashes for reviewer auditing.
+
+### 2026-02-08 07:58 MST
+- Scope: Added a concise OtterCamp overview section explaining purpose and system workflow.
+- GitHub issues: N/A
+- Commits: (pending)
+- Tests run: N/A (documentation change only)
+- Remaining work: None for this request.
+- Notes: Kept the overview short and placed it near the top for fast onboarding context.
