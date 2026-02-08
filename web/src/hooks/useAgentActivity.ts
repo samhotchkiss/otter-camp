@@ -147,7 +147,7 @@ export function parseAgentActivityEvent(raw: unknown): AgentActivityEvent | null
   const trigger = normalizeString(record.trigger);
   const summary = normalizeString(record.summary);
 
-  if (!id || !orgId || !agentId || !sessionKey || !trigger || !summary) {
+  if (!id || !orgId || !agentId || !trigger || !summary) {
     return null;
   }
 
@@ -159,7 +159,7 @@ export function parseAgentActivityEvent(raw: unknown): AgentActivityEvent | null
     id,
     orgId,
     agentId,
-    sessionKey,
+    sessionKey: sessionKey || "",
     trigger,
     channel: normalizeString(record.channel),
     summary,

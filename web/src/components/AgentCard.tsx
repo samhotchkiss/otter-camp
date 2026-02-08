@@ -14,6 +14,7 @@ export type AgentCardData = {
   currentTask?: string;
   lastActive?: string | number | null;
   lastAction?: AgentLastActionData;
+  lastActionFallbackText?: string;
 };
 
 export type AgentCardProps = {
@@ -252,7 +253,10 @@ function AgentCardComponent({ agent, onClick, detailHref }: AgentCardProps) {
             </a>
           ) : null}
         </div>
-        <AgentLastAction activity={agent.lastAction} />
+        <AgentLastAction
+          activity={agent.lastAction}
+          fallbackText={agent.lastActionFallbackText || "No recent activity"}
+        />
       </div>
 
       {/* Footer: Last Active */}

@@ -46,6 +46,21 @@ describe("parseAgentActivityEvent", () => {
     expect(parsed?.issueNumber).toBe(42);
     expect(parsed?.startedAt.toISOString()).toBe("2026-02-08T20:10:00.000Z");
   });
+
+  it("accepts events without session_key", () => {
+    const parsed = parseAgentActivityEvent({
+      id: "evt-2",
+      org_id: "org-1",
+      agent_id: "main",
+      trigger: "chat.slack",
+      summary: "Responded in Slack",
+      started_at: "2026-02-08T20:12:00.000Z",
+      created_at: "2026-02-08T20:12:00.000Z",
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.sessionKey).toBe("");
+  });
 });
 
 describe("buildAgentActivityURL", () => {

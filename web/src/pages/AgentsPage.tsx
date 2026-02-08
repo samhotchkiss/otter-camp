@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, useRef, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import AgentCard, { type AgentCardData } from "../components/AgentCard";
+import AgentCard, { type AgentCardData, formatLastActive } from "../components/AgentCard";
 import { type AgentStatus } from "../components/AgentDM";
 import { useWS } from "../contexts/WebSocketContext";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { useAgentActivity } from "../hooks/useAgentActivity";
+import { isDemoMode } from "../lib/demo";
 
 /**
  * Status filter options including "all".
@@ -95,9 +96,10 @@ const GAP = 16;
  * - Click card to open AgentDM modal
  * - Real-time status updates via WebSocket
  */
-import { isDemoMode } from '../lib/demo';
-
-const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
+const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+const SLACK_THREAD_GROUP_HINTS: Record<string, string> = {
+  "g-c0abhd38u05": "essie",
+};
 
 function normalizeAgentStatus(value: unknown): AgentStatus | undefined {
   if (typeof value !== "string") {
@@ -115,6 +117,56 @@ function normalizeAgentStatus(value: unknown): AgentStatus | undefined {
     return "offline";
   }
   return undefined;
+}
+
+function normalizeCurrentTaskText(value: string): string {
+  const withoutEmojiCodes = value.replace(/:[a-z0-9_+-]+:/gi, " ");
+  return withoutEmojiCodes.replace(/\s+/g, " ").trim();
+}
+
+function toTitleFromSlug(value: string): string {
+  return value
+    .split(/[-_.]/g)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function humanizeCurrentTask(value: string): string {
+  const trimmed = value.trim();
+  const lower = trimmed.toLowerCase();
+
+  if (lower.startsWith("slack:#")) {
+    const channel = trimmed.slice("slack:".length).trim();
+    if (channel) {
+      return `Active in ${channel}`;
+    }
+  }
+
+  const slackThreadMatch = /^slack:(g-[a-z0-9]+)-thread-[a-z0-9._:-]+$/i.exec(trimmed);
+  if (slackThreadMatch?.[1]) {
+    const groupID = slackThreadMatch[1].toLowerCase();
+    const channel = SLACK_THREAD_GROUP_HINTS[groupID];
+    if (channel) {
+      return `Thread in #${channel}`;
+    }
+    return "Thread in Slack";
+  }
+
+  const webchatMatch = /^webchat:g-agent-([a-z0-9-]+)-main$/i.exec(trimmed);
+  if (webchatMatch?.[1]) {
+    const sessionName = toTitleFromSlug(webchatMatch[1]);
+    if (sessionName) {
+      return `Active in ${sessionName} webchat`;
+    }
+    return "Webchat session";
+  }
+  if (lower.startsWith("webchat:")) {
+    return "Webchat session";
+  }
+
+  return normalizeCurrentTaskText(trimmed);
 }
 
 function normalizeCurrentTask(value: unknown): string | undefined {
@@ -135,7 +187,14 @@ function normalizeCurrentTask(value: unknown): string | undefined {
     return undefined;
   }
 
-  return trimmed;
+  const humanized = humanizeCurrentTask(trimmed);
+  if (!humanized) {
+    return undefined;
+  }
+  if (humanized.length <= 120) {
+    return humanized;
+  }
+  return `${humanized.slice(0, 117).trimEnd()}...`;
 }
 
 function normalizeAgentId(value: unknown): string | undefined {
@@ -155,6 +214,22 @@ function normalizeLastActive(value: unknown): string | number | null | undefined
     return value;
   }
   return undefined;
+}
+
+function normalizeActivityLookupKey(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim().toLowerCase();
+  return trimmed || undefined;
+}
+
+function buildIdleFallbackText(agent: AgentCardData): string {
+  const lastActive = formatLastActive(agent.lastActive);
+  if (lastActive === "Never") {
+    return "Idle";
+  }
+  return `Idle ${lastActive.toLowerCase()}`;
 }
 
 function AgentsPageComponent({
@@ -205,7 +280,9 @@ function AgentsPageComponent({
       (typeof agent.name === "string" && agent.name.trim()) ||
       (typeof agent.displayName === "string" && agent.displayName.trim()) ||
       id;
-    const status = normalizeAgentStatus(agent.status) ?? "offline";
+    const statusFromPayload = normalizeAgentStatus(agent.status) ?? "offline";
+    const stalled = agent.stalled === true;
+    const status = stalled ? "offline" : statusFromPayload;
     const avatarRaw =
       (typeof agent.avatarUrl === "string" && agent.avatarUrl) ||
       (typeof agent.avatar === "string" && agent.avatar) ||
@@ -329,9 +406,13 @@ function AgentsPageComponent({
   const latestActivityByAgent = useMemo(() => {
     const map = new Map<string, NonNullable<AgentCardData["lastAction"]>>();
     for (const event of recentActivityEvents) {
-      const existing = map.get(event.agentId);
+      const lookupKey = normalizeActivityLookupKey(event.agentId);
+      if (!lookupKey) {
+        continue;
+      }
+      const existing = map.get(lookupKey);
       if (!existing || new Date(existing.startedAt || 0).getTime() < event.startedAt.getTime()) {
-        map.set(event.agentId, {
+        map.set(lookupKey, {
           summary: event.summary,
           trigger: event.trigger,
           channel: event.channel,
@@ -345,10 +426,27 @@ function AgentsPageComponent({
 
   const agentsWithLastAction = useMemo(
     () =>
-      agents.map((agent) => ({
-        ...agent,
-        lastAction: latestActivityByAgent.get(agent.id),
-      })),
+      agents.map((agent) => {
+        const candidateKeys = [
+          normalizeActivityLookupKey(agent.id),
+          normalizeActivityLookupKey(agent.name),
+        ].filter((value): value is string => Boolean(value));
+
+        let lastAction: AgentCardData["lastAction"];
+        for (const key of candidateKeys) {
+          const matched = latestActivityByAgent.get(key);
+          if (matched) {
+            lastAction = matched;
+            break;
+          }
+        }
+
+        return {
+          ...agent,
+          lastAction,
+          lastActionFallbackText: lastAction ? undefined : buildIdleFallbackText(agent),
+        };
+      }),
     [agents, latestActivityByAgent],
   );
 
