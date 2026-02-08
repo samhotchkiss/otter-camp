@@ -238,3 +238,173 @@ func TestClientProjectMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 		t.Fatalf("DeleteProject request = %s %s", gotMethod, gotPath)
 	}
 }
+
+func TestLabelClientMethodsUseExpectedPathsAndPayloads(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		gotBody = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/labels":
+			_, _ = w.Write([]byte(`{"labels":[{"id":"label-1","name":"bug","color":"#ef4444"},{"id":"label-2","name":"backend","color":"#22c55e"}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/labels":
+			_, _ = w.Write([]byte(`{"id":"label-3","name":"ops","color":"#3b82f6"}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/labels/label-2":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/projects/project-1/labels":
+			_, _ = w.Write([]byte(`{"labels":[{"id":"label-1","name":"bug","color":"#ef4444"}]}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/projects/project-1/labels/label-1":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/projects/project-1/issues/issue-1/labels":
+			_, _ = w.Write([]byte(`{"labels":[{"id":"label-1","name":"bug","color":"#ef4444"}]}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/projects/project-1/issues/issue-1/labels/label-1":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/projects":
+			_, _ = w.Write([]byte(`{"projects":[{"id":"project-1","name":"P1","status":"active"}],"total":1}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues":
+			_, _ = w.Write([]byte(`{"items":[{"id":"issue-1","project_id":"project-1","issue_number":1,"title":"Issue 1","state":"open","origin":"local","approval_state":"draft","work_status":"queued","priority":"P2"}],"total":1}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
+
+	labels, err := client.ListLabels()
+	if err != nil {
+		t.Fatalf("ListLabels() error = %v", err)
+	}
+	if len(labels) != 2 {
+		t.Fatalf("ListLabels() len = %d, want 2", len(labels))
+	}
+
+	created, err := client.CreateLabel("ops", "#3b82f6")
+	if err != nil {
+		t.Fatalf("CreateLabel() error = %v", err)
+	}
+	if created.ID != "label-3" {
+		t.Fatalf("CreateLabel() id = %q, want label-3", created.ID)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/labels" {
+		t.Fatalf("CreateLabel request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["name"] != "ops" {
+		t.Fatalf("CreateLabel payload name = %v", gotBody["name"])
+	}
+
+	if err := client.DeleteLabel("label-2"); err != nil {
+		t.Fatalf("DeleteLabel() error = %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/api/labels/label-2" {
+		t.Fatalf("DeleteLabel request = %s %s", gotMethod, gotPath)
+	}
+
+	projectLabels, err := client.AddProjectLabels("project-1", []string{"label-1"})
+	if err != nil {
+		t.Fatalf("AddProjectLabels() error = %v", err)
+	}
+	if len(projectLabels) != 1 {
+		t.Fatalf("AddProjectLabels() len = %d, want 1", len(projectLabels))
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/projects/project-1/labels" {
+		t.Fatalf("AddProjectLabels request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["label_ids"] == nil {
+		t.Fatalf("AddProjectLabels payload missing label_ids: %#v", gotBody)
+	}
+
+	if err := client.RemoveProjectLabel("project-1", "label-1"); err != nil {
+		t.Fatalf("RemoveProjectLabel() error = %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/api/projects/project-1/labels/label-1" {
+		t.Fatalf("RemoveProjectLabel request = %s %s", gotMethod, gotPath)
+	}
+
+	issueLabels, err := client.AddIssueLabels("project-1", "issue-1", []string{"label-1"})
+	if err != nil {
+		t.Fatalf("AddIssueLabels() error = %v", err)
+	}
+	if len(issueLabels) != 1 {
+		t.Fatalf("AddIssueLabels() len = %d, want 1", len(issueLabels))
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/projects/project-1/issues/issue-1/labels" {
+		t.Fatalf("AddIssueLabels request = %s %s", gotMethod, gotPath)
+	}
+
+	if err := client.RemoveIssueLabel("project-1", "issue-1", "label-1"); err != nil {
+		t.Fatalf("RemoveIssueLabel() error = %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/api/projects/project-1/issues/issue-1/labels/label-1" {
+		t.Fatalf("RemoveIssueLabel request = %s %s", gotMethod, gotPath)
+	}
+
+	_, err = client.ListProjects("label-1", "label-2")
+	if err != nil {
+		t.Fatalf("ListProjects(labels...) error = %v", err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/projects?label=label-1&label=label-2" {
+		t.Fatalf("ListProjects(labels...) request = %s %s", gotMethod, gotPath)
+	}
+
+	_, err = client.ListIssues("project-1", map[string]string{"state": "open"}, "label-1", "label-2")
+	if err != nil {
+		t.Fatalf("ListIssues(labels...) error = %v", err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/issues?label=label-1&label=label-2&project_id=project-1&state=open" {
+		t.Fatalf("ListIssues(labels...) request = %s %s", gotMethod, gotPath)
+	}
+}
+
+func TestLabelClientEnsureLabelAutoCreatesAndResolves(t *testing.T) {
+	listCallCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/labels":
+			listCallCount++
+			if listCallCount == 1 {
+				_, _ = w.Write([]byte(`{"labels":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"labels":[{"id":"label-1","name":"bug","color":"#ef4444"}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/labels":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":"label already exists"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
+
+	label, err := client.EnsureLabel("bug", "#ef4444")
+	if err != nil {
+		t.Fatalf("EnsureLabel() error = %v", err)
+	}
+	if label.ID != "label-1" {
+		t.Fatalf("EnsureLabel() id = %q, want label-1", label.ID)
+	}
+}

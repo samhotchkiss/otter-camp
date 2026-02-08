@@ -443,3 +443,90 @@ func TestIssueViewOutputJSON(t *testing.T) {
 		t.Fatalf("payload work_status = %#v, want queued", payload["work_status"])
 	}
 }
+
+func TestLabelStringSliceFlagCollectsValues(t *testing.T) {
+	var values stringSliceFlag
+	if err := values.Set("bug"); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if err := values.Set("  backend  "); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if err := values.Set(" "); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if len(values) != 2 {
+		t.Fatalf("len(values) = %d, want 2", len(values))
+	}
+	if values[0] != "bug" || values[1] != "backend" {
+		t.Fatalf("values = %#v", values)
+	}
+}
+
+func TestLabelResolveLabelFilterIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/labels" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"labels":[{"id":"11111111-1111-1111-1111-111111111111","name":"bug","color":"#ef4444"},{"id":"22222222-2222-2222-2222-222222222222","name":"backend","color":"#22c55e"}]}`))
+	}))
+	defer server.Close()
+
+	client := &ottercli.Client{
+		BaseURL: server.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    server.Client(),
+	}
+
+	ids, err := resolveLabelFilterIDs(client, []string{"bug", "backend", "bug"})
+	if err != nil {
+		t.Fatalf("resolveLabelFilterIDs() error = %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("len(ids) = %d, want 2", len(ids))
+	}
+	if ids[0] != "11111111-1111-1111-1111-111111111111" || ids[1] != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("ids = %#v", ids)
+	}
+}
+
+func TestLabelResolveLabelForAddAutoCreate(t *testing.T) {
+	listCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/labels":
+			listCalls++
+			if listCalls == 1 {
+				_, _ = w.Write([]byte(`{"labels":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"labels":[{"id":"33333333-3333-3333-3333-333333333333","name":"new-label","color":"#6b7280"}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/labels":
+			_, _ = w.Write([]byte(`{"id":"33333333-3333-3333-3333-333333333333","name":"new-label","color":"#6b7280"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer server.Close()
+
+	client := &ottercli.Client{
+		BaseURL: server.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    server.Client(),
+	}
+
+	label, err := resolveLabelForAdd(client, "new-label", "")
+	if err != nil {
+		t.Fatalf("resolveLabelForAdd() error = %v", err)
+	}
+	if label.ID != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("label.ID = %q", label.ID)
+	}
+}
