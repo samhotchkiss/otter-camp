@@ -375,6 +375,100 @@ func TestIssuesHandlerListSupportsOwnerWorkStatusAndPriorityFilters(t *testing.T
 	require.Equal(t, http.StatusBadRequest, invalidFilterRec.Code)
 }
 
+func TestIssuesHandlerCreateIssueSupportsParentIssueID(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-create-parent-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Create Parent Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	parent, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Parent issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore:   issueStore,
+		ProjectStore: store.NewProjectStore(db),
+	}
+	router := newIssueTestRouter(handler)
+
+	body := `{
+		"title":"Child issue",
+		"parent_issue_id":"` + parent.ID + `",
+		"work_status":"ready_for_work"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/issues?org_id="+orgID, bytes.NewReader([]byte(body)))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var summary issueSummaryPayload
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&summary))
+	require.NotNil(t, summary.ParentIssueID)
+	require.Equal(t, parent.ID, *summary.ParentIssueID)
+	require.Equal(t, store.IssueWorkStatusReadyForWork, summary.WorkStatus)
+}
+
+func TestIssuesHandlerListSupportsParentIssueFilter(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-list-parent-filter-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue List Parent Filter Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	parent, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Parent issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Child A",
+		Origin:        "local",
+		ParentIssueID: &parent.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Child B",
+		Origin:        "local",
+		ParentIssueID: &parent.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Standalone",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/issues?org_id="+orgID+"&project_id="+projectID+"&parent_issue_id="+parent.ID,
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var response issueListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
+	require.Len(t, response.Items, 2)
+	for _, item := range response.Items {
+		require.NotNil(t, item.ParentIssueID)
+		require.Equal(t, parent.ID, *item.ParentIssueID)
+	}
+}
+
 func TestIssuesHandlerCreateIssueCreatesStandaloneIssueWithWorkTrackingFields(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-create-org")

@@ -278,6 +278,152 @@ func TestProjectIssueStore_ListIssuesFiltersByOwnerStatusAndPriority(t *testing.
 	require.Contains(t, err.Error(), "work_status")
 }
 
+func TestProjectIssueStore_CreateIssueSupportsParentIssueAndLifecycleStatuses(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-parent-lifecycle-org")
+	projectID := createTestProject(t, db, orgID, "Issue Parent Lifecycle Project")
+	otherProjectID := createTestProject(t, db, orgID, "Issue Parent Lifecycle Other Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	parent, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Parent issue",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusReady,
+	})
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusReady, parent.WorkStatus)
+
+	child, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Child issue",
+		Origin:        "local",
+		ParentIssueID: &parent.ID,
+		WorkStatus:    IssueWorkStatusReadyForWork,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child.ParentIssueID)
+	require.Equal(t, parent.ID, *child.ParentIssueID)
+	require.Equal(t, IssueWorkStatusReadyForWork, child.WorkStatus)
+
+	otherParent, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: otherProjectID,
+		Title:     "Other project parent",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Cross-project child",
+		Origin:        "local",
+		ParentIssueID: &otherParent.ID,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "parent_issue_id")
+}
+
+func TestProjectIssueStore_ListIssuesFiltersByParentIssueID(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-parent-filter-org")
+	projectID := createTestProject(t, db, orgID, "Issue Parent Filter Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	parent, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Parent issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	childA, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Child A",
+		Origin:        "local",
+		ParentIssueID: &parent.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Child B",
+		Origin:        "local",
+		ParentIssueID: &parent.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Standalone issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	parentFilter := parent.ID
+	children, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID:     projectID,
+		ParentIssueID: &parentFilter,
+	})
+	require.NoError(t, err)
+	require.Len(t, children, 2)
+	require.Equal(t, childA.ParentIssueID, children[0].ParentIssueID)
+	require.Equal(t, childA.ParentIssueID, children[1].ParentIssueID)
+}
+
+func TestProjectIssueStore_TransitionWorkStatusSupportsLifecyclePipeline(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-lifecycle-transition-org")
+	projectID := createTestProject(t, db, orgID, "Issue Lifecycle Transition Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Lifecycle issue",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusReady,
+	})
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusReady, issue.WorkStatus)
+
+	planning, err := issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusPlanning)
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusPlanning, planning.WorkStatus)
+	require.Equal(t, "open", planning.State)
+
+	readyForWork, err := issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusReadyForWork)
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusReadyForWork, readyForWork.WorkStatus)
+
+	inProgress, err := issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusInProgress)
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusInProgress, inProgress.WorkStatus)
+
+	review, err := issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusReview)
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusReview, review.WorkStatus)
+
+	flagged, err := issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusFlagged)
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusFlagged, flagged.WorkStatus)
+
+	queued, err := issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusQueued)
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusQueued, queued.WorkStatus)
+
+	_, err = issueStore.TransitionWorkStatus(ctx, issue.ID, IssueWorkStatusDone)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "transition")
+}
+
 func TestProjectIssueStore_TransitionWorkStatusEnforcesStateMachine(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

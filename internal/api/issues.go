@@ -45,6 +45,7 @@ type issueSummaryPayload struct {
 	ApprovalState            string  `json:"approval_state"`
 	Kind                     string  `json:"kind"`
 	OwnerAgentID             *string `json:"owner_agent_id,omitempty"`
+	ParentIssueID            *string `json:"parent_issue_id,omitempty"`
 	WorkStatus               string  `json:"work_status"`
 	Priority                 string  `json:"priority"`
 	DueAt                    *string `json:"due_at,omitempty"`
@@ -131,6 +132,7 @@ type issueListResponse struct {
 
 type issuePatchRequest struct {
 	OwnerAgentID  *string `json:"owner_agent_id,omitempty"`
+	ParentIssueID *string `json:"parent_issue_id,omitempty"`
 	WorkStatus    *string `json:"work_status,omitempty"`
 	Priority      *string `json:"priority,omitempty"`
 	DueAt         *string `json:"due_at,omitempty"`
@@ -165,6 +167,10 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("kind")); raw != "" {
 		kind = &raw
 	}
+	var parentIssueID *string
+	if raw := strings.TrimSpace(r.URL.Query().Get("parent_issue_id")); raw != "" {
+		parentIssueID = &raw
+	}
 	var ownerAgentID *string
 	if raw := strings.TrimSpace(r.URL.Query().Get("owner_agent_id")); raw != "" {
 		ownerAgentID = &raw
@@ -189,14 +195,15 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	issues, err := h.IssueStore.ListIssues(r.Context(), store.ProjectIssueFilter{
-		ProjectID:    projectID,
-		State:        state,
-		Origin:       origin,
-		Kind:         kind,
-		OwnerAgentID: ownerAgentID,
-		WorkStatus:   workStatus,
-		Priority:     priority,
-		Limit:        limit,
+		ProjectID:     projectID,
+		State:         state,
+		Origin:        origin,
+		Kind:          kind,
+		ParentIssueID: parentIssueID,
+		OwnerAgentID:  ownerAgentID,
+		WorkStatus:    workStatus,
+		Priority:      priority,
+		Limit:         limit,
 	})
 	if err != nil {
 		handleIssueStoreError(w, err)
@@ -246,6 +253,7 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		Title         string  `json:"title"`
 		Body          *string `json:"body"`
 		OwnerAgentID  *string `json:"owner_agent_id"`
+		ParentIssueID *string `json:"parent_issue_id"`
 		Priority      string  `json:"priority"`
 		WorkStatus    string  `json:"work_status"`
 		State         string  `json:"state"`
@@ -287,6 +295,7 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		DocumentPath:  nil,
 		ApprovalState: req.ApprovalState,
 		OwnerAgentID:  req.OwnerAgentID,
+		ParentIssueID: req.ParentIssueID,
 		WorkStatus:    req.WorkStatus,
 		Priority:      req.Priority,
 		DueAt:         dueAt,
@@ -628,6 +637,7 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hasUpdate := req.OwnerAgentID != nil ||
+		req.ParentIssueID != nil ||
 		req.WorkStatus != nil ||
 		req.Priority != nil ||
 		req.DueAt != nil ||
@@ -653,13 +663,15 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 	input := store.UpdateProjectIssueWorkTrackingInput{
 		IssueID: issueID,
 
-		SetOwnerAgentID: req.OwnerAgentID != nil,
-		OwnerAgentID:    req.OwnerAgentID,
+		SetOwnerAgentID:  req.OwnerAgentID != nil,
+		OwnerAgentID:     req.OwnerAgentID,
+		SetParentIssueID: req.ParentIssueID != nil,
+		ParentIssueID:    req.ParentIssueID,
 
-		SetWorkStatus: req.WorkStatus != nil,
-		SetPriority:   req.Priority != nil,
-		SetDueAt:      req.DueAt != nil,
-		SetNextStep:   req.NextStep != nil,
+		SetWorkStatus:    req.WorkStatus != nil,
+		SetPriority:      req.Priority != nil,
+		SetDueAt:         req.DueAt != nil,
+		SetNextStep:      req.NextStep != nil,
 		SetNextStepDueAt: req.NextStepDueAt != nil,
 		SetState:         req.State != nil,
 	}
@@ -824,6 +836,7 @@ func toIssueSummaryPayload(
 		ApprovalState:  issue.ApprovalState,
 		Kind:           inferIssueKind(link),
 		OwnerAgentID:   ownerAgentIDFromParticipants(participants),
+		ParentIssueID:  issue.ParentIssueID,
 		WorkStatus:     issue.WorkStatus,
 		Priority:       issue.Priority,
 		NextStep:       issue.NextStep,
