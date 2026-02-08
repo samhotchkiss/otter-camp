@@ -255,8 +255,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               className={`nav-link ${activeNavId === item.id ? "active" : ""}`}
             >
               {item.label}
-              {item.id === "inbox" && inboxCount && inboxCount > 0 && (
-                <span className="nav-badge">({inboxCount})</span>
+              {item.id === "inbox" && inboxCount !== null && (
+                <span className="nav-badge" aria-label={`Inbox count ${inboxCount}`}>
+                  {inboxCount}
+                </span>
               )}
             </Link>
           ))}
@@ -336,8 +338,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               className={`mobile-nav-link ${activeNavId === item.id ? "active" : ""}`}
             >
               {item.label}
-              {item.id === "inbox" && inboxCount && inboxCount > 0 && (
-                <span className="nav-badge">({inboxCount})</span>
+              {item.id === "inbox" && inboxCount !== null && (
+                <span className="nav-badge" aria-label={`Inbox count ${inboxCount}`}>
+                  {inboxCount}
+                </span>
               )}
             </Link>
           ))}
