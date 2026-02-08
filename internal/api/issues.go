@@ -414,6 +414,64 @@ func (h *IssuesHandler) UpsertRoleAssignment(w http.ResponseWriter, r *http.Requ
 	sendJSON(w, http.StatusOK, toIssueRoleAssignmentPayload(*assignment))
 }
 
+func (h *IssuesHandler) ClaimNextQueueIssue(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+
+	var req struct {
+		Role    string `json:"role"`
+		AgentID string `json:"agent_id"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	req.Role = strings.TrimSpace(req.Role)
+	req.AgentID = strings.TrimSpace(req.AgentID)
+	if req.Role == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "role is required"})
+		return
+	}
+	if req.AgentID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent_id is required"})
+		return
+	}
+
+	updated, err := h.IssueStore.ClaimNextQueueIssue(r.Context(), projectID, req.Role, req.AgentID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	if err := h.syncIssueOwnerParticipant(r.Context(), updated.ID, &req.AgentID); err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), updated.ID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{updated.ID})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, updated.ID)))
+}
+
 func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	if h.IssueStore == nil || h.ProjectStore == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})

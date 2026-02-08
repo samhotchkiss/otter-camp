@@ -429,6 +429,19 @@ func releaseTransitionIssueWorkStatus(currentStatus string) (string, error) {
 	}
 }
 
+func queueWorkStatusForRole(role string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(role)) {
+	case "planner":
+		return IssueWorkStatusReady, nil
+	case "worker":
+		return IssueWorkStatusReadyForWork, nil
+	case "reviewer":
+		return IssueWorkStatusReview, nil
+	default:
+		return "", fmt.Errorf("role must be planner, worker, or reviewer")
+	}
+}
+
 func normalizeIssuePriority(priority string) string {
 	return strings.ToUpper(strings.TrimSpace(priority))
 }
@@ -1015,6 +1028,105 @@ func (s *ProjectIssueStore) ReleaseIssue(
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to release issue: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (s *ProjectIssueStore) ClaimNextQueueIssue(
+	ctx context.Context,
+	projectID string,
+	role string,
+	agentID string,
+) (*ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+	agentID = strings.TrimSpace(agentID)
+	if !uuidRegex.MatchString(agentID) {
+		return nil, fmt.Errorf("invalid agent_id")
+	}
+
+	workStatus, err := queueWorkStatusForRole(role)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := ensureProjectVisible(ctx, tx, projectID); err != nil {
+		return nil, err
+	}
+	if err := ensureAgentVisible(ctx, tx, agentID); err != nil {
+		return nil, err
+	}
+
+	candidate, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
+			FROM project_issues
+			WHERE project_id = $1
+			  AND work_status = $2
+			  AND state = 'open'
+			  AND owner_agent_id IS NULL
+			ORDER BY CASE priority
+				WHEN 'P0' THEN 0
+				WHEN 'P1' THEN 1
+				WHEN 'P2' THEN 2
+				WHEN 'P3' THEN 3
+				ELSE 4
+			END ASC, updated_at ASC, issue_number ASC
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED`,
+		projectID,
+		workStatus,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to select next queue issue: %w", err)
+	}
+	if candidate.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	nextStatus, err := claimTransitionIssueWorkStatus(candidate.WorkStatus)
+	if err != nil {
+		return nil, err
+	}
+	if !canTransitionIssueWorkStatus(candidate.WorkStatus, nextStatus) {
+		return nil, fmt.Errorf("invalid work_status transition")
+	}
+
+	updated, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`UPDATE project_issues
+			SET owner_agent_id = $2,
+				work_status = $3,
+				state = 'open',
+				closed_at = NULL
+			WHERE id = $1
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
+		candidate.ID,
+		agentID,
+		nextStatus,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to claim next queue issue: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

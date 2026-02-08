@@ -37,6 +37,7 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues", handler.CreateIssue)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues/link", handler.CreateLinkedIssue)
 	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/issues/queue", handler.RoleQueue)
+	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues/queue/claim-next", handler.ClaimNextQueueIssue)
 	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/issue-role-assignments", handler.ListRoleAssignments)
 	router.With(middleware.OptionalWorkspace).Put("/api/projects/{id}/issue-role-assignments/{role}", handler.UpsertRoleAssignment)
 	return router
@@ -760,6 +761,75 @@ func TestIssuesHandlerRoleQueueValidatesRoleAndLimit(t *testing.T) {
 	invalidLimitRec := httptest.NewRecorder()
 	router.ServeHTTP(invalidLimitRec, invalidLimitReq)
 	require.Equal(t, http.StatusBadRequest, invalidLimitRec.Code)
+}
+
+func TestIssuesHandlerClaimNextQueueIssue(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-claim-next-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Claim Next API Project")
+	agentID := insertMessageTestAgent(t, db, orgID, "issue-claim-next-api-agent")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	first, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "First worker queue issue",
+		Origin:     "local",
+		WorkStatus: store.IssueWorkStatusReadyForWork,
+		Priority:   store.IssuePriorityP0,
+	})
+	require.NoError(t, err)
+	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Second worker queue issue",
+		Origin:     "local",
+		WorkStatus: store.IssueWorkStatusReadyForWork,
+		Priority:   store.IssuePriorityP1,
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	claimReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues/queue/claim-next?org_id="+orgID,
+		bytes.NewReader([]byte(`{"role":"worker","agent_id":"`+agentID+`"}`)),
+	)
+	claimRec := httptest.NewRecorder()
+	router.ServeHTTP(claimRec, claimReq)
+	require.Equal(t, http.StatusOK, claimRec.Code)
+
+	var claimResp issueSummaryPayload
+	require.NoError(t, json.NewDecoder(claimRec.Body).Decode(&claimResp))
+	require.Equal(t, first.ID, claimResp.ID)
+	require.NotNil(t, claimResp.OwnerAgentID)
+	require.Equal(t, agentID, *claimResp.OwnerAgentID)
+	require.Equal(t, store.IssueWorkStatusInProgress, claimResp.WorkStatus)
+
+	participants, err := issueStore.ListParticipants(issueTestCtx(orgID), first.ID, false)
+	require.NoError(t, err)
+	require.Len(t, participants, 1)
+	require.Equal(t, "owner", participants[0].Role)
+	require.Equal(t, agentID, participants[0].AgentID)
+
+	claimAgainReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues/queue/claim-next?org_id="+orgID,
+		bytes.NewReader([]byte(`{"role":"reviewer","agent_id":"`+agentID+`"}`)),
+	)
+	claimAgainRec := httptest.NewRecorder()
+	router.ServeHTTP(claimAgainRec, claimAgainReq)
+	require.Equal(t, http.StatusNotFound, claimAgainRec.Code)
+
+	invalidReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues/queue/claim-next?org_id="+orgID,
+		bytes.NewReader([]byte(`{"role":"invalid","agent_id":"`+agentID+`"}`)),
+	)
+	invalidRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidRec, invalidReq)
+	require.Equal(t, http.StatusBadRequest, invalidRec.Code)
 }
 
 func TestIssueRoleAssignmentsHandler_UpsertAndList(t *testing.T) {

@@ -676,6 +676,66 @@ func TestProjectIssueStore_ReleaseIssue(t *testing.T) {
 	require.Contains(t, err.Error(), "not claimed")
 }
 
+func TestProjectIssueStore_ClaimNextQueuedIssue(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-claim-next-org")
+	projectID := createTestProject(t, db, orgID, "Issue Claim Next Project")
+	agentID := createIssueTestAgent(t, db, orgID, "issue-claim-next-agent")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	first, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "First P0 worker item",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusReadyForWork,
+		Priority:   IssuePriorityP0,
+	})
+	require.NoError(t, err)
+
+	second, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Second P0 worker item",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusReadyForWork,
+		Priority:   IssuePriorityP0,
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "P1 worker item",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusReadyForWork,
+		Priority:   IssuePriorityP1,
+	})
+	require.NoError(t, err)
+
+	claimedFirst, err := issueStore.ClaimNextQueueIssue(ctx, projectID, "worker", agentID)
+	require.NoError(t, err)
+	require.Equal(t, first.ID, claimedFirst.ID)
+	require.NotNil(t, claimedFirst.OwnerAgentID)
+	require.Equal(t, agentID, *claimedFirst.OwnerAgentID)
+	require.Equal(t, IssueWorkStatusInProgress, claimedFirst.WorkStatus)
+
+	claimedSecond, err := issueStore.ClaimNextQueueIssue(ctx, projectID, "worker", agentID)
+	require.NoError(t, err)
+	require.Equal(t, second.ID, claimedSecond.ID)
+	require.NotNil(t, claimedSecond.OwnerAgentID)
+	require.Equal(t, agentID, *claimedSecond.OwnerAgentID)
+	require.Equal(t, IssueWorkStatusInProgress, claimedSecond.WorkStatus)
+
+	_, err = issueStore.ClaimNextQueueIssue(ctx, projectID, "reviewer", agentID)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNotFound))
+
+	_, err = issueStore.ClaimNextQueueIssue(ctx, projectID, "invalid", agentID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "role")
+}
+
 func TestProjectIssueStore_UpdateIssueWorkTrackingAllowsClosingFromQueuedOrInProgress(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
