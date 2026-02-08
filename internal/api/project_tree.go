@@ -54,6 +54,7 @@ const (
 )
 
 var errProjectRepoNotConfigured = errors.New("project repository is not configured")
+var errRepositoryEmpty = errors.New("repository has no commits")
 
 func (h *ProjectTreeHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 	if h.ProjectStore == nil {
@@ -94,6 +95,18 @@ func (h *ProjectTreeHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 
 	resolvedRef, output, err := readTreeListingForBrowse(r.Context(), repoPath, repoMode, ref, normalizedPath, !refProvided)
 	if err != nil {
+		if errors.Is(err, errRepositoryEmpty) {
+			responsePath := "/"
+			if normalizedPath != "" {
+				responsePath = "/" + normalizedPath
+			}
+			sendJSON(w, http.StatusOK, projectTreeResponse{
+				Ref:     ref,
+				Path:    responsePath,
+				Entries: []projectTreeEntry{},
+			})
+			return
+		}
 		status, message := classifyGitBrowseError(err)
 		sendJSON(w, status, errorResponse{Error: message})
 		return
@@ -234,32 +247,120 @@ func readTreeListingForBrowse(
 	normalizedPath string,
 	allowHeadFallback bool,
 ) (string, []byte, error) {
-	for _, candidateRef := range browseRefCandidates(ref, allowHeadFallback) {
-		objectSpec := candidateRef
-		if normalizedPath != "" {
-			objectSpec = candidateRef + ":" + normalizedPath
-			objectType, typeErr := readGitObjectType(ctx, repoPath, repoMode, objectSpec)
-			if typeErr != nil {
-				if allowHeadFallback && candidateRef != "HEAD" && isRefOrPathNotFoundError(typeErr) {
-					continue
-				}
-				return "", nil, typeErr
-			}
-			if objectType != "tree" {
-				return "", nil, fmt.Errorf("path must point to a directory")
-			}
-		}
-
-		output, err := runGitBrowseCommand(ctx, repoPath, repoMode, "ls-tree", "-z", "--long", objectSpec)
+	candidateRefs := browseRefCandidates(ref, allowHeadFallback)
+	seenRefs := make(map[string]struct{}, len(candidateRefs))
+	for _, candidateRef := range candidateRefs {
+		seenRefs[candidateRef] = struct{}{}
+		resolvedRef, output, err := readTreeListingForBrowseRef(ctx, repoPath, repoMode, candidateRef, normalizedPath)
 		if err == nil {
-			return candidateRef, output, nil
+			return resolvedRef, output, nil
 		}
 		if allowHeadFallback && candidateRef != "HEAD" && isRefOrPathNotFoundError(err) {
 			continue
 		}
+		if candidateRef == "HEAD" && isRepositoryWithoutCommitsError(err) {
+			continue
+		}
 		return "", nil, err
 	}
+
+	if allowHeadFallback {
+		branchRefs, err := listGitLocalBranches(ctx, repoPath, repoMode)
+		if err == nil {
+			for _, branchRef := range branchRefs {
+				if _, alreadyTried := seenRefs[branchRef]; alreadyTried {
+					continue
+				}
+				resolvedRef, output, branchErr := readTreeListingForBrowseRef(ctx, repoPath, repoMode, branchRef, normalizedPath)
+				if branchErr == nil {
+					return resolvedRef, output, nil
+				}
+				if !isRefOrPathNotFoundError(branchErr) {
+					return "", nil, branchErr
+				}
+			}
+		}
+	}
+
+	isEmpty, emptyErr := isRepositoryEmpty(ctx, repoPath, repoMode)
+	if emptyErr == nil && isEmpty {
+		return "", nil, errRepositoryEmpty
+	}
 	return "", nil, fmt.Errorf("ref or path not found")
+}
+
+func readTreeListingForBrowseRef(
+	ctx context.Context,
+	repoPath string,
+	repoMode gitRepoMode,
+	candidateRef string,
+	normalizedPath string,
+) (string, []byte, error) {
+	objectSpec := candidateRef
+	if normalizedPath != "" {
+		objectSpec = candidateRef + ":" + normalizedPath
+		objectType, typeErr := readGitObjectType(ctx, repoPath, repoMode, objectSpec)
+		if typeErr != nil {
+			return "", nil, typeErr
+		}
+		if objectType != "tree" {
+			return "", nil, fmt.Errorf("path must point to a directory")
+		}
+	}
+
+	output, err := runGitBrowseCommand(ctx, repoPath, repoMode, "ls-tree", "-z", "--long", objectSpec)
+	if err != nil {
+		return "", nil, err
+	}
+	return candidateRef, output, nil
+}
+
+func listGitLocalBranches(
+	ctx context.Context,
+	repoPath string,
+	repoMode gitRepoMode,
+) ([]string, error) {
+	output, err := runGitBrowseCommand(
+		ctx,
+		repoPath,
+		repoMode,
+		"for-each-ref",
+		"--format=%(refname:short)",
+		"refs/heads",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	refs := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		refs = append(refs, trimmed)
+	}
+	return refs, nil
+}
+
+func isRepositoryEmpty(ctx context.Context, repoPath string, repoMode gitRepoMode) (bool, error) {
+	_, err := runGitBrowseCommand(ctx, repoPath, repoMode, "rev-parse", "--verify", "HEAD^{commit}")
+	if err == nil {
+		return false, nil
+	}
+	if isRepositoryWithoutCommitsError(err) {
+		return true, nil
+	}
+	return false, err
+}
+
+func isRepositoryWithoutCommitsError(err error) bool {
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "not a valid object name") ||
+		strings.Contains(message, "needed a single revision") ||
+		strings.Contains(message, "unknown revision or path not in the working tree") ||
+		strings.Contains(message, "bad revision 'head")
 }
 
 func readBlobForBrowse(

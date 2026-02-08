@@ -251,6 +251,71 @@ func TestProjectTreeHandlerBlobFallsBackToHeadWhenDefaultBranchMissing(t *testin
 	require.Contains(t, payload.Content, "# Tree test")
 }
 
+func TestProjectTreeHandlerFallsBackToExistingBranchWhenHeadInvalid(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-tree-head-invalid-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Tree Head Invalid")
+	fixture := newPublishRepoFixture(t)
+	seedProjectTreeFixtureRepo(t, fixture.LocalPath)
+	seedProjectTreeRepoBindingWithDefaultBranch(t, db, orgID, projectID, fixture.LocalPath, "missing-branch")
+
+	headPath := filepath.Join(fixture.LocalPath, ".git", "HEAD")
+	require.NoError(t, os.WriteFile(headPath, []byte("ref: refs/heads/missing\n"), 0o644))
+
+	handler := &ProjectTreeHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ProjectRepos: store.NewProjectRepoStore(db),
+	}
+	router := newProjectTreeTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/tree?org_id="+orgID+"&path=/",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload projectTreeResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "/", payload.Path)
+	require.NotEmpty(t, payload.Entries)
+	require.Contains(t, payload.Entries, projectTreeEntry{Name: "posts", Type: "dir", Path: "posts/"})
+}
+
+func TestProjectTreeHandlerReturnsEmptyEntriesForEmptyRepository(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-tree-empty-repo-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Tree Empty Repo")
+
+	repoPath := filepath.Join(t.TempDir(), "empty-repo")
+	runGitTest(t, "", "init", "--initial-branch=main", repoPath)
+	runGitTest(t, repoPath, "config", "user.email", "fixture@example.com")
+	runGitTest(t, repoPath, "config", "user.name", "Fixture User")
+	seedProjectTreeRepoBindingWithDefaultBranch(t, db, orgID, projectID, repoPath, "main")
+
+	handler := &ProjectTreeHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ProjectRepos: store.NewProjectRepoStore(db),
+	}
+	router := newProjectTreeTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/tree?org_id="+orgID+"&path=/",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload projectTreeResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "/", payload.Path)
+	require.Empty(t, payload.Entries)
+}
+
 func TestProjectTreeHandlerReturnsNoRepoConfiguredWhenBindingMissing(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "project-tree-no-repo-org")
