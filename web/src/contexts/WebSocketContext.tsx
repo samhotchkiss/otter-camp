@@ -32,3 +32,7 @@ export function useWS(): WebSocketContextValue {
   }
   return context;
 }
+
+export function useOptionalWS(): WebSocketContextValue | null {
+  return useContext(WebSocketContext) ?? null;
+}

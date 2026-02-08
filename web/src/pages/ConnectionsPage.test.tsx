@@ -24,6 +24,38 @@ describe("ConnectionsPage", () => {
       const url = String(input);
       const requestMethod = input instanceof Request ? input.method : undefined;
       const method = (init?.method || requestMethod || "GET").toUpperCase();
+      if (url.includes("/api/activity/recent")) {
+        return mockJSONResponse({
+          items: [
+            {
+              id: "evt-1",
+              org_id: "00000000-0000-0000-0000-000000000001",
+              agent_id: "main",
+              session_key: "agent:main:main",
+              trigger: "chat.slack",
+              summary: "Responded in #leadership",
+              status: "completed",
+              tokens_used: 30,
+              duration_ms: 800,
+              started_at: "2026-02-08T16:00:00Z",
+              created_at: "2026-02-08T16:00:00Z",
+            },
+            {
+              id: "evt-2",
+              org_id: "00000000-0000-0000-0000-000000000001",
+              agent_id: "main",
+              session_key: "agent:main:main",
+              trigger: "dispatch.issue",
+              summary: "Bridge dispatch failed",
+              status: "failed",
+              tokens_used: 10,
+              duration_ms: 500,
+              started_at: "2026-02-08T16:05:00Z",
+              created_at: "2026-02-08T16:05:00Z",
+            },
+          ],
+        });
+      }
       if (url.includes("/api/admin/connections")) {
         return mockJSONResponse({
           bridge: {
@@ -134,6 +166,9 @@ describe("ConnectionsPage", () => {
     expect(screen.getByText("Dead letters: 2")).toBeInTheDocument();
     expect(screen.getByText("Frank")).toBeInTheDocument();
     expect(screen.getByText("sync push failed: 502 [REDACTED]")).toBeInTheDocument();
+    expect(screen.getByText("Last Activity")).toBeInTheDocument();
+    expect(screen.getByText("Bridge dispatch failed")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("Hourly Heartbeat")).toBeInTheDocument();
     expect(screen.getByText("proc-1")).toBeInTheDocument();
 
@@ -173,6 +208,9 @@ describe("ConnectionsPage", () => {
     let attempts = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("/api/activity/recent")) {
+        return mockJSONResponse({ items: [] });
+      }
       if (url.includes("/api/admin/connections")) {
         attempts += 1;
         if (attempts === 1) {

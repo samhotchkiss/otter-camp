@@ -5,6 +5,11 @@ import { readFileSync } from "node:fs";
 
 export default defineConfig({
   plugins: [react()],
+  server: {
+    fs: {
+      allow: [".."],
+    },
+  },
   define: {
     __APP_VERSION__: JSON.stringify(getAppVersion()),
     __BUILD_SHA__: JSON.stringify(getBuildSha()),
@@ -14,6 +19,10 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
+    include: [
+      "**/*.{test,spec}.?(c|m)[jt]s?(x)",
+      "../bridge/__tests__/**/*.{test,spec}.?(c|m)[jt]s?(x)",
+    ],
     exclude: [...configDefaults.exclude, "e2e/**"],
   },
 });

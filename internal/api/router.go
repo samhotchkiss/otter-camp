@@ -85,6 +85,7 @@ func NewRouter() http.Handler {
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 	projectChatHandler := &ProjectChatHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
 	issuesHandler := &IssuesHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
+	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
 	projectCommitsHandler := &ProjectCommitsHandler{}
 	projectTreeHandler := &ProjectTreeHandler{}
 	knowledgeHandler := &KnowledgeHandler{}
@@ -96,11 +97,14 @@ func NewRouter() http.Handler {
 	var githubSyncJobStore *store.GitHubSyncJobStore
 	var projectRepoStore *store.ProjectRepoStore
 	var activityStore *store.ActivityStore
+	var agentActivityStore *store.AgentActivityEventStore
 	if db != nil {
 		projectStore = store.NewProjectStore(db)
 		githubSyncJobStore = store.NewGitHubSyncJobStore(db)
 		projectRepoStore = store.NewProjectRepoStore(db)
 		activityStore = store.NewActivityStore(db)
+		agentActivityStore = store.NewAgentActivityEventStore(db)
+		agentActivityHandler.Store = agentActivityStore
 		adminConnectionsHandler.EventStore = store.NewConnectionEventStore(db)
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
 		githubSyncHealthHandler.Store = githubSyncJobStore
@@ -161,6 +165,9 @@ func NewRouter() http.Handler {
 		r.Post("/commands/execute", CommandExecuteHandler)
 		r.Get("/feed", FeedHandlerV2)
 		r.Post("/feed", feedPushHandler.Handle)
+		r.Post("/activity/events", agentActivityHandler.IngestEvents)
+		r.With(middleware.OptionalWorkspace).Get("/activity/recent", agentActivityHandler.ListRecent)
+		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/activity", agentActivityHandler.ListByAgent)
 		r.Post("/auth/login", HandleLogin)
 		r.Post("/auth/exchange", HandleAuthExchange)
 		r.Get("/auth/exchange", HandleAuthExchange)

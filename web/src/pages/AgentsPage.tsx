@@ -4,6 +4,7 @@ import AgentCard, { type AgentCardData } from "../components/AgentCard";
 import { type AgentStatus } from "../components/AgentDM";
 import { useWS } from "../contexts/WebSocketContext";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
+import { useAgentActivity } from "../hooks/useAgentActivity";
 
 /**
  * Status filter options including "all".
@@ -170,6 +171,10 @@ function AgentsPageComponent({
 
   const { lastMessage, connected } = useWS();
   const { openConversation } = useGlobalChat();
+  const { events: recentActivityEvents } = useAgentActivity({
+    mode: "recent",
+    limit: 100,
+  });
 
   // Responsive column count
   useEffect(() => {
@@ -321,21 +326,48 @@ function AgentsPageComponent({
   }, [lastMessage]);
 
   // Calculate counts for filters - memoized
+  const latestActivityByAgent = useMemo(() => {
+    const map = new Map<string, NonNullable<AgentCardData["lastAction"]>>();
+    for (const event of recentActivityEvents) {
+      const existing = map.get(event.agentId);
+      if (!existing || new Date(existing.startedAt || 0).getTime() < event.startedAt.getTime()) {
+        map.set(event.agentId, {
+          summary: event.summary,
+          trigger: event.trigger,
+          channel: event.channel,
+          status: event.status,
+          startedAt: event.startedAt,
+        });
+      }
+    }
+    return map;
+  }, [recentActivityEvents]);
+
+  const agentsWithLastAction = useMemo(
+    () =>
+      agents.map((agent) => ({
+        ...agent,
+        lastAction: latestActivityByAgent.get(agent.id),
+      })),
+    [agents, latestActivityByAgent],
+  );
+
+  // Calculate counts for filters - memoized
   const counts = useMemo(() => {
-    const result = { all: agents.length, online: 0, busy: 0, offline: 0 };
-    for (const agent of agents) {
+    const result = { all: agentsWithLastAction.length, online: 0, busy: 0, offline: 0 };
+    for (const agent of agentsWithLastAction) {
       result[agent.status]++;
     }
     return result;
-  }, [agents]);
+  }, [agentsWithLastAction]);
 
   // Filter agents by status - memoized
   const filteredAgents = useMemo(() => {
     if (statusFilter === "all") {
-      return agents;
+      return agentsWithLastAction;
     }
-    return agents.filter((agent) => agent.status === statusFilter);
-  }, [agents, statusFilter]);
+    return agentsWithLastAction.filter((agent) => agent.status === statusFilter);
+  }, [agentsWithLastAction, statusFilter]);
 
   // Calculate rows for virtualization
   const rowCount = useMemo(() => 
@@ -507,6 +539,7 @@ function AgentsPageComponent({
                       key={agent.id}
                       agent={agent}
                       onClick={handleAgentClick}
+                      detailHref={`/agents/${encodeURIComponent(agent.id)}`}
                     />
                   ))}
                 </div>

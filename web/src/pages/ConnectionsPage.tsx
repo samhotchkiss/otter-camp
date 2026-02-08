@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { useAgentActivity } from "../hooks/useAgentActivity";
 
 type BridgeDiagnostics = {
   uptime_seconds?: number;
@@ -127,6 +128,13 @@ type ProcessesResponse = {
   total: number;
 };
 
+type SessionActivitySummary = {
+  latestSummary: string;
+  latestAt: Date;
+  countLastHour: number;
+  hasRecentFailure: boolean;
+};
+
 function formatRelativeOrUnknown(raw?: string): string {
   if (!raw) {
     return "Unknown";
@@ -175,6 +183,47 @@ export default function ConnectionsPage() {
       return "";
     }
   }, []);
+
+  const { events: recentActivityEvents } = useAgentActivity({
+    mode: "recent",
+    limit: 500,
+  });
+
+  const sessionActivityByAgent = useMemo(() => {
+    const nowMs = Date.now();
+    const hourAgo = nowMs - 60 * 60 * 1000;
+    const dayAgo = nowMs - 24 * 60 * 60 * 1000;
+
+    const byAgent = new Map<string, SessionActivitySummary>();
+
+    for (const event of recentActivityEvents) {
+      const key = event.agentId.trim();
+      if (!key) {
+        continue;
+      }
+
+      const startedAtMs = event.startedAt.getTime();
+      const existing = byAgent.get(key);
+      if (!existing) {
+        byAgent.set(key, {
+          latestSummary: event.summary,
+          latestAt: event.startedAt,
+          countLastHour: startedAtMs >= hourAgo ? 1 : 0,
+          hasRecentFailure: event.status === "failed" && startedAtMs >= dayAgo,
+        });
+        continue;
+      }
+
+      existing.countLastHour += startedAtMs >= hourAgo ? 1 : 0;
+      existing.hasRecentFailure = existing.hasRecentFailure || (event.status === "failed" && startedAtMs >= dayAgo);
+      if (startedAtMs > existing.latestAt.getTime()) {
+        existing.latestAt = event.startedAt;
+        existing.latestSummary = event.summary;
+      }
+    }
+
+    return byAgent;
+  }, [recentActivityEvents]);
 
   const loadLogs = useCallback(async () => {
     if (!orgID) {
@@ -516,11 +565,26 @@ export default function ConnectionsPage() {
                     <th className="py-2 pr-4">Context</th>
                     <th className="py-2 pr-4">Channel</th>
                     <th className="py-2 pr-4">Last Seen</th>
+                    <th className="py-2 pr-4">Last Activity</th>
+                    <th className="py-2 pr-4">1h Count</th>
+                    <th className="py-2 pr-4">Errors</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {connections.sessions.map((session) => (
-                    <tr key={session.id} className="border-b border-[var(--border)]/60 text-[var(--text)]">
+                  {connections.sessions.map((session) => {
+                    const activity =
+                      sessionActivityByAgent.get(session.id) ||
+                      sessionActivityByAgent.get(session.id.toLowerCase()) ||
+                      sessionActivityByAgent.get(session.name) ||
+                      sessionActivityByAgent.get(session.name.toLowerCase());
+
+                    return (
+                    <tr
+                      key={session.id}
+                      className={`border-b border-[var(--border)]/60 text-[var(--text)] ${
+                        activity?.hasRecentFailure ? "bg-rose-50/40" : ""
+                      }`}
+                    >
                       <td className="py-2 pr-4 font-medium">{session.name}</td>
                       <td className="py-2 pr-4">
                         <span
@@ -541,11 +605,30 @@ export default function ConnectionsPage() {
                       <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">{session.context_tokens ?? 0}</td>
                       <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">{session.channel ?? "—"}</td>
                       <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">{session.last_seen || "Unknown"}</td>
+                      <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">
+                        {activity ? (
+                          <div className="space-y-0.5">
+                            <p className="line-clamp-2 text-[var(--text)]">{activity.latestSummary}</p>
+                            <p className="text-[10px] text-[var(--text-muted)]">{formatRelativeOrUnknown(activity.latestAt.toISOString())}</p>
+                          </div>
+                        ) : (
+                          "No recent activity"
+                        )}
+                      </td>
+                      <td className="py-2 pr-4 text-xs text-[var(--text-muted)]">{activity?.countLastHour ?? 0}</td>
+                      <td className="py-2 pr-4 text-xs">
+                        {activity?.hasRecentFailure ? (
+                          <span className="rounded-full bg-rose-100 px-2 py-0.5 font-semibold text-rose-700">Failed</span>
+                        ) : (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-700">OK</span>
+                        )}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   {connections.sessions.length === 0 && (
                     <tr>
-                      <td className="py-3 text-xs text-[var(--text-muted)]" colSpan={6}>No synced sessions yet.</td>
+                      <td className="py-3 text-xs text-[var(--text-muted)]" colSpan={9}>No synced sessions yet.</td>
                     </tr>
                   )}
                 </tbody>

@@ -19,6 +19,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 const OPENCLAW_HOST = process.env.OPENCLAW_HOST || '127.0.0.1';
@@ -30,9 +31,17 @@ const OTTERCAMP_WS_SECRET = process.env.OPENCLAW_WS_SECRET || '';
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
 const MAX_TRACKED_RUN_IDS = 2000;
 const DISPATCH_QUEUE_POLL_INTERVAL_MS = 5000;
+const ACTIVITY_EVENT_FLUSH_INTERVAL_MS = 5000;
+const ACTIVITY_EVENTS_BATCH_SIZE = 200;
+const MAX_TRACKED_ACTIVITY_EVENT_IDS = 5000;
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const PROJECT_ID_PATTERN = /(?:^|:)project:([0-9a-f-]{36})(?:$|:)/i;
+const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
+const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
+const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
+const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 
-interface OpenClawSession {
+export interface OpenClawSession {
   key: string;
   kind: string;
   channel: string;
@@ -50,6 +59,30 @@ interface OpenClawSession {
   lastAccountId?: string;
   transcriptPath?: string;
 }
+
+export type AgentActivityScope = {
+  project_id?: string;
+  issue_id?: string;
+  issue_number?: number;
+  thread_id?: string;
+};
+
+export type BridgeAgentActivityEvent = {
+  id: string;
+  agent_id: string;
+  session_key: string;
+  trigger: string;
+  channel?: string;
+  summary: string;
+  detail?: string;
+  scope?: AgentActivityScope;
+  tokens_used: number;
+  model_used?: string;
+  duration_ms: number;
+  status: 'started' | 'completed' | 'failed' | 'timeout';
+  started_at: string;
+  completed_at?: string;
+};
 
 interface OpenClawCronJobSnapshot {
   id: string;
@@ -186,6 +219,11 @@ const sessionContexts = new Map<string, SessionContext>();
 const contextPrimedSessions = new Set<string>();
 const deliveredRunIDs = new Set<string>();
 const deliveredRunIDOrder: string[] = [];
+let previousSessionsByKey = new Map<string, OpenClawSession>();
+const queuedActivityEventsByOrg = new Map<string, BridgeAgentActivityEvent[]>();
+const queuedActivityEventIDs = new Set<string>();
+const deliveredActivityEventIDs = new Set<string>();
+const deliveredActivityEventIDOrder: string[] = [];
 
 const genId = () => `req-${++requestId}`;
 const execFileAsync = promisify(execFile);
@@ -210,6 +248,269 @@ function parseAgentIDFromSessionKey(sessionKey: string): string {
     return '';
   }
   return match[1].trim();
+}
+
+function normalizeUpdatedAt(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return Date.now();
+  }
+  if (value > 1_000_000_000_000) {
+    return Math.floor(value);
+  }
+  return Math.floor(value * 1000);
+}
+
+function deriveAgentID(session: OpenClawSession): string {
+  const fromSessionKey = parseAgentIDFromSessionKey(session.key);
+  if (fromSessionKey) {
+    return fromSessionKey;
+  }
+  const context = sessionContexts.get(session.key);
+  const fromContext = getTrimmedString(context?.agentID);
+  if (fromContext) {
+    return fromContext;
+  }
+  const deliveryContext = asRecord(session.deliveryContext);
+  const fromDelivery =
+    getTrimmedString(deliveryContext?.agent_id) ||
+    getTrimmedString(deliveryContext?.agentId) ||
+    getTrimmedString(session.lastTo);
+  if (fromDelivery) {
+    return fromDelivery;
+  }
+  return 'system';
+}
+
+function deriveActivityScope(session: OpenClawSession): AgentActivityScope | undefined {
+  const scope: AgentActivityScope = {};
+  const sessionKey = getTrimmedString(session.key);
+  if (!sessionKey) {
+    return undefined;
+  }
+
+  const context = sessionContexts.get(sessionKey);
+  const deliveryContext = asRecord(session.deliveryContext);
+
+  const projectFromSession = PROJECT_ID_PATTERN.exec(sessionKey)?.[1];
+  const issueFromSession = ISSUE_ID_PATTERN.exec(sessionKey)?.[1];
+  const projectID =
+    projectFromSession ||
+    getTrimmedString(context?.projectID) ||
+    getTrimmedString(deliveryContext?.project_id) ||
+    getTrimmedString(deliveryContext?.projectId);
+  const issueID =
+    issueFromSession ||
+    getTrimmedString(context?.issueID) ||
+    getTrimmedString(deliveryContext?.issue_id) ||
+    getTrimmedString(deliveryContext?.issueId);
+  const threadID =
+    getTrimmedString(context?.threadID) ||
+    getTrimmedString(deliveryContext?.thread_id) ||
+    getTrimmedString(deliveryContext?.threadId);
+  const issueNumber =
+    context?.issueNumber ??
+    getNumeric(deliveryContext?.issue_number) ??
+    getNumeric(deliveryContext?.issueNumber);
+
+  if (projectID) {
+    scope.project_id = projectID;
+  }
+  if (issueID) {
+    scope.issue_id = issueID;
+  }
+  if (Number.isFinite(issueNumber)) {
+    scope.issue_number = Number(issueNumber);
+  }
+  if (threadID) {
+    scope.thread_id = threadID;
+  }
+  if (!scope.project_id && !scope.issue_id && !scope.issue_number && !scope.thread_id) {
+    return undefined;
+  }
+  return scope;
+}
+
+export function inferActivityTrigger(
+  session: OpenClawSession,
+  previous?: OpenClawSession,
+): { trigger: string; channel: string } {
+  const sessionKey = getTrimmedString(session.key).toLowerCase();
+  const displayName = getTrimmedString(session.displayName).toLowerCase();
+  const channel =
+    getTrimmedString(session.channel).toLowerCase() ||
+    getTrimmedString(session.lastChannel).toLowerCase() ||
+    getTrimmedString(previous?.channel).toLowerCase();
+
+  if (sessionKey.startsWith('cron:') || sessionKey.includes(':cron:')) {
+    return { trigger: 'cron.scheduled', channel: 'cron' };
+  }
+  if (HEARTBEAT_PATTERN.test(sessionKey) || HEARTBEAT_PATTERN.test(displayName)) {
+    return { trigger: 'heartbeat', channel: channel || 'system' };
+  }
+  if (sessionKey.startsWith('spawn:') || session.kind === 'sub') {
+    return { trigger: 'spawn.sub_agent', channel: channel || 'system' };
+  }
+  if (session.kind === 'isolated') {
+    return { trigger: 'spawn.isolated', channel: channel || 'system' };
+  }
+  if (CHAT_CHANNELS.has(channel)) {
+    return { trigger: `chat.${channel}`, channel };
+  }
+  if (session.kind === 'main') {
+    const chatChannel = channel || 'tui';
+    return { trigger: `chat.${chatChannel}`, channel: chatChannel };
+  }
+  return { trigger: 'system.event', channel: channel || 'system' };
+}
+
+function shouldEmitActivityDelta(current: OpenClawSession, previous?: OpenClawSession): boolean {
+  if (!previous) {
+    return true;
+  }
+  const currentUpdatedAt = normalizeUpdatedAt(current.updatedAt);
+  const previousUpdatedAt = normalizeUpdatedAt(previous.updatedAt);
+  if (currentUpdatedAt > previousUpdatedAt) {
+    return true;
+  }
+  if (getTrimmedString(current.displayName) !== getTrimmedString(previous.displayName)) {
+    return true;
+  }
+  if ((current.totalTokens || 0) !== (previous.totalTokens || 0)) {
+    return true;
+  }
+  if (Boolean(current.abortedLastRun) !== Boolean(previous.abortedLastRun)) {
+    return true;
+  }
+  return false;
+}
+
+function buildActivitySummary(
+  session: OpenClawSession,
+  previous: OpenClawSession | undefined,
+  trigger: string,
+): string {
+  const displayName = getTrimmedString(session.displayName);
+  const previousDisplayName = getTrimmedString(previous?.displayName);
+  if (!previous) {
+    if (displayName) {
+      return `Started ${displayName}`;
+    }
+    return `Started ${trigger}`;
+  }
+  if (displayName && displayName !== previousDisplayName) {
+    return `Updated task: ${displayName}`;
+  }
+  if (session.abortedLastRun) {
+    return displayName ? `Failed while working on ${displayName}` : 'Session run failed';
+  }
+  return displayName ? `Worked on ${displayName}` : `Session activity (${session.key})`;
+}
+
+function buildActivityDetail(session: OpenClawSession, previous?: OpenClawSession): string {
+  const parts: string[] = [];
+  if (previous && getTrimmedString(previous.displayName) !== getTrimmedString(session.displayName)) {
+    const from = getTrimmedString(previous.displayName) || 'unknown';
+    const to = getTrimmedString(session.displayName) || 'unknown';
+    parts.push(`task: ${from} -> ${to}`);
+  }
+  if (session.model) {
+    parts.push(`model=${session.model}`);
+  }
+  parts.push(`session=${session.key}`);
+  return parts.join(' | ');
+}
+
+function buildActivityEventID(session: OpenClawSession, previous?: OpenClawSession): string {
+  const seed = [
+    getTrimmedString(session.key),
+    String(normalizeUpdatedAt(session.updatedAt)),
+    String(session.totalTokens || 0),
+    String(previous?.totalTokens || 0),
+    getTrimmedString(session.displayName),
+  ].join('|');
+  return `act_${crypto.createHash('sha1').update(seed).digest('hex').slice(0, 24)}`;
+}
+
+function mapSessionDeltaToActivityEvent(
+  session: OpenClawSession,
+  previous?: OpenClawSession,
+): BridgeAgentActivityEvent | null {
+  if (!shouldEmitActivityDelta(session, previous)) {
+    return null;
+  }
+
+  const triggerInfo = inferActivityTrigger(session, previous);
+  const updatedAtMs = normalizeUpdatedAt(session.updatedAt);
+  const previousUpdatedAtMs = previous ? normalizeUpdatedAt(previous.updatedAt) : updatedAtMs;
+  const durationMs = Math.max(0, updatedAtMs - previousUpdatedAtMs);
+  const totalTokens = Number.isFinite(session.totalTokens) ? Math.max(0, session.totalTokens) : 0;
+  const previousTokens = previous && Number.isFinite(previous.totalTokens) ? Math.max(0, previous.totalTokens) : 0;
+  const tokensUsed = previous ? Math.max(0, totalTokens - previousTokens) : totalTokens;
+
+  let status: BridgeAgentActivityEvent['status'] = 'completed';
+  if (!previous) {
+    status = 'started';
+  } else if (session.abortedLastRun) {
+    status = 'failed';
+  }
+
+  const startedAtISO = new Date(updatedAtMs).toISOString();
+  const completedAt = status === 'started' ? undefined : startedAtISO;
+  const event: BridgeAgentActivityEvent = {
+    id: buildActivityEventID(session, previous),
+    agent_id: deriveAgentID(session),
+    session_key: getTrimmedString(session.key),
+    trigger: triggerInfo.trigger,
+    channel: triggerInfo.channel || undefined,
+    summary: buildActivitySummary(session, previous, triggerInfo.trigger),
+    detail: buildActivityDetail(session, previous),
+    tokens_used: tokensUsed,
+    model_used: getTrimmedString(session.model) || undefined,
+    duration_ms: durationMs,
+    status,
+    started_at: startedAtISO,
+    completed_at: completedAt,
+  };
+
+  const scope = deriveActivityScope(session);
+  if (scope) {
+    event.scope = scope;
+  }
+
+  return event;
+}
+
+export function buildActivityEventsFromSessionDeltas(params: {
+  previousByKey: Map<string, OpenClawSession>;
+  currentSessions: OpenClawSession[];
+}): BridgeAgentActivityEvent[] {
+  const events: BridgeAgentActivityEvent[] = [];
+  for (const session of params.currentSessions) {
+    const key = getTrimmedString(session.key);
+    if (!key) {
+      continue;
+    }
+    const previous = params.previousByKey.get(key);
+    const event = mapSessionDeltaToActivityEvent(session, previous);
+    if (!event) {
+      continue;
+    }
+    events.push(event);
+  }
+  events.sort((a, b) => a.started_at.localeCompare(b.started_at));
+  return events;
+}
+
+function sessionsByKey(sessions: OpenClawSession[]): Map<string, OpenClawSession> {
+  const next = new Map<string, OpenClawSession>();
+  for (const session of sessions) {
+    const key = getTrimmedString(session.key);
+    if (!key) {
+      continue;
+    }
+    next.set(key, session);
+  }
+  return next;
 }
 
 function getNumeric(value: unknown): number | undefined {
@@ -479,6 +780,199 @@ function markRunIDDelivered(runID: string): void {
       deliveredRunIDs.delete(stale);
     }
   }
+}
+
+function markActivityEventDelivered(eventID: string): void {
+  const normalized = getTrimmedString(eventID);
+  if (!normalized || deliveredActivityEventIDs.has(normalized)) {
+    return;
+  }
+  deliveredActivityEventIDs.add(normalized);
+  deliveredActivityEventIDOrder.push(normalized);
+  while (deliveredActivityEventIDOrder.length > MAX_TRACKED_ACTIVITY_EVENT_IDS) {
+    const stale = deliveredActivityEventIDOrder.shift();
+    if (stale) {
+      deliveredActivityEventIDs.delete(stale);
+    }
+  }
+}
+
+function resolveActivityOrgID(sessionKey: string): string {
+  const fromContext = getTrimmedString(sessionContexts.get(sessionKey)?.orgID);
+  if (fromContext) {
+    return fromContext;
+  }
+  return OTTERCAMP_ORG_ID;
+}
+
+export function queueActivityEventsForOrg(orgID: string, events: BridgeAgentActivityEvent[]): number {
+  const normalizedOrgID = getTrimmedString(orgID);
+  if (!normalizedOrgID || events.length === 0) {
+    return 0;
+  }
+
+  const queue = queuedActivityEventsByOrg.get(normalizedOrgID) || [];
+  let queued = 0;
+  for (const event of events) {
+    const eventID = getTrimmedString(event.id);
+    if (!eventID) {
+      continue;
+    }
+    if (queuedActivityEventIDs.has(eventID) || deliveredActivityEventIDs.has(eventID)) {
+      continue;
+    }
+    queue.push(event);
+    queuedActivityEventIDs.add(eventID);
+    queued += 1;
+  }
+  if (queue.length > 0) {
+    queuedActivityEventsByOrg.set(normalizedOrgID, queue);
+  }
+  return queued;
+}
+
+function queueSessionDeltaActivityEvents(events: BridgeAgentActivityEvent[]): number {
+  let queued = 0;
+  const grouped = new Map<string, BridgeAgentActivityEvent[]>();
+  for (const event of events) {
+    const orgID = resolveActivityOrgID(event.session_key);
+    if (!orgID) {
+      continue;
+    }
+    const bucket = grouped.get(orgID) || [];
+    bucket.push(event);
+    grouped.set(orgID, bucket);
+  }
+  for (const [orgID, orgEvents] of grouped.entries()) {
+    queued += queueActivityEventsForOrg(orgID, orgEvents);
+  }
+  return queued;
+}
+
+function buildDispatchCorrelationEvent(params: {
+  orgID: string;
+  trigger: 'dispatch.dm' | 'dispatch.project_chat' | 'dispatch.issue';
+  correlationID: string;
+  sessionKey: string;
+  agentID: string;
+  summary: string;
+  detail?: string;
+  scope?: AgentActivityScope;
+}): BridgeAgentActivityEvent | null {
+  const orgID = getTrimmedString(params.orgID);
+  const correlationID = getTrimmedString(params.correlationID);
+  const sessionKey = getTrimmedString(params.sessionKey);
+  const agentID = getTrimmedString(params.agentID);
+  if (!orgID || !correlationID || !sessionKey || !agentID) {
+    return null;
+  }
+
+  const startedAt = new Date().toISOString();
+  const idSeed = [orgID, params.trigger, correlationID, sessionKey, agentID].join('|');
+  const event: BridgeAgentActivityEvent = {
+    id: `dispatch_${crypto.createHash('sha1').update(idSeed).digest('hex').slice(0, 24)}`,
+    agent_id: agentID,
+    session_key: sessionKey,
+    trigger: params.trigger,
+    channel: 'system',
+    summary: getTrimmedString(params.summary) || 'Dispatch processed',
+    detail: getTrimmedString(params.detail) || undefined,
+    tokens_used: 0,
+    duration_ms: 0,
+    status: 'completed',
+    started_at: startedAt,
+    completed_at: startedAt,
+  };
+  if (params.scope && (params.scope.project_id || params.scope.issue_id || params.scope.issue_number || params.scope.thread_id)) {
+    event.scope = params.scope;
+  }
+  return event;
+}
+
+function queueDispatchCorrelationEvent(params: {
+  orgID: string;
+  trigger: 'dispatch.dm' | 'dispatch.project_chat' | 'dispatch.issue';
+  correlationID: string;
+  sessionKey: string;
+  agentID: string;
+  summary: string;
+  detail?: string;
+  scope?: AgentActivityScope;
+}): void {
+  const event = buildDispatchCorrelationEvent(params);
+  if (!event) {
+    return;
+  }
+  queueActivityEventsForOrg(params.orgID, [event]);
+}
+
+async function pushActivityEventBatch(orgID: string, events: BridgeAgentActivityEvent[]): Promise<boolean> {
+  if (!orgID || events.length === 0) {
+    return true;
+  }
+
+  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/activity/events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN
+        ? {
+            Authorization: `Bearer ${OTTERCAMP_TOKEN}`,
+            'X-OpenClaw-Token': OTTERCAMP_TOKEN,
+          }
+        : {}),
+    },
+    body: JSON.stringify({
+      org_id: orgID,
+      events,
+    }),
+  }, 'push activity events');
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 240);
+    console.error(
+      `[bridge] activity event push failed (${orgID}): ${response.status} ${response.statusText} ${snippet}`.trim(),
+    );
+    return false;
+  }
+  return true;
+}
+
+export async function flushBufferedActivityEvents(reason = 'manual'): Promise<number> {
+  let pushed = 0;
+  for (const [orgID, queue] of Array.from(queuedActivityEventsByOrg.entries())) {
+    while (queue.length > 0) {
+      const batch = queue.slice(0, ACTIVITY_EVENTS_BATCH_SIZE);
+      const ok = await pushActivityEventBatch(orgID, batch);
+      if (!ok) {
+        break;
+      }
+      queue.splice(0, batch.length);
+      for (const event of batch) {
+        const eventID = getTrimmedString(event.id);
+        if (eventID) {
+          queuedActivityEventIDs.delete(eventID);
+          markActivityEventDelivered(eventID);
+        }
+      }
+      pushed += batch.length;
+    }
+    if (queue.length === 0) {
+      queuedActivityEventsByOrg.delete(orgID);
+    } else {
+      queuedActivityEventsByOrg.set(orgID, queue);
+    }
+  }
+  if (pushed > 0) {
+    console.log(`[bridge] flushed ${pushed} activity event(s) (${reason})`);
+  }
+  return pushed;
+}
+
+export function resetBufferedActivityEventsForTest(): void {
+  queuedActivityEventsByOrg.clear();
+  queuedActivityEventIDs.clear();
+  deliveredActivityEventIDs.clear();
+  deliveredActivityEventIDOrder.length = 0;
 }
 
 async function fetchWithRetry(
@@ -906,6 +1400,15 @@ async function fetchSessions(): Promise<OpenClawSession[]> {
   return response.sessions || [];
 }
 
+function collectSessionDeltaActivityEvents(currentSessions: OpenClawSession[]): BridgeAgentActivityEvent[] {
+  const events = buildActivityEventsFromSessionDeltas({
+    previousByKey: previousSessionsByKey,
+    currentSessions,
+  });
+  previousSessionsByKey = sessionsByKey(currentSessions);
+  return events;
+}
+
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   const [cronJobs, processes] = await Promise.all([fetchCronJobsSnapshot(), fetchProcessesSnapshot()]);
   const payload = {
@@ -1040,6 +1543,10 @@ async function processDispatchQueue(): Promise<void> {
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   const sessionKey = (event.data?.session_key || '').trim();
   const content = (event.data?.content || '').trim();
+  const orgID = getTrimmedString(event.org_id);
+  const threadID = getTrimmedString(event.data?.thread_id);
+  const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(sessionKey);
+  const messageID = getTrimmedString(event.data?.message_id);
 
   if (!sessionKey || !content) {
     console.warn('[bridge] skipped dm.message with missing session key or content');
@@ -1048,17 +1555,30 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
 
   sessionContexts.set(sessionKey, {
     kind: 'dm',
-    orgID: getTrimmedString(event.org_id),
-    threadID: getTrimmedString(event.data?.thread_id),
-    agentID:
-      getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(sessionKey),
+    orgID,
+    threadID,
+    agentID,
   });
 
   try {
-    await sendMessageToSession(sessionKey, content, event.data?.message_id);
+    await sendMessageToSession(sessionKey, content, messageID || undefined);
     console.log(
-      `[bridge] delivered dm.message to ${sessionKey} (message_id=${event.data?.message_id || 'n/a'})`,
+      `[bridge] delivered dm.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
+    if (orgID && agentID) {
+      queueDispatchCorrelationEvent({
+        orgID,
+        trigger: 'dispatch.dm',
+        correlationID: messageID || `${sessionKey}:${content.slice(0, 80)}`,
+        sessionKey,
+        agentID,
+        summary: `Dispatched DM to ${agentID}`,
+        detail: content.slice(0, 500),
+        scope: {
+          thread_id: threadID || undefined,
+        },
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('missing scope')) {
@@ -1100,6 +1620,20 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
     console.log(
       `[bridge] delivered project.chat.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
+    if (orgID && agentID) {
+      queueDispatchCorrelationEvent({
+        orgID,
+        trigger: 'dispatch.project_chat',
+        correlationID: messageID || `${sessionKey}:${content.slice(0, 80)}`,
+        sessionKey,
+        agentID,
+        summary: `Dispatched project chat for ${projectID}`,
+        detail: content.slice(0, 500),
+        scope: {
+          project_id: projectID,
+        },
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('missing scope')) {
@@ -1152,6 +1686,24 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
     console.log(
       `[bridge] delivered issue.comment.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
+    const correlationAgentID = responderAgentID || agentID || parseAgentIDFromSessionKey(sessionKey);
+    if (orgID && correlationAgentID) {
+      const issueLabel = Number.isFinite(issueNumber) ? `#${issueNumber}` : issueID;
+      queueDispatchCorrelationEvent({
+        orgID,
+        trigger: 'dispatch.issue',
+        correlationID: messageID || `${sessionKey}:${content.slice(0, 80)}`,
+        sessionKey,
+        agentID: correlationAgentID,
+        summary: `Dispatched issue comment for ${issueLabel}`,
+        detail: content.slice(0, 500),
+        scope: {
+          project_id: projectID,
+          issue_id: issueID,
+          issue_number: issueNumber,
+        },
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('missing scope')) {
@@ -1496,7 +2048,15 @@ async function runOnce(): Promise<void> {
   try {
     await connectToOpenClaw();
     const sessions = await fetchSessions();
+    const activityEvents = collectSessionDeltaActivityEvents(sessions);
+    queueSessionDeltaActivityEvents(activityEvents);
     await pushToOtterCamp(sessions);
+    const flushedCount = await flushBufferedActivityEvents('one-shot');
+    if (activityEvents.length > 0 || flushedCount > 0) {
+      console.log(
+        `[bridge] generated ${activityEvents.length} activity event(s) from session deltas; pushed ${flushedCount}`,
+      );
+    }
     console.log(`[bridge] sync complete (${sessions.length} sessions)`);
   } catch (err) {
     console.error('[bridge] one-shot sync failed:', err);
@@ -1513,16 +2073,33 @@ async function runContinuous(): Promise<void> {
   connectOtterCampDispatchSocket();
 
   const firstSessions = await fetchSessions();
+  const firstActivityEvents = collectSessionDeltaActivityEvents(firstSessions);
+  queueSessionDeltaActivityEvents(firstActivityEvents);
   await pushToOtterCamp(firstSessions);
+  const firstFlushedCount = await flushBufferedActivityEvents('initial-sync');
+  if (firstActivityEvents.length > 0 || firstFlushedCount > 0) {
+    console.log(
+      `[bridge] generated ${firstActivityEvents.length} initial activity event(s); pushed ${firstFlushedCount}`,
+    );
+  }
   console.log(`[bridge] initial sync complete (${firstSessions.length} sessions)`);
   await processDispatchQueue().catch((err) => {
     console.error('[bridge] initial dispatch queue drain failed:', err);
   });
+  await flushBufferedActivityEvents('initial-dispatch');
 
   setInterval(async () => {
     try {
       const sessions = await fetchSessions();
+      const activityEvents = collectSessionDeltaActivityEvents(sessions);
+      queueSessionDeltaActivityEvents(activityEvents);
       await pushToOtterCamp(sessions);
+      const flushedCount = await flushBufferedActivityEvents('periodic-sync');
+      if (activityEvents.length > 0 || flushedCount > 0) {
+        console.log(
+          `[bridge] generated ${activityEvents.length} activity event(s) from session deltas; pushed ${flushedCount}`,
+        );
+      }
       console.log(`[bridge] periodic sync complete (${sessions.length} sessions)`);
     } catch (err) {
       console.error('[bridge] periodic sync failed:', err);
@@ -1532,24 +2109,47 @@ async function runContinuous(): Promise<void> {
   setInterval(async () => {
     try {
       await processDispatchQueue();
+      await flushBufferedActivityEvents('dispatch-loop');
     } catch (err) {
       console.error('[bridge] periodic dispatch queue drain failed:', err);
     }
   }, DISPATCH_QUEUE_POLL_INTERVAL_MS);
 
+  setInterval(async () => {
+    try {
+      await flushBufferedActivityEvents('activity-flush-loop');
+    } catch (err) {
+      console.error('[bridge] activity flush loop failed:', err);
+    }
+  }, ACTIVITY_EVENT_FLUSH_INTERVAL_MS);
+
   console.log('[bridge] running continuously (Ctrl+C to stop)');
 }
 
-const mode = normalizeModeArg(process.argv[2]);
+function isMainModule(): boolean {
+  const argvPath = getTrimmedString(process.argv[1]);
+  if (!argvPath) {
+    return false;
+  }
+  try {
+    return import.meta.url === pathToFileURL(argvPath).href;
+  } catch {
+    return false;
+  }
+}
 
-if (mode === 'continuous') {
-  runContinuous().catch((err) => {
-    console.error('[bridge] fatal error in continuous mode:', err);
-    process.exit(1);
-  });
-} else {
-  runOnce().catch((err) => {
-    console.error('[bridge] fatal error in one-shot mode:', err);
+async function runByMode(modeArg: string | undefined): Promise<void> {
+  const mode = normalizeModeArg(modeArg);
+  if (mode === 'continuous') {
+    await runContinuous();
+    return;
+  }
+  await runOnce();
+}
+
+if (isMainModule()) {
+  runByMode(process.argv[2]).catch((err) => {
+    console.error('[bridge] fatal error:', err);
     process.exit(1);
   });
 }
