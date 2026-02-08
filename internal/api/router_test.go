@@ -224,6 +224,20 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 		t.Fatalf("expected /api/admin/agents/{id}/memory/{date} route to be registered, got status %d", recAdminAgentMemoryDate.Code)
 	}
 
+	reqAdminConfig := httptest.NewRequest(http.MethodGet, "/api/admin/config?org_id="+orgID, nil)
+	recAdminConfig := httptest.NewRecorder()
+	router.ServeHTTP(recAdminConfig, reqAdminConfig)
+	if recAdminConfig.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/config route to be registered, got status %d", recAdminConfig.Code)
+	}
+
+	reqAdminConfigHistory := httptest.NewRequest(http.MethodGet, "/api/admin/config/history?org_id="+orgID, nil)
+	recAdminConfigHistory := httptest.NewRecorder()
+	router.ServeHTTP(recAdminConfigHistory, reqAdminConfigHistory)
+	if recAdminConfigHistory.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/config/history route to be registered, got status %d", recAdminConfigHistory.Code)
+	}
+
 	reqDiagnostics := httptest.NewRequest(http.MethodPost, "/api/admin/diagnostics?org_id="+orgID, nil)
 	recDiagnostics := httptest.NewRecorder()
 	router.ServeHTTP(recDiagnostics, reqDiagnostics)

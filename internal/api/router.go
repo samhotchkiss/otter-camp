@@ -77,6 +77,7 @@ func NewRouter() http.Handler {
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
 	adminAgentsHandler := &AdminAgentsHandler{DB: db, Store: agentStore}
+	adminConfigHandler := &AdminConfigHandler{DB: db}
 	workflowsHandler := &WorkflowsHandler{DB: db}
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
 	adminConnectionsHandler := &AdminConnectionsHandler{DB: db, OpenClawHandler: openClawWSHandler}
@@ -292,6 +293,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files/{path:.*}", adminAgentsHandler.GetFile)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory", adminAgentsHandler.ListMemoryFiles)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory/{date}", adminAgentsHandler.GetMemoryFileByDate)
+		r.With(middleware.OptionalWorkspace).Get("/admin/config", adminConfigHandler.GetCurrent)
+		r.With(middleware.OptionalWorkspace).Get("/admin/config/history", adminConfigHandler.ListHistory)
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)
 		r.With(middleware.OptionalWorkspace).Post("/admin/diagnostics", adminConnectionsHandler.RunDiagnostics)

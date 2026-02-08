@@ -107,6 +107,13 @@ interface OpenClawProcessSnapshot {
   started_at?: string;
 }
 
+interface OpenClawConfigSyncSnapshot {
+  path: string;
+  source: string;
+  captured_at: string;
+  data: unknown;
+}
+
 interface SessionsListResponse {
   count: number;
   sessions: OpenClawSession[];
@@ -582,6 +589,14 @@ function resolveOpenClawStateDir(): string {
     return envDir;
   }
   return path.join(os.homedir(), '.openclaw');
+}
+
+function resolveOpenClawConfigPath(): string {
+  const envPath = getTrimmedString(process.env.OPENCLAW_CONFIG_PATH);
+  if (envPath) {
+    return envPath;
+  }
+  return path.join(resolveOpenClawStateDir(), 'openclaw.json');
 }
 
 function resolveOpenClawIdentityPath(fileName: string): string {
@@ -1400,6 +1415,22 @@ async function fetchSessions(): Promise<OpenClawSession[]> {
   return response.sessions || [];
 }
 
+function fetchOpenClawConfigSnapshot(): OpenClawConfigSyncSnapshot | undefined {
+  const configPath = resolveOpenClawConfigPath();
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const parsed = parseJSONValue(raw);
+    return {
+      path: configPath,
+      source: 'bridge',
+      captured_at: new Date().toISOString(),
+      data: parsed,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function collectSessionDeltaActivityEvents(currentSessions: OpenClawSession[]): BridgeAgentActivityEvent[] {
   const events = buildActivityEventsFromSessionDeltas({
     previousByKey: previousSessionsByKey,
@@ -1411,12 +1442,14 @@ function collectSessionDeltaActivityEvents(currentSessions: OpenClawSession[]): 
 
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   const [cronJobs, processes] = await Promise.all([fetchCronJobsSnapshot(), fetchProcessesSnapshot()]);
+  const configSnapshot = fetchOpenClawConfigSnapshot();
   const payload = {
     type: 'full',
     timestamp: new Date().toISOString(),
     sessions,
     cron_jobs: cronJobs,
     processes,
+    ...(configSnapshot ? { config: configSnapshot } : {}),
     source: 'bridge',
   };
 
