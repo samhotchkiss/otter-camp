@@ -500,3 +500,59 @@ func TestAgentStatusConsistency(t *testing.T) {
 	require.Equal(t, statusByAgent["main"], adminStatusByAgent["main"])
 	require.Equal(t, statusByAgent["three-stones"], adminStatusByAgent["three-stones"])
 }
+
+func TestOpenClawSyncProgressLogEmissions(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	resetProgressLogEmissionSeen()
+	t.Cleanup(resetProgressLogEmissionSeen)
+
+	buffer := NewEmissionBuffer(10)
+	handler := &OpenClawSyncHandler{EmissionBuffer: buffer}
+
+	payload := SyncPayload{
+		Type:      "delta",
+		Timestamp: time.Now().UTC(),
+		Source:    "bridge",
+		ProgressLogLines: []string{
+			"- [2026-02-08 12:30 MST] Issue #318 | Commit 8fc69ae | in_progress | Completed 3/7 sub-issues | Tests: go test ./internal/api -run TestOpenClawSyncProgressLogEmissions -count=1",
+			"- [2026-02-08 12:30 MST] Issue #318 | Commit 8fc69ae | in_progress | Completed 3/7 sub-issues | Tests: go test ./internal/api -run TestOpenClawSyncProgressLogEmissions -count=1",
+			"   ",
+			"- [bad timestamp] no structured issue payload",
+			"## [2026-02-08 12:31 MST] Completed Spec008 issue #318 (Phase2B progress-log watcher emissions)",
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	recent := buffer.Recent(10, EmissionFilter{})
+	require.Len(t, recent, 3)
+
+	require.Equal(t, "codex", recent[0].SourceType)
+	require.Equal(t, "codex-progress-log", recent[0].SourceID)
+	require.Equal(t, "milestone", recent[0].Kind)
+	require.Contains(t, recent[0].Summary, "Completed Spec008 issue #318")
+	require.NotNil(t, recent[0].Scope)
+	require.NotNil(t, recent[0].Scope.IssueNumber)
+	require.EqualValues(t, 318, *recent[0].Scope.IssueNumber)
+
+	var progressEmission *Emission
+	for idx := range recent {
+		if recent[idx].Kind == "progress" {
+			progressEmission = &recent[idx]
+			break
+		}
+	}
+	require.NotNil(t, progressEmission)
+	require.NotNil(t, progressEmission.Progress)
+	require.Equal(t, 3, progressEmission.Progress.Current)
+	require.Equal(t, 7, progressEmission.Progress.Total)
+}

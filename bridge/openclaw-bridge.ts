@@ -28,8 +28,17 @@ const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || '';
 const OTTERCAMP_URL = process.env.OTTERCAMP_URL || 'https://api.otter.camp';
 const OTTERCAMP_TOKEN = process.env.OTTERCAMP_TOKEN || '';
 const OTTERCAMP_WS_SECRET = process.env.OPENCLAW_WS_SECRET || '';
+const OTTER_PROGRESS_LOG_PATH = (process.env.OTTER_PROGRESS_LOG_PATH || '').trim();
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
 const MAX_TRACKED_RUN_IDS = 2000;
+const MAX_TRACKED_PROGRESS_LOG_HASHES = 4000;
+const PROGRESS_LOG_MAX_LINES_PER_SYNC = (() => {
+  const raw = Number.parseInt((process.env.OTTER_PROGRESS_LOG_MAX_LINES || '').trim(), 10);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 50;
+  }
+  return raw;
+})();
 const DISPATCH_QUEUE_POLL_INTERVAL_MS = 5000;
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
@@ -208,6 +217,10 @@ const sessionContexts = new Map<string, SessionContext>();
 const contextPrimedSessions = new Set<string>();
 const deliveredRunIDs = new Set<string>();
 const deliveredRunIDOrder: string[] = [];
+const progressLogLineHashes = new Set<string>();
+const progressLogLineHashOrder: string[] = [];
+let progressLogByteOffset = 0;
+let progressLogOffsetInitialized = false;
 
 const genId = () => `req-${++requestId}`;
 const execFileAsync = promisify(execFile);
@@ -1280,12 +1293,90 @@ async function fetchSessions(): Promise<OpenClawSession[]> {
   return response.sessions || [];
 }
 
+function rememberProgressLogLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const hash = crypto.createHash('sha1').update(trimmed).digest('hex');
+  if (progressLogLineHashes.has(hash)) {
+    return false;
+  }
+  progressLogLineHashes.add(hash);
+  progressLogLineHashOrder.push(hash);
+  while (progressLogLineHashOrder.length > MAX_TRACKED_PROGRESS_LOG_HASHES) {
+    const oldest = progressLogLineHashOrder.shift();
+    if (oldest) {
+      progressLogLineHashes.delete(oldest);
+    }
+  }
+  return true;
+}
+
+async function readProgressLogDeltaLines(): Promise<string[]> {
+  if (!OTTER_PROGRESS_LOG_PATH) {
+    return [];
+  }
+
+  let fileBuffer: Buffer;
+  try {
+    fileBuffer = await fs.promises.readFile(OTTER_PROGRESS_LOG_PATH);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      progressLogOffsetInitialized = true;
+      progressLogByteOffset = 0;
+      return [];
+    }
+    throw err;
+  }
+
+  if (!progressLogOffsetInitialized) {
+    progressLogOffsetInitialized = true;
+    progressLogByteOffset = fileBuffer.length;
+    return [];
+  }
+
+  if (progressLogByteOffset > fileBuffer.length) {
+    progressLogByteOffset = 0;
+  }
+
+  if (progressLogByteOffset === fileBuffer.length) {
+    return [];
+  }
+
+  const delta = fileBuffer.subarray(progressLogByteOffset);
+  progressLogByteOffset = fileBuffer.length;
+
+  const newLines = delta
+    .toString('utf8')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => rememberProgressLogLine(line));
+
+  if (newLines.length <= PROGRESS_LOG_MAX_LINES_PER_SYNC) {
+    return newLines;
+  }
+
+  const trimmedCount = newLines.length - PROGRESS_LOG_MAX_LINES_PER_SYNC;
+  console.warn(
+    `[bridge] progress-log backpressure: dropping ${trimmedCount} old lines, keeping latest ${PROGRESS_LOG_MAX_LINES_PER_SYNC}`,
+  );
+  return newLines.slice(newLines.length - PROGRESS_LOG_MAX_LINES_PER_SYNC);
+}
+
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
-  const [cronJobs, processes] = await Promise.all([fetchCronJobsSnapshot(), fetchProcessesSnapshot()]);
+  const [cronJobs, processes, progressLogLines] = await Promise.all([
+    fetchCronJobsSnapshot(),
+    fetchProcessesSnapshot(),
+    readProgressLogDeltaLines(),
+  ]);
   const payload = {
     type: 'full',
     timestamp: new Date().toISOString(),
     sessions,
+    ...(progressLogLines.length > 0 ? { progress_log_lines: progressLogLines } : {}),
     cron_jobs: cronJobs,
     processes,
     source: 'bridge',
