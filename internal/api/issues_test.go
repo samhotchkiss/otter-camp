@@ -155,6 +155,100 @@ func TestIssuesHandlerListAndGetIncludeOwnerParticipantsAndComments(t *testing.T
 	require.NotEmpty(t, detail.Issue.LastActivityAt)
 }
 
+func TestProjectIssuesHandlerLabelFilter(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-label-filter-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Label Filter API Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	labelStore := store.NewLabelStore(db)
+	ctx := issueTestCtx(orgID)
+
+	issueA, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue Label A",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	issueB, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue Label B",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	issueC, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue Label C",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	labelBug, err := labelStore.Create(ctx, "bug", "#ef4444")
+	require.NoError(t, err)
+	labelBackend, err := labelStore.Create(ctx, "backend", "#22c55e")
+	require.NoError(t, err)
+	labelOps, err := labelStore.Create(ctx, "ops", "#3b82f6")
+	require.NoError(t, err)
+
+	require.NoError(t, labelStore.AddToIssue(ctx, issueA.ID, labelBug.ID))
+	require.NoError(t, labelStore.AddToIssue(ctx, issueA.ID, labelBackend.ID))
+	require.NoError(t, labelStore.AddToIssue(ctx, issueB.ID, labelBug.ID))
+	require.NoError(t, labelStore.AddToIssue(ctx, issueC.ID, labelOps.ID))
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/issues?org_id="+orgID+"&project_id="+projectID, nil)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+
+	var listResp issueListResponse
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	require.Len(t, listResp.Items, 3)
+	labelsByIssue := make(map[string]int, len(listResp.Items))
+	for _, item := range listResp.Items {
+		labelsByIssue[item.ID] = len(item.Labels)
+	}
+	require.Equal(t, 2, labelsByIssue[issueA.ID])
+	require.Equal(t, 1, labelsByIssue[issueB.ID])
+	require.Equal(t, 1, labelsByIssue[issueC.ID])
+
+	filterReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/issues?org_id="+orgID+"&project_id="+projectID+"&label="+labelBug.ID+"&label="+labelBackend.ID,
+		nil,
+	)
+	filterRec := httptest.NewRecorder()
+	router.ServeHTTP(filterRec, filterReq)
+	require.Equal(t, http.StatusOK, filterRec.Code)
+
+	var filterResp issueListResponse
+	require.NoError(t, json.NewDecoder(filterRec.Body).Decode(&filterResp))
+	require.Len(t, filterResp.Items, 1)
+	require.Equal(t, issueA.ID, filterResp.Items[0].ID)
+	require.Len(t, filterResp.Items[0].Labels, 2)
+
+	invalidReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/issues?org_id="+orgID+"&project_id="+projectID+"&label=not-a-uuid",
+		nil,
+	)
+	invalidRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidRec, invalidReq)
+	require.Equal(t, http.StatusBadRequest, invalidRec.Code)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/issues/"+issueA.ID+"?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	var detail issueDetailPayload
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&detail))
+	require.Equal(t, issueA.ID, detail.Issue.ID)
+	require.Len(t, detail.Issue.Labels, 2)
+}
+
 func TestIssuesHandlerCommentCreateValidatesAndPersists(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-comment-org")

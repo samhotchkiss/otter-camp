@@ -33,31 +33,32 @@ type IssuesHandler struct {
 }
 
 type issueSummaryPayload struct {
-	ID                       string  `json:"id"`
-	ProjectID                string  `json:"project_id"`
-	IssueNumber              int64   `json:"issue_number"`
-	Title                    string  `json:"title"`
-	Body                     *string `json:"body,omitempty"`
-	State                    string  `json:"state"`
-	Origin                   string  `json:"origin"`
-	DocumentPath             *string `json:"document_path,omitempty"`
-	DocumentContent          *string `json:"document_content,omitempty"`
-	ApprovalState            string  `json:"approval_state"`
-	Kind                     string  `json:"kind"`
-	OwnerAgentID             *string `json:"owner_agent_id,omitempty"`
-	ParentIssueID            *string `json:"parent_issue_id,omitempty"`
-	WorkStatus               string  `json:"work_status"`
-	Priority                 string  `json:"priority"`
-	ActiveBranch             *string `json:"active_branch,omitempty"`
-	LastCommitSHA            *string `json:"last_commit_sha,omitempty"`
-	DueAt                    *string `json:"due_at,omitempty"`
-	NextStep                 *string `json:"next_step,omitempty"`
-	NextStepDueAt            *string `json:"next_step_due_at,omitempty"`
-	LastActivityAt           string  `json:"last_activity_at"`
-	GitHubNumber             *int64  `json:"github_number,omitempty"`
-	GitHubURL                *string `json:"github_url,omitempty"`
-	GitHubState              *string `json:"github_state,omitempty"`
-	GitHubRepositoryFullName *string `json:"github_repository_full_name,omitempty"`
+	ID                       string        `json:"id"`
+	ProjectID                string        `json:"project_id"`
+	IssueNumber              int64         `json:"issue_number"`
+	Title                    string        `json:"title"`
+	Body                     *string       `json:"body,omitempty"`
+	State                    string        `json:"state"`
+	Origin                   string        `json:"origin"`
+	DocumentPath             *string       `json:"document_path,omitempty"`
+	DocumentContent          *string       `json:"document_content,omitempty"`
+	ApprovalState            string        `json:"approval_state"`
+	Kind                     string        `json:"kind"`
+	OwnerAgentID             *string       `json:"owner_agent_id,omitempty"`
+	ParentIssueID            *string       `json:"parent_issue_id,omitempty"`
+	WorkStatus               string        `json:"work_status"`
+	Priority                 string        `json:"priority"`
+	Labels                   []store.Label `json:"labels"`
+	ActiveBranch             *string       `json:"active_branch,omitempty"`
+	LastCommitSHA            *string       `json:"last_commit_sha,omitempty"`
+	DueAt                    *string       `json:"due_at,omitempty"`
+	NextStep                 *string       `json:"next_step,omitempty"`
+	NextStepDueAt            *string       `json:"next_step_due_at,omitempty"`
+	LastActivityAt           string        `json:"last_activity_at"`
+	GitHubNumber             *int64        `json:"github_number,omitempty"`
+	GitHubURL                *string       `json:"github_url,omitempty"`
+	GitHubState              *string       `json:"github_state,omitempty"`
+	GitHubRepositoryFullName *string       `json:"github_repository_full_name,omitempty"`
 }
 
 type issueParticipantPayload struct {
@@ -232,6 +233,11 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("priority")); raw != "" {
 		priority = &raw
 	}
+	labelFilterIDs, err := parseIssueLabelFilterIDs(r.URL.Query()["label"])
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
 
 	limit := 100
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
@@ -252,6 +258,7 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 		OwnerAgentID:  ownerAgentID,
 		WorkStatus:    workStatus,
 		Priority:      priority,
+		LabelIDs:      labelFilterIDs,
 		Limit:         limit,
 	})
 	if err != nil {
@@ -1324,6 +1331,10 @@ func toIssueSummaryPayload(
 	participants []store.ProjectIssueParticipant,
 	link *store.ProjectIssueGitHubLink,
 ) issueSummaryPayload {
+	labels := issue.Labels
+	if labels == nil {
+		labels = []store.Label{}
+	}
 	payload := issueSummaryPayload{
 		ID:             issue.ID,
 		ProjectID:      issue.ProjectID,
@@ -1339,6 +1350,7 @@ func toIssueSummaryPayload(
 		ParentIssueID:  issue.ParentIssueID,
 		WorkStatus:     issue.WorkStatus,
 		Priority:       issue.Priority,
+		Labels:         labels,
 		ActiveBranch:   issue.ActiveBranch,
 		LastCommitSHA:  issue.LastCommitSHA,
 		NextStep:       issue.NextStep,
@@ -1373,6 +1385,29 @@ func inferIssueKind(link *store.ProjectIssueGitHubLink) string {
 		}
 	}
 	return "issue"
+}
+
+func parseIssueLabelFilterIDs(rawValues []string) ([]string, error) {
+	if len(rawValues) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(rawValues))
+	labelIDs := make([]string, 0, len(rawValues))
+	for _, raw := range rawValues {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if !uuidRegex.MatchString(trimmed) {
+			return nil, fmt.Errorf("invalid label filter")
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		labelIDs = append(labelIDs, trimmed)
+	}
+	return labelIDs, nil
 }
 
 func findIssueLink(
