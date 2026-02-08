@@ -422,4 +422,42 @@ describe("GitHubSettings", () => {
       expect(screen.getAllByText(/published/).length).toBeGreaterThan(0);
     });
   });
+
+  it("suppresses invalid-session auth errors and shows clean disconnected state", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/github/integration/status")) {
+        return new Response(JSON.stringify({ error: "invalid session token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/github/integration/repos")) {
+        return new Response(JSON.stringify({ error: "invalid session token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/github/integration/settings")) {
+        return new Response(JSON.stringify({ error: "invalid session token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "unexpected endpoint" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    render(<GitHubSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Not connected")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/invalid session token/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Disconnected")).toBeInTheDocument();
+  });
 });
