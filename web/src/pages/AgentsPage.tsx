@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import AgentCard, { type AgentCardData, formatLastActive } from "../components/AgentCard";
+import AddAgentModal from "../components/agents/AddAgentModal";
 import { type AgentStatus } from "../components/AgentDM";
 import { useWS } from "../contexts/WebSocketContext";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
@@ -18,6 +19,18 @@ type StatusFilter = AgentStatus | "all";
 export type AgentsPageProps = {
   apiEndpoint?: string;
 };
+
+type AdminRosterAgent = {
+  id: string;
+  name: string;
+  status: AgentStatus;
+  model?: string;
+  heartbeatEvery?: string;
+  channel?: string;
+  lastSeen?: string;
+};
+
+type RosterSort = "name" | "status" | "model" | "last_seen";
 
 // Status filter styles - memoized outside component
 // Using gold/amber for active states per DESIGN-SPEC.md
@@ -241,6 +254,10 @@ function AgentsPageComponent({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [rosterAgents, setRosterAgents] = useState<AdminRosterAgent[]>([]);
+  const [rosterSort, setRosterSort] = useState<RosterSort>("name");
+  const [rosterSortAsc, setRosterSortAsc] = useState(true);
+  const [isAddAgentModalOpen, setIsAddAgentModalOpen] = useState(false);
   const [columns, setColumns] = useState(GRID_COLUMNS.lg);
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -312,6 +329,28 @@ function AgentsPageComponent({
     };
   };
 
+  const fetchAdminRoster = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/admin/agents`);
+      if (!response.ok) {
+        throw new Error("Failed to fetch admin roster");
+      }
+      const payload = (await response.json()) as { agents?: Array<Record<string, unknown>> };
+      const next = (payload.agents || []).map((agent) => ({
+        id: String(agent.id || "").trim(),
+        name: String(agent.name || agent.id || "unknown").trim(),
+        status: normalizeAgentStatus(agent.status) || "offline",
+        model: typeof agent.model === "string" ? agent.model : undefined,
+        heartbeatEvery: typeof agent.heartbeat_every === "string" ? agent.heartbeat_every : undefined,
+        channel: typeof agent.channel === "string" ? agent.channel : undefined,
+        lastSeen: typeof agent.last_seen === "string" ? agent.last_seen : undefined,
+      }));
+      setRosterAgents(next);
+    } catch {
+      setRosterAgents([]);
+    }
+  }, []);
+
   // Fetch agents from API
   const fetchAgents = useCallback(async () => {
     try {
@@ -327,6 +366,16 @@ function AgentsPageComponent({
     }
   }, [apiEndpoint]);
 
+  const refreshData = useCallback(async () => {
+    try {
+      const fetchedAgents = await fetchAgents();
+      setAgents(fetchedAgents);
+    } catch {
+      // Keep current grid data if refresh fails.
+    }
+    await fetchAdminRoster();
+  }, [fetchAgents, fetchAdminRoster]);
+
   // Initial fetch
   useEffect(() => {
     const loadAgents = async () => {
@@ -334,6 +383,7 @@ function AgentsPageComponent({
       try {
         const fetchedAgents = await fetchAgents();
         setAgents(fetchedAgents);
+        await fetchAdminRoster();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load agents");
       } finally {
@@ -342,7 +392,7 @@ function AgentsPageComponent({
     };
 
     loadAgents();
-  }, [fetchAgents]);
+  }, [fetchAgents, fetchAdminRoster]);
 
   // Handle WebSocket messages for real-time status updates
   useEffect(() => {
@@ -467,6 +517,42 @@ function AgentsPageComponent({
     return agentsWithLastAction.filter((agent) => agent.status === statusFilter);
   }, [agentsWithLastAction, statusFilter]);
 
+  const filteredRoster = useMemo(() => {
+    if (statusFilter === "all") {
+      return rosterAgents;
+    }
+    return rosterAgents.filter((agent) => agent.status === statusFilter);
+  }, [rosterAgents, statusFilter]);
+
+  const sortedRoster = useMemo(() => {
+    const items = [...filteredRoster];
+    items.sort((left, right) => {
+      let leftValue = "";
+      let rightValue = "";
+      switch (rosterSort) {
+        case "status":
+          leftValue = left.status;
+          rightValue = right.status;
+          break;
+        case "model":
+          leftValue = left.model || "";
+          rightValue = right.model || "";
+          break;
+        case "last_seen":
+          leftValue = left.lastSeen || "";
+          rightValue = right.lastSeen || "";
+          break;
+        default:
+          leftValue = left.name;
+          rightValue = right.name;
+          break;
+      }
+      const comparison = leftValue.localeCompare(rightValue);
+      return rosterSortAsc ? comparison : -comparison;
+    });
+    return items;
+  }, [filteredRoster, rosterSort, rosterSortAsc]);
+
   // Calculate rows for virtualization
   const rowCount = useMemo(() => 
     Math.ceil(filteredAgents.length / columns), 
@@ -503,6 +589,17 @@ function AgentsPageComponent({
   const handleFilterOnline = useCallback(() => setStatusFilter("online"), []);
   const handleFilterBusy = useCallback(() => setStatusFilter("busy"), []);
   const handleFilterOffline = useCallback(() => setStatusFilter("offline"), []);
+
+  const toggleRosterSort = useCallback((nextSort: RosterSort) => {
+    setRosterSort((previous) => {
+      if (previous === nextSort) {
+        setRosterSortAsc((current) => !current);
+        return previous;
+      }
+      setRosterSortAsc(true);
+      return nextSort;
+    });
+  }, []);
 
   if (isLoading) {
     return (
@@ -544,20 +641,28 @@ function AgentsPageComponent({
             </p>
           </div>
 
-          {/* Connection status */}
-          <div
-            className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${
-              connected
-                ? "bg-[#C9A86C]/20 text-[#C9A86C]"
-                : "bg-red-500/20 text-red-400"
-            }`}
-          >
-            <span
-              className={`h-2 w-2 rounded-full ${
-                connected ? "bg-[#C9A86C] animate-pulse" : "bg-red-500"
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsAddAgentModalOpen(true)}
+              className="rounded-lg border border-[#C9A86C]/60 bg-[#C9A86C]/20 px-3 py-1.5 text-xs font-medium text-[#C9A86C]"
+            >
+              Add Agent
+            </button>
+            <div
+              className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${
+                connected
+                  ? "bg-[#C9A86C]/20 text-[#C9A86C]"
+                  : "bg-red-500/20 text-red-400"
               }`}
-            />
-            {connected ? "Live" : "Disconnected"}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  connected ? "bg-[#C9A86C] animate-pulse" : "bg-red-500"
+                }`}
+              />
+              {connected ? "Live" : "Disconnected"}
+            </div>
           </div>
         </div>
 
@@ -593,6 +698,81 @@ function AgentsPageComponent({
           />
         </div>
       </div>
+
+      <section className="mb-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)]/60 p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-medium text-[var(--text)]">Management Roster</h2>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <button
+              type="button"
+              onClick={() => toggleRosterSort("name")}
+              className="rounded border border-[var(--border)] px-2 py-1 text-[var(--text-muted)]"
+            >
+              Name
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleRosterSort("status")}
+              className="rounded border border-[var(--border)] px-2 py-1 text-[var(--text-muted)]"
+            >
+              Status
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleRosterSort("model")}
+              className="rounded border border-[var(--border)] px-2 py-1 text-[var(--text-muted)]"
+            >
+              Model
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleRosterSort("last_seen")}
+              className="rounded border border-[var(--border)] px-2 py-1 text-[var(--text-muted)]"
+            >
+              Last Active
+            </button>
+          </div>
+        </div>
+
+        {sortedRoster.length === 0 ? (
+          <p className="text-sm text-[var(--text-muted)]">No roster entries available yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-[var(--border)] text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
+                  <th className="px-2 py-2">Name</th>
+                  <th className="px-2 py-2">Slot</th>
+                  <th className="px-2 py-2">Status</th>
+                  <th className="px-2 py-2">Model</th>
+                  <th className="px-2 py-2">Tokens</th>
+                  <th className="px-2 py-2">Last Active</th>
+                  <th className="px-2 py-2">Heartbeat</th>
+                  <th className="px-2 py-2">Channels</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border)]">
+                {sortedRoster.map((agent) => (
+                  <tr key={agent.id} data-testid={`roster-row-${agent.id}`} className="text-[var(--text)]">
+                    <td className="px-2 py-2 font-medium">
+                      <a href={`/agents/${encodeURIComponent(agent.id)}`} className="hover:underline">
+                        {agent.name}
+                      </a>
+                    </td>
+                    <td className="px-2 py-2">{agent.id}</td>
+                    <td className="px-2 py-2">{agent.status}</td>
+                    <td className="px-2 py-2">{agent.model || "n/a"}</td>
+                    <td className="px-2 py-2">—</td>
+                    <td className="px-2 py-2">{agent.lastSeen || "n/a"}</td>
+                    <td className="px-2 py-2">{agent.heartbeatEvery || "n/a"}</td>
+                    <td className="px-2 py-2">{agent.channel || "n/a"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {/* Agent grid with virtual scrolling */}
       {filteredAgents.length === 0 ? (
@@ -646,6 +826,14 @@ function AgentsPageComponent({
           </div>
         </div>
       )}
+
+      <AddAgentModal
+        isOpen={isAddAgentModalOpen}
+        onClose={() => setIsAddAgentModalOpen(false)}
+        onCreated={() => {
+          void refreshData();
+        }}
+      />
     </div>
   );
 }

@@ -84,6 +84,9 @@ describe("AgentsPage", () => {
           { status: 200 },
         );
       }
+      if (url.includes("/api/admin/agents")) {
+        return new Response(JSON.stringify({ agents: [] }), { status: 200 });
+      }
 
       throw new Error(`unexpected url: ${url}`);
     });
@@ -115,6 +118,9 @@ describe("AgentsPage", () => {
       if (url.includes("/api/activity/recent")) {
         return new Response(JSON.stringify({ error: "boom" }), { status: 500 });
       }
+      if (url.includes("/api/admin/agents")) {
+        return new Response(JSON.stringify({ agents: [] }), { status: 200 });
+      }
 
       throw new Error(`unexpected url: ${url}`);
     });
@@ -126,6 +132,65 @@ describe("AgentsPage", () => {
     expect(await screen.findByText("Frank")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText(/^Idle/)).toBeInTheDocument();
+    });
+  });
+
+  it("renders management roster and supports add-agent modal flow", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes("/api/admin/agents") && (init?.method || "GET") === "POST") {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.includes("/api/admin/agents")) {
+        return new Response(
+          JSON.stringify({
+            agents: [
+              {
+                id: "main",
+                name: "Frank",
+                status: "online",
+                model: "gpt-5.2-codex",
+                heartbeat_every: "15m",
+                channel: "slack:#engineering",
+                last_seen: "just now",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/sync/agents")) {
+        return new Response(
+          JSON.stringify({ agents: [{ id: "main", name: "Frank", status: "online" }] }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/activity/recent")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+
+      throw new Error(`unexpected url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<AgentsPage apiEndpoint="https://api.otter.camp/api/sync/agents" />);
+
+    expect(await screen.findByTestId("roster-row-main")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Agent" }));
+    expect(screen.getByRole("dialog", { name: "Add Agent" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Slot"), { target: { value: "research" } });
+    fireEvent.change(screen.getByLabelText("Display Name"), { target: { value: "Riley" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Agent" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([request, requestInit]) => {
+          return String(request).includes("/api/admin/agents") && requestInit?.method === "POST";
+        }),
+      ).toBe(true);
     });
   });
 });

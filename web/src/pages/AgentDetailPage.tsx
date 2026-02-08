@@ -51,6 +51,8 @@ export default function AgentDetailPage() {
   const [agentDetail, setAgentDetail] = useState<AgentDetailPayload | null>(null);
   const [detailLoading, setDetailLoading] = useState(true);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [isLifecyclePending, setIsLifecyclePending] = useState(false);
+  const [lifecycleMessage, setLifecycleMessage] = useState<string | null>(null);
 
   const {
     events,
@@ -133,6 +135,7 @@ export default function AgentDetailPage() {
   const overviewTask = agentDetail?.sync?.current_task?.trim() || "n/a";
   const overviewContextTokens = agentDetail?.sync?.context_tokens ?? 0;
   const overviewTotalTokens = agentDetail?.sync?.total_tokens ?? 0;
+  const isRetired = overviewStatus.toLowerCase() === "retired";
 
   if (!id) {
     return (
@@ -318,20 +321,77 @@ export default function AgentDetailPage() {
           ) : detailError ? (
             <p className="text-sm text-rose-400">{detailError}</p>
           ) : (
-            <dl className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-4">
+              <dl className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-3">
+                  <dt className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Model</dt>
+                  <dd className="mt-1 text-sm font-medium text-[var(--text)]">{overviewModel}</dd>
+                </div>
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-3">
+                  <dt className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Heartbeat</dt>
+                  <dd className="mt-1 text-sm font-medium text-[var(--text)]">{overviewHeartbeat}</dd>
+                </div>
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-3 sm:col-span-2">
+                  <dt className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Channel Binding</dt>
+                  <dd className="mt-1 text-sm font-medium text-[var(--text)]">{overviewChannel}</dd>
+                </div>
+              </dl>
+
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-3">
-                <dt className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Model</dt>
-                <dd className="mt-1 text-sm font-medium text-[var(--text)]">{overviewModel}</dd>
+                <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Lifecycle</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isLifecyclePending}
+                    onClick={async () => {
+                      const action = isRetired ? "reactivate" : "retire";
+                      const label = isRetired ? "Reactivate Agent" : "Retire Agent";
+                      const confirmed = window.confirm(
+                        isRetired
+                          ? `Reactivate ${agentDetail?.agent?.name || id}?`
+                          : `Retire ${agentDetail?.agent?.name || id}? This can be undone.`,
+                      );
+                      if (!confirmed) {
+                        return;
+                      }
+
+                      setIsLifecyclePending(true);
+                      setLifecycleMessage(null);
+                      try {
+                        const response = await fetch(
+                          `${API_URL}/api/admin/agents/${encodeURIComponent(id)}/${action}`,
+                          { method: "POST" },
+                        );
+                        if (!response.ok) {
+                          const payload = (await response.json().catch(() => ({}))) as { error?: string };
+                          throw new Error(payload.error || `Failed to ${action} agent (${response.status})`);
+                        }
+                        setLifecycleMessage(`${label} request sent.`);
+                        await loadAgentDetail();
+                      } catch (lifecycleError) {
+                        const message =
+                          lifecycleError instanceof Error
+                            ? lifecycleError.message
+                            : "Failed to update lifecycle status";
+                        setLifecycleMessage(message);
+                      } finally {
+                        setIsLifecyclePending(false);
+                      }
+                    }}
+                    className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+                      isRetired
+                        ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
+                        : "border-amber-500/50 bg-amber-500/10 text-amber-300"
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    {isLifecyclePending ? "Applying..." : isRetired ? "Reactivate Agent" : "Retire Agent"}
+                  </button>
+                </div>
+                {lifecycleMessage && (
+                  <p className="mt-2 text-sm text-[var(--text-muted)]">{lifecycleMessage}</p>
+                )}
               </div>
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-3">
-                <dt className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Heartbeat</dt>
-                <dd className="mt-1 text-sm font-medium text-[var(--text)]">{overviewHeartbeat}</dd>
-              </div>
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-3 sm:col-span-2">
-                <dt className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Channel Binding</dt>
-                <dd className="mt-1 text-sm font-medium text-[var(--text)]">{overviewChannel}</dd>
-              </div>
-            </dl>
+            </div>
           )}
         </section>
       )}

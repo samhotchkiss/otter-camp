@@ -221,4 +221,56 @@ describe("AgentDetailPage", () => {
       expect(textarea.value).toContain("Noted updates");
     });
   });
+
+  it("triggers retire action from settings tab", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/admin/agents/main/retire")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.includes("/api/admin/agents/main") && !url.includes("/files") && !url.includes("/memory")) {
+        return new Response(
+          JSON.stringify({
+            agent: {
+              id: "main",
+              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
+              name: "Frank",
+              status: "online",
+              model: "gpt-5.2-codex",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/agents/main/activity")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(
+      <MemoryRouter initialEntries={["/agents/main"]}>
+        <Routes>
+          <Route path="/agents/:id" element={<AgentDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Agent Details" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retire Agent" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([request, init]) => {
+          return String(request).includes("/api/admin/agents/main/retire") && init?.method === "POST";
+        }),
+      ).toBe(true);
+    });
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(await screen.findByText("Retire Agent request sent.")).toBeInTheDocument();
+  });
 });
