@@ -54,6 +54,64 @@ func TestResolveIssueIDUUIDBypassesLookup(t *testing.T) {
 	}
 }
 
+func TestResolveOptionalParentIssueID(t *testing.T) {
+	t.Run("empty parent reference", func(t *testing.T) {
+		parentID, err := resolveOptionalParentIssueID(nil, "", "")
+		if err != nil {
+			t.Fatalf("resolveOptionalParentIssueID() error = %v", err)
+		}
+		if parentID != nil {
+			t.Fatalf("resolveOptionalParentIssueID() = %v, want nil", *parentID)
+		}
+	})
+
+	t.Run("numeric parent requires project", func(t *testing.T) {
+		client := &ottercli.Client{}
+		_, err := resolveOptionalParentIssueID(client, "", "42")
+		if err == nil {
+			t.Fatalf("expected error for numeric parent without project")
+		}
+		if !strings.Contains(err.Error(), "--project is required") {
+			t.Fatalf("error = %q, want contains --project is required", err.Error())
+		}
+	})
+
+	t.Run("numeric parent resolves via issue lookup", func(t *testing.T) {
+		var requestedIssueNumber string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/projects":
+				_, _ = w.Write([]byte(`{"projects":[{"id":"project-1","name":"Project 1","status":"active"}],"total":1}`))
+			case r.Method == http.MethodGet && r.URL.Path == "/api/issues":
+				requestedIssueNumber = r.URL.Query().Get("issue_number")
+				_, _ = w.Write([]byte(`{"items":[{"id":"issue-42","project_id":"project-1","issue_number":42,"title":"Issue 42","state":"open","origin":"local","approval_state":"draft","work_status":"queued","priority":"P2"}],"total":1}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"not found"}`))
+			}
+		}))
+		defer server.Close()
+
+		client := &ottercli.Client{
+			BaseURL: server.URL,
+			Token:   "token-1",
+			OrgID:   "org-1",
+			HTTP:    server.Client(),
+		}
+
+		parentID, err := resolveOptionalParentIssueID(client, "project-1", "42")
+		if err != nil {
+			t.Fatalf("resolveOptionalParentIssueID() error = %v", err)
+		}
+		if parentID == nil || *parentID != "issue-42" {
+			t.Fatalf("resolveOptionalParentIssueID() = %#v, want issue-42", parentID)
+		}
+		if requestedIssueNumber != "42" {
+			t.Fatalf("issue_number query = %q, want 42", requestedIssueNumber)
+		}
+	})
+}
+
 func TestFriendlyAuthErrorMessage(t *testing.T) {
 	tests := []struct {
 		name  string

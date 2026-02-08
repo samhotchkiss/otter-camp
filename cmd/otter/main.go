@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/samhotchkiss/otter-camp/internal/ottercli"
@@ -545,6 +546,7 @@ func handleIssue(args []string) {
 		flags := flag.NewFlagSet("issue create", flag.ExitOnError)
 		projectRef := flags.String("project", "", "project name or id (required)")
 		body := flags.String("body", "", "issue body")
+		parent := flags.String("parent", "", "parent issue id or number")
 		assign := flags.String("assign", "", "owner agent id/name/slug")
 		priority := flags.String("priority", "", "priority (P0-P3)")
 		workStatus := flags.String("work-status", "", "work status")
@@ -582,6 +584,15 @@ func handleIssue(args []string) {
 			dieIf(err)
 			payload["owner_agent_id"] = agent.ID
 		}
+		parentIssueID, err := resolveOptionalParentIssueID(
+			client,
+			strings.TrimSpace(*projectRef),
+			strings.TrimSpace(*parent),
+		)
+		dieIf(err)
+		if parentIssueID != nil {
+			payload["parent_issue_id"] = *parentIssueID
+		}
 
 		issue, err := client.CreateIssue(project.ID, payload)
 		dieIf(err)
@@ -594,6 +605,9 @@ func handleIssue(args []string) {
 		fmt.Printf("Project: %s\n", project.Name)
 		if issue.OwnerAgentID != nil {
 			fmt.Printf("Owner: %s\n", resolveAgentName(client, *issue.OwnerAgentID))
+		}
+		if issue.ParentIssueID != nil {
+			fmt.Printf("Parent: %s\n", *issue.ParentIssueID)
 		}
 		fmt.Printf("Status: %s / %s\n", issue.State, issue.WorkStatus)
 		fmt.Printf("Priority: %s\n", issue.Priority)
@@ -873,6 +887,21 @@ func resolveIssueCommentAuthorRef(client *ottercli.Client, explicitAuthorRef, en
 	return agent.ID, nil
 }
 
+func resolveOptionalParentIssueID(client *ottercli.Client, projectRef, parentRef string) (*string, error) {
+	parentRef = strings.TrimSpace(parentRef)
+	if parentRef == "" {
+		return nil, nil
+	}
+	if client == nil {
+		return nil, errors.New("client is required when --parent is set")
+	}
+	parentIssueID, err := resolveIssueID(client, projectRef, parentRef)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --parent reference: %w", err)
+	}
+	return &parentIssueID, nil
+}
+
 func resolveIssueID(client *ottercli.Client, projectRef, issueRef string) (string, error) {
 	issueRef = strings.TrimSpace(issueRef)
 	if issueRef == "" {
@@ -895,7 +924,10 @@ func resolveIssueID(client *ottercli.Client, projectRef, issueRef string) (strin
 	if err != nil {
 		return "", err
 	}
-	issues, err := client.ListIssues(project.ID, map[string]string{})
+	issues, err := client.ListIssues(project.ID, map[string]string{
+		"issue_number": strconv.Itoa(issueNumber),
+		"limit":        "1",
+	})
 	if err != nil {
 		return "", err
 	}

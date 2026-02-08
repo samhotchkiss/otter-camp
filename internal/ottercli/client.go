@@ -111,6 +111,7 @@ type agentListResponse struct {
 type Issue struct {
 	ID            string  `json:"id"`
 	ProjectID     string  `json:"project_id"`
+	ParentIssueID *string `json:"parent_issue_id,omitempty"`
 	IssueNumber   int64   `json:"issue_number"`
 	Title         string  `json:"title"`
 	Body          *string `json:"body,omitempty"`

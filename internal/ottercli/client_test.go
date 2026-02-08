@@ -51,7 +51,7 @@ func TestClientIssueMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/projects/project-123/issues":
-			_, _ = w.Write([]byte(`{"id":"issue-1","project_id":"project-123","issue_number":12,"title":"Test issue","state":"open","origin":"local","approval_state":"draft","work_status":"queued","priority":"P2"}`))
+			_, _ = w.Write([]byte(`{"id":"issue-1","project_id":"project-123","parent_issue_id":"issue-parent-1","issue_number":12,"title":"Test issue","state":"open","origin":"local","approval_state":"draft","work_status":"queued","priority":"P2"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/issues":
 			_, _ = w.Write([]byte(`{"items":[{"id":"issue-1","project_id":"project-123","issue_number":12,"title":"Test issue","state":"open","origin":"local","approval_state":"draft","work_status":"queued","priority":"P2"}],"total":1}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/issues/issue-1":
@@ -75,8 +75,9 @@ func TestClientIssueMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 	}
 
 	issue, err := client.CreateIssue("project-123", map[string]any{
-		"title":    "Test issue",
-		"priority": "P2",
+		"title":           "Test issue",
+		"priority":        "P2",
+		"parent_issue_id": "issue-parent-1",
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -84,11 +85,17 @@ func TestClientIssueMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 	if issue.ID != "issue-1" {
 		t.Fatalf("CreateIssue() id = %q, want issue-1", issue.ID)
 	}
+	if issue.ParentIssueID == nil || *issue.ParentIssueID != "issue-parent-1" {
+		t.Fatalf("CreateIssue() parent_issue_id = %#v, want issue-parent-1", issue.ParentIssueID)
+	}
 	if gotMethod != http.MethodPost || gotPath != "/api/projects/project-123/issues" {
 		t.Fatalf("CreateIssue request = %s %s", gotMethod, gotPath)
 	}
 	if gotBody["title"] != "Test issue" {
 		t.Fatalf("CreateIssue payload title = %v", gotBody["title"])
+	}
+	if gotBody["parent_issue_id"] != "issue-parent-1" {
+		t.Fatalf("CreateIssue payload parent_issue_id = %v", gotBody["parent_issue_id"])
 	}
 
 	issues, err := client.ListIssues("project-123", map[string]string{"work_status": "queued"})
