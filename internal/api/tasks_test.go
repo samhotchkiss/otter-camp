@@ -2,12 +2,14 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -177,12 +179,12 @@ func TestParseOptionalStringField(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		raw      map[string]json.RawMessage
-		key      string
-		wantVal  *string
-		wantSet  bool
-		wantErr  bool
+		name    string
+		raw     map[string]json.RawMessage
+		key     string
+		wantVal *string
+		wantSet bool
+		wantErr bool
 	}{
 		{
 			name:    "key not present",
@@ -415,6 +417,82 @@ func TestTaskHandler_ListTasks_InvalidAgentID(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&resp)
 	require.NoError(t, err)
 	assert.Equal(t, "invalid agent", resp.Error)
+}
+
+func TestTaskHandler_GetProjectTaskDetail_MissingOrgID(t *testing.T) {
+	t.Parallel()
+
+	handler := &TaskHandler{}
+	projectID := "550e8400-e29b-41d4-a716-446655440010"
+	taskID := "550e8400-e29b-41d4-a716-446655440011"
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/tasks/"+taskID, nil)
+	req = addProjectTaskRouteParams(req, projectID, taskID)
+	rec := httptest.NewRecorder()
+
+	handler.GetProjectTaskDetail(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp errorResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+	assert.Equal(t, "missing query parameter: org_id", resp.Error)
+}
+
+func TestTaskHandler_GetProjectTaskDetail_InvalidOrgID(t *testing.T) {
+	t.Parallel()
+
+	handler := &TaskHandler{}
+	projectID := "550e8400-e29b-41d4-a716-446655440010"
+	taskID := "550e8400-e29b-41d4-a716-446655440011"
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/tasks/"+taskID+"?org_id=not-a-uuid", nil)
+	req = addProjectTaskRouteParams(req, projectID, taskID)
+	rec := httptest.NewRecorder()
+
+	handler.GetProjectTaskDetail(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp errorResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+	assert.Equal(t, "invalid org_id", resp.Error)
+}
+
+func TestTaskHandler_GetProjectTaskDetail_InvalidProjectID(t *testing.T) {
+	t.Parallel()
+
+	handler := &TaskHandler{}
+	taskID := "550e8400-e29b-41d4-a716-446655440011"
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/not-a-uuid/tasks/"+taskID+"?org_id="+orgID, nil)
+	req = addProjectTaskRouteParams(req, "not-a-uuid", taskID)
+	rec := httptest.NewRecorder()
+
+	handler.GetProjectTaskDetail(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp errorResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+	assert.Equal(t, "invalid project id", resp.Error)
+}
+
+func TestTaskHandler_GetProjectTaskDetail_InvalidTaskID(t *testing.T) {
+	t.Parallel()
+
+	handler := &TaskHandler{}
+	projectID := "550e8400-e29b-41d4-a716-446655440010"
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/tasks/not-a-uuid?org_id="+orgID, nil)
+	req = addProjectTaskRouteParams(req, projectID, "not-a-uuid")
+	rec := httptest.NewRecorder()
+
+	handler.GetProjectTaskDetail(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp errorResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+	assert.Equal(t, "invalid task id", resp.Error)
 }
 
 func TestTaskHandler_CreateTask_InvalidJSON(t *testing.T) {
@@ -667,6 +745,18 @@ func TestTaskStatusRequest_JSONParsing(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "in_progress", req.Status)
+}
+
+func addProjectTaskRouteParams(req *http.Request, projectID, taskID string) *http.Request {
+	routeCtx := chi.NewRouteContext()
+	if projectID != "" {
+		routeCtx.URLParams.Add("id", projectID)
+	}
+	if taskID != "" {
+		routeCtx.URLParams.Add("taskId", taskID)
+	}
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx)
+	return req.WithContext(ctx)
 }
 
 // Helper function moved to test_helpers_test.go or feed_push_test.go

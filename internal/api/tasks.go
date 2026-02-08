@@ -13,14 +13,23 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 const taskSelectColumns = "id, org_id, project_id, number, title, description, status, priority, context, assigned_agent_id, parent_task_id, created_at, updated_at"
+const taskSelectColumnsWithAlias = "t.id, t.org_id, t.project_id, t.number, t.title, t.description, t.status, t.priority, t.context, t.assigned_agent_id, t.parent_task_id, t.created_at, t.updated_at"
 
 const (
-	getTaskByIDSQL = "SELECT " + taskSelectColumns + " FROM tasks WHERE id = $1"
-	createTaskSQL  = `INSERT INTO tasks (
+	getTaskByIDSQL        = "SELECT " + taskSelectColumns + " FROM tasks WHERE id = $1"
+	getProjectTaskByIDSQL = `SELECT ` + taskSelectColumnsWithAlias + `,
+		COALESCE(p.name, '') AS project_name,
+		COALESCE(a.display_name, '') AS assignee_name
+	FROM tasks t
+	LEFT JOIN projects p ON p.id = t.project_id AND p.org_id = t.org_id
+	LEFT JOIN agents a ON a.id = t.assigned_agent_id AND a.org_id = t.org_id
+	WHERE t.org_id = $1 AND t.project_id = $2 AND t.id = $3`
+	createTaskSQL = `INSERT INTO tasks (
 		org_id,
 		project_id,
 		title,
@@ -100,6 +109,12 @@ type TasksResponse struct {
 	Tasks     []Task  `json:"tasks"`
 }
 
+type ProjectTaskDetailResponse struct {
+	Task
+	ProjectName  string `json:"project_name,omitempty"`
+	AssigneeName string `json:"assignee_name,omitempty"`
+}
+
 type CreateTaskRequest struct {
 	OrgID           string          `json:"org_id"`
 	ProjectID       *string         `json:"project_id,omitempty"`
@@ -110,6 +125,66 @@ type CreateTaskRequest struct {
 	Context         json.RawMessage `json:"context,omitempty"`
 	AssignedAgentID *string         `json:"assigned_agent_id,omitempty"`
 	ParentTaskID    *string         `json:"parent_task_id,omitempty"`
+}
+
+// GetProjectTaskDetail handles GET /api/projects/{id}/tasks/{taskId}
+func (h *TaskHandler) GetProjectTaskDetail(w http.ResponseWriter, r *http.Request) {
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing project id"})
+		return
+	}
+	if !uuidRegex.MatchString(projectID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid project id"})
+		return
+	}
+
+	taskID := strings.TrimSpace(chi.URLParam(r, "taskId"))
+	if taskID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing task id"})
+		return
+	}
+	if !uuidRegex.MatchString(taskID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid task id"})
+		return
+	}
+
+	orgID := strings.TrimSpace(firstNonEmpty(
+		middleware.WorkspaceFromContext(r.Context()),
+		r.URL.Query().Get("org_id"),
+	))
+	if orgID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "missing query parameter: org_id"})
+		return
+	}
+	if !uuidRegex.MatchString(orgID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid org_id"})
+		return
+	}
+
+	db, err := getTasksDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	task, projectName, assigneeName, err := scanProjectTaskDetail(
+		db.QueryRowContext(r.Context(), getProjectTaskByIDSQL, orgID, projectID, taskID),
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "task not found"})
+			return
+		}
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load task"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, ProjectTaskDetailResponse{
+		Task:         task,
+		ProjectName:  projectName,
+		AssigneeName: assigneeName,
+	})
 }
 
 type TaskStatusRequest struct {
@@ -624,6 +699,58 @@ func scanTask(scanner interface{ Scan(...any) error }) (Task, error) {
 	}
 
 	return task, nil
+}
+
+func scanProjectTaskDetail(scanner interface{ Scan(...any) error }) (Task, string, string, error) {
+	var task Task
+	var projectID sql.NullString
+	var description sql.NullString
+	var assignedAgentID sql.NullString
+	var parentTaskID sql.NullString
+	var contextBytes []byte
+	var projectName string
+	var assigneeName string
+
+	err := scanner.Scan(
+		&task.ID,
+		&task.OrgID,
+		&projectID,
+		&task.Number,
+		&task.Title,
+		&description,
+		&task.Status,
+		&task.Priority,
+		&contextBytes,
+		&assignedAgentID,
+		&parentTaskID,
+		&task.CreatedAt,
+		&task.UpdatedAt,
+		&projectName,
+		&assigneeName,
+	)
+	if err != nil {
+		return task, "", "", err
+	}
+
+	if projectID.Valid {
+		task.ProjectID = &projectID.String
+	}
+	if description.Valid {
+		task.Description = &description.String
+	}
+	if assignedAgentID.Valid {
+		task.AssignedAgentID = &assignedAgentID.String
+	}
+	if parentTaskID.Valid {
+		task.ParentTaskID = &parentTaskID.String
+	}
+	if len(contextBytes) == 0 {
+		task.Context = json.RawMessage("{}")
+	} else {
+		task.Context = json.RawMessage(contextBytes)
+	}
+
+	return task, projectName, assigneeName, nil
 }
 
 func validateOptionalUUID(value *string, field string) error {
