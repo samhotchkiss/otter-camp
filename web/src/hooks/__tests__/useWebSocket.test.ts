@@ -382,6 +382,7 @@ describe("useWebSocket", () => {
       "IssueCommentCreated",
       "IssueReviewSaved",
       "IssueReviewAddressed",
+      "EmissionReceived",
     ];
 
     const { result } = renderHook(() => useWebSocket());
