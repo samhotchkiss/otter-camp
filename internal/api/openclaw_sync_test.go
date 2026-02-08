@@ -188,6 +188,53 @@ func TestOpenClawSyncHandlePersistsDiagnosticsMetadata(t *testing.T) {
 	require.Equal(t, 4242, processes[0].PID)
 }
 
+func TestOpenClawSyncEmissionsPayloadIngestsIntoBuffer(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	buffer := NewEmissionBuffer(10)
+	handler := &OpenClawSyncHandler{EmissionBuffer: buffer}
+
+	now := time.Now().UTC()
+	payload := SyncPayload{
+		Type:      "delta",
+		Timestamp: now,
+		Source:    "bridge",
+		Emissions: []Emission{
+			{
+				ID:         "sync-em-1",
+				SourceType: "bridge",
+				SourceID:   "bridge-main",
+				Kind:       "status",
+				Summary:    "Bridge heartbeat",
+				Timestamp:  now,
+			},
+			{
+				ID:         "sync-em-invalid",
+				SourceType: "bridge",
+				SourceID:   "",
+				Kind:       "status",
+				Summary:    "invalid",
+				Timestamp:  now,
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	recent := buffer.Recent(10, EmissionFilter{})
+	require.Len(t, recent, 1)
+	require.Equal(t, "sync-em-1", recent[0].ID)
+	require.Equal(t, "bridge-main", recent[0].SourceID)
+}
+
 func TestOpenClawDispatchQueuePullAndAck(t *testing.T) {
 	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
 	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
