@@ -400,3 +400,47 @@
 - Pushed commit: `620c6af`
 - Remaining:
   - #275 Cron + process controls in Connections
+
+## [2026-02-07 16:59:07 MST] Completed Spec102 issue #275 (cron + process controls)
+- Added sync payload support for operational snapshots in `internal/api/openclaw_sync.go`:
+  - `cron_jobs` (`OpenClawCronJobDiagnostics`)
+  - `processes` (`OpenClawProcessDiagnostics`)
+- Persisted new sync metadata keys:
+  - `openclaw_cron_jobs`
+  - `openclaw_processes`
+- Added backend admin endpoints and routing:
+  - `GET /api/admin/cron/jobs`
+  - `POST /api/admin/cron/jobs/{id}/run`
+  - `PATCH /api/admin/cron/jobs/{id}`
+  - `GET /api/admin/processes`
+  - `POST /api/admin/processes/{id}/kill`
+- Extended admin command envelope and dispatch support with new actions:
+  - `cron.run`, `cron.enable`, `cron.disable`, `process.kill`
+- Extended bridge command handling and best-effort snapshot collection in `bridge/openclaw-bridge.ts`:
+  - Handles cron/process command actions from queued/websocket admin command events
+  - Includes `cron_jobs` and `processes` in sync payloads
+- Updated Connections page UI:
+  - Cron Jobs table with Run + Enable/Disable actions
+  - Active Processes table with Kill action + confirmation
+  - Refresh controls and action-state/error handling integrated with existing logs/diagnostics surface
+- Added tests:
+  - `internal/api/admin_connections_test.go`
+    - `TestAdminConnectionsGetCronJobsReturnsMetadata`
+    - `TestAdminConnectionsRunCronJobDispatchesCommand`
+    - `TestAdminConnectionsToggleCronJobQueuesWhenBridgeOffline`
+    - `TestAdminConnectionsGetProcessesReturnsMetadata`
+    - `TestAdminConnectionsKillProcessDispatchesCommand`
+  - `internal/api/openclaw_sync_test.go`
+    - expanded `TestOpenClawSyncHandlePersistsDiagnosticsMetadata` to assert cron/process metadata persistence
+  - `internal/api/router_test.go`
+    - route registration assertions for all new cron/process endpoints
+  - `web/src/pages/ConnectionsPage.test.tsx`
+    - cron/process sections render and action flow coverage
+- Validation:
+  - `go test ./internal/api -count=1`
+  - `go test ./internal/api -run 'TestAdminConnections(GetCronJobsReturnsMetadata|RunCronJobDispatchesCommand|ToggleCronJobQueuesWhenBridgeOffline|GetProcessesReturnsMetadata|KillProcessDispatchesCommand|RunDiagnosticsReturnsChecks|GetLogsRedactsSensitiveTokens|GetLogsRejectsInvalidLimit|RestartGatewayDispatchesCommand|PingAgentQueuesWhenBridgeOffline|GetEventsReturnsWorkspaceScopedRows)|TestOpenClawSyncHandlePersistsDiagnosticsMetadata|TestProjectsAndInboxRoutesAreRegistered' -count=1`
+  - `cd web && npm test -- src/pages/ConnectionsPage.test.tsx src/router.test.tsx src/layouts/DashboardLayout.test.tsx --run`
+  - `cd web && npm run build:typecheck`
+- Remaining:
+  - Spec102 complete (#270-#275 done)
+  - Spec103 remains blocked by spec banner (NOT READY FOR WORK)

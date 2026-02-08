@@ -21,3 +21,11 @@
   1. Start bridge in continuous mode.
   2. Call `POST /api/admin/gateway/restart` with `org_id`.
   3. Confirm bridge logs command receipt/execution and queue acks.
+
+## [2026-02-07 16:59:07 MST] Spec102 Phase3 bridge test harness note
+- `bridge/openclaw-bridge.ts` now includes cron/process admin command handling and snapshot collection attempts.
+- Repo still has no dedicated TypeScript/unit harness for `bridge/`; bridge behavior is validated via API dispatch tests + manual runtime validation.
+- Action commands intentionally use fallback CLI patterns to tolerate OpenClaw CLI variant drift:
+  - cron run: `cron run --id` then `cron trigger --id`
+  - cron toggle: `cron enable/disable --id` then `cron update --id --enabled ...`
+  - process kill: `process kill --id` then `exec kill --id`
