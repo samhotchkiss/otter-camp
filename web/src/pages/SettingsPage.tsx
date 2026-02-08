@@ -840,13 +840,9 @@ export default function SettingsPage() {
 
     const root = document.documentElement;
     root.classList.remove("dark", "light");
-
-    if (theme === "system") {
-      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      root.classList.toggle("dark", prefersDark);
-    } else {
-      root.classList.toggle("dark", theme === "dark");
-    }
+    const useDarkTheme = theme !== "light";
+    root.classList.toggle("dark", useDarkTheme);
+    root.setAttribute("data-theme", useDarkTheme ? "dark" : "light");
   }, [theme]);
 
   // Save handlers
