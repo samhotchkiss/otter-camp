@@ -32,6 +32,13 @@ const OTTER_PROGRESS_LOG_PATH = (process.env.OTTER_PROGRESS_LOG_PATH || '').trim
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
 const MAX_TRACKED_RUN_IDS = 2000;
 const MAX_TRACKED_PROGRESS_LOG_HASHES = 4000;
+const SYNC_INTERVAL_MS = (() => {
+  const raw = Number.parseInt((process.env.OTTER_SYNC_INTERVAL_MS || '').trim(), 10);
+  if (!Number.isFinite(raw) || raw < 1000) {
+    return 10000;
+  }
+  return raw;
+})();
 const PROGRESS_LOG_MAX_LINES_PER_SYNC = (() => {
   const raw = Number.parseInt((process.env.OTTER_PROGRESS_LOG_MAX_LINES || '').trim(), 10);
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -2006,7 +2013,7 @@ async function runContinuous(): Promise<void> {
     } catch (err) {
       console.error('[bridge] periodic sync failed:', err);
     }
-  }, 30000);
+  }, SYNC_INTERVAL_MS);
 
   setInterval(async () => {
     try {
@@ -2016,7 +2023,9 @@ async function runContinuous(): Promise<void> {
     }
   }, DISPATCH_QUEUE_POLL_INTERVAL_MS);
 
-  console.log('[bridge] running continuously (Ctrl+C to stop)');
+  console.log(
+    `[bridge] running continuously (Ctrl+C to stop, sync interval ${SYNC_INTERVAL_MS}ms)`,
+  );
 }
 
 const mode = normalizeModeArg(process.argv[2]);
