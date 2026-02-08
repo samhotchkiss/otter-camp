@@ -29,6 +29,7 @@ Thumbs.db
 *.log
 npm-debug.log*
 issues/
+scripts/
 
 # Testing
 coverage/
