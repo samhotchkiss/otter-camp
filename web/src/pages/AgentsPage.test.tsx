@@ -55,6 +55,7 @@ describe("AgentsPage", () => {
                 name: "Frank",
                 status: "online",
                 role: "Lead Agent",
+                current_task: "slack:#engineering",
               },
             ],
           }),
@@ -69,8 +70,7 @@ describe("AgentsPage", () => {
               {
                 id: "evt-1",
                 org_id: "org-123",
-                agent_id: "main",
-                session_key: "agent:main:main",
+                agent_id: "Frank",
                 trigger: "chat.slack",
                 summary: "Responded to Sam in #leadership",
                 status: "completed",
@@ -93,6 +93,7 @@ describe("AgentsPage", () => {
     render(<AgentsPage apiEndpoint="https://api.otter.camp/api/sync/agents" />);
 
     expect(await screen.findByText("Frank")).toBeInTheDocument();
+    expect(await screen.findByText("Active in #engineering")).toBeInTheDocument();
     expect(await screen.findByText("Responded to Sam in #leadership")).toBeInTheDocument();
     expect(screen.getByText("Slack")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View timeline" })).toHaveAttribute("href", "/agents/main");
@@ -124,7 +125,7 @@ describe("AgentsPage", () => {
 
     expect(await screen.findByText("Frank")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText("No recent activity")).toBeInTheDocument();
+      expect(screen.getByText(/^Idle/)).toBeInTheDocument();
     });
   });
 });

@@ -246,3 +246,88 @@ func TestOpenClawDispatchQueuePullAndAck(t *testing.T) {
 	require.NoError(t, json.NewDecoder(pullAgainRec.Body).Decode(&pullAgainResp))
 	require.Empty(t, pullAgainResp.Jobs)
 }
+
+func TestAgentStatusConsistency(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	syncHandler := &OpenClawSyncHandler{DB: db}
+	now := time.Now().UTC()
+
+	payload := SyncPayload{
+		Type:      "full",
+		Timestamp: now,
+		Source:    "bridge",
+		Sessions: []OpenClawSession{
+			{
+				Key:           "agent:main:slack",
+				Channel:       "slack",
+				DisplayName:   "slack:#engineering",
+				UpdatedAt:     now.Add(-20 * time.Second).UnixMilli(),
+				Model:         "claude-opus-4-6",
+				ContextTokens: 120,
+			},
+			{
+				Key:           "agent:2b:slack",
+				Channel:       "slack",
+				DisplayName:   "slack:#engineering",
+				UpdatedAt:     now.Add(-35 * time.Minute).UnixMilli(),
+				Model:         "claude-opus-4-6",
+				ContextTokens: 120,
+			},
+			{
+				Key:           "agent:three-stones:webchat",
+				Channel:       "webchat",
+				DisplayName:   "webchat:g-agent-three-stones-main",
+				UpdatedAt:     now.Add(-3 * time.Hour).UnixMilli(),
+				Model:         "claude-opus-4-6",
+				ContextTokens: 170000,
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	rec := httptest.NewRecorder()
+	syncHandler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	syncListReq := httptest.NewRequest(http.MethodGet, "/api/sync/agents", nil)
+	syncListRec := httptest.NewRecorder()
+	syncHandler.GetAgents(syncListRec, syncListReq)
+	require.Equal(t, http.StatusOK, syncListRec.Code)
+
+	var syncList struct {
+		Agents []AgentState `json:"agents"`
+	}
+	require.NoError(t, json.NewDecoder(syncListRec.Body).Decode(&syncList))
+	require.NotEmpty(t, syncList.Agents)
+
+	statusByAgent := make(map[string]string)
+	for _, agent := range syncList.Agents {
+		statusByAgent[agent.ID] = agent.Status
+	}
+	require.Equal(t, "online", statusByAgent["main"])
+	require.Equal(t, "offline", statusByAgent["three-stones"])
+
+	adminHandler := &AdminConnectionsHandler{DB: db}
+	adminReq := httptest.NewRequest(http.MethodGet, "/api/admin/connections", nil)
+	adminRec := httptest.NewRecorder()
+	adminHandler.Get(adminRec, adminReq)
+	require.Equal(t, http.StatusOK, adminRec.Code)
+
+	var adminResp adminConnectionsResponse
+	require.NoError(t, json.NewDecoder(adminRec.Body).Decode(&adminResp))
+	require.NotEmpty(t, adminResp.Sessions)
+
+	adminStatusByAgent := make(map[string]string)
+	for _, session := range adminResp.Sessions {
+		adminStatusByAgent[session.ID] = session.Status
+	}
+	require.Equal(t, statusByAgent["main"], adminStatusByAgent["main"])
+	require.Equal(t, statusByAgent["three-stones"], adminStatusByAgent["three-stones"])
+}

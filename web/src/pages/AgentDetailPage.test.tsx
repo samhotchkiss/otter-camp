@@ -12,6 +12,14 @@ describe("AgentDetailPage", () => {
   it("loads and renders activity timeline for agent route", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("/api/sync/agents")) {
+        return new Response(
+          JSON.stringify({
+            agents: [{ id: "main", name: "Frank", role: "Chief of Staff", status: "online" }],
+          }),
+          { status: 200 },
+        );
+      }
       if (url.includes("/api/agents/main/activity")) {
         return new Response(
           JSON.stringify({
@@ -49,6 +57,7 @@ describe("AgentDetailPage", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Agent Activity" })).toBeInTheDocument();
+    expect(await screen.findByText("Timeline for Frank (Chief of Staff)")).toBeInTheDocument();
     expect(await screen.findByText("Ran codex-progress-summary")).toBeInTheDocument();
     expect(screen.getByText("Cron")).toBeInTheDocument();
   });
@@ -58,6 +67,9 @@ describe("AgentDetailPage", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       urls.push(url);
+      if (url.includes("/api/sync/agents")) {
+        return new Response(JSON.stringify({ agents: [] }), { status: 200 });
+      }
       if (url.includes("/api/agents/main/activity")) {
         return new Response(JSON.stringify({ items: [] }), { status: 200 });
       }
@@ -84,6 +96,6 @@ describe("AgentDetailPage", () => {
       expect(urls.length).toBeGreaterThanOrEqual(2);
     });
 
-    expect(urls.at(-1)).toContain("status=failed");
+    expect(urls[urls.length - 1]).toContain("status=failed");
   });
 });

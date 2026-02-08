@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -315,7 +316,7 @@ func (h *AgentActivityHandler) ListByAgent(w http.ResponseWriter, r *http.Reques
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database unavailable"})
 		return
 	}
-	items, err := activityStore.ListByAgent(r.Context(), agentID, opts)
+	items, err := h.listTimelineEventsByAgent(r.Context(), activityStore, agentID, opts)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list agent activity"})
 		return
@@ -390,6 +391,87 @@ func parseAgentActivityListOptions(values url.Values) (store.ListAgentActivityOp
 	}
 	opts.ProjectID = projectID
 	return opts, nil
+}
+
+func (h *AgentActivityHandler) listTimelineEventsByAgent(
+	ctx context.Context,
+	activityStore *store.AgentActivityEventStore,
+	agentID string,
+	opts store.ListAgentActivityOptions,
+) ([]store.AgentActivityEvent, error) {
+	items, err := activityStore.ListByAgent(ctx, agentID, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) > 0 {
+		return items, nil
+	}
+
+	candidateIDs := fallbackTimelineAgentIDs(agentID)
+	if len(candidateIDs) == 0 {
+		return items, nil
+	}
+
+	merged := make(map[string]store.AgentActivityEvent)
+	for _, event := range items {
+		merged[event.ID] = event
+	}
+
+	for _, candidateID := range candidateIDs {
+		candidateItems, listErr := activityStore.ListByAgent(ctx, candidateID, opts)
+		if listErr != nil {
+			return nil, listErr
+		}
+		for _, event := range candidateItems {
+			merged[event.ID] = event
+		}
+	}
+
+	out := make([]store.AgentActivityEvent, 0, len(merged))
+	for _, event := range merged {
+		out = append(out, event)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	if len(out) > opts.Limit {
+		out = out[:opts.Limit]
+	}
+	return out, nil
+}
+
+func fallbackTimelineAgentIDs(agentID string) []string {
+	trimmed := strings.TrimSpace(agentID)
+	if trimmed == "" {
+		return nil
+	}
+
+	candidates := []string{}
+	add := func(value string) {
+		v := strings.TrimSpace(value)
+		if v == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if strings.EqualFold(existing, v) {
+				return
+			}
+		}
+		candidates = append(candidates, v)
+	}
+
+	add(strings.ToLower(trimmed))
+	for id, name := range agentNames {
+		switch {
+		case strings.EqualFold(id, trimmed):
+			add(name)
+			add(strings.ToLower(name))
+		case strings.EqualFold(name, trimmed):
+			add(id)
+		}
+	}
+
+	return candidates
 }
 
 func buildListAgentActivityResponse(items []store.AgentActivityEvent, limit int) listAgentActivityResponse {

@@ -1,9 +1,16 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import AgentActivityTimeline from "../components/agents/AgentActivityTimeline";
 import { useAgentActivity } from "../hooks/useAgentActivity";
 
 const STATUS_OPTIONS = ["started", "completed", "failed", "timeout"];
+const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+
+type AgentSummary = {
+  id: string;
+  name: string;
+  role?: string;
+};
 
 function toTitleCase(raw: string): string {
   return raw
@@ -15,6 +22,7 @@ function toTitleCase(raw: string): string {
 
 export default function AgentDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const [agentSummary, setAgentSummary] = useState<AgentSummary | null>(null);
 
   const {
     events,
@@ -52,6 +60,59 @@ export default function AgentDetailPage() {
     return Array.from(unique).sort();
   }, [events]);
 
+  useEffect(() => {
+    if (!id) {
+      setAgentSummary(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadAgentSummary = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/sync/agents`);
+        if (!response.ok) {
+          return;
+        }
+        const payload = await response.json();
+        const candidates = Array.isArray(payload?.agents)
+          ? payload.agents
+          : Array.isArray(payload)
+            ? payload
+            : [];
+        const matched = candidates.find((entry: unknown) => {
+          if (!entry || typeof entry !== "object") {
+            return false;
+          }
+          const record = entry as Record<string, unknown>;
+          return typeof record.id === "string" && record.id.trim().toLowerCase() === id.trim().toLowerCase();
+        });
+        if (!matched || cancelled) {
+          return;
+        }
+        const record = matched as Record<string, unknown>;
+        const name = typeof record.name === "string" ? record.name.trim() : "";
+        const role = typeof record.role === "string" ? record.role.trim() : "";
+        if (!name) {
+          return;
+        }
+        setAgentSummary({
+          id,
+          name,
+          role: role || undefined,
+        });
+      } catch {
+        if (!cancelled) {
+          setAgentSummary(null);
+        }
+      }
+    };
+
+    void loadAgentSummary();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
   if (!id) {
     return (
       <div className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-rose-700">
@@ -59,6 +120,10 @@ export default function AgentDetailPage() {
       </div>
     );
   }
+
+  const subtitle = agentSummary
+    ? `Timeline for ${agentSummary.name}${agentSummary.role ? ` (${agentSummary.role})` : ""}`
+    : `Timeline for agent \`${id}\``;
 
   return (
     <div className="space-y-6">
@@ -69,7 +134,7 @@ export default function AgentDetailPage() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-[var(--text)]">Agent Activity</h1>
-            <p className="mt-1 text-sm text-[var(--text-muted)]">Timeline for agent `{id}`</p>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">{subtitle}</p>
           </div>
           <button
             type="button"

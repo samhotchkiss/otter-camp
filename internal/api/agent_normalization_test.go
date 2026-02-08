@@ -17,6 +17,10 @@ func TestNormalizeCurrentTask(t *testing.T) {
 		{"Heartbeat OK", ""},
 		{"HEARTBEAT", ""},
 		{"HEARTBEAT_FAIL", ""},
+		{"slack:#engineering", "Active in #engineering"},
+		{"slack:g-c0abhd38u05-thread-1770304196.509249", "Thread in #essie"},
+		{"webchat:g-agent-three-stones-main", "Active in Three Stones webchat"},
+		{"Slack thread #engineering: :building_construction: Derek: Checked deployment status", "Slack thread #engineering: Derek: Checked deployment status"},
 		{"Draft launch plan", "Draft launch plan"},
 	}
 
@@ -24,6 +28,13 @@ func TestNormalizeCurrentTask(t *testing.T) {
 		if got := normalizeCurrentTask(tc.input); got != tc.expect {
 			t.Fatalf("normalizeCurrentTask(%q) = %q, want %q", tc.input, got, tc.expect)
 		}
+	}
+}
+
+func TestAgentCurrentTaskHumanized(t *testing.T) {
+	got := normalizeCurrentTask("slack:#essie")
+	if got != "Active in #essie" {
+		t.Fatalf("normalizeCurrentTask should humanize slack channel, got %q", got)
 	}
 }
 
