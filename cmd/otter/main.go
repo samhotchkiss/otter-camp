@@ -59,7 +59,7 @@ func usage() {
 Commands:
   auth login       Store API token + default org
   whoami           Validate token and show user
-  project create   Create a project
+  project          Manage projects
   clone            Clone a project repo
   remote add       Add origin remote for project
   repo info        Show repo URL for project
@@ -134,8 +134,9 @@ func handleWhoami(args []string) {
 }
 
 func handleProject(args []string) {
+	const projectUsage = "usage: otter project <list|create|view|archive|delete> ..."
 	if len(args) == 0 {
-		fmt.Println("usage: otter project <list|create> ...")
+		fmt.Println(projectUsage)
 		os.Exit(1)
 	}
 
@@ -221,8 +222,96 @@ func handleProject(args []string) {
 		if project.RepoURL != "" {
 			fmt.Printf("Repo: %s\n", project.RepoURL)
 		}
+	case "view":
+		flags := flag.NewFlagSet("project view", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter project view <project-name-or-id>")
+		}
+		query := strings.Join(flags.Args(), " ")
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		project, err := client.FindProject(query)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(project)
+			return
+		}
+		fmt.Printf("Project: %s\n", project.Name)
+		fmt.Printf("ID: %s\n", project.ID)
+		fmt.Printf("Status: %s\n", project.Status)
+		if strings.TrimSpace(project.Description) != "" {
+			fmt.Printf("Description: %s\n", strings.TrimSpace(project.Description))
+		}
+		if strings.TrimSpace(project.RepoURL) != "" {
+			fmt.Printf("Repo: %s\n", project.RepoURL)
+		}
+	case "archive":
+		flags := flag.NewFlagSet("project archive", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter project archive <project-name-or-id>")
+		}
+		query := strings.Join(flags.Args(), " ")
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		project, err := client.FindProject(query)
+		dieIf(err)
+		updated, err := client.PatchProject(project.ID, map[string]interface{}{"status": "archived"})
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(updated)
+			return
+		}
+		fmt.Printf("Archived project: %s\n", updated.Name)
+	case "delete":
+		flags := flag.NewFlagSet("project delete", flag.ExitOnError)
+		yes := flags.Bool("yes", false, "confirm deletion")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter project delete <project-name-or-id> [--yes]")
+		}
+		if !*yes {
+			die("project delete requires --yes")
+		}
+		query := strings.Join(flags.Args(), " ")
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		project, err := client.FindProject(query)
+		dieIf(err)
+		dieIf(client.DeleteProject(project.ID))
+
+		if *jsonOut {
+			printJSON(map[string]interface{}{
+				"ok": true,
+				"data": map[string]string{
+					"id":   project.ID,
+					"name": project.Name,
+				},
+				"errors": []interface{}{},
+			})
+			return
+		}
+		fmt.Printf("Deleted project: %s\n", project.Name)
 	default:
-		fmt.Println("usage: otter project <list|create> ...")
+		fmt.Println(projectUsage)
 		os.Exit(1)
 	}
 }

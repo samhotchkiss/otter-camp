@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -197,4 +198,54 @@ func TestProjectsHandlerUpdateSettingsClearsPrimaryAgent(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Nil(t, resp.PrimaryAgentID)
+}
+
+func TestProjectsHandlerPatchUpdatesProjectFields(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-patch-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Patch")
+
+	handler := &ProjectsHandler{
+		DB:    db,
+		Store: store.NewProjectStore(db),
+	}
+	body := []byte(`{"status":"archived","repo_url":"https://example.com/repo.git"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/projects/"+projectID+"?org_id="+orgID, bytes.NewReader(body))
+	req = addRouteParam(req, "id", projectID)
+	rec := httptest.NewRecorder()
+
+	handler.Patch(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		ID      string `json:"id"`
+		Status  string `json:"status"`
+		RepoURL string `json:"repo_url"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, projectID, resp.ID)
+	require.Equal(t, "archived", resp.Status)
+	require.Equal(t, "https://example.com/repo.git", resp.RepoURL)
+}
+
+func TestProjectsHandlerDeleteRemovesProject(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-delete-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Delete")
+
+	handler := &ProjectsHandler{
+		DB:    db,
+		Store: store.NewProjectStore(db),
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/projects/"+projectID+"?org_id="+orgID, nil)
+	req = addRouteParam(req, "id", projectID)
+	rec := httptest.NewRecorder()
+
+	handler.Delete(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM projects WHERE id = $1`, projectID).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
 }

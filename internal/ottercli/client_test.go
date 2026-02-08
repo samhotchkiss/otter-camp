@@ -163,3 +163,71 @@ func TestClientResolveAgentByName(t *testing.T) {
 		t.Fatalf("ResolveAgent() id = %q, want a1", agent.ID)
 	}
 }
+
+func TestClientProjectMethodsUseExpectedPathsAndPayloads(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		gotBody = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/projects/project-123":
+			_, _ = w.Write([]byte(`{"id":"project-123","org_id":"org-1","name":"My Project","status":"active","repo_url":"https://example.com/repo.git"}`))
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/projects/project-123":
+			_, _ = w.Write([]byte(`{"id":"project-123","org_id":"org-1","name":"My Project","status":"archived","repo_url":"https://example.com/repo.git"}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/projects/project-123":
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
+
+	project, err := client.GetProject("project-123")
+	if err != nil {
+		t.Fatalf("GetProject() error = %v", err)
+	}
+	if project.ID != "project-123" {
+		t.Fatalf("GetProject() id = %q, want project-123", project.ID)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/projects/project-123" {
+		t.Fatalf("GetProject request = %s %s", gotMethod, gotPath)
+	}
+
+	patched, err := client.PatchProject("project-123", map[string]any{"status": "archived"})
+	if err != nil {
+		t.Fatalf("PatchProject() error = %v", err)
+	}
+	if patched.Status != "archived" {
+		t.Fatalf("PatchProject() status = %q, want archived", patched.Status)
+	}
+	if gotMethod != http.MethodPatch || gotPath != "/api/projects/project-123" {
+		t.Fatalf("PatchProject request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["status"] != "archived" {
+		t.Fatalf("PatchProject payload status = %v", gotBody["status"])
+	}
+
+	if err := client.DeleteProject("project-123"); err != nil {
+		t.Fatalf("DeleteProject() error = %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/api/projects/project-123" {
+		t.Fatalf("DeleteProject request = %s %s", gotMethod, gotPath)
+	}
+}

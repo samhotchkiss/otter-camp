@@ -169,6 +169,64 @@ func (c *Client) CreateProject(input map[string]interface{}) (Project, error) {
 	return project, nil
 }
 
+func (c *Client) GetProject(projectID string) (Project, error) {
+	if err := c.requireAuth(); err != nil {
+		return Project{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return Project{}, errors.New("project id is required")
+	}
+	req, err := c.newRequest(http.MethodGet, "/api/projects/"+url.PathEscape(projectID), nil)
+	if err != nil {
+		return Project{}, err
+	}
+	var project Project
+	if err := c.do(req, &project); err != nil {
+		return Project{}, err
+	}
+	return project, nil
+}
+
+func (c *Client) PatchProject(projectID string, input map[string]interface{}) (Project, error) {
+	if err := c.requireAuth(); err != nil {
+		return Project{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return Project{}, errors.New("project id is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return Project{}, err
+	}
+	req, err := c.newRequest(http.MethodPatch, "/api/projects/"+url.PathEscape(projectID), bytes.NewReader(payload))
+	if err != nil {
+		return Project{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var project Project
+	if err := c.do(req, &project); err != nil {
+		return Project{}, err
+	}
+	return project, nil
+}
+
+func (c *Client) DeleteProject(projectID string) error {
+	if err := c.requireAuth(); err != nil {
+		return err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return errors.New("project id is required")
+	}
+	req, err := c.newRequest(http.MethodDelete, "/api/projects/"+url.PathEscape(projectID), nil)
+	if err != nil {
+		return err
+	}
+	return c.do(req, nil)
+}
+
 // Slug returns a filesystem-safe slug derived from the project name.
 func (p Project) Slug() string {
 	return slugify(p.Name)

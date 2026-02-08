@@ -186,6 +186,8 @@ func NewRouter() http.Handler {
 		r.Get("/workflows", workflowsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects", projectsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}", projectsHandler.Get)
+		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}", projectsHandler.Patch)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}", projectsHandler.Delete)
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/settings", projectsHandler.UpdateSettings)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat/search", projectChatHandler.Search)

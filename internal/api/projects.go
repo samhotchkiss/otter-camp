@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -287,6 +288,158 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusCreated, project)
 }
 
+// Patch updates mutable project fields.
+func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil || h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project ID is required"})
+		return
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.URL.Query().Get("org_id"))
+	}
+	if workspaceID == "" {
+		if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+			workspaceID = identity.OrgID
+		}
+	}
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+		return
+	}
+
+	var input struct {
+		Name        *string `json:"name"`
+		Description *string `json:"description"`
+		Status      *string `json:"status"`
+		RepoURL     *string `json:"repo_url"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
+	existing, err := h.Store.GetByID(ctx, projectID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
+			return
+		}
+		if errors.Is(err, store.ErrForbidden) {
+			sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
+			return
+		}
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to get project"})
+		return
+	}
+
+	updateInput := store.UpdateProjectInput{
+		Name:        existing.Name,
+		Description: existing.Description,
+		Status:      existing.Status,
+		RepoURL:     existing.RepoURL,
+	}
+
+	if input.Name != nil {
+		name := strings.TrimSpace(*input.Name)
+		if name == "" {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "name is required"})
+			return
+		}
+		updateInput.Name = name
+	}
+	if input.Description != nil {
+		description := strings.TrimSpace(*input.Description)
+		if description == "" {
+			updateInput.Description = nil
+		} else {
+			updateInput.Description = &description
+		}
+	}
+	if input.Status != nil {
+		status := strings.ToLower(strings.TrimSpace(*input.Status))
+		if !isSupportedProjectStatus(status) {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "status must be active, archived, or completed"})
+			return
+		}
+		updateInput.Status = status
+	}
+	if input.RepoURL != nil {
+		repoURL := strings.TrimSpace(*input.RepoURL)
+		if repoURL == "" {
+			updateInput.RepoURL = nil
+		} else {
+			updateInput.RepoURL = &repoURL
+		}
+	}
+
+	updated, err := h.Store.Update(ctx, projectID, updateInput)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
+			return
+		}
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update project"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, updated)
+}
+
+// Delete removes a project.
+func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil || h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project ID is required"})
+		return
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.URL.Query().Get("org_id"))
+	}
+	if workspaceID == "" {
+		if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+			workspaceID = identity.OrgID
+		}
+	}
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+		return
+	}
+
+	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
+	if err := h.Store.Delete(ctx, projectID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
+			return
+		}
+		if errors.Is(err, store.ErrForbidden) {
+			sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
+			return
+		}
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to delete project"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // UpdateSettings updates project-scoped settings.
 func (h *ProjectsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if h.DB == nil {
@@ -383,6 +536,15 @@ func (h *ProjectsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 	}
 
 	h.Get(w, r)
+}
+
+func isSupportedProjectStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "active", "archived", "completed":
+		return true
+	default:
+		return false
+	}
 }
 
 func supportsProjectPrimaryAgentColumn(ctx context.Context, db *sql.DB) bool {
