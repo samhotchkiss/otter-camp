@@ -309,4 +309,46 @@ describe("ProjectDetailPage files tab", () => {
     expect(screen.getByText("Ship status column")).toBeInTheDocument();
     expect(screen.getByText("In Progress")).toBeInTheDocument();
   });
+
+  it("renders git push activity with System fallback and metadata-derived text", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ tasks: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "activity-1",
+              agent_name: "Unknown",
+              type: "git.push",
+              summary: "Unknown: git.push",
+              metadata: {
+                branch: "main",
+                commit_message: "Fix project activity formatting",
+              },
+              created_at: "2026-02-08T13:00:00.000Z",
+            },
+          ],
+        }),
+      );
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    expect(await screen.findByText("System")).toBeInTheDocument();
+    expect(screen.getByText(/Fix project activity formatting/i)).toBeInTheDocument();
+  });
 });

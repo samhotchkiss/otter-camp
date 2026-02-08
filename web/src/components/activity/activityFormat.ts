@@ -98,7 +98,7 @@ function normalizeSummaryToken(value: string): string {
   return String(value ?? "")
     .trim()
     .toLowerCase()
-    .replace(/[._-]+/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ");
 }
 
@@ -119,10 +119,23 @@ export function getActivityDescription(input: DescriptionInput): string {
     const normalizedSummary = normalizeSummaryToken(resolvedSummary);
     const normalizedType = normalizeSummaryToken(type);
     const normalizedHumanizedType = normalizeSummaryToken(humanizeType(type));
+    const summaryParts = normalizedSummary ? normalizedSummary.split(" ") : [];
+    const typeParts = normalizedType ? normalizedType.split(" ") : [];
+    const summaryEndsWithType =
+      typeParts.length > 0 &&
+      summaryParts.length > typeParts.length &&
+      summaryParts.slice(summaryParts.length - typeParts.length).join(" ") === normalizedType;
+    const summaryPrefix = summaryEndsWithType
+      ? summaryParts.slice(0, summaryParts.length - typeParts.length).join(" ")
+      : "";
+    const placeholderPrefixedTypeEcho =
+      summaryEndsWithType &&
+      (summaryPrefix === "unknown" || summaryPrefix === "system" || summaryPrefix === "someone");
     if (
       normalizedSummary &&
       normalizedSummary !== normalizedType &&
-      normalizedSummary !== normalizedHumanizedType
+      normalizedSummary !== normalizedHumanizedType &&
+      !placeholderPrefixedTypeEcho
     ) {
       return resolvedSummary;
     }

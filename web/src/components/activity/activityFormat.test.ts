@@ -30,4 +30,19 @@ describe("getActivityDescription", () => {
     expect(description).toContain("Fix feed fallback wiring");
     expect(description).not.toBe("git.push");
   });
+
+  it("ignores placeholder-prefixed git push summary echoes", () => {
+    const description = getActivityDescription({
+      type: "git.push",
+      actorName: "System",
+      summary: "Unknown: git.push",
+      metadata: {
+        branch: "main",
+        commit_message: "Fix project activity formatting",
+      },
+    });
+
+    expect(description).toContain("main");
+    expect(description).toContain("Fix project activity formatting");
+  });
 });
