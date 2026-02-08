@@ -534,4 +534,109 @@ describe("ProjectDetailPage files tab", () => {
     expect(screen.getByText("Ship status column")).toBeInTheDocument();
     expect(screen.getByText("In Progress")).toBeInTheDocument();
   });
+
+  it("shows issue list columns for status, assignee, and priority", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          agents: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440222",
+              name: "Ivy",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-501",
+              issue_number: 501,
+              title: "List columns should render",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440222",
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "List" }));
+
+    expect(screen.getByText("Status")).toBeInTheDocument();
+    expect(screen.getByText("Assignee")).toBeInTheDocument();
+    expect(screen.getByText("Priority")).toBeInTheDocument();
+    expect(screen.getByText(/List columns should render/i)).toBeInTheDocument();
+    expect(screen.getByText("Ivy")).toBeInTheDocument();
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+    expect(screen.getByText("P1")).toBeInTheDocument();
+  });
+
+  it("uses issue-centric empty copy in list tab when no active issues remain", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-closed",
+              issue_number: 520,
+              title: "Closed issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              work_status: "done",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "List" }));
+
+    expect(screen.getByText("No active issues")).toBeInTheDocument();
+    expect(screen.queryByText("No active tasks")).not.toBeInTheDocument();
+  });
 });

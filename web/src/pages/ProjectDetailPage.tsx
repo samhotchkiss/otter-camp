@@ -883,35 +883,44 @@ export default function ProjectDetailPage() {
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
           <div className="space-y-3">
             {tasks.filter(t => t.status !== "done" && t.status !== "cancelled").length > 0 ? (
-              tasks.filter(t => t.status !== "done" && t.status !== "cancelled").map((task) => (
-                <div
-                  key={task.id}
-                  onClick={() => handleTaskClick(task)}
-                  className="flex cursor-pointer items-center gap-4 rounded-xl border border-[var(--border)] p-4 transition hover:border-[#C9A86C]/50 hover:bg-[var(--surface-alt)]"
-                >
-                  <input type="checkbox" className="h-5 w-5 rounded border-[var(--border)]" readOnly />
-                  <span className="flex-1 text-sm font-medium text-[var(--text)]">
-                    {task.title}
-                  </span>
-                  <span className="text-xs text-[var(--text-muted)]">
-                    {task.assignee}
-                  </span>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${LIST_STATUS_BADGE[task.status].className}`}>
-                    {LIST_STATUS_BADGE[task.status].label}
-                  </span>
-                  <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
-                    task.priority === "P0" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
-                    task.priority === "P1" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :
-                    task.priority === "P2" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
-                    "bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400"
-                  }`}>
-                    {task.priority}
-                  </span>
+              <>
+                <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_90px] items-center gap-3 px-3 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                  <span>Issue</span>
+                  <span>Assignee</span>
+                  <span>Status</span>
+                  <span>Priority</span>
                 </div>
-              ))
+                {tasks.filter(t => t.status !== "done" && t.status !== "cancelled").map((task) => (
+                  <button
+                    key={task.id}
+                    type="button"
+                    onClick={() => handleTaskClick(task)}
+                    className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_120px_120px_90px] items-center gap-3 rounded-xl border border-[var(--border)] p-4 text-left transition hover:border-[#C9A86C]/50 hover:bg-[var(--surface-alt)]"
+                  >
+                    <span className="truncate text-sm font-medium text-[var(--text)]">
+                      {typeof task.issueNumber === "number" ? `#${task.issueNumber} ` : ""}
+                      {task.title}
+                    </span>
+                    <span className="text-xs text-[var(--text-muted)]">
+                      {task.assignee}
+                    </span>
+                    <span className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold ${LIST_STATUS_BADGE[task.status].className}`}>
+                      {LIST_STATUS_BADGE[task.status].label}
+                    </span>
+                    <span className={`w-fit rounded px-2 py-0.5 text-[10px] font-semibold ${
+                      task.priority === "P0" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
+                      task.priority === "P1" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :
+                      task.priority === "P2" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
+                      "bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400"
+                    }`}>
+                      {task.priority}
+                    </span>
+                  </button>
+                ))}
+              </>
             ) : (
               <div className="py-8 text-center text-sm text-[var(--text-muted)]">
-                No active tasks
+                No active issues
               </div>
             )}
           </div>
