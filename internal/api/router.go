@@ -73,12 +73,13 @@ func NewRouter() http.Handler {
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
 	taskHandler := &TaskHandler{Hub: hub}
 	openClawWSHandler := ws.NewOpenClawHandler(hub)
-	emissionsHandler := &EmissionsHandler{Buffer: NewEmissionBuffer(defaultEmissionBufferSize), Hub: hub}
+	emissionBuffer := NewEmissionBuffer(defaultEmissionBufferSize)
+	emissionsHandler := &EmissionsHandler{Buffer: emissionBuffer, Hub: hub}
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
 	workflowsHandler := &WorkflowsHandler{DB: db}
-	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
+	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db, EmissionBuffer: emissionBuffer}
 	adminConnectionsHandler := &AdminConnectionsHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	githubSyncDeadLettersHandler := &GitHubSyncDeadLettersHandler{}
 	githubSyncHealthHandler := &GitHubSyncHealthHandler{}

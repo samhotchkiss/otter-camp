@@ -24,8 +24,9 @@ import (
 
 // OpenClawSyncHandler handles real-time sync from OpenClaw
 type OpenClawSyncHandler struct {
-	Hub *ws.Hub
-	DB  *sql.DB
+	Hub            *ws.Hub
+	DB             *sql.DB
+	EmissionBuffer *EmissionBuffer
 }
 
 const maxOpenClawSyncBodySize = 2 << 20 // 2 MB
@@ -177,6 +178,7 @@ type SyncPayload struct {
 	Timestamp time.Time                    `json:"timestamp"`
 	Agents    []OpenClawAgent              `json:"agents,omitempty"`
 	Sessions  []OpenClawSession            `json:"sessions,omitempty"`
+	Emissions []Emission                   `json:"emissions,omitempty"`
 	Host      *OpenClawHostDiagnostics     `json:"host,omitempty"`
 	Bridge    *OpenClawBridgeDiagnostics   `json:"bridge,omitempty"`
 	CronJobs  []OpenClawCronJobDiagnostics `json:"cron_jobs,omitempty"`
@@ -317,6 +319,17 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	processedCount := 0
 	now := time.Now()
+
+	if h.EmissionBuffer != nil && len(payload.Emissions) > 0 {
+		for _, raw := range payload.Emissions {
+			emission, err := normalizeEmission(raw)
+			if err != nil {
+				log.Printf("openclaw sync emission dropped: %v", err)
+				continue
+			}
+			h.EmissionBuffer.Push(emission)
+		}
+	}
 
 	// Process sessions into agent states
 	for _, session := range payload.Sessions {
