@@ -17,6 +17,11 @@ import (
 
 var issueUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
 
+const (
+	authSetupCommand = "otter auth login --token <your-token> --org <org-id>"
+	authTokenHelpURL = "https://otter.camp/settings"
+)
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -780,7 +785,19 @@ func dieIf(err error) {
 	if errors.Is(err, flag.ErrHelp) {
 		os.Exit(0)
 	}
-	die(err.Error())
+	die(formatCLIError(err))
+}
+
+func formatCLIError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.TrimSpace(err.Error())
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "missing auth token") || strings.Contains(lower, "missing org id") {
+		return fmt.Sprintf("No auth config found. Run:\n\n  %s\n\nGet your token at: %s -> API Tokens", authSetupCommand, authTokenHelpURL)
+	}
+	return message
 }
 
 func mustConfigPath() string {

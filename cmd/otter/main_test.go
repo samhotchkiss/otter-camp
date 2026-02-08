@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestParsePositiveInt(t *testing.T) {
 	tests := []struct {
@@ -42,5 +46,50 @@ func TestResolveIssueIDUUIDBypassesLookup(t *testing.T) {
 	}
 	if got != id {
 		t.Fatalf("resolveIssueID got %q want %q", got, id)
+	}
+}
+
+func TestFriendlyAuthErrorMessage(t *testing.T) {
+	tests := []struct {
+		name  string
+		err   error
+		parts []string
+	}{
+		{
+			name: "missing token",
+			err:  errors.New("missing auth token"),
+			parts: []string{
+				"No auth config found.",
+				"otter auth login --token <your-token> --org <org-id>",
+				"https://otter.camp/settings",
+				"API Tokens",
+			},
+		},
+		{
+			name: "missing org",
+			err:  errors.New("missing org id; pass --org or set defaultOrg in config"),
+			parts: []string{
+				"No auth config found.",
+				"otter auth login --token <your-token> --org <org-id>",
+				"https://otter.camp/settings",
+				"API Tokens",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		got := formatCLIError(tt.err)
+		for _, part := range tt.parts {
+			if !strings.Contains(got, part) {
+				t.Fatalf("%s: expected %q in message %q", tt.name, part, got)
+			}
+		}
+	}
+}
+
+func TestFriendlyAuthErrorMessageFallback(t *testing.T) {
+	err := errors.New("request failed (500): boom")
+	if got := formatCLIError(err); got != err.Error() {
+		t.Fatalf("formatCLIError() = %q, want %q", got, err.Error())
 	}
 }
