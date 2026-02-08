@@ -113,14 +113,18 @@ func TestEmissionBufferConcurrentPushIsSafe(t *testing.T) {
 		go func(worker int) {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				buffer.Push(Emission{
-					ID:         time.Now().Add(time.Duration(worker*j) * time.Millisecond).Format(time.RFC3339Nano),
+				normalized, err := normalizeEmission(Emission{
 					SourceType: "agent",
 					SourceID:   "agent-concurrent",
 					Kind:       "log",
 					Summary:    "concurrent",
-					Timestamp:  time.Now(),
+					Timestamp:  time.Now().Add(time.Duration(worker*j) * time.Millisecond),
 				})
+				if err != nil {
+					t.Errorf("normalizeEmission failed: %v", err)
+					return
+				}
+				buffer.Push(normalized)
 			}
 		}(i)
 	}
@@ -129,6 +133,12 @@ func TestEmissionBufferConcurrentPushIsSafe(t *testing.T) {
 	recent := buffer.Recent(500, EmissionFilter{})
 	require.NotEmpty(t, recent)
 	require.LessOrEqual(t, len(recent), 500)
+	seenIDs := make(map[string]struct{}, len(recent))
+	for _, emission := range recent {
+		_, exists := seenIDs[emission.ID]
+		require.False(t, exists, "duplicate emission id detected: %s", emission.ID)
+		seenIDs[emission.ID] = struct{}{}
+	}
 	latest := buffer.LatestBySource("", "agent-concurrent")
 	require.NotNil(t, latest)
 }

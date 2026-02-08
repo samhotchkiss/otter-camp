@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
@@ -14,6 +15,8 @@ import (
 )
 
 const defaultEmissionBufferSize = 100
+
+var emissionIDSequence uint64
 
 type Emission struct {
 	ID         string            `json:"id"`
@@ -242,7 +245,7 @@ func (h *EmissionsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 func normalizeEmission(input Emission) (Emission, error) {
 	input.ID = strings.TrimSpace(input.ID)
 	if input.ID == "" {
-		input.ID = fmt.Sprintf("em_%d", time.Now().UTC().UnixNano())
+		input.ID = newEmissionID()
 	}
 
 	input.SourceType = strings.TrimSpace(strings.ToLower(input.SourceType))
@@ -324,6 +327,11 @@ func normalizeEmission(input Emission) (Emission, error) {
 	}
 
 	return input, nil
+}
+
+func newEmissionID() string {
+	seq := atomic.AddUint64(&emissionIDSequence, 1)
+	return fmt.Sprintf("em_%d_%x", time.Now().UTC().UnixNano(), seq)
 }
 
 type emissionReceivedEvent struct {
