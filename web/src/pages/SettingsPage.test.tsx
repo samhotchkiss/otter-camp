@@ -111,8 +111,9 @@ describe("SettingsPage", () => {
 describe("SettingsPage theme behavior", () => {
   beforeEach(() => {
     localStorage.clear();
+    localStorage.setItem("otter-camp-org-id", "org-123");
     document.documentElement.classList.remove("dark", "light");
-    stubFetchForThemeTests();
+    stubFetchForDataTests();
 
     Object.defineProperty(window, "matchMedia", {
       writable: true,
@@ -129,30 +130,32 @@ describe("SettingsPage theme behavior", () => {
     });
   });
 
-  it("applies dark class by default for system theme", async () => {
+  it("respects system preference (light when matchMedia prefers light)", async () => {
     render(<SettingsPage />);
 
+    // matchMedia.matches is false (prefers-color-scheme: dark = false => light)
     await waitFor(() => {
-      expect(document.documentElement.classList.contains("dark")).toBe(true);
+      expect(document.documentElement.classList.contains("dark")).toBe(false);
     });
   });
 
-  it("toggles dark class when switching between light and dark appearance", async () => {
+  it("toggles dark class when switching between dark and light appearance", async () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
 
-    await waitFor(() => {
-      expect(document.documentElement.classList.contains("dark")).toBe(true);
-    });
-
-    await user.click(await screen.findByRole("button", { name: /light/i }));
+    // System defaults to light (matchMedia.matches = false)
     await waitFor(() => {
       expect(document.documentElement.classList.contains("dark")).toBe(false);
     });
 
-    await user.click(screen.getByRole("button", { name: /dark/i }));
+    await user.click(await screen.findByRole("button", { name: /dark/i }));
     await waitFor(() => {
       expect(document.documentElement.classList.contains("dark")).toBe(true);
+    });
+
+    await user.click(screen.getByRole("button", { name: /light/i }));
+    await waitFor(() => {
+      expect(document.documentElement.classList.contains("dark")).toBe(false);
     });
   });
 });
