@@ -8,6 +8,7 @@ import ProjectCommitBrowser from "./ProjectCommitBrowser";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
+const NO_REPO_CONFIGURED_MESSAGE = "No repository configured for this project";
 
 type ProjectFileBrowserProps = {
   projectId: string;
@@ -80,6 +81,23 @@ function mimeTypeForPath(filePath: string): string {
   return "application/octet-stream";
 }
 
+function isNoRepositoryConfiguredError(message: string | null): boolean {
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("no repository configured") ||
+    lower.includes("repository path is not configured") ||
+    lower.includes("project has no local repo path configured")
+  );
+}
+
+function normalizeTreeErrorMessage(message: string): string {
+  if (isNoRepositoryConfiguredError(message)) {
+    return NO_REPO_CONFIGURED_MESSAGE;
+  }
+  return message;
+}
+
 export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProps) {
   const [mode, setMode] = useState<BrowserMode>("files");
   const [currentPath, setCurrentPath] = useState("/");
@@ -132,7 +150,8 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
         }
       } catch (error) {
         if (!cancelled) {
-          setTreeError(error instanceof Error ? error.message : "Failed to load files");
+          const message = error instanceof Error ? error.message : "Failed to load files";
+          setTreeError(normalizeTreeErrorMessage(message));
         }
       } finally {
         if (!cancelled) {
@@ -335,16 +354,22 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
           )}
 
           {!treeLoading && treeError && (
-            <div className="space-y-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2">
-              <p className="text-sm text-red-300">{treeError}</p>
-              <button
-                type="button"
-                className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-200 hover:bg-red-500/20"
-                onClick={() => setTreeRefreshKey((value) => value + 1)}
-              >
-                Retry
-              </button>
-            </div>
+            isNoRepositoryConfiguredError(treeError) ? (
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2">
+                <p className="text-sm text-[var(--text-muted)]">{NO_REPO_CONFIGURED_MESSAGE}</p>
+              </div>
+            ) : (
+              <div className="space-y-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2">
+                <p className="text-sm text-red-300">{treeError}</p>
+                <button
+                  type="button"
+                  className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-200 hover:bg-red-500/20"
+                  onClick={() => setTreeRefreshKey((value) => value + 1)}
+                >
+                  Retry
+                </button>
+              </div>
+            )
           )}
 
           {!treeLoading && !treeError && entries.length === 0 && (

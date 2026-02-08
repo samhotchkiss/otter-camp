@@ -245,6 +245,17 @@ describe("ProjectFileBrowser", () => {
     expect(await screen.findByRole("button", { name: /notes/i })).toBeInTheDocument();
   });
 
+  it("shows a friendly no-repository empty state instead of raw git errors", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockJSONResponse({ error: "project repository path is not configured" }, false),
+    );
+
+    render(<ProjectFileBrowser projectId="project-1" />);
+
+    expect(await screen.findByText("No repository configured for this project")).toBeInTheDocument();
+    expect(screen.queryByText("project repository path is not configured")).not.toBeInTheDocument();
+  });
+
   it("toggles to commit history view", async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValueOnce(

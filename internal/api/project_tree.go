@@ -50,7 +50,10 @@ type gitRepoMode string
 const (
 	gitRepoModeWorktree gitRepoMode = "worktree"
 	gitRepoModeBare     gitRepoMode = "bare"
+	noRepoConfiguredMsg             = "No repository configured for this project"
 )
+
+var errProjectRepoNotConfigured = errors.New("project repository is not configured")
 
 func (h *ProjectTreeHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 	if h.ProjectStore == nil {
@@ -71,6 +74,7 @@ func (h *ProjectTreeHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	refProvided := ref != ""
 	if ref == "" {
 		ref = defaultRef
 	}
@@ -88,22 +92,7 @@ func (h *ProjectTreeHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	objectSpec := ref
-	if normalizedPath != "" {
-		objectSpec = ref + ":" + normalizedPath
-		objectType, typeErr := readGitObjectType(r.Context(), repoPath, repoMode, objectSpec)
-		if typeErr != nil {
-			status, message := classifyGitBrowseError(typeErr)
-			sendJSON(w, status, errorResponse{Error: message})
-			return
-		}
-		if objectType != "tree" {
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "path must point to a directory"})
-			return
-		}
-	}
-
-	output, err := runGitBrowseCommand(r.Context(), repoPath, repoMode, "ls-tree", "-z", "--long", objectSpec)
+	resolvedRef, output, err := readTreeListingForBrowse(r.Context(), repoPath, repoMode, ref, normalizedPath, !refProvided)
 	if err != nil {
 		status, message := classifyGitBrowseError(err)
 		sendJSON(w, status, errorResponse{Error: message})
@@ -122,7 +111,7 @@ func (h *ProjectTreeHandler) GetTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, projectTreeResponse{
-		Ref:     ref,
+		Ref:     resolvedRef,
 		Path:    responsePath,
 		Entries: entries,
 	})
@@ -147,6 +136,7 @@ func (h *ProjectTreeHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	refProvided := ref != ""
 	if ref == "" {
 		ref = defaultRef
 	}
@@ -169,19 +159,7 @@ func (h *ProjectTreeHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	objectSpec := ref + ":" + normalizedPath
-	objectType, err := readGitObjectType(r.Context(), repoPath, repoMode, objectSpec)
-	if err != nil {
-		status, message := classifyGitBrowseError(err)
-		sendJSON(w, status, errorResponse{Error: message})
-		return
-	}
-	if objectType != "blob" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "path must point to a file"})
-		return
-	}
-
-	contentBytes, err := runGitBrowseCommand(r.Context(), repoPath, repoMode, "show", objectSpec)
+	resolvedRef, contentBytes, err := readBlobForBrowse(r.Context(), repoPath, repoMode, ref, normalizedPath, !refProvided)
 	if err != nil {
 		status, message := classifyGitBrowseError(err)
 		sendJSON(w, status, errorResponse{Error: message})
@@ -196,7 +174,7 @@ func (h *ProjectTreeHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, projectBlobResponse{
-		Ref:      ref,
+		Ref:      resolvedRef,
 		Path:     "/" + normalizedPath,
 		Content:  content,
 		Size:     int64(len(contentBytes)),
@@ -213,29 +191,32 @@ func (h *ProjectTreeHandler) resolveBrowseRepository(
 		return "", "", "", err
 	}
 
-	repoPath := optionalStringValue(project.LocalRepoPath)
+	repoPath := ""
 	defaultRef := "HEAD"
 
 	if h.ProjectRepos != nil {
 		binding, bindErr := h.ProjectRepos.GetBinding(ctx, projectID)
-		if bindErr != nil && !errors.Is(bindErr, store.ErrNotFound) {
+		if bindErr != nil {
+			if errors.Is(bindErr, store.ErrNotFound) {
+				return "", "", "", errProjectRepoNotConfigured
+			}
 			return "", "", "", bindErr
 		}
-		if bindErr == nil && binding != nil {
-			if binding.LocalRepoPath != nil && strings.TrimSpace(*binding.LocalRepoPath) != "" {
-				repoPath = strings.TrimSpace(*binding.LocalRepoPath)
-			}
-			if strings.TrimSpace(binding.DefaultBranch) != "" {
-				defaultRef = strings.TrimSpace(binding.DefaultBranch)
-			}
+		if binding == nil || !binding.Enabled {
+			return "", "", "", errProjectRepoNotConfigured
 		}
+		if binding.LocalRepoPath != nil && strings.TrimSpace(*binding.LocalRepoPath) != "" {
+			repoPath = strings.TrimSpace(*binding.LocalRepoPath)
+		}
+		if strings.TrimSpace(binding.DefaultBranch) != "" {
+			defaultRef = strings.TrimSpace(binding.DefaultBranch)
+		}
+	} else {
+		repoPath = optionalStringValue(project.LocalRepoPath)
 	}
 
 	if strings.TrimSpace(repoPath) == "" {
-		repoPath, err = h.ProjectStore.GetRepoPath(ctx, projectID)
-		if err != nil {
-			return "", "", "", err
-		}
+		return "", "", "", errProjectRepoNotConfigured
 	}
 
 	repoMode, err := detectGitRepositoryMode(repoPath)
@@ -243,6 +224,92 @@ func (h *ProjectTreeHandler) resolveBrowseRepository(
 		return "", "", "", err
 	}
 	return repoPath, repoMode, defaultRef, nil
+}
+
+func readTreeListingForBrowse(
+	ctx context.Context,
+	repoPath string,
+	repoMode gitRepoMode,
+	ref string,
+	normalizedPath string,
+	allowHeadFallback bool,
+) (string, []byte, error) {
+	for _, candidateRef := range browseRefCandidates(ref, allowHeadFallback) {
+		objectSpec := candidateRef
+		if normalizedPath != "" {
+			objectSpec = candidateRef + ":" + normalizedPath
+			objectType, typeErr := readGitObjectType(ctx, repoPath, repoMode, objectSpec)
+			if typeErr != nil {
+				if allowHeadFallback && candidateRef != "HEAD" && isRefOrPathNotFoundError(typeErr) {
+					continue
+				}
+				return "", nil, typeErr
+			}
+			if objectType != "tree" {
+				return "", nil, fmt.Errorf("path must point to a directory")
+			}
+		}
+
+		output, err := runGitBrowseCommand(ctx, repoPath, repoMode, "ls-tree", "-z", "--long", objectSpec)
+		if err == nil {
+			return candidateRef, output, nil
+		}
+		if allowHeadFallback && candidateRef != "HEAD" && isRefOrPathNotFoundError(err) {
+			continue
+		}
+		return "", nil, err
+	}
+	return "", nil, fmt.Errorf("ref or path not found")
+}
+
+func readBlobForBrowse(
+	ctx context.Context,
+	repoPath string,
+	repoMode gitRepoMode,
+	ref string,
+	normalizedPath string,
+	allowHeadFallback bool,
+) (string, []byte, error) {
+	for _, candidateRef := range browseRefCandidates(ref, allowHeadFallback) {
+		objectSpec := candidateRef + ":" + normalizedPath
+		objectType, err := readGitObjectType(ctx, repoPath, repoMode, objectSpec)
+		if err != nil {
+			if allowHeadFallback && candidateRef != "HEAD" && isRefOrPathNotFoundError(err) {
+				continue
+			}
+			return "", nil, err
+		}
+		if objectType != "blob" {
+			return "", nil, fmt.Errorf("path must point to a file")
+		}
+
+		contentBytes, err := runGitBrowseCommand(ctx, repoPath, repoMode, "show", objectSpec)
+		if err == nil {
+			return candidateRef, contentBytes, nil
+		}
+		if allowHeadFallback && candidateRef != "HEAD" && isRefOrPathNotFoundError(err) {
+			continue
+		}
+		return "", nil, err
+	}
+	return "", nil, fmt.Errorf("ref or path not found")
+}
+
+func browseRefCandidates(ref string, allowHeadFallback bool) []string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		ref = "HEAD"
+	}
+	candidates := []string{ref}
+	if allowHeadFallback && !strings.EqualFold(ref, "HEAD") {
+		candidates = append(candidates, "HEAD")
+	}
+	return candidates
+}
+
+func isRefOrPathNotFoundError(err error) bool {
+	status, _ := classifyGitBrowseError(err)
+	return status == http.StatusNotFound
 }
 
 func normalizeRepositoryPath(raw string) (string, error) {
@@ -353,6 +420,10 @@ func runGitBrowseCommand(
 }
 
 func classifyGitBrowseError(err error) (int, string) {
+	if errors.Is(err, errProjectRepoNotConfigured) {
+		return http.StatusConflict, noRepoConfiguredMsg
+	}
+
 	message := strings.TrimSpace(err.Error())
 	lower := strings.ToLower(message)
 	switch {
@@ -365,6 +436,9 @@ func classifyGitBrowseError(err error) (int, string) {
 	case strings.Contains(lower, "repository path does not exist"),
 		strings.Contains(lower, "repository path is not"),
 		strings.Contains(lower, "repository path is not configured"):
+		if strings.Contains(lower, "repository path is not configured") {
+			return http.StatusConflict, noRepoConfiguredMsg
+		}
 		return http.StatusConflict, message
 	default:
 		return http.StatusBadRequest, message
