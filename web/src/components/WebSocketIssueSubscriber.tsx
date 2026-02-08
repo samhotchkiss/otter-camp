@@ -35,21 +35,25 @@ export default function WebSocketIssueSubscriber({
     const previousChannel = activeChannelRef.current;
 
     if (previousChannel && previousChannel !== nextChannel) {
-      sendMessage({
+      const sent = sendMessage({
         type: "unsubscribe",
         org_id: orgID,
         channel: previousChannel,
       });
-      activeChannelRef.current = null;
+      if (sent || !connected) {
+        activeChannelRef.current = null;
+      }
     }
 
     if (nextChannel && previousChannel !== nextChannel) {
-      sendMessage({
+      const sent = sendMessage({
         type: "subscribe",
         org_id: orgID,
         channel: nextChannel,
       });
-      activeChannelRef.current = nextChannel;
+      if (sent) {
+        activeChannelRef.current = nextChannel;
+      }
     }
 
     if (!nextChannel) {
@@ -67,12 +71,14 @@ export default function WebSocketIssueSubscriber({
       if (!orgID) {
         return;
       }
-      sendMessage({
+      const sent = sendMessage({
         type: "unsubscribe",
         org_id: orgID,
         channel: activeChannel,
       });
-      activeChannelRef.current = null;
+      if (sent) {
+        activeChannelRef.current = null;
+      }
     };
   }, [sendMessage]);
 

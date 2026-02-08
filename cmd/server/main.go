@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/samhotchkiss/otter-camp/internal/api"
+	"github.com/samhotchkiss/otter-camp/internal/automigrate"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/github"
 	"github.com/samhotchkiss/otter-camp/internal/githubsync"
@@ -16,6 +17,15 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("invalid configuration: %v", err)
+	}
+
+	// Auto-migrate database on startup
+	if migDB, err := store.DB(); err == nil {
+		if err := automigrate.Run(migDB, "migrations"); err != nil {
+			log.Printf("⚠️  Auto-migration failed: %v", err)
+		}
+	} else {
+		log.Printf("⚠️  Auto-migration skipped; database unavailable: %v", err)
 	}
 
 	router := api.NewRouter()

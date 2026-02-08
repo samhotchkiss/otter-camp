@@ -173,14 +173,23 @@ function parseIssueCommentEvent(
     return null;
   }
   const record = payload as Record<string, unknown>;
-  const issueID = typeof record.issue_id === "string" ? record.issue_id : "";
+  const issueID =
+    (typeof record.issue_id === "string" && record.issue_id) ||
+    (typeof record.issueId === "string" && record.issueId) ||
+    "";
   if (issueID !== activeIssueID) {
+    const nested =
+      parseIssueCommentEvent(record.data, activeIssueID) ??
+      parseIssueCommentEvent(record.payload, activeIssueID);
+    if (nested) {
+      return nested;
+    }
     return null;
   }
   const commentRecord =
     record.comment && typeof record.comment === "object"
       ? (record.comment as Record<string, unknown>)
-      : null;
+      : (record as Record<string, unknown>);
   if (!commentRecord) {
     return null;
   }

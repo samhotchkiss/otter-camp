@@ -24,6 +24,8 @@ const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";
 const PROJECT_CHAT_SESSION_RESET_PREFIX = "project_chat_session_reset:";
 const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
 const POST_SEND_REFRESH_DELAYS_MS = [1200, 3500, 7000, 12000];
+const PERIODIC_REFRESH_CONNECTED_MS = 10000;
+const PERIODIC_REFRESH_DEGRADED_MS = 3500;
 
 type DeliveryTone = "neutral" | "success" | "warning";
 
@@ -65,6 +67,16 @@ type GlobalChatSurfaceProps = {
   refreshVersion?: number;
 };
 
+type DMRealtimeEvent = {
+  threadID: string;
+  message: unknown;
+};
+
+type IssueCommentRealtimeEvent = {
+  issueID: string;
+  comment: unknown;
+};
+
 function getStoredOrgID(): string {
   try {
     return (window.localStorage.getItem(ORG_STORAGE_KEY) ?? "").trim();
@@ -95,6 +107,12 @@ function normalizeTimestamp(value: unknown): string {
     return new Date().toISOString();
   }
   return value;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function normalizeMessageAttachments(raw: unknown): ChatAttachment[] {
@@ -304,6 +322,141 @@ function normalizeIssueComment(
   };
 }
 
+function sortChatMessagesByCreatedAt(messages: ChatMessage[]): ChatMessage[] {
+  return [...messages].sort(
+    (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
+  );
+}
+
+function areAttachmentsEqual(
+  a: ChatAttachment[] | undefined,
+  b: ChatAttachment[] | undefined,
+): boolean {
+  const left = a ?? [];
+  const right = b ?? [];
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let i = 0; i < left.length; i += 1) {
+    const leftItem = left[i];
+    const rightItem = right[i];
+    if (
+      leftItem.id !== rightItem.id ||
+      leftItem.filename !== rightItem.filename ||
+      leftItem.mime_type !== rightItem.mime_type ||
+      leftItem.size_bytes !== rightItem.size_bytes ||
+      leftItem.url !== rightItem.url ||
+      (leftItem.thumbnail_url ?? "") !== (rightItem.thumbnail_url ?? "")
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areMessagesEquivalent(left: ChatMessage[], right: ChatMessage[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let i = 0; i < left.length; i += 1) {
+    const a = left[i];
+    const b = right[i];
+    if (
+      a.id !== b.id ||
+      a.threadId !== b.threadId ||
+      a.senderId !== b.senderId ||
+      a.senderName !== b.senderName ||
+      a.senderType !== b.senderType ||
+      (a.senderAvatarUrl ?? "") !== (b.senderAvatarUrl ?? "") ||
+      a.content !== b.content ||
+      a.createdAt !== b.createdAt ||
+      Boolean(a.optimistic) !== Boolean(b.optimistic) ||
+      Boolean(a.failed) !== Boolean(b.failed) ||
+      Boolean(a.isSessionReset) !== Boolean(b.isSessionReset) ||
+      (a.sessionID ?? "") !== (b.sessionID ?? "") ||
+      !areAttachmentsEqual(a.attachments, b.attachments)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function extractDMRealtimeEvent(raw: unknown): DMRealtimeEvent | null {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+
+  const threadID =
+    (typeof record.threadId === "string" && record.threadId) ||
+    (typeof record.thread_id === "string" && record.thread_id) ||
+    "";
+  if (threadID) {
+    const message = asRecord(record.message) ?? record;
+    return { threadID, message };
+  }
+
+  return (
+    extractDMRealtimeEvent(record.data) ??
+    extractDMRealtimeEvent(record.payload) ??
+    extractDMRealtimeEvent(record.message)
+  );
+}
+
+function extractProjectRealtimeMessage(raw: unknown): unknown {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+  const hasProjectID =
+    (typeof record.project_id === "string" && record.project_id.trim() !== "") ||
+    (typeof record.projectId === "string" && record.projectId.trim() !== "");
+  if (hasProjectID) {
+    return record;
+  }
+
+  return (
+    extractProjectRealtimeMessage(record.message) ??
+    extractProjectRealtimeMessage(record.data) ??
+    extractProjectRealtimeMessage(record.payload)
+  );
+}
+
+function extractIssueCommentRealtimeEvent(raw: unknown): IssueCommentRealtimeEvent | null {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+
+  const issueID =
+    (typeof record.issue_id === "string" && record.issue_id) ||
+    (typeof record.issueId === "string" && record.issueId) ||
+    "";
+  const comment = asRecord(record.comment);
+  if (issueID && comment) {
+    return { issueID, comment };
+  }
+  if (issueID && typeof record.id === "string" && typeof record.author_agent_id === "string") {
+    return { issueID, comment: record };
+  }
+
+  if (comment) {
+    const nestedIssueID =
+      (typeof comment.issue_id === "string" && comment.issue_id) ||
+      (typeof comment.issueId === "string" && comment.issueId) ||
+      "";
+    if (nestedIssueID) {
+      return { issueID: nestedIssueID, comment };
+    }
+  }
+
+  return (
+    extractIssueCommentRealtimeEvent(record.data) ??
+    extractIssueCommentRealtimeEvent(record.payload)
+  );
+}
+
 function deliveryIndicatorClass(indicator: DeliveryIndicator): string {
   if (indicator.tone === "success") {
     return "border-[var(--green)]/40 bg-[var(--green)]/15 text-[var(--green)]";
@@ -372,7 +525,7 @@ export default function GlobalChatSurface({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const onConversationTouchedRef = useRef(onConversationTouched);
   const postSendRefreshTimersRef = useRef<number[]>([]);
-  const { lastMessage } = useWS();
+  const { connected, lastMessage } = useWS();
   const conversationType = conversation.type;
   const conversationKey = conversation.key;
   const conversationTitle = conversation.title;
@@ -418,6 +571,10 @@ export default function GlobalChatSurface({
     postSendRefreshTimersRef.current = [];
   }, []);
 
+  const setMessagesIfChanged = useCallback((next: ChatMessage[]) => {
+    setMessages((prev) => (areMessagesEquivalent(prev, next) ? prev : next));
+  }, []);
+
   const loadConversation = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true;
     if (!orgID) {
@@ -458,7 +615,7 @@ export default function GlobalChatSurface({
               )
               .filter((entry: ChatMessage | null): entry is ChatMessage => entry !== null)
           : [];
-        setMessages(normalized);
+        setMessagesIfChanged(sortChatMessagesByCreatedAt(normalized));
         touchConversation();
         return;
       }
@@ -492,8 +649,7 @@ export default function GlobalChatSurface({
               .filter((entry: ChatMessage | null): entry is ChatMessage => entry !== null)
           : [];
 
-        normalized.sort((a: ChatMessage, b: ChatMessage) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-        setMessages(normalized);
+        setMessagesIfChanged(sortChatMessagesByCreatedAt(normalized));
         touchConversation();
         return;
       }
@@ -538,8 +694,7 @@ export default function GlobalChatSurface({
             .map((entry) => normalizeIssueComment(entry, conversationKey, agentMap, defaultAuthor))
             .filter((entry: ChatMessage | null): entry is ChatMessage => entry !== null)
         : [];
-      normalized.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-      setMessages(normalized);
+      setMessagesIfChanged(sortChatMessagesByCreatedAt(normalized));
       touchConversation();
     } catch (loadError) {
       if (!silent) {
@@ -562,6 +717,7 @@ export default function GlobalChatSurface({
     projectID,
     requestHeaders,
     touchConversation,
+    setMessagesIfChanged,
   ]);
 
   useEffect(() => {
@@ -579,30 +735,56 @@ export default function GlobalChatSurface({
   }, [clearPostSendRefreshTimers, conversationKey]);
 
   useEffect(() => {
+    const refresh = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      void loadConversation({ silent: true });
+    };
+
+    const intervalID = window.setInterval(
+      refresh,
+      connected ? PERIODIC_REFRESH_CONNECTED_MS : PERIODIC_REFRESH_DEGRADED_MS,
+    );
+    const onFocus = () => refresh();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refresh();
+      }
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalID);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [connected, conversationKey, loadConversation]);
+
+  useEffect(() => {
     if (!lastMessage) {
       return;
     }
 
     if (conversationType === "dm" && lastMessage.type === "DMMessageReceived") {
-      if (!lastMessage.data || typeof lastMessage.data !== "object") {
+      const dmEvent = extractDMRealtimeEvent(lastMessage.data);
+      if (!dmEvent) {
         return;
       }
-      const payload = lastMessage.data as Record<string, unknown>;
-      const eventThreadID =
-        (typeof payload.threadId === "string" && payload.threadId) ||
-        (typeof payload.thread_id === "string" && payload.thread_id) ||
-        "";
-      if (eventThreadID !== dmThreadID) {
+      if (dmEvent.threadID !== dmThreadID) {
         return;
       }
 
       const normalized = normalizeThreadMessage(
-        payload.message ?? payload,
+        dmEvent.message,
         dmThreadID,
         currentUserName,
         currentUserID,
       );
       if (!normalized) {
+        void loadConversation({ silent: true });
         return;
       }
 
@@ -621,14 +803,19 @@ export default function GlobalChatSurface({
     }
 
     if (conversationType === "project" && lastMessage.type === "ProjectChatMessageCreated") {
+      const realtimeMessage = extractProjectRealtimeMessage(lastMessage.data);
+      if (!realtimeMessage) {
+        return;
+      }
       const normalized = normalizeProjectMessage(
-        lastMessage.data,
+        realtimeMessage,
         projectID,
         conversationKey,
         currentUserName,
         currentUserID,
       );
       if (!normalized) {
+        void loadConversation({ silent: true });
         return;
       }
 
@@ -644,40 +831,28 @@ export default function GlobalChatSurface({
         if (prev.some((entry) => entry.id === normalized.id)) {
           return prev;
         }
-        return [...prev, normalized].sort(
-          (a: ChatMessage, b: ChatMessage) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
-        );
+        return sortChatMessagesByCreatedAt([...prev, normalized]);
       });
       return;
     }
 
     if (conversationType === "issue" && lastMessage.type === "IssueCommentCreated") {
-      if (!lastMessage.data || typeof lastMessage.data !== "object") {
+      const issueEvent = extractIssueCommentRealtimeEvent(lastMessage.data);
+      if (!issueEvent) {
         return;
       }
-      const payload = lastMessage.data as Record<string, unknown>;
-      const eventIssueID =
-        (typeof payload.issue_id === "string" && payload.issue_id) ||
-        (typeof payload.issueId === "string" && payload.issueId) ||
-        "";
-      if (eventIssueID !== issueID) {
-        return;
-      }
-      const comment =
-        payload.comment && typeof payload.comment === "object"
-          ? payload.comment
-          : null;
-      if (!comment) {
+      if (issueEvent.issueID !== issueID) {
         return;
       }
 
       const normalized = normalizeIssueComment(
-        comment,
+        issueEvent.comment,
         conversationKey,
         issueAgentNameByID,
         issueAuthorID,
       );
       if (!normalized) {
+        void loadConversation({ silent: true });
         return;
       }
 
@@ -690,9 +865,7 @@ export default function GlobalChatSurface({
         if (prev.some((entry) => entry.id === normalized.id)) {
           return prev;
         }
-        return [...prev, normalized].sort(
-          (a: ChatMessage, b: ChatMessage) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
-        );
+        return sortChatMessagesByCreatedAt([...prev, normalized]);
       });
     }
   }, [
@@ -707,6 +880,7 @@ export default function GlobalChatSurface({
     issueAuthorID,
     lastMessage,
     clearPostSendRefreshTimers,
+    loadConversation,
   ]);
 
   const uploadSelectedFiles = useCallback(async (files: File[]) => {

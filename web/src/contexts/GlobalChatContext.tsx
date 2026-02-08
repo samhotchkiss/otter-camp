@@ -116,6 +116,47 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function extractProjectEventPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const projectID = asString(payload.project_id) || asString(payload.projectId);
+  if (projectID) {
+    return payload;
+  }
+
+  if (isRecord(payload.message)) {
+    return extractProjectEventPayload(payload.message);
+  }
+  if (isRecord(payload.data)) {
+    return extractProjectEventPayload(payload.data);
+  }
+  return null;
+}
+
+function extractIssueEventPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const issueID = asString(payload.issue_id) || asString(payload.issueId);
+  if (issueID) {
+    return payload;
+  }
+
+  if (isRecord(payload.comment)) {
+    const nestedIssueID =
+      asString(payload.comment.issue_id) || asString(payload.comment.issueId);
+    if (nestedIssueID) {
+      return {
+        ...payload,
+        issue_id: nestedIssueID,
+      };
+    }
+  }
+  if (isRecord(payload.data)) {
+    return extractIssueEventPayload(payload.data);
+  }
+  return null;
+}
+
 function buildThreadId(agentId: string): string {
   return `dm_${agentId}`;
 }
@@ -390,8 +431,13 @@ function parseIncomingEvent(lastMessage: {
   }
 
   if (lastMessage.type === "ProjectChatMessageCreated") {
-    const projectId = asString(payload.project_id) || asString(payload.projectId);
-    const author = asString(payload.author);
+    const projectPayload = extractProjectEventPayload(payload);
+    if (!projectPayload) {
+      return null;
+    }
+    const projectId =
+      asString(projectPayload.project_id) || asString(projectPayload.projectId);
+    const author = asString(projectPayload.author);
     if (!projectId) {
       return null;
     }
@@ -420,7 +466,11 @@ function parseIncomingEvent(lastMessage: {
   }
 
   if (lastMessage.type === "IssueCommentCreated") {
-    const issueId = asString(payload.issue_id) || asString(payload.issueId);
+    const issuePayload = extractIssueEventPayload(payload);
+    if (!issuePayload) {
+      return null;
+    }
+    const issueId = asString(issuePayload.issue_id) || asString(issuePayload.issueId);
     if (!issueId) {
       return null;
     }

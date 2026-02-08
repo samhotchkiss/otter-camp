@@ -12,6 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func projectStrPtr(value string) *string {
+	return &value
+}
+
 func insertProjectTestProject(t *testing.T, db *sql.DB, orgID, name string) string {
 	t.Helper()
 	var id string
@@ -82,6 +86,41 @@ func TestProjectsHandlerListIncludesTaskCounts(t *testing.T) {
 	require.Equal(t, 2, projectCounts[projectOne].CompletedCount)
 	require.Equal(t, 0, projectCounts[projectTwo].TaskCount)
 	require.Equal(t, 0, projectCounts[projectTwo].CompletedCount)
+}
+
+func TestNormalizeProjectCreateNameAndDescription(t *testing.T) {
+	t.Run("splits embedded description flag from name", func(t *testing.T) {
+		name, description := normalizeProjectCreateNameAndDescription(
+			"Agent Avatars --description Animal avatar generation for agent identities",
+			nil,
+		)
+
+		require.Equal(t, "Agent Avatars", name)
+		require.NotNil(t, description)
+		require.Equal(t, "Animal avatar generation for agent identities", *description)
+	})
+
+	t.Run("supports equals delimiter", func(t *testing.T) {
+		name, description := normalizeProjectCreateNameAndDescription(
+			"Agent Avatars --description=Animal avatar generation for agent identities",
+			nil,
+		)
+
+		require.Equal(t, "Agent Avatars", name)
+		require.NotNil(t, description)
+		require.Equal(t, "Animal avatar generation for agent identities", *description)
+	})
+
+	t.Run("keeps explicit description over embedded token", func(t *testing.T) {
+		name, description := normalizeProjectCreateNameAndDescription(
+			"Agent Avatars --description wrong value",
+			projectStrPtr("Correct description"),
+		)
+
+		require.Equal(t, "Agent Avatars --description wrong value", name)
+		require.NotNil(t, description)
+		require.Equal(t, "Correct description", *description)
+	})
 }
 
 func TestProjectsHandlerGetIncludesTaskCounts(t *testing.T) {

@@ -30,6 +30,13 @@ type ProjectIssuesResponse = {
   total: number;
 };
 
+type AgentsResponse = {
+  agents?: Array<{
+    id: string;
+    name: string;
+  }>;
+};
+
 type ProjectIssuesListProps = {
   projectId: string;
   selectedIssueID?: string | null;
@@ -117,6 +124,7 @@ export default function ProjectIssuesList({
   const [kindFilter, setKindFilter] = useState<IssueFilterKind>("all");
   const [originFilter, setOriginFilter] = useState<IssueFilterOrigin>("all");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [agentNameByID, setAgentNameByID] = useState<Map<string, string>>(new Map());
   const issueByID = useMemo(() => {
     const index = new Map<string, ProjectIssueItem>();
     for (const issue of items) {
@@ -146,38 +154,56 @@ export default function ProjectIssuesList({
       return;
     }
 
-    const url = new URL(`${API_URL}/api/issues`);
-    url.searchParams.set("org_id", orgID);
-    url.searchParams.set("project_id", projectId);
-    url.searchParams.set("limit", "200");
+    const issuesURL = new URL(`${API_URL}/api/issues`);
+    issuesURL.searchParams.set("org_id", orgID);
+    issuesURL.searchParams.set("project_id", projectId);
+    issuesURL.searchParams.set("limit", "200");
     if (stateFilter !== "all") {
-      url.searchParams.set("state", stateFilter);
+      issuesURL.searchParams.set("state", stateFilter);
     }
     if (kindFilter !== "all") {
-      url.searchParams.set("kind", kindFilter);
+      issuesURL.searchParams.set("kind", kindFilter);
     }
     if (originFilter !== "all") {
-      url.searchParams.set("origin", originFilter);
+      issuesURL.searchParams.set("origin", originFilter);
     }
+    const agentsURL = new URL(`${API_URL}/api/agents`);
+    agentsURL.searchParams.set("org_id", orgID);
 
     setIsLoading(true);
     setError(null);
 
-    void fetch(url.toString(), {
-      headers: { "Content-Type": "application/json" },
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          const payload = await response.json().catch(() => null);
+    void Promise.all([
+      fetch(issuesURL.toString(), {
+        headers: { "Content-Type": "application/json" },
+      }),
+      fetch(agentsURL.toString(), {
+        headers: { "Content-Type": "application/json" },
+      }).catch(() => null),
+    ])
+      .then(async ([issuesResponse, agentsResponse]) => {
+        if (!issuesResponse.ok) {
+          const payload = await issuesResponse.json().catch(() => null);
           throw new Error(payload?.error ?? "Failed to load issues");
         }
-        return response.json() as Promise<ProjectIssuesResponse>;
+        const issuesPayload = await issuesResponse.json() as ProjectIssuesResponse;
+        const agentMap = new Map<string, string>();
+        if (agentsResponse && agentsResponse.ok) {
+          const agentsPayload = await agentsResponse.json() as AgentsResponse;
+          for (const agent of agentsPayload.agents ?? []) {
+            if (agent.id && agent.name) {
+              agentMap.set(agent.id, agent.name);
+            }
+          }
+        }
+        return { issuesPayload, agentMap };
       })
-      .then((payload) => {
+      .then(({ issuesPayload, agentMap }) => {
         if (cancelled) {
           return;
         }
-        setItems(Array.isArray(payload.items) ? payload.items : []);
+        setItems(Array.isArray(issuesPayload.items) ? issuesPayload.items : []);
+        setAgentNameByID(agentMap);
       })
       .catch((fetchError: unknown) => {
         if (cancelled) {
@@ -197,6 +223,26 @@ export default function ProjectIssuesList({
       cancelled = true;
     };
   }, [kindFilter, originFilter, projectId, refreshKey, stateFilter]);
+
+  const ownerLabelByIssueID = useMemo(() => {
+    const labels = new Map<string, string>();
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    for (const issue of items) {
+      const ownerID = (issue.owner_agent_id ?? "").trim();
+      if (!ownerID) {
+        labels.set(issue.id, "Unassigned");
+        continue;
+      }
+      const resolved = agentNameByID.get(ownerID);
+      if (resolved) {
+        labels.set(issue.id, resolved);
+        continue;
+      }
+      labels.set(issue.id, uuidPattern.test(ownerID) ? "Unknown agent" : ownerID);
+    }
+    return labels;
+  }, [agentNameByID, items]);
 
   return (
     <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
@@ -326,7 +372,7 @@ export default function ProjectIssuesList({
                     {childCount > 0 && (
                       <span>Sub-issues: {childCount}</span>
                     )}
-                    <span>Owner: {issue.owner_agent_id ?? "Unassigned"}</span>
+                    <span>Owner: {ownerLabelByIssueID.get(issue.id) ?? "Unassigned"}</span>
                     <span>Last activity: {formatLastActivity(issue.last_activity_at)}</span>
                     {issue.github_number ? (
                       <span>
@@ -346,9 +392,9 @@ export default function ProjectIssuesList({
                           </>
                         )}
                       </span>
-                    ) : (
+                    ) : issue.origin === "github" ? (
                       <span>GitHub metadata unavailable</span>
-                    )}
+                    ) : null}
                   </div>
                 </button>
               </li>

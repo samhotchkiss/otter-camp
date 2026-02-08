@@ -17,6 +17,7 @@ describe("WebSocketIssueSubscriber", () => {
   beforeEach(() => {
     wsState.connected = false;
     sendMessage.mockReset();
+    sendMessage.mockReturnValue(true);
     localStorage.clear();
   });
 

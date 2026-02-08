@@ -322,4 +322,50 @@ describe("GlobalChatSurface", () => {
       ).toBe(true);
     });
   });
+
+  it("handles nested realtime project payload envelopes", async () => {
+    const projectConversation: GlobalProjectConversation = {
+      key: "project:project-1",
+      type: "project",
+      projectId: "project-1",
+      title: "Project One",
+      contextLabel: "Project chat",
+      subtitle: "Team thread",
+      unreadCount: 0,
+      updatedAt: "2026-02-07T00:00:00.000Z",
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ messages: [] }),
+      }),
+    );
+
+    const { rerender } = render(<GlobalChatSurface conversation={projectConversation} />);
+    await screen.findByPlaceholderText("Message Project One...");
+
+    wsState.lastMessage = {
+      type: "ProjectChatMessageCreated",
+      data: {
+        data: {
+          message: {
+            id: "msg-2",
+            project_id: "project-1",
+            author: "Stone",
+            body: "Reply",
+            created_at: "2026-02-08T00:00:00.000Z",
+            updated_at: "2026-02-08T00:00:00.000Z",
+          },
+        },
+      },
+    };
+
+    rerender(<GlobalChatSurface conversation={projectConversation} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Agent replied")).toBeInTheDocument();
+    });
+  });
 });

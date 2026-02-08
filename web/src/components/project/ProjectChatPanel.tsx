@@ -100,6 +100,25 @@ function normalizeMessage(input: unknown): ProjectChatMessage | null {
   };
 }
 
+function extractRealtimeProjectPayload(input: unknown): unknown {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+  const record = input as Record<string, unknown>;
+  const hasProjectID =
+    (typeof record.project_id === "string" && record.project_id.trim() !== "") ||
+    (typeof record.projectId === "string" && record.projectId.trim() !== "");
+  if (hasProjectID) {
+    return record;
+  }
+
+  return (
+    extractRealtimeProjectPayload(record.message) ??
+    extractRealtimeProjectPayload(record.data) ??
+    extractRealtimeProjectPayload(record.payload)
+  );
+}
+
 function formatMessageTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {
@@ -253,7 +272,7 @@ export default function ProjectChatPanel({
       return;
     }
 
-    const incoming = normalizeMessage(lastMessage.data);
+    const incoming = normalizeMessage(extractRealtimeProjectPayload(lastMessage.data));
     if (!incoming || incoming.project_id !== projectId) {
       return;
     }

@@ -277,6 +277,26 @@ describe("useWebSocket", () => {
     });
   });
 
+  it("normalizes websocket message type tokens with separators", async () => {
+    const { result } = renderHook(() => useWebSocket());
+    const socket = latestSocket();
+
+    act(() => {
+      socket.simulateOpen();
+    });
+
+    await act(async () => {
+      await socket.simulateMessage(
+        JSON.stringify({ event_type: "project.chat.message.created", data: { ok: true } }),
+      );
+    });
+
+    expect(result.current.lastMessage).toEqual({
+      type: "ProjectChatMessageCreated",
+      data: { ok: true },
+    });
+  });
+
   it("handles blob messages", async () => {
     const { result } = renderHook(() => useWebSocket());
     const socket = latestSocket();

@@ -24,6 +24,16 @@ function mockJSONResponse(body: unknown, ok = true) {
   } as Response;
 }
 
+function mockIssuesAndAgents(issues: MockIssue[], agents?: Array<{ id: string; name: string }>) {
+  return async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/agents")) {
+      return mockJSONResponse({ agents: agents ?? [] });
+    }
+    return mockJSONResponse({ items: issues, total: issues.length });
+  };
+}
+
 describe("ProjectIssuesList", () => {
   const fetchMock = vi.fn();
 
@@ -39,9 +49,9 @@ describe("ProjectIssuesList", () => {
   });
 
   it("renders origin metadata, github fields, and approval badges", async () => {
-    fetchMock.mockResolvedValueOnce(
-      mockJSONResponse({
-        items: [
+    fetchMock.mockImplementation(
+      mockIssuesAndAgents(
+        [
           {
             id: "issue-1",
             issue_number: 77,
@@ -56,8 +66,8 @@ describe("ProjectIssuesList", () => {
             github_url: "https://github.com/samhotchkiss/otter-camp/issues/77",
           } satisfies MockIssue,
         ],
-        total: 1,
-      }),
+        [{ id: "stone", name: "Stone" }],
+      ),
     );
 
     render(<ProjectIssuesList projectId="project-1" />);
@@ -67,6 +77,7 @@ describe("ProjectIssuesList", () => {
     expect(within(row).getByText("GitHub")).toBeInTheDocument();
     expect(within(row).getByText("Open", { selector: "span" })).toBeInTheDocument();
     expect(within(row).getByTestId("issue-approval-issue-1")).toHaveTextContent("Ready for Review");
+    expect(within(row).getByText("Owner: Stone")).toBeInTheDocument();
     expect(within(row).getByText("GitHub #77", { exact: false })).toBeInTheDocument();
     expect(within(row).getByRole("link", { name: "Open" })).toHaveAttribute(
       "href",
@@ -79,6 +90,9 @@ describe("ProjectIssuesList", () => {
       const raw = typeof input === "string" ? input : input.toString();
       const url = new URL(raw);
       const kind = url.searchParams.get("kind");
+      if (url.pathname.includes("/api/agents")) {
+        return mockJSONResponse({ agents: [{ id: "sam", name: "Sam" }] });
+      }
       if (kind === "pull_request") {
         return mockJSONResponse({
           items: [
@@ -132,19 +146,22 @@ describe("ProjectIssuesList", () => {
   });
 
   it("renders loading and empty states", async () => {
-    let resolveFetch: ((value: Response) => void) | null = null;
-    fetchMock.mockImplementation(
-      () =>
-        new Promise<Response>((resolve) => {
-          resolveFetch = resolve;
-        }),
-    );
+    let resolveIssuesFetch: ((value: Response) => void) | null = null;
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/agents")) {
+        return Promise.resolve(mockJSONResponse({ agents: [] }));
+      }
+      return new Promise<Response>((resolve) => {
+        resolveIssuesFetch = resolve;
+      });
+    });
 
     render(<ProjectIssuesList projectId="project-1" />);
     expect(screen.getByText("Loading issues...")).toBeInTheDocument();
 
-    expect(resolveFetch).not.toBeNull();
-    resolveFetch!(mockJSONResponse({ items: [], total: 0 }));
+    expect(resolveIssuesFetch).not.toBeNull();
+    resolveIssuesFetch!(mockJSONResponse({ items: [], total: 0 }));
 
     expect(
       await screen.findByText("No issues found for the selected filters."),
@@ -152,9 +169,9 @@ describe("ProjectIssuesList", () => {
   });
 
   it("shows parent and child relationship metadata", async () => {
-    fetchMock.mockResolvedValueOnce(
-      mockJSONResponse({
-        items: [
+    fetchMock.mockImplementation(
+      mockIssuesAndAgents(
+        [
           {
             id: "issue-parent",
             issue_number: 10,
@@ -178,8 +195,8 @@ describe("ProjectIssuesList", () => {
             last_activity_at: "2026-02-06T05:30:00Z",
           } satisfies MockIssue,
         ],
-        total: 2,
-      }),
+        [{ id: "sam", name: "Sam" }],
+      ),
     );
 
     render(<ProjectIssuesList projectId="project-1" />);
@@ -189,12 +206,17 @@ describe("ProjectIssuesList", () => {
 
     expect(within(parentRow).getByText("Sub-issues: 1")).toBeInTheDocument();
     expect(within(childRow).getByText("Sub-issue of #10")).toBeInTheDocument();
+    expect(within(parentRow).queryByText("GitHub metadata unavailable")).not.toBeInTheDocument();
+    expect(within(childRow).queryByText("GitHub metadata unavailable")).not.toBeInTheDocument();
   });
 
   it("renders error state and retries", async () => {
     fetchMock
       .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce(mockJSONResponse({ items: [], total: 0 }));
+      .mockResolvedValueOnce(mockJSONResponse({ items: [], total: 0 }))
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [], total: 0 }))
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }));
 
     render(<ProjectIssuesList projectId="project-1" />);
 
@@ -203,5 +225,31 @@ describe("ProjectIssuesList", () => {
     expect(
       await screen.findByText("No issues found for the selected filters."),
     ).toBeInTheDocument();
+  });
+
+  it("shows unknown agent instead of raw owner UUID when agent metadata is unavailable", async () => {
+    fetchMock.mockImplementation(
+      mockIssuesAndAgents(
+        [
+          {
+            id: "issue-uuid-owner",
+            issue_number: 42,
+            title: "Owner should be friendly",
+            state: "open",
+            origin: "local",
+            kind: "issue",
+            owner_agent_id: "6715afdc-9213-4830-b0a8-3a063c5b4209",
+            last_activity_at: "2026-02-06T05:00:00Z",
+          } satisfies MockIssue,
+        ],
+        [],
+      ),
+    );
+
+    render(<ProjectIssuesList projectId="project-1" />);
+
+    const row = await screen.findByRole("button", { name: /#42 Owner should be friendly/i });
+    expect(within(row).getByText("Owner: Unknown agent")).toBeInTheDocument();
+    expect(within(row).queryByText(/6715afdc-9213-4830-b0a8-3a063c5b4209/)).not.toBeInTheDocument();
   });
 });

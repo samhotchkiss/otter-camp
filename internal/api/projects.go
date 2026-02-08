@@ -79,6 +79,57 @@ var demoProjects = []map[string]interface{}{
 	},
 }
 
+var embeddedDescriptionMarkers = []string{
+	"--description",
+	"—description",
+	"–description",
+	"−description",
+}
+
+func normalizeProjectCreateNameAndDescription(name string, description *string) (string, *string) {
+	trimmedName := strings.TrimSpace(name)
+
+	if description != nil {
+		trimmedDescription := strings.TrimSpace(*description)
+		if trimmedDescription != "" {
+			return trimmedName, &trimmedDescription
+		}
+		description = nil
+	}
+
+	lowerName := strings.ToLower(trimmedName)
+	markerIndex := -1
+	markerValue := ""
+	for _, marker := range embeddedDescriptionMarkers {
+		idx := strings.Index(lowerName, marker)
+		if idx <= 0 {
+			continue
+		}
+		if markerIndex == -1 || idx < markerIndex {
+			markerIndex = idx
+			markerValue = marker
+		}
+	}
+	if markerIndex == -1 {
+		return trimmedName, nil
+	}
+
+	rawDescription := strings.TrimSpace(trimmedName[markerIndex+len(markerValue):])
+	if strings.HasPrefix(rawDescription, "=") {
+		rawDescription = strings.TrimSpace(strings.TrimPrefix(rawDescription, "="))
+	}
+	if rawDescription == "" {
+		return trimmedName, nil
+	}
+
+	normalizedName := strings.TrimSpace(trimmedName[:markerIndex])
+	if normalizedName == "" {
+		return trimmedName, nil
+	}
+
+	return normalizedName, &rawDescription
+}
+
 // List returns all projects for the authenticated workspace.
 func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// Check for demo mode or missing database
@@ -253,6 +304,7 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "name is required"})
 		return
 	}
+	input.Name, input.Description = normalizeProjectCreateNameAndDescription(input.Name, input.Description)
 
 	if input.Status == "" {
 		input.Status = "active"

@@ -60,6 +60,27 @@ const MESSAGE_TYPES: WebSocketMessageType[] = [
 ];
 
 const messageTypeSet = new Set<WebSocketMessageType>(MESSAGE_TYPES);
+const messageTypeByNormalizedToken = new Map<string, WebSocketMessageType>(
+  MESSAGE_TYPES.map((type) => [normalizeTypeToken(type), type]),
+);
+
+function normalizeTypeToken(value: string): string {
+  return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+}
+
+function resolveMessageType(rawType: unknown): WebSocketMessageType | null {
+  if (typeof rawType !== "string") {
+    return null;
+  }
+  const trimmed = rawType.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (messageTypeSet.has(trimmed as WebSocketMessageType)) {
+    return trimmed as WebSocketMessageType;
+  }
+  return messageTypeByNormalizedToken.get(normalizeTypeToken(trimmed)) ?? null;
+}
 
 const resolveApiUrl = (): string => {
   const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
@@ -98,16 +119,17 @@ const parseMessage = (raw: string): WebSocketMessage => {
   if (parsed && typeof parsed === "object") {
     const record = parsed as Record<string, unknown>;
     const type =
-      (record.type as WebSocketMessageType | undefined) ??
-      (record.messageType as WebSocketMessageType | undefined) ??
-      (record.event as WebSocketMessageType | undefined);
+      resolveMessageType(record.type) ??
+      resolveMessageType(record.messageType) ??
+      resolveMessageType(record.event) ??
+      resolveMessageType(record.event_type);
 
-    if (type && messageTypeSet.has(type)) {
+    if (type) {
       const data =
         record.payload ??
         record.data ??
-        record.body ??
         record.message ??
+        record.body ??
         record;
       return { type, data };
     }

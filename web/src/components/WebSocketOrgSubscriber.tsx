@@ -29,8 +29,10 @@ export default function WebSocketOrgSubscriber() {
         return;
       }
 
-      sendMessage({ type: "subscribe", org_id: orgId });
-      lastSentOrgIdRef.current = orgId;
+      const sent = sendMessage({ type: "subscribe", org_id: orgId });
+      if (sent) {
+        lastSentOrgIdRef.current = orgId;
+      }
     };
 
     const handleVisibilityChange = () => {
