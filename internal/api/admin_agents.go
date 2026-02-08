@@ -101,6 +101,10 @@ var (
 	errAgentFilesProjectNotConfigured = errors.New("agent files project is not configured")
 	memoryDatePattern                 = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 	agentSlotPattern                  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
+	errAgentFilesDirMissing           = errors.New("agent files directory is missing")
+	errRetiredAgentFilesDirMissing    = errors.New("retired agent files directory is missing")
+	errAgentFilesDirAlreadyExists     = errors.New("agent files directory already exists")
+	errRetiredAgentFilesDirExists     = errors.New("retired agent files directory already exists")
 )
 
 const agentFilesProjectName = "Agent Files"
@@ -279,6 +283,68 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			DryRun:      false,
 		},
 	)
+}
+
+func (h *AdminAgentsHandler) Retire(w http.ResponseWriter, r *http.Request) {
+	row, workspaceID, err := h.resolveFileAgentRow(r)
+	if err != nil {
+		h.writeAgentLookupError(w, err)
+		return
+	}
+
+	repoPath, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	if err != nil {
+		h.writeAgentFilesResolveError(w, err)
+		return
+	}
+	if err := h.moveAgentFilesAndCommit(
+		r.Context(),
+		repoPath,
+		path.Join("agents", row.Slug),
+		path.Join("agents", "_retired", row.Slug),
+		fmt.Sprintf("Retire agent %s", row.Slug),
+		errAgentFilesDirMissing,
+		errRetiredAgentFilesDirExists,
+	); err != nil {
+		h.writeLifecycleMoveError(w, err)
+		return
+	}
+	if err := h.updateAgentStatus(r.Context(), workspaceID, row.Slug, "retired"); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update agent status"})
+		return
+	}
+	h.dispatchAgentEnablePatch(w, r, row.Slug, false)
+}
+
+func (h *AdminAgentsHandler) Reactivate(w http.ResponseWriter, r *http.Request) {
+	row, workspaceID, err := h.resolveFileAgentRow(r)
+	if err != nil {
+		h.writeAgentLookupError(w, err)
+		return
+	}
+
+	repoPath, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	if err != nil {
+		h.writeAgentFilesResolveError(w, err)
+		return
+	}
+	if err := h.moveAgentFilesAndCommit(
+		r.Context(),
+		repoPath,
+		path.Join("agents", "_retired", row.Slug),
+		path.Join("agents", row.Slug),
+		fmt.Sprintf("Reactivate agent %s", row.Slug),
+		errRetiredAgentFilesDirMissing,
+		errAgentFilesDirAlreadyExists,
+	); err != nil {
+		h.writeLifecycleMoveError(w, err)
+		return
+	}
+	if err := h.updateAgentStatus(r.Context(), workspaceID, row.Slug, "active"); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update agent status"})
+		return
+	}
+	h.dispatchAgentEnablePatch(w, r, row.Slug, true)
 }
 
 func (h *AdminAgentsHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
@@ -877,4 +943,145 @@ func renderNewAgentMemoryTemplate(displayName string) string {
 		name = "Agent"
 	}
 	return fmt.Sprintf("# MEMORY.md\n\nLong-term memory for %s.\n", name)
+}
+
+func (h *AdminAgentsHandler) moveAgentFilesAndCommit(
+	ctx context.Context,
+	repoPath string,
+	fromRelative string,
+	toRelative string,
+	commitMessage string,
+	missingErr error,
+	alreadyExistsErr error,
+) error {
+	if err := ensureGitRepoPath(repoPath); err != nil {
+		return err
+	}
+
+	fromPath := filepath.Join(repoPath, filepath.FromSlash(fromRelative))
+	toPath := filepath.Join(repoPath, filepath.FromSlash(toRelative))
+	if !isPathWithinRoot(repoPath, fromPath) || !isPathWithinRoot(repoPath, toPath) {
+		return fmt.Errorf("invalid lifecycle move path")
+	}
+
+	if _, err := os.Stat(fromPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return missingErr
+		}
+		return err
+	}
+	if _, err := os.Stat(toPath); err == nil {
+		return alreadyExistsErr
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(toPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.Rename(fromPath, toPath); err != nil {
+		return err
+	}
+
+	if _, err := runGitInRepo(ctx, repoPath, "add", "-A", "--", path.Dir(fromRelative)); err != nil {
+		return err
+	}
+	hasChanges, err := gitHasCachedChangesForPath(ctx, repoPath, "agents")
+	if err != nil {
+		return err
+	}
+	if !hasChanges {
+		return fmt.Errorf("agent lifecycle move produced no git changes")
+	}
+	if _, err := runGitInRepo(
+		ctx,
+		repoPath,
+		"-c", "user.name=OtterCamp Admin",
+		"-c", "user.email=ottercamp-admin@localhost",
+		"commit",
+		"-m", commitMessage,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (h *AdminAgentsHandler) updateAgentStatus(
+	ctx context.Context,
+	workspaceID string,
+	slug string,
+	status string,
+) error {
+	result, err := h.DB.ExecContext(
+		ctx,
+		`UPDATE agents
+		 SET status = $1,
+		     updated_at = NOW()
+		 WHERE org_id = $2
+		   AND slug = $3`,
+		status,
+		workspaceID,
+		slug,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (h *AdminAgentsHandler) dispatchAgentEnablePatch(
+	w http.ResponseWriter,
+	r *http.Request,
+	slug string,
+	enabled bool,
+) {
+	patch, err := canonicalizeOpenClawConfigData(map[string]interface{}{
+		"agents": map[string]interface{}{
+			slug: map[string]interface{}{
+				"enabled": enabled,
+			},
+		},
+	})
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to build config patch"})
+		return
+	}
+
+	dispatcher := &AdminConnectionsHandler{
+		DB:              h.DB,
+		OpenClawHandler: h.OpenClawHandler,
+		EventStore:      h.EventStore,
+	}
+	dispatcher.dispatchAdminCommand(
+		w,
+		r,
+		adminCommandActionConfigPatch,
+		adminCommandDispatchInput{
+			ConfigPatch: patch,
+			Confirm:     true,
+			DryRun:      false,
+		},
+	)
+}
+
+func (h *AdminAgentsHandler) writeLifecycleMoveError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errAgentFilesDirMissing):
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "agent files directory is missing"})
+	case errors.Is(err, errRetiredAgentFilesDirMissing):
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "retired agent archive is missing"})
+	case errors.Is(err, errAgentFilesDirAlreadyExists):
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "agent files directory already exists"})
+	case errors.Is(err, errRetiredAgentFilesDirExists):
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "retired agent archive already exists"})
+	default:
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update agent lifecycle"})
+	}
 }

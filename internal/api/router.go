@@ -296,6 +296,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files/{path:.*}", adminAgentsHandler.GetFile)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory", adminAgentsHandler.ListMemoryFiles)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory/{date}", adminAgentsHandler.GetMemoryFileByDate)
+		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/retire", adminAgentsHandler.Retire)
+		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reactivate", adminAgentsHandler.Reactivate)
 		r.With(middleware.OptionalWorkspace).Patch("/admin/config", adminConfigHandler.Patch)
 		r.With(middleware.OptionalWorkspace).Get("/admin/config", adminConfigHandler.GetCurrent)
 		r.With(middleware.OptionalWorkspace).Get("/admin/config/history", adminConfigHandler.ListHistory)
