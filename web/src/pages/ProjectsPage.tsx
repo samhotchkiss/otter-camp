@@ -7,6 +7,7 @@ import { NoProjectsEmpty } from "../components/EmptyState";
 import { SkeletonList } from "../components/Skeleton";
 import api from "../lib/api";
 import { isDemoMode } from "../lib/demo";
+import { formatProjectTaskSummary } from "../lib/projectTaskSummary";
 // Filters removed - use magic bar (Cmd+K) for search
 
 type Project = {
@@ -120,6 +121,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
   const taskCount = project.taskCount ?? 0;
   const completedCount = project.completedCount ?? 0;
   const progress = taskCount > 0 ? Math.round((completedCount / taskCount) * 100) : 0;
+  const taskSummary = formatProjectTaskSummary(completedCount, taskCount);
   const colors = colorClasses[project.color ?? "sky"] ?? colorClasses.sky;
   const updatedAt = project.updatedAt ?? project.updated_at ?? project.createdAt ?? project.created_at;
   const isArchived = (project.status || "").toLowerCase() === "archived";
@@ -185,7 +187,7 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
         <div className="flex items-center justify-between text-sm">
           <span className="text-[var(--text-muted)]">Progress</span>
           <span className={`font-medium ${colors.text}`}>
-            {completedCount}/{taskCount} tasks
+            {taskSummary}
           </span>
         </div>
         <div

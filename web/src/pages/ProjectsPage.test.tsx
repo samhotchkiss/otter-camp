@@ -96,4 +96,33 @@ describe("ProjectsPage", () => {
       expect(screen.getByTestId("project-progress-fill-progress-2")).toHaveStyle({ width: "0%" });
     });
   });
+
+  it("uses 'No tasks yet' phrasing for projects with zero tasks", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          projects: [
+            {
+              id: "empty-1",
+              name: "Empty Project",
+              status: "active",
+              taskCount: 0,
+              completedCount: 0,
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(
+      <MemoryRouter>
+        <ProjectsPage apiEndpoint="/api/projects-test" />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Empty Project")).toBeInTheDocument();
+    expect(screen.getByText("No tasks yet")).toBeInTheDocument();
+  });
 });
