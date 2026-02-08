@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -118,6 +119,46 @@ func TestIssuesHandlerListAndGetIncludeOwnerParticipantsAndComments(t *testing.T
 	require.NotNil(t, detail.Issue.GitHubRepositoryFullName)
 	require.Equal(t, "samhotchkiss/otter-camp", *detail.Issue.GitHubRepositoryFullName)
 	require.NotEmpty(t, detail.Issue.LastActivityAt)
+}
+
+func TestIssuesHandlerListFiltersByIssueNumber(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-list-number-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Number Filter Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	_, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue One",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	second, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue Two",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	listReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/issues?org_id=%s&project_id=%s&issue_number=%d", orgID, projectID, second.IssueNumber),
+		nil,
+	)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+
+	var listResp issueListResponse
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	require.Equal(t, 1, listResp.Total)
+	require.Len(t, listResp.Items, 1)
+	require.Equal(t, second.ID, listResp.Items[0].ID)
+	require.Equal(t, second.IssueNumber, listResp.Items[0].IssueNumber)
 }
 
 func TestIssuesHandlerCommentCreateValidatesAndPersists(t *testing.T) {

@@ -93,6 +93,7 @@ type ProjectIssueFilter struct {
 	State        *string
 	Origin       *string
 	Kind         *string
+	IssueNumber  *int64
 	OwnerAgentID *string
 	WorkStatus   *string
 	Priority     *string
@@ -1108,6 +1109,14 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		default:
 			return nil, fmt.Errorf("invalid kind filter")
 		}
+	}
+	if filter.IssueNumber != nil {
+		if *filter.IssueNumber <= 0 {
+			return nil, fmt.Errorf("invalid issue_number filter")
+		}
+		query += fmt.Sprintf(" AND i.issue_number = $%d", argPos)
+		args = append(args, *filter.IssueNumber)
+		argPos++
 	}
 	if filter.OwnerAgentID != nil && strings.TrimSpace(*filter.OwnerAgentID) != "" {
 		ownerAgentID := strings.TrimSpace(*filter.OwnerAgentID)

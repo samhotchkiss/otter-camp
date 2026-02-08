@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/samhotchkiss/otter-camp/internal/ottercli"
@@ -974,7 +975,10 @@ func resolveIssueID(client *ottercli.Client, projectRef, issueRef string) (strin
 	if err != nil {
 		return "", err
 	}
-	issues, err := client.ListIssues(project.ID, map[string]string{})
+	issues, err := client.ListIssues(project.ID, map[string]string{
+		"issue_number": strconv.Itoa(issueNumber),
+		"limit":        "1",
+	})
 	if err != nil {
 		return "", err
 	}
@@ -991,12 +995,9 @@ func parsePositiveInt(raw string) (int, error) {
 	if raw == "" {
 		return 0, errors.New("empty value")
 	}
-	value := 0
-	for _, ch := range raw {
-		if ch < '0' || ch > '9' {
-			return 0, errors.New("not numeric")
-		}
-		value = value*10 + int(ch-'0')
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, errors.New("not numeric")
 	}
 	if value <= 0 {
 		return 0, errors.New("must be > 0")

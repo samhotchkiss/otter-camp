@@ -167,6 +167,15 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("kind")); raw != "" {
 		kind = &raw
 	}
+	var issueNumber *int64
+	if raw := strings.TrimSpace(r.URL.Query().Get("issue_number")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue_number must be a positive integer"})
+			return
+		}
+		issueNumber = &parsed
+	}
 	var ownerAgentID *string
 	if raw := strings.TrimSpace(r.URL.Query().Get("owner_agent_id")); raw != "" {
 		ownerAgentID = &raw
@@ -195,6 +204,7 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 		State:        state,
 		Origin:       origin,
 		Kind:         kind,
+		IssueNumber:  issueNumber,
 		OwnerAgentID: ownerAgentID,
 		WorkStatus:   workStatus,
 		Priority:     priority,

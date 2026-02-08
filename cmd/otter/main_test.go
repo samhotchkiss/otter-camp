@@ -2,8 +2,13 @@ package main
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/samhotchkiss/otter-camp/internal/ottercli"
 )
 
 func TestParsePositiveInt(t *testing.T) {
@@ -19,6 +24,7 @@ func TestParsePositiveInt(t *testing.T) {
 		{name: "negative-like", input: "-1", wantErr: true},
 		{name: "alpha", input: "abc", wantErr: true},
 		{name: "empty", input: "", wantErr: true},
+		{name: "overflow", input: "99999999999999999999", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -46,6 +52,53 @@ func TestResolveIssueIDUUIDBypassesLookup(t *testing.T) {
 	}
 	if got != id {
 		t.Fatalf("resolveIssueID got %q want %q", got, id)
+	}
+}
+
+func TestResolveIssueIDUsesIssueNumberQueryFilter(t *testing.T) {
+	var requestedIssueNumber string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/projects":
+			_, _ = w.Write([]byte(`{"projects":[{"id":"project-1","name":"Project One","slug":"project-one"}],"total":1}`))
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues":
+			values, err := url.ParseQuery(r.URL.RawQuery)
+			if err != nil {
+				t.Fatalf("failed to parse query: %v", err)
+			}
+			requestedIssueNumber = values.Get("issue_number")
+			if requestedIssueNumber == "42" {
+				_, _ = w.Write([]byte(`{"items":[{"id":"issue-42","project_id":"project-1","issue_number":42,"title":"Issue 42","state":"open","origin":"local","approval_state":"draft","work_status":"queued","priority":"P2"}],"total":1}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+			return
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+			return
+		}
+	}))
+	defer srv.Close()
+
+	client := &ottercli.Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
+
+	got, err := resolveIssueID(client, "project-1", "42")
+	if err != nil {
+		t.Fatalf("resolveIssueID() error = %v", err)
+	}
+	if got != "issue-42" {
+		t.Fatalf("resolveIssueID() = %q, want issue-42", got)
+	}
+	if requestedIssueNumber != "42" {
+		t.Fatalf("issue_number query = %q, want 42", requestedIssueNumber)
 	}
 }
 

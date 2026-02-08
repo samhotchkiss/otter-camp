@@ -241,6 +241,11 @@ func TestProjectIssueStore_ListIssuesFiltersByOwnerStatusAndPriority(t *testing.
 	})
 	require.NoError(t, err)
 
+	latestIssues, err := issueStore.ListIssues(ctx, ProjectIssueFilter{ProjectID: projectID, Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, latestIssues, 1)
+	secondIssueNumber := latestIssues[0].IssueNumber
+
 	ownerFilter := ownerAgentID
 	filteredByOwner, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
 		ProjectID:    projectID,
@@ -268,6 +273,14 @@ func TestProjectIssueStore_ListIssuesFiltersByOwnerStatusAndPriority(t *testing.
 	require.NoError(t, err)
 	require.Len(t, filteredByPriority, 1)
 	require.Equal(t, IssuePriorityP1, filteredByPriority[0].Priority)
+
+	filteredByIssueNumber, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID:   projectID,
+		IssueNumber: &secondIssueNumber,
+	})
+	require.NoError(t, err)
+	require.Len(t, filteredByIssueNumber, 1)
+	require.Equal(t, secondIssueNumber, filteredByIssueNumber[0].IssueNumber)
 
 	badStatus := "invalid"
 	_, err = issueStore.ListIssues(ctx, ProjectIssueFilter{
