@@ -505,9 +505,11 @@ func scanEnrichedFeedItem(scanner interface{ Scan(...any) error }) (EnrichedFeed
 	if taskTitle.Valid {
 		item.TaskTitle = &taskTitle.String
 	}
+	normalizedAgentName := "System"
 	if agentName.Valid {
-		item.AgentName = &agentName.String
+		normalizedAgentName = normalizeFeedActorName(agentName.String)
 	}
+	item.AgentName = &normalizedAgentName
 	if projectName.Valid {
 		item.ProjectName = &projectName.String
 	}
