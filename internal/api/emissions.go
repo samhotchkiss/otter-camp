@@ -17,6 +17,7 @@ const defaultEmissionBufferSize = 100
 
 type Emission struct {
 	ID         string            `json:"id"`
+	OrgID      string            `json:"org_id,omitempty"`
 	SourceType string            `json:"source_type"`
 	SourceID   string            `json:"source_id"`
 	Scope      *EmissionScope    `json:"scope,omitempty"`
@@ -40,6 +41,7 @@ type EmissionProgress struct {
 }
 
 type EmissionFilter struct {
+	OrgID     string
 	ProjectID string
 	IssueID   string
 	SourceID  string
@@ -73,7 +75,7 @@ func (b *EmissionBuffer) Push(emission Emission) {
 		b.emissions = append([]Emission(nil), b.emissions[excess:]...)
 	}
 	if sourceID := strings.TrimSpace(emission.SourceID); sourceID != "" {
-		b.bySource[sourceID] = emission
+		b.bySource[sourceKey(emission.OrgID, sourceID)] = emission
 	}
 }
 
@@ -85,6 +87,7 @@ func (b *EmissionBuffer) Recent(limit int, filter EmissionFilter) []Emission {
 	projectID := strings.TrimSpace(filter.ProjectID)
 	issueID := strings.TrimSpace(filter.IssueID)
 	sourceID := strings.TrimSpace(filter.SourceID)
+	orgID := strings.TrimSpace(filter.OrgID)
 
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -92,6 +95,9 @@ func (b *EmissionBuffer) Recent(limit int, filter EmissionFilter) []Emission {
 	out := make([]Emission, 0, min(limit, len(b.emissions)))
 	for i := len(b.emissions) - 1; i >= 0 && len(out) < limit; i-- {
 		emission := b.emissions[i]
+		if orgID != "" && strings.TrimSpace(emission.OrgID) != orgID {
+			continue
+		}
 		if sourceID != "" && strings.TrimSpace(emission.SourceID) != sourceID {
 			continue
 		}
@@ -110,19 +116,24 @@ func (b *EmissionBuffer) Recent(limit int, filter EmissionFilter) []Emission {
 	return out
 }
 
-func (b *EmissionBuffer) LatestBySource(sourceID string) *Emission {
+func (b *EmissionBuffer) LatestBySource(orgID string, sourceID string) *Emission {
+	orgID = strings.TrimSpace(orgID)
 	sourceID = strings.TrimSpace(sourceID)
 	if sourceID == "" {
 		return nil
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	latest, ok := b.bySource[sourceID]
+	latest, ok := b.bySource[sourceKey(orgID, sourceID)]
 	if !ok {
 		return nil
 	}
 	copy := latest
 	return &copy
+}
+
+func sourceKey(orgID string, sourceID string) string {
+	return strings.TrimSpace(orgID) + ":" + strings.TrimSpace(sourceID)
 }
 
 func min(a, b int) int {
@@ -173,6 +184,7 @@ func (h *EmissionsHandler) Recent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	records := h.Buffer.Recent(limit, EmissionFilter{
+		OrgID:     workspaceID,
 		ProjectID: r.URL.Query().Get("project_id"),
 		IssueID:   r.URL.Query().Get("issue_id"),
 		SourceID:  r.URL.Query().Get("source_id"),
@@ -214,6 +226,7 @@ func (h *EmissionsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, emission := range normalized {
+		emission.OrgID = workspaceID
 		h.Buffer.Push(emission)
 		h.broadcastEmission(workspaceID, emission)
 	}

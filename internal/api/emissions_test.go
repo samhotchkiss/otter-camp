@@ -100,7 +100,7 @@ func TestEmissionBufferPushRecentAndFilters(t *testing.T) {
 	require.Len(t, sourceFiltered, 1)
 	require.Equal(t, "4", sourceFiltered[0].ID)
 
-	latest := buffer.LatestBySource("agent-a")
+	latest := buffer.LatestBySource("", "agent-a")
 	require.NotNil(t, latest)
 	require.Equal(t, "4", latest.ID)
 }
@@ -129,7 +129,7 @@ func TestEmissionBufferConcurrentPushIsSafe(t *testing.T) {
 	recent := buffer.Recent(500, EmissionFilter{})
 	require.NotEmpty(t, recent)
 	require.LessOrEqual(t, len(recent), 500)
-	latest := buffer.LatestBySource("agent-concurrent")
+	latest := buffer.LatestBySource("", "agent-concurrent")
 	require.NotNil(t, latest)
 }
 
@@ -189,6 +189,15 @@ func TestEmissionHandlerIngestAndRecent(t *testing.T) {
 	require.Len(t, recentResp.Items, 2)
 	require.Equal(t, "em-2", recentResp.Items[0].ID)
 	require.Equal(t, "em-1", recentResp.Items[1].ID)
+
+	otherOrgReq := httptest.NewRequest(http.MethodGet, "/api/emissions/recent?org_id=660e8400-e29b-41d4-a716-446655440000&limit=10", nil)
+	otherOrgRec := httptest.NewRecorder()
+	router.ServeHTTP(otherOrgRec, otherOrgReq)
+	require.Equal(t, http.StatusOK, otherOrgRec.Code)
+
+	var otherOrgResp emissionListResponse
+	require.NoError(t, json.NewDecoder(otherOrgRec.Body).Decode(&otherOrgResp))
+	require.Len(t, otherOrgResp.Items, 0)
 
 	scopedReq := httptest.NewRequest(http.MethodGet, "/api/emissions/recent?org_id="+orgID+"&project_id="+projectID+"&issue_id="+issueID, nil)
 	scopedRec := httptest.NewRecorder()
@@ -253,4 +262,42 @@ func TestEmissionWebsocketBroadcast(t *testing.T) {
 	require.Equal(t, ws.MessageEmissionReceived, event.Type)
 	require.Equal(t, "em-ws-1", event.Emission.ID)
 	require.Equal(t, "agent-1", event.Emission.SourceID)
+}
+
+func TestEmissionBufferOrgIsolation(t *testing.T) {
+	buffer := NewEmissionBuffer(10)
+	buffer.Push(Emission{
+		ID:         "org-a-1",
+		OrgID:      "org-a",
+		SourceType: "agent",
+		SourceID:   "agent-main",
+		Kind:       "status",
+		Summary:    "org A update",
+		Timestamp:  time.Now().Add(-2 * time.Second),
+	})
+	buffer.Push(Emission{
+		ID:         "org-b-1",
+		OrgID:      "org-b",
+		SourceType: "agent",
+		SourceID:   "agent-main",
+		Kind:       "status",
+		Summary:    "org B update",
+		Timestamp:  time.Now().Add(-1 * time.Second),
+	})
+
+	orgARecent := buffer.Recent(10, EmissionFilter{OrgID: "org-a"})
+	require.Len(t, orgARecent, 1)
+	require.Equal(t, "org-a-1", orgARecent[0].ID)
+
+	orgBRecent := buffer.Recent(10, EmissionFilter{OrgID: "org-b"})
+	require.Len(t, orgBRecent, 1)
+	require.Equal(t, "org-b-1", orgBRecent[0].ID)
+
+	orgALatest := buffer.LatestBySource("org-a", "agent-main")
+	require.NotNil(t, orgALatest)
+	require.Equal(t, "org-a-1", orgALatest.ID)
+
+	orgBLatest := buffer.LatestBySource("org-b", "agent-main")
+	require.NotNil(t, orgBLatest)
+	require.Equal(t, "org-b-1", orgBLatest.ID)
 }
