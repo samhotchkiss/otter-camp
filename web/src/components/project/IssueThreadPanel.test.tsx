@@ -1,11 +1,15 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import useEmissions from "../../hooks/useEmissions";
 import { useWS } from "../../contexts/WebSocketContext";
 import IssueThreadPanel from "./IssueThreadPanel";
 
 vi.mock("../../contexts/WebSocketContext", () => ({
   useWS: vi.fn(),
+}));
+vi.mock("../../hooks/useEmissions", () => ({
+  default: vi.fn(),
 }));
 
 function mockJSONResponse(payload: unknown, status = 200): Response {
@@ -20,6 +24,13 @@ describe("IssueThreadPanel", () => {
     localStorage.clear();
     localStorage.setItem("otter-camp-org-id", "org-123");
     vi.restoreAllMocks();
+    vi.mocked(useEmissions).mockReturnValue({
+      emissions: [],
+      latestBySource: new Map(),
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
     vi.mocked(useWS).mockReturnValue({
       connected: false,
       lastMessage: null,
@@ -254,6 +265,54 @@ describe("IssueThreadPanel", () => {
     expect(screen.getByTestId("issue-thread-approval")).toHaveTextContent("Ready for Review");
     expect(screen.getByText("/posts/2026-02-06-launch-plan.md")).toBeInTheDocument();
     expect(screen.getByTestId("editor-mode-markdown")).toBeInTheDocument();
+  });
+
+  it("renders issue-scoped live activity indicator and stream", async () => {
+    vi.mocked(useEmissions).mockReturnValue({
+      emissions: [
+        {
+          id: "em-1",
+          source_type: "agent",
+          source_id: "agent-1",
+          kind: "progress",
+          summary: "Finished lint cleanup",
+          timestamp: new Date().toISOString(),
+          scope: { issue_id: "issue-1" },
+        },
+      ],
+      latestBySource: new Map(),
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/issues/issue-1?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-1",
+            issue_number: 1,
+            title: "Thread issue",
+            state: "open",
+            origin: "local",
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      return mockJSONResponse({
+        agents: [{ id: "sam", name: "Sam" }],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<IssueThreadPanel issueID="issue-1" />);
+
+    expect(await screen.findByText("#1 Thread issue")).toBeInTheDocument();
+    expect(screen.getByText(/Agent is working on this issue/i)).toBeInTheDocument();
+    expect(screen.getByText("Finished lint cleanup")).toBeInTheDocument();
+    expect(useEmissions).toHaveBeenCalledWith({ issueId: "issue-1", limit: 30 });
   });
 
   it("lists history and opens historical version with read-only comment rendering", async () => {
