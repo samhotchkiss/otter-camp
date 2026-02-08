@@ -192,3 +192,11 @@ Template for every entry:
 - Tests run: N/A (documentation change only)
 - Remaining work: None for this request.
 - Notes: Kept the overview short and placed it near the top for fast onboarding context.
+
+### 2026-02-08 08:02 MST
+- Scope: Broke down Spec004 into small implementation tickets and moved spec to in-progress.
+- GitHub issues: #277, #278, #279, #280, #281
+- Commits: (pending)
+- Tests run: N/A (planning + issue creation only)
+- Remaining work: Implement phases in order starting with #277.
+- Notes: Phase ordering enforces schema/API before UI work to keep TDD loop stable.

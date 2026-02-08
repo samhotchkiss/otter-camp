@@ -454,3 +454,15 @@ Spawned 4 Codex agents:
 - `/private/tmp/otter-6-cli` → Issue #6: CLI Install & Onboarding (branch: codex/6-cli)
 
 Previous batch (issues #7 subtasks) fully merged. Stale branch `codex/3-nav-cleanup` deleted (bad run — deleted issue specs).
+
+## [2026-02-08 08:02:55 MST] Started Spec004 (File Uploads in Chat)
+- Moved spec file to in-progress:
+  - `/Users/sam/Documents/Dev/otter-camp/issues/02-in-progress/004-file-uploads-in-chat.md`
+- Created build-ordered GitHub implementation issues:
+  - #277 Spec 004 / Phase 1: DB schema support for project chat attachments
+  - #278 Spec 004 / Phase 2: API/store support for `attachment_ids`
+  - #279 Spec 004 / Phase 3: Composer upload queue UX
+  - #280 Spec 004 / Phase 4: Attachment rendering in chat history
+  - #281 Spec 004 / Phase 5: Upload asset serving hardening
+- Next up:
+  - Implement #277 first (migration + schema tests), then commit/push.
