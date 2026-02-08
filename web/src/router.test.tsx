@@ -26,4 +26,8 @@ describe("router", () => {
   it("registers the agent detail route", () => {
     expect(hasPath(router.routes as RouteNode[], "agents/:id")).toBe(true);
   });
+
+  it("registers the project task detail route", () => {
+    expect(hasPath(router.routes as RouteNode[], "projects/:id/tasks/:taskId")).toBe(true);
+  });
 });

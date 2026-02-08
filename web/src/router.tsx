@@ -88,6 +88,10 @@ export const router = createBrowserRouter([
         element: <ProjectDetailPage />,
       },
       {
+        path: "projects/:id/tasks/:taskId",
+        element: <TaskDetailPage />,
+      },
+      {
         path: "projects/:id/issues/:issueId",
         element: <ProjectDetailPage />,
       },

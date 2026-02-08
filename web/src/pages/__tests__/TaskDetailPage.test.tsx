@@ -31,6 +31,10 @@ function renderTaskDetail(pathname: string) {
         path: "/tasks/:taskId",
         element: <TaskDetailPage />,
       },
+      {
+        path: "/projects/:id/tasks/:taskId",
+        element: <TaskDetailPage />,
+      },
     ],
     { initialEntries: [pathname] }
   );
@@ -87,5 +91,52 @@ describe("TaskDetailPage", () => {
     // Activity timeline updates.
     expect(screen.getByText('added subtask “Test subtask”')).toBeInTheDocument();
     expect(screen.getAllByText(/added a comment/i).length).toBe(commentEventsBefore + 1);
+  });
+
+  it("loads project-scoped task details and renders a project breadcrumb", async () => {
+    localStorageMock.setItem("otter-camp-org-id", "550e8400-e29b-41d4-a716-446655440000");
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "550e8400-e29b-41d4-a716-446655440101",
+          title: "Fix task detail page routing",
+          description: "Task description",
+          status: "in_progress",
+          priority: "P1",
+          assigned_agent_id: "550e8400-e29b-41d4-a716-446655440102",
+          assignee_name: "Derek",
+          project_name: "Otter Camp",
+          created_at: "2026-02-07T12:00:00Z",
+          updated_at: "2026-02-08T12:00:00Z",
+        }),
+      } as Response) as unknown as typeof fetch;
+
+    renderTaskDetail("/projects/550e8400-e29b-41d4-a716-446655440010/tasks/550e8400-e29b-41d4-a716-446655440101");
+
+    expect(await screen.findByRole("heading", { name: "Fix task detail page routing" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Projects" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Otter Camp" })).toHaveAttribute(
+      "href",
+      "/projects/550e8400-e29b-41d4-a716-446655440010",
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/projects/550e8400-e29b-41d4-a716-446655440010/tasks/550e8400-e29b-41d4-a716-446655440101?org_id=550e8400-e29b-41d4-a716-446655440000",
+    );
+  });
+
+  it("shows a project-scoped 404 with Back to Project link and no demo copy", async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false } as Response) as unknown as typeof fetch;
+
+    renderTaskDetail("/projects/550e8400-e29b-41d4-a716-446655440010/tasks/550e8400-e29b-41d4-a716-446655440103");
+
+    expect(await screen.findByRole("heading", { name: "Task not found" })).toBeInTheDocument();
+    expect(screen.queryByText(/demo/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Project" })).toHaveAttribute(
+      "href",
+      "/projects/550e8400-e29b-41d4-a716-446655440010",
+    );
+    expect(screen.queryByRole("link", { name: "Back to Dashboard" })).not.toBeInTheDocument();
   });
 });

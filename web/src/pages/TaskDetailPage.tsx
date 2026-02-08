@@ -145,6 +145,48 @@ const SAMPLE_TASKS: Record<string, TaskDetail> = {
   },
 };
 
+function normalizeTaskStatus(value: unknown): TaskStatus {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  switch (raw) {
+    case "backlog":
+      return "backlog";
+    case "in-progress":
+    case "in_progress":
+      return "in-progress";
+    case "blocked":
+      return "blocked";
+    case "review":
+      return "review";
+    case "done":
+    case "cancelled":
+      return "done";
+    case "todo":
+    case "queued":
+    case "dispatched":
+    default:
+      return "todo";
+  }
+}
+
+function normalizeTaskPriority(value: unknown): TaskPriority {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  switch (raw) {
+    case "low":
+    case "p3":
+      return "low";
+    case "high":
+    case "p1":
+      return "high";
+    case "urgent":
+    case "p0":
+      return "urgent";
+    case "medium":
+    case "p2":
+    default:
+      return "medium";
+  }
+}
+
 function formatTimestamp(isoString: string): string {
   const date = new Date(isoString);
   return date.toLocaleString(undefined, {
@@ -329,12 +371,13 @@ function buildInitialActivity(task: TaskDetail, subtasks: Subtask[], comments: C
 
 export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetailPageProps) {
   const navigate = useNavigate();
-  const { taskId } = useParams();
+  const { id: projectId, taskId } = useParams<{ id?: string; taskId?: string }>();
 
   const [task, setTask] = useState<TaskDetail | null>(null);
   const [subtasks, setSubtasks] = useState<Subtask[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const [projectName, setProjectName] = useState("");
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -349,14 +392,14 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   const storageKeys = useMemo(() => {
-    const id = taskId || "unknown";
+    const id = projectId ? `${projectId}.${taskId || "unknown"}` : taskId || "unknown";
     return {
       task: `oc.task.${id}`,
       subtasks: `oc.subtasks.${id}`,
       comments: `oc.comments.${id}`,
       activity: `oc.activity.${id}`,
     };
-  }, [taskId]);
+  }, [projectId, taskId]);
 
   const appendActivity = useCallback((event: Omit<ActivityEvent, "id">) => {
     setActivity((prev) => {
@@ -406,6 +449,11 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
         setIsLoading(false);
         return;
       }
+      if (projectId) {
+        setProjectName("Project");
+      } else {
+        setProjectName("");
+      }
 
       setIsLoading(true);
       setError(null);
@@ -418,30 +466,56 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
       // Load task details from API when available, but never block the UI on failure.
       let apiTask: TaskDetail | null = null;
       try {
-        const response = await fetch(`${apiEndpoint}/${taskId}`);
+        const orgID = localStorage.getItem("otter-camp-org-id");
+        const query = orgID ? `?org_id=${encodeURIComponent(orgID)}` : "";
+        const endpoint = projectId
+          ? `/api/projects/${projectId}/tasks/${taskId}${query}`
+          : `${apiEndpoint}/${taskId}${query}`;
+        const response = await fetch(endpoint);
         if (response.ok) {
           const data = await response.json();
           const raw = (data?.task ?? data) as Partial<Record<string, unknown>>;
           if (raw && typeof raw === "object") {
             const title = typeof raw.title === "string" ? raw.title : "";
             const description = typeof raw.description === "string" ? raw.description : "";
-            const status = typeof raw.status === "string" ? raw.status : "todo";
-            const priority = typeof raw.priority === "string" ? raw.priority : "medium";
             const createdAt = (typeof raw.createdAt === "string" ? raw.createdAt : typeof raw.created_at === "string" ? raw.created_at : new Date().toISOString());
             const updatedAt = (typeof raw.updatedAt === "string" ? raw.updatedAt : typeof raw.updated_at === "string" ? raw.updated_at : createdAt);
+            const assigneeID = typeof raw.assigned_agent_id === "string" ? raw.assigned_agent_id : "";
+            const assigneeName = typeof raw.assignee_name === "string" ? raw.assignee_name.trim() : "";
 
-            const normalizedStatus = (STATUS_OPTIONS.some((s) => s.value === status) ? status : "todo") as TaskStatus;
-            const normalizedPriority = (PRIORITY_OPTIONS.some((p) => p.value === priority) ? priority : "medium") as TaskPriority;
+            let assignee: TaskAssignee | undefined;
+            if (raw.assignee && typeof raw.assignee === "object") {
+              const parsed = raw.assignee as Partial<Record<string, unknown>>;
+              const parsedName = typeof parsed.name === "string" ? parsed.name.trim() : "";
+              const parsedID = typeof parsed.id === "string" ? parsed.id.trim() : "";
+              if (parsedName) {
+                assignee = { id: parsedID || parsedName.toLowerCase().replace(/\s+/g, "-"), name: parsedName };
+              }
+            } else if (assigneeName) {
+              assignee = {
+                id: assigneeID || assigneeName.toLowerCase().replace(/\s+/g, "-"),
+                name: assigneeName,
+              };
+            }
 
             apiTask = {
               id: typeof raw.id === "string" ? raw.id : taskId,
               title: title || `Task ${taskId}`,
               description: description || "",
-              status: normalizedStatus,
-              priority: normalizedPriority,
+              status: normalizeTaskStatus(raw.status),
+              priority: normalizeTaskPriority(raw.priority),
+              assignee,
               createdAt,
               updatedAt,
             };
+
+            if (projectId) {
+              const projectNameValue =
+                typeof raw.project_name === "string" ? raw.project_name.trim() : "";
+              if (projectNameValue) {
+                setProjectName(projectNameValue);
+              }
+            }
           }
         }
       } catch {
@@ -472,7 +546,7 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
     return () => {
       isMounted = false;
     };
-  }, [apiEndpoint, storageKeys, taskId]);
+  }, [apiEndpoint, projectId, storageKeys, taskId]);
 
   // Keep activity persisted when it changes (in case it was loaded from sample)
   useEffect(() => {
@@ -685,16 +759,18 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
   }
 
   if (!task) {
+    const fallbackHref = projectId ? `/projects/${projectId}` : "/projects";
+    const fallbackLabel = projectId ? "Back to Project" : "Back to Projects";
     return (
       <div className="w-full">
         <div className="rounded-2xl border border-slate-200 bg-[var(--surface)]/80 p-6">
           <h1 className="text-lg font-semibold text-[var(--text)]">Task not found</h1>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            The requested task doesn’t exist (or isn’t available in this demo).
+            The requested task doesn&apos;t exist.
           </p>
           <div className="mt-4">
-            <Link to="/" className="text-sm font-medium text-sky-700 underline underline-offset-4 dark:text-sky-300">
-              Back to Dashboard
+            <Link to={fallbackHref} className="text-sm font-medium text-sky-700 underline underline-offset-4 dark:text-sky-300">
+              {fallbackLabel}
             </Link>
           </div>
         </div>
@@ -702,8 +778,24 @@ export default function TaskDetailPage({ apiEndpoint = "/api/tasks" }: TaskDetai
     );
   }
 
+  const resolvedProjectName = projectName.trim() || "Project";
+
   return (
     <div className="w-full space-y-6">
+      {projectId ? (
+        <nav className="flex items-center gap-2 text-sm text-[var(--text-muted)]" aria-label="Breadcrumb">
+          <Link to="/projects" className="hover:text-[var(--text)]">
+            Projects
+          </Link>
+          <span>›</span>
+          <Link to={`/projects/${projectId}`} className="hover:text-[var(--text)]">
+            {resolvedProjectName}
+          </Link>
+          <span>›</span>
+          <span className="font-medium text-[var(--text)]">{task.title}</span>
+        </nav>
+      ) : null}
+
       {/* Header */}
       <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">

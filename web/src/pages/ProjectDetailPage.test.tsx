@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ProjectDetailPage from "./ProjectDetailPage";
 
@@ -35,6 +35,11 @@ function mockJSONResponse(body: unknown, ok = true): Response {
     ok,
     json: async () => body,
   } as Response;
+}
+
+function ProjectTaskRouteEcho() {
+  const { id, taskId } = useParams<{ id: string; taskId: string }>();
+  return <div data-testid="project-task-route">{id}:{taskId}</div>;
 }
 
 describe("ProjectDetailPage files tab", () => {
@@ -179,6 +184,89 @@ describe("ProjectDetailPage files tab", () => {
     expect(openConversationMock).toHaveBeenCalledWith(
       expect.objectContaining({ type: "project", projectId: "project-1" }),
       expect.objectContaining({ focus: true, openDock: true }),
+    );
+  });
+
+  it("navigates to project task detail when a board task card is clicked", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          tasks: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440111",
+              title: "Fix task detail routing",
+              status: "queued",
+              priority: "P1",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+          <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskRouteEcho />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByText("Fix task detail routing"));
+    expect(await screen.findByTestId("project-task-route")).toHaveTextContent(
+      "project-1:550e8400-e29b-41d4-a716-446655440111",
+    );
+  });
+
+  it("navigates to project task detail when a list task row is clicked", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          tasks: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440112",
+              title: "Verify list row click route",
+              status: "in_progress",
+              priority: "P2",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+          <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskRouteEcho />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "List" }));
+    await user.click(screen.getByText("Verify list row click route"));
+    expect(await screen.findByTestId("project-task-route")).toHaveTextContent(
+      "project-1:550e8400-e29b-41d4-a716-446655440112",
     );
   });
 });
