@@ -213,3 +213,13 @@ Template for every entry:
   - `go test ./internal/store -count=1` (pass)
 - Remaining work: Implement UI upload queue + attachment rendering phases (#279, #280, #281).
 - Notes: Runtime lacks docker/local postgres, so DB integration tests are skipped in this environment.
+
+### 2026-02-08 08:18 MST
+- Scope: Completed Spec004 composer upload queue UX phase.
+- GitHub issues: #279
+- Commits: (pending)
+- Tests run:
+  - `cd web && npm test -- src/components/chat/GlobalChatSurface.test.tsx --run` (pass)
+  - `cd web && npm run build:typecheck` (pass)
+- Remaining work: #280 attachment rendering and #281 upload route hardening.
+- Notes: For issue chat, attachments are currently appended as markdown links since issue comment API does not yet accept attachment_ids.

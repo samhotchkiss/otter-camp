@@ -501,3 +501,26 @@ Previous batch (issues #7 subtasks) fully merged. Stale branch `codex/3-nav-clea
   - `docker` binary is not installed in this runtime, so local Postgres-backed integration tests cannot be executed here.
 - Next up:
   - Start #279 (chat composer file upload UX).
+
+## [2026-02-08 08:18:43 MST] Implemented Spec004 issue #279 (composer upload queue UX)
+- Frontend composer updates in `web/src/components/chat/GlobalChatSurface.tsx`:
+  - Added attachment upload queue with remove controls and per-file size chips
+  - Added file picker button + hidden multi-file input
+  - Added drag-and-drop upload handling on chat surface
+  - Added clipboard image/file paste upload handling from textarea
+  - Added upload state indicators and delivery status updates
+  - Added send payload wiring:
+    - DM: sends `attachments` metadata array
+    - Project chat: sends `attachment_ids`
+    - Issue chat: appends attachment links to body (current endpoint lacks attachment field)
+  - Enabled attachment-only sends and disabled send only when both draft and queue are empty
+  - Added normalization/fallback logic so attachment-only messages still render useful link text before attachment-card rendering phase
+- Tests added in `web/src/components/chat/GlobalChatSurface.test.tsx`:
+  - upload via file picker + project `attachment_ids` payload assertion
+  - drag-drop upload triggers attachment endpoint
+  - paste upload triggers attachment endpoint
+- Validation run:
+  - `cd web && npm test -- src/components/chat/GlobalChatSurface.test.tsx --run` ✅
+  - `cd web && npm run build:typecheck` ✅
+- Next up:
+  - #280 attachment rendering UI in message history.
