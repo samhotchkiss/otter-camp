@@ -14,7 +14,10 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
-const defaultEmissionBufferSize = 100
+const (
+	defaultEmissionBufferSize = 100
+	maxEmissionBatchSize      = 100
+)
 
 var emissionIDSequence uint64
 
@@ -215,6 +218,10 @@ func (h *EmissionsHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Emissions) == 0 {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "emissions are required"})
+		return
+	}
+	if len(req.Emissions) > maxEmissionBatchSize {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "too many emissions"})
 		return
 	}
 

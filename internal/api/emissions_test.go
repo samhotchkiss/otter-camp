@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -272,6 +273,40 @@ func TestEmissionWebsocketBroadcast(t *testing.T) {
 	require.Equal(t, ws.MessageEmissionReceived, event.Type)
 	require.Equal(t, "em-ws-1", event.Emission.ID)
 	require.Equal(t, "agent-1", event.Emission.SourceID)
+}
+
+func TestEmissionHandlerIngestBatchSizeLimit(t *testing.T) {
+	buffer := NewEmissionBuffer(200)
+	handler := &EmissionsHandler{Buffer: buffer}
+	router := newEmissionsTestRouter(handler)
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+
+	buildPayload := func(count int) []byte {
+		emissions := make([]map[string]any, 0, count)
+		for i := 0; i < count; i++ {
+			emissions = append(emissions, map[string]any{
+				"id":          "em-limit-" + strconv.Itoa(i),
+				"source_type": "agent",
+				"source_id":   "agent-limit",
+				"kind":        "status",
+				"summary":     "limit test",
+			})
+		}
+		body, err := json.Marshal(map[string]any{"emissions": emissions})
+		require.NoError(t, err)
+		return body
+	}
+
+	tooLargeReq := httptest.NewRequest(http.MethodPost, "/api/emissions?org_id="+orgID, bytes.NewReader(buildPayload(101)))
+	tooLargeRec := httptest.NewRecorder()
+	router.ServeHTTP(tooLargeRec, tooLargeReq)
+	require.Equal(t, http.StatusBadRequest, tooLargeRec.Code)
+	require.Contains(t, tooLargeRec.Body.String(), "too many emissions")
+
+	maxReq := httptest.NewRequest(http.MethodPost, "/api/emissions?org_id="+orgID, bytes.NewReader(buildPayload(100)))
+	maxRec := httptest.NewRecorder()
+	router.ServeHTTP(maxRec, maxReq)
+	require.Equal(t, http.StatusAccepted, maxRec.Code)
 }
 
 func TestEmissionBufferOrgIsolation(t *testing.T) {
