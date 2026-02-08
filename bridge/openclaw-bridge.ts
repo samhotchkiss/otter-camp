@@ -31,11 +31,15 @@ const OTTERCAMP_WS_SECRET = process.env.OPENCLAW_WS_SECRET || '';
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
 const MAX_TRACKED_RUN_IDS = 2000;
 const DISPATCH_QUEUE_POLL_INTERVAL_MS = 5000;
+const ACTIVITY_EVENT_FLUSH_INTERVAL_MS = 5000;
+const ACTIVITY_EVENTS_BATCH_SIZE = 200;
+const MAX_TRACKED_ACTIVITY_EVENT_IDS = 5000;
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const PROJECT_ID_PATTERN = /(?:^|:)project:([0-9a-f-]{36})(?:$|:)/i;
 const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
+const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 
 export interface OpenClawSession {
   key: string;
@@ -216,6 +220,10 @@ const contextPrimedSessions = new Set<string>();
 const deliveredRunIDs = new Set<string>();
 const deliveredRunIDOrder: string[] = [];
 let previousSessionsByKey = new Map<string, OpenClawSession>();
+const queuedActivityEventsByOrg = new Map<string, BridgeAgentActivityEvent[]>();
+const queuedActivityEventIDs = new Set<string>();
+const deliveredActivityEventIDs = new Set<string>();
+const deliveredActivityEventIDOrder: string[] = [];
 
 const genId = () => `req-${++requestId}`;
 const execFileAsync = promisify(execFile);
@@ -772,6 +780,199 @@ function markRunIDDelivered(runID: string): void {
       deliveredRunIDs.delete(stale);
     }
   }
+}
+
+function markActivityEventDelivered(eventID: string): void {
+  const normalized = getTrimmedString(eventID);
+  if (!normalized || deliveredActivityEventIDs.has(normalized)) {
+    return;
+  }
+  deliveredActivityEventIDs.add(normalized);
+  deliveredActivityEventIDOrder.push(normalized);
+  while (deliveredActivityEventIDOrder.length > MAX_TRACKED_ACTIVITY_EVENT_IDS) {
+    const stale = deliveredActivityEventIDOrder.shift();
+    if (stale) {
+      deliveredActivityEventIDs.delete(stale);
+    }
+  }
+}
+
+function resolveActivityOrgID(sessionKey: string): string {
+  const fromContext = getTrimmedString(sessionContexts.get(sessionKey)?.orgID);
+  if (fromContext) {
+    return fromContext;
+  }
+  return OTTERCAMP_ORG_ID;
+}
+
+export function queueActivityEventsForOrg(orgID: string, events: BridgeAgentActivityEvent[]): number {
+  const normalizedOrgID = getTrimmedString(orgID);
+  if (!normalizedOrgID || events.length === 0) {
+    return 0;
+  }
+
+  const queue = queuedActivityEventsByOrg.get(normalizedOrgID) || [];
+  let queued = 0;
+  for (const event of events) {
+    const eventID = getTrimmedString(event.id);
+    if (!eventID) {
+      continue;
+    }
+    if (queuedActivityEventIDs.has(eventID) || deliveredActivityEventIDs.has(eventID)) {
+      continue;
+    }
+    queue.push(event);
+    queuedActivityEventIDs.add(eventID);
+    queued += 1;
+  }
+  if (queue.length > 0) {
+    queuedActivityEventsByOrg.set(normalizedOrgID, queue);
+  }
+  return queued;
+}
+
+function queueSessionDeltaActivityEvents(events: BridgeAgentActivityEvent[]): number {
+  let queued = 0;
+  const grouped = new Map<string, BridgeAgentActivityEvent[]>();
+  for (const event of events) {
+    const orgID = resolveActivityOrgID(event.session_key);
+    if (!orgID) {
+      continue;
+    }
+    const bucket = grouped.get(orgID) || [];
+    bucket.push(event);
+    grouped.set(orgID, bucket);
+  }
+  for (const [orgID, orgEvents] of grouped.entries()) {
+    queued += queueActivityEventsForOrg(orgID, orgEvents);
+  }
+  return queued;
+}
+
+function buildDispatchCorrelationEvent(params: {
+  orgID: string;
+  trigger: 'dispatch.dm' | 'dispatch.project_chat' | 'dispatch.issue';
+  correlationID: string;
+  sessionKey: string;
+  agentID: string;
+  summary: string;
+  detail?: string;
+  scope?: AgentActivityScope;
+}): BridgeAgentActivityEvent | null {
+  const orgID = getTrimmedString(params.orgID);
+  const correlationID = getTrimmedString(params.correlationID);
+  const sessionKey = getTrimmedString(params.sessionKey);
+  const agentID = getTrimmedString(params.agentID);
+  if (!orgID || !correlationID || !sessionKey || !agentID) {
+    return null;
+  }
+
+  const startedAt = new Date().toISOString();
+  const idSeed = [orgID, params.trigger, correlationID, sessionKey, agentID].join('|');
+  const event: BridgeAgentActivityEvent = {
+    id: `dispatch_${crypto.createHash('sha1').update(idSeed).digest('hex').slice(0, 24)}`,
+    agent_id: agentID,
+    session_key: sessionKey,
+    trigger: params.trigger,
+    channel: 'system',
+    summary: getTrimmedString(params.summary) || 'Dispatch processed',
+    detail: getTrimmedString(params.detail) || undefined,
+    tokens_used: 0,
+    duration_ms: 0,
+    status: 'completed',
+    started_at: startedAt,
+    completed_at: startedAt,
+  };
+  if (params.scope && (params.scope.project_id || params.scope.issue_id || params.scope.issue_number || params.scope.thread_id)) {
+    event.scope = params.scope;
+  }
+  return event;
+}
+
+function queueDispatchCorrelationEvent(params: {
+  orgID: string;
+  trigger: 'dispatch.dm' | 'dispatch.project_chat' | 'dispatch.issue';
+  correlationID: string;
+  sessionKey: string;
+  agentID: string;
+  summary: string;
+  detail?: string;
+  scope?: AgentActivityScope;
+}): void {
+  const event = buildDispatchCorrelationEvent(params);
+  if (!event) {
+    return;
+  }
+  queueActivityEventsForOrg(params.orgID, [event]);
+}
+
+async function pushActivityEventBatch(orgID: string, events: BridgeAgentActivityEvent[]): Promise<boolean> {
+  if (!orgID || events.length === 0) {
+    return true;
+  }
+
+  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/activity/events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN
+        ? {
+            Authorization: `Bearer ${OTTERCAMP_TOKEN}`,
+            'X-OpenClaw-Token': OTTERCAMP_TOKEN,
+          }
+        : {}),
+    },
+    body: JSON.stringify({
+      org_id: orgID,
+      events,
+    }),
+  }, 'push activity events');
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 240);
+    console.error(
+      `[bridge] activity event push failed (${orgID}): ${response.status} ${response.statusText} ${snippet}`.trim(),
+    );
+    return false;
+  }
+  return true;
+}
+
+export async function flushBufferedActivityEvents(reason = 'manual'): Promise<number> {
+  let pushed = 0;
+  for (const [orgID, queue] of Array.from(queuedActivityEventsByOrg.entries())) {
+    while (queue.length > 0) {
+      const batch = queue.slice(0, ACTIVITY_EVENTS_BATCH_SIZE);
+      const ok = await pushActivityEventBatch(orgID, batch);
+      if (!ok) {
+        break;
+      }
+      queue.splice(0, batch.length);
+      for (const event of batch) {
+        const eventID = getTrimmedString(event.id);
+        if (eventID) {
+          queuedActivityEventIDs.delete(eventID);
+          markActivityEventDelivered(eventID);
+        }
+      }
+      pushed += batch.length;
+    }
+    if (queue.length === 0) {
+      queuedActivityEventsByOrg.delete(orgID);
+    } else {
+      queuedActivityEventsByOrg.set(orgID, queue);
+    }
+  }
+  if (pushed > 0) {
+    console.log(`[bridge] flushed ${pushed} activity event(s) (${reason})`);
+  }
+  return pushed;
+}
+
+export function resetBufferedActivityEventsForTest(): void {
+  queuedActivityEventsByOrg.clear();
+  queuedActivityEventIDs.clear();
+  deliveredActivityEventIDs.clear();
+  deliveredActivityEventIDOrder.length = 0;
 }
 
 async function fetchWithRetry(
@@ -1342,6 +1543,10 @@ async function processDispatchQueue(): Promise<void> {
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   const sessionKey = (event.data?.session_key || '').trim();
   const content = (event.data?.content || '').trim();
+  const orgID = getTrimmedString(event.org_id);
+  const threadID = getTrimmedString(event.data?.thread_id);
+  const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(sessionKey);
+  const messageID = getTrimmedString(event.data?.message_id);
 
   if (!sessionKey || !content) {
     console.warn('[bridge] skipped dm.message with missing session key or content');
@@ -1350,17 +1555,30 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
 
   sessionContexts.set(sessionKey, {
     kind: 'dm',
-    orgID: getTrimmedString(event.org_id),
-    threadID: getTrimmedString(event.data?.thread_id),
-    agentID:
-      getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(sessionKey),
+    orgID,
+    threadID,
+    agentID,
   });
 
   try {
-    await sendMessageToSession(sessionKey, content, event.data?.message_id);
+    await sendMessageToSession(sessionKey, content, messageID || undefined);
     console.log(
-      `[bridge] delivered dm.message to ${sessionKey} (message_id=${event.data?.message_id || 'n/a'})`,
+      `[bridge] delivered dm.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
+    if (orgID && agentID) {
+      queueDispatchCorrelationEvent({
+        orgID,
+        trigger: 'dispatch.dm',
+        correlationID: messageID || `${sessionKey}:${content.slice(0, 80)}`,
+        sessionKey,
+        agentID,
+        summary: `Dispatched DM to ${agentID}`,
+        detail: content.slice(0, 500),
+        scope: {
+          thread_id: threadID || undefined,
+        },
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('missing scope')) {
@@ -1402,6 +1620,20 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
     console.log(
       `[bridge] delivered project.chat.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
+    if (orgID && agentID) {
+      queueDispatchCorrelationEvent({
+        orgID,
+        trigger: 'dispatch.project_chat',
+        correlationID: messageID || `${sessionKey}:${content.slice(0, 80)}`,
+        sessionKey,
+        agentID,
+        summary: `Dispatched project chat for ${projectID}`,
+        detail: content.slice(0, 500),
+        scope: {
+          project_id: projectID,
+        },
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('missing scope')) {
@@ -1454,6 +1686,24 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
     console.log(
       `[bridge] delivered issue.comment.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
+    const correlationAgentID = responderAgentID || agentID || parseAgentIDFromSessionKey(sessionKey);
+    if (orgID && correlationAgentID) {
+      const issueLabel = Number.isFinite(issueNumber) ? `#${issueNumber}` : issueID;
+      queueDispatchCorrelationEvent({
+        orgID,
+        trigger: 'dispatch.issue',
+        correlationID: messageID || `${sessionKey}:${content.slice(0, 80)}`,
+        sessionKey,
+        agentID: correlationAgentID,
+        summary: `Dispatched issue comment for ${issueLabel}`,
+        detail: content.slice(0, 500),
+        scope: {
+          project_id: projectID,
+          issue_id: issueID,
+          issue_number: issueNumber,
+        },
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('missing scope')) {
@@ -1799,9 +2049,13 @@ async function runOnce(): Promise<void> {
     await connectToOpenClaw();
     const sessions = await fetchSessions();
     const activityEvents = collectSessionDeltaActivityEvents(sessions);
+    queueSessionDeltaActivityEvents(activityEvents);
     await pushToOtterCamp(sessions);
-    if (activityEvents.length > 0) {
-      console.log(`[bridge] generated ${activityEvents.length} activity event(s) from session deltas`);
+    const flushedCount = await flushBufferedActivityEvents('one-shot');
+    if (activityEvents.length > 0 || flushedCount > 0) {
+      console.log(
+        `[bridge] generated ${activityEvents.length} activity event(s) from session deltas; pushed ${flushedCount}`,
+      );
     }
     console.log(`[bridge] sync complete (${sessions.length} sessions)`);
   } catch (err) {
@@ -1820,22 +2074,31 @@ async function runContinuous(): Promise<void> {
 
   const firstSessions = await fetchSessions();
   const firstActivityEvents = collectSessionDeltaActivityEvents(firstSessions);
+  queueSessionDeltaActivityEvents(firstActivityEvents);
   await pushToOtterCamp(firstSessions);
-  if (firstActivityEvents.length > 0) {
-    console.log(`[bridge] generated ${firstActivityEvents.length} initial activity event(s)`);
+  const firstFlushedCount = await flushBufferedActivityEvents('initial-sync');
+  if (firstActivityEvents.length > 0 || firstFlushedCount > 0) {
+    console.log(
+      `[bridge] generated ${firstActivityEvents.length} initial activity event(s); pushed ${firstFlushedCount}`,
+    );
   }
   console.log(`[bridge] initial sync complete (${firstSessions.length} sessions)`);
   await processDispatchQueue().catch((err) => {
     console.error('[bridge] initial dispatch queue drain failed:', err);
   });
+  await flushBufferedActivityEvents('initial-dispatch');
 
   setInterval(async () => {
     try {
       const sessions = await fetchSessions();
       const activityEvents = collectSessionDeltaActivityEvents(sessions);
+      queueSessionDeltaActivityEvents(activityEvents);
       await pushToOtterCamp(sessions);
-      if (activityEvents.length > 0) {
-        console.log(`[bridge] generated ${activityEvents.length} activity event(s) from session deltas`);
+      const flushedCount = await flushBufferedActivityEvents('periodic-sync');
+      if (activityEvents.length > 0 || flushedCount > 0) {
+        console.log(
+          `[bridge] generated ${activityEvents.length} activity event(s) from session deltas; pushed ${flushedCount}`,
+        );
       }
       console.log(`[bridge] periodic sync complete (${sessions.length} sessions)`);
     } catch (err) {
@@ -1846,10 +2109,19 @@ async function runContinuous(): Promise<void> {
   setInterval(async () => {
     try {
       await processDispatchQueue();
+      await flushBufferedActivityEvents('dispatch-loop');
     } catch (err) {
       console.error('[bridge] periodic dispatch queue drain failed:', err);
     }
   }, DISPATCH_QUEUE_POLL_INTERVAL_MS);
+
+  setInterval(async () => {
+    try {
+      await flushBufferedActivityEvents('activity-flush-loop');
+    } catch (err) {
+      console.error('[bridge] activity flush loop failed:', err);
+    }
+  }, ACTIVITY_EVENT_FLUSH_INTERVAL_MS);
 
   console.log('[bridge] running continuously (Ctrl+C to stop)');
 }
