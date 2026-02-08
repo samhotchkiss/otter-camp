@@ -466,3 +466,38 @@ Previous batch (issues #7 subtasks) fully merged. Stale branch `codex/3-nav-clea
   - #281 Spec 004 / Phase 5: Upload asset serving hardening
 - Next up:
   - Implement #277 first (migration + schema tests), then commit/push.
+
+## [2026-02-08 08:11:42 MST] Implemented Spec004 issue #278 (backend attachment_ids + project chat payload)
+- Backend/API updates:
+  - `internal/api/project_chat.go`
+    - Added `attachment_ids` support in create payload
+    - Allow attachment-only messages (`body` can be empty if attachments present)
+    - Validate attachment UUIDs and org ownership before create
+    - Link attachments to chat message after create
+    - Include `attachments` array in chat payloads
+  - `internal/api/attachments.go`
+    - Added `chat_message_id` support to attachment model lookup
+    - Added `LinkAttachmentToChatMessage()` + `UpdateProjectChatMessageAttachments()`
+    - Updated comment-link helper to clear `chat_message_id` when linking to comments
+- Store updates:
+  - `internal/store/project_chat_store.go`
+    - Added `attachments` column handling to create/list/get/search scans
+    - Ensure empty JSON defaults to `[]`
+- Tests added/updated:
+  - `internal/api/project_chat_test.go`
+    - `TestProjectChatHandlerCreateWithAttachmentOnlyBody`
+    - `TestProjectChatHandlerCreateRejectsInvalidAttachmentIDs`
+    - `TestNormalizeProjectChatAttachmentIDs`
+    - `TestToProjectChatPayloadDecodesAttachments`
+  - `internal/store/schema_test.go`
+    - `TestSchemaProjectChatAttachmentColumnsAndForeignKey` (from #277)
+- Validation run:
+  - `go test ./internal/api -run 'TestNormalizeProjectChatAttachmentIDs|TestToProjectChatPayloadDecodesAttachments' -count=1` ✅
+  - `go test ./internal/api -run TestProjectChatHandlerCreateWithAttachmentOnlyBody -v -count=1` ⏭️ skipped (`OTTER_TEST_DATABASE_URL` not set)
+  - `go test ./internal/api -count=1` ✅
+  - `go test ./internal/store -run TestSchemaProjectChatAttachmentColumnsAndForeignKey -v -count=1` ⏭️ skipped (`OTTER_TEST_DATABASE_URL` not set)
+  - `go test ./internal/store -count=1` ✅
+- Environment note:
+  - `docker` binary is not installed in this runtime, so local Postgres-backed integration tests cannot be executed here.
+- Next up:
+  - Start #279 (chat composer file upload UX).

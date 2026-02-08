@@ -200,3 +200,16 @@ Template for every entry:
 - Tests run: N/A (planning + issue creation only)
 - Remaining work: Implement phases in order starting with #277.
 - Notes: Phase ordering enforces schema/API before UI work to keep TDD loop stable.
+
+### 2026-02-08 08:11 MST
+- Scope: Completed Spec004 backend phase for attachment_ids and project-chat attachment payloads.
+- GitHub issues: #278
+- Commits: (pending)
+- Tests run:
+  - `go test ./internal/api -run 'TestNormalizeProjectChatAttachmentIDs|TestToProjectChatPayloadDecodesAttachments' -count=1` (pass)
+  - `go test ./internal/api -run TestProjectChatHandlerCreateWithAttachmentOnlyBody -v -count=1` (skipped: OTTER_TEST_DATABASE_URL)
+  - `go test ./internal/api -count=1` (pass)
+  - `go test ./internal/store -run TestSchemaProjectChatAttachmentColumnsAndForeignKey -v -count=1` (skipped: OTTER_TEST_DATABASE_URL)
+  - `go test ./internal/store -count=1` (pass)
+- Remaining work: Implement UI upload queue + attachment rendering phases (#279, #280, #281).
+- Notes: Runtime lacks docker/local postgres, so DB integration tests are skipped in this environment.
