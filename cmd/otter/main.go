@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -173,16 +174,22 @@ func handleProject(args []string) {
 			}
 		}
 	case "create":
-		flags := flag.NewFlagSet("project create", flag.ExitOnError)
+		flags := flag.NewFlagSet("project create", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
 		slug := flags.String("slug", "", "custom project slug")
 		description := flags.String("description", "", "project description")
 		status := flags.String("status", "", "status (active|archived|completed)")
 		repoURL := flags.String("repo-url", "", "repo URL")
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
-		_ = flags.Parse(args[1:])
+		flagArgs, nameArgs, err := splitProjectCreateArgs(args[1:])
+		if err != nil {
+			die(err.Error())
+		}
+		if err := flags.Parse(flagArgs); err != nil {
+			die(err.Error())
+		}
 
-		nameArgs := flags.Args()
 		if len(nameArgs) == 0 {
 			die("project name is required")
 		}
@@ -314,6 +321,49 @@ func handleProject(args []string) {
 		fmt.Println(projectUsage)
 		os.Exit(1)
 	}
+}
+
+func splitProjectCreateArgs(args []string) ([]string, []string, error) {
+	flagsWithValue := map[string]struct{}{
+		"--slug":        {},
+		"--description": {},
+		"--status":      {},
+		"--repo-url":    {},
+		"--org":         {},
+	}
+	flagArgs := make([]string, 0, len(args))
+	nameArgs := make([]string, 0, len(args))
+
+	for i := 0; i < len(args); i++ {
+		token := args[i]
+		if token == "--" {
+			nameArgs = append(nameArgs, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(token, "--") {
+			nameArgs = append(nameArgs, token)
+			continue
+		}
+		if strings.Contains(token, "=") {
+			flagArgs = append(flagArgs, token)
+			continue
+		}
+		if token == "--json" {
+			flagArgs = append(flagArgs, token)
+			continue
+		}
+		if _, ok := flagsWithValue[token]; ok {
+			if i+1 >= len(args) {
+				return nil, nil, fmt.Errorf("flag needs value: %s", token)
+			}
+			flagArgs = append(flagArgs, token, args[i+1])
+			i++
+			continue
+		}
+		flagArgs = append(flagArgs, token)
+	}
+
+	return flagArgs, nameArgs, nil
 }
 
 func handleClone(args []string) {

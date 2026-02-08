@@ -153,3 +153,62 @@ func TestDeriveManagedRepoURL(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectCreateSplitArgsSupportsInterspersedFlags(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     []string
+		wantFlags []string
+		wantNames []string
+		wantErr   bool
+	}{
+		{
+			name:      "flags before name",
+			input:     []string{"--description", "Description here", "Agent Avatars"},
+			wantFlags: []string{"--description", "Description here"},
+			wantNames: []string{"Agent Avatars"},
+		},
+		{
+			name:      "flags after name",
+			input:     []string{"Agent Avatars", "--description", "Description here"},
+			wantFlags: []string{"--description", "Description here"},
+			wantNames: []string{"Agent Avatars"},
+		},
+		{
+			name:      "mixed with bool and equals flag",
+			input:     []string{"Agent Avatars", "--json", "--repo-url=https://example.com/repo.git"},
+			wantFlags: []string{"--json", "--repo-url=https://example.com/repo.git"},
+			wantNames: []string{"Agent Avatars"},
+		},
+		{
+			name:      "double dash keeps remaining as name",
+			input:     []string{"--description", "Desc", "--", "Agent", "--description"},
+			wantFlags: []string{"--description", "Desc"},
+			wantNames: []string{"Agent", "--description"},
+		},
+		{
+			name:    "missing flag value",
+			input:   []string{"Agent Avatars", "--description"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		gotFlags, gotNames, err := splitProjectCreateArgs(tt.input)
+		if tt.wantErr {
+			if err == nil {
+				t.Fatalf("%s: expected error, got none", tt.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tt.name, err)
+		}
+		if strings.Join(gotFlags, "|") != strings.Join(tt.wantFlags, "|") {
+			t.Fatalf("%s: flags got %v want %v", tt.name, gotFlags, tt.wantFlags)
+		}
+		if strings.Join(gotNames, "|") != strings.Join(tt.wantNames, "|") {
+			t.Fatalf("%s: names got %v want %v", tt.name, gotNames, tt.wantNames)
+		}
+	}
+}
