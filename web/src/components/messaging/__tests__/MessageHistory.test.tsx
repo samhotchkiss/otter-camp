@@ -49,6 +49,65 @@ describe("MessageHistory", () => {
     expect(screen.getByText("Hi!")).toBeInTheDocument();
   });
 
+  it("renders image attachments inline", () => {
+    const messages: DMMessage[] = [
+      {
+        id: "m-image",
+        threadId: "dm_agent-1",
+        senderId: "agent-1",
+        senderName: "Agent One",
+        senderType: "agent",
+        content: "See screenshot",
+        attachments: [
+          {
+            id: "att-image-1",
+            filename: "screenshot.png",
+            size_bytes: 1024,
+            mime_type: "image/png",
+            url: "/uploads/screenshot.png",
+            thumbnail_url: "/uploads/screenshot-thumb.png",
+          },
+        ],
+        createdAt: "2024-01-01T00:01:00.000Z",
+      },
+    ];
+
+    render(<MessageHistory messages={messages} currentUserId="user-1" agent={agent} />);
+
+    expect(screen.getByAltText("screenshot.png")).toBeInTheDocument();
+  });
+
+  it("renders non-image attachments as download cards", () => {
+    const messages: DMMessage[] = [
+      {
+        id: "m-file",
+        threadId: "dm_agent-1",
+        senderId: "agent-1",
+        senderName: "Agent One",
+        senderType: "agent",
+        content: "",
+        attachments: [
+          {
+            id: "att-file-1",
+            filename: "report.pdf",
+            size_bytes: 2048,
+            mime_type: "application/pdf",
+            url: "/uploads/report.pdf",
+          },
+        ],
+        createdAt: "2024-01-01T00:01:00.000Z",
+      },
+    ];
+
+    render(<MessageHistory messages={messages} currentUserId="user-1" agent={agent} />);
+
+    expect(screen.getByText("report.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute(
+      "href",
+      "/uploads/report.pdf",
+    );
+  });
+
   it("invokes onLoadMore when clicking load earlier", async () => {
     const user = userEvent.setup();
     const onLoadMore = vi.fn();

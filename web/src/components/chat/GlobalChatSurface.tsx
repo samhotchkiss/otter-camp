@@ -11,7 +11,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useWS } from "../../contexts/WebSocketContext";
-import type { DMMessage } from "../messaging/types";
+import type { DMMessage, MessageAttachment } from "../messaging/types";
 import MessageHistory from "../messaging/MessageHistory";
 import type {
   GlobalChatConversation,
@@ -51,14 +51,7 @@ type AgentsResponse = {
   agents?: Array<{ id: string; name: string }>;
 };
 
-type ChatAttachment = {
-  id: string;
-  filename: string;
-  size_bytes: number;
-  mime_type: string;
-  url: string;
-  thumbnail_url?: string;
-};
+type ChatAttachment = MessageAttachment;
 
 type ChatMessage = DMMessage & {
   attachments?: ChatAttachment[];
@@ -177,9 +170,6 @@ function normalizeThreadMessage(
   const content =
     (typeof record.content === "string" && record.content) || "";
   const attachments = normalizeMessageAttachments(record.attachments);
-  const contentWithAttachmentFallback = content === "" && attachments.length > 0
-    ? buildAttachmentLinksMarkdown(attachments)
-    : content;
   const resetSessionID = extractSessionResetID(content);
   if (resetSessionID !== null) {
     return {
@@ -211,7 +201,7 @@ function normalizeThreadMessage(
       (typeof record.senderAvatarUrl === "string" && record.senderAvatarUrl) ||
       (typeof record.sender_avatar_url === "string" && record.sender_avatar_url) ||
       undefined,
-    content: contentWithAttachmentFallback,
+    content,
     attachments,
     createdAt: normalizeTimestamp(record.createdAt ?? record.created_at),
   };
@@ -236,9 +226,6 @@ function normalizeProjectMessage(
   if (!id || !projectID || !author || (body === "" && attachments.length === 0)) {
     return null;
   }
-  const contentWithAttachmentFallback = body === "" && attachments.length > 0
-    ? buildAttachmentLinksMarkdown(attachments)
-    : body;
   if (projectID !== expectedProjectID) {
     return null;
   }
@@ -264,7 +251,7 @@ function normalizeProjectMessage(
     senderId: isUser ? currentUserID : `agent:${author}`,
     senderName: isUser ? currentUserName : author,
     senderType: isUser ? "user" : "agent",
-    content: contentWithAttachmentFallback,
+    content: body,
     attachments,
     createdAt: normalizeTimestamp(record.created_at),
   };
@@ -287,9 +274,6 @@ function normalizeIssueComment(
   if (!id || !authorID || (body === "" && attachments.length === 0)) {
     return null;
   }
-  const contentWithAttachmentFallback = body === "" && attachments.length > 0
-    ? buildAttachmentLinksMarkdown(attachments)
-    : body;
   const resetSessionID = extractSessionResetID(body);
   if (resetSessionID !== null) {
     return {
@@ -314,7 +298,7 @@ function normalizeIssueComment(
     senderId: authorID,
     senderName,
     senderType: isUser ? "user" : "agent",
-    content: contentWithAttachmentFallback,
+    content: body,
     attachments,
     createdAt: normalizeTimestamp(record.created_at),
   };
@@ -877,9 +861,7 @@ export default function GlobalChatSurface({
         ? (issueAgentNameByID.get(issueAuthorID) ?? currentUserName)
         : currentUserName,
       senderType: "user",
-      content: body === "" && attachmentsForSend.length > 0
-        ? buildAttachmentLinksMarkdown(attachmentsForSend)
-        : body,
+      content: body,
       attachments: attachmentsForSend,
       createdAt: new Date().toISOString(),
       optimistic: true,

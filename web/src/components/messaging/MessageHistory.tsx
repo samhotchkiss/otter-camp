@@ -1,9 +1,83 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { Agent, AgentStatus, DMMessage, MessageSenderType } from "./types";
+import type {
+  Agent,
+  AgentStatus,
+  DMMessage,
+  MessageAttachment,
+  MessageSenderType,
+} from "./types";
 import { formatTimestamp, getInitials } from "./utils";
 import MessageMarkdown from "./MessageMarkdown";
 
 const SCROLL_BOTTOM_THRESHOLD_PX = 40;
+
+function formatAttachmentSize(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "0 B";
+  }
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function MessageAttachments({ attachments }: { attachments: MessageAttachment[] }) {
+  if (attachments.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      {attachments.map((attachment) => {
+        const isImage = attachment.mime_type.startsWith("image/");
+        if (isImage) {
+          return (
+            <a
+              key={attachment.id}
+              href={attachment.url}
+              target="_blank"
+              rel="noreferrer"
+              className="block overflow-hidden rounded-xl border border-[var(--border)] bg-black/20"
+            >
+              <img
+                src={attachment.thumbnail_url || attachment.url}
+                alt={attachment.filename}
+                loading="lazy"
+                className="max-h-64 w-full object-cover"
+              />
+              <div className="border-t border-[var(--border)]/70 px-3 py-2 text-xs text-[var(--text-muted)]">
+                {attachment.filename}
+              </div>
+            </a>
+          );
+        }
+
+        return (
+          <div
+            key={attachment.id}
+            className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs"
+          >
+            <div className="min-w-0">
+              <p className="truncate font-medium text-[var(--text)]">{attachment.filename}</p>
+              <p className="text-[var(--text-muted)]">{formatAttachmentSize(attachment.size_bytes)}</p>
+            </div>
+            <a
+              href={attachment.url}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded border border-[var(--border)] px-2 py-1 text-[10px] font-medium text-[var(--text)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Download
+            </a>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function MessageAvatar({
   name,
@@ -99,6 +173,9 @@ function MessageBubble({
             markdown={message.content}
             className="text-sm leading-relaxed"
           />
+          {message.attachments && message.attachments.length > 0 ? (
+            <MessageAttachments attachments={message.attachments} />
+          ) : null}
         </div>
         {message.optimistic ? (
           <p className="mt-1 text-[10px] text-[var(--orange)]">Sending...</p>

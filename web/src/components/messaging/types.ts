@@ -19,6 +19,15 @@ export type Agent = {
  */
 export type MessageSenderType = "user" | "agent";
 
+export type MessageAttachment = {
+  id: string;
+  filename: string;
+  size_bytes: number;
+  mime_type: string;
+  url: string;
+  thumbnail_url?: string;
+};
+
 /**
  * Represents a single message in a DM thread.
  */
@@ -30,6 +39,7 @@ export type DMMessage = {
   senderType: MessageSenderType;
   senderAvatarUrl?: string;
   content: string;
+  attachments?: MessageAttachment[];
   createdAt: string;
   optimistic?: boolean;
   failed?: boolean;
