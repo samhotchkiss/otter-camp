@@ -125,6 +125,7 @@ export default function Questionnaire({
   );
 
   const setFieldValue = (questionID: string, value: unknown) => {
+    setError(null);
     setValues((prev) => ({
       ...prev,
       [questionID]: value,
@@ -132,6 +133,7 @@ export default function Questionnaire({
   };
 
   const toggleMultiselectValue = (questionID: string, option: string) => {
+    setError(null);
     setValues((prev) => {
       const current = Array.isArray(prev[questionID]) ? prev[questionID] as string[] : [];
       const selected = current.includes(option)
