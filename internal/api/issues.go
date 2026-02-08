@@ -48,6 +48,8 @@ type issueSummaryPayload struct {
 	ParentIssueID            *string `json:"parent_issue_id,omitempty"`
 	WorkStatus               string  `json:"work_status"`
 	Priority                 string  `json:"priority"`
+	ActiveBranch             *string `json:"active_branch,omitempty"`
+	LastCommitSHA            *string `json:"last_commit_sha,omitempty"`
 	DueAt                    *string `json:"due_at,omitempty"`
 	NextStep                 *string `json:"next_step,omitempty"`
 	NextStepDueAt            *string `json:"next_step_due_at,omitempty"`
@@ -167,6 +169,8 @@ type issuePatchRequest struct {
 	ParentIssueID *string `json:"parent_issue_id,omitempty"`
 	WorkStatus    *string `json:"work_status,omitempty"`
 	Priority      *string `json:"priority,omitempty"`
+	ActiveBranch  *string `json:"active_branch,omitempty"`
+	LastCommitSHA *string `json:"last_commit_sha,omitempty"`
 	DueAt         *string `json:"due_at,omitempty"`
 	NextStep      *string `json:"next_step,omitempty"`
 	NextStepDueAt *string `json:"next_step_due_at,omitempty"`
@@ -953,6 +957,8 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		req.ParentIssueID != nil ||
 		req.WorkStatus != nil ||
 		req.Priority != nil ||
+		req.ActiveBranch != nil ||
+		req.LastCommitSHA != nil ||
 		req.DueAt != nil ||
 		req.NextStep != nil ||
 		req.NextStepDueAt != nil ||
@@ -992,6 +998,8 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 
 		SetWorkStatus:    req.WorkStatus != nil,
 		SetPriority:      req.Priority != nil,
+		SetActiveBranch:  req.ActiveBranch != nil,
+		SetLastCommitSHA: req.LastCommitSHA != nil,
 		SetDueAt:         req.DueAt != nil,
 		SetNextStep:      req.NextStep != nil,
 		SetNextStepDueAt: req.NextStepDueAt != nil,
@@ -1002,6 +1010,12 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Priority != nil {
 		input.Priority = *req.Priority
+	}
+	if req.ActiveBranch != nil {
+		input.ActiveBranch = req.ActiveBranch
+	}
+	if req.LastCommitSHA != nil {
+		input.LastCommitSHA = req.LastCommitSHA
 	}
 	if req.State != nil {
 		input.State = *req.State
@@ -1260,6 +1274,8 @@ func toIssueSummaryPayload(
 		ParentIssueID:  issue.ParentIssueID,
 		WorkStatus:     issue.WorkStatus,
 		Priority:       issue.Priority,
+		ActiveBranch:   issue.ActiveBranch,
+		LastCommitSHA:  issue.LastCommitSHA,
 		NextStep:       issue.NextStep,
 		LastActivityAt: issue.UpdatedAt.UTC().Format(time.RFC3339),
 	}

@@ -810,6 +810,67 @@ func TestProjectIssueStore_ClaimNextQueuedIssue(t *testing.T) {
 	require.Contains(t, err.Error(), "role")
 }
 
+func TestProjectIssueStore_UpdateIssueBranchTracking(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-branch-tracking-org")
+	projectID := createTestProject(t, db, orgID, "Issue Branch Tracking Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+	issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Branch tracking issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	branch := "feature/spec-105-branch-tracking"
+	sha := "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0"
+	updated, err := issueStore.UpdateIssueWorkTracking(ctx, UpdateProjectIssueWorkTrackingInput{
+		IssueID:          issue.ID,
+		SetActiveBranch:  true,
+		ActiveBranch:     &branch,
+		SetLastCommitSHA: true,
+		LastCommitSHA:    &sha,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated.ActiveBranch)
+	require.Equal(t, branch, *updated.ActiveBranch)
+	require.NotNil(t, updated.LastCommitSHA)
+	require.Equal(t, sha, *updated.LastCommitSHA)
+
+	clearValue := ""
+	cleared, err := issueStore.UpdateIssueWorkTracking(ctx, UpdateProjectIssueWorkTrackingInput{
+		IssueID:          issue.ID,
+		SetActiveBranch:  true,
+		ActiveBranch:     &clearValue,
+		SetLastCommitSHA: true,
+		LastCommitSHA:    &clearValue,
+	})
+	require.NoError(t, err)
+	require.Nil(t, cleared.ActiveBranch)
+	require.Nil(t, cleared.LastCommitSHA)
+
+	invalidBranch := "bad branch"
+	_, err = issueStore.UpdateIssueWorkTracking(ctx, UpdateProjectIssueWorkTrackingInput{
+		IssueID:         issue.ID,
+		SetActiveBranch: true,
+		ActiveBranch:    &invalidBranch,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "active_branch")
+
+	invalidSHA := "123xyz"
+	_, err = issueStore.UpdateIssueWorkTracking(ctx, UpdateProjectIssueWorkTrackingInput{
+		IssueID:          issue.ID,
+		SetLastCommitSHA: true,
+		LastCommitSHA:    &invalidSHA,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "last_commit_sha")
+}
+
 func TestProjectIssueStore_UpdateIssueWorkTrackingAllowsClosingFromQueuedOrInProgress(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

@@ -261,6 +261,71 @@ func TestIssuesHandlerPatchIssueUpdatesAndClearsWorkTrackingFields(t *testing.T)
 	require.Nil(t, cleared.NextStepDueAt)
 }
 
+func TestIssuesHandlerPatchIssueBranchTracking(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-patch-branch-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Patch Branch Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Branch patchable issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	setReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"active_branch":"feature/spec-105","last_commit_sha":"abcdef1234567"}`)),
+	)
+	setRec := httptest.NewRecorder()
+	router.ServeHTTP(setRec, setReq)
+	require.Equal(t, http.StatusOK, setRec.Code)
+
+	var updated issueSummaryPayload
+	require.NoError(t, json.NewDecoder(setRec.Body).Decode(&updated))
+	require.NotNil(t, updated.ActiveBranch)
+	require.Equal(t, "feature/spec-105", *updated.ActiveBranch)
+	require.NotNil(t, updated.LastCommitSHA)
+	require.Equal(t, "abcdef1234567", *updated.LastCommitSHA)
+
+	clearReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"active_branch":"","last_commit_sha":""}`)),
+	)
+	clearRec := httptest.NewRecorder()
+	router.ServeHTTP(clearRec, clearReq)
+	require.Equal(t, http.StatusOK, clearRec.Code)
+
+	var cleared issueSummaryPayload
+	require.NoError(t, json.NewDecoder(clearRec.Body).Decode(&cleared))
+	require.Nil(t, cleared.ActiveBranch)
+	require.Nil(t, cleared.LastCommitSHA)
+
+	invalidBranchReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"active_branch":"bad branch"}`)),
+	)
+	invalidBranchRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidBranchRec, invalidBranchReq)
+	require.Equal(t, http.StatusBadRequest, invalidBranchRec.Code)
+
+	invalidSHAReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"last_commit_sha":"123xyz"}`)),
+	)
+	invalidSHARec := httptest.NewRecorder()
+	router.ServeHTTP(invalidSHARec, invalidSHAReq)
+	require.Equal(t, http.StatusBadRequest, invalidSHARec.Code)
+}
+
 func TestIssuesHandlerPatchIssueRejectsInvalidTransitionsAndValues(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-patch-validate-org")
