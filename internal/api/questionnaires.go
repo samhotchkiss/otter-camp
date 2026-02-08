@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"strings"
@@ -51,6 +52,11 @@ type questionnairePayload struct {
 	CreatedAt   string                  `json:"created_at"`
 }
 
+const (
+	maxQuestionnaireQuestionCount = 100
+	maxQuestionnaireOptionCount   = 200
+)
+
 func (h *QuestionnaireHandler) CreateIssueQuestionnaire(w http.ResponseWriter, r *http.Request) {
 	h.createQuestionnaireForContext(w, r, store.QuestionnaireContextIssue)
 }
@@ -80,6 +86,10 @@ func (h *QuestionnaireHandler) createQuestionnaireForContext(
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	if strings.TrimSpace(req.Author) == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "author is required"})
 		return
 	}
 
@@ -135,6 +145,10 @@ func (h *QuestionnaireHandler) Respond(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Responses == nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "responses is required"})
+		return
+	}
+	if strings.TrimSpace(req.RespondedBy) == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "responded_by is required"})
 		return
 	}
 
@@ -237,6 +251,9 @@ func normalizeQuestionnaireQuestions(raw []questionnaireQuestion) ([]questionnai
 	if len(raw) == 0 {
 		return nil, errors.New("questions is required")
 	}
+	if len(raw) > maxQuestionnaireQuestionCount {
+		return nil, fmt.Errorf("questions exceeds max count of %d", maxQuestionnaireQuestionCount)
+	}
 
 	normalized := make([]questionnaireQuestion, 0, len(raw))
 	ids := make(map[string]struct{}, len(raw))
@@ -261,6 +278,13 @@ func normalizeQuestionnaireQuestions(raw []questionnaireQuestion) ([]questionnai
 		}
 
 		options := normalizeQuestionnaireOptions(question.Options)
+		if len(options) > maxQuestionnaireOptionCount {
+			return nil, fmt.Errorf(
+				"question %s options exceeds max count of %d",
+				id,
+				maxQuestionnaireOptionCount,
+			)
+		}
 		if (qType == "select" || qType == "multiselect") && len(options) == 0 {
 			return nil, fmt.Errorf("question %s requires options", id)
 		}
@@ -471,6 +495,7 @@ func handleQuestionnaireStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrQuestionnaireAlreadyResponded):
 		sendJSON(w, http.StatusConflict, errorResponse{Error: "questionnaire already responded"})
 	default:
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		log.Printf("questionnaire store error: %v", err)
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 	}
 }

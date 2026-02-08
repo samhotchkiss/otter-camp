@@ -3,8 +3,11 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -171,4 +174,122 @@ func TestQuestionnaireHandlerRejectsCrossOrgAccess(t *testing.T) {
 	createRec := httptest.NewRecorder()
 	router.ServeHTTP(createRec, createReq)
 	require.Contains(t, []int{http.StatusForbidden, http.StatusNotFound}, createRec.Code)
+}
+
+func TestQuestionnaireHandlerRejectsEmptyAuthorAndRespondedBy(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "questionnaire-api-validation-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Questionnaire Validation Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Questionnaire Validation Issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &QuestionnaireHandler{
+		QuestionnaireStore: store.NewQuestionnaireStore(db),
+	}
+	router := newQuestionnaireTestRouter(handler)
+
+	emptyAuthorReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/questionnaire?org_id="+orgID,
+		bytes.NewReader([]byte(`{
+			"author":"   ",
+			"questions":[{"id":"q1","text":"Protocol?","type":"text","required":true}]
+		}`)),
+	)
+	emptyAuthorRec := httptest.NewRecorder()
+	router.ServeHTTP(emptyAuthorRec, emptyAuthorReq)
+	require.Equal(t, http.StatusBadRequest, emptyAuthorRec.Code)
+
+	validCreateReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/questionnaire?org_id="+orgID,
+		bytes.NewReader([]byte(`{
+			"author":"Planner",
+			"questions":[{"id":"q1","text":"Protocol?","type":"text","required":true}]
+		}`)),
+	)
+	validCreateRec := httptest.NewRecorder()
+	router.ServeHTTP(validCreateRec, validCreateReq)
+	require.Equal(t, http.StatusCreated, validCreateRec.Code)
+
+	var created questionnairePayload
+	require.NoError(t, json.NewDecoder(validCreateRec.Body).Decode(&created))
+
+	emptyRespondedByReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/questionnaires/"+created.ID+"/response?org_id="+orgID,
+		bytes.NewReader([]byte(`{
+			"responded_by":"   ",
+			"responses":{"q1":"WebSocket"}
+		}`)),
+	)
+	emptyRespondedByRec := httptest.NewRecorder()
+	router.ServeHTTP(emptyRespondedByRec, emptyRespondedByReq)
+	require.Equal(t, http.StatusBadRequest, emptyRespondedByRec.Code)
+}
+
+func TestQuestionnaireHandlerRejectsExcessiveQuestionAndOptionCounts(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "questionnaire-api-limits-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Questionnaire Limits Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Questionnaire Limits Issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &QuestionnaireHandler{
+		QuestionnaireStore: store.NewQuestionnaireStore(db),
+	}
+	router := newQuestionnaireTestRouter(handler)
+
+	questionEntries := make([]string, 0, 101)
+	for i := 1; i <= 101; i++ {
+		questionEntries = append(
+			questionEntries,
+			fmt.Sprintf(`{"id":"q%d","text":"Question","type":"text","required":true}`, i),
+		)
+	}
+	tooManyQuestionsBody := `{"author":"Planner","questions":[` + strings.Join(questionEntries, ",") + `]}`
+	tooManyQuestionsReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/questionnaire?org_id="+orgID,
+		bytes.NewReader([]byte(tooManyQuestionsBody)),
+	)
+	tooManyQuestionsRec := httptest.NewRecorder()
+	router.ServeHTTP(tooManyQuestionsRec, tooManyQuestionsReq)
+	require.Equal(t, http.StatusBadRequest, tooManyQuestionsRec.Code)
+
+	optionEntries := make([]string, 0, 201)
+	for i := 1; i <= 201; i++ {
+		optionEntries = append(optionEntries, fmt.Sprintf(`"option %d"`, i))
+	}
+	tooManyOptionsBody := `{"author":"Planner","questions":[{"id":"q1","text":"Pick one","type":"select","required":true,"options":[` + strings.Join(optionEntries, ",") + `]}]}`
+	tooManyOptionsReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/questionnaire?org_id="+orgID,
+		bytes.NewReader([]byte(tooManyOptionsBody)),
+	)
+	tooManyOptionsRec := httptest.NewRecorder()
+	router.ServeHTTP(tooManyOptionsRec, tooManyOptionsReq)
+	require.Equal(t, http.StatusBadRequest, tooManyOptionsRec.Code)
+}
+
+func TestHandleQuestionnaireStoreErrorRedactsUnexpectedErrors(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handleQuestionnaireStoreError(rec, errors.New("sensitive internal detail"))
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "internal error", payload.Error)
 }
