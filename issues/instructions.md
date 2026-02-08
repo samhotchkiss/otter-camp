@@ -236,3 +236,11 @@ Template for every entry:
   - `cd web && npm run build:typecheck` (pass)
 - Remaining work: Move to next ready issue spec (#005) after closing #280/#281.
 - Notes: #280 landed via existing main commit (`5947ca3`), #281 implemented in this run.
+
+### 2026-02-08 08:41:02 MST
+- Scope: Started Spec005 and split work into two build-order phases.
+- GitHub issues: #282, #283
+- Commits: (pending)
+- Tests run: (pending)
+- Remaining work: Finish implementation/tests for #282 then #283, push, close issues.
+- Notes: Moved spec file from 01-ready to 02-in-progress to reflect active execution.

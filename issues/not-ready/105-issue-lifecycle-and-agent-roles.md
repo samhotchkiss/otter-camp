@@ -308,6 +308,80 @@ The same pipeline handles:
 
 The human's project-level settings define the pipeline's behavior. The agents just follow the pipeline.
 
+## Context Profiles Per Role
+
+Each role gets a tailored context package — the right information for their job, nothing more. Overloading context causes hallucination, missed details, and token overflow.
+
+### Planner Context
+
+The Planner needs **breadth** — enough to decompose work intelligently.
+
+| Context | Why | Source |
+|---------|-----|--------|
+| Issue description | What the human wants | Issue body |
+| Project overview | Tech stack, architecture, conventions | `CONTEXT.md` in project repo |
+| Codebase map | File tree, key modules, how things connect | Tree API |
+| **Decision history** | Past decisions and *why* they were made — avoids re-litigating or contradicting prior choices | Project-level decision log, issue comment history, relevant closed issues |
+| Recent changes | What's been touched lately (avoid conflicts) | Recent commits / recent closed issues |
+| Open issues | What's already being worked on | Active issue list |
+| Pipeline config | Who are the workers/reviewers, deploy rules | Project settings |
+| API/service documentation | Real endpoint specs, schemas, auth patterns — **never assume an API shape** | Linked docs, OpenAPI specs, or explicit references in project context |
+
+**Critical rule for Planner:** *Do not hallucinate interfaces.* If you don't know what an endpoint accepts or returns, look it up or ask. Invented API shapes create bugs that are extremely hard to track down. Every sub-issue spec must reference real, verified interfaces — not guesses.
+
+### Worker Context
+
+The Worker needs **depth but narrow** — just what they need to implement one sub-issue.
+
+| Context | Why | Source |
+|---------|-----|--------|
+| Sub-issue spec | Exactly what to build, acceptance criteria, files to modify | Sub-issue body |
+| **Sibling sub-issues (high level)** | Awareness of what else is being built in this sprint — avoids conflicting approaches or duplicate work | Titles + summaries of other sub-issues under the same parent |
+| Relevant source files | The specific files to touch + their imports/dependencies | Spec's "files to modify" list + dependency analysis |
+| **Connected system documentation** | Real endpoint specs, real schemas, real auth patterns for any service they're integrating with | Linked docs, OpenAPI specs, explicit URLs/examples |
+| Test patterns | How this project writes tests | Existing test files in relevant directories |
+| Branch info | Where to commit | Auto-assigned branch name |
+
+**Critical rule for Worker:** *Do not hallucinate APIs, endpoints, schemas, or interfaces.* If the sub-issue spec references a service you're connecting to, you MUST verify the actual interface (read the source, check the docs, call the endpoint). If you can't verify it, flag it and ask — do not guess. An invented endpoint shape is worse than a missing feature.
+
+### Reviewer Context
+
+The Reviewer needs **diff + spec** — focused on "does this match what was asked?"
+
+| Context | Why | Source |
+|---------|-----|--------|
+| The diff | What changed | Branch diff vs main |
+| Sub-issue spec | What was supposed to change | Sub-issue body |
+| Review criteria | What "good" looks like for this project | Project pipeline config + issue overrides |
+| Test results | Did tests pass? | CI output or local test run |
+| Related sub-issues | Consistency check — are sibling changes compatible? | Other completed/in-review sub-issues under same parent |
+
+### Context Assembly
+
+When an agent claims an issue, Otter Camp assembles the context package automatically based on:
+1. The agent's **role** (planner/worker/reviewer)
+2. The **project's** context config (what docs exist, where specs are)
+3. The **issue's** overrides (if any)
+4. A **token budget** per role (prevents context overflow)
+
+The assembled context is delivered as part of the work notification through the bridge. The agent doesn't have to go hunting for information — it's handed exactly what it needs.
+
+### Decision Log
+
+Each project should maintain a lightweight decision log — a record of significant choices and their reasoning. This prevents:
+- Planner re-proposing something that was already rejected
+- Worker implementing something in a way that contradicts an earlier architectural decision
+- Reviewer questioning a choice that was already deliberated
+
+Format: append-only list in the project (or in issue comments), searchable by the Planner.
+
+```markdown
+## Decisions
+- **2026-02-07**: Issues are the single work tracking primitive, not tasks. Tasks may become a filtered view later.
+- **2026-02-07**: Agents don't interact with GitHub directly. Commit to Otter Camp, sync handles the rest.
+- **2026-02-08**: Pipeline roles are project-level defaults with per-issue overrides.
+```
+
 ## Open Questions
 
 1. **Who is the Planner?** A dedicated agent? The project lead? A specialized planning agent? Or configurable per project?

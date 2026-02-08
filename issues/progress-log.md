@@ -549,3 +549,15 @@ Previous batch (issues #7 subtasks) fully merged. Stale branch `codex/3-nav-clea
 - Remaining:
   - Spec004 phases now complete (#277-#281 done).
   - Next ready spec in queue is #005 (iOS reconnect toast spam).
+
+## [2026-02-08 08:41:02 MST] Started Spec005 execution and created phase issues
+- Reviewed spec: \
+- GitHub issues:
+  - #282 Spec005 Phase 1 (visibility-aware reconnect metadata)
+  - #283 Spec005 Phase 2 (toast suppression and debounce)
+- Status:
+  - Existing in-progress code changes for #282/#283 confirmed in working tree.
+  - Next step is test-first validation + finalizing implementation in small commits.
+- Remaining:
+  - Run targeted web tests and typecheck.
+  - Commit/push phase-by-phase and close issues.
