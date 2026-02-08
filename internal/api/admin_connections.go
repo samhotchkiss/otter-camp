@@ -155,6 +155,8 @@ const (
 
 var sensitiveTokenPattern = regexp.MustCompile(`(?i)(oc_git_[a-z0-9]+|bearer\s+[a-z0-9._-]+)`)
 
+const bridgeRecentSyncWindow = 5 * time.Minute
+
 func (h *AdminConnectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	sessions := h.loadSessions(r.Context())
 	summary := summarizeSessions(sessions)
@@ -162,15 +164,17 @@ func (h *AdminConnectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	hostDiag := h.loadHostDiagnostics(r.Context())
 	bridgeDiag := h.loadBridgeDiagnostics(r.Context())
 
-	var connected bool
+	connected := false
 	if h.OpenClawHandler != nil {
 		connected = h.OpenClawHandler.IsConnected()
 	}
 
-	syncHealthy := false
+	recentSync := false
 	if lastSync != nil {
-		syncHealthy = time.Since(*lastSync) < 2*time.Minute
+		recentSync = time.Since(*lastSync) <= bridgeRecentSyncWindow
 	}
+	connected = connected || recentSync
+	syncHealthy := recentSync
 
 	sendJSON(w, http.StatusOK, adminConnectionsResponse{
 		Bridge: adminConnectionsBridgeStatus{

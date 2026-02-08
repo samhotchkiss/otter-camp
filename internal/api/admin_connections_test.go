@@ -117,6 +117,50 @@ func TestAdminConnectionsGetHandlesMissingDiagnosticsMetadata(t *testing.T) {
 	require.Equal(t, 0, payload.Summary.Total)
 }
 
+func TestAdminConnectionsGetUsesRecentLastSyncAsConnectedSignal(t *testing.T) {
+	prevLastSync := memoryLastSync
+	memoryLastSync = time.Now().UTC().Add(-90 * time.Second)
+	defer func() {
+		memoryLastSync = prevLastSync
+	}()
+
+	handler := &AdminConnectionsHandler{
+		OpenClawHandler: &fakeOpenClawConnectionStatus{connected: false},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/connections", nil)
+	rec := httptest.NewRecorder()
+	handler.Get(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminConnectionsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.True(t, payload.Bridge.Connected)
+	require.True(t, payload.Bridge.SyncHealthy)
+}
+
+func TestAdminConnectionsGetMarksBridgeDisconnectedWhenLastSyncIsStale(t *testing.T) {
+	prevLastSync := memoryLastSync
+	memoryLastSync = time.Now().UTC().Add(-10 * time.Minute)
+	defer func() {
+		memoryLastSync = prevLastSync
+	}()
+
+	handler := &AdminConnectionsHandler{
+		OpenClawHandler: &fakeOpenClawConnectionStatus{connected: false},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/connections", nil)
+	rec := httptest.NewRecorder()
+	handler.Get(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminConnectionsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.False(t, payload.Bridge.Connected)
+	require.False(t, payload.Bridge.SyncHealthy)
+}
+
 func TestAdminConnectionsGetEventsReturnsWorkspaceScopedRows(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgA := insertMessageTestOrganization(t, db, "conn-events-org-a")
