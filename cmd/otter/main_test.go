@@ -93,3 +93,63 @@ func TestFriendlyAuthErrorMessageFallback(t *testing.T) {
 		t.Fatalf("formatCLIError() = %q, want %q", got, err.Error())
 	}
 }
+
+func TestDeriveManagedRepoURL(t *testing.T) {
+	tests := []struct {
+		name      string
+		apiBase   string
+		orgID     string
+		projectID string
+		want      string
+	}{
+		{
+			name:      "plain host",
+			apiBase:   "https://api.otter.camp",
+			orgID:     "org-123",
+			projectID: "project-456",
+			want:      "https://api.otter.camp/git/org-123/project-456.git",
+		},
+		{
+			name:      "host with trailing slash",
+			apiBase:   "https://api.otter.camp/",
+			orgID:     "org-123",
+			projectID: "project-456",
+			want:      "https://api.otter.camp/git/org-123/project-456.git",
+		},
+		{
+			name:      "host with api path suffix",
+			apiBase:   "https://api.otter.camp/api/v1",
+			orgID:     "org-123",
+			projectID: "project-456",
+			want:      "https://api.otter.camp/git/org-123/project-456.git",
+		},
+		{
+			name:      "localhost with port",
+			apiBase:   "http://localhost:8080/api",
+			orgID:     "org-123",
+			projectID: "project-456",
+			want:      "http://localhost:8080/git/org-123/project-456.git",
+		},
+		{
+			name:      "empty org",
+			apiBase:   "https://api.otter.camp",
+			orgID:     "",
+			projectID: "project-456",
+			want:      "",
+		},
+		{
+			name:      "invalid base url",
+			apiBase:   "://bad",
+			orgID:     "org-123",
+			projectID: "project-456",
+			want:      "",
+		},
+	}
+
+	for _, tt := range tests {
+		got := deriveManagedRepoURL(tt.apiBase, tt.orgID, tt.projectID)
+		if got != tt.want {
+			t.Fatalf("%s: got %q want %q", tt.name, got, tt.want)
+		}
+	}
+}

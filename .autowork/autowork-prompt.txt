@@ -1,0 +1,13 @@
+Read and follow /Users/sam/Documents/Dev/otter-camp/issues/instructions.md exactly.
+
+Start-of-run requirements:
+- Execute the Start-of-Run Preflight checklist first.
+- Continue work using the defined priority order.
+- Create small GitHub issues with explicit tests before implementation.
+- Implement with TDD, make small descriptive commits, and push as you go.
+- Move implementation-complete specs into /Users/sam/Documents/Dev/otter-camp/issues/03-needs-review.
+- Do not move specs to 05-completed before external reviewer sign-off.
+- Never stage or commit files under /Users/sam/Documents/Dev/otter-camp/issues.
+- If blocked, note required follow-up in /Users/sam/Documents/Dev/otter-camp/issues/notes.md and continue with the next actionable item.
+
+Begin now and keep working until no actionable ready/in-progress spec remains.

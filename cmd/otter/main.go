@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -244,7 +245,11 @@ func handleClone(args []string) {
 	project, err := client.FindProject(query)
 	dieIf(err)
 
-	if strings.TrimSpace(project.RepoURL) == "" {
+	repoURL := strings.TrimSpace(project.RepoURL)
+	if repoURL == "" {
+		repoURL = deriveManagedRepoURL(client.BaseURL, project.OrgID, project.ID)
+	}
+	if repoURL == "" {
 		die("project has no repo_url; set one first")
 	}
 
@@ -254,7 +259,7 @@ func handleClone(args []string) {
 		target = filepath.Join(root, project.Slug())
 	}
 
-	cmd := exec.Command("git", "clone", project.RepoURL, target)
+	cmd := exec.Command("git", "clone", repoURL, target)
 	if !*jsonOut {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -276,7 +281,7 @@ func handleClone(args []string) {
 			"data": map[string]string{
 				"project":  project.Name,
 				"slug":     project.Slug(),
-				"repo_url": project.RepoURL,
+				"repo_url": repoURL,
 				"path":     target,
 			},
 			"errors": []interface{}{},
@@ -837,4 +842,25 @@ func userHomeDir() string {
 		return home
 	}
 	return "."
+}
+
+func deriveManagedRepoURL(apiBaseURL, orgID, projectID string) string {
+	base := strings.TrimSpace(apiBaseURL)
+	orgID = strings.TrimSpace(orgID)
+	projectID = strings.TrimSpace(projectID)
+	if base == "" || orgID == "" || projectID == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	root := strings.TrimRight(parsed.String(), "/")
+	return fmt.Sprintf("%s/git/%s/%s.git", root, url.PathEscape(orgID), url.PathEscape(projectID))
 }
