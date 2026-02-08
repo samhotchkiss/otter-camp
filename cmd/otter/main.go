@@ -444,7 +444,7 @@ func handleIssue(args []string) {
 		fmt.Printf("Title: %s\n", issue.Title)
 		fmt.Printf("Project: %s\n", project.Name)
 		if issue.OwnerAgentID != nil {
-			fmt.Printf("Owner: %s\n", *issue.OwnerAgentID)
+			fmt.Printf("Owner: %s\n", resolveAgentName(client, *issue.OwnerAgentID))
 		}
 		fmt.Printf("Status: %s / %s\n", issue.State, issue.WorkStatus)
 		fmt.Printf("Priority: %s\n", issue.Priority)
@@ -522,7 +522,7 @@ func handleIssue(args []string) {
 		for _, issue := range issues {
 			ownerText := ""
 			if issue.OwnerAgentID != nil {
-				ownerText = " owner=" + *issue.OwnerAgentID
+				ownerText = " owner=" + resolveAgentName(client, *issue.OwnerAgentID)
 			}
 			fmt.Printf("#%d [%s/%s] %s (priority=%s%s)\n",
 				issue.IssueNumber,
@@ -563,7 +563,7 @@ func handleIssue(args []string) {
 		fmt.Printf("State: %s / %s\n", issue.State, issue.WorkStatus)
 		fmt.Printf("Priority: %s\n", issue.Priority)
 		if issue.OwnerAgentID != nil {
-			fmt.Printf("Owner: %s\n", *issue.OwnerAgentID)
+			fmt.Printf("Owner: %s\n", resolveAgentName(client, *issue.OwnerAgentID))
 		}
 		if issue.Body != nil {
 			fmt.Printf("\n%s\n", strings.TrimSpace(*issue.Body))
@@ -700,6 +700,13 @@ func handleIssue(args []string) {
 		fmt.Println("usage: otter issue <create|list|view|comment|assign|close|reopen> ...")
 		os.Exit(1)
 	}
+}
+
+func resolveAgentName(client *ottercli.Client, agentID string) string {
+	if agent, err := client.ResolveAgent(agentID); err == nil && agent.Name != "" {
+		return agent.Name
+	}
+	return agentID
 }
 
 func resolveIssueID(client *ottercli.Client, projectRef, issueRef string) (string, error) {
