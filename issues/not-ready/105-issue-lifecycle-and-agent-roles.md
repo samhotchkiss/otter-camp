@@ -194,19 +194,95 @@ The human's job shifts from **writing specs** to **creating intent and reviewing
 
 ### What's Different From Gas Town
 - **Web UI, not tmux**: Otter Camp is the interface, not a terminal multiplexer
-- **Not code-only**: Our pipeline handles content, design, and ops — not just code
+- **Not code-only**: Our pipeline handles any kind of work — code, content, design, ops. "Tests" and "deploy" are project-configurable.
 - **Human-in-the-loop by default**: The human marks issues ready and reviews flagged items. Gas Town is more autonomous.
 - **Simpler role model**: 3 roles + human, not 7. We can always add complexity later.
+- **Deploy is configurable**: Not just "merge to main" — could be publish, upload, email, webhook, or any combination.
+
+## Project-Level Configuration
+
+The pipeline is universal — plan, execute, review, deploy — but what each stage *means* is defined per project.
+
+### Role Assignments (per project)
+
+```json
+{
+  "planner": { "agent": "josh-s", "fallback": "frank" },
+  "worker": { "agent": "codex", "allow_swarm": true, "max_concurrent": 3 },
+  "reviewer": { "agent": "jeremy-h", "fallback": "derek" }
+}
+```
+
+Each project sets who fills each role. Some projects might have the same agent in multiple roles (small projects). Others might have dedicated specialists.
+
+### Review Criteria (per project)
+
+What "review" means depends on the work:
+
+| Project | Review Criteria |
+|---------|----------------|
+| Otter Camp (code) | Tests pass, no regressions, matches spec, code style |
+| Technonymous (writing) | Matches writer's voice, hits key points, hook draws you in, no AI slop |
+| Agent Avatars (design) | Consistent style, correct dimensions, matches brief |
+| ItsAlive (product) | Tests pass, UI matches design, accessibility |
+| Pearl (infra) | Tests pass, no performance regression, security review |
+
+The Reviewer agent gets project-specific review criteria in its prompt. This is configurable in project settings.
+
+### Deploy Actions (per project)
+
+What "deploy" means after Reviewer approves:
+
+| Project | Deploy Action | Auto/Manual |
+|---------|--------------|-------------|
+| Otter Camp | Merge to main → Railway auto-deploys | Auto after review |
+| Technonymous | Merge to main → Publish to Substack | Manual (human signs off) |
+| OpenClaw | Merge to main → GitHub sync → npm publish | Manual |
+| Three Stones | Merge to main → Generate PDF/ebook | Manual |
+| Agent Avatars | Upload assets via SSH/API | Auto |
+| Email campaign | Send via email provider | Manual (always) |
+
+Deploy is a **configurable action** per project:
+
+```json
+{
+  "deploy": {
+    "auto": false,
+    "require_human_signoff": true,
+    "actions": [
+      { "type": "merge_to_main" },
+      { "type": "github_sync" },
+      { "type": "webhook", "url": "https://..." },
+      { "type": "ssh_upload", "host": "...", "path": "..." },
+      { "type": "command", "run": "npx itsalive-co" },
+      { "type": "email", "template": "..." },
+      { "type": "notify_human", "message": "Ready for your review" }
+    ]
+  }
+}
+```
+
+Deploy actions are composable — a project might merge to main AND trigger a webhook AND notify the human. The `auto` flag determines whether this happens immediately after review approval or waits for human confirmation.
+
+### What This Means
+
+The same pipeline handles:
+- **Code**: Plan architecture → implement in branch → review diff + tests → merge + deploy
+- **Writing**: Plan outline + research → draft content → review voice/quality/accuracy → publish
+- **Design**: Plan brief + references → create assets → review against brand/spec → upload
+- **Ops**: Plan changes → implement config/infra → review safety → apply
+- **Comms**: Plan message + audience → draft → review tone/accuracy → send
+
+The human's project-level settings define the pipeline's behavior. The agents just follow the pipeline.
 
 ## Open Questions
 
-1. **Who is the Planner?** A dedicated agent? Frank? Josh S? A new specialized agent? Or any agent with the right prompt?
+1. **Who is the Planner?** A dedicated agent? The project lead? A specialized planning agent? Or configurable per project?
 2. **Branch management**: Do we use Otter Camp's git server for branches, or the local filesystem? How do Workers get isolated workspaces?
 3. **Merge conflicts**: When multiple Workers commit to different branches, who resolves conflicts? The Reviewer? A dedicated merge agent?
-4. **Non-code work**: How does this pipeline work for content issues? (Stone writing a blog post doesn't need a branch or code review)
-5. **Notification surface**: How does the human get notified? Slack DM? Otter Camp inbox? Both?
-6. **Auto-deploy**: After Reviewer approves, does it auto-deploy? Or does deploy require human confirmation?
-7. **Cross-project issues**: Some work spans multiple projects. How do sub-issues reference different repos?
+4. **Notification surface**: How does the human get notified? Slack DM? Otter Camp inbox? Both?
+5. **Cross-project issues**: Some work spans multiple projects. How do sub-issues reference different repos?
+6. **Deploy plugin system**: How extensible should deploy actions be? Hardcoded types vs. arbitrary shell commands vs. a plugin API?
 
 ## Implementation Phases
 
