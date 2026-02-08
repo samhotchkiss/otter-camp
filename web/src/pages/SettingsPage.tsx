@@ -912,8 +912,11 @@ export default function SettingsPage() {
           : null;
       const prefersDark = Boolean(mediaQuery?.matches);
       root.classList.toggle("dark", prefersDark);
+      root.setAttribute("data-theme", prefersDark ? "dark" : "light");
     } else {
-      root.classList.toggle("dark", theme === "dark");
+      const useDark = theme === "dark";
+      root.classList.toggle("dark", useDark);
+      root.setAttribute("data-theme", useDark ? "dark" : "light");
     }
   }, [theme]);
 

@@ -6,6 +6,7 @@ import NewTaskModal from "../components/NewTaskModal";
 import type { Command } from "../hooks/useCommandPalette";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { api, type ActionItem, type FeedApiItem, type FeedItem, type Project } from "../lib/api";
+import { formatProjectTaskSummary } from "../lib/projectTaskSummary";
 import { getActivityDescription, formatRelativeTime, getTypeConfig, normalizeMetadata } from "../components/activity/activityFormat";
 import { getInitials } from "../components/messaging/utils";
 import { isDemoMode } from "../lib/demo";
@@ -423,7 +424,7 @@ export default function Dashboard() {
           {projects.map((project) => {
             const total = project.taskCount ?? 0;
             const done = project.completedCount ?? 0;
-            const desc = total > 0 ? `${done}/${total} tasks` : "No tasks yet";
+            const desc = formatProjectTaskSummary(done, total);
             return (
               <div key={project.id} className="project-item">
                 <div className={`project-status ${project.status || "active"}`}></div>

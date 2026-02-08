@@ -23,13 +23,19 @@ const sampleEvents: AgentActivityEvent[] = [
 describe("AgentActivityTimeline", () => {
   it("renders loading/empty/error states", () => {
     const { rerender } = render(<AgentActivityTimeline events={[]} isLoading />);
-    expect(screen.getByText("Loading activity...")).toBeInTheDocument();
+    const loadingCard = screen.getByText("Loading activity...");
+    expect(loadingCard).toBeInTheDocument();
+    expect(loadingCard.className).toContain("bg-[var(--surface)]");
+    expect(loadingCard.className).toContain("border-[var(--border)]");
 
     rerender(<AgentActivityTimeline events={[]} error="Failed to fetch" />);
     expect(screen.getByText("Failed to fetch")).toBeInTheDocument();
 
     rerender(<AgentActivityTimeline events={[]} />);
-    expect(screen.getByText("No activity yet.")).toBeInTheDocument();
+    const emptyCard = screen.getByText("No activity yet.");
+    expect(emptyCard).toBeInTheDocument();
+    expect(emptyCard.className).toContain("bg-[var(--surface)]");
+    expect(emptyCard.className).toContain("border-[var(--border)]");
   });
 
   it("renders timeline events and load-more action", () => {
@@ -44,7 +50,10 @@ describe("AgentActivityTimeline", () => {
 
     expect(screen.getByText("Slack response")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    const loadMoreButton = screen.getByRole("button", { name: "Load more" });
+    expect(loadMoreButton.className).toContain("bg-[var(--surface)]");
+    expect(loadMoreButton.className).toContain("border-[var(--border)]");
+    fireEvent.click(loadMoreButton);
     expect(onLoadMore).toHaveBeenCalledTimes(1);
   });
 });

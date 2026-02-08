@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import SettingsPage from "./SettingsPage";
 
 vi.mock("../contexts/AuthContext", () => ({
@@ -20,43 +21,54 @@ vi.mock("./settings/GitHubSettings", () => ({
   default: () => <div data-testid="github-settings" />,
 }));
 
+function mockJSONResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function stubFetchForDataTests() {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/orgs")) {
+      return mockJSONResponse({
+        orgs: [
+          { id: "org-123", name: "Otter Camp HQ", slug: "otter-camp-hq" },
+        ],
+      });
+    }
+    if (url.includes("/api/agents")) {
+      return mockJSONResponse({
+        agents: [
+          { id: "agent-1", name: "Frank", role: "Chief of Staff", avatar: "🤖" },
+          { id: "agent-2", name: "Ivy", role: "Product", avatar: "🤖" },
+        ],
+      });
+    }
+    return mockJSONResponse({ error: "unexpected endpoint" }, 500);
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  return fetchMock;
+}
+
+function stubFetchForThemeTests() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => mockJSONResponse({})),
+  );
+}
+
 describe("SettingsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
     localStorage.setItem("otter-camp-org-id", "org-123");
+    document.documentElement.classList.remove("dark", "light");
   });
 
   it("loads profile/workspace/integrations from authenticated context + APIs", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/orgs")) {
-        return new Response(
-          JSON.stringify({
-            orgs: [
-              { id: "org-123", name: "Otter Camp HQ", slug: "otter-camp-hq" },
-            ],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-      if (url.includes("/api/agents")) {
-        return new Response(
-          JSON.stringify({
-            agents: [
-              { id: "agent-1", name: "Frank", role: "Chief of Staff", avatar: "🤖" },
-              { id: "agent-2", name: "Ivy", role: "Product", avatar: "🤖" },
-            ],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-      return new Response(JSON.stringify({ error: "unexpected endpoint" }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const fetchMock = stubFetchForDataTests();
 
     render(<SettingsPage />);
 
@@ -93,5 +105,54 @@ describe("SettingsPage", () => {
       expect.stringContaining("/api/settings/"),
       expect.anything()
     );
+  });
+});
+
+describe("SettingsPage theme behavior", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.documentElement.classList.remove("dark", "light");
+    stubFetchForThemeTests();
+
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: vi.fn().mockImplementation(() => ({
+        matches: false,
+        media: "(prefers-color-scheme: dark)",
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+  });
+
+  it("applies dark class by default for system theme", async () => {
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(document.documentElement.classList.contains("dark")).toBe(true);
+    });
+  });
+
+  it("toggles dark class when switching between light and dark appearance", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(document.documentElement.classList.contains("dark")).toBe(true);
+    });
+
+    await user.click(await screen.findByRole("button", { name: /light/i }));
+    await waitFor(() => {
+      expect(document.documentElement.classList.contains("dark")).toBe(false);
+    });
+
+    await user.click(screen.getByRole("button", { name: /dark/i }));
+    await waitFor(() => {
+      expect(document.documentElement.classList.contains("dark")).toBe(true);
+    });
   });
 });
