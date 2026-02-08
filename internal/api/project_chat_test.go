@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -111,6 +112,123 @@ func TestProjectChatHandlerCreateValidatesPayload(t *testing.T) {
 	reservedAuthorRec := httptest.NewRecorder()
 	router.ServeHTTP(reservedAuthorRec, reservedAuthorReq)
 	require.Equal(t, http.StatusBadRequest, reservedAuthorRec.Code)
+}
+
+func TestProjectChatHandlerCreateWithAttachmentOnlyBody(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-attachment-only-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Attachment Only Project")
+	attachmentID := insertMessageTestAttachment(t, db, orgID, "project-note.txt")
+
+	handler := &ProjectChatHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ChatStore:    store.NewProjectChatStore(db),
+		DB:           db,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	createReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"","attachment_ids":["`+attachmentID+`"]}`)),
+	)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code)
+
+	var createResp struct {
+		Message projectChatMessagePayload `json:"message"`
+	}
+	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&createResp))
+	require.Equal(t, "", createResp.Message.Body)
+	require.Len(t, createResp.Message.Attachments, 1)
+	require.Equal(t, attachmentID, createResp.Message.Attachments[0].ID)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/chat?org_id="+orgID, nil)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+
+	var listResp projectChatListResponse
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	require.Len(t, listResp.Messages, 1)
+	require.Len(t, listResp.Messages[0].Attachments, 1)
+	require.Equal(t, attachmentID, listResp.Messages[0].Attachments[0].ID)
+
+	var linkedChatMessageID sql.NullString
+	var linkedCommentID sql.NullString
+	err := db.QueryRow(
+		`SELECT chat_message_id, comment_id FROM attachments WHERE id = $1`,
+		attachmentID,
+	).Scan(&linkedChatMessageID, &linkedCommentID)
+	require.NoError(t, err)
+	require.True(t, linkedChatMessageID.Valid)
+	require.Equal(t, createResp.Message.ID, linkedChatMessageID.String)
+	require.False(t, linkedCommentID.Valid)
+}
+
+func TestProjectChatHandlerCreateRejectsInvalidAttachmentIDs(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-invalid-attachment-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Invalid Attachment Project")
+
+	handler := &ProjectChatHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ChatStore:    store.NewProjectChatStore(db),
+		DB:           db,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	invalidUUIDReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"","attachment_ids":["not-a-uuid"]}`)),
+	)
+	invalidUUIDRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidUUIDRec, invalidUUIDReq)
+	require.Equal(t, http.StatusBadRequest, invalidUUIDRec.Code)
+
+	validButMissingReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"","attachment_ids":["11111111-1111-1111-1111-111111111111"]}`)),
+	)
+	validButMissingRec := httptest.NewRecorder()
+	router.ServeHTTP(validButMissingRec, validButMissingReq)
+	require.Equal(t, http.StatusBadRequest, validButMissingRec.Code)
+}
+
+func TestNormalizeProjectChatAttachmentIDs(t *testing.T) {
+	ids, err := normalizeProjectChatAttachmentIDs([]string{
+		" 11111111-1111-1111-1111-111111111111 ",
+		"11111111-1111-1111-1111-111111111111",
+		"",
+		"22222222-2222-2222-2222-222222222222",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"11111111-1111-1111-1111-111111111111",
+		"22222222-2222-2222-2222-222222222222",
+	}, ids)
+
+	_, err = normalizeProjectChatAttachmentIDs([]string{"not-a-uuid"})
+	require.Error(t, err)
+}
+
+func TestToProjectChatPayloadDecodesAttachments(t *testing.T) {
+	payload := toProjectChatPayload(store.ProjectChatMessage{
+		ID:          "msg-1",
+		ProjectID:   "proj-1",
+		Author:      "Sam",
+		Body:        "hello",
+		Attachments: []byte(`[{"id":"att-1","filename":"file.txt","size_bytes":12,"mime_type":"text/plain","url":"/uploads/file.txt"}]`),
+		CreatedAt:   time.Unix(0, 0).UTC(),
+		UpdatedAt:   time.Unix(0, 0).UTC(),
+	})
+
+	require.Len(t, payload.Attachments, 1)
+	require.Equal(t, "att-1", payload.Attachments[0].ID)
+	require.Equal(t, "file.txt", payload.Attachments[0].Filename)
 }
 
 func TestProjectChatHandlerResetSessionCreatesMarkerAndDispatchesUsingNewSessionKey(t *testing.T) {

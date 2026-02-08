@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,13 +13,14 @@ import (
 )
 
 type ProjectChatMessage struct {
-	ID        string    `json:"id"`
-	OrgID     string    `json:"org_id"`
-	ProjectID string    `json:"project_id"`
-	Author    string    `json:"author"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          string          `json:"id"`
+	OrgID       string          `json:"org_id"`
+	ProjectID   string          `json:"project_id"`
+	Author      string          `json:"author"`
+	Body        string          `json:"body"`
+	Attachments json.RawMessage `json:"attachments,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 type CreateProjectChatMessageInput struct {
@@ -56,6 +58,7 @@ const projectChatColumns = `
 	project_id,
 	author,
 	body,
+	attachments,
 	created_at,
 	updated_at
 `
@@ -95,13 +98,15 @@ func (s *ProjectChatStore) Create(ctx context.Context, input CreateProjectChatMe
 			org_id,
 			project_id,
 			author,
-			body
-		) VALUES ($1, $2, $3, $4)
+			body,
+			attachments
+		) VALUES ($1, $2, $3, $4, $5::jsonb)
 		RETURNING `+projectChatColumns,
 		workspaceID,
 		projectID,
 		author,
 		body,
+		`[]`,
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project chat message: %w", err)
@@ -358,9 +363,16 @@ func scanProjectChatMessage(scanner interface{ Scan(dest ...any) error }) (Proje
 		&message.ProjectID,
 		&message.Author,
 		&message.Body,
+		&message.Attachments,
 		&message.CreatedAt,
 		&message.UpdatedAt,
 	)
+	if err != nil {
+		return message, err
+	}
+	if len(message.Attachments) == 0 {
+		message.Attachments = json.RawMessage(`[]`)
+	}
 	return message, err
 }
 
@@ -375,6 +387,7 @@ func scanProjectChatSearchResult(scanner interface{ Scan(dest ...any) error }) (
 		&result.Message.ProjectID,
 		&result.Message.Author,
 		&result.Message.Body,
+		&result.Message.Attachments,
 		&result.Message.CreatedAt,
 		&result.Message.UpdatedAt,
 		&result.Relevance,
@@ -382,6 +395,9 @@ func scanProjectChatSearchResult(scanner interface{ Scan(dest ...any) error }) (
 	)
 	if err != nil {
 		return result, err
+	}
+	if len(result.Message.Attachments) == 0 {
+		result.Message.Attachments = json.RawMessage(`[]`)
 	}
 	if snippet.Valid {
 		result.Snippet = snippet.String

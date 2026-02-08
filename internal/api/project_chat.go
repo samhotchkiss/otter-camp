@@ -40,18 +40,20 @@ type ProjectChatHandler struct {
 }
 
 type createProjectChatMessageRequest struct {
-	Author     string `json:"author"`
-	Body       string `json:"body"`
-	SenderType string `json:"sender_type,omitempty"`
+	Author        string   `json:"author"`
+	Body          string   `json:"body"`
+	SenderType    string   `json:"sender_type,omitempty"`
+	AttachmentIDs []string `json:"attachment_ids,omitempty"`
 }
 
 type projectChatMessagePayload struct {
-	ID        string    `json:"id"`
-	ProjectID string    `json:"project_id"`
-	Author    string    `json:"author"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          string               `json:"id"`
+	ProjectID   string               `json:"project_id"`
+	Author      string               `json:"author"`
+	Body        string               `json:"body"`
+	Attachments []AttachmentMetadata `json:"attachments"`
+	CreatedAt   time.Time            `json:"created_at"`
+	UpdatedAt   time.Time            `json:"updated_at"`
 }
 
 type projectChatListResponse struct {
@@ -196,6 +198,12 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 	req.Author = strings.TrimSpace(req.Author)
 	req.Body = strings.TrimSpace(req.Body)
 	req.SenderType = strings.TrimSpace(strings.ToLower(req.SenderType))
+	attachmentIDs, err := normalizeProjectChatAttachmentIDs(req.AttachmentIDs)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid attachment_ids"})
+		return
+	}
+	req.AttachmentIDs = attachmentIDs
 
 	if req.Author == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "author is required"})
@@ -205,13 +213,40 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "author is reserved"})
 		return
 	}
-	if req.Body == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "body is required"})
+	if req.Body == "" && len(req.AttachmentIDs) == 0 {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "body or attachment_ids is required"})
 		return
 	}
 	if req.SenderType != "" && req.SenderType != "user" && req.SenderType != "agent" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid sender_type"})
 		return
+	}
+	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace context"})
+		return
+	}
+	if len(req.AttachmentIDs) > 0 {
+		if h.DB == nil {
+			sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+			return
+		}
+		for _, attachmentID := range req.AttachmentIDs {
+			var exists bool
+			if err := h.DB.QueryRowContext(
+				r.Context(),
+				`SELECT EXISTS(SELECT 1 FROM attachments WHERE id = $1 AND org_id = $2)`,
+				attachmentID,
+				workspaceID,
+			).Scan(&exists); err != nil {
+				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate attachment_ids"})
+				return
+			}
+			if !exists {
+				sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid attachment_ids"})
+				return
+			}
+		}
 	}
 
 	target, shouldDispatch, dispatchWarning, dispatchErr := h.resolveProjectChatDispatchTarget(r.Context(), projectID, req.SenderType)
@@ -228,6 +263,24 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		handleProjectChatStoreError(w, err)
 		return
+	}
+	if len(req.AttachmentIDs) > 0 {
+		for _, attachmentID := range req.AttachmentIDs {
+			if err := LinkAttachmentToChatMessage(h.DB, workspaceID, attachmentID, message.ID); err != nil {
+				if errors.Is(err, ErrAttachmentNotFound) {
+					sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid attachment_ids"})
+					return
+				}
+				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to link attachments"})
+				return
+			}
+		}
+		refreshed, err := h.ChatStore.GetByID(r.Context(), projectID, message.ID)
+		if err != nil {
+			handleProjectChatStoreError(w, err)
+			return
+		}
+		message = refreshed
 	}
 
 	payload := toProjectChatPayload(*message)
@@ -692,14 +745,44 @@ func (h *ProjectChatHandler) resolveProjectLeadAgent(
 }
 
 func toProjectChatPayload(message store.ProjectChatMessage) projectChatMessagePayload {
-	return projectChatMessagePayload{
-		ID:        message.ID,
-		ProjectID: message.ProjectID,
-		Author:    message.Author,
-		Body:      message.Body,
-		CreatedAt: message.CreatedAt,
-		UpdatedAt: message.UpdatedAt,
+	attachments := make([]AttachmentMetadata, 0)
+	if len(message.Attachments) > 0 && string(message.Attachments) != "null" {
+		if err := json.Unmarshal(message.Attachments, &attachments); err != nil {
+			attachments = make([]AttachmentMetadata, 0)
+		}
 	}
+	return projectChatMessagePayload{
+		ID:          message.ID,
+		ProjectID:   message.ProjectID,
+		Author:      message.Author,
+		Body:        message.Body,
+		Attachments: attachments,
+		CreatedAt:   message.CreatedAt,
+		UpdatedAt:   message.UpdatedAt,
+	}
+}
+
+func normalizeProjectChatAttachmentIDs(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, id := range raw {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
+		}
+		if !uuidRegex.MatchString(trimmed) {
+			return nil, fmt.Errorf("invalid attachment id")
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out, nil
 }
 
 func saveProjectChatMessageToNotes(message store.ProjectChatMessage) (string, bool, error) {

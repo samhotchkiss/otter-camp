@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -23,16 +24,17 @@ const (
 
 // Attachment represents a file attachment on a message.
 type Attachment struct {
-	ID           string    `json:"id"`
-	OrgID        string    `json:"org_id"`
-	CommentID    *string   `json:"comment_id,omitempty"`
-	Filename     string    `json:"filename"`
-	SizeBytes    int64     `json:"size_bytes"`
-	MimeType     string    `json:"mime_type"`
-	StorageKey   string    `json:"storage_key"`
-	URL          string    `json:"url"`
-	ThumbnailURL *string   `json:"thumbnail_url,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	OrgID         string    `json:"org_id"`
+	CommentID     *string   `json:"comment_id,omitempty"`
+	ChatMessageID *string   `json:"chat_message_id,omitempty"`
+	Filename      string    `json:"filename"`
+	SizeBytes     int64     `json:"size_bytes"`
+	MimeType      string    `json:"mime_type"`
+	StorageKey    string    `json:"storage_key"`
+	URL           string    `json:"url"`
+	ThumbnailURL  *string   `json:"thumbnail_url,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // AttachmentMetadata is the minimal attachment info stored in comments.attachments JSONB.
@@ -52,6 +54,8 @@ type UploadResponse struct {
 
 // AttachmentsHandler handles attachment operations.
 type AttachmentsHandler struct{}
+
+var ErrAttachmentNotFound = errors.New("attachment not found")
 
 // Upload handles POST /api/messages/attachments (multipart form upload).
 func (h *AttachmentsHandler) Upload(w http.ResponseWriter, r *http.Request) {
@@ -220,14 +224,16 @@ func (h *AttachmentsHandler) GetAttachment(w http.ResponseWriter, r *http.Reques
 	var attachment Attachment
 	var thumbnailURL sql.NullString
 	var commentID sql.NullString
+	var chatMessageID sql.NullString
 	err = db.QueryRowContext(r.Context(), `
-		SELECT id, org_id, comment_id, filename, size_bytes, mime_type, storage_key, url, thumbnail_url, created_at
+		SELECT id, org_id, comment_id, chat_message_id, filename, size_bytes, mime_type, storage_key, url, thumbnail_url, created_at
 		FROM attachments
 		WHERE id = $1 AND org_id = $2
 	`, attachmentID, identity.OrgID).Scan(
 		&attachment.ID,
 		&attachment.OrgID,
 		&commentID,
+		&chatMessageID,
 		&attachment.Filename,
 		&attachment.SizeBytes,
 		&attachment.MimeType,
@@ -247,6 +253,9 @@ func (h *AttachmentsHandler) GetAttachment(w http.ResponseWriter, r *http.Reques
 
 	if commentID.Valid {
 		attachment.CommentID = &commentID.String
+	}
+	if chatMessageID.Valid {
+		attachment.ChatMessageID = &chatMessageID.String
 	}
 	if thumbnailURL.Valid {
 		attachment.ThumbnailURL = &thumbnailURL.String
@@ -328,7 +337,9 @@ func UpdateCommentAttachments(db *sql.DB, commentID string, attachments []Attach
 func LinkAttachmentToComment(db *sql.DB, attachmentID, commentID string) error {
 	// Update attachment with comment_id
 	_, err := db.Exec(`
-		UPDATE attachments SET comment_id = $1 WHERE id = $2
+		UPDATE attachments
+		SET comment_id = $1, chat_message_id = NULL
+		WHERE id = $2
 	`, commentID, attachmentID)
 	if err != nil {
 		return err
@@ -359,4 +370,71 @@ func LinkAttachmentToComment(db *sql.DB, attachmentID, commentID string) error {
 	}
 
 	return UpdateCommentAttachments(db, commentID, attachments)
+}
+
+// UpdateProjectChatMessageAttachments updates the attachments JSONB array on a project chat message.
+func UpdateProjectChatMessageAttachments(db *sql.DB, chatMessageID string, attachments []AttachmentMetadata) error {
+	attachmentsJSON, err := json.Marshal(attachments)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`
+		UPDATE project_chat_messages SET attachments = $1 WHERE id = $2
+	`, attachmentsJSON, chatMessageID)
+	return err
+}
+
+// LinkAttachmentToChatMessage links an attachment to a project chat message and updates the JSONB array.
+func LinkAttachmentToChatMessage(db *sql.DB, orgID, attachmentID, chatMessageID string) error {
+	result, err := db.Exec(`
+		UPDATE attachments
+		SET chat_message_id = $1, comment_id = NULL
+		WHERE id = $2 AND org_id = $3
+	`, chatMessageID, attachmentID, orgID)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrAttachmentNotFound
+	}
+
+	rows, err := db.Query(`
+		SELECT id, filename, size_bytes, mime_type, url, thumbnail_url
+		FROM attachments
+		WHERE chat_message_id = $1 AND org_id = $2
+		ORDER BY created_at ASC, id ASC
+	`, chatMessageID, orgID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	attachments := make([]AttachmentMetadata, 0, 4)
+	for rows.Next() {
+		var attachment AttachmentMetadata
+		var thumbnailURL sql.NullString
+		if err := rows.Scan(
+			&attachment.ID,
+			&attachment.Filename,
+			&attachment.SizeBytes,
+			&attachment.MimeType,
+			&attachment.URL,
+			&thumbnailURL,
+		); err != nil {
+			return err
+		}
+		if thumbnailURL.Valid {
+			attachment.ThumbnailURL = &thumbnailURL.String
+		}
+		attachments = append(attachments, attachment)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	return UpdateProjectChatMessageAttachments(db, chatMessageID, attachments)
 }
