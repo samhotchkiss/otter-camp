@@ -130,6 +130,20 @@ type issueListResponse struct {
 	Total int                   `json:"total"`
 }
 
+type issueRoleAssignmentPayload struct {
+	ID        string  `json:"id"`
+	ProjectID string  `json:"project_id"`
+	Role      string  `json:"role"`
+	AgentID   *string `json:"agent_id,omitempty"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+type issueRoleAssignmentListResponse struct {
+	Items []issueRoleAssignmentPayload `json:"items"`
+	Total int                          `json:"total"`
+}
+
 type issuePatchRequest struct {
 	OwnerAgentID  *string `json:"owner_agent_id,omitempty"`
 	ParentIssueID *string `json:"parent_issue_id,omitempty"`
@@ -305,6 +319,81 @@ func (h *IssuesHandler) RoleQueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, issueListResponse{Items: items, Total: len(items)})
+}
+
+func (h *IssuesHandler) ListRoleAssignments(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+
+	assignments, err := h.IssueStore.ListIssueRoleAssignments(r.Context(), projectID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	items := make([]issueRoleAssignmentPayload, 0, len(assignments))
+	for _, assignment := range assignments {
+		items = append(items, toIssueRoleAssignmentPayload(assignment))
+	}
+	sendJSON(w, http.StatusOK, issueRoleAssignmentListResponse{Items: items, Total: len(items)})
+}
+
+func (h *IssuesHandler) UpsertRoleAssignment(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+
+	role := strings.TrimSpace(chi.URLParam(r, "role"))
+	if role == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "role is required"})
+		return
+	}
+
+	var req struct {
+		AgentID *string `json:"agent_id"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	if req.AgentID != nil {
+		trimmed := strings.TrimSpace(*req.AgentID)
+		if trimmed == "" {
+			req.AgentID = nil
+		} else {
+			req.AgentID = &trimmed
+		}
+	}
+
+	assignment, err := h.IssueStore.UpsertIssueRoleAssignment(r.Context(), store.UpsertIssueRoleAssignmentInput{
+		ProjectID: projectID,
+		Role:      role,
+		AgentID:   req.AgentID,
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusOK, toIssueRoleAssignmentPayload(*assignment))
 }
 
 func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -1046,6 +1135,17 @@ func findIssueLink(
 	}
 	copy := link
 	return &copy
+}
+
+func toIssueRoleAssignmentPayload(assignment store.IssueRoleAssignment) issueRoleAssignmentPayload {
+	return issueRoleAssignmentPayload{
+		ID:        assignment.ID,
+		ProjectID: assignment.ProjectID,
+		Role:      assignment.Role,
+		AgentID:   assignment.AgentID,
+		CreatedAt: assignment.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt: assignment.UpdatedAt.UTC().Format(time.RFC3339),
+	}
 }
 
 func (h *IssuesHandler) syncIssueOwnerParticipant(ctx context.Context, issueID string, ownerAgentID *string) error {

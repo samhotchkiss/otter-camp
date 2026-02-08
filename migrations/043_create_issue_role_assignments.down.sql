@@ -1,0 +1,4 @@
+DROP POLICY IF EXISTS issue_role_assignments_org_isolation ON issue_role_assignments;
+DROP TRIGGER IF EXISTS issue_role_assignments_updated_at_trg ON issue_role_assignments;
+DROP INDEX IF EXISTS issue_role_assignments_org_project_idx;
+DROP TABLE IF EXISTS issue_role_assignments;

@@ -278,6 +278,89 @@ func TestProjectIssueStore_ListIssuesFiltersByOwnerStatusAndPriority(t *testing.
 	require.Contains(t, err.Error(), "work_status")
 }
 
+func TestIssueRoleAssignmentStore_UpsertAndListByProject(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-role-assignment-org")
+	projectID := createTestProject(t, db, orgID, "Issue Role Assignment Project")
+	agentPlanner := createIssueTestAgent(t, db, orgID, "issue-role-planner")
+	agentWorker := createIssueTestAgent(t, db, orgID, "issue-role-worker")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	planner, err := issueStore.UpsertIssueRoleAssignment(ctx, UpsertIssueRoleAssignmentInput{
+		ProjectID: projectID,
+		Role:      "planner",
+		AgentID:   &agentPlanner,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, planner.AgentID)
+	require.Equal(t, agentPlanner, *planner.AgentID)
+	require.Equal(t, "planner", planner.Role)
+
+	worker, err := issueStore.UpsertIssueRoleAssignment(ctx, UpsertIssueRoleAssignmentInput{
+		ProjectID: projectID,
+		Role:      "worker",
+		AgentID:   &agentWorker,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, worker.AgentID)
+	require.Equal(t, agentWorker, *worker.AgentID)
+	require.Equal(t, "worker", worker.Role)
+
+	updatedPlanner, err := issueStore.UpsertIssueRoleAssignment(ctx, UpsertIssueRoleAssignmentInput{
+		ProjectID: projectID,
+		Role:      "planner",
+		AgentID:   &agentWorker,
+	})
+	require.NoError(t, err)
+	require.Equal(t, planner.ID, updatedPlanner.ID)
+	require.NotNil(t, updatedPlanner.AgentID)
+	require.Equal(t, agentWorker, *updatedPlanner.AgentID)
+
+	assignments, err := issueStore.ListIssueRoleAssignments(ctx, projectID)
+	require.NoError(t, err)
+	require.Len(t, assignments, 2)
+	require.Equal(t, "planner", assignments[0].Role)
+	require.NotNil(t, assignments[0].AgentID)
+	require.Equal(t, agentWorker, *assignments[0].AgentID)
+	require.Equal(t, "worker", assignments[1].Role)
+	require.NotNil(t, assignments[1].AgentID)
+	require.Equal(t, agentWorker, *assignments[1].AgentID)
+}
+
+func TestIssueRoleAssignmentStore_ValidatesRoleAndVisibility(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-role-assignment-validate-org")
+	projectID := createTestProject(t, db, orgID, "Issue Role Assignment Validate Project")
+	otherOrgID := createTestOrganization(t, db, "issue-role-assignment-validate-other-org")
+	otherAgent := createIssueTestAgent(t, db, otherOrgID, "issue-role-other-agent")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	_, err := issueStore.UpsertIssueRoleAssignment(ctx, UpsertIssueRoleAssignmentInput{
+		ProjectID: projectID,
+		Role:      "observer",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "role")
+
+	_, err = issueStore.UpsertIssueRoleAssignment(ctx, UpsertIssueRoleAssignmentInput{
+		ProjectID: projectID,
+		Role:      "planner",
+		AgentID:   &otherAgent,
+	})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNotFound) || errors.Is(err, ErrForbidden))
+
+	assignments, err := issueStore.ListIssueRoleAssignments(ctx, projectID)
+	require.NoError(t, err)
+	require.Len(t, assignments, 0)
+}
+
 func TestProjectIssueStore_CreateIssueSupportsParentIssueAndLifecycleStatuses(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

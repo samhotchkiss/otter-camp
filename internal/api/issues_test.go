@@ -37,6 +37,8 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues", handler.CreateIssue)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues/link", handler.CreateLinkedIssue)
 	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/issues/queue", handler.RoleQueue)
+	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/issue-role-assignments", handler.ListRoleAssignments)
+	router.With(middleware.OptionalWorkspace).Put("/api/projects/{id}/issue-role-assignments/{role}", handler.UpsertRoleAssignment)
 	return router
 }
 
@@ -758,6 +760,109 @@ func TestIssuesHandlerRoleQueueValidatesRoleAndLimit(t *testing.T) {
 	invalidLimitRec := httptest.NewRecorder()
 	router.ServeHTTP(invalidLimitRec, invalidLimitReq)
 	require.Equal(t, http.StatusBadRequest, invalidLimitRec.Code)
+}
+
+func TestIssueRoleAssignmentsHandler_UpsertAndList(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-role-assignment-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Role Assignment API Project")
+	plannerID := insertMessageTestAgent(t, db, orgID, "issue-role-planner-api")
+	workerID := insertMessageTestAgent(t, db, orgID, "issue-role-worker-api")
+
+	handler := &IssuesHandler{IssueStore: store.NewProjectIssueStore(db)}
+	router := newIssueTestRouter(handler)
+
+	setPlannerReq := httptest.NewRequest(
+		http.MethodPut,
+		"/api/projects/"+projectID+"/issue-role-assignments/planner?org_id="+orgID,
+		bytes.NewReader([]byte(`{"agent_id":"`+plannerID+`"}`)),
+	)
+	setPlannerRec := httptest.NewRecorder()
+	router.ServeHTTP(setPlannerRec, setPlannerReq)
+	require.Equal(t, http.StatusOK, setPlannerRec.Code)
+
+	var plannerResp issueRoleAssignmentPayload
+	require.NoError(t, json.NewDecoder(setPlannerRec.Body).Decode(&plannerResp))
+	require.Equal(t, "planner", plannerResp.Role)
+	require.NotNil(t, plannerResp.AgentID)
+	require.Equal(t, plannerID, *plannerResp.AgentID)
+
+	setWorkerReq := httptest.NewRequest(
+		http.MethodPut,
+		"/api/projects/"+projectID+"/issue-role-assignments/worker?org_id="+orgID,
+		bytes.NewReader([]byte(`{"agent_id":"`+workerID+`"}`)),
+	)
+	setWorkerRec := httptest.NewRecorder()
+	router.ServeHTTP(setWorkerRec, setWorkerReq)
+	require.Equal(t, http.StatusOK, setWorkerRec.Code)
+
+	clearPlannerReq := httptest.NewRequest(
+		http.MethodPut,
+		"/api/projects/"+projectID+"/issue-role-assignments/planner?org_id="+orgID,
+		bytes.NewReader([]byte(`{"agent_id":null}`)),
+	)
+	clearPlannerRec := httptest.NewRecorder()
+	router.ServeHTTP(clearPlannerRec, clearPlannerReq)
+	require.Equal(t, http.StatusOK, clearPlannerRec.Code)
+
+	var clearedPlannerResp issueRoleAssignmentPayload
+	require.NoError(t, json.NewDecoder(clearPlannerRec.Body).Decode(&clearedPlannerResp))
+	require.Equal(t, "planner", clearedPlannerResp.Role)
+	require.Nil(t, clearedPlannerResp.AgentID)
+
+	listReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/issue-role-assignments?org_id="+orgID,
+		nil,
+	)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+
+	var listResp issueRoleAssignmentListResponse
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	require.Len(t, listResp.Items, 2)
+	require.Equal(t, "planner", listResp.Items[0].Role)
+	require.Nil(t, listResp.Items[0].AgentID)
+	require.Equal(t, "worker", listResp.Items[1].Role)
+	require.NotNil(t, listResp.Items[1].AgentID)
+	require.Equal(t, workerID, *listResp.Items[1].AgentID)
+}
+
+func TestIssueRoleAssignmentsHandler_ValidatesInputs(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-role-assignment-validate-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Role Assignment Validate API Project")
+
+	handler := &IssuesHandler{IssueStore: store.NewProjectIssueStore(db)}
+	router := newIssueTestRouter(handler)
+
+	invalidRoleReq := httptest.NewRequest(
+		http.MethodPut,
+		"/api/projects/"+projectID+"/issue-role-assignments/observer?org_id="+orgID,
+		bytes.NewReader([]byte(`{"agent_id":null}`)),
+	)
+	invalidRoleRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidRoleRec, invalidRoleReq)
+	require.Equal(t, http.StatusBadRequest, invalidRoleRec.Code)
+
+	invalidAgentReq := httptest.NewRequest(
+		http.MethodPut,
+		"/api/projects/"+projectID+"/issue-role-assignments/planner?org_id="+orgID,
+		bytes.NewReader([]byte(`{"agent_id":"bad-id"}`)),
+	)
+	invalidAgentRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidAgentRec, invalidAgentReq)
+	require.Equal(t, http.StatusBadRequest, invalidAgentRec.Code)
+
+	invalidJSONReq := httptest.NewRequest(
+		http.MethodPut,
+		"/api/projects/"+projectID+"/issue-role-assignments/worker?org_id="+orgID,
+		bytes.NewReader([]byte(`{"agent_id":"x","extra":true}`)),
+	)
+	invalidJSONRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidJSONRec, invalidJSONReq)
+	require.Equal(t, http.StatusBadRequest, invalidJSONRec.Code)
 }
 
 func TestIssuesHandlerCreateIssueCreatesStandaloneIssueWithWorkTrackingFields(t *testing.T) {

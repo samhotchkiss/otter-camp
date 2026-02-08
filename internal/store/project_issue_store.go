@@ -177,6 +177,22 @@ type CreateProjectIssueReviewNotificationInput struct {
 	Payload              json.RawMessage
 }
 
+type IssueRoleAssignment struct {
+	ID        string    `json:"id"`
+	OrgID     string    `json:"org_id"`
+	ProjectID string    `json:"project_id"`
+	Role      string    `json:"role"`
+	AgentID   *string   `json:"agent_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type UpsertIssueRoleAssignmentInput struct {
+	ProjectID string
+	Role      string
+	AgentID   *string
+}
+
 type ProjectIssueCounts struct {
 	Total        int `json:"total"`
 	Open         int `json:"open"`
@@ -420,6 +436,19 @@ func normalizeIssuePriority(priority string) string {
 func isValidIssuePriority(priority string) bool {
 	switch normalizeIssuePriority(priority) {
 	case IssuePriorityP0, IssuePriorityP1, IssuePriorityP2, IssuePriorityP3:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeIssueRoleAssignmentRole(role string) string {
+	return strings.TrimSpace(strings.ToLower(role))
+}
+
+func isValidIssueRoleAssignmentRole(role string) bool {
+	switch normalizeIssueRoleAssignmentRole(role) {
+	case "planner", "worker", "reviewer":
 		return true
 	default:
 		return false
@@ -1486,6 +1515,130 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		return nil, fmt.Errorf("failed to read issue rows: %w", err)
 	}
 	return items, nil
+}
+
+func (s *ProjectIssueStore) ListIssueRoleAssignments(
+	ctx context.Context,
+	projectID string,
+) ([]IssueRoleAssignment, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	projectID = strings.TrimSpace(projectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if err := ensureProjectVisible(ctx, conn, projectID); err != nil {
+		return nil, err
+	}
+
+	rows, err := conn.QueryContext(
+		ctx,
+		`SELECT id, org_id, project_id, role, agent_id, created_at, updated_at
+			FROM issue_role_assignments
+			WHERE project_id = $1
+			ORDER BY CASE role
+				WHEN 'planner' THEN 0
+				WHEN 'worker' THEN 1
+				WHEN 'reviewer' THEN 2
+				ELSE 3
+			END, created_at ASC`,
+		projectID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list issue role assignments: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]IssueRoleAssignment, 0)
+	for rows.Next() {
+		item, err := scanIssueRoleAssignment(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan issue role assignment: %w", err)
+		}
+		if item.OrgID != workspaceID {
+			return nil, ErrForbidden
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading issue role assignments: %w", err)
+	}
+
+	return items, nil
+}
+
+func (s *ProjectIssueStore) UpsertIssueRoleAssignment(
+	ctx context.Context,
+	input UpsertIssueRoleAssignmentInput,
+) (*IssueRoleAssignment, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	projectID := strings.TrimSpace(input.ProjectID)
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+
+	role := normalizeIssueRoleAssignmentRole(input.Role)
+	if !isValidIssueRoleAssignmentRole(role) {
+		return nil, fmt.Errorf("role must be planner, worker, or reviewer")
+	}
+
+	agentID, err := normalizeOptionalIssueID(input.AgentID, "agent_id")
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := ensureProjectVisible(ctx, tx, projectID); err != nil {
+		return nil, err
+	}
+	if agentID != nil {
+		if err := ensureAgentVisible(ctx, tx, *agentID); err != nil {
+			return nil, err
+		}
+	}
+
+	record, err := scanIssueRoleAssignment(tx.QueryRowContext(
+		ctx,
+		`INSERT INTO issue_role_assignments (
+			org_id, project_id, role, agent_id
+		) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (project_id, role)
+		DO UPDATE SET
+			agent_id = EXCLUDED.agent_id,
+			updated_at = NOW()
+		RETURNING id, org_id, project_id, role, agent_id, created_at, updated_at`,
+		workspaceID,
+		projectID,
+		role,
+		nullableString(agentID),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to upsert issue role assignment: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
 func (s *ProjectIssueStore) ListGitHubLinksByIssueIDs(
@@ -2779,6 +2932,28 @@ func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, er
 		issue.ClosedAt = &closedAt.Time
 	}
 	return issue, nil
+}
+
+func scanIssueRoleAssignment(scanner interface{ Scan(...any) error }) (IssueRoleAssignment, error) {
+	var assignment IssueRoleAssignment
+	var agentID sql.NullString
+
+	err := scanner.Scan(
+		&assignment.ID,
+		&assignment.OrgID,
+		&assignment.ProjectID,
+		&assignment.Role,
+		&agentID,
+		&assignment.CreatedAt,
+		&assignment.UpdatedAt,
+	)
+	if err != nil {
+		return assignment, err
+	}
+	if agentID.Valid {
+		assignment.AgentID = &agentID.String
+	}
+	return assignment, nil
 }
 
 func scanProjectIssueGitHubLink(scanner interface{ Scan(...any) error }) (ProjectIssueGitHubLink, error) {

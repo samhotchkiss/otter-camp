@@ -201,6 +201,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/metadata", projectChatHandler.GetContentMetadata)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/search", projectChatHandler.SearchContent)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/issues/queue", issuesHandler.RoleQueue)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/issue-role-assignments", issuesHandler.ListRoleAssignments)
+		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/issue-role-assignments/{role}", issuesHandler.UpsertRoleAssignment)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/commits", projectCommitsHandler.Create)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits", projectCommitsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}", projectCommitsHandler.Get)
