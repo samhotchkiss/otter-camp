@@ -28,6 +28,7 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Patch("/api/issues/{id}", handler.PatchIssue)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/claim", handler.ClaimIssue)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/release", handler.ReleaseIssue)
+	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/reviewer-decision", handler.ReviewerDecision)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/review/save", handler.SaveReview)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/review/address", handler.AddressReview)
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}/review/changes", handler.ReviewChanges)
@@ -546,6 +547,103 @@ func TestIssuesHandlerClaimIssueAndReleaseIssueValidation(t *testing.T) {
 	unclaimedReleaseRec := httptest.NewRecorder()
 	router.ServeHTTP(unclaimedReleaseRec, unclaimedReleaseReq)
 	require.Equal(t, http.StatusBadRequest, unclaimedReleaseRec.Code)
+}
+
+func TestIssuesHandlerReviewerDecision(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-reviewer-decision-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Reviewer Decision API Project")
+	reviewerID := insertMessageTestAgent(t, db, orgID, "issue-reviewer-decision-reviewer")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	makeReviewIssue := func(title string) *store.ProjectIssue {
+		issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+			ProjectID:    projectID,
+			Title:        title,
+			Origin:       "local",
+			OwnerAgentID: &reviewerID,
+			WorkStatus:   store.IssueWorkStatusReview,
+		})
+		require.NoError(t, err)
+		_, err = issueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
+			IssueID: issue.ID,
+			AgentID: reviewerID,
+			Role:    "owner",
+		})
+		require.NoError(t, err)
+		return issue
+	}
+
+	approveIssue := makeReviewIssue("Approve candidate")
+	reworkIssue := makeReviewIssue("Rework candidate")
+	escalateIssue := makeReviewIssue("Escalate candidate")
+
+	handler := &IssuesHandler{IssueStore: issueStore, DB: db}
+	router := newIssueTestRouter(handler)
+
+	approveReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+approveIssue.ID+"/reviewer-decision?org_id="+orgID,
+		bytes.NewReader([]byte(`{"decision":"approve","reason":"LGTM"}`)),
+	)
+	approveRec := httptest.NewRecorder()
+	router.ServeHTTP(approveRec, approveReq)
+	require.Equal(t, http.StatusOK, approveRec.Code)
+
+	var approveResp issueSummaryPayload
+	require.NoError(t, json.NewDecoder(approveRec.Body).Decode(&approveResp))
+	require.Equal(t, store.IssueWorkStatusDone, approveResp.WorkStatus)
+	require.Equal(t, "closed", approveResp.State)
+	require.Nil(t, approveResp.OwnerAgentID)
+
+	reworkReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+reworkIssue.ID+"/reviewer-decision?org_id="+orgID,
+		bytes.NewReader([]byte(`{"decision":"request_changes"}`)),
+	)
+	reworkRec := httptest.NewRecorder()
+	router.ServeHTTP(reworkRec, reworkReq)
+	require.Equal(t, http.StatusOK, reworkRec.Code)
+
+	var reworkResp issueSummaryPayload
+	require.NoError(t, json.NewDecoder(reworkRec.Body).Decode(&reworkResp))
+	require.Equal(t, store.IssueWorkStatusInProgress, reworkResp.WorkStatus)
+	require.Equal(t, "open", reworkResp.State)
+	require.Nil(t, reworkResp.OwnerAgentID)
+
+	escalateReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+escalateIssue.ID+"/reviewer-decision?org_id="+orgID,
+		bytes.NewReader([]byte(`{"decision":"escalate","reason":"needs human decision"}`)),
+	)
+	escalateRec := httptest.NewRecorder()
+	router.ServeHTTP(escalateRec, escalateReq)
+	require.Equal(t, http.StatusOK, escalateRec.Code)
+
+	var escalateResp issueSummaryPayload
+	require.NoError(t, json.NewDecoder(escalateRec.Body).Decode(&escalateResp))
+	require.Equal(t, store.IssueWorkStatusFlagged, escalateResp.WorkStatus)
+	require.Equal(t, "open", escalateResp.State)
+	require.Nil(t, escalateResp.OwnerAgentID)
+
+	invalidDecisionReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+makeReviewIssue("Invalid decision candidate").ID+"/reviewer-decision?org_id="+orgID,
+		bytes.NewReader([]byte(`{"decision":"ship_it"}`)),
+	)
+	invalidDecisionRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidDecisionRec, invalidDecisionReq)
+	require.Equal(t, http.StatusBadRequest, invalidDecisionRec.Code)
+
+	missingDecisionReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+makeReviewIssue("Missing decision candidate").ID+"/reviewer-decision?org_id="+orgID,
+		bytes.NewReader([]byte(`{}`)),
+	)
+	missingDecisionRec := httptest.NewRecorder()
+	router.ServeHTTP(missingDecisionRec, missingDecisionReq)
+	require.Equal(t, http.StatusBadRequest, missingDecisionRec.Code)
 }
 
 func TestIssuesHandlerListSupportsOwnerWorkStatusAndPriorityFilters(t *testing.T) {

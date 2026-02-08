@@ -457,6 +457,23 @@ func queueWorkStatusForRole(role string) (string, error) {
 	}
 }
 
+func normalizeReviewerDecision(decision string) string {
+	return strings.TrimSpace(strings.ToLower(decision))
+}
+
+func reviewerDecisionNextWorkStatus(decision string) (string, error) {
+	switch normalizeReviewerDecision(decision) {
+	case "approve":
+		return IssueWorkStatusDone, nil
+	case "request_changes":
+		return IssueWorkStatusInProgress, nil
+	case "escalate":
+		return IssueWorkStatusFlagged, nil
+	default:
+		return "", fmt.Errorf("decision must be approve, request_changes, or escalate")
+	}
+}
+
 func normalizeIssuePriority(priority string) string {
 	return strings.ToUpper(strings.TrimSpace(priority))
 }
@@ -1290,6 +1307,92 @@ func (s *ProjectIssueStore) ClaimNextQueueIssue(
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to claim next queue issue: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (s *ProjectIssueStore) ApplyReviewerDecision(
+	ctx context.Context,
+	issueID string,
+	decision string,
+) (*ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+
+	nextStatus, err := reviewerDecisionNextWorkStatus(decision)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
+			FROM project_issues
+			WHERE id = $1
+			FOR UPDATE`,
+		issueID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to load issue: %w", err)
+	}
+	if current.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	currentStatus := normalizeIssueWorkStatus(current.WorkStatus)
+	if currentStatus == "" {
+		currentStatus = defaultIssueWorkStatusForState(current.State)
+	}
+	if currentStatus != IssueWorkStatusReview {
+		return nil, fmt.Errorf("reviewer decision requires review work_status")
+	}
+	if !canTransitionIssueWorkStatus(currentStatus, nextStatus) {
+		return nil, fmt.Errorf("invalid work_status transition")
+	}
+
+	nextState := "open"
+	if nextStatus == IssueWorkStatusDone || nextStatus == IssueWorkStatusCancelled {
+		nextState = "closed"
+	}
+
+	updated, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`UPDATE project_issues
+			SET owner_agent_id = NULL,
+				work_status = $2,
+				state = $3,
+				closed_at = CASE
+					WHEN $3 = 'closed' THEN COALESCE(closed_at, NOW())
+					ELSE NULL
+				END
+			WHERE id = $1
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
+		issueID,
+		nextStatus,
+		nextState,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply reviewer decision: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

@@ -223,6 +223,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Patch("/issues/{id}", issuesHandler.PatchIssue)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/claim", issuesHandler.ClaimIssue)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/release", issuesHandler.ReleaseIssue)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/reviewer-decision", issuesHandler.ReviewerDecision)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/review/save", issuesHandler.SaveReview)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/review/address", issuesHandler.AddressReview)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/changes", issuesHandler.ReviewChanges)

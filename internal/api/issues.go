@@ -1149,6 +1149,71 @@ func (h *IssuesHandler) ReleaseIssue(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
 }
 
+func (h *IssuesHandler) ReviewerDecision(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if issueID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
+		return
+	}
+
+	var req struct {
+		Decision string  `json:"decision"`
+		Reason   *string `json:"reason,omitempty"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	req.Decision = strings.TrimSpace(req.Decision)
+	if req.Decision == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "decision is required"})
+		return
+	}
+
+	before, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	updated, err := h.IssueStore.ApplyReviewerDecision(r.Context(), issueID, req.Decision)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	if err := h.syncIssueOwnerParticipant(r.Context(), issueID, nil); err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	reason := ""
+	if req.Reason != nil {
+		reason = strings.TrimSpace(*req.Reason)
+	}
+	h.logIssueReviewerDecision(r.Context(), *before, *updated, req.Decision, reason)
+
+	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
+}
+
 func (h *IssuesHandler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 	if h.IssueStore == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
@@ -1698,6 +1763,35 @@ func (h *IssuesHandler) logIssueApproved(
 		"approval_state": updated.ApprovalState,
 		"issue_state":    updated.State,
 		"closed_at":      updated.ClosedAt,
+	})
+}
+
+func (h *IssuesHandler) logIssueReviewerDecision(
+	ctx context.Context,
+	before store.ProjectIssue,
+	updated store.ProjectIssue,
+	decision string,
+	reason string,
+) {
+	if h.DB == nil {
+		return
+	}
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return
+	}
+	decision = strings.TrimSpace(strings.ToLower(decision))
+	reason = strings.TrimSpace(reason)
+	_ = logGitHubActivity(ctx, h.DB, workspaceID, &updated.ProjectID, "issue.reviewer_decision", map[string]any{
+		"issue_id":           updated.ID,
+		"project_id":         updated.ProjectID,
+		"decision":           decision,
+		"reason":             reason,
+		"before_work_status": before.WorkStatus,
+		"after_work_status":  updated.WorkStatus,
+		"before_state":       before.State,
+		"after_state":        updated.State,
+		"closed_at":          updated.ClosedAt,
 	})
 }
 

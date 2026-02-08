@@ -871,6 +871,63 @@ func TestProjectIssueStore_UpdateIssueBranchTracking(t *testing.T) {
 	require.Contains(t, err.Error(), "last_commit_sha")
 }
 
+func TestProjectIssueStore_ReviewerDecisionTransitions(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-reviewer-decision-org")
+	projectID := createTestProject(t, db, orgID, "Issue Reviewer Decision Project")
+	agentID := createIssueTestAgent(t, db, orgID, "issue-reviewer-agent")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	makeReviewIssue := func(title string) *ProjectIssue {
+		issue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+			ProjectID:    projectID,
+			Title:        title,
+			Origin:       "local",
+			OwnerAgentID: &agentID,
+			WorkStatus:   IssueWorkStatusReview,
+		})
+		require.NoError(t, err)
+		return issue
+	}
+
+	approved, err := issueStore.ApplyReviewerDecision(ctx, makeReviewIssue("Approve case").ID, "approve")
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusDone, approved.WorkStatus)
+	require.Equal(t, "closed", approved.State)
+	require.Nil(t, approved.OwnerAgentID)
+
+	changesRequested, err := issueStore.ApplyReviewerDecision(ctx, makeReviewIssue("Request changes case").ID, "request_changes")
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusInProgress, changesRequested.WorkStatus)
+	require.Equal(t, "open", changesRequested.State)
+	require.Nil(t, changesRequested.OwnerAgentID)
+
+	escalated, err := issueStore.ApplyReviewerDecision(ctx, makeReviewIssue("Escalate case").ID, "escalate")
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusFlagged, escalated.WorkStatus)
+	require.Equal(t, "open", escalated.State)
+	require.Nil(t, escalated.OwnerAgentID)
+
+	notInReview, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Not in review",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusInProgress,
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.ApplyReviewerDecision(ctx, notInReview.ID, "approve")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires review")
+
+	_, err = issueStore.ApplyReviewerDecision(ctx, makeReviewIssue("Invalid decision case").ID, "ship_it")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decision")
+}
+
 func TestProjectIssueStore_UpdateIssueWorkTrackingAllowsClosingFromQueuedOrInProgress(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
