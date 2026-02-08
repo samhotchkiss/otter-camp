@@ -160,10 +160,11 @@ func (s *QuestionnaireStore) ListByContext(
 	rows, err := conn.QueryContext(
 		ctx,
 		`SELECT `+questionnaireColumns+` FROM questionnaires
-		 WHERE context_type = $1 AND context_id = $2
+		 WHERE context_type = $1 AND context_id = $2 AND org_id = $3
 		 ORDER BY created_at ASC, id ASC`,
 		contextType,
 		contextID,
+		workspaceID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list questionnaires: %w", err)
@@ -206,8 +207,9 @@ func (s *QuestionnaireStore) GetByID(ctx context.Context, questionnaireID string
 
 	record, err := scanQuestionnaire(conn.QueryRowContext(
 		ctx,
-		`SELECT `+questionnaireColumns+` FROM questionnaires WHERE id = $1`,
+		`SELECT `+questionnaireColumns+` FROM questionnaires WHERE id = $1 AND org_id = $2`,
 		questionnaireID,
+		workspaceID,
 	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -248,9 +250,10 @@ func (s *QuestionnaireStore) Respond(ctx context.Context, input RespondQuestionn
 	record, err := scanQuestionnaire(tx.QueryRowContext(
 		ctx,
 		`SELECT `+questionnaireColumns+` FROM questionnaires
-		 WHERE id = $1
+		 WHERE id = $1 AND org_id = $2
 		 FOR UPDATE`,
 		questionnaireID,
+		workspaceID,
 	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -271,11 +274,12 @@ func (s *QuestionnaireStore) Respond(ctx context.Context, input RespondQuestionn
 		 SET responses = $2::jsonb,
 		     responded_by = $3,
 		     responded_at = NOW()
-		 WHERE id = $1
+		 WHERE id = $1 AND org_id = $4
 		 RETURNING `+questionnaireColumns,
 		questionnaireID,
 		[]byte(input.Responses),
 		respondedBy,
+		workspaceID,
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to respond questionnaire: %w", err)

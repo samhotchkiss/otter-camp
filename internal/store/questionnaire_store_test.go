@@ -99,7 +99,7 @@ func TestQuestionnaireStoreRejectsCrossOrgAndInvalidContext(t *testing.T) {
 	ctxA := ctxWithWorkspace(orgA)
 	ctxB := ctxWithWorkspace(orgB)
 
-	_, err := store.Create(ctxA, CreateQuestionnaireInput{
+	created, err := store.Create(ctxA, CreateQuestionnaireInput{
 		ContextType: QuestionnaireContextIssue,
 		ContextID:   issueA,
 		Author:      "Planner",
@@ -116,6 +116,16 @@ func TestQuestionnaireStoreRejectsCrossOrgAndInvalidContext(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 
 	_, err = store.ListByContext(ctxB, QuestionnaireContextIssue, issueA)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	_, err = store.GetByID(ctxB, created.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	_, err = store.Respond(ctxB, RespondQuestionnaireInput{
+		QuestionnaireID: created.ID,
+		RespondedBy:     "Other",
+		Responses:       json.RawMessage(`{"q1":"Answer"}`),
+	})
 	require.ErrorIs(t, err, ErrNotFound)
 
 	_, err = store.Create(ctxA, CreateQuestionnaireInput{
