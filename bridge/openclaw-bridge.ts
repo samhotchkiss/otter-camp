@@ -34,6 +34,13 @@ const DISPATCH_QUEUE_POLL_INTERVAL_MS = 5000;
 const ACTIVITY_EVENT_FLUSH_INTERVAL_MS = 5000;
 const ACTIVITY_EVENTS_BATCH_SIZE = 200;
 const MAX_TRACKED_ACTIVITY_EVENT_IDS = 5000;
+const MAX_TRACKED_SESSION_CONTEXTS = (() => {
+  const raw = Number.parseInt((process.env.OTTER_SESSION_CONTEXT_MAX || '').trim(), 10);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 5000;
+  }
+  return raw;
+})();
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const PROJECT_ID_PATTERN = /(?:^|:)project:([0-9a-f-]{36})(?:$|:)/i;
 const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
@@ -240,6 +247,25 @@ function getTrimmedString(value: unknown): string {
     return '';
   }
   return value.trim();
+}
+
+function setSessionContext(sessionKey: string, context: SessionContext): void {
+  const normalized = getTrimmedString(sessionKey);
+  if (!normalized) {
+    return;
+  }
+  if (sessionContexts.has(normalized)) {
+    sessionContexts.delete(normalized);
+  }
+  sessionContexts.set(normalized, context);
+  while (sessionContexts.size > MAX_TRACKED_SESSION_CONTEXTS) {
+    const oldest = sessionContexts.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    sessionContexts.delete(oldest.value);
+    contextPrimedSessions.delete(oldest.value);
+  }
 }
 
 function parseAgentIDFromSessionKey(sessionKey: string): string {
@@ -985,6 +1011,22 @@ export function getBufferedActivityEventStateForTest(): {
   };
 }
 
+export function resetSessionContextsForTest(): void {
+  sessionContexts.clear();
+  contextPrimedSessions.clear();
+}
+
+export function setSessionContextForTest(sessionKey: string, context: SessionContext): void {
+  setSessionContext(sessionKey, context);
+}
+
+export function getSessionContextStateForTest(): { count: number; keys: string[] } {
+  return {
+    count: sessionContexts.size,
+    keys: Array.from(sessionContexts.keys()),
+  };
+}
+
 async function fetchWithRetry(
   input: RequestInfo | URL,
   init: RequestInit,
@@ -1563,7 +1605,7 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
     return;
   }
 
-  sessionContexts.set(sessionKey, {
+  setSessionContext(sessionKey, {
     kind: 'dm',
     orgID,
     threadID,
@@ -1617,7 +1659,7 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
     return;
   }
 
-  sessionContexts.set(sessionKey, {
+  setSessionContext(sessionKey, {
     kind: 'project_chat',
     orgID,
     agentID,
@@ -1678,7 +1720,7 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
     return;
   }
 
-  sessionContexts.set(sessionKey, {
+  setSessionContext(sessionKey, {
     kind: 'issue_comment',
     orgID,
     projectID,
