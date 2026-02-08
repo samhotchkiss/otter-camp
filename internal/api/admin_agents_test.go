@@ -1,0 +1,220 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/stretchr/testify/require"
+)
+
+func TestAdminAgentsListReturnsMergedRoster(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgA := insertMessageTestOrganization(t, db, "admin-agents-list-a")
+	orgB := insertMessageTestOrganization(t, db, "admin-agents-list-b")
+
+	_, err := db.Exec(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES
+		    ($1, 'main', 'Frank', 'active'),
+		    ($1, 'three-stones', 'Stone', 'offline'),
+		    ($2, 'hidden-agent', 'Hidden', 'active')`,
+		orgA,
+		orgB,
+	)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	_, err = db.Exec(
+		`INSERT INTO agent_sync_state
+		    (id, name, status, model, context_tokens, total_tokens, channel, session_key, last_seen, updated_at)
+		 VALUES
+		    ('main', 'Frank', 'online', 'gpt-5.2-codex', 2200, 10240, 'slack:#engineering', 'agent:main:main', 'just now', $1),
+		    ('hidden-agent', 'Hidden', 'online', 'gpt-5.2-codex', 100, 1000, 'slack:#secret', 'agent:hidden-agent:main', 'just now', $1)
+		 ON CONFLICT (id) DO UPDATE SET
+		    name = EXCLUDED.name,
+		    status = EXCLUDED.status,
+		    model = EXCLUDED.model,
+		    context_tokens = EXCLUDED.context_tokens,
+		    total_tokens = EXCLUDED.total_tokens,
+		    channel = EXCLUDED.channel,
+		    session_key = EXCLUDED.session_key,
+		    last_seen = EXCLUDED.last_seen,
+		    updated_at = EXCLUDED.updated_at`,
+		now,
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO openclaw_agent_configs (id, heartbeat_every, updated_at)
+		 VALUES ('main', '15m', NOW())
+		 ON CONFLICT (id) DO UPDATE SET heartbeat_every = EXCLUDED.heartbeat_every, updated_at = EXCLUDED.updated_at`,
+	)
+	require.NoError(t, err)
+
+	handler := &AdminAgentsHandler{
+		DB:    db,
+		Store: store.NewAgentStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/agents", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgA))
+	rec := httptest.NewRecorder()
+	handler.List(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminAgentsListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Len(t, payload.Agents, 2)
+	require.Equal(t, 2, payload.Total)
+
+	first := payload.Agents[0]
+	second := payload.Agents[1]
+
+	require.Equal(t, "main", first.ID)
+	require.Equal(t, "Frank", first.Name)
+	require.Equal(t, "online", first.Status)
+	require.Equal(t, "gpt-5.2-codex", first.Model)
+	require.Equal(t, "15m", first.HeartbeatEvery)
+	require.Equal(t, "slack:#engineering", first.Channel)
+	require.Equal(t, "agent:main:main", first.SessionKey)
+
+	require.Equal(t, "three-stones", second.ID)
+	require.Equal(t, "Stone", second.Name)
+	require.Equal(t, "offline", second.Status)
+	require.Equal(t, "", second.Model)
+	require.Equal(t, "", second.Channel)
+}
+
+func TestAdminAgentsListEnforcesWorkspace(t *testing.T) {
+	db := setupMessageTestDB(t)
+	handler := &AdminAgentsHandler{
+		DB:    db,
+		Store: store.NewAgentStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/agents", nil)
+	rec := httptest.NewRecorder()
+	handler.List(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestAdminAgentsGetReturnsMergedDetail(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-get")
+
+	var workspaceAgentID string
+	err := db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'main', 'Frank', 'active')
+		 RETURNING id`,
+		orgID,
+	).Scan(&workspaceAgentID)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	_, err = db.Exec(
+		`INSERT INTO agent_sync_state
+		    (id, name, status, model, context_tokens, total_tokens, channel, session_key, current_task, last_seen, updated_at)
+		 VALUES
+		    ('main', 'Frank', 'busy', 'claude-opus-4-6', 3400, 15120, 'slack:#ops', 'agent:main:main', 'Handling incident triage', '1m ago', $1)
+		 ON CONFLICT (id) DO UPDATE SET
+		    name = EXCLUDED.name,
+		    status = EXCLUDED.status,
+		    model = EXCLUDED.model,
+		    context_tokens = EXCLUDED.context_tokens,
+		    total_tokens = EXCLUDED.total_tokens,
+		    channel = EXCLUDED.channel,
+		    session_key = EXCLUDED.session_key,
+		    current_task = EXCLUDED.current_task,
+		    last_seen = EXCLUDED.last_seen,
+		    updated_at = EXCLUDED.updated_at`,
+		now,
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO openclaw_agent_configs (id, heartbeat_every, updated_at)
+		 VALUES ('main', '10m', NOW())
+		 ON CONFLICT (id) DO UPDATE SET heartbeat_every = EXCLUDED.heartbeat_every, updated_at = EXCLUDED.updated_at`,
+	)
+	require.NoError(t, err)
+
+	handler := &AdminAgentsHandler{
+		DB:    db,
+		Store: store.NewAgentStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/agents/main", nil)
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("id", "main")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+
+	rec := httptest.NewRecorder()
+	handler.Get(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminAgentDetailResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "main", payload.Agent.ID)
+	require.Equal(t, workspaceAgentID, payload.Agent.WorkspaceAgentID)
+	require.Equal(t, "Frank", payload.Agent.Name)
+	require.Equal(t, "online", payload.Agent.Status)
+	require.Equal(t, "claude-opus-4-6", payload.Agent.Model)
+	require.Equal(t, "10m", payload.Agent.HeartbeatEvery)
+	require.NotNil(t, payload.Sync)
+	require.Equal(t, 3400, payload.Sync.ContextTokens)
+	require.Equal(t, 15120, payload.Sync.TotalTokens)
+	require.Equal(t, "Handling incident triage", payload.Sync.CurrentTask)
+}
+
+func TestAdminAgentsGetMissingAgent(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-missing")
+
+	handler := &AdminAgentsHandler{
+		DB:    db,
+		Store: store.NewAgentStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/agents/missing", nil)
+	req = addRouteParam(req, "id", "missing")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+
+	rec := httptest.NewRecorder()
+	handler.Get(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestAdminAgentsGetCrossOrgForbidden(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgA := insertMessageTestOrganization(t, db, "admin-agents-cross-a")
+	orgB := insertMessageTestOrganization(t, db, "admin-agents-cross-b")
+
+	_, err := db.Exec(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'hidden-agent', 'Hidden Agent', 'active')`,
+		orgB,
+	)
+	require.NoError(t, err)
+
+	handler := &AdminAgentsHandler{
+		DB:    db,
+		Store: store.NewAgentStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/agents/hidden-agent", nil)
+	req = addRouteParam(req, "id", "hidden-agent")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgA))
+
+	rec := httptest.NewRecorder()
+	handler.Get(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+}
