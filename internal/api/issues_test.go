@@ -34,11 +34,39 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Delete("/api/issues/{id}/participants/{agentID}", handler.RemoveParticipant)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues", handler.CreateIssue)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues/link", handler.CreateLinkedIssue)
+	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/issues/queue", handler.RoleQueue)
 	return router
 }
 
 func issueTestCtx(orgID string) context.Context {
 	return context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+}
+
+func TestResolveIssueQueueRoleWorkStatus(t *testing.T) {
+	testCases := []struct {
+		name       string
+		role       string
+		wantStatus string
+		wantErr    bool
+	}{
+		{name: "planner", role: "planner", wantStatus: store.IssueWorkStatusReady},
+		{name: "worker", role: "worker", wantStatus: store.IssueWorkStatusReadyForWork},
+		{name: "reviewer", role: "reviewer", wantStatus: store.IssueWorkStatusReview},
+		{name: "trim and case normalize", role: "  Worker  ", wantStatus: store.IssueWorkStatusReadyForWork},
+		{name: "invalid role", role: "observer", wantErr: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveIssueQueueRoleWorkStatus(tc.role)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantStatus, got)
+		})
+	}
 }
 
 func TestIssuesHandlerListAndGetIncludeOwnerParticipantsAndComments(t *testing.T) {
@@ -467,6 +495,133 @@ func TestIssuesHandlerListSupportsParentIssueFilter(t *testing.T) {
 		require.NotNil(t, item.ParentIssueID)
 		require.Equal(t, parent.ID, *item.ParentIssueID)
 	}
+}
+
+func TestIssuesHandlerRoleQueueReturnsRoleMappedStatuses(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-role-queue-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Role Queue Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	parent, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Planner parent",
+		Origin:     "local",
+		WorkStatus: store.IssueWorkStatusReady,
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:     projectID,
+		Title:         "Planner child",
+		Origin:        "local",
+		ParentIssueID: &parent.ID,
+		WorkStatus:    store.IssueWorkStatusReady,
+	})
+	require.NoError(t, err)
+	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Worker issue",
+		Origin:     "local",
+		WorkStatus: store.IssueWorkStatusReadyForWork,
+	})
+	require.NoError(t, err)
+	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Reviewer issue",
+		Origin:     "local",
+		WorkStatus: store.IssueWorkStatusReview,
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	plannerReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID+"&role=planner&limit=10",
+		nil,
+	)
+	plannerRec := httptest.NewRecorder()
+	router.ServeHTTP(plannerRec, plannerReq)
+	require.Equal(t, http.StatusOK, plannerRec.Code)
+
+	var plannerResp issueListResponse
+	require.NoError(t, json.NewDecoder(plannerRec.Body).Decode(&plannerResp))
+	require.Len(t, plannerResp.Items, 2)
+	for _, item := range plannerResp.Items {
+		require.Equal(t, store.IssueWorkStatusReady, item.WorkStatus)
+	}
+	require.Equal(t, "Planner child", plannerResp.Items[0].Title)
+	require.NotNil(t, plannerResp.Items[0].ParentIssueID)
+	require.Equal(t, parent.ID, *plannerResp.Items[0].ParentIssueID)
+
+	workerReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID+"&role=worker",
+		nil,
+	)
+	workerRec := httptest.NewRecorder()
+	router.ServeHTTP(workerRec, workerReq)
+	require.Equal(t, http.StatusOK, workerRec.Code)
+
+	var workerResp issueListResponse
+	require.NoError(t, json.NewDecoder(workerRec.Body).Decode(&workerResp))
+	require.Len(t, workerResp.Items, 1)
+	require.Equal(t, "Worker issue", workerResp.Items[0].Title)
+	require.Equal(t, store.IssueWorkStatusReadyForWork, workerResp.Items[0].WorkStatus)
+
+	reviewerReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID+"&role=reviewer",
+		nil,
+	)
+	reviewerRec := httptest.NewRecorder()
+	router.ServeHTTP(reviewerRec, reviewerReq)
+	require.Equal(t, http.StatusOK, reviewerRec.Code)
+
+	var reviewerResp issueListResponse
+	require.NoError(t, json.NewDecoder(reviewerRec.Body).Decode(&reviewerResp))
+	require.Len(t, reviewerResp.Items, 1)
+	require.Equal(t, "Reviewer issue", reviewerResp.Items[0].Title)
+	require.Equal(t, store.IssueWorkStatusReview, reviewerResp.Items[0].WorkStatus)
+}
+
+func TestIssuesHandlerRoleQueueValidatesRoleAndLimit(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-role-queue-validate-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Role Queue Validate Project")
+
+	handler := &IssuesHandler{IssueStore: store.NewProjectIssueStore(db)}
+	router := newIssueTestRouter(handler)
+
+	missingRoleReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID,
+		nil,
+	)
+	missingRoleRec := httptest.NewRecorder()
+	router.ServeHTTP(missingRoleRec, missingRoleReq)
+	require.Equal(t, http.StatusBadRequest, missingRoleRec.Code)
+
+	invalidRoleReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID+"&role=invalid",
+		nil,
+	)
+	invalidRoleRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidRoleRec, invalidRoleReq)
+	require.Equal(t, http.StatusBadRequest, invalidRoleRec.Code)
+
+	invalidLimitReq := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID+"&role=planner&limit=0",
+		nil,
+	)
+	invalidLimitRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidLimitRec, invalidLimitReq)
+	require.Equal(t, http.StatusBadRequest, invalidLimitRec.Code)
 }
 
 func TestIssuesHandlerCreateIssueCreatesStandaloneIssueWithWorkTrackingFields(t *testing.T) {

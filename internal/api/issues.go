@@ -143,6 +143,19 @@ type issuePatchRequest struct {
 
 const maxLinkedIssueDocumentBytes = 512 * 1024
 
+func resolveIssueQueueRoleWorkStatus(role string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(role)) {
+	case "planner":
+		return store.IssueWorkStatusReady, nil
+	case "worker":
+		return store.IssueWorkStatusReadyForWork, nil
+	case "reviewer":
+		return store.IssueWorkStatusReview, nil
+	default:
+		return "", fmt.Errorf("role must be planner, worker, or reviewer")
+	}
+}
+
 func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if h.IssueStore == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
@@ -204,6 +217,67 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 		WorkStatus:    workStatus,
 		Priority:      priority,
 		Limit:         limit,
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	issueIDs := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		issueIDs = append(issueIDs, issue.ID)
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), issueIDs)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	items := make([]issueSummaryPayload, 0, len(issues))
+	for _, issue := range issues {
+		participants, err := h.IssueStore.ListParticipants(r.Context(), issue.ID, false)
+		if err != nil {
+			handleIssueStoreError(w, err)
+			return
+		}
+		items = append(items, toIssueSummaryPayload(issue, participants, findIssueLink(linksByIssueID, issue.ID)))
+	}
+
+	sendJSON(w, http.StatusOK, issueListResponse{Items: items, Total: len(items)})
+}
+
+func (h *IssuesHandler) RoleQueue(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+
+	workStatus, err := resolveIssueQueueRoleWorkStatus(r.URL.Query().Get("role"))
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed <= 0 {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "limit must be a positive integer"})
+			return
+		}
+		limit = parsed
+	}
+
+	issues, err := h.IssueStore.ListIssues(r.Context(), store.ProjectIssueFilter{
+		ProjectID:  projectID,
+		WorkStatus: &workStatus,
+		Limit:      limit,
 	})
 	if err != nil {
 		handleIssueStoreError(w, err)
