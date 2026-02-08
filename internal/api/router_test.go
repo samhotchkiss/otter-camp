@@ -189,6 +189,13 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 		t.Fatalf("expected /api/admin/agents route to be registered, got status %d", recAdminAgentsList.Code)
 	}
 
+	reqAdminAgentsCreate := httptest.NewRequest(http.MethodPost, "/api/admin/agents?org_id="+orgID, strings.NewReader(`{"slot":"research","display_name":"Riley","model":"gpt-5.2-codex"}`))
+	recAdminAgentsCreate := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentsCreate, reqAdminAgentsCreate)
+	if recAdminAgentsCreate.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents POST route to be registered, got status %d", recAdminAgentsCreate.Code)
+	}
+
 	reqAdminAgentsGet := httptest.NewRequest(http.MethodGet, "/api/admin/agents/main?org_id="+orgID, nil)
 	recAdminAgentsGet := httptest.NewRecorder()
 	router.ServeHTTP(recAdminAgentsGet, reqAdminAgentsGet)

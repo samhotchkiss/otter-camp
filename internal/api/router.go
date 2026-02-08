@@ -76,7 +76,7 @@ func NewRouter() http.Handler {
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
-	adminAgentsHandler := &AdminAgentsHandler{DB: db, Store: agentStore}
+	adminAgentsHandler := &AdminAgentsHandler{DB: db, Store: agentStore, OpenClawHandler: openClawWSHandler}
 	adminConfigHandler := &AdminConfigHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	workflowsHandler := &WorkflowsHandler{DB: db}
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
@@ -108,6 +108,7 @@ func NewRouter() http.Handler {
 		agentActivityStore = store.NewAgentActivityEventStore(db)
 		agentActivityHandler.Store = agentActivityStore
 		adminConnectionsHandler.EventStore = store.NewConnectionEventStore(db)
+		adminAgentsHandler.EventStore = adminConnectionsHandler.EventStore
 		adminConfigHandler.EventStore = adminConnectionsHandler.EventStore
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
 		githubSyncHealthHandler.Store = githubSyncJobStore
@@ -288,6 +289,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/admin/connections", adminConnectionsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/admin/events", adminConnectionsHandler.GetEvents)
 		r.With(middleware.OptionalWorkspace).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)
+		r.With(middleware.OptionalWorkspace).Post("/admin/agents", adminAgentsHandler.Create)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents", adminAgentsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}", adminAgentsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files", adminAgentsHandler.ListFiles)

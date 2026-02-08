@@ -5,10 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -20,10 +23,14 @@ import (
 )
 
 type AdminAgentsHandler struct {
-	DB           *sql.DB
-	Store        *store.AgentStore
-	ProjectStore *store.ProjectStore
-	ProjectRepos *store.ProjectRepoStore
+	DB              *sql.DB
+	Store           *store.AgentStore
+	ProjectStore    *store.ProjectStore
+	ProjectRepos    *store.ProjectRepoStore
+	OpenClawHandler openClawConnectionStatus
+	EventStore      *store.ConnectionEventStore
+
+	writeTemplatesFn func(ctx context.Context, repoPath, slot, displayName string) error
 }
 
 type adminAgentSummary struct {
@@ -62,6 +69,14 @@ type adminAgentFilesListResponse struct {
 	Entries []projectTreeEntry `json:"entries"`
 }
 
+type adminAgentCreateRequest struct {
+	Slot           string `json:"slot"`
+	DisplayName    string `json:"display_name"`
+	Model          string `json:"model"`
+	HeartbeatEvery string `json:"heartbeat_every,omitempty"`
+	Channel        string `json:"channel,omitempty"`
+}
+
 type adminAgentRow struct {
 	WorkspaceAgentID string
 	Slug             string
@@ -85,6 +100,7 @@ var errAdminAgentForbidden = errors.New("agent belongs to a different workspace"
 var (
 	errAgentFilesProjectNotConfigured = errors.New("agent files project is not configured")
 	memoryDatePattern                 = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	agentSlotPattern                  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
 )
 
 const agentFilesProjectName = "Agent Files"
@@ -166,6 +182,103 @@ func (h *AdminAgentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, payload)
+}
+
+func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
+		return
+	}
+	if h.DB == nil || h.Store == nil || h.ProjectStore == nil || h.ProjectRepos == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	var req adminAgentCreateRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+
+	req.Slot = strings.ToLower(strings.TrimSpace(req.Slot))
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	req.Model = strings.TrimSpace(req.Model)
+	req.HeartbeatEvery = strings.TrimSpace(req.HeartbeatEvery)
+	req.Channel = strings.TrimSpace(req.Channel)
+
+	if !agentSlotPattern.MatchString(req.Slot) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "slot must match ^[a-z0-9][a-z0-9-]{1,62}$"})
+		return
+	}
+	if req.DisplayName == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "display_name is required"})
+		return
+	}
+	if req.Model == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "model is required"})
+		return
+	}
+
+	existing, err := h.Store.GetBySlug(r.Context(), req.Slot)
+	if err == nil && existing != nil {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "agent slot already exists"})
+		return
+	}
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate agent slot"})
+		return
+	}
+
+	repoPath, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	if err != nil {
+		h.writeAgentFilesResolveError(w, err)
+		return
+	}
+
+	createdAgent, err := h.Store.Create(r.Context(), store.CreateAgentInput{
+		Slug:        req.Slot,
+		DisplayName: req.DisplayName,
+		Status:      "active",
+	})
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create agent"})
+		return
+	}
+
+	writeTemplates := h.writeTemplatesFn
+	if writeTemplates == nil {
+		writeTemplates = h.writeAgentTemplates
+	}
+	if err := writeTemplates(r.Context(), repoPath, req.Slot, req.DisplayName); err != nil {
+		_ = h.Store.Delete(r.Context(), createdAgent.ID)
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to scaffold agent files"})
+		return
+	}
+
+	configPatch, err := buildCreateAgentConfigPatch(req)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to build config patch"})
+		return
+	}
+
+	dispatcher := &AdminConnectionsHandler{
+		DB:              h.DB,
+		OpenClawHandler: h.OpenClawHandler,
+		EventStore:      h.EventStore,
+	}
+	dispatcher.dispatchAdminCommand(
+		w,
+		r,
+		adminCommandActionConfigPatch,
+		adminCommandDispatchInput{
+			ConfigPatch: configPatch,
+			Confirm:     true,
+			DryRun:      false,
+		},
+	)
 }
 
 func (h *AdminAgentsHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
@@ -634,4 +747,134 @@ func scanAdminAgentRow(scanner interface{ Scan(...any) error }) (adminAgentRow, 
 		&row.TotalTokens,
 	)
 	return row, err
+}
+
+func (h *AdminAgentsHandler) writeAgentTemplates(
+	ctx context.Context,
+	repoPath string,
+	slot string,
+	displayName string,
+) error {
+	if err := ensureGitRepoPath(repoPath); err != nil {
+		return err
+	}
+
+	agentDir := filepath.Join(repoPath, "agents", slot)
+	if !isPathWithinRoot(repoPath, agentDir) {
+		return fmt.Errorf("invalid agent template path")
+	}
+	if _, err := os.Stat(agentDir); err == nil {
+		return fmt.Errorf("agent directory already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(agentDir, "memory"), 0o755); err != nil {
+		return err
+	}
+
+	files := map[string]string{
+		filepath.Join("agents", slot, "SOUL.md"):     renderNewAgentSoulTemplate(displayName),
+		filepath.Join("agents", slot, "IDENTITY.md"): renderNewAgentIdentityTemplate(displayName),
+		filepath.Join("agents", slot, "TOOLS.md"):    renderNewAgentToolsTemplate(),
+		filepath.Join("agents", slot, "MEMORY.md"):   renderNewAgentMemoryTemplate(displayName),
+	}
+	for relativePath, content := range files {
+		absolutePath := filepath.Join(repoPath, relativePath)
+		if !isPathWithinRoot(repoPath, absolutePath) {
+			return fmt.Errorf("invalid agent template path")
+		}
+		if err := os.WriteFile(absolutePath, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+
+	gitPath := path.Join("agents", slot)
+	if _, err := runGitInRepo(ctx, repoPath, "add", "--", gitPath); err != nil {
+		return err
+	}
+	hasChanges, err := gitHasCachedChangesForPath(ctx, repoPath, gitPath)
+	if err != nil {
+		return err
+	}
+	if !hasChanges {
+		return fmt.Errorf("agent templates produced no git changes")
+	}
+	if _, err := runGitInRepo(
+		ctx,
+		repoPath,
+		"-c", "user.name=OtterCamp Admin",
+		"-c", "user.email=ottercamp-admin@localhost",
+		"commit",
+		"-m", fmt.Sprintf("Bootstrap agent files for %s", slot),
+		"--",
+		gitPath,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func buildCreateAgentConfigPatch(req adminAgentCreateRequest) (json.RawMessage, error) {
+	agentPatch := map[string]interface{}{
+		"enabled": true,
+		"model": map[string]interface{}{
+			"primary": req.Model,
+		},
+	}
+	if req.HeartbeatEvery != "" {
+		agentPatch["heartbeat"] = map[string]interface{}{
+			"every": req.HeartbeatEvery,
+		}
+	}
+	if req.Channel != "" {
+		agentPatch["channels"] = []map[string]interface{}{
+			{
+				"channel":          req.Channel,
+				"require_mention":  false,
+				"requireMention":   false,
+				"delivery_channel": req.Channel,
+			},
+		}
+	}
+
+	patch := map[string]interface{}{
+		"agents": map[string]interface{}{
+			req.Slot: agentPatch,
+		},
+	}
+	return canonicalizeOpenClawConfigData(patch)
+}
+
+func renderNewAgentSoulTemplate(displayName string) string {
+	name := strings.TrimSpace(displayName)
+	if name == "" {
+		name = "New Agent"
+	}
+	return fmt.Sprintf(
+		"# SOUL.md - Who You Are\n\n*You're not a chatbot. You're becoming someone.*\n\n- Name: %s\n- Voice: Clear, grounded, and direct.\n- Values: Ownership, honesty, and useful outcomes.\n\n---\n\n_This file is yours to evolve. As you learn who you are, update it._\n",
+		name,
+	)
+}
+
+func renderNewAgentIdentityTemplate(displayName string) string {
+	name := strings.TrimSpace(displayName)
+	if name == "" {
+		name = "New Agent"
+	}
+	return fmt.Sprintf(
+		"# IDENTITY.md - Who Am I?\n\n- **Name:** %s\n- **Creature:** *(to be determined)*\n- **Vibe:** *(to be determined)*\n- **Emoji:** *(pick one)*\n- **Avatar:** *(workspace-relative path or URL)*\n",
+		name,
+	)
+}
+
+func renderNewAgentToolsTemplate() string {
+	return "# TOOLS.md\n\n- Add local tool notes, credentials, and integration constraints here.\n"
+}
+
+func renderNewAgentMemoryTemplate(displayName string) string {
+	name := strings.TrimSpace(displayName)
+	if name == "" {
+		name = "Agent"
+	}
+	return fmt.Sprintf("# MEMORY.md\n\nLong-term memory for %s.\n", name)
 }
