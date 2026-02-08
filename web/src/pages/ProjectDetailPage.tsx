@@ -7,6 +7,8 @@ import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
+import useEmissions from "../hooks/useEmissions";
+import EmissionStream from "../components/EmissionStream";
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
@@ -297,6 +299,10 @@ export default function ProjectDetailPage() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
   const { upsertConversation, openConversation } = useGlobalChat();
+  const { emissions: projectEmissions } = useEmissions({
+    projectId: id,
+    limit: 25,
+  });
 
   // Fetch project and tasks
   useEffect(() => {
@@ -794,10 +800,17 @@ export default function ProjectDetailPage() {
             <div className="flex items-center gap-2 border-b border-[var(--border)] px-5 py-4">
               <span className="text-sm">📡</span>
               <span className="text-sm font-bold text-[var(--text)]">
-                Recent Activity
+                Live Activity
               </span>
             </div>
             <div className="flex-1 overflow-y-auto p-3">
+              <EmissionStream
+                emissions={projectEmissions}
+                projectId={project.id}
+                limit={8}
+                emptyText="No live project emissions"
+              />
+              <div className="my-3 border-t border-[var(--border)]" />
               {activity.length > 0 ? (
                 activity.map((a) => (
                   <ActivityItem key={a.id} activity={a} />
@@ -853,7 +866,14 @@ export default function ProjectDetailPage() {
 
       {activeTab === "activity" && (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
-          <div className="space-y-2">
+          <div className="space-y-4">
+            <EmissionStream
+              emissions={projectEmissions}
+              projectId={project.id}
+              limit={12}
+              emptyText="No live project emissions"
+            />
+            <div className="border-t border-[var(--border)] pt-4" />
             {activity.length > 0 ? (
               activity.map((a) => (
                 <ActivityItem key={a.id} activity={a} />
