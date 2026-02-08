@@ -120,6 +120,37 @@ const COLUMNS: TaskColumn[] = [
   { key: "done", title: "✅ Done", statuses: ["done", "cancelled"] },
 ];
 
+const LIST_STATUS_BADGE: Record<Task["status"], { label: string; className: string }> = {
+  queued: {
+    label: "Queued",
+    className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
+  },
+  dispatched: {
+    label: "Dispatched",
+    className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
+  },
+  in_progress: {
+    label: "In Progress",
+    className: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+  },
+  review: {
+    label: "Review",
+    className: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  },
+  blocked: {
+    label: "Blocked",
+    className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  },
+  done: {
+    label: "Done",
+    className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
+  },
+  cancelled: {
+    label: "Cancelled",
+    className: "bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-300",
+  },
+};
+
 function formatTimeAgo(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
@@ -776,6 +807,9 @@ export default function ProjectDetailPage() {
                   </span>
                   <span className="text-xs text-[var(--text-muted)]">
                     {task.assignee}
+                  </span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${LIST_STATUS_BADGE[task.status].className}`}>
+                    {LIST_STATUS_BADGE[task.status].label}
                   </span>
                   <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
                     task.priority === "P0" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :

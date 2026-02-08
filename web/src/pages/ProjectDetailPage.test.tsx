@@ -181,4 +181,44 @@ describe("ProjectDetailPage files tab", () => {
       expect.objectContaining({ focus: true, openDock: true }),
     );
   });
+
+  it("shows task status badges in the list tab", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          tasks: [
+            {
+              id: "task-1",
+              title: "Ship status column",
+              status: "in_progress",
+              priority: "P1",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "List" }));
+
+    expect(screen.getByText("Ship status column")).toBeInTheDocument();
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+  });
 });
