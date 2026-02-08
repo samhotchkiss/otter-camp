@@ -226,11 +226,13 @@ func (c *Client) WhoAmI() (whoamiResponse, error) {
 	}
 	q := url.Values{}
 	q.Set("token", strings.TrimSpace(c.Token))
-	path := "/api/auth/validate?" + q.Encode()
-	req, err := c.newRequest(http.MethodGet, path, nil)
+	endpoint := c.BaseURL + "/api/auth/validate?" + q.Encode()
+	// Build request without Bearer header — validate endpoint reads token from query param only.
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return whoamiResponse{}, err
 	}
+	req.Header.Set("Accept", "application/json")
 	var resp whoamiResponse
 	if err := c.do(req, &resp); err != nil {
 		return whoamiResponse{}, err
