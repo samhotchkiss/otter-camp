@@ -73,6 +73,7 @@ func NewRouter() http.Handler {
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
 	taskHandler := &TaskHandler{Hub: hub}
 	openClawWSHandler := ws.NewOpenClawHandler(hub)
+	emissionsHandler := &EmissionsHandler{Buffer: NewEmissionBuffer(defaultEmissionBufferSize)}
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
@@ -181,6 +182,8 @@ func NewRouter() http.Handler {
 		r.Post("/user/prefixes", HandleUserCommandPrefixesCreate)
 		r.Delete("/user/prefixes/{id}", HandleUserCommandPrefixesDelete)
 		r.Post("/webhooks/openclaw", webhookHandler.OpenClawHandler)
+		r.With(middleware.OptionalWorkspace).Get("/emissions/recent", emissionsHandler.Recent)
+		r.With(middleware.OptionalWorkspace).Post("/emissions", emissionsHandler.Ingest)
 		r.Get("/approvals/exec", execApprovalsHandler.List)
 		r.Post("/approvals/exec/{id}/respond", execApprovalsHandler.Respond)
 		r.With(middleware.OptionalWorkspace).Get("/inbox", HandleInbox)
