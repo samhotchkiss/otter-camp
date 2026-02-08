@@ -465,6 +465,134 @@ func TestProjectIssueStore_TransitionWorkStatusEnforcesStateMachine(t *testing.T
 	require.Contains(t, err.Error(), "work_status")
 }
 
+func TestProjectIssueStore_ClaimIssue(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-claim-org")
+	projectID := createTestProject(t, db, orgID, "Issue Claim Project")
+	agentID := createIssueTestAgent(t, db, orgID, "issue-claim-agent")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	readyIssue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Planner queue item",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusReady,
+	})
+	require.NoError(t, err)
+
+	claimedReady, err := issueStore.ClaimIssue(ctx, readyIssue.ID, agentID)
+	require.NoError(t, err)
+	require.NotNil(t, claimedReady.OwnerAgentID)
+	require.Equal(t, agentID, *claimedReady.OwnerAgentID)
+	require.Equal(t, IssueWorkStatusPlanning, claimedReady.WorkStatus)
+	require.Equal(t, "open", claimedReady.State)
+
+	workerIssue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Worker queue item",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusReadyForWork,
+	})
+	require.NoError(t, err)
+
+	claimedWorker, err := issueStore.ClaimIssue(ctx, workerIssue.ID, agentID)
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusInProgress, claimedWorker.WorkStatus)
+
+	reviewerIssue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Reviewer queue item",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusReview,
+	})
+	require.NoError(t, err)
+
+	claimedReviewer, err := issueStore.ClaimIssue(ctx, reviewerIssue.ID, agentID)
+	require.NoError(t, err)
+	require.Equal(t, IssueWorkStatusReview, claimedReviewer.WorkStatus)
+
+	doneIssue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Done issue",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusDone,
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.ClaimIssue(ctx, doneIssue.ID, agentID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "claimable")
+}
+
+func TestProjectIssueStore_ReleaseIssue(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-release-org")
+	projectID := createTestProject(t, db, orgID, "Issue Release Project")
+	agentID := createIssueTestAgent(t, db, orgID, "issue-release-agent")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	inProgressIssue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Claimed worker item",
+		Origin:       "local",
+		OwnerAgentID: &agentID,
+		WorkStatus:   IssueWorkStatusInProgress,
+	})
+	require.NoError(t, err)
+
+	releasedInProgress, err := issueStore.ReleaseIssue(ctx, inProgressIssue.ID)
+	require.NoError(t, err)
+	require.Nil(t, releasedInProgress.OwnerAgentID)
+	require.Equal(t, IssueWorkStatusReadyForWork, releasedInProgress.WorkStatus)
+	require.Equal(t, "open", releasedInProgress.State)
+
+	planningIssue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Claimed planner item",
+		Origin:       "local",
+		OwnerAgentID: &agentID,
+		WorkStatus:   IssueWorkStatusPlanning,
+	})
+	require.NoError(t, err)
+
+	releasedPlanning, err := issueStore.ReleaseIssue(ctx, planningIssue.ID)
+	require.NoError(t, err)
+	require.Nil(t, releasedPlanning.OwnerAgentID)
+	require.Equal(t, IssueWorkStatusReady, releasedPlanning.WorkStatus)
+
+	reviewIssue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Claimed reviewer item",
+		Origin:       "local",
+		OwnerAgentID: &agentID,
+		WorkStatus:   IssueWorkStatusReview,
+	})
+	require.NoError(t, err)
+
+	releasedReview, err := issueStore.ReleaseIssue(ctx, reviewIssue.ID)
+	require.NoError(t, err)
+	require.Nil(t, releasedReview.OwnerAgentID)
+	require.Equal(t, IssueWorkStatusReview, releasedReview.WorkStatus)
+
+	unclaimedIssue, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Unclaimed issue",
+		Origin:     "local",
+		WorkStatus: IssueWorkStatusReadyForWork,
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.ReleaseIssue(ctx, unclaimedIssue.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not claimed")
+}
+
 func TestProjectIssueStore_UpdateIssueWorkTrackingAllowsClosingFromQueuedOrInProgress(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

@@ -357,7 +357,11 @@ func canTransitionIssueWorkStatus(currentStatus, nextStatus string) bool {
 			next == IssueWorkStatusBlocked ||
 			next == IssueWorkStatusCancelled
 	case IssueWorkStatusInProgress:
-		return next == IssueWorkStatusReview || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled || next == IssueWorkStatusDone
+		return next == IssueWorkStatusReadyForWork ||
+			next == IssueWorkStatusReview ||
+			next == IssueWorkStatusBlocked ||
+			next == IssueWorkStatusCancelled ||
+			next == IssueWorkStatusDone
 	case IssueWorkStatusBlocked:
 		return next == IssueWorkStatusReady ||
 			next == IssueWorkStatusPlanning ||
@@ -378,6 +382,34 @@ func canTransitionIssueWorkStatus(currentStatus, nextStatus string) bool {
 		return next == IssueWorkStatusQueued || next == IssueWorkStatusReady
 	default:
 		return false
+	}
+}
+
+func claimTransitionIssueWorkStatus(currentStatus string) (string, error) {
+	switch normalizeIssueWorkStatus(currentStatus) {
+	case IssueWorkStatusQueued:
+		return IssueWorkStatusInProgress, nil
+	case IssueWorkStatusReady:
+		return IssueWorkStatusPlanning, nil
+	case IssueWorkStatusReadyForWork:
+		return IssueWorkStatusInProgress, nil
+	case IssueWorkStatusReview:
+		return IssueWorkStatusReview, nil
+	default:
+		return "", fmt.Errorf("issue is not claimable from current work_status")
+	}
+}
+
+func releaseTransitionIssueWorkStatus(currentStatus string) (string, error) {
+	switch normalizeIssueWorkStatus(currentStatus) {
+	case IssueWorkStatusPlanning:
+		return IssueWorkStatusReady, nil
+	case IssueWorkStatusInProgress:
+		return IssueWorkStatusReadyForWork, nil
+	case IssueWorkStatusReview:
+		return IssueWorkStatusReview, nil
+	default:
+		return "", fmt.Errorf("issue is not releasable from current work_status")
 	}
 }
 
@@ -794,6 +826,166 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to update work_status: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (s *ProjectIssueStore) ClaimIssue(
+	ctx context.Context,
+	issueID string,
+	agentID string,
+) (*ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+	agentID = strings.TrimSpace(agentID)
+	if !uuidRegex.MatchString(agentID) {
+		return nil, fmt.Errorf("invalid agent_id")
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
+			FROM project_issues
+			WHERE id = $1
+			FOR UPDATE`,
+		issueID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to load issue: %w", err)
+	}
+	if current.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	if current.OwnerAgentID != nil && strings.TrimSpace(*current.OwnerAgentID) != "" && *current.OwnerAgentID != agentID {
+		return nil, fmt.Errorf("issue is already claimed")
+	}
+	if err := ensureAgentVisible(ctx, tx, agentID); err != nil {
+		return nil, err
+	}
+
+	currentStatus := normalizeIssueWorkStatus(current.WorkStatus)
+	if currentStatus == "" {
+		currentStatus = defaultIssueWorkStatusForState(current.State)
+	}
+	nextStatus, err := claimTransitionIssueWorkStatus(currentStatus)
+	if err != nil {
+		return nil, err
+	}
+	if !canTransitionIssueWorkStatus(currentStatus, nextStatus) {
+		return nil, fmt.Errorf("invalid work_status transition")
+	}
+
+	updated, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`UPDATE project_issues
+			SET owner_agent_id = $2,
+				work_status = $3,
+				state = 'open',
+				closed_at = NULL
+			WHERE id = $1
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
+		issueID,
+		agentID,
+		nextStatus,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to claim issue: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (s *ProjectIssueStore) ReleaseIssue(
+	ctx context.Context,
+	issueID string,
+) (*ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	issueID = strings.TrimSpace(issueID)
+	if !uuidRegex.MatchString(issueID) {
+		return nil, fmt.Errorf("invalid issue_id")
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
+			FROM project_issues
+			WHERE id = $1
+			FOR UPDATE`,
+		issueID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to load issue: %w", err)
+	}
+	if current.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+	if current.OwnerAgentID == nil || strings.TrimSpace(*current.OwnerAgentID) == "" {
+		return nil, fmt.Errorf("issue is not claimed")
+	}
+
+	currentStatus := normalizeIssueWorkStatus(current.WorkStatus)
+	if currentStatus == "" {
+		currentStatus = defaultIssueWorkStatusForState(current.State)
+	}
+	nextStatus, err := releaseTransitionIssueWorkStatus(currentStatus)
+	if err != nil {
+		return nil, err
+	}
+	if !canTransitionIssueWorkStatus(currentStatus, nextStatus) {
+		return nil, fmt.Errorf("invalid work_status transition")
+	}
+
+	updated, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`UPDATE project_issues
+			SET owner_agent_id = NULL,
+				work_status = $2,
+				state = 'open',
+				closed_at = NULL
+			WHERE id = $1
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
+		issueID,
+		nextStatus,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to release issue: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

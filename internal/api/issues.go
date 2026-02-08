@@ -788,6 +788,95 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
 }
 
+func (h *IssuesHandler) ClaimIssue(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if issueID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
+		return
+	}
+
+	var req struct {
+		AgentID string `json:"agent_id"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	req.AgentID = strings.TrimSpace(req.AgentID)
+	if req.AgentID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent_id is required"})
+		return
+	}
+
+	updated, err := h.IssueStore.ClaimIssue(r.Context(), issueID, req.AgentID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	if err := h.syncIssueOwnerParticipant(r.Context(), issueID, &req.AgentID); err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
+}
+
+func (h *IssuesHandler) ReleaseIssue(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if issueID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
+		return
+	}
+
+	updated, err := h.IssueStore.ReleaseIssue(r.Context(), issueID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	if err := h.syncIssueOwnerParticipant(r.Context(), issueID, nil); err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
+}
+
 func (h *IssuesHandler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 	if h.IssueStore == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
@@ -957,6 +1046,44 @@ func findIssueLink(
 	}
 	copy := link
 	return &copy
+}
+
+func (h *IssuesHandler) syncIssueOwnerParticipant(ctx context.Context, issueID string, ownerAgentID *string) error {
+	participants, err := h.IssueStore.ListParticipants(ctx, issueID, false)
+	if err != nil {
+		return err
+	}
+
+	ownerID := ""
+	if ownerAgentID != nil {
+		ownerID = strings.TrimSpace(*ownerAgentID)
+	}
+	ownerPresent := false
+	for _, participant := range participants {
+		if participant.Role != "owner" || participant.RemovedAt != nil {
+			continue
+		}
+		if ownerID == "" || participant.AgentID != ownerID {
+			if err := h.IssueStore.RemoveParticipant(ctx, issueID, participant.AgentID); err != nil {
+				return err
+			}
+			continue
+		}
+		ownerPresent = true
+	}
+
+	if ownerID != "" && !ownerPresent {
+		_, err := h.IssueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
+			IssueID: issueID,
+			AgentID: ownerID,
+			Role:    "owner",
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (h *IssuesHandler) broadcastIssueCommentCreated(

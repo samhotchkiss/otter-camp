@@ -25,6 +25,8 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approval-state", handler.TransitionApprovalState)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approve", handler.Approve)
 	router.With(middleware.OptionalWorkspace).Patch("/api/issues/{id}", handler.PatchIssue)
+	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/claim", handler.ClaimIssue)
+	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/release", handler.ReleaseIssue)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/review/save", handler.SaveReview)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/review/address", handler.AddressReview)
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}/review/changes", handler.ReviewChanges)
@@ -341,6 +343,140 @@ func TestIssuesHandlerPatchIssueAllowsClosingFromQueuedOrInProgress(t *testing.T
 			require.Equal(t, tc.expectedStatus, payload.WorkStatus)
 		})
 	}
+}
+
+func TestIssuesHandlerClaimIssue(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-claim-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Claim API Project")
+	agentID := insertMessageTestAgent(t, db, orgID, "issue-claim-api-agent")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Claimable issue",
+		Origin:     "local",
+		WorkStatus: store.IssueWorkStatusReadyForWork,
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/claim?org_id="+orgID,
+		bytes.NewReader([]byte(`{"agent_id":"`+agentID+`"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload issueSummaryPayload
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.NotNil(t, payload.OwnerAgentID)
+	require.Equal(t, agentID, *payload.OwnerAgentID)
+	require.Equal(t, store.IssueWorkStatusInProgress, payload.WorkStatus)
+
+	participants, err := issueStore.ListParticipants(issueTestCtx(orgID), issue.ID, false)
+	require.NoError(t, err)
+	require.Len(t, participants, 1)
+	require.Equal(t, "owner", participants[0].Role)
+	require.Equal(t, agentID, participants[0].AgentID)
+}
+
+func TestIssuesHandlerReleaseIssue(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-release-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Release API Project")
+	agentID := insertMessageTestAgent(t, db, orgID, "issue-release-api-agent")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Releasable issue",
+		Origin:       "local",
+		OwnerAgentID: &agentID,
+		WorkStatus:   store.IssueWorkStatusInProgress,
+	})
+	require.NoError(t, err)
+	_, err = issueStore.AddParticipant(issueTestCtx(orgID), store.AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: agentID,
+		Role:    "owner",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/issues/"+issue.ID+"/release?org_id="+orgID, bytes.NewReader([]byte(`{}`)))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload issueSummaryPayload
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Nil(t, payload.OwnerAgentID)
+	require.Equal(t, store.IssueWorkStatusReadyForWork, payload.WorkStatus)
+
+	participants, err := issueStore.ListParticipants(issueTestCtx(orgID), issue.ID, false)
+	require.NoError(t, err)
+	require.Len(t, participants, 0)
+}
+
+func TestIssuesHandlerClaimIssueAndReleaseIssueValidation(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-claim-release-validate-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Claim Release Validate Project")
+	agentID := insertMessageTestAgent(t, db, orgID, "issue-claim-release-validate-agent")
+
+	issueStore := store.NewProjectIssueStore(db)
+	readyIssue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Ready queue issue",
+		Origin:     "local",
+		WorkStatus: store.IssueWorkStatusReady,
+	})
+	require.NoError(t, err)
+
+	doneIssue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID:  projectID,
+		Title:      "Done issue",
+		Origin:     "local",
+		WorkStatus: store.IssueWorkStatusDone,
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	missingAgentReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+readyIssue.ID+"/claim?org_id="+orgID,
+		bytes.NewReader([]byte(`{}`)),
+	)
+	missingAgentRec := httptest.NewRecorder()
+	router.ServeHTTP(missingAgentRec, missingAgentReq)
+	require.Equal(t, http.StatusBadRequest, missingAgentRec.Code)
+
+	notClaimableReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+doneIssue.ID+"/claim?org_id="+orgID,
+		bytes.NewReader([]byte(`{"agent_id":"`+agentID+`"}`)),
+	)
+	notClaimableRec := httptest.NewRecorder()
+	router.ServeHTTP(notClaimableRec, notClaimableReq)
+	require.Equal(t, http.StatusBadRequest, notClaimableRec.Code)
+
+	unclaimedReleaseReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+readyIssue.ID+"/release?org_id="+orgID,
+		bytes.NewReader([]byte(`{}`)),
+	)
+	unclaimedReleaseRec := httptest.NewRecorder()
+	router.ServeHTTP(unclaimedReleaseRec, unclaimedReleaseReq)
+	require.Equal(t, http.StatusBadRequest, unclaimedReleaseRec.Code)
 }
 
 func TestIssuesHandlerListSupportsOwnerWorkStatusAndPriorityFilters(t *testing.T) {
