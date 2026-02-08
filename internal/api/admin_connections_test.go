@@ -161,6 +161,76 @@ func TestAdminConnectionsGetMarksBridgeDisconnectedWhenLastSyncIsStale(t *testin
 	require.False(t, payload.Bridge.SyncHealthy)
 }
 
+func TestDeriveSessionChannel(t *testing.T) {
+	cases := []struct {
+		name      string
+		channel   string
+		session   string
+		expect    string
+	}{
+		{
+			name:    "preserves explicit channel",
+			channel: "slack:#engineering",
+			session: "agent:main:slack:channel:C123",
+			expect:  "slack:#engineering",
+		},
+		{
+			name:    "derives slack from session key",
+			session: "agent:main:slack:channel:C123",
+			expect:  "slack",
+		},
+		{
+			name:    "derives webchat from session key",
+			session: "agent:three-stones:webchat:g-agent-three-stones-main",
+			expect:  "webchat",
+		},
+		{
+			name:    "returns empty for unknown pattern",
+			session: "agent:main:main",
+			expect:  "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveSessionChannel(tc.channel, tc.session)
+			require.Equal(t, tc.expect, got)
+		})
+	}
+}
+
+func TestAdminConnectionsGetUsesDerivedChannelForMemorySessions(t *testing.T) {
+	prevStates := memoryAgentStates
+	memoryAgentStates = map[string]*AgentState{
+		"main": {
+			ID:            "main",
+			Name:          "Frank",
+			Status:        "online",
+			ContextTokens: 0,
+			Channel:       "",
+			SessionKey:    "agent:main:slack:channel:C123456",
+			UpdatedAt:     time.Now().UTC(),
+		},
+	}
+	defer func() {
+		memoryAgentStates = prevStates
+	}()
+
+	handler := &AdminConnectionsHandler{
+		OpenClawHandler: &fakeOpenClawConnectionStatus{connected: true},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/connections", nil)
+	rec := httptest.NewRecorder()
+	handler.Get(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminConnectionsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Len(t, payload.Sessions, 1)
+	require.Equal(t, "slack", payload.Sessions[0].Channel)
+}
+
 func TestAdminConnectionsGetEventsReturnsWorkspaceScopedRows(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgA := insertMessageTestOrganization(t, db, "conn-events-org-a")
