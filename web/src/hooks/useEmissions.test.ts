@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWS } from "../contexts/WebSocketContext";
+import type { WebSocketMessageType } from "../hooks/useWebSocket";
 import useEmissions, { type Emission } from "./useEmissions";
 
 vi.mock("../contexts/WebSocketContext", () => ({
@@ -11,7 +12,7 @@ const mockUseWS = vi.mocked(useWS);
 
 type WSState = {
   connected: boolean;
-  lastMessage: { type: string; data: unknown } | null;
+  lastMessage: { type: WebSocketMessageType | "Unknown"; data: unknown } | null;
   sendMessage: ReturnType<typeof vi.fn>;
   reconnectReason: "initial" | "backoff" | "visibility";
 };
