@@ -9,8 +9,8 @@
  * - No sidebar - clean topbar-based navigation
  */
 
-import { useState, useEffect, type ReactNode } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useState, useEffect, useRef, type ReactNode } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
 import { useWS } from "../contexts/WebSocketContext";
@@ -28,23 +28,42 @@ type NavItem = {
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { id: "dashboard", label: "Dashboard", href: "/" },
   { id: "inbox", label: "Inbox", href: "/inbox" },
   { id: "projects", label: "Projects", href: "/projects" },
-  { id: "agents", label: "Agents", href: "/agents" },
   { id: "workflows", label: "Workflows", href: "/workflows" },
   { id: "knowledge", label: "Knowledge", href: "/knowledge" },
+];
+
+const AVATAR_MENU_ITEMS: NavItem[] = [
+  { id: "agents", label: "Agents", href: "/agents" },
   { id: "connections", label: "Connections", href: "/connections" },
   { id: "feed", label: "Feed", href: "/feed" },
+  { id: "settings", label: "Settings", href: "/settings" },
 ];
+
+// All nav items for active detection
+const ALL_NAV_ITEMS = [...NAV_ITEMS, ...AVATAR_MENU_ITEMS];
 
 type DashboardLayoutProps = {
   children: ReactNode;
 };
 
+function logOut() {
+  // Clear auth cookies
+  document.cookie = "otter_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+  // Clear localStorage
+  const keysToRemove = ["otter-camp-org-id", "otter-camp-token", "otter_camp_token", "otter-camp-theme"];
+  keysToRemove.forEach((key) => localStorage.removeItem(key));
+  // Redirect
+  window.location.href = "/";
+}
+
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
+  const avatarMenuRef = useRef<HTMLDivElement>(null);
   const [inboxCount, setInboxCount] = useState<number | null>(null);
   const { connected: wsConnected } = useWS();
   // In demo mode, always show as connected for better UX
@@ -147,17 +166,37 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   // Get active nav item
   const getActiveNavId = () => {
     const path = location.pathname;
-    if (path === "/") return "dashboard";
-    const item = NAV_ITEMS.find((item) => path.startsWith(item.href) && item.href !== "/");
-    return item?.id ?? "dashboard";
+    if (path === "/") return null;
+    const item = ALL_NAV_ITEMS.find((item) => path.startsWith(item.href) && item.href !== "/");
+    return item?.id ?? null;
   };
 
   const activeNavId = getActiveNavId();
 
-  // Close mobile menu on navigation
+  // Close menus on navigation
   useEffect(() => {
     setMobileMenuOpen(false);
+    setAvatarMenuOpen(false);
   }, [location.pathname]);
+
+  // Close avatar menu on click outside or Escape
+  useEffect(() => {
+    if (!avatarMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (avatarMenuRef.current && !avatarMenuRef.current.contains(e.target as Node)) {
+        setAvatarMenuOpen(false);
+      }
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAvatarMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [avatarMenuOpen]);
 
   // Load inbox count for nav badge
   useEffect(() => {
@@ -231,10 +270,43 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             <span className="status-text">{connected ? 'Live' : 'Offline'}</span>
           </div>
 
-          {/* User Avatar */}
-          <button type="button" className="avatar" aria-label="User menu">
-            S
-          </button>
+          {/* User Avatar + Dropdown */}
+          <div className="avatar-menu-container" ref={avatarMenuRef}>
+            <button
+              type="button"
+              className="avatar"
+              aria-label="User menu"
+              aria-expanded={avatarMenuOpen}
+              onClick={() => setAvatarMenuOpen(!avatarMenuOpen)}
+            >
+              S
+            </button>
+            {avatarMenuOpen && (
+              <div className="avatar-dropdown">
+                {AVATAR_MENU_ITEMS.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`avatar-dropdown-item ${activeNavId === item.id ? "active" : ""}`}
+                    onClick={() => {
+                      navigate(item.href);
+                      setAvatarMenuOpen(false);
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+                <div className="avatar-dropdown-divider" />
+                <button
+                  type="button"
+                  className="avatar-dropdown-item avatar-dropdown-logout"
+                  onClick={logOut}
+                >
+                  Log Out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Mobile Menu Button */}
@@ -257,7 +329,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* Mobile Navigation */}
       {mobileMenuOpen && (
         <nav className="mobile-nav">
-          {NAV_ITEMS.map((item) => (
+          {[...NAV_ITEMS, ...AVATAR_MENU_ITEMS].map((item) => (
             <Link
               key={item.id}
               to={item.href}
@@ -269,6 +341,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               )}
             </Link>
           ))}
+          <button type="button" className="mobile-nav-link mobile-logout" onClick={logOut}>
+            Log Out
+          </button>
         </nav>
       )}
 

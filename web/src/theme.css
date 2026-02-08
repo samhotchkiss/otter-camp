@@ -585,6 +585,77 @@ textarea::placeholder {
   background: rgba(255, 255, 255, 0.3);
 }
 
+/* Avatar Dropdown Menu */
+.avatar-menu-container {
+  position: relative;
+}
+
+.avatar-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 180px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+  z-index: 100;
+  animation: avatar-dropdown-in 0.15s ease-out;
+}
+
+@keyframes avatar-dropdown-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.avatar-dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.avatar-dropdown-item:hover {
+  background: var(--surface-alt);
+}
+
+.avatar-dropdown-item.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.avatar-dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.avatar-dropdown-logout {
+  color: var(--red, #e53e3e);
+}
+
+.avatar-dropdown-logout:hover {
+  background: rgba(229, 62, 62, 0.1);
+}
+
+/* Mobile logout button */
+.mobile-logout {
+  color: var(--red, #e53e3e) !important;
+  border: none;
+  background: none;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
 /* ========================================
    CONNECTION STATUS
    ======================================== */
