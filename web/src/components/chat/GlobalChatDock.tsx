@@ -30,6 +30,7 @@ export default function GlobalChatDock() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [resettingProjectSession, setResettingProjectSession] = useState(false);
   const [resetProjectError, setResetProjectError] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const visibleConversations = useMemo(() => {
     if (conversations.length > 0) {
@@ -50,12 +51,16 @@ export default function GlobalChatDock() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && isOpen) {
-        setDockOpen(false);
+        if (isFullscreen) {
+          setIsFullscreen(false);
+        } else {
+          setDockOpen(false);
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isOpen, setDockOpen]);
+  }, [isOpen, isFullscreen, setDockOpen]);
 
   useEffect(() => {
     setResetProjectError(null);
@@ -196,8 +201,11 @@ export default function GlobalChatDock() {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-[min(960px,calc(100vw-2rem))]">
-      <section className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl">
+    <div className={isFullscreen
+      ? "fixed inset-0 top-[var(--topbar-height,56px)] z-50"
+      : "fixed bottom-4 right-4 z-50 w-[min(960px,calc(100vw-2rem))]"
+    }>
+      <section className={`overflow-hidden border border-[var(--border)] bg-[var(--surface)] shadow-2xl ${isFullscreen ? "h-full" : "rounded-2xl"}`}>
         <header className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-semibold text-[var(--text)]">Global Chat</h2>
@@ -216,7 +224,15 @@ export default function GlobalChatDock() {
             </button>
             <button
               type="button"
-              onClick={toggleDock}
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
+              aria-label={isFullscreen ? "Exit fullscreen chat" : "Fullscreen chat"}
+            >
+              {isFullscreen ? "⊡" : "⊞"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setIsFullscreen(false); toggleDock(); }}
               className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
               aria-label="Collapse global chat"
             >
@@ -224,7 +240,7 @@ export default function GlobalChatDock() {
             </button>
             <button
               type="button"
-              onClick={() => setDockOpen(false)}
+              onClick={() => { setIsFullscreen(false); setDockOpen(false); }}
               className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border)] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
               aria-label="Close global chat"
             >
@@ -238,7 +254,7 @@ export default function GlobalChatDock() {
           </div>
         ) : null}
 
-        <div className="grid h-[min(72vh,620px)] max-h-[calc(100vh-2rem)] grid-cols-[260px_1fr]">
+        <div className={`grid grid-cols-[260px_1fr] ${isFullscreen ? "h-[calc(100%-44px)]" : "h-[min(72vh,620px)] max-h-[calc(100vh-2rem)]"}`}>
           <aside className="min-h-0 border-r border-[var(--border)] bg-[var(--surface-alt)]/50">
             <div className="h-full overflow-y-auto p-2">
               {visibleConversations.length === 0 ? (
