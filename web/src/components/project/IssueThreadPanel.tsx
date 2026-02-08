@@ -10,6 +10,8 @@ type IssueApprovalState = "draft" | "ready_for_review" | "needs_changes" | "appr
 
 type IssueSummary = {
   id: string;
+  project_id?: string;
+  parent_issue_id?: string | null;
   title: string;
   issue_number: number;
   state: "open" | "closed";
@@ -55,6 +57,17 @@ type IssueDetailResponse = {
   issue: IssueSummary;
   participants: IssueParticipant[];
   comments: IssueComment[];
+};
+
+type IssueRelationSummary = {
+  id: string;
+  issue_number: number;
+  title: string;
+};
+
+type IssueListResponse = {
+  items: IssueRelationSummary[];
+  total: number;
 };
 
 type IssueReviewHistoryItem = {
@@ -335,6 +348,9 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
   const [updatingApprovalState, setUpdatingApprovalState] = useState<IssueApprovalState | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [showApprovalConfetti, setShowApprovalConfetti] = useState(false);
+  const [parentIssue, setParentIssue] = useState<IssueRelationSummary | null>(null);
+  const [parentIssueMissing, setParentIssueMissing] = useState(false);
+  const [childIssues, setChildIssues] = useState<IssueRelationSummary[]>([]);
   const [reviewHistory, setReviewHistory] = useState<IssueReviewHistoryItem[]>([]);
   const [reviewHistoryLoading, setReviewHistoryLoading] = useState(false);
   const [reviewHistoryError, setReviewHistoryError] = useState<string | null>(null);
@@ -422,6 +438,9 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
         setReviewVersionError(null);
         setReviewChanges(null);
         setReviewChangesError(null);
+        setParentIssue(null);
+        setParentIssueMissing(false);
+        setChildIssues([]);
       })
       .catch((loadError: unknown) => {
         if (cancelled) {
@@ -439,6 +458,89 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
       cancelled = true;
     };
   }, [issueID, reviewRealtimeRefreshNonce]);
+
+  useEffect(() => {
+    const orgID = getOrgID();
+    const currentIssueID = issue?.id ?? "";
+    const projectID = issue?.project_id?.trim() ?? "";
+    if (!orgID || !currentIssueID || !projectID) {
+      setParentIssue(null);
+      setParentIssueMissing(false);
+      setChildIssues([]);
+      return;
+    }
+
+    let cancelled = false;
+    const parentIssueID = issue?.parent_issue_id?.trim() ?? "";
+    setParentIssue(null);
+    setParentIssueMissing(false);
+    setChildIssues([]);
+
+    const childURL = new URL(`${API_URL}/api/issues`);
+    childURL.searchParams.set("org_id", orgID);
+    childURL.searchParams.set("project_id", projectID);
+    childURL.searchParams.set("parent_issue_id", currentIssueID);
+    childURL.searchParams.set("limit", "200");
+
+    const childrenRequest = fetch(childURL.toString(), { headers: { "Content-Type": "application/json" } })
+      .then(async (response) => {
+        if (!response.ok) {
+          return [] as IssueRelationSummary[];
+        }
+        const payload = await response.json() as IssueListResponse;
+        if (!Array.isArray(payload.items)) {
+          return [] as IssueRelationSummary[];
+        }
+        return payload.items.filter((entry) =>
+          typeof entry?.id === "string" &&
+          typeof entry?.issue_number === "number" &&
+          typeof entry?.title === "string"
+        );
+      });
+
+    const parentRequest = parentIssueID === ""
+      ? Promise.resolve<null | IssueRelationSummary>(null)
+      : fetch(
+        `${API_URL}/api/issues/${encodeURIComponent(parentIssueID)}?org_id=${encodeURIComponent(orgID)}`,
+        { headers: { "Content-Type": "application/json" } },
+      )
+        .then(async (response) => {
+          if (!response.ok) {
+            return null;
+          }
+          const payload = await response.json() as IssueDetailResponse;
+          if (!payload.issue || typeof payload.issue.id !== "string" || typeof payload.issue.issue_number !== "number" || typeof payload.issue.title !== "string") {
+            return null;
+          }
+          return {
+            id: payload.issue.id,
+            issue_number: payload.issue.issue_number,
+            title: payload.issue.title,
+          } satisfies IssueRelationSummary;
+        });
+
+    void Promise.all([parentRequest, childrenRequest])
+      .then(([parentRecord, childRecords]) => {
+        if (cancelled) {
+          return;
+        }
+        setParentIssue(parentRecord);
+        setParentIssueMissing(parentIssueID !== "" && parentRecord == null);
+        setChildIssues(childRecords);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setParentIssue(null);
+        setParentIssueMissing(parentIssueID !== "");
+        setChildIssues([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [issue?.id, issue?.parent_issue_id, issue?.project_id]);
 
   useEffect(() => {
     const orgID = getOrgID();
@@ -892,6 +994,26 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
                 {approvalStateLabel(normalizedApprovalState)}
               </span>
             </div>
+            {(issue.parent_issue_id || childIssues.length > 0) && (
+              <div className="mt-2 space-y-1 text-xs text-[var(--text-muted)]">
+                {issue.parent_issue_id && parentIssue && (
+                  <p>{`Parent: #${parentIssue.issue_number} ${parentIssue.title}`}</p>
+                )}
+                {issue.parent_issue_id && !parentIssue && parentIssueMissing && (
+                  <p>Parent issue unavailable</p>
+                )}
+                {childIssues.length > 0 && (
+                  <div>
+                    <p>{`Sub-issues: ${childIssues.length}`}</p>
+                    <ul className="ml-4 list-disc">
+                      {childIssues.map((child) => (
+                        <li key={child.id}>{`#${child.issue_number} ${child.title}`}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
             {approvalActions.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {approvalActions.map((action) => (

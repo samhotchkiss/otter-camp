@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
@@ -12,6 +12,7 @@ type ProjectIssueItem = {
   id: string;
   issue_number: number;
   title: string;
+  parent_issue_id?: string | null;
   state: "open" | "closed";
   origin: "local" | "github";
   kind: "issue" | "pull_request";
@@ -116,6 +117,24 @@ export default function ProjectIssuesList({
   const [kindFilter, setKindFilter] = useState<IssueFilterKind>("all");
   const [originFilter, setOriginFilter] = useState<IssueFilterOrigin>("all");
   const [refreshKey, setRefreshKey] = useState(0);
+  const issueByID = useMemo(() => {
+    const index = new Map<string, ProjectIssueItem>();
+    for (const issue of items) {
+      index.set(issue.id, issue);
+    }
+    return index;
+  }, [items]);
+  const childCountByParentID = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const issue of items) {
+      const parentIssueID = (issue.parent_issue_id ?? "").trim();
+      if (!parentIssueID) {
+        continue;
+      }
+      counts.set(parentIssueID, (counts.get(parentIssueID) ?? 0) + 1);
+    }
+    return counts;
+  }, [items]);
 
   useEffect(() => {
     let cancelled = false;
@@ -262,6 +281,9 @@ export default function ProjectIssuesList({
           {items.map((issue) => {
             const selected = selectedIssueID === issue.id;
             const approvalState = normalizeApprovalState(issue.approval_state);
+            const parentIssueID = (issue.parent_issue_id ?? "").trim();
+            const parentIssue = parentIssueID === "" ? null : issueByID.get(parentIssueID) ?? null;
+            const childCount = childCountByParentID.get(issue.id) ?? 0;
             return (
               <li key={issue.id}>
                 <button
@@ -294,6 +316,16 @@ export default function ProjectIssuesList({
                     </span>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-[var(--text-muted)]">
+                    {parentIssueID !== "" && (
+                      <span>
+                        {parentIssue
+                          ? `Sub-issue of #${parentIssue.issue_number}`
+                          : "Sub-issue"}
+                      </span>
+                    )}
+                    {childCount > 0 && (
+                      <span>Sub-issues: {childCount}</span>
+                    )}
                     <span>Owner: {issue.owner_agent_id ?? "Unassigned"}</span>
                     <span>Last activity: {formatLastActivity(issue.last_activity_at)}</span>
                     {issue.github_number ? (

@@ -450,4 +450,69 @@ describe("IssueThreadPanel", () => {
     expect(screen.getByTestId("approval-confetti")).toBeInTheDocument();
     expect(screen.getAllByTestId("approval-confetti")).toHaveLength(1);
   });
+
+  it("shows parent issue context and child sub-issue summary", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/issues?") && url.includes("parent_issue_id=issue-child")) {
+        return mockJSONResponse({
+          items: [
+            {
+              id: "issue-grandchild",
+              issue_number: 3,
+              title: "Grandchild issue",
+              parent_issue_id: "issue-child",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              last_activity_at: "2026-02-06T09:00:00Z",
+            },
+          ],
+          total: 1,
+        });
+      }
+      if (url.includes("/api/issues/issue-parent?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-parent",
+            issue_number: 1,
+            title: "Parent issue",
+            state: "open",
+            origin: "local",
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      if (url.includes("/api/issues/issue-child?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-child",
+            project_id: "project-1",
+            parent_issue_id: "issue-parent",
+            issue_number: 2,
+            title: "Child issue",
+            state: "open",
+            origin: "local",
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<IssueThreadPanel issueID="issue-child" />);
+
+    expect(await screen.findByText("#2 Child issue")).toBeInTheDocument();
+    expect(await screen.findByText("Parent: #1 Parent issue")).toBeInTheDocument();
+    expect(await screen.findByText("Sub-issues: 1")).toBeInTheDocument();
+    expect(await screen.findByText("#3 Grandchild issue")).toBeInTheDocument();
+  });
 });

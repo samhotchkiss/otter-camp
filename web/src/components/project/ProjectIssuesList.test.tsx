@@ -6,6 +6,7 @@ type MockIssue = {
   id: string;
   issue_number: number;
   title: string;
+  parent_issue_id?: string | null;
   state: "open" | "closed";
   origin: "local" | "github";
   kind: "issue" | "pull_request";
@@ -148,6 +149,46 @@ describe("ProjectIssuesList", () => {
     expect(
       await screen.findByText("No issues found for the selected filters."),
     ).toBeInTheDocument();
+  });
+
+  it("shows parent and child relationship metadata", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockJSONResponse({
+        items: [
+          {
+            id: "issue-parent",
+            issue_number: 10,
+            title: "Parent issue",
+            parent_issue_id: null,
+            state: "open",
+            origin: "local",
+            kind: "issue",
+            owner_agent_id: "sam",
+            last_activity_at: "2026-02-06T05:00:00Z",
+          } satisfies MockIssue,
+          {
+            id: "issue-child",
+            issue_number: 11,
+            title: "Child issue",
+            parent_issue_id: "issue-parent",
+            state: "open",
+            origin: "local",
+            kind: "issue",
+            owner_agent_id: "sam",
+            last_activity_at: "2026-02-06T05:30:00Z",
+          } satisfies MockIssue,
+        ],
+        total: 2,
+      }),
+    );
+
+    render(<ProjectIssuesList projectId="project-1" />);
+
+    const parentRow = await screen.findByRole("button", { name: /#10 Parent issue/i });
+    const childRow = await screen.findByRole("button", { name: /#11 Child issue/i });
+
+    expect(within(parentRow).getByText("Sub-issues: 1")).toBeInTheDocument();
+    expect(within(childRow).getByText("Sub-issue of #10")).toBeInTheDocument();
   });
 
   it("renders error state and retries", async () => {
