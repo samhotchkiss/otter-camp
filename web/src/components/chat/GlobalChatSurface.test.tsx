@@ -17,8 +17,41 @@ vi.mock("../../contexts/WebSocketContext", () => ({
   useWS: () => wsState,
 }));
 
+type MockMessageHistoryProps = {
+  messages: Array<Record<string, unknown>>;
+  onSubmitQuestionnaire?: (
+    questionnaireID: string,
+    responses: Record<string, unknown>,
+  ) => Promise<void> | void;
+};
+
+let lastMessageHistoryProps: MockMessageHistoryProps | null = null;
+
 vi.mock("../messaging/MessageHistory", () => ({
-  default: () => <div data-testid="message-history" />,
+  default: (props: MockMessageHistoryProps) => {
+    lastMessageHistoryProps = props;
+    const pendingQuestionnaire = props.messages.find((entry) => {
+      const questionnaire = entry.questionnaire as
+        | { id?: string; responses?: Record<string, unknown> }
+        | undefined;
+      return questionnaire?.id && !questionnaire.responses;
+    });
+    const pendingID = (pendingQuestionnaire?.questionnaire as { id?: string } | undefined)?.id;
+    return (
+      <div data-testid="message-history">
+        {pendingID && props.onSubmitQuestionnaire ? (
+          <button
+            type="button"
+            onClick={() =>
+              props.onSubmitQuestionnaire?.(pendingID, { q1: "WebSocket" })
+            }
+          >
+            Submit mock questionnaire
+          </button>
+        ) : null}
+      </div>
+    );
+  },
 }));
 
 describe("GlobalChatSurface", () => {
@@ -40,6 +73,7 @@ describe("GlobalChatSurface", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    lastMessageHistoryProps = null;
     window.localStorage.clear();
     window.localStorage.setItem("otter-camp-org-id", "org-1");
     window.localStorage.setItem("otter-camp-user-name", "Sam");
@@ -321,5 +355,97 @@ describe("GlobalChatSurface", () => {
         fetchMock.mock.calls.some(([url]) => String(url).includes("/api/messages/attachments")),
       ).toBe(true);
     });
+  });
+
+  it("submits questionnaire responses from project chat timeline", async () => {
+    const user = userEvent.setup();
+    const projectConversation: GlobalProjectConversation = {
+      key: "project:project-1",
+      type: "project",
+      projectId: "project-1",
+      title: "Project One",
+      contextLabel: "Project chat",
+      subtitle: "Team thread",
+      unreadCount: 0,
+      updatedAt: "2026-02-07T00:00:00.000Z",
+    };
+
+    let responsePayload: Record<string, unknown> | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/projects/project-1/chat?")) {
+        return {
+          ok: true,
+          json: async () => ({
+            messages: [],
+            questionnaires: [
+              {
+                id: "qn-1",
+                context_type: "project_chat",
+                context_id: "project-1",
+                author: "Planner",
+                title: "Design decisions",
+                questions: [
+                  {
+                    id: "q1",
+                    text: "Protocol?",
+                    type: "select",
+                    options: ["WebSocket", "Polling"],
+                    required: true,
+                  },
+                ],
+                created_at: "2026-02-08T00:00:00.000Z",
+              },
+            ],
+          }),
+        };
+      }
+      if (url.includes("/api/questionnaires/qn-1/response")) {
+        responsePayload = JSON.parse(String(init?.body ?? "{}"));
+        return {
+          ok: true,
+          json: async () => ({
+            id: "qn-1",
+            context_type: "project_chat",
+            context_id: "project-1",
+            author: "Planner",
+            title: "Design decisions",
+            questions: [
+              {
+                id: "q1",
+                text: "Protocol?",
+                type: "select",
+                options: ["WebSocket", "Polling"],
+                required: true,
+              },
+            ],
+            responses: { q1: "WebSocket" },
+            responded_by: "Sam",
+            responded_at: "2026-02-08T01:00:00.000Z",
+            created_at: "2026-02-08T00:00:00.000Z",
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<GlobalChatSurface conversation={projectConversation} />);
+    await screen.findByRole("button", { name: "Submit mock questionnaire" });
+    await user.click(screen.getByRole("button", { name: "Submit mock questionnaire" }));
+
+    await waitFor(() => {
+      expect(responsePayload).toEqual({
+        responded_by: "Sam",
+        responses: { q1: "WebSocket" },
+      });
+    });
+    expect(lastMessageHistoryProps?.messages.some((entry) => {
+      const questionnaire = entry.questionnaire as { responses?: Record<string, unknown> } | undefined;
+      return questionnaire?.responses?.q1 === "WebSocket";
+    })).toBe(true);
   });
 });

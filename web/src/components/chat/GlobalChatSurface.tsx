@@ -11,7 +11,12 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useWS } from "../../contexts/WebSocketContext";
-import type { DMMessage, MessageAttachment } from "../messaging/types";
+import type {
+  DMMessage,
+  MessageAttachment,
+  MessageQuestionnaire,
+  MessageQuestionnaireQuestion,
+} from "../messaging/types";
 import MessageHistory from "../messaging/MessageHistory";
 import type {
   GlobalChatConversation,
@@ -45,10 +50,24 @@ type IssueDetailResponse = {
     role: "owner" | "collaborator";
     removed_at?: string | null;
   }>;
+  questionnaires?: unknown[];
 };
 
 type AgentsResponse = {
   agents?: Array<{ id: string; name: string }>;
+};
+
+type QuestionnairePayload = {
+  id: string;
+  context_type: "issue" | "project_chat" | "template";
+  context_id: string;
+  author: string;
+  title?: string;
+  questions: MessageQuestionnaireQuestion[];
+  responses?: Record<string, unknown>;
+  responded_by?: string;
+  responded_at?: string;
+  created_at: string;
 };
 
 type ChatAttachment = MessageAttachment;
@@ -304,6 +323,132 @@ function normalizeIssueComment(
   };
 }
 
+function normalizeQuestionType(raw: unknown): MessageQuestionnaireQuestion["type"] | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const normalized = raw.trim().toLowerCase();
+  switch (normalized) {
+    case "text":
+    case "textarea":
+    case "boolean":
+    case "select":
+    case "multiselect":
+    case "number":
+    case "date":
+      return normalized;
+    default:
+      return null;
+  }
+}
+
+function normalizeQuestionnaireQuestions(raw: unknown): MessageQuestionnaireQuestion[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const questions: MessageQuestionnaireQuestion[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    const type = normalizeQuestionType(record.type);
+    if (!id || !text || !type) {
+      continue;
+    }
+    const options = Array.isArray(record.options)
+      ? record.options
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0)
+      : undefined;
+    const placeholder = typeof record.placeholder === "string" ? record.placeholder : undefined;
+    questions.push({
+      id,
+      text,
+      type,
+      required: Boolean(record.required),
+      options: options && options.length > 0 ? [...new Set(options)] : undefined,
+      placeholder,
+      default: record.default,
+    });
+  }
+  return questions;
+}
+
+function normalizeQuestionnairePayload(
+  raw: unknown,
+  expectedContextType: QuestionnairePayload["context_type"],
+  expectedContextID: string,
+): QuestionnairePayload | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const contextType =
+    record.context_type === "issue" ||
+    record.context_type === "project_chat" ||
+    record.context_type === "template"
+      ? record.context_type
+      : null;
+  const contextID = typeof record.context_id === "string" ? record.context_id.trim() : "";
+  const author = typeof record.author === "string" ? record.author.trim() : "";
+  const createdAt = typeof record.created_at === "string" ? record.created_at : "";
+  const questions = normalizeQuestionnaireQuestions(record.questions);
+  if (!id || !contextType || !contextID || !author || !createdAt || questions.length === 0) {
+    return null;
+  }
+  if (contextType !== expectedContextType || contextID !== expectedContextID) {
+    return null;
+  }
+  const title = typeof record.title === "string" && record.title.trim() !== ""
+    ? record.title
+    : undefined;
+  const responses = record.responses && typeof record.responses === "object" && !Array.isArray(record.responses)
+    ? record.responses as Record<string, unknown>
+    : undefined;
+  const respondedBy = typeof record.responded_by === "string" && record.responded_by.trim() !== ""
+    ? record.responded_by
+    : undefined;
+  const respondedAt = typeof record.responded_at === "string" && record.responded_at.trim() !== ""
+    ? record.responded_at
+    : undefined;
+  return {
+    id,
+    context_type: contextType,
+    context_id: contextID,
+    author,
+    title,
+    questions,
+    responses,
+    responded_by: respondedBy,
+    responded_at: respondedAt,
+    created_at: createdAt,
+  };
+}
+
+function normalizeQuestionnaireMessage(
+  questionnaire: QuestionnairePayload,
+  threadID: string,
+  currentUserName: string,
+  currentUserID: string,
+): ChatMessage {
+  const isUser = questionnaire.author.toLowerCase() === currentUserName.toLowerCase();
+  return {
+    id: `questionnaire:${questionnaire.id}`,
+    threadId: threadID,
+    senderId: isUser ? currentUserID : `questionnaire:${questionnaire.id}`,
+    senderName: questionnaire.author,
+    senderType: isUser ? "user" : "agent",
+    content: questionnaire.title?.trim() ? `Questionnaire: ${questionnaire.title}` : "Questionnaire",
+    questionnaire: questionnaire as MessageQuestionnaire,
+    createdAt: normalizeTimestamp(questionnaire.created_at),
+  };
+}
+
 function deliveryIndicatorClass(indicator: DeliveryIndicator): string {
   if (indicator.tone === "success") {
     return "border-[var(--green)]/40 bg-[var(--green)]/15 text-[var(--green)]";
@@ -478,7 +623,7 @@ export default function GlobalChatSurface({
         }
 
         const payload = await response.json();
-        const normalized = Array.isArray(payload.messages)
+        const normalizedMessages = Array.isArray(payload.messages)
           ? payload.messages
               .map((entry: unknown) =>
                 normalizeProjectMessage(
@@ -491,6 +636,20 @@ export default function GlobalChatSurface({
               )
               .filter((entry: ChatMessage | null): entry is ChatMessage => entry !== null)
           : [];
+        const normalizedQuestionnaires = Array.isArray(payload.questionnaires)
+          ? payload.questionnaires
+              .map((entry: unknown) => normalizeQuestionnairePayload(entry, "project_chat", projectID))
+              .filter((entry: QuestionnairePayload | null): entry is QuestionnairePayload => entry !== null)
+              .map((entry: QuestionnairePayload) =>
+                normalizeQuestionnaireMessage(
+                  entry,
+                  conversationKey,
+                  currentUserName,
+                  currentUserID,
+                ),
+              )
+          : [];
+        const normalized = [...normalizedMessages, ...normalizedQuestionnaires];
 
         normalized.sort((a: ChatMessage, b: ChatMessage) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
         setMessages(normalized);
@@ -533,11 +692,25 @@ export default function GlobalChatSurface({
       const defaultAuthor = owner || participants[0]?.agent_id || "";
       setIssueAuthorID((current) => current || defaultAuthor);
 
-      const normalized = Array.isArray(issuePayload.comments)
+      const normalizedComments = Array.isArray(issuePayload.comments)
         ? issuePayload.comments
             .map((entry) => normalizeIssueComment(entry, conversationKey, agentMap, defaultAuthor))
             .filter((entry: ChatMessage | null): entry is ChatMessage => entry !== null)
         : [];
+      const normalizedQuestionnaires = Array.isArray(issuePayload.questionnaires)
+        ? issuePayload.questionnaires
+            .map((entry) => normalizeQuestionnairePayload(entry, "issue", issueID))
+            .filter((entry: QuestionnairePayload | null): entry is QuestionnairePayload => entry !== null)
+            .map((entry: QuestionnairePayload) =>
+              normalizeQuestionnaireMessage(
+                entry,
+                conversationKey,
+                currentUserName,
+                currentUserID,
+              ),
+            )
+        : [];
+      const normalized = [...normalizedComments, ...normalizedQuestionnaires];
       normalized.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
       setMessages(normalized);
       touchConversation();
@@ -1111,6 +1284,75 @@ export default function GlobalChatSurface({
     [sendMessage],
   );
 
+  const submitQuestionnaireResponse = useCallback(async (
+    questionnaireID: string,
+    responses: Record<string, unknown>,
+  ) => {
+    if (!orgID) {
+      throw new Error("Missing organization context");
+    }
+    const trimmedID = questionnaireID.trim();
+    if (!trimmedID) {
+      throw new Error("Questionnaire id is required");
+    }
+    if (conversationType !== "project" && conversationType !== "issue") {
+      throw new Error("Questionnaires are only available in project or issue conversations");
+    }
+
+    setError(null);
+    setDeliveryIndicator({ tone: "neutral", text: "Submitting questionnaire..." });
+
+    const url = new URL(`${API_URL}/api/questionnaires/${trimmedID}/response`);
+    url.searchParams.set("org_id", orgID);
+
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: requestHeaders,
+      body: JSON.stringify({
+        responded_by: currentUserName,
+        responses,
+      }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      throw new Error(payload?.error ?? "Failed to submit questionnaire");
+    }
+
+    const payload = await response.json();
+    const normalizedPayload = normalizeQuestionnairePayload(
+      payload,
+      conversationType === "project" ? "project_chat" : "issue",
+      conversationType === "project" ? projectID : issueID,
+    );
+    if (!normalizedPayload) {
+      throw new Error("Invalid questionnaire response payload");
+    }
+    const normalizedMessage = normalizeQuestionnaireMessage(
+      normalizedPayload,
+      conversationKey,
+      currentUserName,
+      currentUserID,
+    );
+
+    setMessages((prev) =>
+      prev.map((entry) =>
+        entry.questionnaire?.id === trimmedID
+          ? normalizedMessage
+          : entry,
+      ),
+    );
+    setDeliveryIndicator({ tone: "success", text: "Questionnaire submitted" });
+  }, [
+    conversationKey,
+    conversationType,
+    currentUserID,
+    currentUserName,
+    issueID,
+    orgID,
+    projectID,
+    requestHeaders,
+  ]);
+
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void sendMessage();
@@ -1170,6 +1412,7 @@ export default function GlobalChatSurface({
         threadId={threadID}
         agent={pseudoAgent}
         onRetryMessage={handleRetryMessage}
+        onSubmitQuestionnaire={submitQuestionnaireResponse}
       />
 
       {error ? (
