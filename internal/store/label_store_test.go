@@ -187,6 +187,50 @@ func TestLabelStoreMapLookups(t *testing.T) {
 	assert.Equal(t, feature.ID, issueMap[issueB][0].ID)
 }
 
+func TestLabelPresetSeed(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgA := createTestOrganization(t, db, "labels-preset-org-a")
+	orgB := createTestOrganization(t, db, "labels-preset-org-b")
+	ctxA := ctxWithWorkspace(orgA)
+	ctxB := ctxWithWorkspace(orgB)
+
+	store := NewLabelStore(db)
+
+	// Seeding is idempotent in one workspace.
+	require.NoError(t, store.EnsurePresetLabels(ctxA))
+	require.NoError(t, store.EnsurePresetLabels(ctxA))
+
+	labelsA, err := store.List(ctxA)
+	require.NoError(t, err)
+	require.Len(t, labelsA, 10)
+
+	colorsByNameA := make(map[string]string, len(labelsA))
+	for _, label := range labelsA {
+		colorsByNameA[label.Name] = label.Color
+	}
+	require.Equal(t, "#3b82f6", colorsByNameA["product"])
+	require.Equal(t, "#8b5cf6", colorsByNameA["content"])
+	require.Equal(t, "#6b7280", colorsByNameA["infrastructure"])
+	require.Equal(t, "#f59e0b", colorsByNameA["personal"])
+	require.Equal(t, "#ef4444", colorsByNameA["bug"])
+	require.Equal(t, "#22c55e", colorsByNameA["feature"])
+	require.Equal(t, "#ec4899", colorsByNameA["design"])
+	require.Equal(t, "#f97316", colorsByNameA["blocked"])
+	require.Equal(t, "#eab308", colorsByNameA["needs-review"])
+	require.Equal(t, "#06b6d4", colorsByNameA["quick-win"])
+
+	// Workspace-scoped: other org remains empty until seeded.
+	var countB int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM labels WHERE org_id = $1`, orgB).Scan(&countB))
+	require.Equal(t, 0, countB)
+
+	require.NoError(t, store.EnsurePresetLabels(ctxB))
+	labelsB, err := store.List(ctxB)
+	require.NoError(t, err)
+	require.Len(t, labelsB, 10)
+}
+
 func TestLabelStoreNoWorkspace(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

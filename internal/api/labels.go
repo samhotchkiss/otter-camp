@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -40,6 +41,14 @@ func (h *LabelsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if h.Store == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "labels store unavailable"})
 		return
+	}
+
+	seedRequested, err := strconv.ParseBool(strings.TrimSpace(r.URL.Query().Get("seed")))
+	if err == nil && seedRequested {
+		if seedErr := h.Store.EnsurePresetLabels(r.Context()); seedErr != nil {
+			sendJSON(w, labelStoreErrorStatus(seedErr), errorResponse{Error: labelStoreErrorMessage(seedErr)})
+			return
+		}
 	}
 
 	labels, err := h.Store.List(r.Context())

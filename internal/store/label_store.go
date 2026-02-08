@@ -14,6 +14,24 @@ import (
 
 const defaultLabelColor = "#6b7280"
 
+type labelPreset struct {
+	Name  string
+	Color string
+}
+
+var defaultLabelPresets = []labelPreset{
+	{Name: "product", Color: "#3b82f6"},
+	{Name: "content", Color: "#8b5cf6"},
+	{Name: "infrastructure", Color: "#6b7280"},
+	{Name: "personal", Color: "#f59e0b"},
+	{Name: "bug", Color: "#ef4444"},
+	{Name: "feature", Color: "#22c55e"},
+	{Name: "design", Color: "#ec4899"},
+	{Name: "blocked", Color: "#f97316"},
+	{Name: "needs-review", Color: "#eab308"},
+	{Name: "quick-win", Color: "#06b6d4"},
+}
+
 // Label represents an org-scoped label that can be attached to projects/issues.
 type Label struct {
 	ID        string    `json:"id"`
@@ -39,6 +57,44 @@ const labelSelectColumns = `
 // NewLabelStore creates a new LabelStore.
 func NewLabelStore(db *sql.DB) *LabelStore {
 	return &LabelStore{db: db}
+}
+
+// EnsurePresetLabels inserts the default label starter set for the current workspace.
+// It is idempotent and safe to call repeatedly.
+func (s *LabelStore) EnsurePresetLabels(ctx context.Context) error {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return ErrNoWorkspace
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to start preset label transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	for _, preset := range defaultLabelPresets {
+		if _, execErr := tx.ExecContext(ctx, `
+			INSERT INTO labels (org_id, name, color)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (org_id, name) DO NOTHING
+		`, workspaceID, preset.Name, preset.Color); execErr != nil {
+			return fmt.Errorf("failed to seed preset label %q: %w", preset.Name, execErr)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit preset label seed: %w", err)
+	}
+	return nil
 }
 
 // List returns all labels in the current workspace.

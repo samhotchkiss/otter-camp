@@ -50,6 +50,12 @@ type Integrations = {
   }>;
 };
 
+type ManagedLabel = {
+  id: string;
+  name: string;
+  color: string;
+};
+
 type ThemeMode = "light" | "dark" | "system";
 
 const NOTIFICATION_EVENT_LABELS: Record<NotificationEventType, string> = {
@@ -684,6 +690,137 @@ function IntegrationsSection({
   );
 }
 
+type LabelManagementSectionProps = {
+  labels: ManagedLabel[];
+  drafts: Record<string, { name: string; color: string }>;
+  loading: boolean;
+  error: string | null;
+  newLabelName: string;
+  newLabelColor: string;
+  creating: boolean;
+  savingLabelID: string | null;
+  deletingLabelID: string | null;
+  onNewLabelNameChange: (value: string) => void;
+  onNewLabelColorChange: (value: string) => void;
+  onDraftChange: (labelID: string, field: "name" | "color", value: string) => void;
+  onCreate: () => Promise<void>;
+  onSave: (label: ManagedLabel) => Promise<void>;
+  onDelete: (label: ManagedLabel) => Promise<void>;
+};
+
+function LabelManagementSection({
+  labels,
+  drafts,
+  loading,
+  error,
+  newLabelName,
+  newLabelColor,
+  creating,
+  savingLabelID,
+  deletingLabelID,
+  onNewLabelNameChange,
+  onNewLabelColorChange,
+  onDraftChange,
+  onCreate,
+  onSave,
+  onDelete,
+}: LabelManagementSectionProps) {
+  return (
+    <SectionCard
+      title="Label Management"
+      description="Manage reusable project and issue labels"
+      icon="🏷️"
+    >
+      <div className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto] sm:items-end">
+          <Input
+            label="New label name"
+            value={newLabelName}
+            onChange={onNewLabelNameChange}
+            placeholder="e.g. blocked"
+          />
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+              New label color
+            </span>
+            <input
+              aria-label="New label color"
+              type="color"
+              value={newLabelColor}
+              onChange={(event) => onNewLabelColorChange(event.target.value)}
+              className="mt-1 h-11 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white px-1 py-1 dark:border-slate-700 dark:bg-slate-800"
+            />
+          </label>
+          <Button onClick={() => void onCreate()} loading={creating}>
+            Create Label
+          </Button>
+        </div>
+
+        {loading && (
+          <p className="text-sm text-slate-500 dark:text-slate-400">Loading labels…</p>
+        )}
+        {error && (
+          <p className="text-sm text-red-700">{error}</p>
+        )}
+
+        {!loading && labels.length === 0 && (
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            No labels yet. Create one above to get started.
+          </p>
+        )}
+
+        {!loading && labels.length > 0 && (
+          <div className="space-y-2">
+            {labels.map((label) => {
+              const draft = drafts[label.id] ?? { name: label.name, color: label.color };
+              const dirty =
+                draft.name.trim() !== label.name || draft.color.toLowerCase() !== label.color.toLowerCase();
+              return (
+                <div
+                  key={label.id}
+                  data-testid={`label-row-${label.id}`}
+                  className="grid gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700 sm:grid-cols-[1fr_auto_auto_auto]"
+                >
+                  <input
+                    aria-label={`Label name ${label.name}`}
+                    data-testid={`label-name-${label.id}`}
+                    value={draft.name}
+                    onChange={(event) => onDraftChange(label.id, "name", event.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                  <input
+                    aria-label={`Label color ${label.name}`}
+                    data-testid={`label-color-${label.id}`}
+                    type="color"
+                    value={draft.color}
+                    onChange={(event) => onDraftChange(label.id, "color", event.target.value)}
+                    className="h-10 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white px-1 py-1 dark:border-slate-700 dark:bg-slate-800"
+                  />
+                  <Button
+                    variant="secondary"
+                    disabled={!dirty}
+                    loading={savingLabelID === label.id}
+                    onClick={() => void onSave(label)}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    variant="danger"
+                    loading={deletingLabelID === label.id}
+                    onClick={() => void onDelete(label)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
 type AppearanceSectionProps = {
   theme: ThemeMode;
   onUpdate: (theme: ThemeMode) => void;
@@ -780,8 +917,30 @@ export default function SettingsPage() {
   });
   const [savingIntegrations, setSavingIntegrations] = useState(false);
 
+  // Labels state
+  const [labels, setLabels] = useState<ManagedLabel[]>([]);
+  const [labelDrafts, setLabelDrafts] = useState<Record<string, { name: string; color: string }>>({});
+  const [loadingLabels, setLoadingLabels] = useState(false);
+  const [labelError, setLabelError] = useState<string | null>(null);
+  const [newLabelName, setNewLabelName] = useState("");
+  const [newLabelColor, setNewLabelColor] = useState("#6b7280");
+  const [creatingLabel, setCreatingLabel] = useState(false);
+  const [savingLabelID, setSavingLabelID] = useState<string | null>(null);
+  const [deletingLabelID, setDeletingLabelID] = useState<string | null>(null);
+
   // Theme state
   const [theme, setTheme] = useState<ThemeMode>("system");
+
+  const upsertLabelDrafts = useCallback((items: ManagedLabel[]) => {
+    setLabelDrafts((existing) => {
+      const next: Record<string, { name: string; color: string }> = {};
+      for (const label of items) {
+        const prior = existing[label.id];
+        next[label.id] = prior ?? { name: label.name, color: label.color };
+      }
+      return next;
+    });
+  }, []);
 
   // Load settings on mount
   useEffect(() => {
@@ -833,6 +992,52 @@ export default function SettingsPage() {
 
     loadSettings();
   }, []);
+
+  useEffect(() => {
+    const orgID = localStorage.getItem("otter-camp-org-id") || "";
+    if (!orgID) {
+      setLabelError("Missing organization context");
+      setLoadingLabels(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingLabels(true);
+    setLabelError(null);
+
+    void fetch(`/api/labels?org_id=${encodeURIComponent(orgID)}&seed=true`)
+      .then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to load labels");
+        }
+        return response.json() as Promise<{ labels: ManagedLabel[] }>;
+      })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        const list = Array.isArray(payload.labels) ? payload.labels : [];
+        const sorted = [...list].sort((a, b) => a.name.localeCompare(b.name));
+        setLabels(sorted);
+        upsertLabelDrafts(sorted);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setLabelError(err instanceof Error ? err.message : "Failed to load labels");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingLabels(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [upsertLabelDrafts]);
 
   // Apply theme changes
   useEffect(() => {
@@ -932,6 +1137,129 @@ export default function SettingsPage() {
     }));
   }, []);
 
+  const handleLabelDraftChange = useCallback(
+    (labelID: string, field: "name" | "color", value: string) => {
+      setLabelDrafts((prev) => ({
+        ...prev,
+        [labelID]: {
+          ...(prev[labelID] ?? { name: "", color: "#6b7280" }),
+          [field]: value,
+        },
+      }));
+    },
+    [],
+  );
+
+  const handleCreateLabel = useCallback(async () => {
+    const orgID = localStorage.getItem("otter-camp-org-id") || "";
+    const name = newLabelName.trim();
+    if (!orgID || !name) {
+      return;
+    }
+    setCreatingLabel(true);
+    setLabelError(null);
+    try {
+      const response = await fetch(`/api/labels?org_id=${encodeURIComponent(orgID)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, color: newLabelColor }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to create label");
+      }
+      const created = await response.json() as ManagedLabel;
+      setLabels((prev) => {
+        const next = [...prev, created].sort((a, b) => a.name.localeCompare(b.name));
+        return next;
+      });
+      upsertLabelDrafts([created]);
+      setNewLabelName("");
+      setNewLabelColor("#6b7280");
+    } catch (err) {
+      setLabelError(err instanceof Error ? err.message : "Failed to create label");
+    } finally {
+      setCreatingLabel(false);
+    }
+  }, [newLabelColor, newLabelName, upsertLabelDrafts]);
+
+  const handleSaveLabel = useCallback(async (label: ManagedLabel) => {
+    const orgID = localStorage.getItem("otter-camp-org-id") || "";
+    if (!orgID) {
+      return;
+    }
+    const draft = labelDrafts[label.id] ?? { name: label.name, color: label.color };
+    const nextName = draft.name.trim();
+    if (!nextName) {
+      return;
+    }
+    setSavingLabelID(label.id);
+    setLabelError(null);
+    try {
+      const response = await fetch(
+        `/api/labels/${encodeURIComponent(label.id)}?org_id=${encodeURIComponent(orgID)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: nextName, color: draft.color }),
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to save label");
+      }
+      const updated = await response.json() as ManagedLabel;
+      setLabels((prev) =>
+        prev
+          .map((existing) => (existing.id === updated.id ? updated : existing))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      setLabelDrafts((prev) => ({
+        ...prev,
+        [updated.id]: { name: updated.name, color: updated.color },
+      }));
+    } catch (err) {
+      setLabelError(err instanceof Error ? err.message : "Failed to save label");
+    } finally {
+      setSavingLabelID(null);
+    }
+  }, [labelDrafts]);
+
+  const handleDeleteLabel = useCallback(async (label: ManagedLabel) => {
+    const orgID = localStorage.getItem("otter-camp-org-id") || "";
+    if (!orgID) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete label "${label.name}"? This will remove it from linked projects and issues.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setDeletingLabelID(label.id);
+    setLabelError(null);
+    try {
+      const response = await fetch(
+        `/api/labels/${encodeURIComponent(label.id)}?org_id=${encodeURIComponent(orgID)}`,
+        { method: "DELETE" },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to delete label");
+      }
+      setLabels((prev) => prev.filter((existing) => existing.id !== label.id));
+      setLabelDrafts((prev) => {
+        const next = { ...prev };
+        delete next[label.id];
+        return next;
+      });
+    } catch (err) {
+      setLabelError(err instanceof Error ? err.message : "Failed to delete label");
+    } finally {
+      setDeletingLabelID(null);
+    }
+  }, []);
+
   return (
     <div className="w-full">
       {/* Header */}
@@ -974,6 +1302,24 @@ export default function SettingsPage() {
           onGenerateApiKey={handleGenerateApiKey}
           onRevokeApiKey={handleRevokeApiKey}
           saving={savingIntegrations}
+        />
+
+        <LabelManagementSection
+          labels={labels}
+          drafts={labelDrafts}
+          loading={loadingLabels}
+          error={labelError}
+          newLabelName={newLabelName}
+          newLabelColor={newLabelColor}
+          creating={creatingLabel}
+          savingLabelID={savingLabelID}
+          deletingLabelID={deletingLabelID}
+          onNewLabelNameChange={setNewLabelName}
+          onNewLabelColorChange={setNewLabelColor}
+          onDraftChange={handleLabelDraftChange}
+          onCreate={handleCreateLabel}
+          onSave={handleSaveLabel}
+          onDelete={handleDeleteLabel}
         />
 
         <GitHubSettings />
