@@ -1,7 +1,92 @@
-import { useMemo, useState } from "react";
-import ActivityPanel from "../components/ActivityPanel";
+import { useEffect, useMemo, useState } from "react";
+import ActivityPanel from "../components/activity/ActivityPanel";
 import AgentActivityTimeline from "../components/agents/AgentActivityTimeline";
-import { useAgentActivity } from "../hooks/useAgentActivity";
+import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
+import { useAgentActivity, type AgentActivityEvent } from "../hooks/useAgentActivity";
+
+const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+
+type FeedFallbackItem = {
+  id?: string;
+  org_id?: string;
+  agent_id?: string | null;
+  agent_name?: string | null;
+  type?: string;
+  created_at?: string;
+  task_title?: string | null;
+  summary?: string | null;
+  metadata?: unknown;
+};
+
+type FeedFallbackResponse = {
+  items?: FeedFallbackItem[];
+};
+
+function toDate(value: string | undefined): Date {
+  if (!value) return new Date();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function resolveOrgId(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("otter-camp-org-id") || "";
+}
+
+function resolveToken(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("otter_camp_token") || "";
+}
+
+function resolveChannel(type: string): string {
+  if (!type) return "activity";
+  if (type.includes(".")) return type.split(".")[0] || "activity";
+  if (type.includes("_")) return type.split("_")[0] || "activity";
+  return type;
+}
+
+function mapFallbackItem(raw: FeedFallbackItem): AgentActivityEvent | null {
+  const id = String(raw.id || "").trim();
+  const orgId = String(raw.org_id || "").trim();
+  const type = String(raw.type || "").trim();
+  if (!id || !orgId || !type) return null;
+
+  const actorName = String(raw.agent_name || "").trim() || "System";
+  const taskTitle = String(raw.task_title || "").trim();
+  const metadata = normalizeMetadata(raw.metadata);
+  const description = getActivityDescription({
+    type,
+    actorName,
+    taskTitle: taskTitle || undefined,
+    summary: String(raw.summary || "").trim() || undefined,
+    metadata,
+  });
+
+  const projectID = typeof metadata.project_id === "string" ? metadata.project_id : undefined;
+  const createdAt = toDate(raw.created_at);
+
+  return {
+    id: `feed-${id}`,
+    orgId,
+    agentId: String(raw.agent_id || "").trim() || actorName.toLowerCase(),
+    sessionKey: `feed:${type}:${id}`,
+    trigger: type,
+    channel: resolveChannel(type),
+    summary: `${actorName} ${description}`,
+    detail: undefined,
+    projectId: projectID,
+    issueId: undefined,
+    issueNumber: undefined,
+    threadId: undefined,
+    tokensUsed: 0,
+    modelUsed: undefined,
+    durationMs: 0,
+    status: "completed",
+    startedAt: createdAt,
+    completedAt: createdAt,
+    createdAt,
+  };
+}
 
 export default function FeedPage() {
   const [mode, setMode] = useState<"realtime" | "agent">("realtime");
@@ -9,15 +94,67 @@ export default function FeedPage() {
     mode: "recent",
     limit: 100,
   });
+  const [fallbackEvents, setFallbackEvents] = useState<AgentActivityEvent[]>([]);
+  const [isFallbackLoading, setIsFallbackLoading] = useState(false);
+  const [fallbackError, setFallbackError] = useState<string | null>(null);
 
-  const agentEvents = useMemo(
-    () =>
-      events.map((event) => ({
-        ...event,
-        summary: `${event.agentId} · ${event.summary}`,
-      })),
-    [events],
-  );
+  useEffect(() => {
+    if (events.length > 0) {
+      setFallbackEvents([]);
+      setFallbackError(null);
+      return;
+    }
+
+    const orgId = resolveOrgId();
+    if (!orgId) {
+      setFallbackEvents([]);
+      setFallbackError("Missing org_id");
+      return;
+    }
+
+    const token = resolveToken();
+    const url = new URL("/api/feed", API_URL);
+    url.searchParams.set("org_id", orgId);
+    url.searchParams.set("limit", "100");
+
+    const controller = new AbortController();
+    setIsFallbackLoading(true);
+    setFallbackError(null);
+
+    void fetch(url.toString(), {
+      signal: controller.signal,
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to load fallback feed (${response.status})`);
+        }
+        const payload = (await response.json()) as FeedFallbackResponse;
+        const items = (payload.items || [])
+          .map(mapFallbackItem)
+          .filter((item): item is AgentActivityEvent => item !== null)
+          .filter((item) => item.trigger.startsWith("task") || item.trigger.startsWith("agent"));
+        setFallbackEvents(items);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return;
+        }
+        setFallbackEvents([]);
+        setFallbackError(err instanceof Error ? err.message : "Failed to load fallback feed");
+      })
+      .finally(() => {
+        setIsFallbackLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [events]);
+
+  const agentEvents = useMemo(() => (events.length > 0 ? events : fallbackEvents), [events, fallbackEvents]);
+  const agentLoading = isLoading || (events.length === 0 && isFallbackLoading);
+  const agentError = agentEvents.length === 0 ? error || fallbackError : null;
 
   return (
     <div className="w-full">
@@ -60,9 +197,9 @@ export default function FeedPage() {
       ) : (
         <AgentActivityTimeline
           events={agentEvents}
-          isLoading={isLoading}
+          isLoading={agentLoading}
           isLoadingMore={isLoadingMore}
-          error={error}
+          error={agentError}
           hasMore={hasMore}
           onLoadMore={() => void loadMore()}
           emptyMessage="No agent activity yet."

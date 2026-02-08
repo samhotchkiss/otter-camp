@@ -6,6 +6,7 @@ import ProjectFileBrowser from "../components/project/ProjectFileBrowser";
 import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
+import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
@@ -344,17 +345,25 @@ export default function ProjectDetailPage() {
             id: string;
             agent_name?: string;
             type?: string;
-            metadata?: { message?: string; comment?: string; title?: string };
+            summary?: string;
+            task_title?: string;
+            metadata?: unknown;
             created_at?: string;
           }) => {
-            const agentName = item.agent_name || "Unknown";
-            const metadata = item.metadata || {};
-            const highlight = metadata.message || metadata.comment || metadata.title || item.type || "";
+            const agentName = item.agent_name?.trim() || "System";
+            const type = item.type?.trim() || "activity";
+            const highlight = getActivityDescription({
+              type,
+              actorName: agentName,
+              taskTitle: item.task_title,
+              summary: item.summary,
+              metadata: normalizeMetadata(item.metadata),
+            });
             return {
               id: item.id,
               agent: agentName,
               avatarColor: agentColors[agentName] || "var(--accent, #C9A86C)",
-              text: `${item.type?.replace(/_/g, " ")}: `,
+              text: "",
               highlight: highlight,
               timeAgo: item.created_at ? formatTimeAgo(item.created_at) : "",
             };
