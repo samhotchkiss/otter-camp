@@ -110,6 +110,7 @@ type ProjectChatDispatchEvent = {
     session_key?: string;
     content?: string;
     author?: string;
+    questionnaire?: unknown;
   };
 };
 
@@ -130,7 +131,26 @@ type IssueCommentDispatchEvent = {
     sender_type?: string;
     session_key?: string;
     content?: string;
+    questionnaire?: unknown;
   };
+};
+
+type QuestionnaireQuestion = {
+  id: string;
+  text: string;
+  type: 'text' | 'textarea' | 'boolean' | 'select' | 'multiselect' | 'number' | 'date';
+  required?: boolean;
+  options?: string[];
+};
+
+type QuestionnairePayload = {
+  id: string;
+  contextType?: string;
+  contextID?: string;
+  author?: string;
+  title?: string;
+  questions: QuestionnaireQuestion[];
+  responses?: Record<string, unknown>;
 };
 
 type AdminCommandDispatchEvent = {
@@ -167,6 +187,7 @@ type SessionContext = {
   issueTitle?: string;
   documentPath?: string;
   responderAgentID?: string;
+  pendingQuestionnaire?: QuestionnairePayload;
 };
 
 type DeviceIdentity = {
@@ -457,6 +478,315 @@ function extractMessageContent(value: unknown): string {
   );
 }
 
+function normalizeQuestionnaireType(value: unknown): QuestionnaireQuestion['type'] | null {
+  const normalized = getTrimmedString(value).toLowerCase();
+  switch (normalized) {
+    case 'text':
+    case 'textarea':
+    case 'boolean':
+    case 'select':
+    case 'multiselect':
+    case 'number':
+    case 'date':
+      return normalized;
+    default:
+      return null;
+  }
+}
+
+function normalizeQuestionnairePayload(raw: unknown): QuestionnairePayload | null {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+  const id = getTrimmedString(record.id);
+  if (!id) {
+    return null;
+  }
+
+  const rawQuestions = Array.isArray(record.questions) ? record.questions : [];
+  const questions: QuestionnaireQuestion[] = [];
+  for (const entry of rawQuestions) {
+    const question = asRecord(entry);
+    if (!question) {
+      continue;
+    }
+    const questionID = getTrimmedString(question.id);
+    const text = getTrimmedString(question.text);
+    const questionType = normalizeQuestionnaireType(question.type);
+    if (!questionID || !text || !questionType) {
+      continue;
+    }
+    const optionsRaw = Array.isArray(question.options) ? question.options : [];
+    const optionSet = new Set<string>();
+    for (const option of optionsRaw) {
+      const trimmed = getTrimmedString(option);
+      if (!trimmed) {
+        continue;
+      }
+      optionSet.add(trimmed);
+    }
+    const options = Array.from(optionSet);
+
+    questions.push({
+      id: questionID,
+      text,
+      type: questionType,
+      required: getBoolean(question.required),
+      options: options.length > 0 ? options : undefined,
+    });
+  }
+  if (questions.length === 0) {
+    return null;
+  }
+
+  const responsesRecord = asRecord(record.responses);
+  const responses = responsesRecord ? responsesRecord : undefined;
+  return {
+    id,
+    contextType: getTrimmedString(record.context_type) || undefined,
+    contextID: getTrimmedString(record.context_id) || undefined,
+    author: getTrimmedString(record.author) || undefined,
+    title: getTrimmedString(record.title) || undefined,
+    questions,
+    responses,
+  };
+}
+
+function formatQuestionnaireForFallback(questionnaire: QuestionnairePayload): string {
+  const lines: string[] = [];
+  lines.push('[QUESTIONNAIRE]');
+  lines.push(`Questionnaire ID: ${questionnaire.id}`);
+  if (questionnaire.title) {
+    lines.push(`Title: ${questionnaire.title}`);
+  }
+  if (questionnaire.author) {
+    lines.push(`Author: ${questionnaire.author}`);
+  }
+  lines.push('Reply with numbered answers, for example:');
+  lines.push('1. ...');
+  lines.push('2. ...');
+  lines.push('');
+
+  questionnaire.questions.forEach((question, index) => {
+    const meta: string[] = [question.type];
+    if (question.required) {
+      meta.push('required');
+    }
+    lines.push(`${index + 1}. ${question.text} [id=${question.id}; ${meta.join(', ')}]`);
+    if (question.options && question.options.length > 0) {
+      lines.push(`   options: ${question.options.join(' | ')}`);
+    }
+  });
+  lines.push('[/QUESTIONNAIRE]');
+  return lines.join('\n');
+}
+
+function parseNumberedAnswers(content: string): Map<number, string> {
+  const lines = content.split(/\r?\n/);
+  const answers = new Map<number, string>();
+  let currentIndex = -1;
+  let currentLines: string[] = [];
+
+  const flush = () => {
+    if (currentIndex <= 0) {
+      return;
+    }
+    const value = currentLines.join('\n').trim();
+    if (value) {
+      answers.set(currentIndex, value);
+    }
+  };
+
+  for (const line of lines) {
+    const match = /^\s*(\d+)[\.\)]\s*(.*)$/.exec(line);
+    if (match) {
+      flush();
+      currentIndex = Number(match[1]);
+      currentLines = [match[2] || ''];
+      continue;
+    }
+    if (currentIndex > 0) {
+      currentLines.push(line);
+    }
+  }
+  flush();
+
+  return answers;
+}
+
+function parseBooleanText(value: string): boolean | null {
+  const normalized = value.trim().toLowerCase();
+  if (['true', 'yes', 'y', '1'].includes(normalized)) {
+    return true;
+  }
+  if (['false', 'no', 'n', '0'].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+function parseQuestionnaireAnswer(
+  question: QuestionnaireQuestion,
+  rawAnswer: string,
+): { value: unknown; valid: boolean } {
+  const trimmed = rawAnswer.trim();
+  if (!trimmed) {
+    return { value: undefined, valid: false };
+  }
+
+  switch (question.type) {
+    case 'text':
+    case 'textarea':
+    case 'date':
+      return { value: trimmed, valid: true };
+    case 'boolean': {
+      const parsed = parseBooleanText(trimmed);
+      if (parsed === null) {
+        return { value: undefined, valid: false };
+      }
+      return { value: parsed, valid: true };
+    }
+    case 'number': {
+      const value = Number(trimmed);
+      if (!Number.isFinite(value)) {
+        return { value: undefined, valid: false };
+      }
+      return { value, valid: true };
+    }
+    case 'select':
+      if (!question.options || question.options.length === 0) {
+        return { value: trimmed, valid: true };
+      }
+      for (const option of question.options) {
+        if (option.toLowerCase() === trimmed.toLowerCase()) {
+          return { value: option, valid: true };
+        }
+      }
+      return { value: undefined, valid: false };
+    case 'multiselect': {
+      const parts = trimmed
+        .split(/[,|]/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (parts.length === 0) {
+        return { value: undefined, valid: false };
+      }
+      if (!question.options || question.options.length === 0) {
+        return { value: parts, valid: true };
+      }
+      const normalized: string[] = [];
+      const seen = new Set<string>();
+      for (const part of parts) {
+        const match = question.options.find((option) => option.toLowerCase() === part.toLowerCase());
+        if (!match) {
+          return { value: undefined, valid: false };
+        }
+        if (seen.has(match)) {
+          continue;
+        }
+        seen.add(match);
+        normalized.push(match);
+      }
+      if (normalized.length === 0) {
+        return { value: undefined, valid: false };
+      }
+      return { value: normalized, valid: true };
+    }
+    default:
+      return { value: undefined, valid: false };
+  }
+}
+
+function parseNumberedQuestionnaireResponse(
+  content: string,
+  questionnaire: QuestionnairePayload,
+): {
+  responses: Record<string, unknown>;
+  highConfidence: boolean;
+} | null {
+  const answers = parseNumberedAnswers(content);
+  if (answers.size === 0) {
+    return null;
+  }
+
+  const responses: Record<string, unknown> = {};
+  let invalidCount = 0;
+  let requiredCount = 0;
+  let requiredAnswered = 0;
+  let answeredCount = 0;
+
+  questionnaire.questions.forEach((question, idx) => {
+    if (question.required) {
+      requiredCount += 1;
+    }
+
+    const answer = answers.get(idx + 1);
+    if (!answer) {
+      return;
+    }
+
+    answeredCount += 1;
+    const parsed = parseQuestionnaireAnswer(question, answer);
+    if (!parsed.valid) {
+      invalidCount += 1;
+      return;
+    }
+
+    responses[question.id] = parsed.value;
+    if (question.required) {
+      requiredAnswered += 1;
+    }
+  });
+
+  if (Object.keys(responses).length === 0) {
+    return null;
+  }
+
+  return {
+    responses,
+    highConfidence: invalidCount === 0 && requiredAnswered >= requiredCount && answeredCount > 0,
+  };
+}
+
+async function submitQuestionnaireResponse(
+  orgID: string,
+  questionnaireID: string,
+  respondedBy: string,
+  responses: Record<string, unknown>,
+): Promise<boolean> {
+  if (!orgID || !questionnaireID || !respondedBy || Object.keys(responses).length === 0) {
+    return false;
+  }
+
+  const url = new URL(
+    `/api/questionnaires/${encodeURIComponent(questionnaireID)}/response`,
+    OTTERCAMP_URL,
+  );
+  url.searchParams.set('org_id', orgID);
+
+  const response = await fetchWithRetry(url.toString(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    },
+    body: JSON.stringify({
+      responded_by: respondedBy,
+      responses,
+    }),
+  }, 'persist questionnaire response');
+
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    console.warn(
+      `[bridge] questionnaire response submit failed (${response.status} ${response.statusText} ${snippet})`,
+    );
+    return false;
+  }
+  return true;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -734,6 +1064,49 @@ async function persistAssistantReplyToOtterCamp(params: {
     return;
   }
   let persistedTarget = sessionKey;
+
+  const pendingQuestionnaire = context.pendingQuestionnaire;
+  if (
+    pendingQuestionnaire &&
+    !pendingQuestionnaire.responses &&
+    (context.kind === 'project_chat' || context.kind === 'issue_comment')
+  ) {
+    const parsed = parseNumberedQuestionnaireResponse(content, pendingQuestionnaire);
+    if (parsed?.highConfidence) {
+      const orgID = getTrimmedString(context.orgID);
+      const respondedBy =
+        params.assistantName?.trim() ||
+        getTrimmedString(context.agentName) ||
+        getTrimmedString(context.agentID) ||
+        'Bridge responder';
+      try {
+        const submitted = await submitQuestionnaireResponse(
+          orgID,
+          pendingQuestionnaire.id,
+          respondedBy,
+          parsed.responses,
+        );
+        if (submitted) {
+          sessionContexts.set(sessionKey, {
+            ...context,
+            pendingQuestionnaire: undefined,
+          });
+          if (params.runID) {
+            markRunIDDelivered(params.runID);
+          }
+          console.log(
+            `[bridge] captured numbered questionnaire response for ${pendingQuestionnaire.id} from ${sessionKey}`,
+          );
+          return;
+        }
+      } catch (err) {
+        console.warn(
+          `[bridge] failed to persist structured questionnaire response for ${pendingQuestionnaire.id}:`,
+          err,
+        );
+      }
+    }
+  }
 
   if (context.kind === 'dm') {
     const orgID = getTrimmedString(context.orgID);
@@ -1076,13 +1449,19 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
   const agentID = getTrimmedString(event.data?.agent_id);
   const agentName = getTrimmedString(event.data?.agent_name);
   const content = getTrimmedString(event.data?.content);
+  const questionnaire = normalizeQuestionnairePayload(event.data?.questionnaire);
   const orgID = getTrimmedString(event.org_id);
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
   const sessionKey =
     getTrimmedString(event.data?.session_key) ||
     (agentID && projectID ? `agent:${agentID}:project:${projectID}` : '');
+  let outboundContent = content;
+  if (questionnaire) {
+    const formatted = formatQuestionnaireForFallback(questionnaire);
+    outboundContent = outboundContent ? `${outboundContent}\n\n${formatted}` : formatted;
+  }
 
-  if (!sessionKey || !projectID || !orgID || !content) {
+  if (!sessionKey || !projectID || !orgID || !outboundContent) {
     console.warn('[bridge] skipped project.chat.message with missing org/project/session/content');
     return;
   }
@@ -1093,10 +1472,11 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
     agentID,
     agentName,
     projectID,
+    pendingQuestionnaire: questionnaire || undefined,
   });
 
   try {
-    await sendMessageToSession(sessionKey, content, messageID);
+    await sendMessageToSession(sessionKey, outboundContent, messageID);
     console.log(
       `[bridge] delivered project.chat.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
@@ -1121,6 +1501,7 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   const issueTitle = getTrimmedString(event.data?.issue_title);
   const documentPath = getTrimmedString(event.data?.document_path);
   const content = getTrimmedString(event.data?.content);
+  const questionnaire = normalizeQuestionnairePayload(event.data?.questionnaire);
   const orgID = getTrimmedString(event.org_id);
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
   const parsedIssueNumber = Number(event.data?.issue_number);
@@ -1128,8 +1509,13 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   const sessionKey =
     getTrimmedString(event.data?.session_key) ||
     (agentID && issueID ? `agent:${agentID}:issue:${issueID}` : '');
+  let outboundContent = content;
+  if (questionnaire) {
+    const formatted = formatQuestionnaireForFallback(questionnaire);
+    outboundContent = outboundContent ? `${outboundContent}\n\n${formatted}` : formatted;
+  }
 
-  if (!sessionKey || !issueID || !projectID || !orgID || !content) {
+  if (!sessionKey || !issueID || !projectID || !orgID || !outboundContent) {
     console.warn('[bridge] skipped issue.comment.message with missing org/project/issue/session/content');
     return;
   }
@@ -1145,10 +1531,11 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
     agentID,
     agentName,
     responderAgentID,
+    pendingQuestionnaire: questionnaire || undefined,
   });
 
   try {
-    await sendMessageToSession(sessionKey, content, messageID);
+    await sendMessageToSession(sessionKey, outboundContent, messageID);
     console.log(
       `[bridge] delivered issue.comment.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
