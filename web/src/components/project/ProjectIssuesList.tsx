@@ -202,7 +202,20 @@ export default function ProjectIssuesList({
         if (cancelled) {
           return;
         }
-        setItems(Array.isArray(issuesPayload.items) ? issuesPayload.items : []);
+        const rawItems = Array.isArray(issuesPayload.items) ? issuesPayload.items : [];
+        const filteredItems = rawItems.filter((issue) => {
+          if (stateFilter !== "all" && issue.state !== stateFilter) {
+            return false;
+          }
+          if (kindFilter !== "all" && issue.kind !== kindFilter) {
+            return false;
+          }
+          if (originFilter !== "all" && issue.origin !== originFilter) {
+            return false;
+          }
+          return true;
+        });
+        setItems(filteredItems);
         setAgentNameByID(agentMap);
       })
       .catch((fetchError: unknown) => {
