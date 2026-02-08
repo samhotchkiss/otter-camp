@@ -32,53 +32,63 @@ function createStorageMock(): StorageLike {
   };
 }
 
-Object.defineProperty(window, "localStorage", {
-  value: createStorageMock(),
-  writable: true,
-});
+const hasWindow = typeof window !== "undefined";
 
-Object.defineProperty(window, "sessionStorage", {
-  value: createStorageMock(),
-  writable: true,
-});
+if (hasWindow) {
+  Object.defineProperty(window, "localStorage", {
+    value: createStorageMock(),
+    writable: true,
+  });
+
+  Object.defineProperty(window, "sessionStorage", {
+    value: createStorageMock(),
+    writable: true,
+  });
+}
 
 // Cleanup after each test
 afterEach(() => {
   cleanup();
-  window.localStorage.clear();
-  window.sessionStorage.clear();
+  if (hasWindow) {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  }
 });
 
-// Mock matchMedia
-Object.defineProperty(window, "matchMedia", {
-  writable: true,
-  value: vi.fn().mockImplementation((query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
-});
+if (hasWindow) {
+  // Mock matchMedia
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
 
-// Mock ResizeObserver
-class ResizeObserverMock {
-  observe = vi.fn();
-  unobserve = vi.fn();
-  disconnect = vi.fn();
-}
-window.ResizeObserver = ResizeObserverMock as unknown as typeof ResizeObserver;
+  // Mock ResizeObserver
+  class ResizeObserverMock {
+    observe = vi.fn();
+    unobserve = vi.fn();
+    disconnect = vi.fn();
+  }
+  window.ResizeObserver = ResizeObserverMock as unknown as typeof ResizeObserver;
 
-// Mock IntersectionObserver
-class IntersectionObserverMock {
-  observe = vi.fn();
-  unobserve = vi.fn();
-  disconnect = vi.fn();
+  // Mock IntersectionObserver
+  class IntersectionObserverMock {
+    observe = vi.fn();
+    unobserve = vi.fn();
+    disconnect = vi.fn();
+  }
+  window.IntersectionObserver = IntersectionObserverMock as unknown as typeof IntersectionObserver;
 }
-window.IntersectionObserver = IntersectionObserverMock as unknown as typeof IntersectionObserver;
 
 // Mock scrollIntoView
-Element.prototype.scrollIntoView = vi.fn();
+if (typeof Element !== "undefined") {
+  Element.prototype.scrollIntoView = vi.fn();
+}
