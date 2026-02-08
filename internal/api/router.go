@@ -216,6 +216,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}", issuesHandler.Get)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/sub-issues", issuesHandler.CreateSubIssuesBatch)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approval-state", issuesHandler.TransitionApprovalState)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approve", issuesHandler.Approve)

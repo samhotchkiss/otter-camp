@@ -21,6 +21,7 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router := chi.NewRouter()
 	router.With(middleware.OptionalWorkspace).Get("/api/issues", handler.List)
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}", handler.Get)
+	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/sub-issues", handler.CreateSubIssuesBatch)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/comments", handler.CreateComment)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approval-state", handler.TransitionApprovalState)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approve", handler.Approve)
@@ -576,6 +577,84 @@ func TestIssuesHandlerCreateIssueSupportsParentIssueID(t *testing.T) {
 	require.NotNil(t, summary.ParentIssueID)
 	require.Equal(t, parent.ID, *summary.ParentIssueID)
 	require.Equal(t, store.IssueWorkStatusReadyForWork, summary.WorkStatus)
+}
+
+func TestIssuesHandlerCreateSubIssuesBatch(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-sub-batch-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Sub Batch API Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	parent, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Parent issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	reqBody := `{
+		"items":[
+			{"title":"Batch child 1","body":"First child","priority":"P1","work_status":"ready_for_work"},
+			{"title":"Batch child 2"}
+		]
+	}`
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+parent.ID+"/sub-issues?org_id="+orgID,
+		bytes.NewReader([]byte(reqBody)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp issueListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Items, 2)
+	require.Equal(t, "Batch child 1", resp.Items[0].Title)
+	require.NotNil(t, resp.Items[0].ParentIssueID)
+	require.Equal(t, parent.ID, *resp.Items[0].ParentIssueID)
+	require.Equal(t, store.IssuePriorityP1, resp.Items[0].Priority)
+	require.Equal(t, store.IssueWorkStatusReadyForWork, resp.Items[0].WorkStatus)
+	require.Equal(t, "Batch child 2", resp.Items[1].Title)
+	require.NotNil(t, resp.Items[1].ParentIssueID)
+	require.Equal(t, parent.ID, *resp.Items[1].ParentIssueID)
+}
+
+func TestIssuesHandlerCreateSubIssuesBatchValidatesAndAvoidsPartialWrites(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-sub-batch-validate-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Sub Batch Validate API Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	parent, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Parent issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{IssueStore: issueStore}
+	router := newIssueTestRouter(handler)
+
+	invalidReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+parent.ID+"/sub-issues?org_id="+orgID,
+		bytes.NewReader([]byte(`{"items":[{"title":"Valid child"},{"title":"   "}]}`)),
+	)
+	invalidRec := httptest.NewRecorder()
+	router.ServeHTTP(invalidRec, invalidReq)
+	require.Equal(t, http.StatusBadRequest, invalidRec.Code)
+
+	parentFilter := parent.ID
+	children, err := issueStore.ListIssues(issueTestCtx(orgID), store.ProjectIssueFilter{
+		ProjectID:     projectID,
+		ParentIssueID: &parentFilter,
+	})
+	require.NoError(t, err)
+	require.Len(t, children, 0)
 }
 
 func TestIssuesHandlerListSupportsParentIssueFilter(t *testing.T) {

@@ -54,6 +54,13 @@ type CreateProjectIssueInput struct {
 	ClosedAt      *time.Time
 }
 
+type CreateProjectSubIssueInput struct {
+	Title      string
+	Body       *string
+	Priority   string
+	WorkStatus string
+}
+
 type UpdateProjectIssueWorkTrackingInput struct {
 	IssueID string
 
@@ -692,6 +699,110 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 		return nil, fmt.Errorf("failed to commit issue create: %w", err)
 	}
 	return &record, nil
+}
+
+func (s *ProjectIssueStore) CreateSubIssuesBatch(
+	ctx context.Context,
+	parentIssueID string,
+	items []CreateProjectSubIssueInput,
+) ([]ProjectIssue, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+	parentIssueID = strings.TrimSpace(parentIssueID)
+	if !uuidRegex.MatchString(parentIssueID) {
+		return nil, fmt.Errorf("invalid parent_issue_id")
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("items are required")
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	parent, err := scanProjectIssue(tx.QueryRowContext(
+		ctx,
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
+			FROM project_issues
+			WHERE id = $1
+			FOR UPDATE`,
+		parentIssueID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to load parent issue: %w", err)
+	}
+	if parent.OrgID != workspaceID {
+		return nil, ErrForbidden
+	}
+
+	nextIssueNumber := parent.IssueNumber + 1
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT COALESCE(MAX(issue_number), 0) + 1 FROM project_issues WHERE project_id = $1`,
+		parent.ProjectID,
+	).Scan(&nextIssueNumber); err != nil {
+		return nil, fmt.Errorf("failed to allocate issue number range: %w", err)
+	}
+
+	created := make([]ProjectIssue, 0, len(items))
+	for _, item := range items {
+		title := strings.TrimSpace(item.Title)
+		if title == "" {
+			return nil, fmt.Errorf("title is required")
+		}
+
+		priority := normalizeIssuePriority(item.Priority)
+		if priority == "" {
+			priority = IssuePriorityP2
+		}
+		if !isValidIssuePriority(priority) {
+			return nil, fmt.Errorf("invalid priority")
+		}
+
+		workStatus := normalizeIssueWorkStatus(item.WorkStatus)
+		if workStatus == "" {
+			workStatus = IssueWorkStatusQueued
+		}
+		if !isValidIssueWorkStatus(workStatus) {
+			return nil, fmt.Errorf("invalid work_status")
+		}
+
+		body := normalizeOptionalIssueText(item.Body)
+		record, err := scanProjectIssue(tx.QueryRowContext(
+			ctx,
+			`INSERT INTO project_issues (
+				org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state,
+				owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, closed_at
+			) VALUES ($1,$2,$3,$4,$5,'open','local',NULL,$6,NULL,$7,$8,$9,NULL,NULL,NULL,NULL)
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
+			workspaceID,
+			parent.ProjectID,
+			nextIssueNumber,
+			title,
+			nullableString(body),
+			IssueApprovalStateDraft,
+			parentIssueID,
+			workStatus,
+			priority,
+		))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create sub-issue: %w", err)
+		}
+		created = append(created, record)
+		nextIssueNumber++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit sub-issues batch: %w", err)
+	}
+	return created, nil
 }
 
 func (s *ProjectIssueStore) TransitionApprovalState(

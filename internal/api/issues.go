@@ -568,6 +568,78 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusCreated, toIssueSummaryPayload(*issue, participants, nil))
 }
 
+func (h *IssuesHandler) CreateSubIssuesBatch(w http.ResponseWriter, r *http.Request) {
+	if h.IssueStore == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	parentIssueID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if parentIssueID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
+		return
+	}
+
+	var req struct {
+		Items []struct {
+			Title      string  `json:"title"`
+			Body       *string `json:"body"`
+			Priority   string  `json:"priority"`
+			WorkStatus string  `json:"work_status"`
+		} `json:"items"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	if len(req.Items) == 0 {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "items are required"})
+		return
+	}
+
+	inputs := make([]store.CreateProjectSubIssueInput, 0, len(req.Items))
+	for _, item := range req.Items {
+		inputs = append(inputs, store.CreateProjectSubIssueInput{
+			Title:      item.Title,
+			Body:       item.Body,
+			Priority:   item.Priority,
+			WorkStatus: item.WorkStatus,
+		})
+	}
+
+	created, err := h.IssueStore.CreateSubIssuesBatch(r.Context(), parentIssueID, inputs)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	ids := make([]string, 0, len(created))
+	for _, issue := range created {
+		ids = append(ids, issue.ID)
+	}
+	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), ids)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	items := make([]issueSummaryPayload, 0, len(created))
+	for i := range created {
+		issue := created[i]
+		h.enqueueIssueQueueNotification(r.Context(), nil, &issue)
+		participants, err := h.IssueStore.ListParticipants(r.Context(), issue.ID, false)
+		if err != nil {
+			handleIssueStoreError(w, err)
+			return
+		}
+		items = append(items, toIssueSummaryPayload(issue, participants, findIssueLink(linksByIssueID, issue.ID)))
+	}
+
+	sendJSON(w, http.StatusCreated, issueListResponse{Items: items, Total: len(items)})
+}
+
 func (h *IssuesHandler) CreateLinkedIssue(w http.ResponseWriter, r *http.Request) {
 	if h.IssueStore == nil || h.ProjectStore == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})

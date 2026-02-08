@@ -459,6 +459,80 @@ func TestProjectIssueStore_ListIssuesFiltersByParentIssueID(t *testing.T) {
 	require.Equal(t, childA.ParentIssueID, children[1].ParentIssueID)
 }
 
+func TestProjectIssueStore_CreateSubIssuesBatch(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-sub-batch-org")
+	projectID := createTestProject(t, db, orgID, "Issue Sub Batch Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+	parent, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Parent issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	items := []CreateProjectSubIssueInput{
+		{
+			Title:      "Sub-issue 1",
+			Body:       stringPtr("First batch item"),
+			Priority:   IssuePriorityP1,
+			WorkStatus: IssueWorkStatusReadyForWork,
+		},
+		{
+			Title: "Sub-issue 2",
+		},
+	}
+
+	created, err := issueStore.CreateSubIssuesBatch(ctx, parent.ID, items)
+	require.NoError(t, err)
+	require.Len(t, created, 2)
+	require.Equal(t, "Sub-issue 1", created[0].Title)
+	require.NotNil(t, created[0].ParentIssueID)
+	require.Equal(t, parent.ID, *created[0].ParentIssueID)
+	require.Equal(t, IssuePriorityP1, created[0].Priority)
+	require.Equal(t, IssueWorkStatusReadyForWork, created[0].WorkStatus)
+	require.Equal(t, "Sub-issue 2", created[1].Title)
+	require.NotNil(t, created[1].ParentIssueID)
+	require.Equal(t, parent.ID, *created[1].ParentIssueID)
+	require.Equal(t, IssuePriorityP2, created[1].Priority)
+	require.Equal(t, IssueWorkStatusQueued, created[1].WorkStatus)
+	require.Less(t, created[0].IssueNumber, created[1].IssueNumber)
+}
+
+func TestProjectIssueStore_CreateSubIssuesBatchRejectsInvalidItemWithoutPartialWrites(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-sub-batch-validate-org")
+	projectID := createTestProject(t, db, orgID, "Issue Sub Batch Validate Project")
+
+	issueStore := NewProjectIssueStore(db)
+	ctx := ctxWithWorkspace(orgID)
+	parent, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Parent issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	_, err = issueStore.CreateSubIssuesBatch(ctx, parent.ID, []CreateProjectSubIssueInput{
+		{Title: "Valid item"},
+		{Title: "   "},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "title")
+
+	parentFilter := parent.ID
+	children, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID:     projectID,
+		ParentIssueID: &parentFilter,
+	})
+	require.NoError(t, err)
+	require.Len(t, children, 0)
+}
+
 func TestProjectIssueStore_TransitionWorkStatusSupportsLifecyclePipeline(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
