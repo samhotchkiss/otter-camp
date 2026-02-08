@@ -10,15 +10,16 @@ import (
 type MessageType string
 
 const (
-	MessageTaskCreated       MessageType = "TaskCreated"
-	MessageTaskUpdated       MessageType = "TaskUpdated"
-	MessageTaskStatusChanged MessageType = "TaskStatusChanged"
-	MessageCommentAdded      MessageType = "CommentAdded"
-	MessageGitPush                    MessageType = "GitPush"
-	MessageIssueReviewAddressed       MessageType = "IssueReviewAddressed"
-	MessageIssueReviewSaved           MessageType = "IssueReviewSaved"
-	MessageIssueCommentCreated        MessageType = "IssueCommentCreated"
-	MessageProjectChatMessageCreated  MessageType = "ProjectChatMessageCreated"
+	MessageTaskCreated               MessageType = "TaskCreated"
+	MessageTaskUpdated               MessageType = "TaskUpdated"
+	MessageTaskStatusChanged         MessageType = "TaskStatusChanged"
+	MessageCommentAdded              MessageType = "CommentAdded"
+	MessageGitPush                   MessageType = "GitPush"
+	MessageIssueReviewAddressed      MessageType = "IssueReviewAddressed"
+	MessageIssueReviewSaved          MessageType = "IssueReviewSaved"
+	MessageIssueCommentCreated       MessageType = "IssueCommentCreated"
+	MessageProjectChatMessageCreated MessageType = "ProjectChatMessageCreated"
+	MessageEmissionReceived          MessageType = "EmissionReceived"
 )
 
 // BroadcastMessage packages a payload for an org-scoped broadcast.

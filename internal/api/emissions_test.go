@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,6 +21,22 @@ func newEmissionsTestRouter(handler *EmissionsHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Get("/api/emissions/recent", handler.Recent)
 	router.With(middleware.OptionalWorkspace).Post("/api/emissions", handler.Ingest)
 	return router
+}
+
+type fakeEmissionBroadcaster struct {
+	orgBroadcasts   []string
+	topicBroadcasts []string
+	payloads        [][]byte
+}
+
+func (f *fakeEmissionBroadcaster) Broadcast(orgID string, payload []byte) {
+	f.orgBroadcasts = append(f.orgBroadcasts, orgID)
+	f.payloads = append(f.payloads, payload)
+}
+
+func (f *fakeEmissionBroadcaster) BroadcastTopic(orgID string, topic string, payload []byte) {
+	f.topicBroadcasts = append(f.topicBroadcasts, orgID+":"+topic)
+	f.payloads = append(f.payloads, payload)
 }
 
 func TestEmissionBufferPushRecentAndFilters(t *testing.T) {
@@ -192,4 +209,48 @@ func TestEmissionHandlerIngestAndRecent(t *testing.T) {
 	missingWorkspaceRec := httptest.NewRecorder()
 	router.ServeHTTP(missingWorkspaceRec, missingWorkspaceReq)
 	require.Equal(t, http.StatusUnauthorized, missingWorkspaceRec.Code)
+}
+
+func TestEmissionWebsocketBroadcast(t *testing.T) {
+	buffer := NewEmissionBuffer(10)
+	broadcaster := &fakeEmissionBroadcaster{}
+	handler := &EmissionsHandler{
+		Buffer: buffer,
+		Hub:    broadcaster,
+	}
+	router := newEmissionsTestRouter(handler)
+
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	projectID := "project-live"
+	issueID := "issue-live"
+	now := time.Now().UTC().Format(time.RFC3339)
+	body := `{
+		"emissions":[
+			{
+				"id":"em-ws-1",
+				"source_type":"agent",
+				"source_id":"agent-1",
+				"kind":"status",
+				"summary":"Running tests",
+				"timestamp":"` + now + `",
+				"scope":{"project_id":"` + projectID + `","issue_id":"` + issueID + `"}
+			}
+		]
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/emissions?org_id="+orgID, bytes.NewReader([]byte(body)))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	require.Len(t, broadcaster.orgBroadcasts, 1)
+	require.Equal(t, orgID, broadcaster.orgBroadcasts[0])
+	require.Contains(t, broadcaster.topicBroadcasts, orgID+":project:"+projectID)
+	require.Contains(t, broadcaster.topicBroadcasts, orgID+":issue:"+issueID)
+
+	require.NotEmpty(t, broadcaster.payloads)
+	var event emissionReceivedEvent
+	require.NoError(t, json.Unmarshal(broadcaster.payloads[0], &event))
+	require.Equal(t, ws.MessageEmissionReceived, event.Type)
+	require.Equal(t, "em-ws-1", event.Emission.ID)
+	require.Equal(t, "agent-1", event.Emission.SourceID)
 }
