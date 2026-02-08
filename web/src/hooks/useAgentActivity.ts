@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useOptionalWS } from "../contexts/WebSocketContext";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
@@ -194,6 +195,51 @@ function parseAgentActivityResponse(raw: unknown): AgentActivityListResponse {
   };
 }
 
+export function parseRealtimeAgentActivityEvent(raw: unknown): AgentActivityEvent | null {
+  if (raw && typeof raw === "object") {
+    const record = raw as Record<string, unknown>;
+    const direct = parseAgentActivityEvent(record);
+    if (direct) {
+      return direct;
+    }
+    const nestedCandidate = record.event ?? record.activity ?? record.data;
+    const nested = parseAgentActivityEvent(nestedCandidate);
+    if (nested) {
+      return nested;
+    }
+  }
+  return parseAgentActivityEvent(raw);
+}
+
+export function matchesActivityFilters(
+  event: AgentActivityEvent,
+  options: {
+    mode: "recent" | "agent";
+    scopedAgentID?: string;
+    filters: AgentActivityFilters;
+  },
+): boolean {
+  if (options.mode === "agent" && options.scopedAgentID && event.agentId !== options.scopedAgentID) {
+    return false;
+  }
+  if (options.filters.agentId && event.agentId !== options.filters.agentId) {
+    return false;
+  }
+  if (options.filters.trigger && event.trigger !== options.filters.trigger) {
+    return false;
+  }
+  if (options.filters.channel && event.channel !== options.filters.channel) {
+    return false;
+  }
+  if (options.filters.status && event.status !== options.filters.status) {
+    return false;
+  }
+  if (options.filters.projectId && event.projectId !== options.filters.projectId) {
+    return false;
+  }
+  return true;
+}
+
 function resolveOrgId(explicitOrgId?: string): string {
   const fromArg = normalizeString(explicitOrgId);
   if (fromArg) {
@@ -263,6 +309,8 @@ export function useAgentActivity(options: UseAgentActivityOptions = {}): UseAgen
   const mode = options.mode ?? "recent";
   const limit = options.limit ?? DEFAULT_LIMIT;
   const resolvedOrgId = useMemo(() => resolveOrgId(options.orgId), [options.orgId]);
+  const ws = useOptionalWS();
+  const wsMessage = ws?.lastMessage ?? null;
 
   const [events, setEvents] = useState<AgentActivityEvent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -270,6 +318,7 @@ export function useAgentActivity(options: UseAgentActivityOptions = {}): UseAgen
   const [error, setError] = useState<string | null>(null);
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [filters, setFiltersState] = useState<AgentActivityFilters>(options.initialFilters ?? {});
+  const processedRealtimeIDsRef = useRef<Set<string>>(new Set());
 
   const hasMore = Boolean(nextBefore);
 
@@ -366,6 +415,43 @@ export function useAgentActivity(options: UseAgentActivityOptions = {}): UseAgen
   useEffect(() => {
     void fetchPage(undefined, false);
   }, [fetchPage]);
+
+  useEffect(() => {
+    if (!wsMessage || wsMessage.type !== "ActivityEventReceived") {
+      return;
+    }
+
+    const realtimeEvent = parseRealtimeAgentActivityEvent(wsMessage.data);
+    if (!realtimeEvent) {
+      return;
+    }
+    if (processedRealtimeIDsRef.current.has(realtimeEvent.id)) {
+      return;
+    }
+    processedRealtimeIDsRef.current.add(realtimeEvent.id);
+
+    const scopedAgentID = normalizeString(options.agentId);
+    if (
+      !matchesActivityFilters(realtimeEvent, {
+        mode,
+        scopedAgentID,
+        filters,
+      })
+    ) {
+      return;
+    }
+
+    setEvents((prev) => {
+      const byID = new Map<string, AgentActivityEvent>();
+      for (const event of prev) {
+        byID.set(event.id, event);
+      }
+      byID.set(realtimeEvent.id, realtimeEvent);
+      return Array.from(byID.values()).sort(
+        (a, b) => b.startedAt.getTime() - a.startedAt.getTime(),
+      );
+    });
+  }, [filters, mode, options.agentId, wsMessage]);
 
   return {
     events,

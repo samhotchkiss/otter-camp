@@ -17,6 +17,7 @@ import (
 
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 const (
@@ -38,6 +39,7 @@ var activityUUIDRegex = regexp.MustCompile(`^[a-fA-F0-9-]{36}$`)
 type AgentActivityHandler struct {
 	DB    *sql.DB
 	Store *store.AgentActivityEventStore
+	Hub   *ws.Hub
 }
 
 type ingestAgentActivityEventsRequest struct {
@@ -155,11 +157,62 @@ func (h *AgentActivityHandler) IngestEvents(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	h.broadcastRealtimeActivityEvents(req.OrgID, createInputs, time.Now().UTC())
+
 	sendJSON(w, http.StatusOK, ingestAgentActivityEventsResponse{
 		OK:       true,
 		Inserted: len(createInputs),
 		At:       time.Now().UTC(),
 	})
+}
+
+type activityEventBroadcastEnvelope struct {
+	Type string                 `json:"type"`
+	Data map[string]interface{} `json:"data"`
+}
+
+func (h *AgentActivityHandler) broadcastRealtimeActivityEvents(orgID string, events []store.CreateAgentActivityEventInput, createdAt time.Time) {
+	if h == nil || h.Hub == nil {
+		return
+	}
+
+	for _, event := range events {
+		payload := map[string]interface{}{
+			"id":           event.ID,
+			"org_id":       orgID,
+			"agent_id":     event.AgentID,
+			"session_key":  event.SessionKey,
+			"trigger":      event.Trigger,
+			"channel":      event.Channel,
+			"summary":      event.Summary,
+			"detail":       event.Detail,
+			"project_id":   event.ProjectID,
+			"issue_id":     event.IssueID,
+			"issue_number": event.IssueNumber,
+			"thread_id":    event.ThreadID,
+			"tokens_used":  event.TokensUsed,
+			"model_used":   event.ModelUsed,
+			"duration_ms":  event.DurationMs,
+			"status":       event.Status,
+			"started_at":   event.StartedAt.UTC(),
+			"created_at":   createdAt,
+		}
+		if event.CompletedAt != nil {
+			payload["completed_at"] = event.CompletedAt.UTC()
+		}
+
+		wire := activityEventBroadcastEnvelope{
+			Type: "ActivityEventReceived",
+			Data: map[string]interface{}{
+				"event": payload,
+			},
+		}
+		data, err := json.Marshal(wire)
+		if err != nil {
+			continue
+		}
+		h.Hub.Broadcast(orgID, data)
+	}
 }
 
 func normalizeActivityIngestRecord(event ingestAgentActivityRecord) (store.CreateAgentActivityEventInput, error) {

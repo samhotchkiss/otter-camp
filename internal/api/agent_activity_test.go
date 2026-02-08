@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,6 +82,87 @@ func TestActivityEventsIngestHandler(t *testing.T) {
 	).Scan(&trigger)
 	require.NoError(t, err)
 	require.Equal(t, "chat.slack", trigger)
+}
+
+func TestActivityEventWebsocketBroadcast(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "activity-ingest-ws-org")
+	otherOrgID := insertMessageTestOrganization(t, db, "activity-ingest-ws-other-org")
+
+	hub := ws.NewHub()
+	go hub.Run()
+
+	handler := &AgentActivityHandler{DB: db, Hub: hub}
+
+	client := ws.NewClient(hub, nil)
+	client.SetOrgID(orgID)
+	hub.Register(client)
+	t.Cleanup(func() { hub.Unregister(client) })
+
+	otherClient := ws.NewClient(hub, nil)
+	otherClient.SetOrgID(otherOrgID)
+	hub.Register(otherClient)
+	t.Cleanup(func() { hub.Unregister(otherClient) })
+
+	time.Sleep(25 * time.Millisecond)
+
+	startedAt := time.Date(2026, 2, 8, 17, 30, 0, 0, time.UTC)
+	body, err := json.Marshal(ingestAgentActivityEventsRequest{
+		OrgID: orgID,
+		Events: []ingestAgentActivityRecord{
+			{
+				ID:         "01HZZ000000000000000000799",
+				AgentID:    "main",
+				SessionKey: "agent:main:main",
+				Trigger:    "chat.slack",
+				Channel:    "slack",
+				Summary:    "Answered a Slack prompt",
+				TokensUsed: 120,
+				ModelUsed:  "opus-4-6",
+				DurationMs: 800,
+				Status:     "completed",
+				StartedAt:  startedAt,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/activity/events", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	rec := httptest.NewRecorder()
+
+	handler.IngestEvents(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	select {
+	case payload := <-client.Send:
+		var event struct {
+			Type string `json:"type"`
+			Data struct {
+				Event map[string]any `json:"event"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(payload, &event))
+		require.Equal(t, "ActivityEventReceived", event.Type)
+		require.Equal(t, "01HZZ000000000000000000799", event.Data.Event["id"])
+		require.Equal(t, orgID, event.Data.Event["org_id"])
+		require.Equal(t, "main", event.Data.Event["agent_id"])
+		require.Equal(t, "chat.slack", event.Data.Event["trigger"])
+		require.Equal(t, "Answered a Slack prompt", event.Data.Event["summary"])
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected websocket subscriber to receive activity broadcast")
+	}
+
+	select {
+	case payload := <-otherClient.Send:
+		t.Fatalf("did not expect cross-org websocket payload: %s", string(payload))
+	case <-time.After(120 * time.Millisecond):
+	}
 }
 
 func TestActivityEventsIngestHandlerValidation(t *testing.T) {

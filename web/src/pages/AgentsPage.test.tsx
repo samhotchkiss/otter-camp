@@ -27,6 +27,7 @@ vi.mock("../contexts/WebSocketContext", () => ({
     lastMessage: null,
     sendMessage: vi.fn(),
   }),
+  useOptionalWS: () => null,
 }));
 
 vi.mock("../contexts/GlobalChatContext", () => ({

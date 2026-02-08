@@ -1,5 +1,20 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+let wsLastMessage: { type: string; data: unknown } | null = null;
+
+vi.mock("../contexts/WebSocketContext", () => ({
+  useOptionalWS: () =>
+    wsLastMessage
+      ? {
+          connected: true,
+          lastMessage: wsLastMessage,
+          sendMessage: vi.fn(),
+          reconnectReason: "initial",
+        }
+      : null,
+}));
+
 import {
   buildAgentActivityURL,
   parseAgentActivityEvent,
@@ -65,6 +80,7 @@ describe("useAgentActivity", () => {
     localStorage.clear();
     localStorage.setItem("otter-camp-org-id", "org-123");
     vi.restoreAllMocks();
+    wsLastMessage = null;
   });
 
   it("fetches agent activity and applies filters + pagination", async () => {
@@ -184,5 +200,134 @@ describe("useAgentActivity", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.current.events).toEqual([]);
+  });
+
+  it("appends realtime activity websocket events and dedupes by id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [
+            {
+              id: "evt-1",
+              org_id: "org-123",
+              agent_id: "main",
+              session_key: "agent:main:main",
+              trigger: "chat.slack",
+              summary: "Initial event",
+              status: "completed",
+              tokens_used: 10,
+              duration_ms: 120,
+              started_at: "2026-02-08T20:00:00.000Z",
+              created_at: "2026-02-08T20:00:00.000Z",
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const { result, rerender } = renderHook(() => useAgentActivity({ mode: "recent" }));
+
+    await waitFor(() => {
+      expect(result.current.events).toHaveLength(1);
+    });
+
+    act(() => {
+      wsLastMessage = {
+        type: "ActivityEventReceived",
+        data: {
+          event: {
+            id: "evt-2",
+            org_id: "org-123",
+            agent_id: "main",
+            session_key: "agent:main:main",
+            trigger: "cron.scheduled",
+            summary: "Realtime event",
+            status: "completed",
+            tokens_used: 8,
+            duration_ms: 95,
+            started_at: "2026-02-08T20:01:00.000Z",
+            created_at: "2026-02-08T20:01:00.000Z",
+          },
+        },
+      };
+      rerender();
+    });
+
+    await waitFor(() => {
+      expect(result.current.events).toHaveLength(2);
+      expect(result.current.events[0]?.id).toBe("evt-2");
+    });
+
+    act(() => {
+      wsLastMessage = {
+        type: "ActivityEventReceived",
+        data: {
+          event: {
+            id: "evt-2",
+            org_id: "org-123",
+            agent_id: "main",
+            session_key: "agent:main:main",
+            trigger: "cron.scheduled",
+            summary: "Realtime duplicate",
+            status: "completed",
+            tokens_used: 8,
+            duration_ms: 95,
+            started_at: "2026-02-08T20:01:00.000Z",
+            created_at: "2026-02-08T20:01:00.000Z",
+          },
+        },
+      };
+      rerender();
+    });
+
+    await waitFor(() => {
+      expect(result.current.events).toHaveLength(2);
+    });
+  });
+
+  it("ignores realtime activity events that do not match active filters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const { result, rerender } = renderHook(() =>
+      useAgentActivity({ mode: "recent", initialFilters: { status: "failed" } }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.events).toEqual([]);
+    });
+
+    act(() => {
+      wsLastMessage = {
+        type: "ActivityEventReceived",
+        data: {
+          event: {
+            id: "evt-3",
+            org_id: "org-123",
+            agent_id: "main",
+            session_key: "agent:main:main",
+            trigger: "chat.slack",
+            summary: "Completed realtime event",
+            status: "completed",
+            tokens_used: 5,
+            duration_ms: 80,
+            started_at: "2026-02-08T20:02:00.000Z",
+            created_at: "2026-02-08T20:02:00.000Z",
+          },
+        },
+      };
+      rerender();
+    });
+
+    await waitFor(() => {
+      expect(result.current.events).toEqual([]);
+    });
   });
 });

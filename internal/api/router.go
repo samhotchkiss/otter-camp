@@ -85,7 +85,7 @@ func NewRouter() http.Handler {
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 	projectChatHandler := &ProjectChatHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
 	issuesHandler := &IssuesHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
-	agentActivityHandler := &AgentActivityHandler{DB: db}
+	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
 	projectCommitsHandler := &ProjectCommitsHandler{}
 	projectTreeHandler := &ProjectTreeHandler{}
 	knowledgeHandler := &KnowledgeHandler{}
