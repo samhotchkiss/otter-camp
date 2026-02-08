@@ -444,3 +444,13 @@
 - Remaining:
   - Spec102 complete (#270-#275 done)
   - Spec103 remains blocked by spec banner (NOT READY FOR WORK)
+
+## Batch 3 — Issues #3, #4, #5, #6 (Feb 8, 12:15 AM)
+
+Spawned 4 Codex agents:
+- `/private/tmp/otter-3-nav` → Issue #3: Nav Cleanup & Chat Fullscreen (branch: codex/3-nav)
+- `/private/tmp/otter-4-uploads` → Issue #4: File Uploads in Chat (branch: codex/4-uploads)
+- `/private/tmp/otter-5-ios` → Issue #5: iOS Toast Spam Fix (branch: codex/5-ios)
+- `/private/tmp/otter-6-cli` → Issue #6: CLI Install & Onboarding (branch: codex/6-cli)
+
+Previous batch (issues #7 subtasks) fully merged. Stale branch `codex/3-nav-cleanup` deleted (bad run — deleted issue specs).
