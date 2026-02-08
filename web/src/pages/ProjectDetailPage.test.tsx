@@ -37,9 +37,9 @@ function mockJSONResponse(body: unknown, ok = true): Response {
   } as Response;
 }
 
-function ProjectTaskRouteEcho() {
-  const { id, taskId } = useParams<{ id: string; taskId: string }>();
-  return <div data-testid="project-task-route">{id}:{taskId}</div>;
+function ProjectIssueRouteEcho() {
+  const { id, issueId } = useParams<{ id: string; issueId: string }>();
+  return <div data-testid="project-issue-route">{id}:{issueId}</div>;
 }
 
 describe("ProjectDetailPage files tab", () => {
@@ -412,7 +412,7 @@ describe("ProjectDetailPage files tab", () => {
     );
   });
 
-  it("navigates to project task detail when a board task card is clicked", async () => {
+  it("navigates to project issue detail when a board issue card is clicked", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -425,11 +425,12 @@ describe("ProjectDetailPage files tab", () => {
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
       .mockResolvedValueOnce(
         mockJSONResponse({
-          tasks: [
+          items: [
             {
               id: "550e8400-e29b-41d4-a716-446655440111",
+              issue_number: 40,
               title: "Fix task detail routing",
-              status: "queued",
+              work_status: "queued",
               priority: "P1",
             },
           ],
@@ -441,19 +442,19 @@ describe("ProjectDetailPage files tab", () => {
       <MemoryRouter initialEntries={["/projects/project-1"]}>
         <Routes>
           <Route path="/projects/:id" element={<ProjectDetailPage />} />
-          <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskRouteEcho />} />
+          <Route path="/projects/:id/issues/:issueId" element={<ProjectIssueRouteEcho />} />
         </Routes>
       </MemoryRouter>,
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
     await user.click(screen.getByText("Fix task detail routing"));
-    expect(await screen.findByTestId("project-task-route")).toHaveTextContent(
+    expect(await screen.findByTestId("project-issue-route")).toHaveTextContent(
       "project-1:550e8400-e29b-41d4-a716-446655440111",
     );
   });
 
-  it("navigates to project task detail when a list task row is clicked", async () => {
+  it("navigates to project issue detail when a list issue row is clicked", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -466,11 +467,12 @@ describe("ProjectDetailPage files tab", () => {
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
       .mockResolvedValueOnce(
         mockJSONResponse({
-          tasks: [
+          items: [
             {
               id: "550e8400-e29b-41d4-a716-446655440112",
+              issue_number: 41,
               title: "Verify list row click route",
-              status: "in_progress",
+              work_status: "in_progress",
               priority: "P2",
             },
           ],
@@ -482,15 +484,15 @@ describe("ProjectDetailPage files tab", () => {
       <MemoryRouter initialEntries={["/projects/project-1"]}>
         <Routes>
           <Route path="/projects/:id" element={<ProjectDetailPage />} />
-          <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskRouteEcho />} />
+          <Route path="/projects/:id/issues/:issueId" element={<ProjectIssueRouteEcho />} />
         </Routes>
       </MemoryRouter>,
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "List" }));
-    await user.click(screen.getByText("Verify list row click route"));
-    expect(await screen.findByTestId("project-task-route")).toHaveTextContent(
+    await user.click(screen.getByText(/Verify list row click route/i));
+    expect(await screen.findByTestId("project-issue-route")).toHaveTextContent(
       "project-1:550e8400-e29b-41d4-a716-446655440112",
     );
   });

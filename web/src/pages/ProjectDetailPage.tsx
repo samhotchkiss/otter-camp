@@ -600,10 +600,9 @@ export default function ProjectDetailPage() {
 
   const handleTaskClick = (task: Task) => {
     if (!id) {
-      navigate(`/tasks/${task.id}`);
       return;
     }
-    navigate(`/projects/${id}/tasks/${task.id}`);
+    navigate(`/projects/${id}/issues/${task.id}`);
   };
 
   const primaryAgentName =
