@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -266,6 +268,20 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create project"})
 		return
+	}
+
+	// Auto-provision a git repo for the new project
+	if initErr := h.Store.InitProjectRepo(ctx, project.ID); initErr != nil {
+		log.Printf("[projects] auto-init repo failed for %s (%s): %v", project.Name, project.ID, initErr)
+	} else if project.RepoURL == nil || strings.TrimSpace(*project.RepoURL) == "" {
+		// Set repo_url to the built-in git server
+		gitURL := fmt.Sprintf("https://api.otter.camp/git/%s/%s.git", workspaceID, project.ID)
+		if _, updateErr := h.DB.ExecContext(ctx, `UPDATE projects SET repo_url = $1 WHERE id = $2 AND org_id = $3`,
+			gitURL, project.ID, workspaceID); updateErr != nil {
+			log.Printf("[projects] auto-set repo_url failed for %s: %v", project.ID, updateErr)
+		} else {
+			project.RepoURL = &gitURL
+		}
 	}
 
 	sendJSON(w, http.StatusCreated, project)
