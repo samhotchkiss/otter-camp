@@ -210,6 +210,157 @@ func TestAgentActivityEventStoreCreateNoWorkspace(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNoWorkspace)
 }
 
+func TestAgentActivityEventStoreBatchCreate(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "agent-activity-batch-create")
+	ctx := ctxWithWorkspace(orgID)
+
+	store := NewAgentActivityEventStore(db)
+	base := time.Date(2026, 2, 8, 9, 0, 0, 0, time.UTC)
+
+	err := store.CreateEvents(ctx, []CreateAgentActivityEventInput{
+		{
+			ID:        "01HZZ000000000000000000301",
+			AgentID:   "main",
+			Trigger:   "chat.slack",
+			Summary:   "Batch event 1",
+			Status:    "completed",
+			StartedAt: base.Add(1 * time.Minute),
+		},
+		{
+			ID:        "01HZZ000000000000000000302",
+			AgentID:   "nova",
+			Trigger:   "cron.scheduled",
+			Summary:   "Batch event 2",
+			Status:    "completed",
+			StartedAt: base.Add(2 * time.Minute),
+		},
+	})
+	require.NoError(t, err)
+
+	recent, err := store.ListRecent(ctx, ListAgentActivityOptions{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, recent, 2)
+	assert.Equal(t, "01HZZ000000000000000000302", recent[0].ID)
+	assert.Equal(t, "01HZZ000000000000000000301", recent[1].ID)
+}
+
+func TestAgentActivityEventStoreLatestByAgent(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "agent-activity-latest")
+	ctx := ctxWithWorkspace(orgID)
+
+	store := NewAgentActivityEventStore(db)
+	base := time.Date(2026, 2, 8, 9, 0, 0, 0, time.UTC)
+
+	_, err := store.Create(ctx, CreateAgentActivityEventInput{
+		ID:        "01HZZ000000000000000000401",
+		AgentID:   "main",
+		Trigger:   "chat.slack",
+		Summary:   "Main old",
+		Status:    "completed",
+		StartedAt: base.Add(1 * time.Minute),
+	})
+	require.NoError(t, err)
+	_, err = store.Create(ctx, CreateAgentActivityEventInput{
+		ID:        "01HZZ000000000000000000402",
+		AgentID:   "main",
+		Trigger:   "chat.slack",
+		Summary:   "Main new",
+		Status:    "completed",
+		StartedAt: base.Add(3 * time.Minute),
+	})
+	require.NoError(t, err)
+	_, err = store.Create(ctx, CreateAgentActivityEventInput{
+		ID:        "01HZZ000000000000000000403",
+		AgentID:   "nova",
+		Trigger:   "cron.scheduled",
+		Summary:   "Nova latest",
+		Status:    "completed",
+		StartedAt: base.Add(2 * time.Minute),
+	})
+	require.NoError(t, err)
+
+	latest, err := store.LatestByAgent(ctx)
+	require.NoError(t, err)
+	require.Len(t, latest, 2)
+	assert.Equal(t, "01HZZ000000000000000000402", latest["main"].ID)
+	assert.Equal(t, "01HZZ000000000000000000403", latest["nova"].ID)
+}
+
+func TestAgentActivityEventStoreCountByAgentSince(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "agent-activity-count")
+	ctx := ctxWithWorkspace(orgID)
+
+	store := NewAgentActivityEventStore(db)
+	base := time.Date(2026, 2, 8, 9, 0, 0, 0, time.UTC)
+
+	_, err := store.Create(ctx, CreateAgentActivityEventInput{
+		ID:        "01HZZ000000000000000000501",
+		AgentID:   "main",
+		Trigger:   "chat.slack",
+		Summary:   "Older event",
+		Status:    "completed",
+		StartedAt: base.Add(1 * time.Minute),
+	})
+	require.NoError(t, err)
+	_, err = store.Create(ctx, CreateAgentActivityEventInput{
+		ID:        "01HZZ000000000000000000502",
+		AgentID:   "main",
+		Trigger:   "chat.slack",
+		Summary:   "Recent event",
+		Status:    "completed",
+		StartedAt: base.Add(5 * time.Minute),
+	})
+	require.NoError(t, err)
+
+	count, err := store.CountByAgentSince(ctx, "main", base.Add(2*time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestAgentActivityEventStoreCleanupOlderThan(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "agent-activity-cleanup")
+	ctx := ctxWithWorkspace(orgID)
+
+	store := NewAgentActivityEventStore(db)
+	base := time.Date(2026, 2, 8, 9, 0, 0, 0, time.UTC)
+
+	_, err := store.Create(ctx, CreateAgentActivityEventInput{
+		ID:        "01HZZ000000000000000000601",
+		AgentID:   "main",
+		Trigger:   "chat.slack",
+		Summary:   "Old event",
+		Status:    "completed",
+		StartedAt: base.Add(1 * time.Minute),
+	})
+	require.NoError(t, err)
+	_, err = store.Create(ctx, CreateAgentActivityEventInput{
+		ID:        "01HZZ000000000000000000602",
+		AgentID:   "main",
+		Trigger:   "chat.slack",
+		Summary:   "New event",
+		Status:    "completed",
+		StartedAt: base.Add(10 * time.Minute),
+	})
+	require.NoError(t, err)
+
+	deleted, err := store.CleanupOlderThan(ctx, base.Add(5*time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+
+	remaining, err := store.ListRecent(ctx, ListAgentActivityOptions{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, "01HZZ000000000000000000602", remaining[0].ID)
+}
+
 func createAgentActivityProject(t *testing.T, db *sql.DB, orgID, name string) string {
 	t.Helper()
 	var id string

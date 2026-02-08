@@ -236,6 +236,177 @@ func (s *AgentActivityEventStore) ListRecent(ctx context.Context, opts ListAgent
 	return events, nil
 }
 
+// CreateEvents inserts multiple activity events in one transaction.
+func (s *AgentActivityEventStore) CreateEvents(ctx context.Context, inputs []CreateAgentActivityEventInput) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return ErrNoWorkspace
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	query := `INSERT INTO agent_activity_events (
+		id,
+		org_id,
+		agent_id,
+		session_key,
+		trigger,
+		channel,
+		summary,
+		detail,
+		project_id,
+		issue_id,
+		issue_number,
+		thread_id,
+		tokens_used,
+		model_used,
+		duration_ms,
+		status,
+		started_at,
+		completed_at
+	) VALUES (
+		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+	)`
+
+	for _, input := range inputs {
+		_, execErr := tx.ExecContext(
+			ctx,
+			query,
+			strings.TrimSpace(input.ID),
+			workspaceID,
+			strings.TrimSpace(input.AgentID),
+			nullIfEmpty(input.SessionKey),
+			strings.TrimSpace(input.Trigger),
+			nullIfEmpty(input.Channel),
+			strings.TrimSpace(input.Summary),
+			nullIfEmpty(input.Detail),
+			nullIfEmpty(input.ProjectID),
+			nullIfEmpty(input.IssueID),
+			nullableInt(input.IssueNumber),
+			nullIfEmpty(input.ThreadID),
+			input.TokensUsed,
+			nullIfEmpty(input.ModelUsed),
+			input.DurationMs,
+			nonEmptyOrDefault(input.Status, "completed"),
+			input.StartedAt.UTC(),
+			input.CompletedAt,
+		)
+		if execErr != nil {
+			return fmt.Errorf("failed to batch create agent activity events: %w", execErr)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit activity event batch: %w", err)
+	}
+	return nil
+}
+
+// LatestByAgent returns the newest event for each agent in the current workspace.
+func (s *AgentActivityEventStore) LatestByAgent(ctx context.Context) (map[string]AgentActivityEvent, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return nil, ErrNoWorkspace
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	query := `SELECT DISTINCT ON (agent_id) ` + agentActivityEventSelectColumns + `
+		FROM agent_activity_events
+		WHERE org_id = $1
+		ORDER BY agent_id, started_at DESC, id DESC`
+
+	rows, err := conn.QueryContext(ctx, query, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list latest activity by agent: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]AgentActivityEvent)
+	for rows.Next() {
+		event, scanErr := scanAgentActivityEvent(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("failed to scan latest activity event: %w", scanErr)
+		}
+		out[event.AgentID] = event
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading latest activity events: %w", err)
+	}
+	return out, nil
+}
+
+// CountByAgentSince returns event count for one agent since a cutoff timestamp.
+func (s *AgentActivityEventStore) CountByAgentSince(ctx context.Context, agentID string, since time.Time) (int, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return 0, ErrNoWorkspace
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	var count int
+	err = conn.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*)
+			FROM agent_activity_events
+			WHERE org_id = $1 AND agent_id = $2 AND started_at >= $3`,
+		workspaceID,
+		strings.TrimSpace(agentID),
+		since.UTC(),
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count agent activity events: %w", err)
+	}
+	return count, nil
+}
+
+// CleanupOlderThan deletes rows before the provided timestamp in current workspace scope.
+func (s *AgentActivityEventStore) CleanupOlderThan(ctx context.Context, olderThan time.Time) (int64, error) {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return 0, ErrNoWorkspace
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	result, err := conn.ExecContext(
+		ctx,
+		`DELETE FROM agent_activity_events
+			WHERE org_id = $1 AND started_at < $2`,
+		workspaceID,
+		olderThan.UTC(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup old agent activity events: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read cleanup row count: %w", err)
+	}
+	return rows, nil
+}
+
 func buildAgentActivityListQuery(workspaceID, agentID string, opts ListAgentActivityOptions, allowAgentFilter bool) (string, []interface{}) {
 	conditions := []string{"org_id = $1"}
 	args := []interface{}{workspaceID}
