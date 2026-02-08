@@ -32,6 +32,7 @@ type FeedItem struct {
 	OrgID     string          `json:"org_id"`
 	TaskID    *string         `json:"task_id,omitempty"`
 	AgentID   *string         `json:"agent_id,omitempty"`
+	AgentName *string         `json:"agent_name,omitempty"`
 	Type      string          `json:"type"`
 	Metadata  json.RawMessage `json:"metadata"`
 	CreatedAt time.Time       `json:"created_at"`
@@ -157,23 +158,23 @@ func getFeedDB() (*sql.DB, error) {
 
 func buildFeedQuery(orgID, action string, limit, offset int) (string, []interface{}) {
 	conditions := []string{
-		"org_id = $1",
-		"action NOT LIKE 'project_chat.%'",
+		"al.org_id = $1",
+		"al.action NOT LIKE 'project_chat.%'",
 	}
 	args := []interface{}{orgID}
 
 	if action != "" {
 		args = append(args, action)
-		conditions = append(conditions, fmt.Sprintf("action = $%d", len(args)))
+		conditions = append(conditions, fmt.Sprintf("al.action = $%d", len(args)))
 	}
 
 	limitPos := len(args) + 1
 	offsetPos := len(args) + 2
 	args = append(args, limit, offset)
 
-	query := "SELECT id, org_id, task_id, agent_id, action, metadata, created_at FROM activity_log WHERE " +
+	query := "SELECT al.id, al.org_id, al.task_id, al.agent_id, a.display_name, al.action, al.metadata, al.created_at FROM activity_log al LEFT JOIN agents a ON al.agent_id = a.id WHERE " +
 		strings.Join(conditions, " AND ") +
-		fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", limitPos, offsetPos)
+		fmt.Sprintf(" ORDER BY al.created_at DESC LIMIT $%d OFFSET $%d", limitPos, offsetPos)
 
 	return query, args
 }
@@ -182,6 +183,7 @@ func scanFeedItem(scanner interface{ Scan(...any) error }) (FeedItem, error) {
 	var item FeedItem
 	var taskID sql.NullString
 	var agentID sql.NullString
+	var agentName sql.NullString
 	var metadataBytes []byte
 
 	err := scanner.Scan(
@@ -189,6 +191,7 @@ func scanFeedItem(scanner interface{ Scan(...any) error }) (FeedItem, error) {
 		&item.OrgID,
 		&taskID,
 		&agentID,
+		&agentName,
 		&item.Type,
 		&metadataBytes,
 		&item.CreatedAt,
@@ -202,6 +205,9 @@ func scanFeedItem(scanner interface{ Scan(...any) error }) (FeedItem, error) {
 	}
 	if agentID.Valid {
 		item.AgentID = &agentID.String
+	}
+	if agentName.Valid {
+		item.AgentName = &agentName.String
 	}
 	if len(metadataBytes) == 0 {
 		item.Metadata = json.RawMessage("{}")
