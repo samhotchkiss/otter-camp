@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -315,4 +316,136 @@ func TestAdminConnectionsGetLogsRejectsInvalidLimit(t *testing.T) {
 	var payload errorResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.Equal(t, "limit must be a positive integer", payload.Error)
+}
+
+func TestAdminConnectionsGetCronJobsReturnsMetadata(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-cron-list-org")
+
+	_, err := db.Exec(
+		`INSERT INTO sync_metadata (key, value, updated_at)
+		 VALUES
+		   ('openclaw_cron_jobs', $1, NOW())
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+		`[
+			{"id":"job-2","name":"Nightly Sync","schedule":"0 3 * * *","enabled":false},
+			{"id":"job-1","name":"Hourly Heartbeat","schedule":"0 * * * *","enabled":true}
+		]`,
+	)
+	require.NoError(t, err)
+
+	handler := &AdminConnectionsHandler{DB: db}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/cron/jobs", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.GetCronJobs(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminCronJobsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Len(t, payload.Items, 2)
+	require.Equal(t, 2, payload.Total)
+	require.Equal(t, "job-1", payload.Items[0].ID)
+	require.Equal(t, "Hourly Heartbeat", payload.Items[0].Name)
+}
+
+func TestAdminConnectionsRunCronJobDispatchesCommand(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-cron-run-org")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+	handler := &AdminConnectionsHandler{
+		DB:              db,
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/cron/jobs/job-1/run", nil)
+	req = addRouteParam(req, "id", "job-1")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.RunCronJob(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, dispatcher.calls, 1)
+	dispatched, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
+	require.True(t, ok)
+	require.Equal(t, adminCommandActionCronRun, dispatched.Data.Action)
+	require.Equal(t, "job-1", dispatched.Data.JobID)
+}
+
+func TestAdminConnectionsToggleCronJobQueuesWhenBridgeOffline(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-cron-toggle-org")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: false}
+	handler := &AdminConnectionsHandler{
+		DB:              db,
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/cron/jobs/job-1", strings.NewReader(`{"enabled":false}`))
+	req = addRouteParam(req, "id", "job-1")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.ToggleCronJob(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	var payload adminCommandDispatchResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.True(t, payload.Queued)
+	require.Equal(t, adminCommandActionCronDisable, payload.Action)
+}
+
+func TestAdminConnectionsGetProcessesReturnsMetadata(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-process-list-org")
+
+	_, err := db.Exec(
+		`INSERT INTO sync_metadata (key, value, updated_at)
+		 VALUES
+		   ('openclaw_processes', $1, NOW())
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+		`[
+			{"id":"proc-2","status":"sleeping","pid":9002},
+			{"id":"proc-1","status":"running","pid":9001}
+		]`,
+	)
+	require.NoError(t, err)
+
+	handler := &AdminConnectionsHandler{DB: db}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/processes", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.GetProcesses(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminProcessesResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Len(t, payload.Items, 2)
+	require.Equal(t, "proc-1", payload.Items[0].ID)
+	require.Equal(t, 9001, payload.Items[0].PID)
+}
+
+func TestAdminConnectionsKillProcessDispatchesCommand(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-process-kill-org")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+	handler := &AdminConnectionsHandler{
+		DB:              db,
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/processes/proc-1/kill", nil)
+	req = addRouteParam(req, "id", "proc-1")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.KillProcess(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, dispatcher.calls, 1)
+	dispatched, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
+	require.True(t, ok)
+	require.Equal(t, adminCommandActionProcessKill, dispatched.Data.Action)
+	require.Equal(t, "proc-1", dispatched.Data.ProcessID)
 }

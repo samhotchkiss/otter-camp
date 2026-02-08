@@ -88,6 +88,20 @@ type adminLogsResponse struct {
 	Total int            `json:"total"`
 }
 
+type adminCronJobsResponse struct {
+	Items []OpenClawCronJobDiagnostics `json:"items"`
+	Total int                          `json:"total"`
+}
+
+type adminProcessesResponse struct {
+	Items []OpenClawProcessDiagnostics `json:"items"`
+	Total int                          `json:"total"`
+}
+
+type adminToggleCronJobRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 type adminLogItem struct {
 	ID        string          `json:"id"`
 	Timestamp time.Time       `json:"timestamp"`
@@ -109,6 +123,16 @@ type openClawAdminCommandData struct {
 	Action     string `json:"action"`
 	AgentID    string `json:"agent_id,omitempty"`
 	SessionKey string `json:"session_key,omitempty"`
+	JobID      string `json:"job_id,omitempty"`
+	ProcessID  string `json:"process_id,omitempty"`
+	Enabled    *bool  `json:"enabled,omitempty"`
+}
+
+type adminCommandDispatchInput struct {
+	AgentID   string
+	JobID     string
+	ProcessID string
+	Enabled   *bool
 }
 
 type adminCommandDispatchResponse struct {
@@ -123,6 +147,10 @@ const (
 	adminCommandActionGatewayRestart = "gateway.restart"
 	adminCommandActionAgentPing      = "agent.ping"
 	adminCommandActionAgentReset     = "agent.reset"
+	adminCommandActionCronRun        = "cron.run"
+	adminCommandActionCronEnable     = "cron.enable"
+	adminCommandActionCronDisable    = "cron.disable"
+	adminCommandActionProcessKill    = "process.kill"
 )
 
 var sensitiveTokenPattern = regexp.MustCompile(`(?i)(oc_git_[a-z0-9]+|bearer\s+[a-z0-9._-]+)`)
@@ -289,6 +317,72 @@ func (h *AdminConnectionsHandler) loadBridgeDiagnostics(_ context.Context) *Open
 	return &bridge
 }
 
+func (h *AdminConnectionsHandler) loadCronJobs(_ context.Context) []OpenClawCronJobDiagnostics {
+	var value string
+	if h.DB != nil {
+		if err := h.DB.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'openclaw_cron_jobs'`).Scan(&value); err == nil && value != "" {
+			var payload []OpenClawCronJobDiagnostics
+			if unmarshalErr := json.Unmarshal([]byte(value), &payload); unmarshalErr == nil {
+				sort.Slice(payload, func(i, j int) bool {
+					left := strings.TrimSpace(payload[i].Name)
+					if left == "" {
+						left = strings.TrimSpace(payload[i].ID)
+					}
+					right := strings.TrimSpace(payload[j].Name)
+					if right == "" {
+						right = strings.TrimSpace(payload[j].ID)
+					}
+					return left < right
+				})
+				return payload
+			}
+		}
+	}
+	if len(memoryCronJobs) == 0 {
+		return []OpenClawCronJobDiagnostics{}
+	}
+	out := append([]OpenClawCronJobDiagnostics(nil), memoryCronJobs...)
+	sort.Slice(out, func(i, j int) bool {
+		left := strings.TrimSpace(out[i].Name)
+		if left == "" {
+			left = strings.TrimSpace(out[i].ID)
+		}
+		right := strings.TrimSpace(out[j].Name)
+		if right == "" {
+			right = strings.TrimSpace(out[j].ID)
+		}
+		return left < right
+	})
+	return out
+}
+
+func (h *AdminConnectionsHandler) loadProcesses(_ context.Context) []OpenClawProcessDiagnostics {
+	var value string
+	if h.DB != nil {
+		if err := h.DB.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'openclaw_processes'`).Scan(&value); err == nil && value != "" {
+			var payload []OpenClawProcessDiagnostics
+			if unmarshalErr := json.Unmarshal([]byte(value), &payload); unmarshalErr == nil {
+				sort.Slice(payload, func(i, j int) bool {
+					left := strings.TrimSpace(payload[i].ID)
+					right := strings.TrimSpace(payload[j].ID)
+					return left < right
+				})
+				return payload
+			}
+		}
+	}
+	if len(memoryProcesses) == 0 {
+		return []OpenClawProcessDiagnostics{}
+	}
+	out := append([]OpenClawProcessDiagnostics(nil), memoryProcesses...)
+	sort.Slice(out, func(i, j int) bool {
+		left := strings.TrimSpace(out[i].ID)
+		right := strings.TrimSpace(out[j].ID)
+		return left < right
+	})
+	return out
+}
+
 func summarizeSessions(sessions []adminConnectionsSession) adminConnectionsSessionSummary {
 	summary := adminConnectionsSessionSummary{
 		Total: len(sessions),
@@ -320,7 +414,7 @@ func isSessionStalled(contextTokens int, updatedAt time.Time) bool {
 }
 
 func (h *AdminConnectionsHandler) RestartGateway(w http.ResponseWriter, r *http.Request) {
-	h.dispatchAdminCommand(w, r, adminCommandActionGatewayRestart, "")
+	h.dispatchAdminCommand(w, r, adminCommandActionGatewayRestart, adminCommandDispatchInput{})
 }
 
 func (h *AdminConnectionsHandler) PingAgent(w http.ResponseWriter, r *http.Request) {
@@ -329,7 +423,7 @@ func (h *AdminConnectionsHandler) PingAgent(w http.ResponseWriter, r *http.Reque
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id is required"})
 		return
 	}
-	h.dispatchAdminCommand(w, r, adminCommandActionAgentPing, agentID)
+	h.dispatchAdminCommand(w, r, adminCommandActionAgentPing, adminCommandDispatchInput{AgentID: agentID})
 }
 
 func (h *AdminConnectionsHandler) ResetAgent(w http.ResponseWriter, r *http.Request) {
@@ -338,14 +432,79 @@ func (h *AdminConnectionsHandler) ResetAgent(w http.ResponseWriter, r *http.Requ
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id is required"})
 		return
 	}
-	h.dispatchAdminCommand(w, r, adminCommandActionAgentReset, agentID)
+	h.dispatchAdminCommand(w, r, adminCommandActionAgentReset, adminCommandDispatchInput{AgentID: agentID})
+}
+
+func (h *AdminConnectionsHandler) GetCronJobs(w http.ResponseWriter, r *http.Request) {
+	items := h.loadCronJobs(r.Context())
+	sendJSON(w, http.StatusOK, adminCronJobsResponse{
+		Items: items,
+		Total: len(items),
+	})
+}
+
+func (h *AdminConnectionsHandler) RunCronJob(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if jobID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "cron job id is required"})
+		return
+	}
+	h.dispatchAdminCommand(w, r, adminCommandActionCronRun, adminCommandDispatchInput{JobID: jobID})
+}
+
+func (h *AdminConnectionsHandler) ToggleCronJob(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if jobID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "cron job id is required"})
+		return
+	}
+
+	var req adminToggleCronJobRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	if req.Enabled == nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "enabled is required"})
+		return
+	}
+
+	action := adminCommandActionCronDisable
+	if *req.Enabled {
+		action = adminCommandActionCronEnable
+	}
+	h.dispatchAdminCommand(w, r, action, adminCommandDispatchInput{
+		JobID:   jobID,
+		Enabled: req.Enabled,
+	})
+}
+
+func (h *AdminConnectionsHandler) GetProcesses(w http.ResponseWriter, r *http.Request) {
+	items := h.loadProcesses(r.Context())
+	sendJSON(w, http.StatusOK, adminProcessesResponse{
+		Items: items,
+		Total: len(items),
+	})
+}
+
+func (h *AdminConnectionsHandler) KillProcess(w http.ResponseWriter, r *http.Request) {
+	processID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if processID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "process id is required"})
+		return
+	}
+	h.dispatchAdminCommand(w, r, adminCommandActionProcessKill, adminCommandDispatchInput{
+		ProcessID: processID,
+	})
 }
 
 func (h *AdminConnectionsHandler) dispatchAdminCommand(
 	w http.ResponseWriter,
 	r *http.Request,
 	action string,
-	agentID string,
+	input adminCommandDispatchInput,
 ) {
 	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
 	if workspaceID == "" {
@@ -361,11 +520,30 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 		Data: openClawAdminCommandData{
 			CommandID: commandID,
 			Action:    action,
-			AgentID:   strings.TrimSpace(agentID),
+			AgentID:   strings.TrimSpace(input.AgentID),
+			JobID:     strings.TrimSpace(input.JobID),
+			ProcessID: strings.TrimSpace(input.ProcessID),
+			Enabled:   input.Enabled,
 		},
 	}
 	if event.Data.AgentID != "" {
 		event.Data.SessionKey = fmt.Sprintf("agent:%s:main", event.Data.AgentID)
+	}
+	metadata := map[string]interface{}{
+		"command_id": commandID,
+		"action":     action,
+	}
+	if event.Data.AgentID != "" {
+		metadata["agent_id"] = event.Data.AgentID
+	}
+	if event.Data.JobID != "" {
+		metadata["job_id"] = event.Data.JobID
+	}
+	if event.Data.ProcessID != "" {
+		metadata["process_id"] = event.Data.ProcessID
+	}
+	if event.Data.Enabled != nil {
+		metadata["enabled"] = *event.Data.Enabled
 	}
 
 	dedupeKey := fmt.Sprintf("admin.command:%s", commandID)
@@ -383,7 +561,7 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 				EventType: "admin.command.queued",
 				Severity:  store.ConnectionEventSeverityWarning,
 				Message:   fmt.Sprintf("%s queued while bridge was unavailable", action),
-				Metadata:  mustMarshalJSON(map[string]string{"command_id": commandID, "action": action, "agent_id": agentID}),
+				Metadata:  mustMarshalJSON(metadata),
 			})
 			sendJSON(w, http.StatusAccepted, adminCommandDispatchResponse{
 				OK:        true,
@@ -400,16 +578,12 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 
 	if err := h.OpenClawHandler.SendToOpenClaw(event); err != nil {
 		if queuedForRetry {
+			metadata["error"] = err.Error()
 			h.logConnectionEventBestEffort(r.Context(), workspaceID, store.CreateConnectionEventInput{
 				EventType: "admin.command.queued",
 				Severity:  store.ConnectionEventSeverityWarning,
 				Message:   fmt.Sprintf("%s queued after bridge delivery failure", action),
-				Metadata: mustMarshalJSON(map[string]string{
-					"command_id": commandID,
-					"action":     action,
-					"agent_id":   agentID,
-					"error":      err.Error(),
-				}),
+				Metadata:  mustMarshalJSON(metadata),
 			})
 			sendJSON(w, http.StatusAccepted, adminCommandDispatchResponse{
 				OK:        true,
@@ -435,11 +609,7 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 		EventType: "admin.command.dispatched",
 		Severity:  store.ConnectionEventSeverityInfo,
 		Message:   fmt.Sprintf("%s dispatched to bridge", action),
-		Metadata: mustMarshalJSON(map[string]string{
-			"command_id": commandID,
-			"action":     action,
-			"agent_id":   agentID,
-		}),
+		Metadata:  mustMarshalJSON(metadata),
 	})
 
 	sendJSON(w, http.StatusOK, adminCommandDispatchResponse{

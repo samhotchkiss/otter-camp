@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ConnectionsPage from "./ConnectionsPage";
 
@@ -15,11 +15,15 @@ describe("ConnectionsPage", () => {
     localStorage.setItem("otter-camp-org-id", "00000000-0000-0000-0000-000000000001");
     localStorage.setItem("otter_camp_token", "token");
     vi.restoreAllMocks();
+    vi.stubGlobal("confirm", vi.fn(() => true));
   });
 
   it("loads and renders bridge/session diagnostics from API", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    let cronEnabled = true;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      const requestMethod = input instanceof Request ? input.method : undefined;
+      const method = (init?.method || requestMethod || "GET").toUpperCase();
       if (url.includes("/api/admin/connections")) {
         return mockJSONResponse({
           bridge: {
@@ -79,6 +83,45 @@ describe("ConnectionsPage", () => {
           generated_at: "2026-02-07T16:00:30Z",
         });
       }
+      if (url.includes("/api/admin/cron/jobs/job-1/run")) {
+        return mockJSONResponse({ ok: true, action: "cron.run" });
+      }
+      if (url.includes("/api/admin/cron/jobs/job-1") && method === "PATCH") {
+        cronEnabled = false;
+        return mockJSONResponse({ ok: true, action: "cron.disable" });
+      }
+      if (url.includes("/api/admin/cron/jobs")) {
+        return mockJSONResponse({
+          items: [
+            {
+              id: "job-1",
+              name: "Hourly Heartbeat",
+              schedule: "0 * * * *",
+              enabled: cronEnabled,
+              last_status: "success",
+              last_run_at: "2026-02-07T15:59:00Z",
+            },
+          ],
+          total: 1,
+        });
+      }
+      if (url.includes("/api/admin/processes/proc-1/kill")) {
+        return mockJSONResponse({ ok: true, action: "process.kill" });
+      }
+      if (url.includes("/api/admin/processes")) {
+        return mockJSONResponse({
+          items: [
+            {
+              id: "proc-1",
+              command: "openclaw run --session agent:main:main",
+              status: "running",
+              duration_seconds: 12,
+              agent_id: "main",
+            },
+          ],
+          total: 1,
+        });
+      }
       throw new Error(`unexpected url ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -91,9 +134,39 @@ describe("ConnectionsPage", () => {
     expect(screen.getByText("Dead letters: 2")).toBeInTheDocument();
     expect(screen.getByText("Frank")).toBeInTheDocument();
     expect(screen.getByText("sync push failed: 502 [REDACTED]")).toBeInTheDocument();
+    expect(screen.getByText("Hourly Heartbeat")).toBeInTheDocument();
+    expect(screen.getByText("proc-1")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    const runButtonsBeforeActions = screen.getAllByRole("button", { name: "Run" });
+    fireEvent.click(runButtonsBeforeActions[0]);
     expect(await screen.findByText("bridge.connection")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    await waitFor(() => {
+      const hasCronToggleCall = fetchMock.mock.calls.some(([input, requestInit]) => {
+        const url = String(input);
+        return url.includes("/api/admin/cron/jobs/job-1") && !url.includes("/run") && String(requestInit?.method).toUpperCase() === "PATCH";
+      });
+      expect(hasCronToggleCall).toBe(true);
+    });
+
+    const runButtonsAfterToggle = screen.getAllByRole("button", { name: "Run" });
+    fireEvent.click(runButtonsAfterToggle[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Kill" }));
+
+    await waitFor(() => {
+      const hasCronRunCall = fetchMock.mock.calls.some(([input, requestInit]) => {
+        return String(input).includes("/api/admin/cron/jobs/job-1/run") && String(requestInit?.method).toUpperCase() === "POST";
+      });
+      expect(hasCronRunCall).toBe(true);
+    });
+
+    await waitFor(() => {
+      const hasKillCall = fetchMock.mock.calls.some(([input, requestInit]) => {
+        return String(input).includes("/api/admin/processes/proc-1/kill") && String(requestInit?.method).toUpperCase() === "POST";
+      });
+      expect(hasKillCall).toBe(true);
+    });
   });
 
   it("shows error state and retries successfully", async () => {
@@ -123,6 +196,12 @@ describe("ConnectionsPage", () => {
       }
       if (url.includes("/api/admin/diagnostics")) {
         return mockJSONResponse({ checks: [], generated_at: "2026-02-07T16:10:10Z" });
+      }
+      if (url.includes("/api/admin/cron/jobs")) {
+        return mockJSONResponse({ items: [], total: 0 });
+      }
+      if (url.includes("/api/admin/processes")) {
+        return mockJSONResponse({ items: [], total: 0 });
       }
       throw new Error(`unexpected url ${url}`);
     });

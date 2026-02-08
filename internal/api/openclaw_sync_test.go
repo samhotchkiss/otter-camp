@@ -120,6 +120,27 @@ func TestOpenClawSyncHandlePersistsDiagnosticsMetadata(t *testing.T) {
 			LastSyncDurationMS: 45,
 			SyncCountTotal:     8920,
 		},
+		CronJobs: []OpenClawCronJobDiagnostics{
+			{
+				ID:          "cron-1",
+				Name:        "Heartbeat Sweep",
+				Schedule:    "*/5 * * * *",
+				LastStatus:  "success",
+				Enabled:     true,
+				PayloadType: "systemEvent",
+			},
+		},
+		Processes: []OpenClawProcessDiagnostics{
+			{
+				ID:              "proc-1",
+				Command:         "openclaw run --session agent:main:main",
+				Status:          "running",
+				PID:             4242,
+				DurationSeconds: 88,
+				AgentID:         "main",
+				SessionKey:      "agent:main:main",
+			},
+		},
 	}
 	body, err := json.Marshal(payload)
 	require.NoError(t, err)
@@ -147,6 +168,24 @@ func TestOpenClawSyncHandlePersistsDiagnosticsMetadata(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(bridgeValue), &bridgeDiag))
 	require.Equal(t, 3, bridgeDiag.ReconnectCount)
 	require.Equal(t, int64(8920), bridgeDiag.SyncCountTotal)
+
+	var cronValue string
+	err = db.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'openclaw_cron_jobs'`).Scan(&cronValue)
+	require.NoError(t, err)
+	var cronJobs []OpenClawCronJobDiagnostics
+	require.NoError(t, json.Unmarshal([]byte(cronValue), &cronJobs))
+	require.Len(t, cronJobs, 1)
+	require.Equal(t, "cron-1", cronJobs[0].ID)
+	require.Equal(t, "Heartbeat Sweep", cronJobs[0].Name)
+
+	var processValue string
+	err = db.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'openclaw_processes'`).Scan(&processValue)
+	require.NoError(t, err)
+	var processes []OpenClawProcessDiagnostics
+	require.NoError(t, json.Unmarshal([]byte(processValue), &processes))
+	require.Len(t, processes, 1)
+	require.Equal(t, "proc-1", processes[0].ID)
+	require.Equal(t, 4242, processes[0].PID)
 }
 
 func TestOpenClawDispatchQueuePullAndAck(t *testing.T) {

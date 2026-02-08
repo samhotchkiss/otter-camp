@@ -51,6 +51,29 @@ interface OpenClawSession {
   transcriptPath?: string;
 }
 
+interface OpenClawCronJobSnapshot {
+  id: string;
+  name?: string;
+  schedule?: string;
+  session_target?: string;
+  payload_type?: string;
+  last_run_at?: string;
+  last_status?: string;
+  next_run_at?: string;
+  enabled: boolean;
+}
+
+interface OpenClawProcessSnapshot {
+  id: string;
+  command?: string;
+  pid?: number;
+  status?: string;
+  duration_seconds?: number;
+  agent_id?: string;
+  session_key?: string;
+  started_at?: string;
+}
+
 interface SessionsListResponse {
   count: number;
   sessions: OpenClawSession[];
@@ -118,6 +141,9 @@ type AdminCommandDispatchEvent = {
     action?: string;
     agent_id?: string;
     session_key?: string;
+    job_id?: string;
+    process_id?: string;
+    enabled?: boolean;
   };
 };
 
@@ -184,6 +210,51 @@ function parseAgentIDFromSessionKey(sessionKey: string): string {
     return '';
   }
   return match[1].trim();
+}
+
+function getNumeric(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function getBoolean(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return undefined;
+}
+
+function normalizeTimeString(value: unknown): string | undefined {
+  const raw = getTrimmedString(value);
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return undefined;
+  }
+  return parsed.toISOString();
+}
+
+function parseJSONValue(raw: string): unknown {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return JSON.parse(trimmed);
 }
 
 function base64UrlEncode(buf: Buffer): string {
@@ -836,10 +907,13 @@ async function fetchSessions(): Promise<OpenClawSession[]> {
 }
 
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
+  const [cronJobs, processes] = await Promise.all([fetchCronJobsSnapshot(), fetchProcessesSnapshot()]);
   const payload = {
     type: 'full',
     timestamp: new Date().toISOString(),
     sessions,
+    cron_jobs: cronJobs,
+    processes,
     source: 'bridge',
   };
 
@@ -1090,7 +1164,7 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   }
 }
 
-async function runOpenClawCommand(args: string[]): Promise<void> {
+async function runOpenClawCommandCapture(args: string[]): Promise<string> {
   const { stdout, stderr } = await execFileAsync('openclaw', args, {
     timeout: 60_000,
     maxBuffer: 2 * 1024 * 1024,
@@ -1101,12 +1175,175 @@ async function runOpenClawCommand(args: string[]): Promise<void> {
   if (stderr?.trim()) {
     console.warn(`[bridge] openclaw ${args.join(' ')} stderr: ${stderr.trim()}`);
   }
+  return stdout || '';
+}
+
+async function runOpenClawCommand(args: string[]): Promise<void> {
+  await runOpenClawCommandCapture(args);
+}
+
+function extractCronJobs(raw: unknown): OpenClawCronJobSnapshot[] {
+  const root = asRecord(raw);
+  let jobs: unknown = raw;
+  if (root) {
+    if (Array.isArray(root.jobs)) jobs = root.jobs;
+    else if (Array.isArray(root.items)) jobs = root.items;
+    else if (Array.isArray(root.cronJobs)) jobs = root.cronJobs;
+  }
+  if (!Array.isArray(jobs)) {
+    return [];
+  }
+  const out: OpenClawCronJobSnapshot[] = [];
+  for (const item of jobs) {
+    const row = asRecord(item);
+    if (!row) {
+      continue;
+    }
+    const id = getTrimmedString(row.id) || getTrimmedString(row.job_id) || getTrimmedString(row.jobId);
+    if (!id) {
+      continue;
+    }
+    const enabled = getBoolean(row.enabled);
+    const normalized: OpenClawCronJobSnapshot = {
+      id,
+      name: getTrimmedString(row.name) || undefined,
+      schedule:
+        getTrimmedString(row.schedule) ||
+        getTrimmedString(row.cron) ||
+        getTrimmedString(row.every) ||
+        undefined,
+      session_target:
+        getTrimmedString(row.session_target) ||
+        getTrimmedString(row.sessionTarget) ||
+        getTrimmedString(row.target) ||
+        undefined,
+      payload_type:
+        getTrimmedString(row.payload_type) ||
+        getTrimmedString(row.payloadType) ||
+        getTrimmedString(row.type) ||
+        undefined,
+      last_run_at:
+        normalizeTimeString(row.last_run_at) ||
+        normalizeTimeString(row.lastRunAt) ||
+        normalizeTimeString(row.last_run) ||
+        undefined,
+      last_status:
+        getTrimmedString(row.last_status) ||
+        getTrimmedString(row.lastStatus) ||
+        getTrimmedString(row.status) ||
+        undefined,
+      next_run_at:
+        normalizeTimeString(row.next_run_at) ||
+        normalizeTimeString(row.nextRunAt) ||
+        normalizeTimeString(row.next_run) ||
+        undefined,
+      enabled: enabled !== undefined ? enabled : true,
+    };
+    out.push(normalized);
+  }
+  return out;
+}
+
+function extractProcesses(raw: unknown): OpenClawProcessSnapshot[] {
+  const root = asRecord(raw);
+  let processes: unknown = raw;
+  if (root) {
+    if (Array.isArray(root.processes)) processes = root.processes;
+    else if (Array.isArray(root.items)) processes = root.items;
+    else if (Array.isArray(root.sessions)) processes = root.sessions;
+  }
+  if (!Array.isArray(processes)) {
+    return [];
+  }
+  const out: OpenClawProcessSnapshot[] = [];
+  for (const item of processes) {
+    const row = asRecord(item);
+    if (!row) {
+      continue;
+    }
+    const id =
+      getTrimmedString(row.id) ||
+      getTrimmedString(row.process_id) ||
+      getTrimmedString(row.processId) ||
+      getTrimmedString(row.session_id) ||
+      getTrimmedString(row.sessionId) ||
+      getTrimmedString(row.key);
+    if (!id) {
+      continue;
+    }
+    const durationSeconds =
+      getNumeric(row.duration_seconds) ??
+      getNumeric(row.durationSeconds) ??
+      getNumeric(row.elapsed_seconds) ??
+      getNumeric(row.elapsedSeconds);
+    const normalized: OpenClawProcessSnapshot = {
+      id,
+      command:
+        getTrimmedString(row.command) ||
+        getTrimmedString(row.cmd) ||
+        getTrimmedString(row.displayName) ||
+        undefined,
+      pid: getNumeric(row.pid) || getNumeric(row.os_pid) || getNumeric(row.osPid),
+      status: getTrimmedString(row.status) || 'running',
+      duration_seconds: durationSeconds !== undefined ? durationSeconds : undefined,
+      agent_id: getTrimmedString(row.agent_id) || getTrimmedString(row.agentId) || undefined,
+      session_key: getTrimmedString(row.session_key) || getTrimmedString(row.sessionKey) || getTrimmedString(row.key) || undefined,
+      started_at:
+        normalizeTimeString(row.started_at) ||
+        normalizeTimeString(row.startedAt) ||
+        normalizeTimeString(row.created_at) ||
+        normalizeTimeString(row.createdAt) ||
+        undefined,
+    };
+    out.push(normalized);
+  }
+  return out;
+}
+
+async function fetchCronJobsSnapshot(): Promise<OpenClawCronJobSnapshot[]> {
+  const attempts: Array<() => Promise<unknown>> = [
+    async () => sendRequest('cron.list', { limit: 200 }),
+    async () => parseJSONValue(await runOpenClawCommandCapture(['cron', 'list', '--json'])),
+  ];
+  for (const attempt of attempts) {
+    try {
+      const parsed = extractCronJobs(await attempt());
+      if (parsed.length > 0) {
+        return parsed;
+      }
+      return [];
+    } catch {
+      // Continue through fallback attempts.
+    }
+  }
+  return [];
+}
+
+async function fetchProcessesSnapshot(): Promise<OpenClawProcessSnapshot[]> {
+  const attempts: Array<() => Promise<unknown>> = [
+    async () => sendRequest('exec.sessions_list', { limit: 200 }),
+    async () => parseJSONValue(await runOpenClawCommandCapture(['exec', 'list', '--json'])),
+  ];
+  for (const attempt of attempts) {
+    try {
+      const parsed = extractProcesses(await attempt());
+      if (parsed.length > 0) {
+        return parsed;
+      }
+      return [];
+    } catch {
+      // Continue through fallback attempts.
+    }
+  }
+  return [];
 }
 
 async function handleAdminCommandDispatchEvent(event: AdminCommandDispatchEvent): Promise<void> {
   const action = getTrimmedString(event.data?.action);
   const commandID = getTrimmedString(event.data?.command_id) || 'n/a';
   const agentID = getTrimmedString(event.data?.agent_id);
+  const jobID = getTrimmedString(event.data?.job_id);
+  const processID = getTrimmedString(event.data?.process_id);
   const sessionKey = getTrimmedString(event.data?.session_key) || (agentID ? `agent:${agentID}:main` : '');
 
   if (!action) {
@@ -1140,6 +1377,46 @@ async function handleAdminCommandDispatchEvent(event: AdminCommandDispatchEvent)
       await runOpenClawCommand(['gateway', 'restart']);
     }
     console.log(`[bridge] executed admin.command agent.reset for ${sessionKey} (${commandID})`);
+    return;
+  }
+
+  if (action === 'cron.run') {
+    if (!jobID) {
+      throw new Error('cron.run missing job_id');
+    }
+    try {
+      await runOpenClawCommand(['cron', 'run', '--id', jobID]);
+    } catch {
+      await runOpenClawCommand(['cron', 'trigger', '--id', jobID]);
+    }
+    console.log(`[bridge] executed admin.command cron.run for ${jobID} (${commandID})`);
+    return;
+  }
+
+  if (action === 'cron.enable' || action === 'cron.disable') {
+    if (!jobID) {
+      throw new Error(`${action} missing job_id`);
+    }
+    const enable = action === 'cron.enable';
+    try {
+      await runOpenClawCommand(['cron', enable ? 'enable' : 'disable', '--id', jobID]);
+    } catch {
+      await runOpenClawCommand(['cron', 'update', '--id', jobID, '--enabled', enable ? 'true' : 'false']);
+    }
+    console.log(`[bridge] executed admin.command ${action} for ${jobID} (${commandID})`);
+    return;
+  }
+
+  if (action === 'process.kill') {
+    if (!processID) {
+      throw new Error('process.kill missing process_id');
+    }
+    try {
+      await runOpenClawCommand(['process', 'kill', '--id', processID]);
+    } catch {
+      await runOpenClawCommand(['exec', 'kill', '--id', processID]);
+    }
+    console.log(`[bridge] executed admin.command process.kill for ${processID} (${commandID})`);
     return;
   }
 

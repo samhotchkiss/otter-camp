@@ -34,6 +34,8 @@ var (
 	memoryLastSync     time.Time
 	memoryHostDiag     *OpenClawHostDiagnostics
 	memoryBridgeDiag   *OpenClawBridgeDiagnostics
+	memoryCronJobs     []OpenClawCronJobDiagnostics
+	memoryProcesses    []OpenClawProcessDiagnostics
 )
 
 // OpenClawSession represents a session from OpenClaw's sessions_list
@@ -118,15 +120,42 @@ type OpenClawBridgeDiagnostics struct {
 	ErrorsLastHour     int   `json:"errors_last_hour,omitempty"`
 }
 
+// OpenClawCronJobDiagnostics captures cron scheduler state from bridge sync snapshots.
+type OpenClawCronJobDiagnostics struct {
+	ID            string     `json:"id"`
+	Name          string     `json:"name,omitempty"`
+	Schedule      string     `json:"schedule,omitempty"`
+	SessionTarget string     `json:"session_target,omitempty"`
+	PayloadType   string     `json:"payload_type,omitempty"`
+	LastRunAt     *time.Time `json:"last_run_at,omitempty"`
+	LastStatus    string     `json:"last_status,omitempty"`
+	NextRunAt     *time.Time `json:"next_run_at,omitempty"`
+	Enabled       bool       `json:"enabled"`
+}
+
+// OpenClawProcessDiagnostics captures active process state from bridge sync snapshots.
+type OpenClawProcessDiagnostics struct {
+	ID              string     `json:"id"`
+	Command         string     `json:"command,omitempty"`
+	PID             int        `json:"pid,omitempty"`
+	Status          string     `json:"status,omitempty"`
+	DurationSeconds int64      `json:"duration_seconds,omitempty"`
+	AgentID         string     `json:"agent_id,omitempty"`
+	SessionKey      string     `json:"session_key,omitempty"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+}
+
 // SyncPayload is the payload sent from OpenClaw bridge
 type SyncPayload struct {
-	Type      string                     `json:"type"` // "full" or "delta"
-	Timestamp time.Time                  `json:"timestamp"`
-	Agents    []OpenClawAgent            `json:"agents,omitempty"`
-	Sessions  []OpenClawSession          `json:"sessions,omitempty"`
-	Host      *OpenClawHostDiagnostics   `json:"host,omitempty"`
-	Bridge    *OpenClawBridgeDiagnostics `json:"bridge,omitempty"`
-	Source    string                     `json:"source"` // "bridge" or "webhook"
+	Type      string                       `json:"type"` // "full" or "delta"
+	Timestamp time.Time                    `json:"timestamp"`
+	Agents    []OpenClawAgent              `json:"agents,omitempty"`
+	Sessions  []OpenClawSession            `json:"sessions,omitempty"`
+	Host      *OpenClawHostDiagnostics     `json:"host,omitempty"`
+	Bridge    *OpenClawBridgeDiagnostics   `json:"bridge,omitempty"`
+	CronJobs  []OpenClawCronJobDiagnostics `json:"cron_jobs,omitempty"`
+	Processes []OpenClawProcessDiagnostics `json:"processes,omitempty"`
+	Source    string                       `json:"source"` // "bridge" or "webhook"
 }
 
 // SyncResponse is returned after processing sync
@@ -392,6 +421,22 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		if db != nil {
 			if err := upsertSyncMetadataJSON(r.Context(), db, "openclaw_bridge_diagnostics", payload.Bridge, now); err != nil {
 				log.Printf("Failed to persist bridge diagnostics metadata: %v", err)
+			}
+		}
+	}
+	if payload.CronJobs != nil {
+		memoryCronJobs = append([]OpenClawCronJobDiagnostics(nil), payload.CronJobs...)
+		if db != nil {
+			if err := upsertSyncMetadataJSON(r.Context(), db, "openclaw_cron_jobs", payload.CronJobs, now); err != nil {
+				log.Printf("Failed to persist cron diagnostics metadata: %v", err)
+			}
+		}
+	}
+	if payload.Processes != nil {
+		memoryProcesses = append([]OpenClawProcessDiagnostics(nil), payload.Processes...)
+		if db != nil {
+			if err := upsertSyncMetadataJSON(r.Context(), db, "openclaw_processes", payload.Processes, now); err != nil {
+				log.Printf("Failed to persist process diagnostics metadata: %v", err)
 			}
 		}
 	}

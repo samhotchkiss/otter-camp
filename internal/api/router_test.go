@@ -186,4 +186,39 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 	if recLogs.Code == http.StatusNotFound {
 		t.Fatalf("expected /api/admin/logs route to be registered, got status %d", recLogs.Code)
 	}
+
+	reqCronJobs := httptest.NewRequest(http.MethodGet, "/api/admin/cron/jobs?org_id="+orgID, nil)
+	recCronJobs := httptest.NewRecorder()
+	router.ServeHTTP(recCronJobs, reqCronJobs)
+	if recCronJobs.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/cron/jobs route to be registered, got status %d", recCronJobs.Code)
+	}
+
+	reqCronRun := httptest.NewRequest(http.MethodPost, "/api/admin/cron/jobs/job-1/run?org_id="+orgID, nil)
+	recCronRun := httptest.NewRecorder()
+	router.ServeHTTP(recCronRun, reqCronRun)
+	if recCronRun.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/cron/jobs/{id}/run route to be registered, got status %d", recCronRun.Code)
+	}
+
+	reqCronToggle := httptest.NewRequest(http.MethodPatch, "/api/admin/cron/jobs/job-1?org_id="+orgID, strings.NewReader(`{"enabled":true}`))
+	recCronToggle := httptest.NewRecorder()
+	router.ServeHTTP(recCronToggle, reqCronToggle)
+	if recCronToggle.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/cron/jobs/{id} PATCH route to be registered, got status %d", recCronToggle.Code)
+	}
+
+	reqProcesses := httptest.NewRequest(http.MethodGet, "/api/admin/processes?org_id="+orgID, nil)
+	recProcesses := httptest.NewRecorder()
+	router.ServeHTTP(recProcesses, reqProcesses)
+	if recProcesses.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/processes route to be registered, got status %d", recProcesses.Code)
+	}
+
+	reqKillProcess := httptest.NewRequest(http.MethodPost, "/api/admin/processes/proc-1/kill?org_id="+orgID, nil)
+	recKillProcess := httptest.NewRecorder()
+	router.ServeHTTP(recKillProcess, reqKillProcess)
+	if recKillProcess.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/processes/{id}/kill route to be registered, got status %d", recKillProcess.Code)
+	}
 }

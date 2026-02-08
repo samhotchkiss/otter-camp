@@ -94,6 +94,39 @@ type LogsResponse = {
   total: number;
 };
 
+type CronJob = {
+  id: string;
+  name?: string;
+  schedule?: string;
+  session_target?: string;
+  payload_type?: string;
+  last_run_at?: string;
+  last_status?: string;
+  next_run_at?: string;
+  enabled: boolean;
+};
+
+type CronJobsResponse = {
+  items: CronJob[];
+  total: number;
+};
+
+type ProcessInfo = {
+  id: string;
+  command?: string;
+  pid?: number;
+  status?: string;
+  duration_seconds?: number;
+  agent_id?: string;
+  session_key?: string;
+  started_at?: string;
+};
+
+type ProcessesResponse = {
+  items: ProcessInfo[];
+  total: number;
+};
+
 function formatRelativeOrUnknown(raw?: string): string {
   if (!raw) {
     return "Unknown";
@@ -126,6 +159,14 @@ export default function ConnectionsPage() {
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState<string | null>(null);
   const [logSearch, setLogSearch] = useState("");
+  const [cronJobs, setCronJobs] = useState<CronJob[]>([]);
+  const [cronLoading, setCronLoading] = useState(false);
+  const [cronError, setCronError] = useState<string | null>(null);
+  const [cronActionID, setCronActionID] = useState<string | null>(null);
+  const [processes, setProcesses] = useState<ProcessInfo[]>([]);
+  const [processesLoading, setProcessesLoading] = useState(false);
+  const [processesError, setProcessesError] = useState<string | null>(null);
+  const [processActionID, setProcessActionID] = useState<string | null>(null);
 
   const orgID = useMemo(() => {
     try {
@@ -152,6 +193,103 @@ export default function ConnectionsPage() {
       setLogsLoading(false);
     }
   }, [orgID]);
+
+  const loadCronJobs = useCallback(async () => {
+    if (!orgID) {
+      return;
+    }
+    setCronLoading(true);
+    setCronError(null);
+    try {
+      const suffix = `?org_id=${encodeURIComponent(orgID)}`;
+      const payload = await apiFetch<CronJobsResponse>(`/api/admin/cron/jobs${suffix}`);
+      setCronJobs(Array.isArray(payload.items) ? payload.items : []);
+    } catch (err) {
+      setCronJobs([]);
+      setCronError(err instanceof Error ? err.message : "Failed to load cron jobs");
+    } finally {
+      setCronLoading(false);
+    }
+  }, [orgID]);
+
+  const loadProcesses = useCallback(async () => {
+    if (!orgID) {
+      return;
+    }
+    setProcessesLoading(true);
+    setProcessesError(null);
+    try {
+      const suffix = `?org_id=${encodeURIComponent(orgID)}`;
+      const payload = await apiFetch<ProcessesResponse>(`/api/admin/processes${suffix}`);
+      setProcesses(Array.isArray(payload.items) ? payload.items : []);
+    } catch (err) {
+      setProcesses([]);
+      setProcessesError(err instanceof Error ? err.message : "Failed to load processes");
+    } finally {
+      setProcessesLoading(false);
+    }
+  }, [orgID]);
+
+  const runCronJob = useCallback(async (jobID: string) => {
+    if (!orgID) {
+      return;
+    }
+    setCronActionID(`run:${jobID}`);
+    setCronError(null);
+    try {
+      const suffix = `?org_id=${encodeURIComponent(orgID)}`;
+      await apiFetch(`/api/admin/cron/jobs/${encodeURIComponent(jobID)}/run${suffix}`, {
+        method: "POST",
+      });
+      await Promise.all([loadCronJobs(), loadLogs()]);
+    } catch (err) {
+      setCronError(err instanceof Error ? err.message : "Failed to run cron job");
+    } finally {
+      setCronActionID(null);
+    }
+  }, [loadCronJobs, loadLogs, orgID]);
+
+  const toggleCronJob = useCallback(async (job: CronJob) => {
+    if (!orgID) {
+      return;
+    }
+    setCronActionID(`toggle:${job.id}`);
+    setCronError(null);
+    try {
+      const suffix = `?org_id=${encodeURIComponent(orgID)}`;
+      await apiFetch(`/api/admin/cron/jobs/${encodeURIComponent(job.id)}${suffix}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: !job.enabled }),
+      });
+      await Promise.all([loadCronJobs(), loadLogs()]);
+    } catch (err) {
+      setCronError(err instanceof Error ? err.message : "Failed to update cron job");
+    } finally {
+      setCronActionID(null);
+    }
+  }, [loadCronJobs, loadLogs, orgID]);
+
+  const killProcess = useCallback(async (processID: string) => {
+    if (!orgID) {
+      return;
+    }
+    if (typeof window !== "undefined" && !window.confirm(`Kill process ${processID}?`)) {
+      return;
+    }
+    setProcessActionID(processID);
+    setProcessesError(null);
+    try {
+      const suffix = `?org_id=${encodeURIComponent(orgID)}`;
+      await apiFetch(`/api/admin/processes/${encodeURIComponent(processID)}/kill${suffix}`, {
+        method: "POST",
+      });
+      await Promise.all([loadProcesses(), loadLogs()]);
+    } catch (err) {
+      setProcessesError(err instanceof Error ? err.message : "Failed to kill process");
+    } finally {
+      setProcessActionID(null);
+    }
+  }, [loadLogs, loadProcesses, orgID]);
 
   const load = useCallback(async () => {
     if (!orgID) {
@@ -184,18 +322,20 @@ export default function ConnectionsPage() {
         setDeadLetterCount(null);
       }
 
-      await loadLogs();
+      await Promise.all([loadLogs(), loadCronJobs(), loadProcesses()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load connection diagnostics");
       setConnections(null);
       setGitHubHealth(null);
       setDeadLetterCount(null);
       setLogs([]);
+      setCronJobs([]);
+      setProcesses([]);
       setDiagnostics(null);
     } finally {
       setLoading(false);
     }
-  }, [loadLogs, orgID]);
+  }, [loadCronJobs, loadLogs, loadProcesses, orgID]);
 
   const runDiagnostics = useCallback(async () => {
     if (!orgID) {
@@ -461,6 +601,131 @@ export default function ConnectionsPage() {
                 {logs.length === 0 && (
                   <p className="px-3 py-3 text-xs text-[var(--text-muted)]">No logs available.</p>
                 )}
+              </div>
+            )}
+          </article>
+
+          <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-[var(--text)]">Cron Jobs</h2>
+              <button
+                type="button"
+                className="rounded-md border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-alt)]"
+                onClick={() => void loadCronJobs()}
+              >
+                Refresh
+              </button>
+            </div>
+            {cronError && <p className="mt-2 text-xs text-red-700">{cronError}</p>}
+            {cronLoading && <p className="mt-2 text-xs text-[var(--text-muted)]">Loading cron jobs...</p>}
+            {!cronLoading && (
+              <div className="mt-2 overflow-x-auto">
+                <table className="min-w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-[var(--border)] text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                      <th className="py-2 pr-3">Name</th>
+                      <th className="py-2 pr-3">Schedule</th>
+                      <th className="py-2 pr-3">Last Status</th>
+                      <th className="py-2 pr-3">Last Run</th>
+                      <th className="py-2 pr-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cronJobs.map((job) => (
+                      <tr key={job.id} className="border-b border-[var(--border)]/60 text-[var(--text)]">
+                        <td className="py-2 pr-3 font-medium">{job.name || job.id}</td>
+                        <td className="py-2 pr-3 text-[var(--text-muted)]">{job.schedule || "—"}</td>
+                        <td className="py-2 pr-3 text-[var(--text-muted)]">{job.last_status || "unknown"}</td>
+                        <td className="py-2 pr-3 text-[var(--text-muted)]">{formatRelativeOrUnknown(job.last_run_at)}</td>
+                        <td className="py-2 pr-3">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="rounded-md border border-[var(--border)] px-2 py-1 text-[10px] font-semibold text-[var(--text-muted)] hover:bg-[var(--surface-alt)] disabled:opacity-60"
+                              disabled={cronActionID === `run:${job.id}` || cronActionID === `toggle:${job.id}`}
+                              onClick={() => void runCronJob(job.id)}
+                            >
+                              Run
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded-md border border-[var(--border)] px-2 py-1 text-[10px] font-semibold text-[var(--text-muted)] hover:bg-[var(--surface-alt)] disabled:opacity-60"
+                              disabled={cronActionID === `run:${job.id}` || cronActionID === `toggle:${job.id}`}
+                              onClick={() => void toggleCronJob(job)}
+                            >
+                              {job.enabled ? "Disable" : "Enable"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {cronJobs.length === 0 && (
+                      <tr>
+                        <td className="py-3 text-[var(--text-muted)]" colSpan={5}>No cron jobs reported.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </article>
+
+          <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-[var(--text)]">Active Processes</h2>
+              <button
+                type="button"
+                className="rounded-md border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-alt)]"
+                onClick={() => void loadProcesses()}
+              >
+                Refresh
+              </button>
+            </div>
+            {processesError && <p className="mt-2 text-xs text-red-700">{processesError}</p>}
+            {processesLoading && <p className="mt-2 text-xs text-[var(--text-muted)]">Loading processes...</p>}
+            {!processesLoading && (
+              <div className="mt-2 overflow-x-auto">
+                <table className="min-w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-[var(--border)] text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                      <th className="py-2 pr-3">Process</th>
+                      <th className="py-2 pr-3">Status</th>
+                      <th className="py-2 pr-3">Duration</th>
+                      <th className="py-2 pr-3">Agent</th>
+                      <th className="py-2 pr-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {processes.map((process) => (
+                      <tr key={process.id} className="border-b border-[var(--border)]/60 text-[var(--text)]">
+                        <td className="py-2 pr-3">
+                          <p className="font-medium">{process.id}</p>
+                          <p className="text-[var(--text-muted)]">{process.command || "Unknown command"}</p>
+                        </td>
+                        <td className="py-2 pr-3 text-[var(--text-muted)]">{process.status || "running"}</td>
+                        <td className="py-2 pr-3 text-[var(--text-muted)]">
+                          {typeof process.duration_seconds === "number" ? `${Math.round(process.duration_seconds)}s` : "—"}
+                        </td>
+                        <td className="py-2 pr-3 text-[var(--text-muted)]">{process.agent_id || "—"}</td>
+                        <td className="py-2 pr-3">
+                          <button
+                            type="button"
+                            className="rounded-md border border-red-300 px-2 py-1 text-[10px] font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+                            disabled={processActionID === process.id}
+                            onClick={() => void killProcess(process.id)}
+                          >
+                            Kill
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {processes.length === 0 && (
+                      <tr>
+                        <td className="py-3 text-[var(--text-muted)]" colSpan={5}>No active processes reported.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             )}
           </article>

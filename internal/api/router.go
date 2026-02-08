@@ -269,6 +269,11 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)
 		r.With(middleware.OptionalWorkspace).Post("/admin/diagnostics", adminConnectionsHandler.RunDiagnostics)
 		r.With(middleware.OptionalWorkspace).Get("/admin/logs", adminConnectionsHandler.GetLogs)
+		r.With(middleware.OptionalWorkspace).Get("/admin/cron/jobs", adminConnectionsHandler.GetCronJobs)
+		r.With(middleware.OptionalWorkspace).Post("/admin/cron/jobs/{id}/run", adminConnectionsHandler.RunCronJob)
+		r.With(middleware.OptionalWorkspace).Patch("/admin/cron/jobs/{id}", adminConnectionsHandler.ToggleCronJob)
+		r.With(middleware.OptionalWorkspace).Get("/admin/processes", adminConnectionsHandler.GetProcesses)
+		r.With(middleware.OptionalWorkspace).Post("/admin/processes/{id}/kill", adminConnectionsHandler.KillProcess)
 	})
 
 	// WebSocket handlers
