@@ -40,10 +40,17 @@ describe("AgentActivityItem", () => {
 
     expect(screen.queryByText("Detailed payload from Slack message")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+    const toggle = screen.getByRole("button", { name: "Show details" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(toggle);
 
     expect(screen.getByText("Detailed payload from Slack message")).toBeInTheDocument();
     expect(screen.getByText("Project: project-1")).toBeInTheDocument();
     expect(screen.getByText("Issue #: 42")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide details" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 });
