@@ -393,6 +393,63 @@ func TestSlugifyAgentName(t *testing.T) {
 	}
 }
 
+func TestMemoryResolveMemoryWriteKind(t *testing.T) {
+	tests := []struct {
+		name         string
+		daily        bool
+		explicitKind string
+		want         string
+		wantErr      bool
+	}{
+		{name: "daily flag overrides", daily: true, explicitKind: "note", want: "daily"},
+		{name: "default to note", daily: false, explicitKind: "", want: "note"},
+		{name: "explicit long term", daily: false, explicitKind: "long_term", want: "long_term"},
+		{name: "invalid explicit kind", daily: false, explicitKind: "bad", wantErr: true},
+		{name: "explicit kind normalized", daily: false, explicitKind: " Long_Term ", want: "long_term"},
+	}
+
+	for _, tt := range tests {
+		got, err := resolveMemoryWriteKind(tt.daily, tt.explicitKind)
+		if tt.wantErr {
+			if err == nil {
+				t.Fatalf("%s: expected error, got none", tt.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tt.name, err)
+		}
+		if got != tt.want {
+			t.Fatalf("%s: got %q want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestMemoryValidateAgentUUID(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "valid uuid", input: "11111111-2222-3333-4444-555555555555"},
+		{name: "empty", input: "", wantErr: true},
+		{name: "invalid", input: "not-a-uuid", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		err := validateAgentUUID(tt.input)
+		if tt.wantErr {
+			if err == nil {
+				t.Fatalf("%s: expected error, got none", tt.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tt.name, err)
+		}
+	}
+}
+
 func TestHandleIssueAskParsesQuestionSpecs(t *testing.T) {
 	questions, err := parseIssueAskQuestions([]string{
 		`{"id":"q1","text":"Realtime transport?","type":"select","required":true,"options":["WebSocket","Polling"]}`,

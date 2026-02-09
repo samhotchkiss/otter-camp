@@ -44,6 +44,8 @@ func main() {
 		handleProject(os.Args[2:])
 	case "agent":
 		handleAgent(os.Args[2:])
+	case "memory":
+		handleMemory(os.Args[2:])
 	case "clone":
 		handleClone(os.Args[2:])
 	case "remote":
@@ -72,6 +74,7 @@ Commands:
   whoami           Validate token and show user
   project          Manage projects
   agent            Manage agents
+  memory           Manage agent memory
   clone            Clone a project repo
   remote add       Add origin remote for project
   repo info        Show repo URL for project
@@ -337,6 +340,128 @@ func handleAgent(args []string) {
 			return
 		}
 		fmt.Printf("Archived agent: %s\n", agentID)
+	default:
+		fmt.Println(usageText)
+		os.Exit(1)
+	}
+}
+
+func handleMemory(args []string) {
+	const usageText = "usage: otter memory <write|read|search> ..."
+	if len(args) == 0 {
+		fmt.Println(usageText)
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "write":
+		flags := flag.NewFlagSet("memory write", flag.ExitOnError)
+		agentID := flags.String("agent", "", "agent UUID")
+		daily := flags.Bool("daily", false, "write daily memory entry")
+		kind := flags.String("kind", "", "memory kind override (daily|long_term|note)")
+		date := flags.String("date", "", "entry date in YYYY-MM-DD (optional)")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		if len(flags.Args()) == 0 {
+			die("usage: otter memory write --agent <uuid> [--daily] [--kind <kind>] [--date YYYY-MM-DD] \"content\"")
+		}
+		normalizedAgentID := strings.TrimSpace(*agentID)
+		if err := validateAgentUUID(normalizedAgentID); err != nil {
+			die(err.Error())
+		}
+		selectedKind, err := resolveMemoryWriteKind(*daily, *kind)
+		if err != nil {
+			die(err.Error())
+		}
+		content := strings.TrimSpace(strings.Join(flags.Args(), " "))
+		if content == "" {
+			die("memory content is required")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		payload := map[string]any{
+			"kind":    selectedKind,
+			"content": content,
+		}
+		if trimmedDate := strings.TrimSpace(*date); trimmedDate != "" {
+			payload["date"] = trimmedDate
+		}
+		response, err := client.WriteAgentMemory(normalizedAgentID, payload)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Wrote %s memory for agent %s\n", selectedKind, normalizedAgentID)
+	case "read":
+		flags := flag.NewFlagSet("memory read", flag.ExitOnError)
+		agentID := flags.String("agent", "", "agent UUID")
+		days := flags.Int("days", 2, "number of days of daily memory")
+		includeLongTerm := flags.Bool("include-long-term", true, "include long-term memory entries")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		normalizedAgentID := strings.TrimSpace(*agentID)
+		if err := validateAgentUUID(normalizedAgentID); err != nil {
+			die(err.Error())
+		}
+		if *days <= 0 {
+			die("--days must be positive")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.ReadAgentMemory(normalizedAgentID, *days, *includeLongTerm)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Loaded memory for agent %s\n", normalizedAgentID)
+		printJSON(response)
+	case "search":
+		flags := flag.NewFlagSet("memory search", flag.ExitOnError)
+		agentID := flags.String("agent", "", "agent UUID")
+		limit := flags.Int("limit", 20, "max results")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		if len(flags.Args()) == 0 {
+			die("usage: otter memory search --agent <uuid> [--limit N] \"query\"")
+		}
+		normalizedAgentID := strings.TrimSpace(*agentID)
+		if err := validateAgentUUID(normalizedAgentID); err != nil {
+			die(err.Error())
+		}
+		query := strings.TrimSpace(strings.Join(flags.Args(), " "))
+		if query == "" {
+			die("query is required")
+		}
+		if *limit <= 0 {
+			die("--limit must be positive")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.SearchAgentMemory(normalizedAgentID, query, *limit)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Memory search results for %s\n", normalizedAgentID)
+		printJSON(response)
 	default:
 		fmt.Println(usageText)
 		os.Exit(1)
@@ -1503,6 +1628,33 @@ func parseChameleonSessionAgentID(sessionKey string) (string, error) {
 		return "", errors.New("--session must match agent:chameleon:oc:{uuid}")
 	}
 	return strings.ToLower(matches[1]), nil
+}
+
+func validateAgentUUID(agentID string) error {
+	trimmed := strings.TrimSpace(agentID)
+	if trimmed == "" {
+		return errors.New("--agent is required")
+	}
+	if !issueUUIDPattern.MatchString(trimmed) {
+		return errors.New("--agent must be a UUID")
+	}
+	return nil
+}
+
+func resolveMemoryWriteKind(daily bool, explicitKind string) (string, error) {
+	if daily {
+		return "daily", nil
+	}
+	kind := strings.TrimSpace(strings.ToLower(explicitKind))
+	if kind == "" {
+		return "note", nil
+	}
+	switch kind {
+	case "daily", "long_term", "note":
+		return kind, nil
+	default:
+		return "", errors.New("--kind must be one of: daily, long_term, note")
+	}
 }
 
 func slugifyAgentName(name string) string {
