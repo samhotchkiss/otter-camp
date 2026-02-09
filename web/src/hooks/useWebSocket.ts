@@ -18,7 +18,8 @@ export type WebSocketMessageType =
   | "IssueCommentCreated"
   | "IssueReviewSaved"
   | "IssueReviewAddressed"
-  | "ActivityEventReceived";
+  | "ActivityEventReceived"
+  | "EmissionReceived";
 
 export type WebSocketMessage =
   | {
@@ -59,6 +60,7 @@ const MESSAGE_TYPES: WebSocketMessageType[] = [
   "IssueReviewSaved",
   "IssueReviewAddressed",
   "ActivityEventReceived",
+  "EmissionReceived",
 ];
 
 const messageTypeSet = new Set<WebSocketMessageType>(MESSAGE_TYPES);
@@ -128,6 +130,7 @@ const parseMessage = (raw: string): WebSocketMessage => {
 
     if (type) {
       const data =
+        record.emission ??
         record.payload ??
         record.data ??
         record.message ??

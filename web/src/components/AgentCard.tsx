@@ -1,6 +1,7 @@
 import { memo, useCallback, useMemo } from "react";
 import type { AgentStatus } from "./AgentDM";
 import AgentLastAction, { type AgentLastActionData } from "./agents/AgentLastAction";
+import AgentWorkingIndicator from "./AgentWorkingIndicator";
 
 /**
  * Extended agent info for card display.
@@ -15,6 +16,10 @@ export type AgentCardData = {
   lastActive?: string | number | null;
   lastAction?: AgentLastActionData;
   lastActionFallbackText?: string;
+  lastEmission?: {
+    summary: string;
+    timestamp: string;
+  };
 };
 
 export type AgentCardProps = {
@@ -234,6 +239,31 @@ function AgentCardComponent({ agent, onClick, detailHref }: AgentCardProps) {
           <p className="mt-1 line-clamp-2 text-sm text-[var(--text)]">
             {agent.currentTask}
           </p>
+        </div>
+      )}
+
+      {/* Live Emission Snippet */}
+      {agent.lastEmission && (
+        <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2">
+          <p className="text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">
+            Latest Emission
+          </p>
+          <p className="mt-1 line-clamp-2 text-sm text-[var(--text)]">
+            {agent.lastEmission.summary}
+          </p>
+          <div className="mt-1 text-xs text-[var(--text-muted)]">
+            <AgentWorkingIndicator
+              latestEmission={{
+                id: `${agent.id}-latest`,
+                source_type: "agent",
+                source_id: agent.id,
+                kind: "status",
+                summary: agent.lastEmission.summary,
+                timestamp: agent.lastEmission.timestamp,
+              }}
+              activeWindowSeconds={60}
+            />
+          </div>
         </div>
       )}
 

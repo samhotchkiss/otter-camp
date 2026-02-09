@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/stretchr/testify/require"
 )
 
@@ -310,6 +312,167 @@ func TestOpenClawSyncHandlePersistsConfigSnapshot(t *testing.T) {
 	require.NotEqual(t, history[0].Hash, history[1].Hash)
 }
 
+func TestOpenClawSyncEmissionsPayloadIngestsIntoBuffer(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	buffer := NewEmissionBuffer(10)
+	handler := &OpenClawSyncHandler{EmissionBuffer: buffer}
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+
+	now := time.Now().UTC()
+	payload := SyncPayload{
+		Type:      "delta",
+		Timestamp: now,
+		Source:    "bridge",
+		Emissions: []Emission{
+			{
+				ID:         "sync-em-1",
+				SourceType: "bridge",
+				SourceID:   "bridge-main",
+				Kind:       "status",
+				Summary:    "Bridge heartbeat",
+				Timestamp:  now,
+			},
+			{
+				ID:         "sync-em-invalid",
+				SourceType: "bridge",
+				SourceID:   "",
+				Kind:       "status",
+				Summary:    "invalid",
+				Timestamp:  now,
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	recent := buffer.Recent(10, EmissionFilter{})
+	require.Len(t, recent, 1)
+	require.Equal(t, "sync-em-1", recent[0].ID)
+	require.Equal(t, "bridge-main", recent[0].SourceID)
+	require.Equal(t, orgID, recent[0].OrgID)
+}
+
+func TestOpenClawSyncEmissionsOrgIsolation(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	resetProgressLogEmissionSeen()
+	t.Cleanup(resetProgressLogEmissionSeen)
+
+	buffer := NewEmissionBuffer(10)
+	handler := &OpenClawSyncHandler{EmissionBuffer: buffer}
+
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	otherOrgID := "660e8400-e29b-41d4-a716-446655440000"
+	now := time.Now().UTC()
+	payload := SyncPayload{
+		Type:      "delta",
+		Timestamp: now,
+		Source:    "bridge",
+		Emissions: []Emission{
+			{
+				ID:         "sync-org-1",
+				SourceType: "bridge",
+				SourceID:   "bridge-main",
+				Kind:       "status",
+				Summary:    "Bridge heartbeat",
+				Timestamp:  now,
+			},
+		},
+		ProgressLogLines: []string{
+			"- [2026-02-08 12:30 MST] Issue #405 | Commit abc1234 | in_progress | Completed 1/2 checklist items | Tests: go test ./internal/api -run TestOpenClawSyncEmissionsOrgIsolation -count=1",
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	orgRecent := buffer.Recent(10, EmissionFilter{OrgID: orgID})
+	require.Len(t, orgRecent, 2)
+	for _, emission := range orgRecent {
+		require.Equal(t, orgID, emission.OrgID)
+	}
+
+	otherRecent := buffer.Recent(10, EmissionFilter{OrgID: otherOrgID})
+	require.Len(t, otherRecent, 0)
+}
+
+func TestOpenClawSyncEmissionsBroadcastsToWebSocket(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	resetProgressLogEmissionSeen()
+	t.Cleanup(resetProgressLogEmissionSeen)
+
+	buffer := NewEmissionBuffer(10)
+	broadcaster := &fakeEmissionBroadcaster{}
+	handler := &OpenClawSyncHandler{
+		EmissionBuffer:      buffer,
+		EmissionBroadcaster: broadcaster,
+	}
+
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	projectID := "project-live"
+	issueID := "issue-live"
+	now := time.Now().UTC()
+	payload := SyncPayload{
+		Type:      "delta",
+		Timestamp: now,
+		Source:    "bridge",
+		Emissions: []Emission{
+			{
+				ID:         "sync-ws-1",
+				SourceType: "bridge",
+				SourceID:   "bridge-main",
+				Kind:       "status",
+				Summary:    "Bridge heartbeat",
+				Timestamp:  now,
+				Scope: &EmissionScope{
+					ProjectID: &projectID,
+					IssueID:   &issueID,
+				},
+			},
+		},
+		ProgressLogLines: []string{
+			"- [2026-02-08 12:30 MST] Issue #406 | Commit abc1234 | in_progress | Completed 1/2 checklist items | Tests: go test ./internal/api -run TestOpenClawSyncEmissionsBroadcastsToWebSocket -count=1",
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, broadcaster.orgBroadcasts, 2)
+	for _, actualOrgID := range broadcaster.orgBroadcasts {
+		require.Equal(t, orgID, actualOrgID)
+	}
+	require.Contains(t, broadcaster.topicBroadcasts, orgID+":project:"+projectID)
+	require.Contains(t, broadcaster.topicBroadcasts, orgID+":issue:"+issueID)
+}
+
 func TestOpenClawDispatchQueuePullAndAck(t *testing.T) {
 	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
 	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
@@ -452,4 +615,113 @@ func TestAgentStatusConsistency(t *testing.T) {
 	}
 	require.Equal(t, statusByAgent["main"], adminStatusByAgent["main"])
 	require.Equal(t, statusByAgent["three-stones"], adminStatusByAgent["three-stones"])
+}
+
+func TestOpenClawSyncProgressLogEmissions(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	resetProgressLogEmissionSeen()
+	t.Cleanup(resetProgressLogEmissionSeen)
+
+	buffer := NewEmissionBuffer(10)
+	handler := &OpenClawSyncHandler{EmissionBuffer: buffer}
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+
+	payload := SyncPayload{
+		Type:      "delta",
+		Timestamp: time.Now().UTC(),
+		Source:    "bridge",
+		ProgressLogLines: []string{
+			"- [2026-02-08 12:30 MST] Issue #318 | Commit 8fc69ae | in_progress | Completed 3/7 sub-issues | Tests: go test ./internal/api -run TestOpenClawSyncProgressLogEmissions -count=1",
+			"- [2026-02-08 12:30 MST] Issue #318 | Commit 8fc69ae | in_progress | Completed 3/7 sub-issues | Tests: go test ./internal/api -run TestOpenClawSyncProgressLogEmissions -count=1",
+			"   ",
+			"- [bad timestamp] no structured issue payload",
+			"## [2026-02-08 12:31 MST] Completed Spec008 issue #318 (Phase2B progress-log watcher emissions)",
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	recent := buffer.Recent(10, EmissionFilter{})
+	require.Len(t, recent, 3)
+
+	require.Equal(t, "codex", recent[0].SourceType)
+	require.Equal(t, "codex-progress-log", recent[0].SourceID)
+	require.Equal(t, "milestone", recent[0].Kind)
+	require.Contains(t, recent[0].Summary, "Completed Spec008 issue #318")
+	require.NotNil(t, recent[0].Scope)
+	require.NotNil(t, recent[0].Scope.IssueNumber)
+	require.EqualValues(t, 318, *recent[0].Scope.IssueNumber)
+
+	var progressEmission *Emission
+	for idx := range recent {
+		if recent[idx].Kind == "progress" {
+			progressEmission = &recent[idx]
+			break
+		}
+	}
+	require.NotNil(t, progressEmission)
+	require.NotNil(t, progressEmission.Progress)
+	require.Equal(t, 3, progressEmission.Progress.Current)
+	require.Equal(t, 7, progressEmission.Progress.Total)
+	require.Equal(t, orgID, progressEmission.OrgID)
+}
+
+func TestProgressLogEmissionSeenCleanup(t *testing.T) {
+	resetProgressLogEmissionSeen()
+	t.Cleanup(resetProgressLogEmissionSeen)
+
+	// Phase 1: crossing 4k with stale entries should evict >24h entries.
+	oldBase := time.Now().Add(-26 * time.Hour)
+	progressLogEmissionMu.Lock()
+	for i := 0; i < 4000; i++ {
+		progressLogEmissionSeen[fmt.Sprintf("old-%04d", i)] = oldBase.Add(time.Duration(i) * time.Second)
+	}
+	progressLogEmissionMu.Unlock()
+
+	require.True(t, markProgressLogEmissionSeen("fresh-after-old-cleanup"))
+
+	progressLogEmissionMu.Lock()
+	_, hasOld := progressLogEmissionSeen["old-0000"]
+	_, hasFresh := progressLogEmissionSeen["fresh-after-old-cleanup"]
+	sizeAfterOldCleanup := len(progressLogEmissionSeen)
+	progressLogEmissionMu.Unlock()
+
+	require.False(t, hasOld)
+	require.True(t, hasFresh)
+	require.Equal(t, 1, sizeAfterOldCleanup)
+
+	// Phase 2: all entries are recent; hard cap must still evict oldest quarter.
+	resetProgressLogEmissionSeen()
+	recentBase := time.Now().Add(-2 * time.Hour)
+	progressLogEmissionMu.Lock()
+	for i := 0; i < 8000; i++ {
+		progressLogEmissionSeen[fmt.Sprintf("recent-%04d", i)] = recentBase.Add(time.Duration(i) * time.Second)
+	}
+	progressLogEmissionMu.Unlock()
+
+	require.True(t, markProgressLogEmissionSeen("recent-hard-cap-trigger"))
+
+	progressLogEmissionMu.Lock()
+	_, hasOldest := progressLogEmissionSeen["recent-0000"]
+	_, hasQuarterBoundary := progressLogEmissionSeen["recent-1999"]
+	_, hasAfterBoundary := progressLogEmissionSeen["recent-2000"]
+	_, hasRecentTrigger := progressLogEmissionSeen["recent-hard-cap-trigger"]
+	sizeAfterHardCap := len(progressLogEmissionSeen)
+	progressLogEmissionMu.Unlock()
+
+	require.False(t, hasOldest)
+	require.False(t, hasQuarterBoundary)
+	require.True(t, hasAfterBoundary)
+	require.True(t, hasRecentTrigger)
+	require.Equal(t, 6001, sizeAfterHardCap)
 }

@@ -403,6 +403,7 @@ describe("useWebSocket", () => {
       "IssueReviewSaved",
       "IssueReviewAddressed",
       "ActivityEventReceived",
+      "EmissionReceived",
     ];
 
     const { result } = renderHook(() => useWebSocket());

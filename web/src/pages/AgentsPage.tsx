@@ -7,6 +7,7 @@ import { useWS } from "../contexts/WebSocketContext";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { useAgentActivity } from "../hooks/useAgentActivity";
 import { isDemoMode } from "../lib/demo";
+import useEmissions from "../hooks/useEmissions";
 
 /**
  * Status filter options including "all".
@@ -267,6 +268,7 @@ function AgentsPageComponent({
     mode: "recent",
     limit: 100,
   });
+  const { latestBySource } = useEmissions({ limit: 200 });
 
   // Responsive column count
   useEffect(() => {
@@ -500,22 +502,38 @@ function AgentsPageComponent({
     [agents, latestActivityByAgent],
   );
 
+  const agentsWithLiveActivity = useMemo(() => {
+    return agentsWithLastAction.map((agent) => {
+      const latestEmission = latestBySource.get(agent.id);
+      if (!latestEmission) {
+        return agent;
+      }
+      return {
+        ...agent,
+        lastEmission: {
+          summary: latestEmission.summary,
+          timestamp: latestEmission.timestamp,
+        },
+      };
+    });
+  }, [agentsWithLastAction, latestBySource]);
+
   // Calculate counts for filters - memoized
   const counts = useMemo(() => {
-    const result = { all: agentsWithLastAction.length, online: 0, busy: 0, offline: 0 };
-    for (const agent of agentsWithLastAction) {
+    const result = { all: agentsWithLiveActivity.length, online: 0, busy: 0, offline: 0 };
+    for (const agent of agentsWithLiveActivity) {
       result[agent.status]++;
     }
     return result;
-  }, [agentsWithLastAction]);
+  }, [agentsWithLiveActivity]);
 
   // Filter agents by status - memoized
   const filteredAgents = useMemo(() => {
     if (statusFilter === "all") {
-      return agentsWithLastAction;
+      return agentsWithLiveActivity;
     }
-    return agentsWithLastAction.filter((agent) => agent.status === statusFilter);
-  }, [agentsWithLastAction, statusFilter]);
+    return agentsWithLiveActivity.filter((agent) => agent.status === statusFilter);
+  }, [agentsWithLiveActivity, statusFilter]);
 
   const filteredRoster = useMemo(() => {
     if (statusFilter === "all") {

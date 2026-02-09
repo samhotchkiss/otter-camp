@@ -9,26 +9,39 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 // OpenClawSyncHandler handles real-time sync from OpenClaw
 type OpenClawSyncHandler struct {
-	Hub *ws.Hub
-	DB  *sql.DB
+	Hub                 *ws.Hub
+	DB                  *sql.DB
+	EmissionBuffer      *EmissionBuffer
+	EmissionBroadcaster emissionBroadcaster
 }
 
 const maxOpenClawSyncBodySize = 2 << 20 // 2 MB
+
+const (
+	progressLogEmissionSeenSoftThreshold = 4000
+	progressLogEmissionSeenHardCap       = 8000
+	progressLogEmissionSeenOldestDivisor = 4 // evict oldest 25% when hard cap is exceeded
+)
 
 // In-memory fallback store (used when DB is unavailable)
 var (
@@ -41,6 +54,15 @@ var (
 	memoryProcesses     []OpenClawProcessDiagnostics
 	memoryConfig        *openClawConfigSnapshotRecord
 	memoryConfigHistory []openClawConfigSnapshotRecord
+
+	progressLogEmissionMu   sync.Mutex
+	progressLogEmissionSeen = make(map[string]time.Time)
+)
+
+var (
+	progressLogIssuePattern      = regexp.MustCompile(`(?i)\bissue\s*#\s*(\d+)\b`)
+	progressLogLooseIssuePattern = regexp.MustCompile(`#(\d+)\b`)
+	progressLogProgressPattern   = regexp.MustCompile(`\b(\d+)\s*/\s*(\d+)\b`)
 )
 
 // OpenClawSession represents a session from OpenClaw's sessions_list
@@ -173,16 +195,18 @@ const (
 
 // SyncPayload is the payload sent from OpenClaw bridge
 type SyncPayload struct {
-	Type      string                       `json:"type"` // "full" or "delta"
-	Timestamp time.Time                    `json:"timestamp"`
-	Agents    []OpenClawAgent              `json:"agents,omitempty"`
-	Sessions  []OpenClawSession            `json:"sessions,omitempty"`
-	Host      *OpenClawHostDiagnostics     `json:"host,omitempty"`
-	Bridge    *OpenClawBridgeDiagnostics   `json:"bridge,omitempty"`
-	CronJobs  []OpenClawCronJobDiagnostics `json:"cron_jobs,omitempty"`
-	Processes []OpenClawProcessDiagnostics `json:"processes,omitempty"`
-	Config    *OpenClawConfigSnapshot      `json:"config,omitempty"`
-	Source    string                       `json:"source"` // "bridge" or "webhook"
+	Type             string                       `json:"type"` // "full" or "delta"
+	Timestamp        time.Time                    `json:"timestamp"`
+	Agents           []OpenClawAgent              `json:"agents,omitempty"`
+	Sessions         []OpenClawSession            `json:"sessions,omitempty"`
+	Emissions        []Emission                   `json:"emissions,omitempty"`
+	ProgressLogLines []string                     `json:"progress_log_lines,omitempty"`
+	Host             *OpenClawHostDiagnostics     `json:"host,omitempty"`
+	Bridge           *OpenClawBridgeDiagnostics   `json:"bridge,omitempty"`
+	CronJobs         []OpenClawCronJobDiagnostics `json:"cron_jobs,omitempty"`
+	Processes        []OpenClawProcessDiagnostics `json:"processes,omitempty"`
+	Config           *OpenClawConfigSnapshot      `json:"config,omitempty"`
+	Source           string                       `json:"source"` // "bridge" or "webhook"
 }
 
 // SyncResponse is returned after processing sync
@@ -306,6 +330,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 		return
 	}
+	workspaceID := resolveOpenClawSyncWorkspaceID(r)
 
 	// Get database - use store's DB() for connection pooling
 	db := h.DB
@@ -317,6 +342,42 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	processedCount := 0
 	now := time.Now()
+	syncBroadcaster := h.resolveEmissionBroadcaster()
+
+	if h.EmissionBuffer != nil && len(payload.Emissions) > 0 {
+		if workspaceID == "" {
+			log.Printf("openclaw sync emissions dropped: missing workspace context")
+		} else {
+			for _, raw := range payload.Emissions {
+				emission, err := normalizeEmission(raw)
+				if err != nil {
+					log.Printf("openclaw sync emission dropped: %v", err)
+					continue
+				}
+				emission.OrgID = workspaceID
+				h.EmissionBuffer.Push(emission)
+				broadcastEmissionEvent(syncBroadcaster, workspaceID, emission)
+			}
+		}
+	}
+	if h.EmissionBuffer != nil && len(payload.ProgressLogLines) > 0 {
+		if workspaceID == "" {
+			log.Printf("openclaw sync progress-log emissions dropped: missing workspace context")
+		} else {
+			for _, rawLine := range payload.ProgressLogLines {
+				emission, ok := progressLogLineToEmission(rawLine)
+				if !ok {
+					continue
+				}
+				if !markProgressLogEmissionSeen(emission.ID) {
+					continue
+				}
+				emission.OrgID = workspaceID
+				h.EmissionBuffer.Push(emission)
+				broadcastEmissionEvent(syncBroadcaster, workspaceID, emission)
+			}
+		}
+	}
 
 	// Process sessions into agent states
 	for _, session := range payload.Sessions {
@@ -649,6 +710,32 @@ func resolveOpenClawSyncSecret() string {
 	return strings.TrimSpace(os.Getenv("OPENCLAW_WEBHOOK_SECRET"))
 }
 
+func resolveOpenClawSyncWorkspaceID(r *http.Request) string {
+	if workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context())); workspaceID != "" {
+		return workspaceID
+	}
+	if workspaceID := strings.TrimSpace(r.Header.Get("X-Workspace-ID")); workspaceID != "" {
+		return workspaceID
+	}
+	if workspaceID := strings.TrimSpace(r.Header.Get("X-Org-ID")); workspaceID != "" {
+		return workspaceID
+	}
+	if workspaceID := strings.TrimSpace(r.URL.Query().Get("org_id")); workspaceID != "" {
+		return workspaceID
+	}
+	return ""
+}
+
+func (h *OpenClawSyncHandler) resolveEmissionBroadcaster() emissionBroadcaster {
+	if h.EmissionBroadcaster != nil {
+		return h.EmissionBroadcaster
+	}
+	if h.Hub != nil {
+		return h.Hub
+	}
+	return nil
+}
+
 // GetAgents returns current agent states
 func (h *OpenClawSyncHandler) GetAgents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -949,4 +1036,259 @@ func persistOpenClawConfigSnapshot(
 	}
 	history = appendConfigHistorySnapshot(history, snapshot)
 	return upsertSyncMetadataJSON(ctx, db, syncMetadataOpenClawConfigHistoryKey, history, now)
+}
+
+func progressLogLineToEmission(rawLine string) (Emission, bool) {
+	trimmed := strings.TrimSpace(rawLine)
+	if trimmed == "" {
+		return Emission{}, false
+	}
+
+	normalized := strings.TrimSpace(strings.TrimLeft(trimmed, "-*"))
+	normalized = strings.TrimSpace(strings.TrimLeft(normalized, "#"))
+	if normalized == "" {
+		return Emission{}, false
+	}
+
+	timestamp := time.Now().UTC()
+	content := normalized
+	if strings.HasPrefix(content, "[") {
+		if closing := strings.Index(content, "]"); closing > 1 {
+			if parsed, ok := parseProgressLogTimestamp(content[1:closing]); ok {
+				timestamp = parsed
+			}
+			content = strings.TrimSpace(content[closing+1:])
+		}
+	}
+	if content == "" {
+		return Emission{}, false
+	}
+
+	summary := progressLogSummaryFromContent(content)
+	if summary == "" {
+		return Emission{}, false
+	}
+	if len(summary) > 200 {
+		summary = summary[:200]
+	}
+
+	kind := "log"
+	lowerContent := strings.ToLower(content)
+	if strings.HasPrefix(strings.TrimSpace(rawLine), "##") {
+		kind = "milestone"
+	}
+	if strings.Contains(lowerContent, "error") || strings.Contains(lowerContent, "failed") || strings.Contains(lowerContent, "blocker") {
+		kind = "error"
+	} else if strings.Contains(lowerContent, "completed") || strings.Contains(lowerContent, "closed") || strings.Contains(lowerContent, "merged") || strings.Contains(lowerContent, "approved") || strings.Contains(lowerContent, "moved") {
+		kind = "milestone"
+	}
+
+	progress := progressFromLine(content)
+	if progress != nil {
+		kind = "progress"
+	}
+
+	emission := Emission{
+		ID:         progressLogEmissionID(trimmed),
+		SourceType: "codex",
+		SourceID:   "codex-progress-log",
+		Kind:       kind,
+		Summary:    summary,
+		Timestamp:  timestamp,
+		Progress:   progress,
+	}
+
+	if issueNumber := extractIssueNumberFromProgressLine(content); issueNumber > 0 {
+		n := int64(issueNumber)
+		emission.Scope = &EmissionScope{IssueNumber: &n}
+	}
+
+	return emission, true
+}
+
+func parseProgressLogTimestamp(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02 15:04 MST",
+		"2006-01-02 15:04:05 MST",
+		"2006-01-02 15:04 -0700",
+		"2006-01-02 15:04:05 -0700",
+	}
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, raw)
+		if err == nil {
+			return parsed.UTC(), true
+		}
+	}
+
+	localLayouts := []string{
+		"2006-01-02 15:04",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range localLayouts {
+		parsed, err := time.ParseInLocation(layout, raw, time.Local)
+		if err == nil {
+			return parsed.UTC(), true
+		}
+	}
+
+	return time.Time{}, false
+}
+
+func progressLogSummaryFromContent(content string) string {
+	parts := strings.Split(content, "|")
+	if len(parts) == 1 {
+		return strings.TrimSpace(content)
+	}
+
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		piece := strings.TrimSpace(part)
+		if piece == "" {
+			continue
+		}
+		lower := strings.ToLower(piece)
+		if strings.HasPrefix(lower, "tests:") || strings.HasPrefix(lower, "commit ") || strings.HasPrefix(lower, "commit:") {
+			continue
+		}
+		filtered = append(filtered, piece)
+	}
+	if len(filtered) == 0 {
+		return strings.TrimSpace(content)
+	}
+	if len(filtered) > 3 {
+		filtered = filtered[:3]
+	}
+	return strings.Join(filtered, " | ")
+}
+
+func progressFromLine(content string) *EmissionProgress {
+	matches := progressLogProgressPattern.FindStringSubmatch(content)
+	if len(matches) != 3 {
+		return nil
+	}
+
+	current, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return nil
+	}
+	total, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return nil
+	}
+	if total <= 0 || current < 0 || current > total {
+		return nil
+	}
+
+	progress := &EmissionProgress{
+		Current: current,
+		Total:   total,
+	}
+	lower := strings.ToLower(content)
+	switch {
+	case strings.Contains(lower, "sub-issue"):
+		unit := "sub-issues"
+		progress.Unit = &unit
+	case strings.Contains(lower, "test"):
+		unit := "tests"
+		progress.Unit = &unit
+	case strings.Contains(lower, "file"):
+		unit := "files"
+		progress.Unit = &unit
+	}
+	return progress
+}
+
+func extractIssueNumberFromProgressLine(content string) int {
+	matches := progressLogIssuePattern.FindStringSubmatch(content)
+	if len(matches) == 2 {
+		if value, err := strconv.Atoi(matches[1]); err == nil && value > 0 {
+			return value
+		}
+	}
+
+	loose := progressLogLooseIssuePattern.FindStringSubmatch(content)
+	if len(loose) == 2 {
+		if value, err := strconv.Atoi(loose[1]); err == nil && value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func progressLogEmissionID(line string) string {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(strings.ToLower(strings.Join(strings.Fields(line), " "))))
+	return fmt.Sprintf("progress-log-%x", hash.Sum64())
+}
+
+func markProgressLogEmissionSeen(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+
+	progressLogEmissionMu.Lock()
+	defer progressLogEmissionMu.Unlock()
+
+	if _, exists := progressLogEmissionSeen[id]; exists {
+		return false
+	}
+
+	now := time.Now()
+	progressLogEmissionSeen[id] = now
+	pruneProgressLogEmissionSeen(now)
+	return true
+}
+
+func pruneProgressLogEmissionSeen(now time.Time) {
+	if len(progressLogEmissionSeen) <= progressLogEmissionSeenSoftThreshold {
+		return
+	}
+
+	cutoff := now.Add(-24 * time.Hour)
+	for key, seenAt := range progressLogEmissionSeen {
+		if seenAt.Before(cutoff) {
+			delete(progressLogEmissionSeen, key)
+		}
+	}
+
+	if len(progressLogEmissionSeen) <= progressLogEmissionSeenHardCap {
+		return
+	}
+
+	type progressEntry struct {
+		id     string
+		seenAt time.Time
+	}
+
+	entries := make([]progressEntry, 0, len(progressLogEmissionSeen))
+	for key, seenAt := range progressLogEmissionSeen {
+		entries = append(entries, progressEntry{id: key, seenAt: seenAt})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].seenAt.Equal(entries[j].seenAt) {
+			return entries[i].id < entries[j].id
+		}
+		return entries[i].seenAt.Before(entries[j].seenAt)
+	})
+
+	evictCount := len(entries) / progressLogEmissionSeenOldestDivisor
+	if evictCount < 1 {
+		evictCount = 1
+	}
+	for i := 0; i < evictCount && i < len(entries); i++ {
+		delete(progressLogEmissionSeen, entries[i].id)
+	}
+}
+
+func resetProgressLogEmissionSeen() {
+	progressLogEmissionMu.Lock()
+	defer progressLogEmissionMu.Unlock()
+	progressLogEmissionSeen = make(map[string]time.Time)
 }

@@ -73,11 +73,13 @@ func NewRouter() http.Handler {
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
 	taskHandler := &TaskHandler{Hub: hub}
 	openClawWSHandler := ws.NewOpenClawHandler(hub)
+	emissionBuffer := NewEmissionBuffer(defaultEmissionBufferSize)
+	emissionsHandler := &EmissionsHandler{Buffer: emissionBuffer, Hub: hub}
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
 	workflowsHandler := &WorkflowsHandler{DB: db}
-	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
+	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db, EmissionBuffer: emissionBuffer}
 	adminConnectionsHandler := &AdminConnectionsHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	githubSyncDeadLettersHandler := &GitHubSyncDeadLettersHandler{}
 	githubSyncHealthHandler := &GitHubSyncHealthHandler{}
@@ -143,6 +145,7 @@ func NewRouter() http.Handler {
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	projectChatHandler.ProjectStore = projectStore
+	websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{IssueStore: issuesHandler.IssueStore}
 
 	if db != nil && projectStore != nil {
 		gitHandler := &gitserver.Handler{
@@ -191,6 +194,8 @@ func NewRouter() http.Handler {
 		r.Post("/user/prefixes", HandleUserCommandPrefixesCreate)
 		r.Delete("/user/prefixes/{id}", HandleUserCommandPrefixesDelete)
 		r.Post("/webhooks/openclaw", webhookHandler.OpenClawHandler)
+		r.With(middleware.OptionalWorkspace).Get("/emissions/recent", emissionsHandler.Recent)
+		r.With(middleware.OptionalWorkspace).Post("/emissions", emissionsHandler.Ingest)
 		r.Get("/approvals/exec", execApprovalsHandler.List)
 		r.Post("/approvals/exec/{id}/respond", execApprovalsHandler.Respond)
 		r.With(middleware.OptionalWorkspace).Get("/inbox", HandleInbox)
