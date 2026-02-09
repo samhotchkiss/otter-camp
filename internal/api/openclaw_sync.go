@@ -760,28 +760,38 @@ func (h *OpenClawSyncHandler) GetAgents(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Get last sync time (try DB first, fall back to memory)
-	var lastSync time.Time
-	var syncHealthy bool
+	var lastSync *time.Time
 	if db != nil {
 		var lastSyncStr string
 		err := db.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'last_sync'`).Scan(&lastSyncStr)
 		if err == nil {
-			lastSync, _ = time.Parse(time.RFC3339, lastSyncStr)
-			syncHealthy = time.Since(lastSync) < 2*time.Minute
+			if parsed, parseErr := time.Parse(time.RFC3339, lastSyncStr); parseErr == nil {
+				parsedUTC := parsed.UTC()
+				lastSync = &parsedUTC
+			}
 		}
 	}
 	// Fall back to memory if DB didn't have data
-	if lastSync.IsZero() && !memoryLastSync.IsZero() {
-		lastSync = memoryLastSync
-		syncHealthy = time.Since(lastSync) < 2*time.Minute
+	if lastSync == nil && !memoryLastSync.IsZero() {
+		last := memoryLastSync.UTC()
+		lastSync = &last
+	}
+	freshness := deriveBridgeFreshness(lastSync, time.Now().UTC(), false, false)
+
+	response := map[string]interface{}{
+		"agents":        agents,
+		"total":         len(agents),
+		"sync_healthy":  freshness.SyncHealthy,
+		"bridge_status": string(freshness.Status),
+	}
+	if lastSync != nil {
+		response["last_sync"] = lastSync
+	}
+	if freshness.LastSyncAgeSeconds != nil {
+		response["last_sync_age_seconds"] = *freshness.LastSyncAgeSeconds
 	}
 
-	sendJSON(w, http.StatusOK, map[string]interface{}{
-		"agents":       agents,
-		"total":        len(agents),
-		"last_sync":    lastSync,
-		"sync_healthy": syncHealthy,
-	})
+	sendJSON(w, http.StatusOK, response)
 }
 
 func (h *OpenClawSyncHandler) getAgentsFromDB(db *sql.DB) ([]AgentState, error) {

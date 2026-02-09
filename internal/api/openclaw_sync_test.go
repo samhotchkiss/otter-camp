@@ -96,6 +96,89 @@ func TestRequireOpenClawSyncAuth_BackwardCompatibleTokenVariable(t *testing.T) {
 	}
 }
 
+func TestOpenClawSyncHandlerHealthEndpoint(t *testing.T) {
+	handler := &OpenClawSyncHandler{}
+
+	tests := []struct {
+		name              string
+		lastSyncAge       time.Duration
+		expectStatus      string
+		expectSyncHealthy bool
+		expectAgeMax      int64
+	}{
+		{
+			name:              "healthy within ten seconds",
+			lastSyncAge:       8 * time.Second,
+			expectStatus:      "healthy",
+			expectSyncHealthy: true,
+			expectAgeMax:      10,
+		},
+		{
+			name:              "degraded between ten and thirty seconds",
+			lastSyncAge:       20 * time.Second,
+			expectStatus:      "degraded",
+			expectSyncHealthy: false,
+			expectAgeMax:      30,
+		},
+		{
+			name:              "unhealthy when stale beyond thirty seconds",
+			lastSyncAge:       45 * time.Second,
+			expectStatus:      "unhealthy",
+			expectSyncHealthy: false,
+			expectAgeMax:      60,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prevLastSync := memoryLastSync
+			memoryLastSync = time.Now().UTC().Add(-tc.lastSyncAge)
+			defer func() {
+				memoryLastSync = prevLastSync
+			}()
+
+			req := httptest.NewRequest(http.MethodGet, "/api/sync/agents", nil)
+			rec := httptest.NewRecorder()
+			handler.GetAgents(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			var payload struct {
+				BridgeStatus       string `json:"bridge_status"`
+				SyncHealthy        bool   `json:"sync_healthy"`
+				LastSyncAgeSeconds *int64 `json:"last_sync_age_seconds"`
+			}
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+			require.Equal(t, tc.expectStatus, payload.BridgeStatus)
+			require.Equal(t, tc.expectSyncHealthy, payload.SyncHealthy)
+			require.NotNil(t, payload.LastSyncAgeSeconds)
+			require.LessOrEqual(t, *payload.LastSyncAgeSeconds, tc.expectAgeMax)
+		})
+	}
+
+	t.Run("unhealthy when no sync timestamp is available", func(t *testing.T) {
+		prevLastSync := memoryLastSync
+		memoryLastSync = time.Time{}
+		defer func() {
+			memoryLastSync = prevLastSync
+		}()
+
+		req := httptest.NewRequest(http.MethodGet, "/api/sync/agents", nil)
+		rec := httptest.NewRecorder()
+		handler.GetAgents(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var payload struct {
+			BridgeStatus       string `json:"bridge_status"`
+			SyncHealthy        bool   `json:"sync_healthy"`
+			LastSyncAgeSeconds *int64 `json:"last_sync_age_seconds"`
+		}
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+		require.Equal(t, "unhealthy", payload.BridgeStatus)
+		require.False(t, payload.SyncHealthy)
+		require.Nil(t, payload.LastSyncAgeSeconds)
+	})
+}
+
 func TestOpenClawSyncHandlePersistsDiagnosticsMetadata(t *testing.T) {
 	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
 	t.Setenv("OPENCLAW_SYNC_TOKEN", "")

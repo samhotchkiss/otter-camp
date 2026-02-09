@@ -16,6 +16,7 @@
 import WebSocket from 'ws';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
+import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,6 +51,22 @@ const DISPATCH_QUEUE_POLL_INTERVAL_MS = 5000;
 const ACTIVITY_EVENT_FLUSH_INTERVAL_MS = 5000;
 const ACTIVITY_EVENTS_BATCH_SIZE = 200;
 const MAX_TRACKED_ACTIVITY_EVENT_IDS = 5000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+const RECONNECT_JITTER_SPREAD = 0.2;
+const RECONNECT_FAILURE_EXIT_THRESHOLD = 5;
+const HEARTBEAT_INTERVAL_MS = 10000;
+const HEARTBEAT_PONG_TIMEOUT_MS = 5000;
+const HEARTBEAT_MISS_THRESHOLD = 2;
+const DISPATCH_REPLAY_MAX_ITEMS = 1000;
+const DISPATCH_REPLAY_MAX_BYTES = 10 * 1024 * 1024;
+const MAX_TRACKED_DISPATCH_REPLAY_IDS = 5000;
+const BRIDGE_HEALTH_PORT = (() => {
+  const raw = Number.parseInt((process.env.OTTER_BRIDGE_HEALTH_PORT || '').trim(), 10);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 8787;
+  }
+  return raw;
+})();
 const MAX_TRACKED_SESSION_CONTEXTS = (() => {
   const raw = Number.parseInt((process.env.OTTER_SESSION_CONTEXT_MAX || '').trim(), 10);
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -255,11 +272,114 @@ type DeviceIdentity = {
   privateKeyPem: string;
 };
 
+export type BridgeConnectionState =
+  | 'connecting'
+  | 'connected'
+  | 'degraded'
+  | 'disconnected'
+  | 'reconnecting';
+
+export type BridgeConnectionTransitionTrigger =
+  | 'connect_attempt'
+  | 'socket_open'
+  | 'socket_message'
+  | 'health_warning'
+  | 'heartbeat_missed'
+  | 'socket_closed'
+  | 'reconnect_scheduled'
+  | 'reconnect_timer_fired';
+
+type BridgeSocketRole = 'openclaw' | 'ottercamp';
+
+type SocketReconnectController = {
+  timer: ReturnType<typeof setTimeout> | null;
+  consecutiveFailures: number;
+  firstMessageReceived: boolean;
+};
+
+type SocketHeartbeatController = {
+  intervalTimer: ReturnType<typeof setInterval> | null;
+  pongTimeoutTimer: ReturnType<typeof setTimeout> | null;
+  missedPongs: number;
+  lastPingAt: number;
+  lastPongAt: number;
+  lastMessageAt: number;
+};
+
+type DispatchReplayQueueItem = {
+  id: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  sizeBytes: number;
+  queuedAtMs: number;
+};
+
+export type BridgeConnectionHealthInput = {
+  uptimeSeconds: number;
+  queueDepth: number;
+  openclaw: {
+    connected: boolean;
+    state: BridgeConnectionState;
+    lastMessageAtMs: number;
+    reconnects: number;
+  };
+  ottercamp: {
+    connected: boolean;
+    state: BridgeConnectionState;
+    lastMessageAtMs: number;
+    reconnects: number;
+  };
+};
+
+type BridgeHealthPayload = {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  openclaw: {
+    connected: boolean;
+    lastMessage: string | null;
+    reconnects: number;
+  };
+  ottercamp: {
+    connected: boolean;
+    lastMessage: string | null;
+    reconnects: number;
+  };
+  uptime: number;
+  queueDepth: number;
+};
+
 let openClawWS: WebSocket | null = null;
 let otterCampWS: WebSocket | null = null;
-let otterCampReconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let otterCampReconnectAttempts = 0;
+let healthServer: http.Server | null = null;
+let continuousModeEnabled = false;
+const processStartedAtMs = Date.now();
+const reconnectByRole: Record<BridgeSocketRole, SocketReconnectController> = {
+  openclaw: { timer: null, consecutiveFailures: 0, firstMessageReceived: false },
+  ottercamp: { timer: null, consecutiveFailures: 0, firstMessageReceived: false },
+};
+const heartbeatByRole: Record<BridgeSocketRole, SocketHeartbeatController> = {
+  openclaw: {
+    intervalTimer: null,
+    pongTimeoutTimer: null,
+    missedPongs: 0,
+    lastPingAt: 0,
+    lastPongAt: 0,
+    lastMessageAt: 0,
+  },
+  ottercamp: {
+    intervalTimer: null,
+    pongTimeoutTimer: null,
+    missedPongs: 0,
+    lastPingAt: 0,
+    lastPongAt: 0,
+    lastMessageAt: 0,
+  },
+};
+const connectionStateByRole: Record<BridgeSocketRole, BridgeConnectionState> = {
+  openclaw: 'disconnected',
+  ottercamp: 'disconnected',
+};
 let isDispatchQueuePolling = false;
+let isDispatchReplayFlushing = false;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
 const sessionContexts = new Map<string, SessionContext>();
@@ -275,9 +395,292 @@ const queuedActivityEventsByOrg = new Map<string, BridgeAgentActivityEvent[]>();
 const queuedActivityEventIDs = new Set<string>();
 const deliveredActivityEventIDs = new Set<string>();
 const deliveredActivityEventIDOrder: string[] = [];
+const dispatchReplayQueue: DispatchReplayQueueItem[] = [];
+const queuedDispatchReplayIDs = new Set<string>();
+const deliveredDispatchReplayIDs = new Set<string>();
+const deliveredDispatchReplayIDOrder: string[] = [];
+let dispatchReplayQueueBytes = 0;
 
 const genId = () => `req-${++requestId}`;
 const execFileAsync = promisify(execFile);
+
+export function computeReconnectDelayMs(attempt: number, randomFn: () => number = Math.random): number {
+  const safeAttempt = Number.isFinite(attempt) && attempt >= 0 ? Math.floor(attempt) : 0;
+  const baseDelay = Math.min(RECONNECT_MAX_DELAY_MS, 1000 * Math.pow(2, safeAttempt));
+  const jitterRandom = Math.min(1, Math.max(0, randomFn()));
+  const jitterMultiplier = 1 + ((jitterRandom * 2 - 1) * RECONNECT_JITTER_SPREAD);
+  return Math.min(RECONNECT_MAX_DELAY_MS, Math.max(100, Math.round(baseDelay * jitterMultiplier)));
+}
+
+export function shouldExitAfterReconnectFailures(consecutiveFailures: number): boolean {
+  return Number.isFinite(consecutiveFailures) && consecutiveFailures >= RECONNECT_FAILURE_EXIT_THRESHOLD;
+}
+
+export function nextMissedPongCount(currentMissedPongs: number, receivedPong: boolean): number {
+  if (receivedPong) {
+    return 0;
+  }
+  const safeCurrent = Number.isFinite(currentMissedPongs) && currentMissedPongs > 0
+    ? Math.floor(currentMissedPongs)
+    : 0;
+  return safeCurrent + 1;
+}
+
+export function shouldForceReconnectFromHeartbeat(missedPongs: number): boolean {
+  return Number.isFinite(missedPongs) && missedPongs >= HEARTBEAT_MISS_THRESHOLD;
+}
+
+function toOptionalISO(timestampMs: number): string | null {
+  if (!Number.isFinite(timestampMs) || timestampMs <= 0) {
+    return null;
+  }
+  return new Date(timestampMs).toISOString();
+}
+
+function classifyBridgeHealthStatus(input: BridgeConnectionHealthInput): 'healthy' | 'degraded' | 'unhealthy' {
+  const socketStates = [input.openclaw, input.ottercamp];
+  if (socketStates.some((socket) => !socket.connected || socket.state === 'disconnected' || socket.state === 'reconnecting')) {
+    return 'unhealthy';
+  }
+  if (socketStates.some((socket) => socket.state === 'degraded' || socket.state === 'connecting')) {
+    return 'degraded';
+  }
+  return 'healthy';
+}
+
+export function buildHealthPayload(input: BridgeConnectionHealthInput): BridgeHealthPayload {
+  return {
+    status: classifyBridgeHealthStatus(input),
+    openclaw: {
+      connected: input.openclaw.connected,
+      lastMessage: toOptionalISO(input.openclaw.lastMessageAtMs),
+      reconnects: input.openclaw.reconnects,
+    },
+    ottercamp: {
+      connected: input.ottercamp.connected,
+      lastMessage: toOptionalISO(input.ottercamp.lastMessageAtMs),
+      reconnects: input.ottercamp.reconnects,
+    },
+    uptime: input.uptimeSeconds,
+    queueDepth: input.queueDepth,
+  };
+}
+
+function getDispatchQueueDepthForHealth(): number {
+  return dispatchReplayQueue.length;
+}
+
+function buildRuntimeHealthInput(): BridgeConnectionHealthInput {
+  const openclawState = connectionStateByRole.openclaw;
+  const ottercampState = connectionStateByRole.ottercamp;
+  return {
+    uptimeSeconds: Math.max(0, Math.floor((Date.now() - processStartedAtMs) / 1000)),
+    queueDepth: getDispatchQueueDepthForHealth(),
+    openclaw: {
+      connected: openclawState === 'connected' || openclawState === 'degraded',
+      state: openclawState,
+      lastMessageAtMs: heartbeatByRole.openclaw.lastMessageAt || heartbeatByRole.openclaw.lastPongAt,
+      reconnects: reconnectByRole.openclaw.consecutiveFailures,
+    },
+    ottercamp: {
+      connected: ottercampState === 'connected' || ottercampState === 'degraded',
+      state: ottercampState,
+      lastMessageAtMs: heartbeatByRole.ottercamp.lastMessageAt || heartbeatByRole.ottercamp.lastPongAt,
+      reconnects: reconnectByRole.ottercamp.consecutiveFailures,
+    },
+  };
+}
+
+function startHealthEndpoint(): void {
+  if (healthServer) {
+    return;
+  }
+
+  healthServer = http.createServer((req, res) => {
+    const url = req.url || '/';
+    if (req.method !== 'GET' || !url.startsWith('/health')) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'not found' }));
+      return;
+    }
+
+    const payload = buildHealthPayload(buildRuntimeHealthInput());
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(payload));
+  });
+
+  healthServer.listen(BRIDGE_HEALTH_PORT, () => {
+    console.log(`[bridge] health endpoint listening on :${BRIDGE_HEALTH_PORT}`);
+  });
+}
+
+export function transitionConnectionState(
+  currentState: BridgeConnectionState,
+  trigger: BridgeConnectionTransitionTrigger,
+): BridgeConnectionState {
+  switch (trigger) {
+    case 'connect_attempt':
+      return 'connecting';
+    case 'socket_open':
+    case 'socket_message':
+      return 'connected';
+    case 'health_warning':
+      return currentState === 'connected' ? 'degraded' : currentState;
+    case 'heartbeat_missed':
+    case 'socket_closed':
+      return 'disconnected';
+    case 'reconnect_scheduled':
+    case 'reconnect_timer_fired':
+      return 'reconnecting';
+    default:
+      return currentState;
+  }
+}
+
+function applyConnectionTransition(
+  role: BridgeSocketRole,
+  trigger: BridgeConnectionTransitionTrigger,
+  extra: Record<string, unknown> = {},
+): void {
+  const previous = connectionStateByRole[role];
+  const next = transitionConnectionState(previous, trigger);
+  connectionStateByRole[role] = next;
+  if (previous === next) {
+    return;
+  }
+  const transitionTimestamp = new Date().toISOString();
+  console.log(
+    `[bridge] connection.transition role=${role} from=${previous} to=${next} trigger=${trigger} at=${transitionTimestamp} ${JSON.stringify(extra)}`,
+  );
+}
+
+function clearReconnectTimer(role: BridgeSocketRole): void {
+  const controller = reconnectByRole[role];
+  if (controller.timer) {
+    clearTimeout(controller.timer);
+    controller.timer = null;
+  }
+}
+
+function resetReconnectBackoffAfterFirstMessage(role: BridgeSocketRole): void {
+  const controller = reconnectByRole[role];
+  controller.consecutiveFailures = 0;
+}
+
+function markSocketConnectAttempt(role: BridgeSocketRole): void {
+  reconnectByRole[role].firstMessageReceived = false;
+  applyConnectionTransition(role, 'connect_attempt');
+}
+
+function markSocketOpen(role: BridgeSocketRole): void {
+  applyConnectionTransition(role, 'socket_open');
+}
+
+function markSocketMessage(role: BridgeSocketRole): void {
+  markHeartbeatTraffic(role);
+  applyConnectionTransition(role, 'socket_message');
+  const controller = reconnectByRole[role];
+  if (!controller.firstMessageReceived) {
+    controller.firstMessageReceived = true;
+    resetReconnectBackoffAfterFirstMessage(role);
+    clearReconnectTimer(role);
+  }
+}
+
+function scheduleReconnect(role: BridgeSocketRole, reconnectFn: () => void): void {
+  const controller = reconnectByRole[role];
+  controller.consecutiveFailures += 1;
+  if (shouldExitAfterReconnectFailures(controller.consecutiveFailures)) {
+    console.error(
+      `[bridge] ${role} reconnect failed ${controller.consecutiveFailures} times; exiting for supervisor restart`,
+    );
+    process.exit(1);
+    return;
+  }
+
+  const delayMs = computeReconnectDelayMs(controller.consecutiveFailures - 1);
+  applyConnectionTransition(role, 'reconnect_scheduled', {
+    attempt: controller.consecutiveFailures,
+    delay_ms: delayMs,
+  });
+  clearReconnectTimer(role);
+  controller.timer = setTimeout(() => {
+    controller.timer = null;
+    applyConnectionTransition(role, 'reconnect_timer_fired', { attempt: controller.consecutiveFailures });
+    reconnectFn();
+  }, delayMs);
+}
+
+function clearHeartbeatTimers(role: BridgeSocketRole): void {
+  const heartbeat = heartbeatByRole[role];
+  if (heartbeat.intervalTimer) {
+    clearInterval(heartbeat.intervalTimer);
+    heartbeat.intervalTimer = null;
+  }
+  if (heartbeat.pongTimeoutTimer) {
+    clearTimeout(heartbeat.pongTimeoutTimer);
+    heartbeat.pongTimeoutTimer = null;
+  }
+}
+
+function markHeartbeatTraffic(role: BridgeSocketRole): void {
+  heartbeatByRole[role].lastMessageAt = Date.now();
+}
+
+function markHeartbeatPong(role: BridgeSocketRole): void {
+  const heartbeat = heartbeatByRole[role];
+  heartbeat.lastPongAt = Date.now();
+  heartbeat.missedPongs = nextMissedPongCount(heartbeat.missedPongs, true);
+  if (heartbeat.pongTimeoutTimer) {
+    clearTimeout(heartbeat.pongTimeoutTimer);
+    heartbeat.pongTimeoutTimer = null;
+  }
+}
+
+function startHeartbeatLoop(
+  role: BridgeSocketRole,
+  socket: WebSocket,
+  onForceReconnect: () => void,
+): void {
+  clearHeartbeatTimers(role);
+  const heartbeat = heartbeatByRole[role];
+  heartbeat.missedPongs = 0;
+  heartbeat.lastPingAt = 0;
+  heartbeat.lastPongAt = 0;
+
+  const triggerHeartbeat = () => {
+    if (socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    heartbeat.lastPingAt = Date.now();
+    try {
+      socket.ping();
+    } catch (err) {
+      console.error(`[bridge] ${role} heartbeat ping failed:`, err);
+      return;
+    }
+
+    if (heartbeat.pongTimeoutTimer) {
+      clearTimeout(heartbeat.pongTimeoutTimer);
+    }
+    heartbeat.pongTimeoutTimer = setTimeout(() => {
+      heartbeat.pongTimeoutTimer = null;
+      heartbeat.missedPongs = nextMissedPongCount(heartbeat.missedPongs, false);
+      applyConnectionTransition(role, 'health_warning', {
+        missed_pongs: heartbeat.missedPongs,
+        timeout_ms: HEARTBEAT_PONG_TIMEOUT_MS,
+      });
+      if (shouldForceReconnectFromHeartbeat(heartbeat.missedPongs)) {
+        applyConnectionTransition(role, 'heartbeat_missed', { missed_pongs: heartbeat.missedPongs });
+        onForceReconnect();
+      }
+    }, HEARTBEAT_PONG_TIMEOUT_MS);
+  };
+
+  heartbeat.intervalTimer = setInterval(triggerHeartbeat, HEARTBEAT_INTERVAL_MS);
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -291,6 +694,141 @@ function getTrimmedString(value: unknown): string {
     return '';
   }
   return value.trim();
+}
+
+function estimateDispatchReplayPayloadSize(eventType: string, payload: Record<string, unknown>, dedupeID: string): number {
+  return Buffer.byteLength(
+    JSON.stringify({
+      id: dedupeID,
+      event_type: eventType,
+      payload,
+    }),
+    'utf8',
+  );
+}
+
+function rememberDeliveredDispatchReplayID(eventID: string): void {
+  if (!eventID) {
+    return;
+  }
+  if (deliveredDispatchReplayIDs.has(eventID)) {
+    return;
+  }
+  deliveredDispatchReplayIDs.add(eventID);
+  deliveredDispatchReplayIDOrder.push(eventID);
+  while (deliveredDispatchReplayIDOrder.length > MAX_TRACKED_DISPATCH_REPLAY_IDS) {
+    const oldest = deliveredDispatchReplayIDOrder.shift();
+    if (oldest) {
+      deliveredDispatchReplayIDs.delete(oldest);
+    }
+  }
+}
+
+function dropOldestDispatchReplayItem(): void {
+  const oldest = dispatchReplayQueue.shift();
+  if (!oldest) {
+    return;
+  }
+  queuedDispatchReplayIDs.delete(oldest.id);
+  dispatchReplayQueueBytes = Math.max(0, dispatchReplayQueueBytes - oldest.sizeBytes);
+}
+
+function deriveDispatchReplayID(eventType: string, payload: Record<string, unknown>): string {
+  const eventRecord = payload as {
+    data?: {
+      message_id?: string;
+      command_id?: string;
+      thread_id?: string;
+      session_key?: string;
+    };
+  };
+  const messageID = getTrimmedString(eventRecord.data?.message_id);
+  if (messageID) {
+    return `${eventType}:${messageID}`;
+  }
+  const commandID = getTrimmedString(eventRecord.data?.command_id);
+  if (commandID) {
+    return `${eventType}:${commandID}`;
+  }
+  const sessionKey = getTrimmedString(eventRecord.data?.session_key);
+  const threadID = getTrimmedString(eventRecord.data?.thread_id);
+  const fallback = `${eventType}:${sessionKey}:${threadID}:${JSON.stringify(payload).slice(0, 240)}`;
+  return crypto.createHash('sha1').update(fallback).digest('hex');
+}
+
+export function queueDispatchEventForReplay(
+  eventType: string,
+  payload: Record<string, unknown>,
+  dedupeID?: string,
+  options?: { maxItems?: number; maxBytes?: number },
+): boolean {
+  const normalizedEventType = getTrimmedString(eventType);
+  if (!normalizedEventType || !payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return false;
+  }
+
+  const id = getTrimmedString(dedupeID) || deriveDispatchReplayID(normalizedEventType, payload);
+  if (!id || queuedDispatchReplayIDs.has(id) || deliveredDispatchReplayIDs.has(id)) {
+    return false;
+  }
+
+  const sizeBytes = estimateDispatchReplayPayloadSize(normalizedEventType, payload, id);
+  const maxItems = options?.maxItems && options.maxItems > 0 ? options.maxItems : DISPATCH_REPLAY_MAX_ITEMS;
+  const maxBytes = options?.maxBytes && options.maxBytes > 0 ? options.maxBytes : DISPATCH_REPLAY_MAX_BYTES;
+  const item: DispatchReplayQueueItem = {
+    id,
+    eventType: normalizedEventType,
+    payload,
+    sizeBytes,
+    queuedAtMs: Date.now(),
+  };
+  dispatchReplayQueue.push(item);
+  queuedDispatchReplayIDs.add(id);
+  dispatchReplayQueueBytes += sizeBytes;
+
+  while (dispatchReplayQueue.length > maxItems || dispatchReplayQueueBytes > maxBytes) {
+    dropOldestDispatchReplayItem();
+  }
+  return queuedDispatchReplayIDs.has(id);
+}
+
+export function getDispatchReplayQueueStateForTest(): {
+  depth: number;
+  totalBytes: number;
+  ids: string[];
+} {
+  return {
+    depth: dispatchReplayQueue.length,
+    totalBytes: dispatchReplayQueueBytes,
+    ids: dispatchReplayQueue.map((item) => item.id),
+  };
+}
+
+export function resetDispatchReplayQueueForTest(): void {
+  dispatchReplayQueue.length = 0;
+  queuedDispatchReplayIDs.clear();
+  deliveredDispatchReplayIDs.clear();
+  deliveredDispatchReplayIDOrder.length = 0;
+  dispatchReplayQueueBytes = 0;
+}
+
+export async function replayQueuedDispatchEventsForTest(
+  dispatcher: (eventType: string, payload: Record<string, unknown>) => Promise<void>,
+): Promise<string[]> {
+  const flushedIDs: string[] = [];
+  while (dispatchReplayQueue.length > 0) {
+    const current = dispatchReplayQueue[0];
+    if (!current) {
+      break;
+    }
+    await dispatcher(current.eventType, current.payload);
+    dispatchReplayQueue.shift();
+    queuedDispatchReplayIDs.delete(current.id);
+    dispatchReplayQueueBytes = Math.max(0, dispatchReplayQueueBytes - current.sizeBytes);
+    rememberDeliveredDispatchReplayID(current.id);
+    flushedIDs.push(current.id);
+  }
+  return flushedIDs;
 }
 
 function setSessionContext(sessionKey: string, context: SessionContext): void {
@@ -1438,17 +1976,44 @@ function buildOtterCampWSURL(): string {
 }
 
 async function connectToOpenClaw(): Promise<void> {
+  if (openClawWS && (openClawWS.readyState === WebSocket.OPEN || openClawWS.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
   return new Promise((resolve, reject) => {
     const url = `ws://${OPENCLAW_HOST}:${OPENCLAW_PORT}`;
     console.log(`[bridge] connecting to OpenClaw gateway at ${url}`);
+    markSocketConnectAttempt('openclaw');
 
     openClawWS = new WebSocket(url);
+    let settled = false;
+    const resolveOnce = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve();
+    };
+    const rejectOnce = (err: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(err);
+    };
 
     openClawWS.on('open', () => {
+      markSocketOpen('openclaw');
+      startHeartbeatLoop('openclaw', openClawWS!, () => {
+        if (openClawWS && openClawWS.readyState === WebSocket.OPEN) {
+          openClawWS.close();
+        }
+      });
       console.log('[bridge] OpenClaw socket opened, waiting for challenge');
     });
 
     openClawWS.on('message', (data) => {
+      markSocketMessage('openclaw');
       try {
         const msg = JSON.parse(data.toString()) as Record<string, unknown>;
 
@@ -1525,9 +2090,12 @@ async function connectToOpenClaw(): Promise<void> {
           pendingRequests.set(connectId, {
             resolve: () => {
               console.log('[bridge] connected to OpenClaw gateway');
-              resolve();
+              void flushDispatchReplayQueue('openclaw-connected').catch((replayErr) => {
+                console.error('[bridge] failed to flush replay queue after OpenClaw connect:', replayErr);
+              });
+              resolveOnce();
             },
-            reject: (err) => reject(err),
+            reject: (err) => rejectOnce(err),
           });
 
           openClawWS!.send(JSON.stringify(connectMsg));
@@ -1561,16 +2129,37 @@ async function connectToOpenClaw(): Promise<void> {
 
     openClawWS.on('error', (err) => {
       console.error('[bridge] OpenClaw socket error:', err);
-      reject(err);
+      rejectOnce(err);
+      if (openClawWS && openClawWS.readyState === WebSocket.OPEN) {
+        openClawWS.close();
+      }
+    });
+
+    openClawWS.on('pong', () => {
+      markHeartbeatPong('openclaw');
     });
 
     openClawWS.on('close', (code, reason) => {
       console.warn(`[bridge] OpenClaw socket closed (${code}) ${reason.toString()}`);
+      applyConnectionTransition('openclaw', 'socket_closed', { code, reason: reason.toString() });
+      clearHeartbeatTimers('openclaw');
       openClawWS = null;
+      for (const [pendingID, pending] of Array.from(pendingRequests.entries())) {
+        pendingRequests.delete(pendingID);
+        pending.reject(new Error('OpenClaw socket closed'));
+      }
+      rejectOnce(new Error(`OpenClaw socket closed (${code})`));
+      if (continuousModeEnabled) {
+        scheduleReconnect('openclaw', () => {
+          void connectToOpenClaw().catch((connectErr) => {
+            console.error('[bridge] OpenClaw reconnect failed:', connectErr);
+          });
+        });
+      }
     });
 
     setTimeout(() => {
-      reject(new Error('OpenClaw connection timeout'));
+      rejectOnce(new Error('OpenClaw connection timeout'));
     }, 30000);
   });
 }
@@ -2079,17 +2668,7 @@ async function processDispatchQueue(): Promise<void> {
       }
 
       try {
-        if (eventType === 'dm.message') {
-          await handleDMDispatchEvent(payload as DMDispatchEvent);
-        } else if (eventType === 'project.chat.message') {
-          await handleProjectChatDispatchEvent(payload as ProjectChatDispatchEvent);
-        } else if (eventType === 'issue.comment.message') {
-          await handleIssueCommentDispatchEvent(payload as IssueCommentDispatchEvent);
-        } else if (eventType === 'admin.command') {
-          await handleAdminCommandDispatchEvent(payload as AdminCommandDispatchEvent);
-        } else {
-          throw new Error(`unsupported event type: ${eventType}`);
-        }
+        await dispatchInboundEvent(eventType, payload, 'replay');
         await ackDispatchQueueJob(jobID, claimToken, true);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -2104,6 +2683,100 @@ async function processDispatchQueue(): Promise<void> {
   } finally {
     isDispatchQueuePolling = false;
   }
+}
+
+async function dispatchInboundEvent(
+  eventType: string,
+  payload: Record<string, unknown>,
+  source: 'socket' | 'replay' = 'socket',
+): Promise<void> {
+  const normalizedType = getTrimmedString(eventType);
+  const record = asRecord(payload);
+  if (!normalizedType || !record) {
+    throw new Error('invalid dispatch payload');
+  }
+
+  const dispatch = async () => {
+    if (normalizedType === 'dm.message') {
+      await handleDMDispatchEvent(record as DMDispatchEvent);
+      return;
+    }
+    if (normalizedType === 'project.chat.message') {
+      await handleProjectChatDispatchEvent(record as ProjectChatDispatchEvent);
+      return;
+    }
+    if (normalizedType === 'issue.comment.message') {
+      await handleIssueCommentDispatchEvent(record as IssueCommentDispatchEvent);
+      return;
+    }
+    if (normalizedType === 'admin.command') {
+      await handleAdminCommandDispatchEvent(record as AdminCommandDispatchEvent);
+      return;
+    }
+    throw new Error(`unsupported event type: ${normalizedType}`);
+  };
+
+  try {
+    await dispatch();
+  } catch (err) {
+    if (source === 'replay') {
+      throw err;
+    }
+    const queued = queueDispatchEventForReplay(normalizedType, record);
+    const queueState = getDispatchReplayQueueStateForTest();
+    const message = err instanceof Error ? err.message : String(err);
+    if (queued) {
+      console.warn(
+        `[bridge] queued dispatch event for replay (type=${normalizedType}, queue_depth=${queueState.depth}): ${message}`,
+      );
+      return;
+    }
+    throw err;
+  }
+}
+
+async function flushDispatchReplayQueue(reason: string): Promise<number> {
+  if (isDispatchReplayFlushing) {
+    return 0;
+  }
+  if (!openClawWS || openClawWS.readyState !== WebSocket.OPEN) {
+    return 0;
+  }
+  if (dispatchReplayQueue.length === 0) {
+    return 0;
+  }
+
+  let flushed = 0;
+  isDispatchReplayFlushing = true;
+  try {
+    while (dispatchReplayQueue.length > 0) {
+      const next = dispatchReplayQueue[0];
+      if (!next) {
+        break;
+      }
+      try {
+        await dispatchInboundEvent(next.eventType, next.payload, 'replay');
+      } catch (err) {
+        console.error(
+          `[bridge] failed replaying queued dispatch event ${next.id} (${next.eventType}):`,
+          err,
+        );
+        break;
+      }
+      dispatchReplayQueue.shift();
+      queuedDispatchReplayIDs.delete(next.id);
+      dispatchReplayQueueBytes = Math.max(0, dispatchReplayQueueBytes - next.sizeBytes);
+      rememberDeliveredDispatchReplayID(next.id);
+      flushed += 1;
+    }
+  } finally {
+    isDispatchReplayFlushing = false;
+  }
+
+  if (flushed > 0) {
+    console.log(`[bridge] replayed ${flushed} queued dispatch event(s) (${reason})`);
+  }
+  return flushed;
 }
 
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
@@ -2654,38 +3327,31 @@ function connectOtterCampDispatchSocket(): void {
 
   const wsURL = buildOtterCampWSURL();
   console.log(`[bridge] connecting to OtterCamp websocket ${wsURL}`);
+  markSocketConnectAttempt('ottercamp');
 
   otterCampWS = new WebSocket(wsURL);
 
   otterCampWS.on('open', () => {
-    otterCampReconnectAttempts = 0;
-    if (otterCampReconnectTimer) {
-      clearTimeout(otterCampReconnectTimer);
-      otterCampReconnectTimer = null;
-    }
+    markSocketOpen('ottercamp');
+    startHeartbeatLoop('ottercamp', otterCampWS!, () => {
+      if (otterCampWS && otterCampWS.readyState === WebSocket.OPEN) {
+        otterCampWS.close();
+      }
+    });
     console.log('[bridge] connected to OtterCamp /ws/openclaw');
   });
 
   otterCampWS.on('message', (data) => {
+    markSocketMessage('ottercamp');
     try {
-      const event = JSON.parse(data.toString()) as DMDispatchEvent | ProjectChatDispatchEvent | IssueCommentDispatchEvent | AdminCommandDispatchEvent;
-      if (event.type === 'dm.message') {
-        void handleDMDispatchEvent(event as DMDispatchEvent).catch(() => {});
+      const event = JSON.parse(data.toString()) as Record<string, unknown>;
+      const eventType = getTrimmedString(event.type);
+      if (!eventType) {
         return;
       }
-      if (event.type === 'project.chat.message') {
-        void handleProjectChatDispatchEvent(event as ProjectChatDispatchEvent).catch(() => {});
-        return;
-      }
-      if (event.type === 'issue.comment.message') {
-        void handleIssueCommentDispatchEvent(event as IssueCommentDispatchEvent).catch(() => {});
-        return;
-      }
-      if (event.type === 'admin.command') {
-        void handleAdminCommandDispatchEvent(event as AdminCommandDispatchEvent).catch((err) => {
-          console.error('[bridge] failed to execute admin.command:', err);
-        });
-      }
+      void dispatchInboundEvent(eventType, event, 'socket').catch((err) => {
+        console.error(`[bridge] failed dispatching socket event ${eventType}:`, err);
+      });
     } catch (err) {
       console.error('[bridge] failed to parse OtterCamp websocket message:', err);
     }
@@ -2693,25 +3359,30 @@ function connectOtterCampDispatchSocket(): void {
 
   otterCampWS.on('close', (code, reason) => {
     console.warn(`[bridge] OtterCamp websocket closed (${code}) ${reason.toString()}`);
+    applyConnectionTransition('ottercamp', 'socket_closed', { code, reason: reason.toString() });
+    clearHeartbeatTimers('ottercamp');
     otterCampWS = null;
-
-    const reconnectDelay = Math.min(30000, 1000 * Math.pow(2, otterCampReconnectAttempts));
-    otterCampReconnectAttempts += 1;
-    if (otterCampReconnectTimer) {
-      clearTimeout(otterCampReconnectTimer);
+    if (continuousModeEnabled) {
+      scheduleReconnect('ottercamp', () => {
+        connectOtterCampDispatchSocket();
+      });
     }
-    otterCampReconnectTimer = setTimeout(() => {
-      otterCampReconnectTimer = null;
-      connectOtterCampDispatchSocket();
-    }, reconnectDelay);
   });
 
   otterCampWS.on('error', (err) => {
     console.error('[bridge] OtterCamp websocket error:', err);
+    if (otterCampWS && otterCampWS.readyState === WebSocket.OPEN) {
+      otterCampWS.close();
+    }
+  });
+
+  otterCampWS.on('pong', () => {
+    markHeartbeatPong('ottercamp');
   });
 }
 
 async function runOnce(): Promise<void> {
+  continuousModeEnabled = false;
   try {
     await connectToOpenClaw();
     const sessions = await fetchSessions();
@@ -2736,6 +3407,8 @@ async function runOnce(): Promise<void> {
 }
 
 async function runContinuous(): Promise<void> {
+  continuousModeEnabled = true;
+  startHealthEndpoint();
   await connectToOpenClaw();
   connectOtterCampDispatchSocket();
 
@@ -2752,6 +3425,9 @@ async function runContinuous(): Promise<void> {
   console.log(`[bridge] initial sync complete (${firstSessions.length} sessions)`);
   await processDispatchQueue().catch((err) => {
     console.error('[bridge] initial dispatch queue drain failed:', err);
+  });
+  await flushDispatchReplayQueue('initial-dispatch-replay').catch((err) => {
+    console.error('[bridge] failed to flush replay queue after initial dispatch drain:', err);
   });
   await flushBufferedActivityEvents('initial-dispatch');
 
@@ -2776,6 +3452,7 @@ async function runContinuous(): Promise<void> {
   setInterval(async () => {
     try {
       await processDispatchQueue();
+      await flushDispatchReplayQueue('dispatch-loop');
       await flushBufferedActivityEvents('dispatch-loop');
     } catch (err) {
       console.error('[bridge] periodic dispatch queue drain failed:', err);

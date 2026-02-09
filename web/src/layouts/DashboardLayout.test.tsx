@@ -31,10 +31,16 @@ vi.mock("../contexts/WebSocketContext", () => ({
 const { inboxMock } = vi.hoisted(() => ({
   inboxMock: vi.fn(async () => ({ items: [] as unknown[] })),
 }));
+const { adminConnectionsMock } = vi.hoisted(() => ({
+  adminConnectionsMock: vi.fn(async () => ({
+    bridge: { connected: true, sync_healthy: true, status: "healthy" },
+  })),
+}));
 
 vi.mock("../lib/api", () => ({
   api: {
     inbox: inboxMock,
+    adminConnections: adminConnectionsMock,
   },
 }));
 
@@ -42,6 +48,10 @@ describe("DashboardLayout", () => {
   beforeEach(() => {
     inboxMock.mockReset();
     inboxMock.mockResolvedValue({ items: [] });
+    adminConnectionsMock.mockReset();
+    adminConnectionsMock.mockResolvedValue({
+      bridge: { connected: true, sync_healthy: true, status: "healthy" },
+    });
   });
 
   it("shows Connections in navigation", async () => {
@@ -94,5 +104,62 @@ describe("DashboardLayout", () => {
     const badges = await screen.findAllByText("3");
     expect(badges.length).toBeGreaterThanOrEqual(1);
     expect(badges[0]).toHaveClass("nav-badge");
+  });
+
+  it("renders healthy bridge indicator without delay banner", async () => {
+    adminConnectionsMock.mockResolvedValue({
+      bridge: { connected: true, sync_healthy: true, status: "healthy" },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <KeyboardShortcutsProvider>
+          <DashboardLayout>
+            <div>child</div>
+          </DashboardLayout>
+        </KeyboardShortcutsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Bridge healthy")).toBeInTheDocument();
+    expect(screen.queryByText("Messages may be delayed - bridge reconnecting")).not.toBeInTheDocument();
+  });
+
+  it("renders degraded bridge indicator and delayed-message banner", async () => {
+    adminConnectionsMock.mockResolvedValue({
+      bridge: { connected: true, sync_healthy: false, status: "degraded" },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <KeyboardShortcutsProvider>
+          <DashboardLayout>
+            <div>child</div>
+          </DashboardLayout>
+        </KeyboardShortcutsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Bridge delayed")).toBeInTheDocument();
+    expect(await screen.findByText("Messages may be delayed - bridge reconnecting")).toBeInTheDocument();
+  });
+
+  it("renders unhealthy bridge indicator and delayed-message banner", async () => {
+    adminConnectionsMock.mockResolvedValue({
+      bridge: { connected: false, sync_healthy: false, status: "unhealthy" },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <KeyboardShortcutsProvider>
+          <DashboardLayout>
+            <div>child</div>
+          </DashboardLayout>
+        </KeyboardShortcutsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Bridge offline")).toBeInTheDocument();
+    expect(await screen.findByText("Messages may be delayed - bridge reconnecting")).toBeInTheDocument();
   });
 });
