@@ -2,10 +2,14 @@ package api
 
 import (
 	"database/sql"
+	"errors"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 )
@@ -26,6 +30,51 @@ type AgentResponse struct {
 	CurrentTask string `json:"currentTask,omitempty"`
 	LastSeen    string `json:"lastSeen,omitempty"`
 }
+
+type agentWhoAmIAgentPayload struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Role   string `json:"role,omitempty"`
+	Emoji  string `json:"emoji,omitempty"`
+	Avatar string `json:"avatar,omitempty"`
+}
+
+type agentWhoAmITaskPointer struct {
+	Project string `json:"project,omitempty"`
+	Issue   string `json:"issue,omitempty"`
+	Title   string `json:"title"`
+	Status  string `json:"status"`
+}
+
+type agentWhoAmIResponse struct {
+	Profile             string                   `json:"profile"`
+	Agent               agentWhoAmIAgentPayload  `json:"agent"`
+	Soul                string                   `json:"soul,omitempty"`
+	Identity            string                   `json:"identity,omitempty"`
+	Instructions        string                   `json:"instructions,omitempty"`
+	SoulSummary         string                   `json:"soul_summary,omitempty"`
+	IdentitySummary     string                   `json:"identity_summary,omitempty"`
+	InstructionsSummary string                   `json:"instructions_summary,omitempty"`
+	ActiveTasks         []agentWhoAmITaskPointer `json:"active_tasks,omitempty"`
+}
+
+type whoAmIIdentityFields struct {
+	Role         string
+	Emoji        string
+	Soul         string
+	Identity     string
+	Instructions string
+}
+
+const (
+	whoAmIProfileCompact            = "compact"
+	whoAmIProfileFull               = "full"
+	defaultWhoAmIRole               = "Agent"
+	defaultWhoAmIEmoji              = "🤖"
+	whoAmICompactSummaryLimit       = 600
+	whoAmIFullPayloadFieldCharLimit = 12000
+	whoAmIMaxActiveTasks            = 8
+)
 
 // List returns all agents (demo mode supported, Postgres when available)
 func (h *AgentsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -82,6 +131,212 @@ func (h *AgentsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	// No workspace or no store - fall back to demo
 	h.sendDemoAgents(w)
+}
+
+// WhoAmI returns profile-scoped identity context for an agent.
+func (h *AgentsHandler) WhoAmI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
+		return
+	}
+	if h.Store == nil || h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	agentID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if !uuidRegex.MatchString(agentID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id must be a UUID"})
+		return
+	}
+
+	profile := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("profile")))
+	if profile == "" {
+		profile = whoAmIProfileCompact
+	}
+	if profile != whoAmIProfileCompact && profile != whoAmIProfileFull {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "profile must be compact or full"})
+		return
+	}
+
+	sessionKey := strings.TrimSpace(r.URL.Query().Get("session_key"))
+	if sessionKey != "" {
+		sessionAgentID, ok := ExtractChameleonSessionAgentID(sessionKey)
+		if !ok {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "session_key must match canonical chameleon format"})
+			return
+		}
+		if !strings.EqualFold(sessionAgentID, agentID) {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "session agent does not match requested agent"})
+			return
+		}
+	}
+
+	agent, err := h.Store.GetByID(r.Context(), agentID)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "agent not found"})
+		case errors.Is(err, store.ErrForbidden):
+			sendJSON(w, http.StatusForbidden, errorResponse{Error: "agent belongs to a different workspace"})
+		default:
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load agent"})
+		}
+		return
+	}
+
+	identity, err := h.loadWhoAmIIdentityFields(r, workspaceID, agentID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load agent identity"})
+		return
+	}
+
+	response := agentWhoAmIResponse{
+		Profile: profile,
+		Agent: agentWhoAmIAgentPayload{
+			ID:     agent.ID,
+			Name:   strings.TrimSpace(agent.DisplayName),
+			Role:   fallbackString(identity.Role, defaultWhoAmIRole),
+			Emoji:  fallbackString(identity.Emoji, defaultWhoAmIEmoji),
+			Avatar: fallbackString(trimmedPointerString(agent.AvatarURL), ""),
+		},
+		ActiveTasks: h.listWhoAmIActiveTasks(r, workspaceID, agentID),
+	}
+
+	if response.Agent.Name == "" {
+		response.Agent.Name = strings.TrimSpace(agent.Slug)
+	}
+	if response.Agent.Name == "" {
+		response.Agent.Name = "Agent"
+	}
+
+	if profile == whoAmIProfileCompact {
+		response.SoulSummary = summarizeWhoAmIText(identity.Soul, whoAmICompactSummaryLimit)
+		response.IdentitySummary = summarizeWhoAmIText(identity.Identity, whoAmICompactSummaryLimit)
+		response.InstructionsSummary = summarizeWhoAmIText(identity.Instructions, whoAmICompactSummaryLimit)
+		sendJSON(w, http.StatusOK, response)
+		return
+	}
+
+	response.Soul = capWhoAmIText(identity.Soul, whoAmIFullPayloadFieldCharLimit)
+	response.Identity = capWhoAmIText(identity.Identity, whoAmIFullPayloadFieldCharLimit)
+	response.Instructions = capWhoAmIText(identity.Instructions, whoAmIFullPayloadFieldCharLimit)
+	sendJSON(w, http.StatusOK, response)
+}
+
+func (h *AgentsHandler) loadWhoAmIIdentityFields(r *http.Request, workspaceID, agentID string) (whoAmIIdentityFields, error) {
+	var identity whoAmIIdentityFields
+	err := h.DB.QueryRowContext(
+		r.Context(),
+		`SELECT
+			COALESCE(role, ''),
+			COALESCE(emoji, ''),
+			COALESCE(soul_md, ''),
+			COALESCE(identity_md, ''),
+			COALESCE(instructions_md, '')
+		FROM agents
+		WHERE id = $1 AND org_id = $2`,
+		agentID,
+		workspaceID,
+	).Scan(
+		&identity.Role,
+		&identity.Emoji,
+		&identity.Soul,
+		&identity.Identity,
+		&identity.Instructions,
+	)
+	if err != nil {
+		return whoAmIIdentityFields{}, err
+	}
+	return identity, nil
+}
+
+func (h *AgentsHandler) listWhoAmIActiveTasks(r *http.Request, workspaceID, agentID string) []agentWhoAmITaskPointer {
+	rows, err := h.DB.QueryContext(
+		r.Context(),
+		`SELECT
+			COALESCE(p.name, ''),
+			t.number,
+			t.title,
+			t.status
+		FROM tasks t
+		LEFT JOIN projects p ON p.id = t.project_id
+		WHERE t.org_id = $1
+		  AND t.assigned_agent_id = $2
+		  AND t.status <> 'done'
+		ORDER BY t.updated_at DESC
+		LIMIT $3`,
+		workspaceID,
+		agentID,
+		whoAmIMaxActiveTasks,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	pointers := make([]agentWhoAmITaskPointer, 0)
+	for rows.Next() {
+		var (
+			project string
+			number  sql.NullInt64
+			title   string
+			status  string
+		)
+		if scanErr := rows.Scan(&project, &number, &title, &status); scanErr != nil {
+			continue
+		}
+		pointer := agentWhoAmITaskPointer{
+			Project: strings.TrimSpace(project),
+			Title:   strings.TrimSpace(title),
+			Status:  strings.TrimSpace(status),
+		}
+		if number.Valid && number.Int64 > 0 {
+			pointer.Issue = "#" + strconv.FormatInt(number.Int64, 10)
+		}
+		pointers = append(pointers, pointer)
+	}
+	if len(pointers) == 0 {
+		return nil
+	}
+	return pointers
+}
+
+func summarizeWhoAmIText(value string, limit int) string {
+	trimmed := strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	return capWhoAmIText(trimmed, limit)
+}
+
+func capWhoAmIText(value string, limit int) string {
+	trimmed := strings.TrimSpace(value)
+	if limit <= 0 || len(trimmed) <= limit {
+		return trimmed
+	}
+	if limit <= 3 {
+		return trimmed[:limit]
+	}
+	return trimmed[:limit-3] + "..."
+}
+
+func fallbackString(primary string, fallback string) string {
+	trimmed := strings.TrimSpace(primary)
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
+}
+
+func trimmedPointerString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 // sendDemoAgents returns hardcoded demo agents
