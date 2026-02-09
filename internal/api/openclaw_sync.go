@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,12 @@ type OpenClawSyncHandler struct {
 }
 
 const maxOpenClawSyncBodySize = 2 << 20 // 2 MB
+
+const (
+	progressLogEmissionSeenSoftThreshold = 4000
+	progressLogEmissionSeenHardCap       = 8000
+	progressLogEmissionSeenOldestDivisor = 4 // evict oldest 25% when hard cap is exceeded
+)
 
 // In-memory fallback store (used when DB is unavailable)
 var (
@@ -1235,8 +1242,13 @@ func markProgressLogEmissionSeen(id string) bool {
 
 	now := time.Now()
 	progressLogEmissionSeen[id] = now
-	if len(progressLogEmissionSeen) <= 4000 {
-		return true
+	pruneProgressLogEmissionSeen(now)
+	return true
+}
+
+func pruneProgressLogEmissionSeen(now time.Time) {
+	if len(progressLogEmissionSeen) <= progressLogEmissionSeenSoftThreshold {
+		return
 	}
 
 	cutoff := now.Add(-24 * time.Hour)
@@ -1245,7 +1257,34 @@ func markProgressLogEmissionSeen(id string) bool {
 			delete(progressLogEmissionSeen, key)
 		}
 	}
-	return true
+
+	if len(progressLogEmissionSeen) <= progressLogEmissionSeenHardCap {
+		return
+	}
+
+	type progressEntry struct {
+		id     string
+		seenAt time.Time
+	}
+
+	entries := make([]progressEntry, 0, len(progressLogEmissionSeen))
+	for key, seenAt := range progressLogEmissionSeen {
+		entries = append(entries, progressEntry{id: key, seenAt: seenAt})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].seenAt.Equal(entries[j].seenAt) {
+			return entries[i].id < entries[j].id
+		}
+		return entries[i].seenAt.Before(entries[j].seenAt)
+	})
+
+	evictCount := len(entries) / progressLogEmissionSeenOldestDivisor
+	if evictCount < 1 {
+		evictCount = 1
+	}
+	for i := 0; i < evictCount && i < len(entries); i++ {
+		delete(progressLogEmissionSeen, entries[i].id)
+	}
 }
 
 func resetProgressLogEmissionSeen() {

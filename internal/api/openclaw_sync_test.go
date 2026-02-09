@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -673,4 +674,54 @@ func TestOpenClawSyncProgressLogEmissions(t *testing.T) {
 	require.Equal(t, 3, progressEmission.Progress.Current)
 	require.Equal(t, 7, progressEmission.Progress.Total)
 	require.Equal(t, orgID, progressEmission.OrgID)
+}
+
+func TestProgressLogEmissionSeenCleanup(t *testing.T) {
+	resetProgressLogEmissionSeen()
+	t.Cleanup(resetProgressLogEmissionSeen)
+
+	// Phase 1: crossing 4k with stale entries should evict >24h entries.
+	oldBase := time.Now().Add(-26 * time.Hour)
+	progressLogEmissionMu.Lock()
+	for i := 0; i < 4000; i++ {
+		progressLogEmissionSeen[fmt.Sprintf("old-%04d", i)] = oldBase.Add(time.Duration(i) * time.Second)
+	}
+	progressLogEmissionMu.Unlock()
+
+	require.True(t, markProgressLogEmissionSeen("fresh-after-old-cleanup"))
+
+	progressLogEmissionMu.Lock()
+	_, hasOld := progressLogEmissionSeen["old-0000"]
+	_, hasFresh := progressLogEmissionSeen["fresh-after-old-cleanup"]
+	sizeAfterOldCleanup := len(progressLogEmissionSeen)
+	progressLogEmissionMu.Unlock()
+
+	require.False(t, hasOld)
+	require.True(t, hasFresh)
+	require.Equal(t, 1, sizeAfterOldCleanup)
+
+	// Phase 2: all entries are recent; hard cap must still evict oldest quarter.
+	resetProgressLogEmissionSeen()
+	recentBase := time.Now().Add(-2 * time.Hour)
+	progressLogEmissionMu.Lock()
+	for i := 0; i < 8000; i++ {
+		progressLogEmissionSeen[fmt.Sprintf("recent-%04d", i)] = recentBase.Add(time.Duration(i) * time.Second)
+	}
+	progressLogEmissionMu.Unlock()
+
+	require.True(t, markProgressLogEmissionSeen("recent-hard-cap-trigger"))
+
+	progressLogEmissionMu.Lock()
+	_, hasOldest := progressLogEmissionSeen["recent-0000"]
+	_, hasQuarterBoundary := progressLogEmissionSeen["recent-1999"]
+	_, hasAfterBoundary := progressLogEmissionSeen["recent-2000"]
+	_, hasRecentTrigger := progressLogEmissionSeen["recent-hard-cap-trigger"]
+	sizeAfterHardCap := len(progressLogEmissionSeen)
+	progressLogEmissionMu.Unlock()
+
+	require.False(t, hasOldest)
+	require.False(t, hasQuarterBoundary)
+	require.True(t, hasAfterBoundary)
+	require.True(t, hasRecentTrigger)
+	require.Equal(t, 6001, sizeAfterHardCap)
 }
