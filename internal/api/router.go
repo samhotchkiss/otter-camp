@@ -146,6 +146,8 @@ func NewRouter() http.Handler {
 		knowledgeHandler.Store = store.NewKnowledgeEntryStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
+	workflowsHandler.ProjectStore = projectStore
+	workflowsHandler.ProjectsHandler = projectsHandler
 	projectChatHandler.ProjectStore = projectStore
 	websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{IssueStore: issuesHandler.IssueStore}
 
