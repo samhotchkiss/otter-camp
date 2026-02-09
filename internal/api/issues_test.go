@@ -1296,6 +1296,29 @@ func TestIssuesHandlerApproveUsesReviewerGateWhenProjectRequiresHumanReview(t *t
 	require.Equal(t, "closed", finalApproved.State)
 }
 
+func TestIssuesHandlerApproveReturnsErrorWhenDBNil(t *testing.T) {
+	handler := &IssuesHandler{
+		IssueStore: store.NewProjectIssueStore(nil),
+		DB:         nil,
+	}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/11111111-1111-1111-1111-111111111111/approve?org_id=22222222-2222-2222-2222-222222222222",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	require.NotPanics(t, func() {
+		router.ServeHTTP(rec, req)
+	})
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	var resp errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, "database not available", resp.Error)
+}
+
 func TestIssuesHandlerApproveRequiresHumanActorForSecondApproval(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-human-review-caller-org")
