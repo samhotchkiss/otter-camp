@@ -144,4 +144,32 @@ describe("SettingsPage label management", () => {
     expect(inviteMemberButton.className).toContain("bg-[var(--surface)]");
     expect(inviteMemberButton.className).toContain("border-[var(--border)]");
   });
+
+  it("uses theme token classes for section-level row and appearance option containers", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/settings/")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/labels?org_id=org-123&seed=true")) {
+        return jsonResponse({
+          labels: [{ id: "label-bug", name: "bug", color: "#ef4444" }],
+        });
+      }
+      return jsonResponse({ error: "unexpected request" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<SettingsPage />);
+
+    expect(await screen.findByTestId("label-row-label-bug")).toBeInTheDocument();
+
+    const labelNameInput = screen.getByTestId("label-name-label-bug");
+    expect(labelNameInput.className).toContain("bg-[var(--surface)]");
+    expect(labelNameInput.className).toContain("border-[var(--border)]");
+
+    const lightThemeButton = screen.getByRole("button", { name: /Light/i });
+    expect(lightThemeButton.className).toContain("bg-[var(--surface)]");
+    expect(lightThemeButton.className).toContain("border-[var(--border)]");
+  });
 });
