@@ -305,6 +305,40 @@ func TestFeedHandlerV2ResolvesGitPushActorFromMetadataUserID(t *testing.T) {
 	require.Contains(t, resp.Items[0].Summary, "main")
 }
 
+func TestFeedHandlerV2ResolvesGitPushActorFromSenderLogin(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	orgID := insertFeedOrganization(t, db, "feed-git-push-sender-login")
+	insertFeedActivity(
+		t,
+		db,
+		orgID,
+		"git.push",
+		json.RawMessage(`{"sender_login":"samhotchkiss","branch":"main","commit_message":"Sender login actor"}`),
+		time.Date(2026, 2, 8, 10, 30, 0, 0, time.UTC),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp PaginatedFeedResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Items, 1)
+	require.NotNil(t, resp.Items[0].AgentName)
+	require.Equal(t, "samhotchkiss", *resp.Items[0].AgentName)
+	require.Contains(t, resp.Items[0].Summary, "Sender login actor")
+}
+
 func TestFeedHandlerV2UsesSystemWhenGitPushActorCannotBeResolved(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)
