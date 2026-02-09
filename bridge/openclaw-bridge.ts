@@ -16,6 +16,7 @@
 import WebSocket from 'ws';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
+import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -56,6 +57,13 @@ const RECONNECT_FAILURE_EXIT_THRESHOLD = 5;
 const HEARTBEAT_INTERVAL_MS = 10000;
 const HEARTBEAT_PONG_TIMEOUT_MS = 5000;
 const HEARTBEAT_MISS_THRESHOLD = 2;
+const BRIDGE_HEALTH_PORT = (() => {
+  const raw = Number.parseInt((process.env.OTTER_BRIDGE_HEALTH_PORT || '').trim(), 10);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 8787;
+  }
+  return raw;
+})();
 const MAX_TRACKED_SESSION_CONTEXTS = (() => {
   const raw = Number.parseInt((process.env.OTTER_SESSION_CONTEXT_MAX || '').trim(), 10);
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -295,9 +303,44 @@ type SocketHeartbeatController = {
   lastMessageAt: number;
 };
 
+export type BridgeConnectionHealthInput = {
+  uptimeSeconds: number;
+  queueDepth: number;
+  openclaw: {
+    connected: boolean;
+    state: BridgeConnectionState;
+    lastMessageAtMs: number;
+    reconnects: number;
+  };
+  ottercamp: {
+    connected: boolean;
+    state: BridgeConnectionState;
+    lastMessageAtMs: number;
+    reconnects: number;
+  };
+};
+
+type BridgeHealthPayload = {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  openclaw: {
+    connected: boolean;
+    lastMessage: string | null;
+    reconnects: number;
+  };
+  ottercamp: {
+    connected: boolean;
+    lastMessage: string | null;
+    reconnects: number;
+  };
+  uptime: number;
+  queueDepth: number;
+};
+
 let openClawWS: WebSocket | null = null;
 let otterCampWS: WebSocket | null = null;
+let healthServer: http.Server | null = null;
 let continuousModeEnabled = false;
+const processStartedAtMs = Date.now();
 const reconnectByRole: Record<BridgeSocketRole, SocketReconnectController> = {
   openclaw: { timer: null, consecutiveFailures: 0, firstMessageReceived: false },
   ottercamp: { timer: null, consecutiveFailures: 0, firstMessageReceived: false },
@@ -368,6 +411,92 @@ export function nextMissedPongCount(currentMissedPongs: number, receivedPong: bo
 
 export function shouldForceReconnectFromHeartbeat(missedPongs: number): boolean {
   return Number.isFinite(missedPongs) && missedPongs >= HEARTBEAT_MISS_THRESHOLD;
+}
+
+function toOptionalISO(timestampMs: number): string | null {
+  if (!Number.isFinite(timestampMs) || timestampMs <= 0) {
+    return null;
+  }
+  return new Date(timestampMs).toISOString();
+}
+
+function classifyBridgeHealthStatus(input: BridgeConnectionHealthInput): 'healthy' | 'degraded' | 'unhealthy' {
+  const socketStates = [input.openclaw, input.ottercamp];
+  if (socketStates.some((socket) => !socket.connected || socket.state === 'disconnected' || socket.state === 'reconnecting')) {
+    return 'unhealthy';
+  }
+  if (socketStates.some((socket) => socket.state === 'degraded' || socket.state === 'connecting')) {
+    return 'degraded';
+  }
+  return 'healthy';
+}
+
+export function buildHealthPayload(input: BridgeConnectionHealthInput): BridgeHealthPayload {
+  return {
+    status: classifyBridgeHealthStatus(input),
+    openclaw: {
+      connected: input.openclaw.connected,
+      lastMessage: toOptionalISO(input.openclaw.lastMessageAtMs),
+      reconnects: input.openclaw.reconnects,
+    },
+    ottercamp: {
+      connected: input.ottercamp.connected,
+      lastMessage: toOptionalISO(input.ottercamp.lastMessageAtMs),
+      reconnects: input.ottercamp.reconnects,
+    },
+    uptime: input.uptimeSeconds,
+    queueDepth: input.queueDepth,
+  };
+}
+
+function getDispatchQueueDepthForHealth(): number {
+  return 0;
+}
+
+function buildRuntimeHealthInput(): BridgeConnectionHealthInput {
+  const openclawState = connectionStateByRole.openclaw;
+  const ottercampState = connectionStateByRole.ottercamp;
+  return {
+    uptimeSeconds: Math.max(0, Math.floor((Date.now() - processStartedAtMs) / 1000)),
+    queueDepth: getDispatchQueueDepthForHealth(),
+    openclaw: {
+      connected: openclawState === 'connected' || openclawState === 'degraded',
+      state: openclawState,
+      lastMessageAtMs: heartbeatByRole.openclaw.lastMessageAt || heartbeatByRole.openclaw.lastPongAt,
+      reconnects: reconnectByRole.openclaw.consecutiveFailures,
+    },
+    ottercamp: {
+      connected: ottercampState === 'connected' || ottercampState === 'degraded',
+      state: ottercampState,
+      lastMessageAtMs: heartbeatByRole.ottercamp.lastMessageAt || heartbeatByRole.ottercamp.lastPongAt,
+      reconnects: reconnectByRole.ottercamp.consecutiveFailures,
+    },
+  };
+}
+
+function startHealthEndpoint(): void {
+  if (healthServer) {
+    return;
+  }
+
+  healthServer = http.createServer((req, res) => {
+    const url = req.url || '/';
+    if (req.method !== 'GET' || !url.startsWith('/health')) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'not found' }));
+      return;
+    }
+
+    const payload = buildHealthPayload(buildRuntimeHealthInput());
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(payload));
+  });
+
+  healthServer.listen(BRIDGE_HEALTH_PORT, () => {
+    console.log(`[bridge] health endpoint listening on :${BRIDGE_HEALTH_PORT}`);
+  });
 }
 
 export function transitionConnectionState(
@@ -3006,6 +3135,7 @@ async function runOnce(): Promise<void> {
 
 async function runContinuous(): Promise<void> {
   continuousModeEnabled = true;
+  startHealthEndpoint();
   await connectToOpenClaw();
   connectOtterCampDispatchSocket();
 
