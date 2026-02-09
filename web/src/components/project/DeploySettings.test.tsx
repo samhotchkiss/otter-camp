@@ -113,6 +113,36 @@ describe("DeploySettings", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
   });
 
+  it("clears success message when form values change after save", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          deployMethod: "none",
+          githubRepoUrl: null,
+          githubBranch: "main",
+          cliCommand: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          deployMethod: "none",
+          githubRepoUrl: null,
+          githubBranch: "main",
+          cliCommand: null,
+        }),
+      );
+
+    render(<DeploySettings projectId="project-1" />);
+    await screen.findByLabelText("Deploy method");
+
+    await user.click(screen.getByRole("button", { name: "Save deployment settings" }));
+    expect(await screen.findByText("Deployment settings saved.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Deploy method"), { target: { value: "github_push" } });
+    expect(screen.queryByText("Deployment settings saved.")).not.toBeInTheDocument();
+  });
+
   it("URL-encodes project id in API paths", async () => {
     fetchMock.mockResolvedValueOnce(
       mockJSONResponse({

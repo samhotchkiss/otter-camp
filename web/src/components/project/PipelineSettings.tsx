@@ -148,7 +148,10 @@ export default function PipelineSettings({
             <select
               id="pipeline-role-planner"
               value={roles.planner}
-              onChange={(event) => setRoles((prev) => ({ ...prev, planner: event.target.value }))}
+              onChange={(event) => {
+                setRoles((prev) => ({ ...prev, planner: event.target.value }));
+                setSuccess(null);
+              }}
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)]"
             >
               <option value="">Manual (no agent)</option>
@@ -167,7 +170,10 @@ export default function PipelineSettings({
             <select
               id="pipeline-role-worker"
               value={roles.worker}
-              onChange={(event) => setRoles((prev) => ({ ...prev, worker: event.target.value }))}
+              onChange={(event) => {
+                setRoles((prev) => ({ ...prev, worker: event.target.value }));
+                setSuccess(null);
+              }}
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)]"
             >
               <option value="">Manual (no agent)</option>
@@ -186,7 +192,10 @@ export default function PipelineSettings({
             <select
               id="pipeline-role-reviewer"
               value={roles.reviewer}
-              onChange={(event) => setRoles((prev) => ({ ...prev, reviewer: event.target.value }))}
+              onChange={(event) => {
+                setRoles((prev) => ({ ...prev, reviewer: event.target.value }));
+                setSuccess(null);
+              }}
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)]"
             >
               <option value="">Manual (no agent)</option>
@@ -205,7 +214,10 @@ export default function PipelineSettings({
           <input
             type="checkbox"
             checked={requireHumanReview}
-            onChange={(event) => setRequireHumanReview(event.target.checked)}
+            onChange={(event) => {
+              setRequireHumanReview(event.target.checked);
+              setSuccess(null);
+            }}
           />
           Require human approval before merge
         </label>
