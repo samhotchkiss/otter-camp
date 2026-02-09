@@ -20,6 +20,8 @@ var (
 	ErrNoWorkspace = errors.New("workspace ID not found in context")
 	// ErrInvalidWorkspace is returned when a workspace ID is invalid.
 	ErrInvalidWorkspace = errors.New("invalid workspace ID")
+	// ErrValidation is returned when caller input fails validation.
+	ErrValidation = errors.New("validation failed")
 	// ErrNotFound is returned when a requested entity does not exist.
 	ErrNotFound = errors.New("entity not found")
 	// ErrForbidden is returned when access to an entity is denied.

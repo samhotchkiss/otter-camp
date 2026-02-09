@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -175,4 +176,12 @@ func TestDeployConfigStoreErrorMessageSanitizesUnexpectedError(t *testing.T) {
 	err := errors.New(`pq: relation "project_deploy_config" does not exist`)
 	require.Equal(t, http.StatusInternalServerError, deployConfigStoreErrorStatus(err))
 	require.Equal(t, "internal server error", deployConfigStoreErrorMessage(err))
+}
+
+func TestDeployConfigHandlerValidationErrorClassification(t *testing.T) {
+	validationErr := fmt.Errorf("%w: invalid deploy_method", store.ErrValidation)
+	require.Equal(t, http.StatusBadRequest, deployConfigStoreErrorStatus(validationErr))
+
+	falsePositiveErr := errors.New("postgres connection invalidated unexpectedly")
+	require.Equal(t, http.StatusInternalServerError, deployConfigStoreErrorStatus(falsePositiveErr))
 }

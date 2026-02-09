@@ -53,7 +53,7 @@ func normalizeDeployConfigInput(input UpsertDeployConfigInput) (UpsertDeployConf
 	switch method {
 	case DeployMethodNone, DeployMethodGitHubPush, DeployMethodCLICommand:
 	default:
-		return UpsertDeployConfigInput{}, fmt.Errorf("invalid deploy_method")
+		return UpsertDeployConfigInput{}, fmt.Errorf("%w: invalid deploy_method", ErrValidation)
 	}
 
 	repoURL := normalizeOptionalDeployText(input.GitHubRepoURL)
@@ -71,7 +71,7 @@ func normalizeDeployConfigInput(input UpsertDeployConfigInput) (UpsertDeployConf
 		command = nil
 	case DeployMethodCLICommand:
 		if command == nil {
-			return UpsertDeployConfigInput{}, fmt.Errorf("cli_command is required for deploy_method cli_command")
+			return UpsertDeployConfigInput{}, fmt.Errorf("%w: cli_command is required for deploy_method cli_command", ErrValidation)
 		}
 		repoURL = nil
 	}
@@ -104,7 +104,7 @@ func (s *DeployConfigStore) Upsert(ctx context.Context, input UpsertDeployConfig
 
 	input.ProjectID = strings.TrimSpace(input.ProjectID)
 	if !uuidRegex.MatchString(input.ProjectID) {
-		return nil, fmt.Errorf("invalid project_id")
+		return nil, fmt.Errorf("%w: invalid project_id", ErrValidation)
 	}
 
 	normalized, err := normalizeDeployConfigInput(input)
@@ -157,7 +157,7 @@ func (s *DeployConfigStore) GetByProject(ctx context.Context, projectID string) 
 
 	projectID = strings.TrimSpace(projectID)
 	if !uuidRegex.MatchString(projectID) {
-		return nil, fmt.Errorf("invalid project_id")
+		return nil, fmt.Errorf("%w: invalid project_id", ErrValidation)
 	}
 
 	conn, err := WithWorkspace(ctx, s.db)
