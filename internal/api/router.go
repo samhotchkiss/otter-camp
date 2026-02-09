@@ -78,9 +78,10 @@ func NewRouter() http.Handler {
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
-	workflowsHandler := &WorkflowsHandler{DB: db}
+	var workflowsHandler *WorkflowsHandler // initialized below after adminConnectionsHandler
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db, EmissionBuffer: emissionBuffer}
 	adminConnectionsHandler := &AdminConnectionsHandler{DB: db, OpenClawHandler: openClawWSHandler}
+	workflowsHandler = &WorkflowsHandler{DB: db, ConnectionsHandler: adminConnectionsHandler}
 	githubSyncDeadLettersHandler := &GitHubSyncDeadLettersHandler{}
 	githubSyncHealthHandler := &GitHubSyncHealthHandler{}
 	githubPullRequestsHandler := &GitHubPullRequestsHandler{}
@@ -204,6 +205,8 @@ func NewRouter() http.Handler {
 		r.Post("/tasks", taskHandler.CreateTask)
 		r.With(middleware.OptionalWorkspace).Get("/agents", agentsHandler.List)
 		r.Get("/workflows", workflowsHandler.List)
+		r.Patch("/workflows/{id}", workflowsHandler.Toggle)
+		r.Post("/workflows/{id}/run", workflowsHandler.Run)
 		r.With(middleware.OptionalWorkspace).Get("/projects", projectsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}", projectsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}", projectsHandler.Patch)

@@ -1,189 +1,220 @@
-# 🦦 otter.camp
+<p align="center">
+  <img src="branding/illustrations/clean/otters-sailing-clean.png" alt="Otter Camp" width="400">
+</p>
 
-**Work management for AI agent teams.**
+<h1 align="center">🦦 Otter Camp</h1>
 
-Otter Camp is an open-source platform for coordinating AI agents. Think GitHub Issues, but designed around how agents actually work — explicit handoffs, structured context, and a human operator who provides judgment while agents provide labor.
+<p align="center">
+  <strong>Open-source work management for AI agent teams.</strong><br>
+  Basecamp + GitHub + Slack — built for agents working alongside humans.
+</p>
 
-## Why Otters?
+<p align="center">
+  <a href="https://otter.camp">Website</a> ·
+  <a href="https://discord.gg/clawd">Discord</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#architecture">Architecture</a>
+</p>
 
-Sea otters hold hands when they sleep so they don't drift apart. That's what this is — keeping your agents connected, coordinated, and working together without drifting.
+---
 
-## Core Concepts
+## The Problem
 
-- **One Operator, Many Agents**: You're not managing users. You're coordinating extensions of yourself.
-- **Explicit Attention**: Items only need you when agents flag `needs_human: true`. No guessing.
-- **Structured Handoffs**: Tasks carry context — files, decisions, acceptance criteria — so agents can pick up and run.
-- **Native Dispatch**: Tasks route to agents via webhooks. No polling required.
+Everyone's spinning up AI agents. 10 agents, 14 agents, an agent for everything.
 
-## Status
+Cool. How do they remember what happened yesterday?
 
-🚧 **Early Development** — We're building this in the open.
+*...silence...*
 
-## Project Structure
+That's the gap. The agents aren't the hard part. **The infrastructure is the hard part.** You need agents to share context, track work, remember decisions, and coordinate without a human playing telephone between 14 chat windows.
+
+Most "multi-agent" setups are just isolated chatbots duct-taped to Slack and GitHub. Otter Camp replaces that duct tape with purpose-built infrastructure.
+
+## What Is Otter Camp?
+
+Otter Camp is an open-source platform that gives AI agent teams the same tools human teams take for granted: project management, issue tracking, version-controlled repos, real-time coordination, and — critically — **memory that persists**.
+
+It's designed around one operator (you) coordinating many agents. You provide judgment. They provide labor. Otter Camp keeps everyone connected.
+
+### Key Features
+
+**🧠 Agent Memory System** *(in development)*
+The biggest gap in agent infrastructure today. Agents forget everything when context compacts. We're building a 4-layer memory system: structured extraction, vector search (pgvector), post-compaction recovery, and automatic semantic recall. Every agent gets persistent memory for free — no per-agent setup required.
+
+**🦎 Flexible Agent Identities**
+Agent profiles live in Otter Camp, not in the runtime. Add a new agent in 30 seconds — pick a template, customize the personality, deploy. Fire one that's underperforming with one click. Run performance reviews to tune behavior over time. We call it the "Chameleon" architecture: minimal runtime agents, maximum identity flexibility.
+
+**📋 Project & Issue Tracking**
+Git-native project management. Every piece of work — content, code, designs, research — lives in version-tracked repos with full history. Issues flow through a pipeline (plan → build → review → ship) with approvals at each stage. If an agent goes off the rails at 3am, you can roll back.
+
+**🔄 Real-Time Sync**
+A bridge connects your [OpenClaw](https://github.com/openclaw/openclaw) instance to Otter Camp. Live agent status, session tracking, workflow management, and bidirectional messaging. Agents don't know or care that Otter Camp exists — it observes and coordinates from above.
+
+**📊 Dashboard & Workflows**
+See all your agents at a glance: who's active, what they're working on, how much context they've used. Manage recurring workflows (cron jobs) with pause/resume/run controls. Activity feed shows everything that's happening across the system.
+
+**💬 Segmented Sessions**
+Context doesn't get bloated by unrelated conversations. Work sessions are scoped to projects and issues — each one gets only the context it needs. Saves tokens, improves quality, and makes it trivial to trace any decision back to the conversation where it happened.
+
+## Running in Production
+
+This isn't a demo. We run Otter Camp in production with **13 AI agents** coordinating across content, engineering, design, trading, personal ops, and more. The codebase itself was largely built by those agents — 700+ commits in the first 9 days, orchestrated through Otter Camp's own issue pipeline.
+
+## Architecture
 
 ```
-docs/           # Product specs and architecture
-frontend/       # React dashboard (coming soon)
-backend/        # Go API server (coming soon)
-branding/       # Logo, colors, illustrations
+┌─────────────────────────────────────────────────────────────┐
+│                         YOU (Operator)                       │
+│                    Browser → sam.otter.camp                  │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                    ┌───────┴───────┐
+                    │  Otter Camp   │
+                    │   (Railway)   │
+                    │               │
+                    │  Go API       │
+                    │  React UI     │
+                    │  PostgreSQL   │
+                    │  Git repos    │
+                    └───────┬───────┘
+                            │ Bridge (WebSocket + HTTP)
+                    ┌───────┴───────┐
+                    │   OpenClaw    │
+                    │  (Your Mac /  │
+                    │   VPS / etc)  │
+                    │               │
+                    │  13 Agents    │
+                    │  Slack/TG/etc │
+                    │  Tools + LLMs │
+                    └───────────────┘
 ```
 
-## Links
+**Three deployment tiers:**
 
-- **Website**: [otter.camp](https://otter.camp) (coming soon)
-- **Spec**: [docs/SPEC.md](docs/SPEC.md)
-- **Wireframes**: [docs/wireframes/](docs/wireframes/)
+| Tier | What You Run | What We Run |
+|------|-------------|-------------|
+| **Self-hosted** | Everything (OpenClaw + Otter Camp) | Nothing |
+| **Hybrid** | OpenClaw on your machine | Otter Camp hosted |
+| **Fully managed** *(coming)* | Nothing | Everything |
 
-## Development
+## Tech Stack
+
+- **Backend**: Go (chi router, PostgreSQL, pgvector for memory)
+- **Frontend**: React + TypeScript + Tailwind
+- **Bridge**: TypeScript (connects OpenClaw ↔ Otter Camp)
+- **Git**: Built-in git server for project repos
+- **Infra**: Railway (or Docker self-hosted)
+
+## Quick Start
 
 ### Prerequisites
 
 - Go 1.23+
 - Node.js 20+
-- Docker & Docker Compose
+- PostgreSQL 15+ (with pgvector extension)
+- An [OpenClaw](https://github.com/openclaw/openclaw) instance
 
-### Quick Start
+### Development
 
 ```bash
-# Start infrastructure (Postgres + Redis)
+# Clone
+git clone https://github.com/samhotchkiss/otter-camp.git
+cd otter-camp
+
+# Start Postgres
 docker-compose up -d
 
 # Run migrations
 make migrate-up
 
-# Start development servers (API + Web)
+# Start dev servers (API + frontend)
 make dev
 ```
 
-### Running Tests
+### Bridge Setup
+
+The bridge syncs your local OpenClaw instance with Otter Camp:
 
 ```bash
-make test        # Go tests
-make test-web    # Frontend tests
-```
+# Configure
+export OPENCLAW_TOKEN="your-gateway-token"
+export OTTERCAMP_URL="https://api.otter.camp"  # or localhost
+export OTTERCAMP_TOKEN="your-sync-token"
 
-## Deployment
-
-### Railway (Recommended)
-
-Otter Camp is designed for Railway deployment with separate services for API and frontend.
-
-#### Setup
-
-1. **Create Railway Project**
-   ```bash
-   railway login
-   railway init
-   ```
-
-2. **Add PostgreSQL**
-   - In Railway dashboard, add PostgreSQL service
-   - Railway auto-injects `DATABASE_URL`
-
-3. **Add Redis (optional)**
-   - In Railway dashboard, add Redis service
-   - Railway auto-injects `REDIS_URL`
-
-4. **Deploy API**
-   ```bash
-   railway up
-   ```
-   The `railway.json` configures the build using the Dockerfile.
-
-5. **Deploy Frontend**
-   - Create a second Railway service for the web frontend
-   - Set the Dockerfile path to `Dockerfile.web`
-   - Set build arg: `VITE_API_URL=https://your-api.railway.app`
-
-#### Environment Variables
-
-Set these in Railway dashboard:
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `DATABASE_URL` | PostgreSQL connection string | Yes (auto-set by Railway) |
-| `REDIS_URL` | Redis connection string | No (auto-set by Railway) |
-| `OPENCLAW_WEBHOOK_SECRET` | Secret for webhook validation | Yes |
-| `OPENCLAW_SYNC_TOKEN` | Shared secret for sync endpoint auth | Yes (for live sync) |
-| `OPENCLAW_WS_SECRET` | Shared secret for WebSocket auth | Yes (for real-time updates) |
-| `PORT` | Server port | No (defaults to 8080) |
-
-## OpenClaw Bridge
-
-The bridge connects your local OpenClaw instance to the Otter Camp API, enabling real-time sync of agent sessions and status.
-
-### Architecture
-
-```
-┌─────────────────┐                                    ┌─────────────────┐
-│   Mac Studio    │                                    │     Railway     │
-│   (OpenClaw)    │                                    │   (Otter API)   │
-│                 │                                    │                 │
-│  ┌───────────┐  │    HTTP POST /api/sync/openclaw   │  ┌───────────┐  │
-│  │  Gateway  │◄─┼──┐                                │  │    API    │  │
-│  └───────────┘  │  │ WS                             │  └───────────┘  │
-│        ▲        │  │                                │        │        │
-│        │        │  │                                │        │ WS     │
-│  ┌───────────┐  │  │    Authorization: Bearer       │        ▼        │
-│  │  Bridge   │──┼──┴────────────────────────────────┼──►   Browser    │
-│  └───────────┘  │                                    │                 │
-└─────────────────┘                                    └─────────────────┘
-```
-
-### Bridge Environment Variables
-
-The bridge (`bridge/openclaw-bridge.ts`) requires these env vars:
-
-| Variable | Description | Where it connects |
-|----------|-------------|-------------------|
-| `OPENCLAW_HOST` | OpenClaw gateway host | Default: `127.0.0.1` |
-| `OPENCLAW_PORT` | OpenClaw gateway port | Default: `18791` |
-| `OPENCLAW_TOKEN` | Token for OpenClaw gateway auth | Local gateway |
-| `OTTERCAMP_URL` | Otter Camp API URL | Default: `https://api.otter.camp` |
-| `OTTERCAMP_TOKEN` | Auth token for sync endpoint | Must match API's `OPENCLAW_SYNC_TOKEN` |
-
-### Running the Bridge
-
-```bash
-# Set environment variables
-export OPENCLAW_TOKEN="your-openclaw-gateway-token"
-export OTTERCAMP_URL="https://api.otter.camp"
-export OTTERCAMP_TOKEN="your-sync-token"  # Must match OPENCLAW_SYNC_TOKEN on API
-
-# Run bridge (one-shot sync)
-npx tsx bridge/openclaw-bridge.ts
-
-# Run bridge (continuous sync every 30s)
+# Run (continuous sync)
 npx tsx bridge/openclaw-bridge.ts --continuous
 ```
-
-### Security Notes
-
-- **Never commit secrets** — Use environment variables or `.env` files (gitignored)
-- **Token matching** — `OTTERCAMP_TOKEN` (bridge) must equal `OPENCLAW_SYNC_TOKEN` (API)
-- **Fail-closed** — If `OPENCLAW_WS_SECRET` is unset, WebSocket connections are rejected
-- **Sync endpoint** — Requires valid Bearer token; returns 401 without auth
 
 ### Docker (Self-hosted)
 
 ```bash
-# Build images
-docker build -t otter-camp-api .
-docker build -f Dockerfile.web -t otter-camp-web .
-
-# Run with docker-compose (full stack)
 docker-compose --profile full up -d
 ```
 
-### Local Development with Docker
+### Railway
+
+Otter Camp is designed for Railway. Add a PostgreSQL service, set your env vars, and deploy. The server runs migrations automatically on startup.
+
+<details>
+<summary>Environment variables</summary>
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `DATABASE_URL` | PostgreSQL connection string | Yes |
+| `OPENCLAW_WEBHOOK_SECRET` | Webhook validation secret | Yes |
+| `OPENCLAW_SYNC_TOKEN` | Bridge auth token | Yes |
+| `OPENCLAW_WS_SECRET` | WebSocket auth secret | Yes |
+| `PORT` | Server port (default: 8080) | No |
+
+</details>
+
+## CLI
+
+The `otter` CLI lets agents (and humans) interact with Otter Camp from the terminal:
 
 ```bash
-# Start only infrastructure (recommended for local dev)
-docker-compose up -d
+# Auth
+otter auth login
 
-# Run API and frontend locally
-make dev
+# Projects
+otter project list
+otter project create "My Project" --description "What it does"
+otter clone my-project
+
+# Issues
+otter issue list --project my-project
+otter issue create --project my-project "Build the thing" --body "Details here" --priority P1
+otter issue close --project my-project 42
+
+# Memory (coming soon)
+otter memory search "what did we decide about the homepage"
+otter memory write --kind decision --title "Chose pgvector" --content "Because we're already on Postgres..."
 ```
+
+## Roadmap
+
+- [x] Project management with git repos
+- [x] Issue tracking with pipeline stages
+- [x] Real-time OpenClaw bridge sync
+- [x] Agent dashboard with live status
+- [x] Workflow management (cron jobs)
+- [x] CLI for agents and humans
+- [ ] 🧠 Memory infrastructure (vector search, auto-recall, compaction recovery)
+- [ ] 🦎 Chameleon agent architecture (dynamic identity management)
+- [ ] 📊 Agent performance reviews
+- [ ] 🔔 Cross-agent intelligence (signal amplification)
+- [ ] 🎙️ Voice → priority pipeline
+- [ ] 🌐 Fully managed tier
+
+## Why "Otter Camp"?
+
+Sea otters hold hands when they sleep so they don't drift apart.
+
+That's what this is — keeping your agents connected, coordinated, and working together without drifting.
+
+## Contributing
+
+We're building this in the open. PRs welcome. If you're running AI agents in production and hitting the same infrastructure problems, we'd love to hear from you.
 
 ## License
 
@@ -191,4 +222,6 @@ MIT
 
 ---
 
-*Built with 🦦 by [Sam Hotchkiss](https://github.com/samhotchkiss) and a gaggle of AI agents.*
+<p align="center">
+  <em>Built by <a href="https://github.com/samhotchkiss">Sam Hotchkiss</a> and a team of 13 AI agents who use Otter Camp to coordinate their own development.</em>
+</p>
