@@ -316,6 +316,38 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 	}
 }
 
+func TestSettingsRoutesAreRegistered(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	orgID := "00000000-0000-0000-0000-000000000001"
+	paths := []string{
+		"/api/settings/profile",
+		"/api/settings/notifications",
+		"/api/settings/workspace",
+		"/api/settings/integrations",
+	}
+
+	for _, path := range paths {
+		reqGet := httptest.NewRequest(http.MethodGet, path+"?org_id="+orgID, nil)
+		recGet := httptest.NewRecorder()
+		router.ServeHTTP(recGet, reqGet)
+		if recGet.Code == http.StatusNotFound {
+			t.Fatalf("expected %s GET route to be registered, got status %d", path, recGet.Code)
+		}
+
+		reqPut := httptest.NewRequest(http.MethodPut, path+"?org_id="+orgID, strings.NewReader(`{}`))
+		recPut := httptest.NewRecorder()
+		router.ServeHTTP(recPut, reqPut)
+		if recPut.Code == http.StatusNotFound {
+			t.Fatalf("expected %s PUT route to be registered, got status %d", path, recPut.Code)
+		}
+		if recPut.Code == http.StatusMethodNotAllowed {
+			t.Fatalf("expected %s PUT route handler to be registered, got status %d", path, recPut.Code)
+		}
+	}
+}
+
 func TestUploadsRouteServesStoredFile(t *testing.T) {
 	t.Parallel()
 

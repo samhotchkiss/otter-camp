@@ -205,6 +205,7 @@ function isRecoverableAuthLoadError(error: unknown): boolean {
     message.includes("invalid session token") ||
     message.includes("missing authentication") ||
     message.includes("workspace mismatch") ||
+    message.includes("forbidden") ||
     message.includes("request failed (401)") ||
     message.includes("request failed (403)")
   );
