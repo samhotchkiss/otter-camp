@@ -53,6 +53,9 @@ const MAX_TRACKED_ACTIVITY_EVENT_IDS = 5000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const RECONNECT_JITTER_SPREAD = 0.2;
 const RECONNECT_FAILURE_EXIT_THRESHOLD = 5;
+const HEARTBEAT_INTERVAL_MS = 10000;
+const HEARTBEAT_PONG_TIMEOUT_MS = 5000;
+const HEARTBEAT_MISS_THRESHOLD = 2;
 const MAX_TRACKED_SESSION_CONTEXTS = (() => {
   const raw = Number.parseInt((process.env.OTTER_SESSION_CONTEXT_MAX || '').trim(), 10);
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -283,12 +286,39 @@ type SocketReconnectController = {
   firstMessageReceived: boolean;
 };
 
+type SocketHeartbeatController = {
+  intervalTimer: ReturnType<typeof setInterval> | null;
+  pongTimeoutTimer: ReturnType<typeof setTimeout> | null;
+  missedPongs: number;
+  lastPingAt: number;
+  lastPongAt: number;
+  lastMessageAt: number;
+};
+
 let openClawWS: WebSocket | null = null;
 let otterCampWS: WebSocket | null = null;
 let continuousModeEnabled = false;
 const reconnectByRole: Record<BridgeSocketRole, SocketReconnectController> = {
   openclaw: { timer: null, consecutiveFailures: 0, firstMessageReceived: false },
   ottercamp: { timer: null, consecutiveFailures: 0, firstMessageReceived: false },
+};
+const heartbeatByRole: Record<BridgeSocketRole, SocketHeartbeatController> = {
+  openclaw: {
+    intervalTimer: null,
+    pongTimeoutTimer: null,
+    missedPongs: 0,
+    lastPingAt: 0,
+    lastPongAt: 0,
+    lastMessageAt: 0,
+  },
+  ottercamp: {
+    intervalTimer: null,
+    pongTimeoutTimer: null,
+    missedPongs: 0,
+    lastPingAt: 0,
+    lastPongAt: 0,
+    lastMessageAt: 0,
+  },
 };
 const connectionStateByRole: Record<BridgeSocketRole, BridgeConnectionState> = {
   openclaw: 'disconnected',
@@ -324,6 +354,20 @@ export function computeReconnectDelayMs(attempt: number, randomFn: () => number 
 
 export function shouldExitAfterReconnectFailures(consecutiveFailures: number): boolean {
   return Number.isFinite(consecutiveFailures) && consecutiveFailures >= RECONNECT_FAILURE_EXIT_THRESHOLD;
+}
+
+export function nextMissedPongCount(currentMissedPongs: number, receivedPong: boolean): number {
+  if (receivedPong) {
+    return 0;
+  }
+  const safeCurrent = Number.isFinite(currentMissedPongs) && currentMissedPongs > 0
+    ? Math.floor(currentMissedPongs)
+    : 0;
+  return safeCurrent + 1;
+}
+
+export function shouldForceReconnectFromHeartbeat(missedPongs: number): boolean {
+  return Number.isFinite(missedPongs) && missedPongs >= HEARTBEAT_MISS_THRESHOLD;
 }
 
 export function transitionConnectionState(
@@ -389,6 +433,7 @@ function markSocketOpen(role: BridgeSocketRole): void {
 }
 
 function markSocketMessage(role: BridgeSocketRole): void {
+  markHeartbeatTraffic(role);
   applyConnectionTransition(role, 'socket_message');
   const controller = reconnectByRole[role];
   if (!controller.firstMessageReceived) {
@@ -420,6 +465,75 @@ function scheduleReconnect(role: BridgeSocketRole, reconnectFn: () => void): voi
     applyConnectionTransition(role, 'reconnect_timer_fired', { attempt: controller.consecutiveFailures });
     reconnectFn();
   }, delayMs);
+}
+
+function clearHeartbeatTimers(role: BridgeSocketRole): void {
+  const heartbeat = heartbeatByRole[role];
+  if (heartbeat.intervalTimer) {
+    clearInterval(heartbeat.intervalTimer);
+    heartbeat.intervalTimer = null;
+  }
+  if (heartbeat.pongTimeoutTimer) {
+    clearTimeout(heartbeat.pongTimeoutTimer);
+    heartbeat.pongTimeoutTimer = null;
+  }
+}
+
+function markHeartbeatTraffic(role: BridgeSocketRole): void {
+  heartbeatByRole[role].lastMessageAt = Date.now();
+}
+
+function markHeartbeatPong(role: BridgeSocketRole): void {
+  const heartbeat = heartbeatByRole[role];
+  heartbeat.lastPongAt = Date.now();
+  heartbeat.missedPongs = nextMissedPongCount(heartbeat.missedPongs, true);
+  if (heartbeat.pongTimeoutTimer) {
+    clearTimeout(heartbeat.pongTimeoutTimer);
+    heartbeat.pongTimeoutTimer = null;
+  }
+}
+
+function startHeartbeatLoop(
+  role: BridgeSocketRole,
+  socket: WebSocket,
+  onForceReconnect: () => void,
+): void {
+  clearHeartbeatTimers(role);
+  const heartbeat = heartbeatByRole[role];
+  heartbeat.missedPongs = 0;
+  heartbeat.lastPingAt = 0;
+  heartbeat.lastPongAt = 0;
+
+  const triggerHeartbeat = () => {
+    if (socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    heartbeat.lastPingAt = Date.now();
+    try {
+      socket.ping();
+    } catch (err) {
+      console.error(`[bridge] ${role} heartbeat ping failed:`, err);
+      return;
+    }
+
+    if (heartbeat.pongTimeoutTimer) {
+      clearTimeout(heartbeat.pongTimeoutTimer);
+    }
+    heartbeat.pongTimeoutTimer = setTimeout(() => {
+      heartbeat.pongTimeoutTimer = null;
+      heartbeat.missedPongs = nextMissedPongCount(heartbeat.missedPongs, false);
+      applyConnectionTransition(role, 'health_warning', {
+        missed_pongs: heartbeat.missedPongs,
+        timeout_ms: HEARTBEAT_PONG_TIMEOUT_MS,
+      });
+      if (shouldForceReconnectFromHeartbeat(heartbeat.missedPongs)) {
+        applyConnectionTransition(role, 'heartbeat_missed', { missed_pongs: heartbeat.missedPongs });
+        onForceReconnect();
+      }
+    }, HEARTBEAT_PONG_TIMEOUT_MS);
+  };
+
+  heartbeat.intervalTimer = setInterval(triggerHeartbeat, HEARTBEAT_INTERVAL_MS);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1609,6 +1723,11 @@ async function connectToOpenClaw(): Promise<void> {
 
     openClawWS.on('open', () => {
       markSocketOpen('openclaw');
+      startHeartbeatLoop('openclaw', openClawWS!, () => {
+        if (openClawWS && openClawWS.readyState === WebSocket.OPEN) {
+          openClawWS.close();
+        }
+      });
       console.log('[bridge] OpenClaw socket opened, waiting for challenge');
     });
 
@@ -1727,11 +1846,19 @@ async function connectToOpenClaw(): Promise<void> {
     openClawWS.on('error', (err) => {
       console.error('[bridge] OpenClaw socket error:', err);
       rejectOnce(err);
+      if (openClawWS && openClawWS.readyState === WebSocket.OPEN) {
+        openClawWS.close();
+      }
+    });
+
+    openClawWS.on('pong', () => {
+      markHeartbeatPong('openclaw');
     });
 
     openClawWS.on('close', (code, reason) => {
       console.warn(`[bridge] OpenClaw socket closed (${code}) ${reason.toString()}`);
       applyConnectionTransition('openclaw', 'socket_closed', { code, reason: reason.toString() });
+      clearHeartbeatTimers('openclaw');
       openClawWS = null;
       for (const [pendingID, pending] of Array.from(pendingRequests.entries())) {
         pendingRequests.delete(pendingID);
@@ -2794,6 +2921,11 @@ function connectOtterCampDispatchSocket(): void {
 
   otterCampWS.on('open', () => {
     markSocketOpen('ottercamp');
+    startHeartbeatLoop('ottercamp', otterCampWS!, () => {
+      if (otterCampWS && otterCampWS.readyState === WebSocket.OPEN) {
+        otterCampWS.close();
+      }
+    });
     console.log('[bridge] connected to OtterCamp /ws/openclaw');
   });
 
@@ -2826,6 +2958,7 @@ function connectOtterCampDispatchSocket(): void {
   otterCampWS.on('close', (code, reason) => {
     console.warn(`[bridge] OtterCamp websocket closed (${code}) ${reason.toString()}`);
     applyConnectionTransition('ottercamp', 'socket_closed', { code, reason: reason.toString() });
+    clearHeartbeatTimers('ottercamp');
     otterCampWS = null;
     if (continuousModeEnabled) {
       scheduleReconnect('ottercamp', () => {
@@ -2839,6 +2972,10 @@ function connectOtterCampDispatchSocket(): void {
     if (otterCampWS && otterCampWS.readyState === WebSocket.OPEN) {
       otterCampWS.close();
     }
+  });
+
+  otterCampWS.on('pong', () => {
+    markHeartbeatPong('ottercamp');
   });
 }
 
