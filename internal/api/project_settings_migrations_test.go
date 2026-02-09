@@ -77,12 +77,12 @@ func TestProjectSettingsMigrationFilesExist(t *testing.T) {
 	require.NoError(t, err)
 
 	required := []string{
-		"047_create_project_deploy_config.up.sql",
-		"047_create_project_deploy_config.down.sql",
-		"048_add_require_human_review.up.sql",
-		"048_add_require_human_review.down.sql",
-		"049_allow_reviewer_gate_approval_state.up.sql",
-		"049_allow_reviewer_gate_approval_state.down.sql",
+		"050_create_project_deploy_config.up.sql",
+		"050_create_project_deploy_config.down.sql",
+		"051_add_require_human_review.up.sql",
+		"051_add_require_human_review.down.sql",
+		"052_allow_reviewer_gate_approval_state.up.sql",
+		"052_allow_reviewer_gate_approval_state.down.sql",
 	}
 
 	for _, filename := range required {
@@ -106,25 +106,25 @@ func TestProjectSettingsMigrationFilesContainExpectedDDL(t *testing.T) {
 	}
 
 	checkContains(
-		"047_create_project_deploy_config.up.sql",
+		"050_create_project_deploy_config.up.sql",
 		"create table project_deploy_config",
 		"deploy_method",
 		"github_push",
 		"cli_command",
 	)
 	checkContains(
-		"048_add_require_human_review.up.sql",
+		"051_add_require_human_review.up.sql",
 		"alter table projects",
 		"add column require_human_review boolean not null default false",
 	)
 	checkContains(
-		"049_allow_reviewer_gate_approval_state.up.sql",
+		"052_allow_reviewer_gate_approval_state.up.sql",
 		"alter table project_issues",
 		"project_issues_approval_state_check",
 		"approved_by_reviewer",
 	)
 	checkContains(
-		"049_allow_reviewer_gate_approval_state.down.sql",
+		"052_allow_reviewer_gate_approval_state.down.sql",
 		"update project_issues",
 		"where approval_state = 'approved_by_reviewer'",
 		"approval_state in ('draft', 'ready_for_review', 'needs_changes', 'approved')",
@@ -139,7 +139,7 @@ func TestProjectSettingsMigrationsRollbackDeployConfigAndHumanReviewColumn(t *te
 
 	db := setupMessageTestDB(t)
 	version := currentSchemaVersion(t, db)
-	require.GreaterOrEqual(t, version, int64(49))
+	require.GreaterOrEqual(t, version, int64(52))
 
 	migrationsDir, err := filepath.Abs(filepath.Join("..", "..", "migrations"))
 	require.NoError(t, err)
