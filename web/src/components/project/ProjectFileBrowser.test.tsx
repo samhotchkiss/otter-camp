@@ -256,6 +256,26 @@ describe("ProjectFileBrowser", () => {
     expect(screen.queryByText("project repository path is not configured")).not.toBeInTheDocument();
   });
 
+  it("normalizes root ref/path tree errors into a friendly empty state and still retries", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(mockJSONResponse({ error: "ref or path not found" }, false))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          ref: "main",
+          path: "/",
+          entries: [{ name: "notes", type: "dir", path: "notes/" }],
+        }),
+      );
+
+    render(<ProjectFileBrowser projectId="project-1" />);
+
+    expect(await screen.findByText("No files found in this repository yet.")).toBeInTheDocument();
+    expect(screen.queryByText("ref or path not found")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: /notes/i })).toBeInTheDocument();
+  });
+
   it("toggles to commit history view", async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValueOnce(
@@ -272,4 +292,16 @@ describe("ProjectFileBrowser", () => {
     await user.click(screen.getByRole("button", { name: "Commit history" }));
     expect(await screen.findByTestId("project-commit-browser")).toBeInTheDocument();
   });
+
+  it("allows toggling to commit history even when tree load failed", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValueOnce(mockJSONResponse({ error: "tree load failed" }, false));
+
+    render(<ProjectFileBrowser projectId="project-1" />);
+    expect(await screen.findByText("tree load failed")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Commit history" }));
+    expect(await screen.findByTestId("project-commit-browser")).toBeInTheDocument();
+  });
+
 });

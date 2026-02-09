@@ -9,6 +9,7 @@ import ProjectCommitBrowser from "./ProjectCommitBrowser";
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const NO_REPO_CONFIGURED_MESSAGE = "No repository configured for this project";
+const EMPTY_REPO_TREE_MESSAGE = "No files found in this repository yet.";
 
 type ProjectFileBrowserProps = {
   projectId: string;
@@ -94,6 +95,10 @@ function isNoRepositoryConfiguredError(message: string | null): boolean {
 function normalizeTreeErrorMessage(message: string): string {
   if (isNoRepositoryConfiguredError(message)) {
     return NO_REPO_CONFIGURED_MESSAGE;
+  }
+  const lower = message.toLowerCase();
+  if (lower.includes("ref or path not found")) {
+    return EMPTY_REPO_TREE_MESSAGE;
   }
   return message;
 }
@@ -357,6 +362,17 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
             isNoRepositoryConfiguredError(treeError) ? (
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2">
                 <p className="text-sm text-[var(--text-muted)]">{NO_REPO_CONFIGURED_MESSAGE}</p>
+              </div>
+            ) : treeError === EMPTY_REPO_TREE_MESSAGE ? (
+              <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2">
+                <p className="text-sm text-[var(--text-muted)]">{EMPTY_REPO_TREE_MESSAGE}</p>
+                <button
+                  type="button"
+                  className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]"
+                  onClick={() => setTreeRefreshKey((value) => value + 1)}
+                >
+                  Retry
+                </button>
               </div>
             ) : (
               <div className="space-y-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2">
