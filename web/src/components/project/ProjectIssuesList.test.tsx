@@ -12,6 +12,7 @@ type MockIssue = {
   kind: "issue" | "pull_request";
   approval_state?: "draft" | "ready_for_review" | "needs_changes" | "approved" | null;
   owner_agent_id?: string | null;
+  work_status?: string;
   last_activity_at: string;
   github_number?: number | null;
   github_url?: string | null;
@@ -305,5 +306,32 @@ describe("ProjectIssuesList", () => {
     const row = await screen.findByRole("button", { name: /#42 Owner should be friendly/i });
     expect(within(row).getByText("Owner: Unknown agent")).toBeInTheDocument();
     expect(within(row).queryByText(/6715afdc-9213-4830-b0a8-3a063c5b4209/)).not.toBeInTheDocument();
+  });
+
+  it("renders mini pipeline progress for each issue row", async () => {
+    fetchMock.mockImplementation(
+      mockIssuesAndAgents(
+        [
+          {
+            id: "issue-progress",
+            issue_number: 56,
+            title: "Show progress",
+            state: "open",
+            origin: "local",
+            kind: "issue",
+            owner_agent_id: null,
+            work_status: "review",
+            last_activity_at: "2026-02-06T05:00:00Z",
+          } satisfies MockIssue,
+        ],
+        [],
+      ),
+    );
+
+    render(<ProjectIssuesList projectId="project-1" />);
+
+    const row = await screen.findByRole("button", { name: /#56 Show progress/i });
+    expect(within(row).getByLabelText("Issue progress")).toBeInTheDocument();
+    expect(within(row).getByTestId("mini-stage-review")).toHaveAttribute("data-stage-state", "current");
   });
 });
