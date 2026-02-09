@@ -47,6 +47,10 @@ func main() {
 		handleRepo(os.Args[2:])
 	case "issue":
 		handleIssue(os.Args[2:])
+	case "pipeline":
+		handlePipeline(os.Args[2:])
+	case "deploy":
+		handleDeploy(os.Args[2:])
 	case "version":
 		fmt.Println("otter dev")
 	default:
@@ -66,6 +70,8 @@ Commands:
   remote add       Add origin remote for project
   repo info        Show repo URL for project
   issue            Manage project issues
+  pipeline         Configure per-project pipeline settings
+  deploy           Configure per-project deployment settings
   version          Show CLI version`)
 }
 
