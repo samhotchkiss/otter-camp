@@ -240,6 +240,16 @@ func TestProjectCreateSplitArgsSupportsInterspersedFlags(t *testing.T) {
 			wantNames: []string{"Agent", "--description"},
 		},
 		{
+			name:  "workflow flags remain in flag args",
+			input: []string{"Agent Avatars", "--workflow", "--schedule", "15m", "--template-title", "Run {{datetime}}"},
+			wantFlags: []string{
+				"--workflow",
+				"--schedule", "15m",
+				"--template-title", "Run {{datetime}}",
+			},
+			wantNames: []string{"Agent Avatars"},
+		},
+		{
 			name:    "missing flag value",
 			input:   []string{"Agent Avatars", "--description"},
 			wantErr: true,
@@ -262,6 +272,59 @@ func TestProjectCreateSplitArgsSupportsInterspersedFlags(t *testing.T) {
 		}
 		if strings.Join(gotNames, "|") != strings.Join(tt.wantNames, "|") {
 			t.Fatalf("%s: names got %v want %v", tt.name, gotNames, tt.wantNames)
+		}
+	}
+}
+
+func TestBuildWorkflowSchedulePayload(t *testing.T) {
+	tests := []struct {
+		name     string
+		schedule string
+		tz       string
+		wantKind string
+		wantExpr string
+		wantMs   int
+		wantTZ   string
+	}{
+		{
+			name:     "defaults to cron",
+			schedule: "",
+			tz:       "",
+			wantKind: "cron",
+			wantExpr: "0 6 * * *",
+			wantTZ:   "America/Denver",
+		},
+		{
+			name:     "duration every schedule",
+			schedule: "15m",
+			wantKind: "every",
+			wantMs:   900000,
+		},
+		{
+			name:     "cron with timezone",
+			schedule: "0 9 * * *",
+			tz:       "America/New_York",
+			wantKind: "cron",
+			wantExpr: "0 9 * * *",
+			wantTZ:   "America/New_York",
+		},
+	}
+
+	for _, tt := range tests {
+		payload := buildWorkflowSchedulePayload(tt.schedule, tt.tz)
+		if payload["kind"] != tt.wantKind {
+			t.Fatalf("%s: kind = %#v, want %q", tt.name, payload["kind"], tt.wantKind)
+		}
+		if tt.wantExpr != "" && payload["expr"] != tt.wantExpr {
+			t.Fatalf("%s: expr = %#v, want %q", tt.name, payload["expr"], tt.wantExpr)
+		}
+		if tt.wantMs > 0 {
+			if got, ok := payload["everyMs"].(int); !ok || got != tt.wantMs {
+				t.Fatalf("%s: everyMs = %#v, want %d", tt.name, payload["everyMs"], tt.wantMs)
+			}
+		}
+		if tt.wantTZ != "" && payload["tz"] != tt.wantTZ {
+			t.Fatalf("%s: tz = %#v, want %q", tt.name, payload["tz"], tt.wantTZ)
 		}
 	}
 }
