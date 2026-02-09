@@ -53,10 +53,12 @@ type adminConnectionsSessionSummary struct {
 }
 
 type adminConnectionsBridgeStatus struct {
-	Connected   bool                       `json:"connected"`
-	LastSync    *time.Time                 `json:"last_sync,omitempty"`
-	SyncHealthy bool                       `json:"sync_healthy"`
-	Diagnostics *OpenClawBridgeDiagnostics `json:"diagnostics,omitempty"`
+	Connected          bool                       `json:"connected"`
+	LastSync           *time.Time                 `json:"last_sync,omitempty"`
+	LastSyncAgeSeconds *int64                     `json:"last_sync_age_seconds,omitempty"`
+	Status             string                     `json:"status"`
+	SyncHealthy        bool                       `json:"sync_healthy"`
+	Diagnostics        *OpenClawBridgeDiagnostics `json:"diagnostics,omitempty"`
 }
 
 type adminConnectionsResponse struct {
@@ -162,8 +164,6 @@ const (
 
 var sensitiveTokenPattern = regexp.MustCompile(`(?i)(oc_git_[a-z0-9]+|bearer\s+[a-z0-9._-]+)`)
 
-const bridgeRecentSyncWindow = 5 * time.Minute
-
 func (h *AdminConnectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	sessions := h.loadSessions(r.Context())
 	summary := summarizeSessions(sessions)
@@ -171,24 +171,21 @@ func (h *AdminConnectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	hostDiag := h.loadHostDiagnostics(r.Context())
 	bridgeDiag := h.loadBridgeDiagnostics(r.Context())
 
-	connected := false
+	openClawConnected := false
+	openClawConnectionKnown := h.OpenClawHandler != nil
 	if h.OpenClawHandler != nil {
-		connected = h.OpenClawHandler.IsConnected()
+		openClawConnected = h.OpenClawHandler.IsConnected()
 	}
-
-	recentSync := false
-	if lastSync != nil {
-		recentSync = time.Since(*lastSync) <= bridgeRecentSyncWindow
-	}
-	connected = connected || recentSync
-	syncHealthy := recentSync
+	bridgeFreshness := deriveBridgeFreshness(lastSync, time.Now().UTC(), openClawConnected, openClawConnectionKnown)
 
 	sendJSON(w, http.StatusOK, adminConnectionsResponse{
 		Bridge: adminConnectionsBridgeStatus{
-			Connected:   connected,
-			LastSync:    lastSync,
-			SyncHealthy: syncHealthy,
-			Diagnostics: bridgeDiag,
+			Connected:          bridgeFreshness.Connected,
+			LastSync:           lastSync,
+			LastSyncAgeSeconds: bridgeFreshness.LastSyncAgeSeconds,
+			Status:             string(bridgeFreshness.Status),
+			SyncHealthy:        bridgeFreshness.SyncHealthy,
+			Diagnostics:        bridgeDiag,
 		},
 		Host:        hostDiag,
 		Sessions:    sessions,
@@ -263,17 +260,17 @@ func (h *AdminConnectionsHandler) loadSessions(_ context.Context) []adminConnect
 		if totalTokens.Valid {
 			session.TotalTokens = int(totalTokens.Int64)
 		}
-			if sessionKey.Valid {
-				session.SessionKey = sessionKey.String
-			}
-			if channel.Valid {
-				session.Channel = channel.String
-			}
-			session.Channel = deriveSessionChannel(session.Channel, session.SessionKey)
-			if lastSeen.Valid {
-				session.LastSeen = lastSeen.String
-			}
-			session.Status = deriveAgentStatus(session.UpdatedAt, session.TotalTokens)
+		if sessionKey.Valid {
+			session.SessionKey = sessionKey.String
+		}
+		if channel.Valid {
+			session.Channel = channel.String
+		}
+		session.Channel = deriveSessionChannel(session.Channel, session.SessionKey)
+		if lastSeen.Valid {
+			session.LastSeen = lastSeen.String
+		}
+		session.Status = deriveAgentStatus(session.UpdatedAt, session.TotalTokens)
 		session.Stalled = isSessionStalled(session.TotalTokens, session.UpdatedAt)
 		out = append(out, session)
 	}
@@ -714,23 +711,34 @@ func (h *AdminConnectionsHandler) RunDiagnostics(w http.ResponseWriter, r *http.
 	}
 
 	lastSync := h.loadLastSync(r.Context())
+	freshness := deriveBridgeFreshness(lastSync, time.Now().UTC(), connected, h.OpenClawHandler != nil)
 	if lastSync == nil {
 		checks = append(checks, adminDiagnosticCheck{
 			Key:     "sync.freshness",
 			Status:  "fail",
 			Message: "No sync timestamp available",
 		})
-	} else if time.Since(*lastSync) < 2*time.Minute {
+	} else if freshness.Status == bridgeFreshnessHealthy {
 		checks = append(checks, adminDiagnosticCheck{
 			Key:     "sync.freshness",
 			Status:  "pass",
-			Message: "Last sync is within freshness window",
+			Message: "Last sync is within 10 second freshness window",
 		})
-	} else {
+	} else if freshness.Status == bridgeFreshnessDegraded {
 		checks = append(checks, adminDiagnosticCheck{
 			Key:     "sync.freshness",
 			Status:  "warn",
-			Message: "Last sync is stale",
+			Message: "Last sync is between 10 and 30 seconds old",
+		})
+	} else {
+		message := "Last sync is stale (>30 seconds)"
+		if h.OpenClawHandler != nil && !connected {
+			message = "Bridge websocket disconnected or stale (>30 seconds)"
+		}
+		checks = append(checks, adminDiagnosticCheck{
+			Key:     "sync.freshness",
+			Status:  "fail",
+			Message: message,
 		})
 	}
 

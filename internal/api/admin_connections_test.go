@@ -117,15 +117,15 @@ func TestAdminConnectionsGetHandlesMissingDiagnosticsMetadata(t *testing.T) {
 	require.Equal(t, 0, payload.Summary.Total)
 }
 
-func TestAdminConnectionsGetUsesRecentLastSyncAsConnectedSignal(t *testing.T) {
+func TestAdminConnectionsGetUsesFreshLastSyncAsConnectedSignal(t *testing.T) {
 	prevLastSync := memoryLastSync
-	memoryLastSync = time.Now().UTC().Add(-90 * time.Second)
+	memoryLastSync = time.Now().UTC().Add(-8 * time.Second)
 	defer func() {
 		memoryLastSync = prevLastSync
 	}()
 
 	handler := &AdminConnectionsHandler{
-		OpenClawHandler: &fakeOpenClawConnectionStatus{connected: false},
+		OpenClawHandler: nil,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/connections", nil)
@@ -136,7 +136,10 @@ func TestAdminConnectionsGetUsesRecentLastSyncAsConnectedSignal(t *testing.T) {
 	var payload adminConnectionsResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.True(t, payload.Bridge.Connected)
+	require.Equal(t, "healthy", payload.Bridge.Status)
 	require.True(t, payload.Bridge.SyncHealthy)
+	require.NotNil(t, payload.Bridge.LastSyncAgeSeconds)
+	require.LessOrEqual(t, *payload.Bridge.LastSyncAgeSeconds, int64(10))
 }
 
 func TestAdminConnectionsGetMarksBridgeDisconnectedWhenLastSyncIsStale(t *testing.T) {
@@ -158,15 +161,93 @@ func TestAdminConnectionsGetMarksBridgeDisconnectedWhenLastSyncIsStale(t *testin
 	var payload adminConnectionsResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.False(t, payload.Bridge.Connected)
+	require.Equal(t, "unhealthy", payload.Bridge.Status)
 	require.False(t, payload.Bridge.SyncHealthy)
+}
+
+func TestAdminConnectionsHandlerBridgeHealthChecks(t *testing.T) {
+	tests := []struct {
+		name               string
+		lastSyncAge        time.Duration
+		openClawKnown      bool
+		openClawConnected  bool
+		expectStatus       string
+		expectConnected    bool
+		expectSyncHealthy  bool
+		expectAgeAtMostSec int64
+	}{
+		{
+			name:               "healthy within ten seconds",
+			lastSyncAge:        8 * time.Second,
+			expectStatus:       "healthy",
+			expectConnected:    true,
+			expectSyncHealthy:  true,
+			expectAgeAtMostSec: 10,
+		},
+		{
+			name:               "degraded between ten and thirty seconds",
+			lastSyncAge:        18 * time.Second,
+			expectStatus:       "degraded",
+			expectConnected:    true,
+			expectSyncHealthy:  false,
+			expectAgeAtMostSec: 30,
+		},
+		{
+			name:               "unhealthy beyond thirty seconds",
+			lastSyncAge:        45 * time.Second,
+			expectStatus:       "unhealthy",
+			expectConnected:    false,
+			expectSyncHealthy:  false,
+			expectAgeAtMostSec: 60,
+		},
+		{
+			name:               "websocket disconnected forces unhealthy",
+			lastSyncAge:        4 * time.Second,
+			openClawKnown:      true,
+			openClawConnected:  false,
+			expectStatus:       "unhealthy",
+			expectConnected:    false,
+			expectSyncHealthy:  false,
+			expectAgeAtMostSec: 10,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prevLastSync := memoryLastSync
+			memoryLastSync = time.Now().UTC().Add(-tc.lastSyncAge)
+			defer func() {
+				memoryLastSync = prevLastSync
+			}()
+
+			var openClawHandler openClawConnectionStatus
+			if tc.openClawKnown {
+				openClawHandler = &fakeOpenClawConnectionStatus{connected: tc.openClawConnected}
+			}
+			handler := &AdminConnectionsHandler{OpenClawHandler: openClawHandler}
+
+			req := httptest.NewRequest(http.MethodGet, "/api/admin/connections", nil)
+			rec := httptest.NewRecorder()
+			handler.Get(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			var payload adminConnectionsResponse
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+			require.Equal(t, tc.expectStatus, payload.Bridge.Status)
+			require.Equal(t, tc.expectConnected, payload.Bridge.Connected)
+			require.Equal(t, tc.expectSyncHealthy, payload.Bridge.SyncHealthy)
+			require.NotNil(t, payload.Bridge.LastSyncAgeSeconds)
+			require.LessOrEqual(t, *payload.Bridge.LastSyncAgeSeconds, tc.expectAgeAtMostSec)
+		})
+	}
 }
 
 func TestDeriveSessionChannel(t *testing.T) {
 	cases := []struct {
-		name      string
-		channel   string
-		session   string
-		expect    string
+		name    string
+		channel string
+		session string
+		expect  string
 	}{
 		{
 			name:    "preserves explicit channel",
