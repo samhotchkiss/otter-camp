@@ -1,4 +1,5 @@
 import PipelineSettings, { type PipelineSettingsAgentOption } from "../../components/project/PipelineSettings";
+import DeploySettings from "../../components/project/DeploySettings";
 
 type ProjectSettingsPageProps = {
   projectID: string;
@@ -80,6 +81,8 @@ export default function ProjectSettingsPage({
         initialRequireHumanReview={initialRequireHumanReview}
         onRequireHumanReviewSaved={onRequireHumanReviewSaved}
       />
+
+      <DeploySettings projectId={projectID} />
     </div>
   );
 }
