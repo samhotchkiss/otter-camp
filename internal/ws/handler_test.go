@@ -2,9 +2,15 @@ package ws
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsAllowedSubscriptionOrgID(t *testing.T) {
@@ -158,4 +164,76 @@ func TestIsWebSocketOriginAllowed_LoopbackAliasAllowed(t *testing.T) {
 	if !isWebSocketOriginAllowed(req) {
 		t.Fatalf("expected loopback alias origin to be allowed")
 	}
+}
+
+func TestClientReadPumpSubscribeTopic(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	handler := &Handler{Hub: hub}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	topic := "project:11111111-1111-1111-1111-111111111111:chat"
+	require.NoError(t, conn.WriteJSON(map[string]string{
+		"type":   "subscribe",
+		"org_id": orgID,
+		"topic":  topic,
+	}))
+	time.Sleep(50 * time.Millisecond)
+
+	payload := map[string]string{"event": "topic-update"}
+	raw, err := json.Marshal(payload)
+	require.NoError(t, err)
+	hub.BroadcastTopic(orgID, topic, raw)
+
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_, message, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.JSONEq(t, string(raw), string(message))
+}
+
+func TestClientReadPumpUnsubscribeTopic(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	handler := &Handler{Hub: hub}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	topic := "project:22222222-2222-2222-2222-222222222222:chat"
+	require.NoError(t, conn.WriteJSON(map[string]string{
+		"type":   "subscribe",
+		"org_id": orgID,
+		"topic":  topic,
+	}))
+	time.Sleep(25 * time.Millisecond)
+	require.NoError(t, conn.WriteJSON(map[string]string{
+		"type":   "unsubscribe",
+		"org_id": orgID,
+		"topic":  topic,
+	}))
+	time.Sleep(50 * time.Millisecond)
+
+	hub.BroadcastTopic(orgID, topic, []byte(`{"event":"should-not-arrive"}`))
+
+	_ = conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+	_, _, err = conn.ReadMessage()
+	require.Error(t, err)
 }
