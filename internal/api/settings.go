@@ -50,10 +50,10 @@ type IntegrationsResponse struct {
 	APIKeys            []IntegrationAPIKey `json:"apiKeys"`
 }
 
-// Backward-compatible aliases used by legacy settings tests and callers.
+// Backward-compatible aliases used by existing tests and callers.
 type settingsProfileResponse = ProfileResponse
-type settingsWorkspaceMemberResponse = WorkspaceMember
 type settingsWorkspaceResponse = WorkspaceResponse
+type settingsWorkspaceMemberResponse = WorkspaceMember
 type settingsIntegrationsResponse = IntegrationsResponse
 
 type apiKeyCreateRequest struct {
