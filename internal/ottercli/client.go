@@ -84,14 +84,19 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 }
 
 type Project struct {
-	ID                 string `json:"id"`
-	OrgID              string `json:"org_id"`
-	Name               string `json:"name"`
-	URLSlug            string `json:"slug"`
-	Description        string `json:"description"`
-	RepoURL            string `json:"repo_url"`
-	Status             string `json:"status"`
-	RequireHumanReview bool   `json:"require_human_review"`
+	ID               string         `json:"id"`
+	OrgID            string         `json:"org_id"`
+	Name             string         `json:"name"`
+	URLSlug          string         `json:"slug"`
+	Description      string         `json:"description"`
+	RepoURL          string         `json:"repo_url"`
+	Status           string         `json:"status"`
+	RequireHumanReview bool         `json:"require_human_review"`
+	WorkflowEnabled  bool           `json:"workflow_enabled"`
+	WorkflowSchedule map[string]any `json:"workflow_schedule,omitempty"`
+	WorkflowTemplate map[string]any `json:"workflow_template,omitempty"`
+	WorkflowAgentID  *string        `json:"workflow_agent_id,omitempty"`
+	WorkflowRunCount int            `json:"workflow_run_count"`
 }
 
 type projectListResponse struct {
@@ -187,10 +192,18 @@ type DeployConfig struct {
 }
 
 func (c *Client) ListProjects() ([]Project, error) {
+	return c.ListProjectsWithWorkflow(false)
+}
+
+func (c *Client) ListProjectsWithWorkflow(workflowOnly bool) ([]Project, error) {
 	if err := c.requireAuth(); err != nil {
 		return nil, err
 	}
-	req, err := c.newRequest(http.MethodGet, "/api/projects", nil)
+	path := "/api/projects"
+	if workflowOnly {
+		path = "/api/projects?workflow=true"
+	}
+	req, err := c.newRequest(http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +212,69 @@ func (c *Client) ListProjects() ([]Project, error) {
 		return nil, err
 	}
 	return resp.Projects, nil
+}
+
+type ProjectRun struct {
+	ID          string  `json:"id"`
+	ProjectID   string  `json:"project_id"`
+	IssueNumber int64   `json:"issue_number"`
+	Title       string  `json:"title"`
+	State       string  `json:"state"`
+	WorkStatus  string  `json:"work_status"`
+	Priority    string  `json:"priority"`
+	CreatedAt   string  `json:"created_at"`
+	ClosedAt    *string `json:"closed_at,omitempty"`
+}
+
+type projectRunListResponse struct {
+	Runs []ProjectRun `json:"runs"`
+}
+
+type projectRunTriggerResponse struct {
+	Run       ProjectRun `json:"run"`
+	RunNumber int        `json:"run_number"`
+}
+
+func (c *Client) TriggerProjectRun(projectID string) (projectRunTriggerResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return projectRunTriggerResponse{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return projectRunTriggerResponse{}, errors.New("project id is required")
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/projects/"+url.PathEscape(projectID)+"/runs/trigger", nil)
+	if err != nil {
+		return projectRunTriggerResponse{}, err
+	}
+	var response projectRunTriggerResponse
+	if err := c.do(req, &response); err != nil {
+		return projectRunTriggerResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) ListProjectRuns(projectID string, limit int) ([]ProjectRun, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	path := fmt.Sprintf("/api/projects/%s/runs?limit=%d", url.PathEscape(projectID), limit)
+	req, err := c.newRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var response projectRunListResponse
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response.Runs, nil
 }
 
 func (c *Client) CreateProject(input map[string]interface{}) (Project, error) {
