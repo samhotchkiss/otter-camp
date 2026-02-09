@@ -617,22 +617,19 @@ func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
-	targetApprovalState := store.IssueApprovalStateApproved
 	requireHumanReview, err := h.projectRequiresHumanReview(r.Context(), before.ProjectID)
 	if err != nil {
 		handleIssueStoreError(w, err)
 		return
 	}
-	if requireHumanReview {
-		if strings.TrimSpace(strings.ToLower(before.ApprovalState)) == store.IssueApprovalStateApprovedByReviewer {
-			if strings.TrimSpace(middleware.UserFromContext(r.Context())) == "" {
-				sendJSON(w, http.StatusForbidden, errorResponse{Error: "human approval required"})
-				return
-			}
-			targetApprovalState = store.IssueApprovalStateApproved
-		} else {
-			targetApprovalState = store.IssueApprovalStateApprovedByReviewer
-		}
+	targetApprovalState, statusCode, message := resolveApproveTargetApprovalState(
+		before.ApprovalState,
+		requireHumanReview,
+		middleware.UserFromContext(r.Context()),
+	)
+	if statusCode != 0 {
+		sendJSON(w, statusCode, errorResponse{Error: message})
+		return
 	}
 
 	updated, err := h.IssueStore.TransitionApprovalState(r.Context(), issueID, targetApprovalState)
@@ -658,6 +655,25 @@ func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
+}
+
+func resolveApproveTargetApprovalState(currentApprovalState string, requireHumanReview bool, actorID string) (string, int, string) {
+	if !requireHumanReview {
+		return store.IssueApprovalStateApproved, 0, ""
+	}
+
+	normalizedState := strings.TrimSpace(strings.ToLower(currentApprovalState))
+	switch normalizedState {
+	case store.IssueApprovalStateReadyForReview:
+		return store.IssueApprovalStateApprovedByReviewer, 0, ""
+	case store.IssueApprovalStateApprovedByReviewer:
+		if strings.TrimSpace(actorID) == "" {
+			return "", http.StatusForbidden, "human approval required"
+		}
+		return store.IssueApprovalStateApproved, 0, ""
+	default:
+		return "", http.StatusConflict, "issue must be ready_for_review for reviewer approval"
+	}
 }
 
 func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
