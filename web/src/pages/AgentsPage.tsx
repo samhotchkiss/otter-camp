@@ -597,8 +597,8 @@ function AgentsPageComponent({
         role: agent.role,
       },
       title: agent.name,
-      contextLabel: "Direct message",
-      subtitle: agent.role || "Agent chat",
+      contextLabel: "Chameleon-routed chat",
+      subtitle: "Identity injected on open. Project required for writable tasks.",
     });
   }, [openConversation]);
 
@@ -685,6 +685,9 @@ function AgentsPageComponent({
         </div>
 
         {/* Status filters */}
+        <p className="mt-4 text-xs text-[var(--text-muted)]">
+          Chats are routed through Chameleon identity injection.
+        </p>
         <div className="mt-6 flex flex-wrap gap-2">
           <StatusFilterButton
             status="all"

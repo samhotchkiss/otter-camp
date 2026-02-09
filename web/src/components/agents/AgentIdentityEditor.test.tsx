@@ -68,6 +68,95 @@ describe("AgentIdentityEditor", () => {
     });
   });
 
+  it("saves edited identity content through project commit endpoint", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/projects") && (init?.method || "GET") === "GET") {
+        return new Response(
+          JSON.stringify({
+            projects: [
+              { id: "project-agent-files", name: "Agent Files" },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/projects/project-agent-files/commits") && (init?.method || "GET") === "POST") {
+        return new Response(
+          JSON.stringify({
+            project_id: "project-agent-files",
+            path: "/agents/main/SOUL.md",
+            commit_type: "system",
+            auto_generated_message: false,
+            commit: {
+              id: "commit-1",
+              project_id: "project-agent-files",
+              repository_full_name: "otter/agent-files",
+              branch_name: "main",
+              sha: "abc123",
+              author_name: "OtterCamp Browser",
+              authored_at: "2026-02-09T00:00:00Z",
+              subject: "Update agent identity file",
+              message: "Update agent identity file",
+              created_at: "2026-02-09T00:00:00Z",
+              updated_at: "2026-02-09T00:00:00Z",
+            },
+          }),
+          { status: 201 },
+        );
+      }
+      if (url.includes("/api/admin/agents/main/files/SOUL.md")) {
+        return new Response(
+          JSON.stringify({
+            ref: "HEAD",
+            path: "/SOUL.md",
+            content: "# SOUL\nSteady and practical.",
+            encoding: "utf-8",
+            size: 28,
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/admin/agents/main/files")) {
+        return new Response(
+          JSON.stringify({
+            ref: "HEAD",
+            path: "/",
+            entries: [{ name: "SOUL.md", type: "file", path: "SOUL.md" }],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<AgentIdentityEditor agentID="main" />);
+
+    expect(await screen.findByRole("button", { name: "SOUL.md" })).toBeInTheDocument();
+    const editor = await screen.findByTestId("source-textarea");
+    fireEvent.change(editor, { target: { value: "# SOUL\nCalm under pressure." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Identity File" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([request, requestInit]) => {
+          if (!String(request).includes("/api/projects/project-agent-files/commits")) {
+            return false;
+          }
+          const method = String(requestInit?.method || "GET").toUpperCase();
+          if (method !== "POST") {
+            return false;
+          }
+          const body = JSON.parse(String(requestInit?.body || "{}")) as Record<string, unknown>;
+          return body.path === "/agents/main/SOUL.md" && body.commit_type === "system";
+        }),
+      ).toBe(true);
+    });
+
+    expect(await screen.findByText("Saved identity file.")).toBeInTheDocument();
+  });
+
   it("renders an empty state when no identity files are present", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

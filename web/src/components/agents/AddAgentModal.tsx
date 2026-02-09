@@ -101,6 +101,9 @@ export default function AddAgentModal({ isOpen, onClose, onCreated }: AddAgentMo
             Close
           </button>
         </div>
+        <p className="mb-4 text-xs text-[var(--text-muted)]">
+          Creates a managed OtterCamp identity + memory scaffold for chameleon routing.
+        </p>
 
         <form className="space-y-4" onSubmit={handleSubmit}>
           <label className="block text-sm text-[var(--text-muted)]" htmlFor="add-agent-slot">
