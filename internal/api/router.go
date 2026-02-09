@@ -91,6 +91,8 @@ func NewRouter() http.Handler {
 	knowledgeHandler := &KnowledgeHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
+	adminAgentsHandler := &AdminAgentsHandler{DB: db, OpenClawHandler: openClawWSHandler}
+	labelsHandler := &LabelsHandler{}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -125,6 +127,12 @@ func NewRouter() http.Handler {
 		projectTreeHandler.ProjectStore = projectStore
 		projectTreeHandler.ProjectRepos = projectRepoStore
 		projectIssueSyncHandler.Projects = projectStore
+		labelsHandler.Store = store.NewLabelStore(db)
+		labelsHandler.DB = db
+		adminAgentsHandler.Store = agentStore
+		adminAgentsHandler.ProjectStore = projectStore
+		adminAgentsHandler.ProjectRepos = projectRepoStore
+		adminAgentsHandler.EventStore = store.NewConnectionEventStore(db)
 		projectIssueSyncHandler.ProjectRepos = githubIntegrationHandler.ProjectRepos
 		projectIssueSyncHandler.Installations = githubIntegrationHandler.Installations
 		projectIssueSyncHandler.SyncJobs = githubSyncJobStore
@@ -240,6 +248,19 @@ func NewRouter() http.Handler {
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/repo/sync", githubIntegrationHandler.ManualRepoSync)
 		r.With(RequireCapability(db, CapabilityGitHubPublish)).Post("/projects/{id}/publish", githubIntegrationHandler.PublishProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects", projectsHandler.Create)
+
+		// Labels
+		r.With(middleware.OptionalWorkspace).Get("/labels", labelsHandler.List)
+		r.With(middleware.OptionalWorkspace).Post("/labels", labelsHandler.Create)
+		r.With(middleware.OptionalWorkspace).Patch("/labels/{id}", labelsHandler.Patch)
+		r.With(middleware.OptionalWorkspace).Delete("/labels/{id}", labelsHandler.Delete)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/labels", labelsHandler.ListProjectLabels)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/labels", labelsHandler.AddProjectLabels)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/labels/{lid}", labelsHandler.RemoveProjectLabel)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{pid}/issues/{iid}/labels", labelsHandler.ListIssueLabels)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{pid}/issues/{iid}/labels", labelsHandler.AddIssueLabels)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{pid}/issues/{iid}/labels/{lid}", labelsHandler.RemoveIssueLabel)
+
 		r.With(middleware.OptionalWorkspace).Get("/github/integration/status", githubIntegrationHandler.IntegrationStatus)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/github/integration/repos", githubIntegrationHandler.ListRepos)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/github/integration/settings", githubIntegrationHandler.ListSettings)
@@ -274,6 +295,15 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/admin/connections", adminConnectionsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/admin/events", adminConnectionsHandler.GetEvents)
 		r.With(middleware.OptionalWorkspace).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)
+		r.With(middleware.OptionalWorkspace).Post("/admin/agents", adminAgentsHandler.Create)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents", adminAgentsHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}", adminAgentsHandler.Get)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files", adminAgentsHandler.ListFiles)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files/{path:.*}", adminAgentsHandler.GetFile)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory", adminAgentsHandler.ListMemoryFiles)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory/{date}", adminAgentsHandler.GetMemoryFileByDate)
+		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/retire", adminAgentsHandler.Retire)
+		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reactivate", adminAgentsHandler.Reactivate)
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)
 		r.With(middleware.OptionalWorkspace).Post("/admin/diagnostics", adminConnectionsHandler.RunDiagnostics)
