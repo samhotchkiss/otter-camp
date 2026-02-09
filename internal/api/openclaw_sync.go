@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
@@ -294,6 +295,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 		return
 	}
+	workspaceID := resolveOpenClawSyncWorkspaceID(r)
 
 	// Get database - use store's DB() for connection pooling
 	db := h.DB
@@ -307,25 +309,35 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 
 	if h.EmissionBuffer != nil && len(payload.Emissions) > 0 {
-		for _, raw := range payload.Emissions {
-			emission, err := normalizeEmission(raw)
-			if err != nil {
-				log.Printf("openclaw sync emission dropped: %v", err)
-				continue
+		if workspaceID == "" {
+			log.Printf("openclaw sync emissions dropped: missing workspace context")
+		} else {
+			for _, raw := range payload.Emissions {
+				emission, err := normalizeEmission(raw)
+				if err != nil {
+					log.Printf("openclaw sync emission dropped: %v", err)
+					continue
+				}
+				emission.OrgID = workspaceID
+				h.EmissionBuffer.Push(emission)
 			}
-			h.EmissionBuffer.Push(emission)
 		}
 	}
 	if h.EmissionBuffer != nil && len(payload.ProgressLogLines) > 0 {
-		for _, rawLine := range payload.ProgressLogLines {
-			emission, ok := progressLogLineToEmission(rawLine)
-			if !ok {
-				continue
+		if workspaceID == "" {
+			log.Printf("openclaw sync progress-log emissions dropped: missing workspace context")
+		} else {
+			for _, rawLine := range payload.ProgressLogLines {
+				emission, ok := progressLogLineToEmission(rawLine)
+				if !ok {
+					continue
+				}
+				if !markProgressLogEmissionSeen(emission.ID) {
+					continue
+				}
+				emission.OrgID = workspaceID
+				h.EmissionBuffer.Push(emission)
 			}
-			if !markProgressLogEmissionSeen(emission.ID) {
-				continue
-			}
-			h.EmissionBuffer.Push(emission)
 		}
 	}
 
@@ -658,6 +670,22 @@ func resolveOpenClawSyncSecret() string {
 	}
 	// Legacy fallback.
 	return strings.TrimSpace(os.Getenv("OPENCLAW_WEBHOOK_SECRET"))
+}
+
+func resolveOpenClawSyncWorkspaceID(r *http.Request) string {
+	if workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context())); workspaceID != "" {
+		return workspaceID
+	}
+	if workspaceID := strings.TrimSpace(r.Header.Get("X-Workspace-ID")); workspaceID != "" {
+		return workspaceID
+	}
+	if workspaceID := strings.TrimSpace(r.Header.Get("X-Org-ID")); workspaceID != "" {
+		return workspaceID
+	}
+	if workspaceID := strings.TrimSpace(r.URL.Query().Get("org_id")); workspaceID != "" {
+		return workspaceID
+	}
+	return ""
 }
 
 // GetAgents returns current agent states
