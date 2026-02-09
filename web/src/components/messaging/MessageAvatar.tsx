@@ -34,8 +34,7 @@ export default function MessageAvatar({
       className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold ${bgColor}`}
       aria-label={senderType === "agent" ? "Agent avatar" : "User avatar"}
     >
-      {senderType === "agent" ? "🤖" : getInitials(name)}
+      {getInitials(name)}
     </div>
   );
 }
-
