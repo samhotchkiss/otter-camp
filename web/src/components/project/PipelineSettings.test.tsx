@@ -6,6 +6,9 @@ import PipelineSettings from "./PipelineSettings";
 function mockJSONResponse(body: unknown, ok = true): Response {
   return {
     ok,
+    headers: {
+      get: () => "application/json",
+    },
     json: async () => body,
   } as Response;
 }
@@ -104,7 +107,7 @@ describe("PipelineSettings", () => {
     const patchCall = fetchMock.mock.calls[2]!;
     expect(String(patchCall[0])).toContain("/api/projects/project-1");
     expect(patchCall[1]).toMatchObject({ method: "PATCH" });
-    expect(JSON.parse(String(patchCall[1]?.body))).toEqual({ requireHumanReview: true });
+    expect(JSON.parse(String(patchCall[1]?.body))).toEqual({ require_human_review: true });
 
     expect(await screen.findByText("Pipeline settings saved.")).toBeInTheDocument();
   });
@@ -133,5 +136,26 @@ describe("PipelineSettings", () => {
     await user.click(screen.getByRole("button", { name: "Save pipeline settings" }));
 
     expect(await screen.findByText("bad role payload")).toBeInTheDocument();
+  });
+
+  it("URL-encodes project id in API paths", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockJSONResponse({
+        planner: { agentId: null },
+        worker: { agentId: null },
+        reviewer: { agentId: null },
+      }),
+    );
+
+    render(
+      <PipelineSettings
+        projectId="project /settings"
+        agents={[]}
+        initialRequireHumanReview={false}
+      />,
+    );
+
+    await screen.findByLabelText("Planner role");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/projects/project%20%2Fsettings/pipeline-roles");
   });
 });

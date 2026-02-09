@@ -6,6 +6,9 @@ import DeploySettings from "./DeploySettings";
 function mockJSONResponse(body: unknown, ok = true): Response {
   return {
     ok,
+    headers: {
+      get: () => "application/json",
+    },
     json: async () => body,
   } as Response;
 }
@@ -100,5 +103,21 @@ describe("DeploySettings", () => {
 
     expect(await screen.findByText("CLI command is required for CLI command deploy mode.")).toBeInTheDocument();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("URL-encodes project id in API paths", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockJSONResponse({
+        deployMethod: "none",
+        githubRepoUrl: null,
+        githubBranch: "main",
+        cliCommand: null,
+      }),
+    );
+
+    render(<DeploySettings projectId="project /deploy" />);
+    await screen.findByLabelText("Deploy method");
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/projects/project%20%2Fdeploy/deploy-config");
   });
 });
