@@ -33,6 +33,8 @@ type IssuesHandler struct {
 	OpenClawDispatcher openClawMessageDispatcher
 }
 
+var errIssueHandlerDatabaseUnavailable = errors.New("database not available")
+
 type issueSummaryPayload struct {
 	ID                       string  `json:"id"`
 	ProjectID                string  `json:"project_id"`
@@ -599,6 +601,10 @@ func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
 		return
 	}
+	if h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
 
 	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
 	if issueID == "" {
@@ -1148,7 +1154,7 @@ func (h *IssuesHandler) logIssueApprovalTransition(
 
 func (h *IssuesHandler) projectRequiresHumanReview(ctx context.Context, projectID string) (bool, error) {
 	if h.DB == nil {
-		return false, nil
+		return false, errIssueHandlerDatabaseUnavailable
 	}
 
 	conn, err := store.WithWorkspace(ctx, h.DB)
