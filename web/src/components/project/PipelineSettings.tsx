@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+import { apiFetch } from "../../lib/api";
 
 type PipelineRoleMember = {
   agentId: string | null;
@@ -36,27 +35,6 @@ const EMPTY_ROLES: RoleFormState = {
   reviewer: "",
 };
 
-function withOrgQuery(path: string): string {
-  const orgID = (localStorage.getItem("otter-camp-org-id") ?? "").trim();
-  if (orgID === "") {
-    return `${API_URL}${path}`;
-  }
-  const separator = path.includes("?") ? "&" : "?";
-  return `${API_URL}${path}${separator}org_id=${encodeURIComponent(orgID)}`;
-}
-
-async function readErrorMessage(response: Response, fallback: string): Promise<string> {
-  const payload = await response.json().catch(() => null);
-  const candidate =
-    payload && typeof payload === "object"
-      ? (payload.error ?? payload.message)
-      : undefined;
-  if (typeof candidate === "string" && candidate.trim() !== "") {
-    return candidate.trim();
-  }
-  return fallback;
-}
-
 function normalizeAgentID(value: string): string | null {
   const trimmed = value.trim();
   return trimmed === "" ? null : trimmed;
@@ -87,13 +65,9 @@ export default function PipelineSettings({
       setError(null);
 
       try {
-        const response = await fetch(withOrgQuery(`/api/projects/${projectId}/pipeline-roles`), {
-          headers: { Accept: "application/json" },
-        });
-        if (!response.ok) {
-          throw new Error(await readErrorMessage(response, "Failed to load pipeline settings"));
-        }
-        const payload = (await response.json()) as PipelineRolesResponse;
+        const payload = await apiFetch<PipelineRolesResponse>(
+          `/api/projects/${encodeURIComponent(projectId)}/pipeline-roles`,
+        );
         if (cancelled) {
           return;
         }
@@ -125,29 +99,21 @@ export default function PipelineSettings({
     setIsSaving(true);
 
     try {
-      const roleResponse = await fetch(withOrgQuery(`/api/projects/${projectId}/pipeline-roles`), {
+      await apiFetch<PipelineRolesResponse>(`/api/projects/${encodeURIComponent(projectId)}/pipeline-roles`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           planner: { agentId: normalizeAgentID(roles.planner) },
           worker: { agentId: normalizeAgentID(roles.worker) },
           reviewer: { agentId: normalizeAgentID(roles.reviewer) },
         }),
       });
-      if (!roleResponse.ok) {
-        throw new Error(await readErrorMessage(roleResponse, "Failed to save pipeline roles"));
-      }
 
-      const reviewResponse = await fetch(withOrgQuery(`/api/projects/${projectId}`), {
+      await apiFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          requireHumanReview: requireHumanReview,
+          require_human_review: requireHumanReview,
         }),
       });
-      if (!reviewResponse.ok) {
-        throw new Error(await readErrorMessage(reviewResponse, "Failed to save human review setting"));
-      }
 
       onRequireHumanReviewSaved?.(requireHumanReview);
       setSuccess("Pipeline settings saved.");

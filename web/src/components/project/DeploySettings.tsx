@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+import { apiFetch } from "../../lib/api";
 
 type DeployMethod = "none" | "github_push" | "cli_command";
 
@@ -14,27 +13,6 @@ type DeployConfigResponse = {
 type DeploySettingsProps = {
   projectId: string;
 };
-
-function withOrgQuery(path: string): string {
-  const orgID = (localStorage.getItem("otter-camp-org-id") ?? "").trim();
-  if (orgID === "") {
-    return `${API_URL}${path}`;
-  }
-  const separator = path.includes("?") ? "&" : "?";
-  return `${API_URL}${path}${separator}org_id=${encodeURIComponent(orgID)}`;
-}
-
-async function readErrorMessage(response: Response, fallback: string): Promise<string> {
-  const payload = await response.json().catch(() => null);
-  const candidate =
-    payload && typeof payload === "object"
-      ? (payload.error ?? payload.message)
-      : undefined;
-  if (typeof candidate === "string" && candidate.trim() !== "") {
-    return candidate.trim();
-  }
-  return fallback;
-}
 
 function normalizeMethod(value: string): DeployMethod {
   if (value === "github_push" || value === "cli_command") {
@@ -60,13 +38,9 @@ export default function DeploySettings({ projectId }: DeploySettingsProps) {
       setIsLoading(true);
       setError(null);
       try {
-        const response = await fetch(withOrgQuery(`/api/projects/${projectId}/deploy-config`), {
-          headers: { Accept: "application/json" },
-        });
-        if (!response.ok) {
-          throw new Error(await readErrorMessage(response, "Failed to load deployment settings"));
-        }
-        const payload = (await response.json()) as DeployConfigResponse;
+        const payload = await apiFetch<DeployConfigResponse>(
+          `/api/projects/${encodeURIComponent(projectId)}/deploy-config`,
+        );
         if (cancelled) {
           return;
         }
@@ -106,9 +80,8 @@ export default function DeploySettings({ projectId }: DeploySettingsProps) {
 
     setIsSaving(true);
     try {
-      const response = await fetch(withOrgQuery(`/api/projects/${projectId}/deploy-config`), {
+      const payload = await apiFetch<DeployConfigResponse>(`/api/projects/${encodeURIComponent(projectId)}/deploy-config`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           deployMethod: deployMethod,
           githubRepoUrl: deployMethod === "github_push" ? (normalizedRepo || null) : null,
@@ -116,10 +89,6 @@ export default function DeploySettings({ projectId }: DeploySettingsProps) {
           cliCommand: deployMethod === "cli_command" ? normalizedCommand : null,
         }),
       });
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response, "Failed to save deployment settings"));
-      }
-      const payload = (await response.json()) as DeployConfigResponse;
       setDeployMethod(normalizeMethod(payload.deployMethod ?? deployMethod));
       setGithubRepoUrl(payload.githubRepoUrl ?? "");
       setGithubBranch((payload.githubBranch ?? "main").trim() || "main");
