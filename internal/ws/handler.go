@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -51,7 +52,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Hub.register <- client
 
 	go client.WritePump()
-	client.ReadPump(h.IssueAuthorizer)
+	client.ReadPump(r.Context(), h.IssueAuthorizer)
 }
 
 type clientMessage struct {
@@ -62,7 +63,7 @@ type clientMessage struct {
 }
 
 // ReadPump pumps messages from the websocket connection.
-func (c *Client) ReadPump(issueAuthorizer issueSubscriptionAuthorizer) {
+func (c *Client) ReadPump(clientCtx context.Context, issueAuthorizer issueSubscriptionAuthorizer) {
 	defer func() {
 		c.Hub.unregister <- c
 		c.Conn.Close()
@@ -84,7 +85,7 @@ func (c *Client) ReadPump(issueAuthorizer issueSubscriptionAuthorizer) {
 		if err := json.Unmarshal(message, &payload); err != nil {
 			continue
 		}
-		processClientMessage(c, payload, issueAuthorizer)
+		processClientMessage(clientCtx, c, payload, issueAuthorizer)
 	}
 }
 
@@ -118,6 +119,7 @@ func (c *Client) WritePump() {
 }
 
 func processClientMessage(
+	ctx context.Context,
 	client *Client,
 	payload clientMessage,
 	issueAuthorizer issueSubscriptionAuthorizer,
@@ -148,8 +150,16 @@ func processClientMessage(
 			return
 		}
 		if issueID, ok := issueIDFromTopic(topic); ok && issueAuthorizer != nil {
-			allowed, err := issueAuthorizer.CanSubscribeIssue(context.Background(), orgID, issueID)
-			if err != nil || !allowed {
+			authorizerCtx := ctx
+			if authorizerCtx == nil {
+				authorizerCtx = context.Background()
+			}
+			allowed, err := issueAuthorizer.CanSubscribeIssue(authorizerCtx, orgID, issueID)
+			if err != nil {
+				log.Printf("warning: issue subscription authorization error: org_id=%s issue_id=%s err=%v", orgID, issueID, err)
+				return
+			}
+			if !allowed {
 				return
 			}
 		}

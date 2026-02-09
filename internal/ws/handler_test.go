@@ -1,8 +1,10 @@
 package ws
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,14 +50,23 @@ func TestIsAllowedSubscriptionTopic(t *testing.T) {
 }
 
 type stubIssueSubscriptionAuthorizer struct {
-	allowed map[string]bool
+	allowed       map[string]bool
+	errByIssueKey map[string]error
+	seenContext   context.Context
 }
 
-func (s stubIssueSubscriptionAuthorizer) CanSubscribeIssue(
-	_ context.Context,
+func (s *stubIssueSubscriptionAuthorizer) CanSubscribeIssue(
+	ctx context.Context,
 	orgID, issueID string,
 ) (bool, error) {
-	return s.allowed[orgID+":"+issueID], nil
+	s.seenContext = ctx
+	issueKey := orgID + ":" + issueID
+	if s.errByIssueKey != nil {
+		if err, ok := s.errByIssueKey[issueKey]; ok {
+			return false, err
+		}
+	}
+	return s.allowed[issueKey], nil
 }
 
 func TestProcessClientMessageSubscribeIssueTopicAuthorized(t *testing.T) {
@@ -64,13 +75,14 @@ func TestProcessClientMessageSubscribeIssueTopicAuthorized(t *testing.T) {
 	topic := "issue:" + issueID
 	client := NewClient(nil, nil)
 
-	processClientMessage(client, clientMessage{
+	authorizer := &stubIssueSubscriptionAuthorizer{
+		allowed: map[string]bool{orgID + ":" + issueID: true},
+	}
+	processClientMessage(context.Background(), client, clientMessage{
 		Type:  "subscribe",
 		OrgID: orgID,
 		Topic: topic,
-	}, stubIssueSubscriptionAuthorizer{
-		allowed: map[string]bool{orgID + ":" + issueID: true},
-	})
+	}, authorizer)
 
 	if client.OrgID() != orgID {
 		t.Fatalf("expected client org to be set to %q, got %q", orgID, client.OrgID())
@@ -86,11 +98,11 @@ func TestProcessClientMessageSubscribeIssueTopicUnauthorized(t *testing.T) {
 	topic := "issue:" + issueID
 	client := NewClient(nil, nil)
 
-	processClientMessage(client, clientMessage{
+	processClientMessage(context.Background(), client, clientMessage{
 		Type:  "subscribe",
 		OrgID: orgID,
 		Topic: topic,
-	}, stubIssueSubscriptionAuthorizer{
+	}, &stubIssueSubscriptionAuthorizer{
 		allowed: map[string]bool{},
 	})
 
@@ -104,7 +116,7 @@ func TestProcessClientMessageSubscribeProjectTopicWithoutIssueAuthorizer(t *test
 	topic := "project:11111111-1111-1111-1111-111111111111:chat"
 	client := NewClient(nil, nil)
 
-	processClientMessage(client, clientMessage{
+	processClientMessage(context.Background(), client, clientMessage{
 		Type:  "subscribe",
 		OrgID: orgID,
 		Topic: topic,
@@ -113,6 +125,60 @@ func TestProcessClientMessageSubscribeProjectTopicWithoutIssueAuthorizer(t *test
 	if !client.IsSubscribedToTopic(topic) {
 		t.Fatalf("expected non-issue topic subscription to continue working")
 	}
+}
+
+func TestProcessClientMessageSubscribeIssueTopicUsesClientContext(t *testing.T) {
+	type contextKey string
+
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	issueID := "33333333-3333-3333-3333-333333333333"
+	topic := "issue:" + issueID
+	client := NewClient(nil, nil)
+
+	ctx := context.WithValue(context.Background(), contextKey("trace_id"), "trace-123")
+	authorizer := &stubIssueSubscriptionAuthorizer{
+		allowed: map[string]bool{orgID + ":" + issueID: true},
+	}
+
+	processClientMessage(ctx, client, clientMessage{
+		Type:  "subscribe",
+		OrgID: orgID,
+		Topic: topic,
+	}, authorizer)
+
+	require.NotNil(t, authorizer.seenContext)
+	require.Equal(t, "trace-123", authorizer.seenContext.Value(contextKey("trace_id")))
+	require.True(t, client.IsSubscribedToTopic(topic))
+}
+
+func TestProcessClientMessageSubscribeIssueTopicAuthorizerErrorLogsWarningAndDenies(t *testing.T) {
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	issueID := "44444444-4444-4444-4444-444444444444"
+	topic := "issue:" + issueID
+	client := NewClient(nil, nil)
+	authorizer := &stubIssueSubscriptionAuthorizer{
+		allowed: map[string]bool{},
+		errByIssueKey: map[string]error{
+			orgID + ":" + issueID: context.DeadlineExceeded,
+		},
+	}
+
+	var logs bytes.Buffer
+	originalOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() {
+		log.SetOutput(originalOutput)
+	})
+
+	processClientMessage(context.Background(), client, clientMessage{
+		Type:  "subscribe",
+		OrgID: orgID,
+		Topic: topic,
+	}, authorizer)
+
+	require.False(t, client.IsSubscribedToTopic(topic))
+	require.Contains(t, logs.String(), "issue subscription authorization error")
+	require.Contains(t, logs.String(), issueID)
 }
 
 func TestIsWebSocketOriginAllowed_NoOrigin(t *testing.T) {
