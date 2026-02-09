@@ -24,19 +24,6 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    container_name: otter-camp-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   # ==========================================================================
   # Application (optional - for full containerized dev)
   # ==========================================================================
@@ -50,11 +37,8 @@ services:
     environment:
       PORT: 8080
       DATABASE_URL: postgres://otter:camp@postgres:5432/ottercamp?sslmode=disable
-      REDIS_URL: redis://redis:6379
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     profiles:
       - full
@@ -75,4 +59,3 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
