@@ -82,6 +82,9 @@ const CHAMELEON_SESSION_KEY_PATTERN =
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
+const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
+const IDENTITY_BLOCK_MAX_CHARS = 1200;
+const SESSION_TASK_SUMMARY_MAX_CHARS = 96;
 
 export interface OpenClawSession {
   key: string;
@@ -266,6 +269,21 @@ type SessionContext = {
   documentPath?: string;
   responderAgentID?: string;
   pendingQuestionnaire?: QuestionnairePayload;
+  identityMetadata?: SessionIdentityMetadata;
+  displayLabel?: string;
+};
+
+type WhoAmITaskPointer = {
+  project?: string;
+  issue?: string;
+  title?: string;
+  status?: string;
+};
+
+type SessionIdentityMetadata = {
+  profile: 'compact' | 'full';
+  preamble: string;
+  displayLabel?: string;
 };
 
 type DeviceIdentity = {
@@ -1344,20 +1362,283 @@ function buildContextReminder(context: SessionContext): string {
   return `DM thread (${context.threadID || 'unknown thread'})`;
 }
 
-function withSessionContext(sessionKey: string, rawContent: string): string {
+function clampInlineText(raw: string, maxChars: number): string {
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '';
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars - 3).trimEnd()}...`;
+}
+
+function deriveTaskSummary(context: SessionContext, content: string): string {
+  const fromIssueTitle = getTrimmedString(context.issueTitle);
+  if (fromIssueTitle) {
+    return clampInlineText(fromIssueTitle, SESSION_TASK_SUMMARY_MAX_CHARS);
+  }
+  const firstLine = content.split(/\r?\n/).find((line) => line.trim().length > 0) || content;
+  return clampInlineText(firstLine, SESSION_TASK_SUMMARY_MAX_CHARS);
+}
+
+function normalizeWhoAmITasks(payload: Record<string, unknown>): WhoAmITaskPointer[] {
+  const raw = Array.isArray(payload.active_tasks) ? payload.active_tasks : [];
+  const tasks: WhoAmITaskPointer[] = [];
+  for (const entry of raw) {
+    const record = asRecord(entry);
+    if (!record) {
+      continue;
+    }
+    tasks.push({
+      project: getTrimmedString(record.project) || undefined,
+      issue: getTrimmedString(record.issue) || undefined,
+      title: getTrimmedString(record.title) || undefined,
+      status: getTrimmedString(record.status) || undefined,
+    });
+    if (tasks.length >= 4) {
+      break;
+    }
+  }
+  return tasks;
+}
+
+function renderTaskPointer(task: WhoAmITaskPointer): string {
+  const parts: string[] = [];
+  if (task.project) {
+    parts.push(task.project);
+  }
+  if (task.issue) {
+    parts.push(task.issue);
+  }
+  if (task.title) {
+    parts.push(task.title);
+  }
+  const label = parts.join(' / ') || 'Task';
+  if (task.status) {
+    return `${label} [${task.status}]`;
+  }
+  return label;
+}
+
+function readIdentityField(
+  payload: Record<string, unknown>,
+  profile: 'compact' | 'full',
+  compactKey: string,
+  fullKey: string,
+): string {
+  if (profile === 'full') {
+    const fullValue = getTrimmedString(payload[fullKey]);
+    if (fullValue) {
+      return clampInlineText(fullValue, IDENTITY_BLOCK_MAX_CHARS);
+    }
+  }
+  const compactValue = getTrimmedString(payload[compactKey]);
+  if (compactValue) {
+    return clampInlineText(compactValue, IDENTITY_BLOCK_MAX_CHARS);
+  }
+  const fullValue = getTrimmedString(payload[fullKey]);
+  if (fullValue) {
+    return clampInlineText(fullValue, IDENTITY_BLOCK_MAX_CHARS);
+  }
+  return '';
+}
+
+export function isCompactWhoAmIInsufficient(payload: Record<string, unknown>): boolean {
+  const profile = getTrimmedString(payload.profile).toLowerCase();
+  if (profile && profile !== 'compact') {
+    return false;
+  }
+  const agent = asRecord(payload.agent);
+  const agentName = getTrimmedString(agent?.name);
+  const soulSummary = getTrimmedString(payload.soul_summary);
+  const identitySummary = getTrimmedString(payload.identity_summary);
+  const instructionsSummary = getTrimmedString(payload.instructions_summary);
+  const segments = [soulSummary, identitySummary, instructionsSummary].filter(Boolean);
+  const totalChars = segments.reduce((sum, segment) => sum + segment.length, 0);
+  if (!agentName) {
+    return true;
+  }
+  if (segments.length < 2) {
+    return true;
+  }
+  return totalChars < COMPACT_WHOAMI_MIN_SUMMARY_CHARS;
+}
+
+export function formatSessionDisplayLabel(agentName: string, taskSummary: string): string {
+  const normalizedName = getTrimmedString(agentName);
+  const normalizedTask = getTrimmedString(taskSummary);
+  if (normalizedName && normalizedTask) {
+    return `${normalizedName} — ${normalizedTask}`;
+  }
+  return normalizedName || normalizedTask;
+}
+
+export function buildIdentityPreamble(params: {
+  payload: Record<string, unknown>;
+  profile: 'compact' | 'full';
+  taskSummary?: string;
+}): string {
+  const payload = params.payload;
+  const profile = params.profile;
+  const taskSummary = getTrimmedString(params.taskSummary);
+  const agent = asRecord(payload.agent);
+  const agentName = getTrimmedString(agent?.name) || 'Agent';
+  const agentRole = getTrimmedString(agent?.role);
+  const identityLine = agentRole ? `${agentName}, ${agentRole}` : agentName;
+  const personalitySummary = readIdentityField(payload, profile, 'soul_summary', 'soul');
+  const identitySummary = readIdentityField(payload, profile, 'identity_summary', 'identity');
+  const instructionsSummary = readIdentityField(payload, profile, 'instructions_summary', 'instructions');
+  const activeTasks = normalizeWhoAmITasks(payload).map(renderTaskPointer);
+
+  const lines: string[] = [
+    '[OtterCamp Identity Injection]',
+    `You are ${identityLine}.`,
+    '',
+    `Identity profile: ${profile}`,
+  ];
+  if (personalitySummary) {
+    lines.push(`Personality summary: ${personalitySummary}`);
+  }
+  if (identitySummary) {
+    lines.push(`Identity summary: ${identitySummary}`);
+  }
+  if (instructionsSummary) {
+    lines.push(`Instructions summary: ${instructionsSummary}`);
+  }
+  if (activeTasks.length > 0) {
+    lines.push(`Active tasks: ${activeTasks.join(' | ')}`);
+  }
+  if (taskSummary) {
+    lines.push(`Task: ${taskSummary}`);
+  }
+  lines.push('[/OtterCamp Identity Injection]');
+  return lines.join('\n');
+}
+
+async function fetchWhoAmIProfile(
+  agentID: string,
+  sessionKey: string,
+  orgID: string,
+  profile: 'compact' | 'full',
+): Promise<Record<string, unknown> | null> {
+  const url = new URL(`/api/agents/${encodeURIComponent(agentID)}/whoami`, OTTERCAMP_URL);
+  url.searchParams.set('session_key', sessionKey);
+  url.searchParams.set('profile', profile);
+  if (orgID) {
+    url.searchParams.set('org_id', orgID);
+  }
+
+  const response = await fetchWithRetry(url.toString(), {
+    method: 'GET',
+    headers: {
+      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    },
+  }, `fetch whoami (${profile})`);
+
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 220);
+    console.warn(
+      `[bridge] whoami ${profile} request failed (${response.status} ${response.statusText} ${snippet})`,
+    );
+    return null;
+  }
+
+  const payload = await response.json().catch(() => null);
+  return asRecord(payload);
+}
+
+async function resolveSessionIdentityMetadata(
+  sessionKey: string,
+  context: SessionContext,
+  content: string,
+): Promise<SessionIdentityMetadata | null> {
+  const chameleonAgentID = parseChameleonSessionKey(sessionKey);
+  if (!chameleonAgentID) {
+    return null;
+  }
+  const orgID = getTrimmedString(context.orgID) || OTTERCAMP_ORG_ID;
+  const taskSummary = deriveTaskSummary(context, content);
+
+  const compactPayload = await fetchWhoAmIProfile(chameleonAgentID, sessionKey, orgID, 'compact');
+  if (!compactPayload) {
+    return null;
+  }
+
+  let selectedProfile: 'compact' | 'full' = 'compact';
+  let selectedPayload = compactPayload;
+  if (isCompactWhoAmIInsufficient(compactPayload)) {
+    const fullPayload = await fetchWhoAmIProfile(chameleonAgentID, sessionKey, orgID, 'full');
+    const fullProfile = getTrimmedString(fullPayload?.profile).toLowerCase();
+    const hasFullIdentityFields =
+      Boolean(getTrimmedString(fullPayload?.soul)) ||
+      Boolean(getTrimmedString(fullPayload?.identity)) ||
+      Boolean(getTrimmedString(fullPayload?.instructions));
+    if (fullPayload && (fullProfile === 'full' || hasFullIdentityFields)) {
+      selectedProfile = 'full';
+      selectedPayload = fullPayload;
+    }
+  }
+
+  const agent = asRecord(selectedPayload.agent);
+  const displayLabel = formatSessionDisplayLabel(
+    getTrimmedString(agent?.name) || getTrimmedString(context.agentName) || getTrimmedString(context.agentID),
+    taskSummary,
+  );
+  return {
+    profile: selectedProfile,
+    preamble: buildIdentityPreamble({
+      payload: selectedPayload,
+      profile: selectedProfile,
+      taskSummary,
+    }),
+    displayLabel: displayLabel || undefined,
+  };
+}
+
+async function withSessionContext(sessionKey: string, rawContent: string): Promise<string> {
   const content = rawContent.trim();
   if (!content) {
     return '';
   }
-  const context = sessionContexts.get(sessionKey);
+  let context = sessionContexts.get(sessionKey);
   if (!context) {
     return content;
   }
   if (!contextPrimedSessions.has(sessionKey)) {
+    let identityMetadata = context.identityMetadata;
+    if (!identityMetadata) {
+      try {
+        identityMetadata = await resolveSessionIdentityMetadata(sessionKey, context, content) || undefined;
+      } catch (err) {
+        console.warn(`[bridge] failed to resolve identity for ${sessionKey}:`, err);
+      }
+      if (identityMetadata) {
+        context = {
+          ...context,
+          identityMetadata,
+          displayLabel: identityMetadata.displayLabel,
+        };
+        setSessionContext(sessionKey, context);
+      }
+    }
     contextPrimedSessions.add(sessionKey);
-    return `${buildContextEnvelope(context)}\n\n${content}`;
+    const sections: string[] = [];
+    if (identityMetadata?.preamble) {
+      sections.push(identityMetadata.preamble);
+    }
+    sections.push(buildContextEnvelope(context));
+    sections.push(content);
+    return sections.join('\n\n');
   }
   return `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]\n\n${content}`;
+}
+
+export async function formatSessionContextMessageForTest(
+  sessionKey: string,
+  rawContent: string,
+): Promise<string> {
+  return withSessionContext(sessionKey, rawContent);
 }
 
 function extractMessageContent(value: unknown): string {
@@ -2218,9 +2499,24 @@ async function sendMessageToSession(
 ): Promise<void> {
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const contextualContent = withSessionContext(sessionKey, content);
+  const isFirstDispatchForSession = !contextPrimedSessions.has(sessionKey);
+  const contextualContent = await withSessionContext(sessionKey, content);
   if (!contextualContent) {
     return;
+  }
+
+  if (isFirstDispatchForSession) {
+    const displayLabel = getTrimmedString(sessionContexts.get(sessionKey)?.displayLabel);
+    if (displayLabel) {
+      try {
+        await sendRequest('sessions.update', {
+          sessionKey,
+          displayName: displayLabel,
+        });
+      } catch (err) {
+        console.warn(`[bridge] unable to set display label for ${sessionKey}:`, err);
+      }
+    }
   }
 
   await sendRequest('chat.send', {
@@ -3245,6 +3541,15 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
     } catch (err) {
       console.warn(`[bridge] targeted reset failed for ${sessionKey}; falling back to gateway restart:`, err);
       await runOpenClawCommand(['gateway', 'restart']);
+    }
+    contextPrimedSessions.delete(sessionKey);
+    const existingContext = sessionContexts.get(sessionKey);
+    if (existingContext) {
+      setSessionContext(sessionKey, {
+        ...existingContext,
+        identityMetadata: undefined,
+        displayLabel: undefined,
+      });
     }
     console.log(`[bridge] executed admin.command agent.reset for ${sessionKey} (${commandID})`);
     return;

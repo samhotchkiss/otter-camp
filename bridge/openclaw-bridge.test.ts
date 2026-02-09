@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { beforeEach, describe, it } from "node:test";
 import {
+  buildIdentityPreamble,
+  formatSessionContextMessageForTest,
+  formatSessionDisplayLabel,
   formatQuestionnaireForFallback,
+  isCompactWhoAmIInsufficient,
   isCanonicalChameleonSessionKey,
   normalizeQuestionnairePayload,
   parseChameleonSessionKey,
   parseNumberedAnswers,
   parseNumberedQuestionnaireResponse,
   parseQuestionnaireAnswer,
+  resetSessionContextsForTest,
+  setSessionContextForTest,
   type QuestionnairePayload,
   type QuestionnaireQuestion,
 } from "./openclaw-bridge";
@@ -33,6 +39,146 @@ describe("bridge chameleon session key helpers", () => {
     );
     assert.equal(parseChameleonSessionKey("agent:main:slack"), null);
     assert.equal(parseChameleonSessionKey("agent:chameleon:oc:not-a-uuid"), null);
+  });
+});
+
+describe("bridge identity preamble helpers", () => {
+  const originalFetch = globalThis.fetch;
+  const agentID = "a1b2c3d4-5678-90ab-cdef-1234567890ab";
+  const sessionKey = `agent:chameleon:oc:${agentID}`;
+
+  beforeEach(() => {
+    resetSessionContextsForTest();
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("injects identity preamble before first task content for chameleon sessions", async () => {
+    setSessionContextForTest(sessionKey, {
+      kind: "dm",
+      orgID: "org-1",
+      threadID: "dm_1",
+      agentID,
+    });
+
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          profile: "compact",
+          agent: {
+            id: agentID,
+            name: "Derek",
+            role: "Engineering Lead",
+          },
+          soul_summary: "Calm systems thinker.",
+          identity_summary: "Leads platform reliability.",
+          instructions_summary: "Prefer concrete plans with tests.",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      )) as typeof fetch;
+
+    const content = "Ship the release checklist now.";
+    const contextual = await formatSessionContextMessageForTest(sessionKey, content);
+    assert.ok(contextual.includes("[OtterCamp Identity Injection]"));
+    assert.ok(contextual.includes("Identity profile: compact"));
+    assert.ok(contextual.indexOf("[OtterCamp Identity Injection]") < contextual.indexOf(content));
+  });
+
+  it("falls back from compact to full profile when compact context is insufficient", async () => {
+    setSessionContextForTest(sessionKey, {
+      kind: "dm",
+      orgID: "org-1",
+      threadID: "dm_2",
+      agentID,
+    });
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      if (fetchCalls === 1) {
+        return new Response(
+          JSON.stringify({
+            profile: "compact",
+            agent: { id: agentID, name: "Derek" },
+            soul_summary: "",
+            identity_summary: "Short",
+            instructions_summary: "",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          profile: "full",
+          agent: { id: agentID, name: "Derek", role: "Engineering Lead" },
+          soul: "Full soul context with deeply specific guidance.",
+          identity: "Full identity context with priorities and role.",
+          instructions: "Full instructions context with operating constraints.",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+
+    const contextual = await formatSessionContextMessageForTest(sessionKey, "Draft migration plan.");
+    assert.equal(fetchCalls, 2);
+    assert.ok(contextual.includes("Identity profile: full"));
+    assert.ok(contextual.includes("Full soul context with deeply specific guidance."));
+  });
+
+  it("uses deterministic compact insufficiency checks and label formatting", () => {
+    assert.equal(
+      isCompactWhoAmIInsufficient({
+        profile: "compact",
+        agent: { id: "a1", name: "Derek" },
+        soul_summary: "",
+        identity_summary: "brief",
+        instructions_summary: "",
+      }),
+      true,
+    );
+    assert.equal(
+      isCompactWhoAmIInsufficient({
+        profile: "compact",
+        agent: { id: "a1", name: "Derek" },
+        soul_summary: "Calm systems thinker.",
+        identity_summary: "Owns execution quality and delivery reliability.",
+        instructions_summary: "Work in small commits and explicit tests.",
+      }),
+      false,
+    );
+
+    assert.equal(
+      formatSessionDisplayLabel("Derek", "Fix flaky release gate"),
+      "Derek — Fix flaky release gate",
+    );
+    assert.equal(formatSessionDisplayLabel("Derek", ""), "Derek");
+  });
+
+  it("renders an identity preamble from profile payload data", () => {
+    const preamble = buildIdentityPreamble({
+      profile: "compact",
+      payload: {
+        agent: { name: "Nova", role: "Writer" },
+        soul_summary: "Creative and structured.",
+        identity_summary: "Specializes in technical storytelling.",
+        instructions_summary: "Ask clarifying questions before drafting.",
+        active_tasks: [{ project: "Docs", issue: "#42", title: "Draft release note", status: "in_progress" }],
+      },
+      taskSummary: "Prepare launch draft",
+    });
+    assert.ok(preamble.includes("You are Nova, Writer."));
+    assert.ok(preamble.includes("Active tasks: Docs / #42 / Draft release note [in_progress]"));
+    assert.ok(preamble.includes("Task: Prepare launch draft"));
   });
 });
 
