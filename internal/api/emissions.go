@@ -18,6 +18,7 @@ const (
 	defaultEmissionBufferSize = 100
 	maxEmissionBatchSize      = 100
 	maxEmissionRecentLimit    = 200
+	maxEmissionDetailLength   = 5000
 )
 
 var emissionIDSequence uint64
@@ -313,6 +314,9 @@ func normalizeEmission(input Emission) (Emission, error) {
 		if detail == "" {
 			input.Detail = nil
 		} else {
+			if len(detail) > maxEmissionDetailLength {
+				return Emission{}, fmt.Errorf("detail exceeds %d characters", maxEmissionDetailLength)
+			}
 			input.Detail = &detail
 		}
 	}

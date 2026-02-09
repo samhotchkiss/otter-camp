@@ -225,6 +225,15 @@ func TestEmissionHandlerIngestAndRecent(t *testing.T) {
 	router.ServeHTTP(invalidRec, invalidReq)
 	require.Equal(t, http.StatusBadRequest, invalidRec.Code)
 
+	oversizedDetailReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/emissions?org_id="+orgID,
+		bytes.NewReader([]byte(`{"emissions":[{"source_type":"agent","source_id":"agent-1","kind":"log","summary":"detail too long","detail":"`+strings.Repeat("d", 5001)+`"}]}`)),
+	)
+	oversizedDetailRec := httptest.NewRecorder()
+	router.ServeHTTP(oversizedDetailRec, oversizedDetailReq)
+	require.Equal(t, http.StatusBadRequest, oversizedDetailRec.Code)
+
 	missingWorkspaceReq := httptest.NewRequest(http.MethodGet, "/api/emissions/recent", nil)
 	missingWorkspaceRec := httptest.NewRecorder()
 	router.ServeHTTP(missingWorkspaceRec, missingWorkspaceReq)
