@@ -54,6 +54,15 @@ const labelSelectColumns = `
 	created_at
 `
 
+// labelSelectColumnsQ is table-qualified for use in JOIN queries (alias "l").
+const labelSelectColumnsQ = `
+	l.id,
+	l.org_id,
+	l.name,
+	l.color,
+	l.created_at
+`
+
 // NewLabelStore creates a new LabelStore.
 func NewLabelStore(db *sql.DB) *LabelStore {
 	return &LabelStore{db: db}
@@ -313,7 +322,7 @@ func (s *LabelStore) ListForProject(ctx context.Context, projectID string) ([]La
 	defer conn.Close()
 
 	rows, err := conn.QueryContext(ctx, `
-		SELECT `+labelSelectColumns+`
+		SELECT `+labelSelectColumnsQ+`
 		FROM labels l
 		INNER JOIN project_labels pl ON pl.label_id = l.id
 		INNER JOIN projects p ON p.id = pl.project_id
@@ -424,7 +433,7 @@ func (s *LabelStore) ListForIssue(ctx context.Context, issueID string) ([]Label,
 	defer conn.Close()
 
 	rows, err := conn.QueryContext(ctx, `
-		SELECT `+labelSelectColumns+`
+		SELECT `+labelSelectColumnsQ+`
 		FROM labels l
 		INNER JOIN issue_labels il ON il.label_id = l.id
 		INNER JOIN project_issues i ON i.id = il.issue_id
@@ -544,7 +553,7 @@ func (s *LabelStore) MapForProjects(ctx context.Context, projectIDs []string) (m
 	defer conn.Close()
 
 	rows, err := conn.QueryContext(ctx, `
-		SELECT pl.project_id, `+labelSelectColumns+`
+		SELECT pl.project_id, `+labelSelectColumnsQ+`
 		FROM project_labels pl
 		INNER JOIN labels l ON l.id = pl.label_id
 		INNER JOIN projects p ON p.id = pl.project_id
@@ -595,7 +604,7 @@ func (s *LabelStore) MapForIssues(ctx context.Context, issueIDs []string) (map[s
 	defer conn.Close()
 
 	rows, err := conn.QueryContext(ctx, `
-		SELECT il.issue_id, `+labelSelectColumns+`
+		SELECT il.issue_id, `+labelSelectColumnsQ+`
 		FROM issue_labels il
 		INNER JOIN labels l ON l.id = il.label_id
 		INNER JOIN project_issues i ON i.id = il.issue_id
