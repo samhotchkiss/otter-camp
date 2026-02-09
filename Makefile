@@ -1,4 +1,4 @@
-.PHONY: dev run setup seed build build-otter install test migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
+.PHONY: dev run setup seed prod-local build build-otter install test migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
 
 # Development
 dev:
@@ -18,6 +18,10 @@ setup:
 
 seed:
 	go run ./scripts/seed/seed.go
+
+prod-local:
+	cd web && VITE_API_URL= npm run build
+	STATIC_DIR=./web/dist go run ./cmd/server
 
 # Build
 build:
