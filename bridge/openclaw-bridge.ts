@@ -50,6 +50,9 @@ const DISPATCH_QUEUE_POLL_INTERVAL_MS = 5000;
 const ACTIVITY_EVENT_FLUSH_INTERVAL_MS = 5000;
 const ACTIVITY_EVENTS_BATCH_SIZE = 200;
 const MAX_TRACKED_ACTIVITY_EVENT_IDS = 5000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+const RECONNECT_JITTER_SPREAD = 0.2;
+const RECONNECT_FAILURE_EXIT_THRESHOLD = 5;
 const MAX_TRACKED_SESSION_CONTEXTS = (() => {
   const raw = Number.parseInt((process.env.OTTER_SESSION_CONTEXT_MAX || '').trim(), 10);
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -255,10 +258,42 @@ type DeviceIdentity = {
   privateKeyPem: string;
 };
 
+export type BridgeConnectionState =
+  | 'connecting'
+  | 'connected'
+  | 'degraded'
+  | 'disconnected'
+  | 'reconnecting';
+
+export type BridgeConnectionTransitionTrigger =
+  | 'connect_attempt'
+  | 'socket_open'
+  | 'socket_message'
+  | 'health_warning'
+  | 'heartbeat_missed'
+  | 'socket_closed'
+  | 'reconnect_scheduled'
+  | 'reconnect_timer_fired';
+
+type BridgeSocketRole = 'openclaw' | 'ottercamp';
+
+type SocketReconnectController = {
+  timer: ReturnType<typeof setTimeout> | null;
+  consecutiveFailures: number;
+  firstMessageReceived: boolean;
+};
+
 let openClawWS: WebSocket | null = null;
 let otterCampWS: WebSocket | null = null;
-let otterCampReconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let otterCampReconnectAttempts = 0;
+let continuousModeEnabled = false;
+const reconnectByRole: Record<BridgeSocketRole, SocketReconnectController> = {
+  openclaw: { timer: null, consecutiveFailures: 0, firstMessageReceived: false },
+  ottercamp: { timer: null, consecutiveFailures: 0, firstMessageReceived: false },
+};
+const connectionStateByRole: Record<BridgeSocketRole, BridgeConnectionState> = {
+  openclaw: 'disconnected',
+  ottercamp: 'disconnected',
+};
 let isDispatchQueuePolling = false;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
@@ -278,6 +313,114 @@ const deliveredActivityEventIDOrder: string[] = [];
 
 const genId = () => `req-${++requestId}`;
 const execFileAsync = promisify(execFile);
+
+export function computeReconnectDelayMs(attempt: number, randomFn: () => number = Math.random): number {
+  const safeAttempt = Number.isFinite(attempt) && attempt >= 0 ? Math.floor(attempt) : 0;
+  const baseDelay = Math.min(RECONNECT_MAX_DELAY_MS, 1000 * Math.pow(2, safeAttempt));
+  const jitterRandom = Math.min(1, Math.max(0, randomFn()));
+  const jitterMultiplier = 1 + ((jitterRandom * 2 - 1) * RECONNECT_JITTER_SPREAD);
+  return Math.min(RECONNECT_MAX_DELAY_MS, Math.max(100, Math.round(baseDelay * jitterMultiplier)));
+}
+
+export function shouldExitAfterReconnectFailures(consecutiveFailures: number): boolean {
+  return Number.isFinite(consecutiveFailures) && consecutiveFailures >= RECONNECT_FAILURE_EXIT_THRESHOLD;
+}
+
+export function transitionConnectionState(
+  currentState: BridgeConnectionState,
+  trigger: BridgeConnectionTransitionTrigger,
+): BridgeConnectionState {
+  switch (trigger) {
+    case 'connect_attempt':
+      return 'connecting';
+    case 'socket_open':
+    case 'socket_message':
+      return 'connected';
+    case 'health_warning':
+      return currentState === 'connected' ? 'degraded' : currentState;
+    case 'heartbeat_missed':
+    case 'socket_closed':
+      return 'disconnected';
+    case 'reconnect_scheduled':
+    case 'reconnect_timer_fired':
+      return 'reconnecting';
+    default:
+      return currentState;
+  }
+}
+
+function applyConnectionTransition(
+  role: BridgeSocketRole,
+  trigger: BridgeConnectionTransitionTrigger,
+  extra: Record<string, unknown> = {},
+): void {
+  const previous = connectionStateByRole[role];
+  const next = transitionConnectionState(previous, trigger);
+  connectionStateByRole[role] = next;
+  if (previous === next) {
+    return;
+  }
+  const transitionTimestamp = new Date().toISOString();
+  console.log(
+    `[bridge] connection.transition role=${role} from=${previous} to=${next} trigger=${trigger} at=${transitionTimestamp} ${JSON.stringify(extra)}`,
+  );
+}
+
+function clearReconnectTimer(role: BridgeSocketRole): void {
+  const controller = reconnectByRole[role];
+  if (controller.timer) {
+    clearTimeout(controller.timer);
+    controller.timer = null;
+  }
+}
+
+function resetReconnectBackoffAfterFirstMessage(role: BridgeSocketRole): void {
+  const controller = reconnectByRole[role];
+  controller.consecutiveFailures = 0;
+}
+
+function markSocketConnectAttempt(role: BridgeSocketRole): void {
+  reconnectByRole[role].firstMessageReceived = false;
+  applyConnectionTransition(role, 'connect_attempt');
+}
+
+function markSocketOpen(role: BridgeSocketRole): void {
+  applyConnectionTransition(role, 'socket_open');
+}
+
+function markSocketMessage(role: BridgeSocketRole): void {
+  applyConnectionTransition(role, 'socket_message');
+  const controller = reconnectByRole[role];
+  if (!controller.firstMessageReceived) {
+    controller.firstMessageReceived = true;
+    resetReconnectBackoffAfterFirstMessage(role);
+    clearReconnectTimer(role);
+  }
+}
+
+function scheduleReconnect(role: BridgeSocketRole, reconnectFn: () => void): void {
+  const controller = reconnectByRole[role];
+  controller.consecutiveFailures += 1;
+  if (shouldExitAfterReconnectFailures(controller.consecutiveFailures)) {
+    console.error(
+      `[bridge] ${role} reconnect failed ${controller.consecutiveFailures} times; exiting for supervisor restart`,
+    );
+    process.exit(1);
+    return;
+  }
+
+  const delayMs = computeReconnectDelayMs(controller.consecutiveFailures - 1);
+  applyConnectionTransition(role, 'reconnect_scheduled', {
+    attempt: controller.consecutiveFailures,
+    delay_ms: delayMs,
+  });
+  clearReconnectTimer(role);
+  controller.timer = setTimeout(() => {
+    controller.timer = null;
+    applyConnectionTransition(role, 'reconnect_timer_fired', { attempt: controller.consecutiveFailures });
+    reconnectFn();
+  }, delayMs);
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -1438,17 +1581,39 @@ function buildOtterCampWSURL(): string {
 }
 
 async function connectToOpenClaw(): Promise<void> {
+  if (openClawWS && (openClawWS.readyState === WebSocket.OPEN || openClawWS.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
   return new Promise((resolve, reject) => {
     const url = `ws://${OPENCLAW_HOST}:${OPENCLAW_PORT}`;
     console.log(`[bridge] connecting to OpenClaw gateway at ${url}`);
+    markSocketConnectAttempt('openclaw');
 
     openClawWS = new WebSocket(url);
+    let settled = false;
+    const resolveOnce = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve();
+    };
+    const rejectOnce = (err: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(err);
+    };
 
     openClawWS.on('open', () => {
+      markSocketOpen('openclaw');
       console.log('[bridge] OpenClaw socket opened, waiting for challenge');
     });
 
     openClawWS.on('message', (data) => {
+      markSocketMessage('openclaw');
       try {
         const msg = JSON.parse(data.toString()) as Record<string, unknown>;
 
@@ -1525,9 +1690,9 @@ async function connectToOpenClaw(): Promise<void> {
           pendingRequests.set(connectId, {
             resolve: () => {
               console.log('[bridge] connected to OpenClaw gateway');
-              resolve();
+              resolveOnce();
             },
-            reject: (err) => reject(err),
+            reject: (err) => rejectOnce(err),
           });
 
           openClawWS!.send(JSON.stringify(connectMsg));
@@ -1561,16 +1726,29 @@ async function connectToOpenClaw(): Promise<void> {
 
     openClawWS.on('error', (err) => {
       console.error('[bridge] OpenClaw socket error:', err);
-      reject(err);
+      rejectOnce(err);
     });
 
     openClawWS.on('close', (code, reason) => {
       console.warn(`[bridge] OpenClaw socket closed (${code}) ${reason.toString()}`);
+      applyConnectionTransition('openclaw', 'socket_closed', { code, reason: reason.toString() });
       openClawWS = null;
+      for (const [pendingID, pending] of Array.from(pendingRequests.entries())) {
+        pendingRequests.delete(pendingID);
+        pending.reject(new Error('OpenClaw socket closed'));
+      }
+      rejectOnce(new Error(`OpenClaw socket closed (${code})`));
+      if (continuousModeEnabled) {
+        scheduleReconnect('openclaw', () => {
+          void connectToOpenClaw().catch((connectErr) => {
+            console.error('[bridge] OpenClaw reconnect failed:', connectErr);
+          });
+        });
+      }
     });
 
     setTimeout(() => {
-      reject(new Error('OpenClaw connection timeout'));
+      rejectOnce(new Error('OpenClaw connection timeout'));
     }, 30000);
   });
 }
@@ -2610,19 +2788,17 @@ function connectOtterCampDispatchSocket(): void {
 
   const wsURL = buildOtterCampWSURL();
   console.log(`[bridge] connecting to OtterCamp websocket ${wsURL}`);
+  markSocketConnectAttempt('ottercamp');
 
   otterCampWS = new WebSocket(wsURL);
 
   otterCampWS.on('open', () => {
-    otterCampReconnectAttempts = 0;
-    if (otterCampReconnectTimer) {
-      clearTimeout(otterCampReconnectTimer);
-      otterCampReconnectTimer = null;
-    }
+    markSocketOpen('ottercamp');
     console.log('[bridge] connected to OtterCamp /ws/openclaw');
   });
 
   otterCampWS.on('message', (data) => {
+    markSocketMessage('ottercamp');
     try {
       const event = JSON.parse(data.toString()) as DMDispatchEvent | ProjectChatDispatchEvent | IssueCommentDispatchEvent | AdminCommandDispatchEvent;
       if (event.type === 'dm.message') {
@@ -2649,25 +2825,25 @@ function connectOtterCampDispatchSocket(): void {
 
   otterCampWS.on('close', (code, reason) => {
     console.warn(`[bridge] OtterCamp websocket closed (${code}) ${reason.toString()}`);
+    applyConnectionTransition('ottercamp', 'socket_closed', { code, reason: reason.toString() });
     otterCampWS = null;
-
-    const reconnectDelay = Math.min(30000, 1000 * Math.pow(2, otterCampReconnectAttempts));
-    otterCampReconnectAttempts += 1;
-    if (otterCampReconnectTimer) {
-      clearTimeout(otterCampReconnectTimer);
+    if (continuousModeEnabled) {
+      scheduleReconnect('ottercamp', () => {
+        connectOtterCampDispatchSocket();
+      });
     }
-    otterCampReconnectTimer = setTimeout(() => {
-      otterCampReconnectTimer = null;
-      connectOtterCampDispatchSocket();
-    }, reconnectDelay);
   });
 
   otterCampWS.on('error', (err) => {
     console.error('[bridge] OtterCamp websocket error:', err);
+    if (otterCampWS && otterCampWS.readyState === WebSocket.OPEN) {
+      otterCampWS.close();
+    }
   });
 }
 
 async function runOnce(): Promise<void> {
+  continuousModeEnabled = false;
   try {
     await connectToOpenClaw();
     const sessions = await fetchSessions();
@@ -2692,6 +2868,7 @@ async function runOnce(): Promise<void> {
 }
 
 async function runContinuous(): Promise<void> {
+  continuousModeEnabled = true;
   await connectToOpenClaw();
   connectOtterCampDispatchSocket();
 
