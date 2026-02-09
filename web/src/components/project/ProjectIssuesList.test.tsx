@@ -15,7 +15,6 @@ type MockIssue = {
   last_activity_at: string;
   github_number?: number | null;
   github_url?: string | null;
-  labels?: Array<{ id: string; name: string; color: string }>;
 };
 
 function mockJSONResponse(body: unknown, ok = true) {
@@ -146,137 +145,58 @@ describe("ProjectIssuesList", () => {
     });
   });
 
-  it("renders issue labels and applies label filter query params", async () => {
-    const labelQueryHistory: string[][] = [];
+  it("requests default open filter from API and renders server-filtered rows", async () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-      const raw = typeof input === "string" ? input : input.toString();
+      const raw = String(input);
       const url = new URL(raw);
       if (url.pathname.includes("/api/agents")) {
-        return mockJSONResponse({ agents: [{ id: "sam", name: "Sam" }] });
+        return mockJSONResponse({ agents: [] });
       }
-
-      const labels = url.searchParams.getAll("label");
-      labelQueryHistory.push(labels);
-
-      if (labels.includes("label-bug") && labels.includes("label-blocked")) {
+      const state = url.searchParams.get("state");
+      if (state === "open") {
         return mockJSONResponse({
           items: [
             {
-              id: "issue-bug-blocked",
-              issue_number: 11,
-              title: "Blocked bug",
+              id: "issue-open-cli",
+              issue_number: 77,
+              title: "CLI-created open issue",
               state: "open",
               origin: "local",
               kind: "issue",
-              owner_agent_id: "sam",
-              last_activity_at: "2026-02-06T05:30:00Z",
-              labels: [
-                { id: "label-bug", name: "bug", color: "#ef4444" },
-                { id: "label-blocked", name: "blocked", color: "#f97316" },
-              ],
+              owner_agent_id: null,
+              last_activity_at: "2026-02-08T07:00:00Z",
             } satisfies MockIssue,
           ],
           total: 1,
         });
       }
-
-      if (labels.includes("label-bug")) {
-        return mockJSONResponse({
-          items: [
-            {
-              id: "issue-bug-blocked",
-              issue_number: 11,
-              title: "Blocked bug",
-              state: "open",
-              origin: "local",
-              kind: "issue",
-              owner_agent_id: "sam",
-              last_activity_at: "2026-02-06T05:30:00Z",
-              labels: [
-                { id: "label-bug", name: "bug", color: "#ef4444" },
-                { id: "label-blocked", name: "blocked", color: "#f97316" },
-              ],
-            } satisfies MockIssue,
-            {
-              id: "issue-bug",
-              issue_number: 12,
-              title: "Bug only",
-              state: "open",
-              origin: "local",
-              kind: "issue",
-              owner_agent_id: "sam",
-              last_activity_at: "2026-02-06T05:45:00Z",
-              labels: [{ id: "label-bug", name: "bug", color: "#ef4444" }],
-            } satisfies MockIssue,
-          ],
-          total: 2,
-        });
-      }
-
       return mockJSONResponse({
         items: [
           {
-            id: "issue-bug-blocked",
-            issue_number: 11,
-            title: "Blocked bug",
-            state: "open",
+            id: "issue-closed",
+            issue_number: 78,
+            title: "Closed issue",
+            state: "closed",
             origin: "local",
             kind: "issue",
-            owner_agent_id: "sam",
-            last_activity_at: "2026-02-06T05:30:00Z",
-            labels: [
-              { id: "label-bug", name: "bug", color: "#ef4444" },
-              { id: "label-blocked", name: "blocked", color: "#f97316" },
-            ],
-          } satisfies MockIssue,
-          {
-            id: "issue-bug",
-            issue_number: 12,
-            title: "Bug only",
-            state: "open",
-            origin: "local",
-            kind: "issue",
-            owner_agent_id: "sam",
-            last_activity_at: "2026-02-06T05:45:00Z",
-            labels: [{ id: "label-bug", name: "bug", color: "#ef4444" }],
-          } satisfies MockIssue,
-          {
-            id: "issue-feature",
-            issue_number: 13,
-            title: "Feature only",
-            state: "open",
-            origin: "local",
-            kind: "issue",
-            owner_agent_id: "sam",
-            last_activity_at: "2026-02-06T06:00:00Z",
-            labels: [{ id: "label-feature", name: "feature", color: "#22c55e" }],
+            owner_agent_id: null,
+            last_activity_at: "2026-02-07T07:00:00Z",
           } satisfies MockIssue,
         ],
-        total: 3,
+        total: 2,
       });
     });
 
     render(<ProjectIssuesList projectId="project-1" />);
 
-    expect(await screen.findByText("#11 Blocked bug")).toBeInTheDocument();
-    expect(screen.getAllByText("bug").length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByRole("button", { name: "Toggle label bug" }));
+    expect(await screen.findByText("#77 CLI-created open issue")).toBeInTheDocument();
+    expect(screen.queryByText("#78 Closed issue")).not.toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.queryByText("#13 Feature only")).not.toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("state=open"),
+        expect.any(Object),
+      );
     });
-
-    fireEvent.click(screen.getByRole("button", { name: "Toggle label blocked" }));
-    await waitFor(() => {
-      expect(screen.queryByText("#12 Bug only")).not.toBeInTheDocument();
-    });
-
-    expect(
-      labelQueryHistory.some((labels) => {
-        const sorted = [...labels].sort();
-        return sorted.length === 2 && sorted[0] === "label-blocked" && sorted[1] === "label-bug";
-      }),
-    ).toBe(true);
   });
 
   it("renders loading and empty states", async () => {

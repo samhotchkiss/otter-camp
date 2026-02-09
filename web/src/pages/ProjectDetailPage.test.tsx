@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,9 +37,9 @@ function mockJSONResponse(body: unknown, ok = true): Response {
   } as Response;
 }
 
-function ProjectTaskRouteEcho() {
-  const { id, taskId } = useParams<{ id: string; taskId: string }>();
-  return <div data-testid="project-task-route">{id}:{taskId}</div>;
+function ProjectIssueRouteEcho() {
+  const { id, issueId } = useParams<{ id: string; issueId: string }>();
+  return <div data-testid="project-issue-route">{id}:{issueId}</div>;
 }
 
 describe("ProjectDetailPage files tab", () => {
@@ -66,7 +66,7 @@ describe("ProjectDetailPage files tab", () => {
         }),
       )
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
-      .mockResolvedValueOnce(mockJSONResponse({ tasks: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
       .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
 
     render(
@@ -98,7 +98,7 @@ describe("ProjectDetailPage files tab", () => {
         }),
       )
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
-      .mockResolvedValueOnce(mockJSONResponse({ tasks: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
       .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
 
     render(
@@ -122,6 +122,231 @@ describe("ProjectDetailPage files tab", () => {
     );
   });
 
+  it("loads board data from project issues and computes issue-based header counts", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          agents: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440111",
+              name: "Derek",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440211",
+              issue_number: 11,
+              title: "Stuck issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440111",
+              work_status: "blocked",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "550e8400-e29b-41d4-a716-446655440212",
+              issue_number: 12,
+              title: "Active issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440111",
+              work_status: "in_progress",
+              priority: "P2",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "550e8400-e29b-41d4-a716-446655440213",
+              issue_number: 13,
+              title: "Completed issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440111",
+              work_status: "done",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+
+    const fetchedURLs = fetchMock.mock.calls.map(([input]: [unknown]) => String(input));
+    expect(fetchedURLs.some((url) => url.includes("/api/issues?"))).toBe(true);
+    expect(fetchedURLs.some((url) => url.includes("/api/tasks?"))).toBe(false);
+    expect(screen.getByText("1 item waiting on you")).toBeInTheDocument();
+    expect(screen.getByText("2 active issues")).toBeInTheDocument();
+  });
+
+  it("groups issue work status values into board columns and removes legacy task controls", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-queued",
+              issue_number: 101,
+              title: "Queued issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "ready",
+              priority: "P2",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-planning",
+              issue_number: 102,
+              title: "Planning issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "planning",
+              priority: "P2",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-ready-for-work",
+              issue_number: 103,
+              title: "Ready for work issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "ready_for_work",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-in-progress",
+              issue_number: 104,
+              title: "In progress issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-review",
+              issue_number: 105,
+              title: "Review issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "review",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-blocked",
+              issue_number: 106,
+              title: "Blocked issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "blocked",
+              priority: "P0",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-flagged",
+              issue_number: 107,
+              title: "Flagged issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "flagged",
+              priority: "P0",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-done",
+              issue_number: 108,
+              title: "Done issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              work_status: "done",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+            {
+              id: "issue-cancelled",
+              issue_number: 109,
+              title: "Cancelled issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              work_status: "cancelled",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+
+    const queuedColumn = screen.getByTestId("board-column-queued");
+    const inProgressColumn = screen.getByTestId("board-column-in_progress");
+    const reviewColumn = screen.getByTestId("board-column-review");
+    const doneColumn = screen.getByTestId("board-column-done");
+
+    expect(within(queuedColumn).getByText("Queued issue")).toBeInTheDocument();
+    expect(within(queuedColumn).getByText("Planning issue")).toBeInTheDocument();
+    expect(within(queuedColumn).getByText("Ready for work issue")).toBeInTheDocument();
+    expect(within(inProgressColumn).getByText("In progress issue")).toBeInTheDocument();
+    expect(within(reviewColumn).getByText("Review issue")).toBeInTheDocument();
+    expect(within(reviewColumn).getByText("Blocked issue")).toBeInTheDocument();
+    expect(within(reviewColumn).getByText("Flagged issue")).toBeInTheDocument();
+    expect(within(doneColumn).getByText("Done issue")).toBeInTheDocument();
+    expect(within(doneColumn).getByText("Cancelled issue")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\+ Add Task/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("No tasks")).not.toBeInTheDocument();
+  });
+
   it("submits New Issue request to project chat endpoint", async () => {
     const user = userEvent.setup();
     localStorage.setItem("otter-camp-user-name", "Sam");
@@ -134,7 +359,7 @@ describe("ProjectDetailPage files tab", () => {
         }),
       )
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
-      .mockResolvedValueOnce(mockJSONResponse({ tasks: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
       .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
       .mockResolvedValueOnce(
         mockJSONResponse({
@@ -187,7 +412,7 @@ describe("ProjectDetailPage files tab", () => {
     );
   });
 
-  it("navigates to project task detail when a board task card is clicked", async () => {
+  it("navigates to project issue detail when a board issue card is clicked", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -200,11 +425,12 @@ describe("ProjectDetailPage files tab", () => {
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
       .mockResolvedValueOnce(
         mockJSONResponse({
-          tasks: [
+          items: [
             {
               id: "550e8400-e29b-41d4-a716-446655440111",
+              issue_number: 40,
               title: "Fix task detail routing",
-              status: "queued",
+              work_status: "queued",
               priority: "P1",
             },
           ],
@@ -216,19 +442,19 @@ describe("ProjectDetailPage files tab", () => {
       <MemoryRouter initialEntries={["/projects/project-1"]}>
         <Routes>
           <Route path="/projects/:id" element={<ProjectDetailPage />} />
-          <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskRouteEcho />} />
+          <Route path="/projects/:id/issues/:issueId" element={<ProjectIssueRouteEcho />} />
         </Routes>
       </MemoryRouter>,
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
     await user.click(screen.getByText("Fix task detail routing"));
-    expect(await screen.findByTestId("project-task-route")).toHaveTextContent(
+    expect(await screen.findByTestId("project-issue-route")).toHaveTextContent(
       "project-1:550e8400-e29b-41d4-a716-446655440111",
     );
   });
 
-  it("navigates to project task detail when a list task row is clicked", async () => {
+  it("navigates to project issue detail when a list issue row is clicked", async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
@@ -241,11 +467,12 @@ describe("ProjectDetailPage files tab", () => {
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
       .mockResolvedValueOnce(
         mockJSONResponse({
-          tasks: [
+          items: [
             {
               id: "550e8400-e29b-41d4-a716-446655440112",
+              issue_number: 41,
               title: "Verify list row click route",
-              status: "in_progress",
+              work_status: "in_progress",
               priority: "P2",
             },
           ],
@@ -257,15 +484,15 @@ describe("ProjectDetailPage files tab", () => {
       <MemoryRouter initialEntries={["/projects/project-1"]}>
         <Routes>
           <Route path="/projects/:id" element={<ProjectDetailPage />} />
-          <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskRouteEcho />} />
+          <Route path="/projects/:id/issues/:issueId" element={<ProjectIssueRouteEcho />} />
         </Routes>
       </MemoryRouter>,
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "List" }));
-    await user.click(screen.getByText("Verify list row click route"));
-    expect(await screen.findByTestId("project-task-route")).toHaveTextContent(
+    await user.click(screen.getByText(/Verify list row click route/i));
+    expect(await screen.findByTestId("project-issue-route")).toHaveTextContent(
       "project-1:550e8400-e29b-41d4-a716-446655440112",
     );
   });
@@ -283,11 +510,15 @@ describe("ProjectDetailPage files tab", () => {
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
       .mockResolvedValueOnce(
         mockJSONResponse({
-          tasks: [
+          items: [
             {
-              id: "task-1",
+              id: "issue-status-1",
+              issue_number: 301,
               title: "Ship status column",
-              status: "in_progress",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "in_progress",
               priority: "P1",
             },
           ],
@@ -306,11 +537,12 @@ describe("ProjectDetailPage files tab", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "List" }));
 
-    expect(screen.getByText("Ship status column")).toBeInTheDocument();
+    expect(screen.getByText(/Ship status column/i)).toBeInTheDocument();
     expect(screen.getByText("In Progress")).toBeInTheDocument();
   });
 
-  it("renders git push activity with System fallback and metadata-derived text", async () => {
+  it("shows issue list columns for status, assignee, and priority", async () => {
+    const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce(
         mockJSONResponse({
@@ -319,25 +551,35 @@ describe("ProjectDetailPage files tab", () => {
           status: "active",
         }),
       )
-      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
-      .mockResolvedValueOnce(mockJSONResponse({ tasks: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          agents: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440222",
+              name: "Ivy",
+            },
+          ],
+        }),
+      )
       .mockResolvedValueOnce(
         mockJSONResponse({
           items: [
             {
-              id: "activity-1",
-              agent_name: "Unknown",
-              type: "git.push",
-              summary: "Unknown: git.push",
-              metadata: {
-                branch: "main",
-                commit_message: "Fix project activity formatting",
-              },
-              created_at: "2026-02-08T13:00:00.000Z",
+              id: "issue-501",
+              issue_number: 501,
+              title: "List columns should render",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "550e8400-e29b-41d4-a716-446655440222",
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
             },
           ],
         }),
-      );
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
 
     render(
       <MemoryRouter initialEntries={["/projects/project-1"]}>
@@ -348,7 +590,147 @@ describe("ProjectDetailPage files tab", () => {
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
-    expect(await screen.findByText("System")).toBeInTheDocument();
-    expect(screen.getByText(/Fix project activity formatting/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "List" }));
+
+    expect(screen.getByText("Status")).toBeInTheDocument();
+    expect(screen.getByText("Assignee")).toBeInTheDocument();
+    expect(screen.getByText("Priority")).toBeInTheDocument();
+    expect(screen.getByText(/List columns should render/i)).toBeInTheDocument();
+    expect(screen.getByText("Ivy")).toBeInTheDocument();
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+    expect(screen.getByText("P1")).toBeInTheDocument();
+  });
+
+  it("uses issue-centric empty copy in list tab when no active issues remain", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-closed",
+              issue_number: 520,
+              title: "Closed issue",
+              state: "closed",
+              origin: "local",
+              kind: "issue",
+              work_status: "done",
+              priority: "P3",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "List" }));
+
+    expect(screen.getByText("No active issues")).toBeInTheDocument();
+    expect(screen.queryByText("No active tasks")).not.toBeInTheDocument();
+  });
+
+  it("does not leak agent name mappings across project remounts", async () => {
+    const ownerID = "550e8400-e29b-41d4-a716-446655440abc";
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Project One",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          agents: [{ id: ownerID, name: "Ivy" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-1",
+              issue_number: 101,
+              title: "Project one issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: ownerID,
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-2",
+          name: "Project Two",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-2",
+              issue_number: 202,
+              title: "Project two issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: ownerID,
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    const firstRender = render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Project One" })).toBeInTheDocument();
+    expect(screen.getByText("Ivy")).toBeInTheDocument();
+    firstRender.unmount();
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-2"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Project Two" })).toBeInTheDocument();
+    expect(screen.getByText("Project two issue")).toBeInTheDocument();
+    expect(screen.getByText("Unassigned")).toBeInTheDocument();
+    expect(screen.queryByText("Ivy")).not.toBeInTheDocument();
   });
 });

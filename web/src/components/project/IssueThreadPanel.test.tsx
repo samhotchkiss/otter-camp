@@ -1,15 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import useEmissions from "../../hooks/useEmissions";
 import { useWS } from "../../contexts/WebSocketContext";
 import IssueThreadPanel from "./IssueThreadPanel";
 
 vi.mock("../../contexts/WebSocketContext", () => ({
   useWS: vi.fn(),
-}));
-vi.mock("../../hooks/useEmissions", () => ({
-  default: vi.fn(),
 }));
 
 function mockJSONResponse(payload: unknown, status = 200): Response {
@@ -24,13 +21,6 @@ describe("IssueThreadPanel", () => {
     localStorage.clear();
     localStorage.setItem("otter-camp-org-id", "org-123");
     vi.restoreAllMocks();
-    vi.mocked(useEmissions).mockReturnValue({
-      emissions: [],
-      latestBySource: new Map(),
-      loading: false,
-      error: null,
-      refresh: vi.fn(),
-    });
     vi.mocked(useWS).mockReturnValue({
       connected: false,
       lastMessage: null,
@@ -204,84 +194,6 @@ describe("IssueThreadPanel", () => {
     });
   });
 
-  it("renders issue labels and supports inline add/remove actions", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (
-        url.includes("/api/projects/project-1/issues/issue-1/labels/label-bug") &&
-        init?.method === "DELETE"
-      ) {
-        return mockJSONResponse({});
-      }
-      if (url.includes("/api/projects/project-1/issues/issue-1/labels?") && init?.method === "POST") {
-        return mockJSONResponse({});
-      }
-      if (url.includes("/api/labels?")) {
-        return mockJSONResponse({
-          labels: [
-            { id: "label-bug", name: "bug", color: "#ef4444" },
-            { id: "label-feature", name: "feature", color: "#22c55e" },
-          ],
-        });
-      }
-      if (url.includes("/api/issues/issue-1?")) {
-        return mockJSONResponse({
-          issue: {
-            id: "issue-1",
-            project_id: "project-1",
-            issue_number: 1,
-            title: "Label issue",
-            state: "open",
-            origin: "local",
-            labels: [{ id: "label-bug", name: "bug", color: "#ef4444" }],
-          },
-          participants: [],
-          comments: [],
-        });
-      }
-      if (url.includes("/api/agents?")) {
-        return mockJSONResponse({
-          agents: [{ id: "sam", name: "Sam" }],
-        });
-      }
-      throw new Error(`unexpected url ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    const user = userEvent.setup();
-    render(<IssueThreadPanel issueID="issue-1" />);
-
-    expect(await screen.findByText("#1 Label issue")).toBeInTheDocument();
-    expect(screen.getAllByText("bug").length).toBeGreaterThan(0);
-
-    await user.click(screen.getByRole("button", { name: "Manage labels" }));
-    await user.click(await screen.findByRole("button", { name: "Add label feature" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("feature").length).toBeGreaterThan(0);
-    });
-
-    await user.click(screen.getByRole("button", { name: "Manage labels" }));
-    await user.click(screen.getByRole("button", { name: "Remove label bug" }));
-
-    await waitFor(() => {
-      expect(screen.queryByText("bug")).not.toBeInTheDocument();
-    });
-
-    expect(
-      fetchMock.mock.calls.some(([input, reqInit]) =>
-        String(input).includes("/api/projects/project-1/issues/issue-1/labels?") &&
-        (reqInit as RequestInit | undefined)?.method === "POST",
-      ),
-    ).toBe(true);
-    expect(
-      fetchMock.mock.calls.some(([input, reqInit]) =>
-        String(input).includes("/api/projects/project-1/issues/issue-1/labels/label-bug?") &&
-        (reqInit as RequestInit | undefined)?.method === "DELETE",
-      ),
-    ).toBe(true);
-  });
-
   it("shows approval badge and renders linked post in markdown workspace", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -345,25 +257,7 @@ describe("IssueThreadPanel", () => {
     expect(screen.getByTestId("editor-mode-markdown")).toBeInTheDocument();
   });
 
-  it("renders issue-scoped live activity indicator and stream", async () => {
-    vi.mocked(useEmissions).mockReturnValue({
-      emissions: [
-        {
-          id: "em-1",
-          source_type: "agent",
-          source_id: "agent-1",
-          kind: "progress",
-          summary: "Finished lint cleanup",
-          timestamp: new Date().toISOString(),
-          scope: { issue_id: "issue-1" },
-        },
-      ],
-      latestBySource: new Map(),
-      loading: false,
-      error: null,
-      refresh: vi.fn(),
-    });
-
+  it("renders issue detail metadata for body, priority, work status, and assignee", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/api/issues/issue-1?")) {
@@ -371,26 +265,60 @@ describe("IssueThreadPanel", () => {
           issue: {
             id: "issue-1",
             issue_number: 1,
-            title: "Thread issue",
+            title: "Metadata issue",
             state: "open",
             origin: "local",
+            body: "Fix the issue detail metadata rendering path.",
+            priority: "P1",
+            work_status: "in_progress",
+            owner_agent_id: "sam",
           },
           participants: [],
           comments: [],
         });
       }
-      return mockJSONResponse({
-        agents: [{ id: "sam", name: "Sam" }],
-      });
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     render(<IssueThreadPanel issueID="issue-1" />);
 
-    expect(await screen.findByText("#1 Thread issue")).toBeInTheDocument();
-    expect(screen.getByText(/Agent is working on this issue/i)).toBeInTheDocument();
-    expect(screen.getByText("Finished lint cleanup")).toBeInTheDocument();
-    expect(useEmissions).toHaveBeenCalledWith({ issueId: "issue-1", limit: 30 });
+    expect(await screen.findByText("#1 Metadata issue")).toBeInTheDocument();
+    expect(screen.getByText("Priority: P1")).toBeInTheDocument();
+    expect(screen.getByText("Work Status: In Progress")).toBeInTheDocument();
+    expect(screen.getByText("Assignee: Sam")).toBeInTheDocument();
+    expect(screen.getByText("Fix the issue detail metadata rendering path.")).toBeInTheDocument();
+  });
+
+  it("renders project-scoped issue not-found state with back link", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/issues/missing-issue?")) {
+        return mockJSONResponse({ error: "not found" }, 404);
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(
+      <MemoryRouter>
+        <IssueThreadPanel issueID="missing-issue" projectID="project-1" />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Issue not found" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Project" })).toHaveAttribute("href", "/projects/project-1");
+    expect(screen.queryByText(/demo/i)).not.toBeInTheDocument();
   });
 
   it("lists history and opens historical version with read-only comment rendering", async () => {

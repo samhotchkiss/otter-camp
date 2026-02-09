@@ -1,5 +1,5 @@
 // Cache bust: 2026-02-05-11:15
-import { useState, useEffect, useMemo, type FormEvent } from "react";
+import { useState, useEffect, useMemo, useRef, type FormEvent } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProjectFileBrowser from "../components/project/ProjectFileBrowser";
@@ -7,8 +7,6 @@ import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
-import useEmissions from "../hooks/useEmissions";
-import EmissionStream from "../components/EmissionStream";
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 
@@ -56,20 +54,31 @@ const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 
-type ApiTask = {
+type ApiIssue = {
   id: string;
   title: string;
-  description?: string;
-  status: string;
-  priority: string;
-  assigned_agent_id?: string;
-  number?: number;
+  issue_number?: number;
+  owner_agent_id?: string;
+  work_status?: string;
+  priority?: string;
 };
 
 type Task = {
   id: string;
+  issueNumber?: number;
   title: string;
-  status: "queued" | "in_progress" | "review" | "done" | "blocked" | "dispatched" | "cancelled";
+  status:
+    | "queued"
+    | "in_progress"
+    | "review"
+    | "done"
+    | "blocked"
+    | "dispatched"
+    | "cancelled"
+    | "ready"
+    | "planning"
+    | "ready_for_work"
+    | "flagged";
   priority: "P0" | "P1" | "P2" | "P3";
   assignee: string;
   avatarColor: string;
@@ -107,9 +116,6 @@ function buildProjectIssueRequestMessage(projectName: string, issueTitle: string
   ].join("\n");
 }
 
-// Agent ID to name mapping (from database)
-const agentIdToName: Record<string, string> = {};
-
 type TaskColumn = {
   key: string;
   title: string;
@@ -117,15 +123,27 @@ type TaskColumn = {
 };
 
 const COLUMNS: TaskColumn[] = [
-  { key: "queued", title: "📋 Queued", statuses: ["queued", "dispatched"] },
+  { key: "queued", title: "📋 Queued", statuses: ["queued", "dispatched", "ready", "planning", "ready_for_work"] },
   { key: "in_progress", title: "🔨 In Progress", statuses: ["in_progress"] },
-  { key: "review", title: "👀 Review", statuses: ["review", "blocked"] },
+  { key: "review", title: "👀 Review", statuses: ["review", "blocked", "flagged"] },
   { key: "done", title: "✅ Done", statuses: ["done", "cancelled"] },
 ];
 
 const LIST_STATUS_BADGE: Record<Task["status"], { label: string; className: string }> = {
   queued: {
     label: "Queued",
+    className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
+  },
+  ready: {
+    label: "Ready",
+    className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
+  },
+  planning: {
+    label: "Planning",
+    className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
+  },
+  ready_for_work: {
+    label: "Ready for Work",
     className: "bg-[var(--surface-alt)] text-[var(--text-muted)]",
   },
   dispatched: {
@@ -142,6 +160,10 @@ const LIST_STATUS_BADGE: Record<Task["status"], { label: string; className: stri
   },
   blocked: {
     label: "Blocked",
+    className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  },
+  flagged: {
+    label: "Flagged",
     className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
   },
   done: {
@@ -168,14 +190,6 @@ function formatTimeAgo(dateStr: string): string {
   return `${diffDays}d ago`;
 }
 
-function normalizeActivityActorName(value?: string): string {
-  const candidate = (value || "").trim();
-  if (!candidate || candidate.toLowerCase() === "unknown") {
-    return "System";
-  }
-  return candidate;
-}
-
 function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
   const priorityClasses: Record<string, string> = {
     P0: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
@@ -193,6 +207,11 @@ function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
           : "border-[var(--border)] hover:border-[#C9A86C]/50"
       } ${task.status === "done" ? "opacity-70" : ""}`}
     >
+      {typeof task.issueNumber === "number" && (
+        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+          #{task.issueNumber}
+        </p>
+      )}
       <h4 className="mb-3 text-sm font-semibold text-[var(--text)]">
         {task.title}
       </h4>
@@ -217,16 +236,21 @@ function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
 }
 
 function BoardColumn({
+  columnKey,
   title,
   tasks,
   onTaskClick,
 }: {
+  columnKey: string;
   title: string;
   tasks: Task[];
   onTaskClick?: (task: Task) => void;
 }) {
   return (
-    <div className="flex w-80 flex-shrink-0 flex-col rounded-xl bg-[var(--surface-alt)]">
+    <div
+      className="flex w-80 flex-shrink-0 flex-col rounded-xl bg-[var(--surface-alt)]"
+      data-testid={`board-column-${columnKey}`}
+    >
       <div className="flex items-center gap-3 border-b border-[var(--border)] px-5 py-4">
         <span className="text-sm font-bold text-[var(--text)]">{title}</span>
         <span className="rounded-full bg-[var(--surface)] px-2.5 py-0.5 text-xs font-semibold text-[var(--text-muted)]">
@@ -239,16 +263,10 @@ function BoardColumn({
         ))}
         {tasks.length === 0 && (
           <div className="py-8 text-center text-sm text-[var(--text-muted)]">
-            No tasks
+            No issues
           </div>
         )}
       </div>
-      <button
-        type="button"
-        className="mx-3 mb-3 rounded-lg border-2 border-dashed border-[var(--border)] bg-transparent py-3 text-sm text-[var(--text-muted)] transition hover:border-[#C9A86C] hover:text-[#C9A86C]"
-      >
-        + Add Task
-      </button>
     </div>
   );
 }
@@ -298,19 +316,17 @@ export default function ProjectDetailPage() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
+  const agentIdToNameRef = useRef<Record<string, string>>({});
   const { upsertConversation, openConversation } = useGlobalChat();
-  const { emissions: projectEmissions } = useEmissions({
-    projectId: id,
-    limit: 25,
-  });
 
-  // Fetch project and tasks
+  // Fetch project and issue work items
   useEffect(() => {
     async function fetchData() {
       if (!id) return;
       
       setIsLoading(true);
       setError(null);
+      agentIdToNameRef.current = {};
       
       try {
         const orgId = localStorage.getItem('otter-camp-org-id');
@@ -344,44 +360,64 @@ export default function ProjectDetailPage() {
               (typeof agent.display_name === "string" && agent.display_name.trim()) ||
               agent.id;
             const agentID = agent.id.trim();
-            agentIdToName[agentID] = agentName;
+            agentIdToNameRef.current[agentID] = agentName;
             parsedAgents.push({ id: agentID, name: agentName });
           }
           parsedAgents.sort((a, b) => a.name.localeCompare(b.name));
           setAvailableAgents(parsedAgents);
         }
         
-        // Fetch tasks for this project
-        const tasksUrl = orgId 
-          ? `${API_URL}/api/tasks?org_id=${orgId}&project_id=${id}`
-          : `${API_URL}/api/tasks?project_id=${id}`;
-        const tasksRes = await fetch(tasksUrl);
-        if (tasksRes.ok) {
-          const tasksData = (await tasksRes.json()) as unknown;
-          const tasksRecord =
-            tasksData && typeof tasksData === "object" && !Array.isArray(tasksData)
-              ? (tasksData as { tasks?: unknown })
-              : null;
-          const apiTasksRaw = Array.isArray(tasksRecord?.tasks)
-            ? tasksRecord.tasks
-            : Array.isArray(tasksData)
-              ? tasksData
-              : [];
-          const apiTasks = apiTasksRaw as ApiTask[];
-          
-          // Transform API tasks to UI tasks
-          const transformedTasks: Task[] = apiTasks.map((t) => {
-            const agentName = t.assigned_agent_id ? 
-              (agentIdToName[t.assigned_agent_id] || "Unassigned") : 
-              "Unassigned";
+        // Fetch issues for this project
+        const issuesUrl = orgId
+          ? `${API_URL}/api/issues?org_id=${encodeURIComponent(orgId)}&project_id=${encodeURIComponent(id)}&limit=200`
+          : `${API_URL}/api/issues?project_id=${encodeURIComponent(id)}&limit=200`;
+        const issuesRes = await fetch(issuesUrl);
+        if (issuesRes.ok) {
+          const payload = await issuesRes.json() as
+            | { items?: ApiIssue[] }
+            | ApiIssue[];
+          const apiIssues = Array.isArray(payload)
+            ? payload
+            : Array.isArray(payload.items)
+              ? payload.items
+                : [];
+
+          const transformedTasks: Task[] = apiIssues.map((raw) => {
+            const issue = raw as ApiIssue;
+            const ownerAgentID = issue.owner_agent_id;
+            const issueStatusRaw = issue.work_status ?? "queued";
+            const normalizedStatus = issueStatusRaw.trim().toLowerCase();
+            const status = (
+              normalizedStatus === "queued" ||
+              normalizedStatus === "ready" ||
+              normalizedStatus === "planning" ||
+              normalizedStatus === "ready_for_work" ||
+              normalizedStatus === "in_progress" ||
+              normalizedStatus === "review" ||
+              normalizedStatus === "blocked" ||
+              normalizedStatus === "flagged" ||
+              normalizedStatus === "done" ||
+              normalizedStatus === "cancelled" ||
+              normalizedStatus === "dispatched"
+            )
+              ? normalizedStatus
+              : "queued";
+            const priorityRaw = (issue.priority ?? "P2").toUpperCase();
+            const priority = (priorityRaw === "P0" || priorityRaw === "P1" || priorityRaw === "P2" || priorityRaw === "P3")
+              ? priorityRaw
+              : "P2";
+            const agentName = ownerAgentID
+              ? (agentIdToNameRef.current[ownerAgentID] || "Unassigned")
+              : "Unassigned";
             return {
-              id: t.id,
-              title: t.title,
-              status: t.status as Task["status"],
-              priority: (t.priority || "P2") as Task["priority"],
+              id: raw.id,
+              issueNumber: issue.issue_number,
+              title: raw.title,
+              status,
+              priority,
               assignee: agentName,
               avatarColor: agentColors[agentName] || "var(--accent, #C9A86C)",
-              blocked: t.status === "blocked",
+              blocked: status === "blocked" || status === "flagged",
             };
           });
           setTasks(transformedTasks);
@@ -404,7 +440,7 @@ export default function ProjectDetailPage() {
             metadata?: unknown;
             created_at?: string;
           }) => {
-            const agentName = normalizeActivityActorName(item.agent_name);
+            const agentName = item.agent_name?.trim() || "System";
             const type = item.type?.trim() || "activity";
             const highlight = getActivityDescription({
               type,
@@ -549,15 +585,17 @@ export default function ProjectDetailPage() {
 
   const handleTaskClick = (task: Task) => {
     if (!id) {
-      navigate(`/tasks/${task.id}`);
       return;
     }
-    navigate(`/projects/${id}/tasks/${task.id}`);
+    navigate(`/projects/${id}/issues/${task.id}`);
   };
 
   const primaryAgentName =
     project.lead ||
-    (project.primary_agent_id ? agentIdToName[project.primary_agent_id] : undefined);
+    (project.primary_agent_id
+      ? availableAgents.find((agent) => agent.id === project.primary_agent_id)?.name ||
+        agentIdToNameRef.current[project.primary_agent_id]
+      : undefined);
 
   const handleSaveSettings = async () => {
     if (!id) return;
@@ -693,7 +731,7 @@ export default function ProjectDetailPage() {
                 )}
               </div>
               <span>•</span>
-              <span>{activeTaskCount} active task{activeTaskCount !== 1 ? "s" : ""}</span>
+              <span>{activeTaskCount} active issue{activeTaskCount !== 1 ? "s" : ""}</span>
               {primaryAgentName && (
                 <>
                   <span>•</span>
@@ -797,6 +835,7 @@ export default function ProjectDetailPage() {
             {COLUMNS.map((col) => (
               <BoardColumn
                 key={col.key}
+                columnKey={col.key}
                 title={col.title}
                 tasks={tasksByColumn[col.key] || []}
                 onTaskClick={handleTaskClick}
@@ -809,17 +848,10 @@ export default function ProjectDetailPage() {
             <div className="flex items-center gap-2 border-b border-[var(--border)] px-5 py-4">
               <span className="text-sm">📡</span>
               <span className="text-sm font-bold text-[var(--text)]">
-                Live Activity
+                Recent Activity
               </span>
             </div>
             <div className="flex-1 overflow-y-auto p-3">
-              <EmissionStream
-                emissions={projectEmissions}
-                projectId={project.id}
-                limit={8}
-                emptyText="No live project emissions"
-              />
-              <div className="my-3 border-t border-[var(--border)]" />
               {activity.length > 0 ? (
                 activity.map((a) => (
                   <ActivityItem key={a.id} activity={a} />
@@ -838,35 +870,44 @@ export default function ProjectDetailPage() {
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
           <div className="space-y-3">
             {tasks.filter(t => t.status !== "done" && t.status !== "cancelled").length > 0 ? (
-              tasks.filter(t => t.status !== "done" && t.status !== "cancelled").map((task) => (
-                <div
-                  key={task.id}
-                  onClick={() => handleTaskClick(task)}
-                  className="flex cursor-pointer items-center gap-4 rounded-xl border border-[var(--border)] p-4 transition hover:border-[#C9A86C]/50 hover:bg-[var(--surface-alt)]"
-                >
-                  <input type="checkbox" className="h-5 w-5 rounded border-[var(--border)]" readOnly />
-                  <span className="flex-1 text-sm font-medium text-[var(--text)]">
-                    {task.title}
-                  </span>
-                  <span className="text-xs text-[var(--text-muted)]">
-                    {task.assignee}
-                  </span>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${LIST_STATUS_BADGE[task.status].className}`}>
-                    {LIST_STATUS_BADGE[task.status].label}
-                  </span>
-                  <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
-                    task.priority === "P0" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
-                    task.priority === "P1" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :
-                    task.priority === "P2" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
-                    "bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400"
-                  }`}>
-                    {task.priority}
-                  </span>
+              <>
+                <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_90px] items-center gap-3 px-3 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                  <span>Issue</span>
+                  <span>Assignee</span>
+                  <span>Status</span>
+                  <span>Priority</span>
                 </div>
-              ))
+                {tasks.filter(t => t.status !== "done" && t.status !== "cancelled").map((task) => (
+                  <button
+                    key={task.id}
+                    type="button"
+                    onClick={() => handleTaskClick(task)}
+                    className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_120px_120px_90px] items-center gap-3 rounded-xl border border-[var(--border)] p-4 text-left transition hover:border-[#C9A86C]/50 hover:bg-[var(--surface-alt)]"
+                  >
+                    <span className="truncate text-sm font-medium text-[var(--text)]">
+                      {typeof task.issueNumber === "number" ? `#${task.issueNumber} ` : ""}
+                      {task.title}
+                    </span>
+                    <span className="text-xs text-[var(--text-muted)]">
+                      {task.assignee}
+                    </span>
+                    <span className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold ${LIST_STATUS_BADGE[task.status].className}`}>
+                      {LIST_STATUS_BADGE[task.status].label}
+                    </span>
+                    <span className={`w-fit rounded px-2 py-0.5 text-[10px] font-semibold ${
+                      task.priority === "P0" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
+                      task.priority === "P1" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :
+                      task.priority === "P2" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
+                      "bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400"
+                    }`}>
+                      {task.priority}
+                    </span>
+                  </button>
+                ))}
+              </>
             ) : (
               <div className="py-8 text-center text-sm text-[var(--text-muted)]">
-                No active tasks
+                No active issues
               </div>
             )}
           </div>
@@ -875,14 +916,7 @@ export default function ProjectDetailPage() {
 
       {activeTab === "activity" && (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
-          <div className="space-y-4">
-            <EmissionStream
-              emissions={projectEmissions}
-              projectId={project.id}
-              limit={12}
-              emptyText="No live project emissions"
-            />
-            <div className="border-t border-[var(--border)] pt-4" />
+          <div className="space-y-2">
             {activity.length > 0 ? (
               activity.map((a) => (
                 <ActivityItem key={a.id} activity={a} />
@@ -907,7 +941,7 @@ export default function ProjectDetailPage() {
               navigate(`/projects/${project.id}/issues/${selectedIssueID}`)
             }
           />
-          {issueId && <IssueThreadPanel issueID={issueId} />}
+          {issueId && <IssueThreadPanel issueID={issueId} projectID={project.id} />}
         </div>
       )}
 

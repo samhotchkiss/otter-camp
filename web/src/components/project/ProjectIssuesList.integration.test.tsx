@@ -31,23 +31,25 @@ describe("ProjectIssuesList navigation integration", () => {
   });
 
   it("navigates to issue thread route when selecting an issue row", async () => {
-    fetchMock.mockResolvedValueOnce(
-      mockJSONResponse({
-        items: [
-          {
-            id: "issue-33",
-            issue_number: 33,
-            title: "Navigate me",
-            state: "open",
-            origin: "local",
-            kind: "issue",
-            owner_agent_id: "sam",
-            last_activity_at: "2026-02-06T07:00:00Z",
-          },
-        ],
-        total: 1,
-      }),
-    );
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-33",
+              issue_number: 33,
+              title: "Navigate me",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: "sam",
+              last_activity_at: "2026-02-06T07:00:00Z",
+            },
+          ],
+          total: 1,
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }));
 
     render(
       <MemoryRouter initialEntries={["/projects/project-1"]}>
