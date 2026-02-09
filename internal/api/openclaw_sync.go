@@ -394,7 +394,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		avatar := agentAvatars[agentID]
 
 		updatedAt := time.Unix(session.UpdatedAt/1000, 0)
-		status := deriveAgentStatus(updatedAt, session.ContextTokens)
+		status := deriveAgentStatus(updatedAt, session.TotalTokens)
 
 		lastSeen := normalizeLastSeenTimestamp(updatedAt)
 		currentTask := normalizeCurrentTask(session.DisplayName)
@@ -417,7 +417,10 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Always update in-memory store (fallback when DB unavailable)
-		memoryAgentStates[agentID] = agentState
+		// Only overwrite if this session is more recent than the stored one
+		if existing, ok := memoryAgentStates[agentID]; !ok || updatedAt.After(existing.UpdatedAt) {
+			memoryAgentStates[agentID] = agentState
+		}
 		processedCount++
 
 		// Also persist to database if available
@@ -440,6 +443,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 					channel = EXCLUDED.channel,
 					session_key = EXCLUDED.session_key,
 					updated_at = EXCLUDED.updated_at
+				WHERE agent_sync_state.updated_at < EXCLUDED.updated_at
 			`, agentID, name, role, status, avatar, currentTask, lastSeen,
 				session.Model, session.TotalTokens, session.ContextTokens,
 				session.Channel, session.Key, updatedAt)
