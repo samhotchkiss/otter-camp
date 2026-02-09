@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { API_URL } from "../lib/api";
 import { useOptionalWS } from "../contexts/WebSocketContext";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const TOKEN_STORAGE_KEY = "otter_camp_token";
 const DEFAULT_LIMIT = 50;

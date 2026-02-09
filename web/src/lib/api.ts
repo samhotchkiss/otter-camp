@@ -5,7 +5,8 @@
 
 import { isDemoMode } from './demo';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
+const browserOrigin = typeof window !== "undefined" ? window.location.origin : "";
+export const API_URL = import.meta.env.VITE_API_URL || browserOrigin;
 
 /**
  * Get query params for API calls that need org_id

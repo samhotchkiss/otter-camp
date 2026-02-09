@@ -21,8 +21,8 @@ import MessageHistory from "../messaging/MessageHistory";
 import type {
   GlobalChatConversation,
 } from "../../contexts/GlobalChatContext";
+import { API_URL } from "../../lib/api";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 const PROJECT_CHAT_SESSION_RESET_AUTHOR = "__otter_session__";

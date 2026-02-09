@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { isDemoMode } from '../lib/demo';
+import { API_URL } from "../lib/api";
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
 const PRIMARY_AUTH_TOKEN_KEY = 'otter_camp_token';
 const LEGACY_AUTH_TOKEN_KEY = 'otter_auth_token';
 
