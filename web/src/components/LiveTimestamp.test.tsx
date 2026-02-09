@@ -1,5 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import AgentWorkingIndicator from "./AgentWorkingIndicator";
 import LiveTimestamp, { formatLiveTimestamp } from "./LiveTimestamp";
 
 describe("formatLiveTimestamp", () => {
@@ -37,5 +38,31 @@ describe("LiveTimestamp", () => {
     });
 
     expect(screen.getByText("5s ago")).toBeInTheDocument();
+  });
+
+  it("uses one shared ticker interval across multiple consumers", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-08T12:00:00Z"));
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const initialCalls = setIntervalSpy.mock.calls.length;
+
+    render(
+      <>
+        <LiveTimestamp timestamp="2026-02-08T11:59:58Z" />
+        <LiveTimestamp timestamp="2026-02-08T11:59:40Z" />
+        <AgentWorkingIndicator
+          latestEmission={{
+            id: "em-1",
+            source_type: "agent",
+            source_id: "agent-1",
+            kind: "status",
+            summary: "working",
+            timestamp: "2026-02-08T11:59:59Z",
+          }}
+        />
+      </>,
+    );
+
+    expect(setIntervalSpy.mock.calls.length - initialCalls).toBe(1);
   });
 });
