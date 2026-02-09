@@ -271,7 +271,11 @@ type SessionContext = {
   pendingQuestionnaire?: QuestionnairePayload;
   identityMetadata?: SessionIdentityMetadata;
   displayLabel?: string;
+  executionMode?: ExecutionMode;
+  projectRoot?: string;
 };
+
+type ExecutionMode = 'conversation' | 'project';
 
 type WhoAmITaskPointer = {
   project?: string;
@@ -1362,6 +1366,151 @@ function buildContextReminder(context: SessionContext): string {
   return `DM thread (${context.threadID || 'unknown thread'})`;
 }
 
+function resolveProjectWorktreeBaseDir(): string {
+  const override = getTrimmedString(process.env.OTTER_PROJECT_WORKTREE_ROOT);
+  if (override) {
+    return override;
+  }
+  return path.join(os.homedir(), '.otter', 'projects');
+}
+
+function safeProjectPathSegment(projectID: string): string {
+  const normalized = getTrimmedString(projectID).toLowerCase();
+  if (/^[0-9a-f-]{8,64}$/.test(normalized)) {
+    return normalized;
+  }
+  return crypto.createHash('sha1').update(normalized || 'project').digest('hex').slice(0, 16);
+}
+
+function hashSessionKeyForWorktree(sessionKey: string): string {
+  return crypto.createHash('sha1').update(getTrimmedString(sessionKey)).digest('hex').slice(0, 16);
+}
+
+export function resolveProjectWorktreeRoot(projectID: string, sessionKey: string): string {
+  return path.join(
+    resolveProjectWorktreeBaseDir(),
+    safeProjectPathSegment(projectID),
+    'worktrees',
+    hashSessionKeyForWorktree(sessionKey),
+  );
+}
+
+async function pathHasSymlinkSegments(fromRoot: string, targetPath: string): Promise<boolean> {
+  const root = path.resolve(fromRoot);
+  const target = path.resolve(targetPath);
+  const relative = path.relative(root, target);
+  if (!relative || relative === '.') {
+    return false;
+  }
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    return true;
+  }
+
+  const segments = relative.split(path.sep).filter(Boolean);
+  let cursor = root;
+  for (const segment of segments) {
+    cursor = path.join(cursor, segment);
+    try {
+      const stat = await fs.promises.lstat(cursor);
+      if (stat.isSymbolicLink()) {
+        return true;
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        continue;
+      }
+      throw err;
+    }
+  }
+  return false;
+}
+
+export async function isPathWithinProjectRoot(projectRoot: string, targetPath: string): Promise<boolean> {
+  const root = path.resolve(projectRoot);
+  try {
+    const rootStat = await fs.promises.lstat(root);
+    if (rootStat.isSymbolicLink()) {
+      return false;
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') {
+      throw err;
+    }
+  }
+  const candidate = path.resolve(root, targetPath);
+  const relative = path.relative(root, candidate);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    return false;
+  }
+  if (await pathHasSymlinkSegments(root, candidate)) {
+    return false;
+  }
+  return true;
+}
+
+export function resolveExecutionMode(context: SessionContext): ExecutionMode {
+  return getTrimmedString(context.projectID) ? 'project' : 'conversation';
+}
+
+async function resolveSessionExecutionContext(
+  sessionKey: string,
+  context: SessionContext,
+): Promise<{ mode: ExecutionMode; projectRoot?: string }> {
+  const mode = resolveExecutionMode(context);
+  if (mode !== 'project') {
+    return { mode: 'conversation' };
+  }
+
+  const projectID = getTrimmedString(context.projectID);
+  if (!projectID) {
+    return { mode: 'conversation' };
+  }
+  const projectRoot = resolveProjectWorktreeRoot(projectID, sessionKey);
+
+  try {
+    await fs.promises.mkdir(projectRoot, { recursive: true });
+    const guardOK = await isPathWithinProjectRoot(projectRoot, '.');
+    if (!guardOK) {
+      console.warn(`[bridge] project path guard failed for ${sessionKey}; forcing conversation mode`);
+      return { mode: 'conversation' };
+    }
+    return {
+      mode: 'project',
+      projectRoot,
+    };
+  } catch (err) {
+    console.warn(`[bridge] unable to prepare project worktree for ${sessionKey}; forcing conversation mode`, err);
+    return { mode: 'conversation' };
+  }
+}
+
+function buildExecutionPolicyBlock(params: {
+  mode: ExecutionMode;
+  context: SessionContext;
+  projectRoot?: string;
+}): string {
+  const lines: string[] = ['[OTTERCAMP_EXECUTION_MODE]'];
+  if (params.mode === 'project' && params.projectRoot) {
+    lines.push('- mode: project');
+    if (params.context.projectID) {
+      lines.push(`- project_id: ${params.context.projectID}`);
+    }
+    lines.push(`- cwd: ${params.projectRoot}`);
+    lines.push(`- write_guard_root: ${params.projectRoot}`);
+    lines.push('- write policy: writes allowed only within write_guard_root');
+    lines.push('- security: path traversal and symlink escape are denied');
+  } else {
+    lines.push('- mode: conversation');
+    lines.push('- project_id: none');
+    lines.push('- write policy: deny write/edit/apply_patch and any filesystem mutation');
+    lines.push('- workspaceAccess: none');
+  }
+  lines.push('[/OTTERCAMP_EXECUTION_MODE]');
+  return lines.join('\n');
+}
+
 function clampInlineText(raw: string, maxChars: number): string {
   const normalized = raw.replace(/\s+/g, ' ').trim();
   if (!normalized) {
@@ -1606,6 +1755,13 @@ async function withSessionContext(sessionKey: string, rawContent: string): Promi
     return content;
   }
   if (!contextPrimedSessions.has(sessionKey)) {
+    const execution = await resolveSessionExecutionContext(sessionKey, context);
+    context = {
+      ...context,
+      executionMode: execution.mode,
+      projectRoot: execution.projectRoot,
+    };
+
     let identityMetadata = context.identityMetadata;
     if (!identityMetadata) {
       try {
@@ -1619,14 +1775,19 @@ async function withSessionContext(sessionKey: string, rawContent: string): Promi
           identityMetadata,
           displayLabel: identityMetadata.displayLabel,
         };
-        setSessionContext(sessionKey, context);
       }
     }
+    setSessionContext(sessionKey, context);
     contextPrimedSessions.add(sessionKey);
     const sections: string[] = [];
     if (identityMetadata?.preamble) {
       sections.push(identityMetadata.preamble);
     }
+    sections.push(buildExecutionPolicyBlock({
+      mode: execution.mode,
+      context,
+      projectRoot: execution.projectRoot,
+    }));
     sections.push(buildContextEnvelope(context));
     sections.push(content);
     return sections.join('\n\n');
@@ -2225,6 +2386,29 @@ export function getSessionContextStateForTest(): { count: number; keys: string[]
   };
 }
 
+export function getSessionContextForTest(sessionKey: string): Record<string, unknown> | null {
+  const context = sessionContexts.get(getTrimmedString(sessionKey));
+  if (!context) {
+    return null;
+  }
+  return {
+    kind: context.kind,
+    orgID: context.orgID,
+    threadID: context.threadID,
+    agentID: context.agentID,
+    agentName: context.agentName,
+    projectID: context.projectID,
+    issueID: context.issueID,
+    issueNumber: context.issueNumber,
+    issueTitle: context.issueTitle,
+    documentPath: context.documentPath,
+    responderAgentID: context.responderAgentID,
+    displayLabel: context.displayLabel,
+    executionMode: context.executionMode,
+    projectRoot: context.projectRoot,
+  };
+}
+
 async function fetchWithRetry(
   input: RequestInfo | URL,
   init: RequestInit,
@@ -2506,15 +2690,22 @@ async function sendMessageToSession(
   }
 
   if (isFirstDispatchForSession) {
-    const displayLabel = getTrimmedString(sessionContexts.get(sessionKey)?.displayLabel);
-    if (displayLabel) {
+    const firstContext = sessionContexts.get(sessionKey);
+    const displayLabel = getTrimmedString(firstContext?.displayLabel);
+    const projectRoot = getTrimmedString(firstContext?.projectRoot);
+    const shouldSetCwd = getTrimmedString(firstContext?.executionMode) === 'project' && projectRoot;
+    if (displayLabel || shouldSetCwd) {
+      const updatePayload: Record<string, unknown> = { sessionKey };
+      if (displayLabel) {
+        updatePayload.displayName = displayLabel;
+      }
+      if (shouldSetCwd) {
+        updatePayload.cwd = projectRoot;
+      }
       try {
-        await sendRequest('sessions.update', {
-          sessionKey,
-          displayName: displayLabel,
-        });
+        await sendRequest('sessions.update', updatePayload);
       } catch (err) {
-        console.warn(`[bridge] unable to set display label for ${sessionKey}:`, err);
+        console.warn(`[bridge] unable to set session metadata for ${sessionKey}:`, err);
       }
     }
   }
