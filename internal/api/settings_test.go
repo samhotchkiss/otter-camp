@@ -30,7 +30,7 @@ func TestGetUserProfile(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	var resp settingsProfileResponse
+	var resp ProfileResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, "User settings-user", resp.Name)
 	require.Equal(t, "settings-user@example.com", resp.Email)
@@ -60,12 +60,12 @@ func TestGetWorkspaceSettings(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	var resp settingsWorkspaceResponse
+	var resp WorkspaceResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, "Org settings-workspace", resp.Name)
 	require.Len(t, resp.Members, 2)
 
-	membersByEmail := make(map[string]settingsWorkspaceMemberResponse, len(resp.Members))
+	membersByEmail := make(map[string]WorkspaceMember, len(resp.Members))
 	for _, member := range resp.Members {
 		membersByEmail[member.Email] = member
 	}
@@ -132,7 +132,7 @@ func TestGetIntegrationsSettings(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	var resp settingsIntegrationsResponse
+	var resp IntegrationsResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, "", resp.OpenClawWebhookURL)
 	require.Len(t, resp.APIKeys, 1)
@@ -165,7 +165,7 @@ func TestPatchUserProfile(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	var resp settingsProfileResponse
+	var resp ProfileResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, "Sam Patch", resp.Name)
 	require.Equal(t, "sam.patch@example.com", resp.Email)
@@ -205,7 +205,7 @@ func TestPatchWorkspaceSettings(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	var resp settingsWorkspaceResponse
+	var resp WorkspaceResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, "Ops Workspace", resp.Name)
 
@@ -280,7 +280,7 @@ func TestPatchIntegrationsSettings(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	var resp settingsIntegrationsResponse
+	var resp IntegrationsResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, "https://example.com/openclaw/webhook", resp.OpenClawWebhookURL)
 

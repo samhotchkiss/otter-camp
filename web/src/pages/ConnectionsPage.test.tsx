@@ -20,6 +20,9 @@ describe("ConnectionsPage", () => {
 
   it("loads and renders bridge/session diagnostics from API", async () => {
     let cronEnabled = true;
+    // Use recent timestamps so "hasRecentFailure" (24h window) doesn't go stale
+    const recentISO = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1 hour ago
+    const recentISO2 = new Date(Date.now() - 50 * 60 * 1000).toISOString(); // 50 min ago
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const requestMethod = input instanceof Request ? input.method : undefined;
@@ -37,8 +40,8 @@ describe("ConnectionsPage", () => {
               status: "completed",
               tokens_used: 30,
               duration_ms: 800,
-              started_at: "2026-02-08T16:00:00Z",
-              created_at: "2026-02-08T16:00:00Z",
+              started_at: recentISO,
+              created_at: recentISO,
             },
             {
               id: "evt-2",
@@ -50,8 +53,8 @@ describe("ConnectionsPage", () => {
               status: "failed",
               tokens_used: 10,
               duration_ms: 500,
-              started_at: "2026-02-08T16:05:00Z",
-              created_at: "2026-02-08T16:05:00Z",
+              started_at: recentISO2,
+              created_at: recentISO2,
             },
           ],
         });

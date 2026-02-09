@@ -21,9 +21,8 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     include: [
       "**/*.{test,spec}.?(c|m)[jt]s?(x)",
-      "../bridge/__tests__/**/*.{test,spec}.?(c|m)[jt]s?(x)",
     ],
-    exclude: [...configDefaults.exclude, "e2e/**"],
+    exclude: [...configDefaults.exclude, "e2e/**", "../bridge/**"],
   },
 });
 
