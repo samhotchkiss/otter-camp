@@ -19,6 +19,9 @@ import (
 )
 
 var issueUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
+var chameleonSessionKeyPattern = regexp.MustCompile(
+	`^agent:chameleon:oc:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
+)
 
 const (
 	authSetupCommand = "otter auth login --token <your-token> --org <org-id>"
@@ -39,6 +42,8 @@ func main() {
 		handleWhoami(os.Args[2:])
 	case "project":
 		handleProject(os.Args[2:])
+	case "agent":
+		handleAgent(os.Args[2:])
 	case "clone":
 		handleClone(os.Args[2:])
 	case "remote":
@@ -66,6 +71,7 @@ Commands:
   auth login       Store API token + default org
   whoami           Validate token and show user
   project          Manage projects
+  agent            Manage agents
   clone            Clone a project repo
   remote add       Add origin remote for project
   repo info        Show repo URL for project
@@ -138,6 +144,202 @@ func handleWhoami(args []string) {
 	fmt.Printf("User: %s (%s)\n", resp.User.Name, resp.User.Email)
 	if cfg.DefaultOrg != "" {
 		fmt.Printf("Default org: %s\n", cfg.DefaultOrg)
+	}
+}
+
+func handleAgent(args []string) {
+	const usageText = "usage: otter agent <whoami|list|create|edit|archive> ..."
+	if len(args) == 0 {
+		fmt.Println(usageText)
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "whoami":
+		flags := flag.NewFlagSet("agent whoami", flag.ExitOnError)
+		sessionKey := flags.String("session", "", "canonical session key (agent:chameleon:oc:{uuid})")
+		profile := flags.String("profile", "compact", "profile (compact|full)")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		agentID, err := parseChameleonSessionAgentID(*sessionKey)
+		if err != nil {
+			die(err.Error())
+		}
+		normalizedProfile := strings.ToLower(strings.TrimSpace(*profile))
+		if normalizedProfile != "compact" && normalizedProfile != "full" {
+			die("--profile must be compact or full")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		payload, err := client.AgentWhoAmI(agentID, strings.TrimSpace(*sessionKey), normalizedProfile)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(payload)
+			return
+		}
+		profileValue, _ := payload["profile"].(string)
+		fmt.Printf("Agent ID: %s\n", agentID)
+		if profileValue != "" {
+			fmt.Printf("Profile: %s\n", profileValue)
+		}
+		agent, _ := payload["agent"].(map[string]interface{})
+		if len(agent) > 0 {
+			if name := strings.TrimSpace(toString(agent["name"])); name != "" {
+				fmt.Printf("Name: %s\n", name)
+			}
+			if role := strings.TrimSpace(toString(agent["role"])); role != "" {
+				fmt.Printf("Role: %s\n", role)
+			}
+		}
+	case "list":
+		flags := flag.NewFlagSet("agent list", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		agents, err := client.ListAgents()
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(map[string]interface{}{
+				"agents": agents,
+				"total":  len(agents),
+			})
+			return
+		}
+		if len(agents) == 0 {
+			fmt.Println("No agents found.")
+			return
+		}
+		for _, agent := range agents {
+			label := strings.TrimSpace(agent.Name)
+			if label == "" {
+				label = agent.ID
+			}
+			if strings.TrimSpace(agent.Slug) != "" {
+				fmt.Printf("%s (%s)\n", label, agent.Slug)
+			} else {
+				fmt.Println(label)
+			}
+		}
+	case "create":
+		flags := flag.NewFlagSet("agent create", flag.ExitOnError)
+		role := flags.String("role", "", "agent role label")
+		slot := flags.String("slot", "", "agent slot override")
+		model := flags.String("model", "gpt-5.2-codex", "OpenClaw model")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter agent create \"Name\" [--role <role>] [--slot <slot>] [--model <model>]")
+		}
+		displayName := strings.TrimSpace(strings.Join(flags.Args(), " "))
+		if displayName == "" {
+			die("agent name is required")
+		}
+		normalizedSlot := strings.TrimSpace(*slot)
+		if normalizedSlot == "" {
+			normalizedSlot = slugifyAgentName(displayName)
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		payload := map[string]interface{}{
+			"slot":         normalizedSlot,
+			"display_name": displayName,
+			"model":        strings.TrimSpace(*model),
+		}
+		response, err := client.CreateAgent(payload)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Created agent slot: %s\n", normalizedSlot)
+		fmt.Printf("Display name: %s\n", displayName)
+		if roleValue := strings.TrimSpace(*role); roleValue != "" {
+			fmt.Printf("Role requested: %s\n", roleValue)
+		}
+	case "edit":
+		flags := flag.NewFlagSet("agent edit", flag.ExitOnError)
+		name := flags.String("name", "", "new display name")
+		role := flags.String("role", "", "new role")
+		emoji := flags.String("emoji", "", "new emoji or icon token")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter agent edit <agent-id> [--name <name>] [--role <role>] [--emoji <emoji>]")
+		}
+		agentID := strings.TrimSpace(flags.Args()[0])
+		if agentID == "" {
+			die("agent id is required")
+		}
+
+		patch := map[string]interface{}{}
+		if trimmed := strings.TrimSpace(*name); trimmed != "" {
+			patch["display_name"] = trimmed
+		}
+		if trimmed := strings.TrimSpace(*role); trimmed != "" {
+			patch["role"] = trimmed
+		}
+		if trimmed := strings.TrimSpace(*emoji); trimmed != "" {
+			patch["emoji"] = trimmed
+		}
+		if len(patch) == 0 {
+			die("no changes provided; pass at least one of --name, --role, --emoji")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.UpdateAgent(agentID, patch)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Updated agent: %s\n", agentID)
+	case "archive":
+		flags := flag.NewFlagSet("agent archive", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter agent archive <agent-id>")
+		}
+		agentID := strings.TrimSpace(flags.Args()[0])
+		if agentID == "" {
+			die("agent id is required")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		dieIf(client.ArchiveAgent(agentID))
+
+		if *jsonOut {
+			printJSON(map[string]interface{}{
+				"ok":       true,
+				"agent_id": agentID,
+			})
+			return
+		}
+		fmt.Printf("Archived agent: %s\n", agentID)
+	default:
+		fmt.Println(usageText)
+		os.Exit(1)
 	}
 }
 
@@ -1289,6 +1491,39 @@ func isSupportedQuestionType(questionType string) bool {
 	default:
 		return false
 	}
+}
+
+func parseChameleonSessionAgentID(sessionKey string) (string, error) {
+	trimmed := strings.TrimSpace(sessionKey)
+	if trimmed == "" {
+		return "", errors.New("--session is required")
+	}
+	matches := chameleonSessionKeyPattern.FindStringSubmatch(trimmed)
+	if len(matches) != 2 {
+		return "", errors.New("--session must match agent:chameleon:oc:{uuid}")
+	}
+	return strings.ToLower(matches[1]), nil
+}
+
+func slugifyAgentName(name string) string {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	normalized = strings.ReplaceAll(normalized, " ", "-")
+	normalized = regexp.MustCompile(`[^a-z0-9\-]+`).ReplaceAllString(normalized, "-")
+	normalized = strings.Trim(normalized, "-")
+	if normalized == "" {
+		return "agent"
+	}
+	return normalized
+}
+
+func toString(value interface{}) string {
+	if value == nil {
+		return ""
+	}
+	if str, ok := value.(string); ok {
+		return str
+	}
+	return fmt.Sprintf("%v", value)
 }
 
 func prompt(label string) string {

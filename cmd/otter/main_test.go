@@ -329,6 +329,70 @@ func TestBuildWorkflowSchedulePayload(t *testing.T) {
 	}
 }
 
+func TestParseChameleonSessionAgentID(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "valid lowercase uuid",
+			input: "agent:chameleon:oc:a1b2c3d4-5678-90ab-cdef-1234567890ab",
+			want:  "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+		},
+		{
+			name:  "valid uppercase uuid normalized",
+			input: "agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB",
+			want:  "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+		},
+		{
+			name:    "invalid format",
+			input:   "agent:main:slack",
+			wantErr: true,
+		},
+		{
+			name:    "empty input",
+			input:   "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		got, err := parseChameleonSessionAgentID(tt.input)
+		if tt.wantErr {
+			if err == nil {
+				t.Fatalf("%s: expected error, got none", tt.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tt.name, err)
+		}
+		if got != tt.want {
+			t.Fatalf("%s: got %q want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestSlugifyAgentName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "Derek", want: "derek"},
+		{input: "Engineering Lead", want: "engineering-lead"},
+		{input: "  ", want: "agent"},
+		{input: "Nova!!!", want: "nova"},
+	}
+
+	for _, tt := range tests {
+		if got := slugifyAgentName(tt.input); got != tt.want {
+			t.Fatalf("slugifyAgentName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestHandleIssueAskParsesQuestionSpecs(t *testing.T) {
 	questions, err := parseIssueAskQuestions([]string{
 		`{"id":"q1","text":"Realtime transport?","type":"select","required":true,"options":["WebSocket","Polling"]}`,
