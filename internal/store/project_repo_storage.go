@@ -13,7 +13,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 )
 
-const defaultGitRepoRoot = "/data/repos"
+const defaultGitRepoRoot = "./data/repos"
 
 func gitRepoRoot() string {
 	root := strings.TrimSpace(os.Getenv("GIT_REPO_ROOT"))
