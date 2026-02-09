@@ -110,7 +110,8 @@ func TestProjectSettingsMigrationsRollbackDeployConfigAndHumanReviewColumn(t *te
 	}
 
 	db := setupMessageTestDB(t)
-	require.EqualValues(t, 48, currentSchemaVersion(t, db))
+	version := currentSchemaVersion(t, db)
+	require.GreaterOrEqual(t, version, int64(48))
 
 	migrationsDir, err := filepath.Abs(filepath.Join("..", "..", "migrations"))
 	require.NoError(t, err)
@@ -121,9 +122,12 @@ func TestProjectSettingsMigrationsRollbackDeployConfigAndHumanReviewColumn(t *te
 		_, _ = m.Close()
 	})
 
-	err = m.Steps(-2)
-	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		require.NoError(t, err)
+	stepsToRollback := int(version - 46)
+	if stepsToRollback > 0 {
+		err = m.Steps(-stepsToRollback)
+		if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+			require.NoError(t, err)
+		}
 	}
 
 	require.False(t, tableExists(t, db, "project_deploy_config"))

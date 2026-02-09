@@ -335,7 +335,7 @@ func TestProjectsHandlerPatchUpdatesProjectFields(t *testing.T) {
 		DB:    db,
 		Store: store.NewProjectStore(db),
 	}
-	body := []byte(`{"status":"archived","repo_url":"https://example.com/repo.git"}`)
+	body := []byte(`{"status":"archived","repo_url":"https://example.com/repo.git","requireHumanReview":true}`)
 	req := httptest.NewRequest(http.MethodPatch, "/api/projects/"+projectID+"?org_id="+orgID, bytes.NewReader(body))
 	req = addRouteParam(req, "id", projectID)
 	rec := httptest.NewRecorder()
@@ -344,14 +344,16 @@ func TestProjectsHandlerPatchUpdatesProjectFields(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var resp struct {
-		ID      string `json:"id"`
-		Status  string `json:"status"`
-		RepoURL string `json:"repo_url"`
+		ID                 string `json:"id"`
+		Status             string `json:"status"`
+		RepoURL            string `json:"repo_url"`
+		RequireHumanReview bool   `json:"require_human_review"`
 	}
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, projectID, resp.ID)
 	require.Equal(t, "archived", resp.Status)
 	require.Equal(t, "https://example.com/repo.git", resp.RepoURL)
+	require.True(t, resp.RequireHumanReview)
 }
 
 func TestProjectsHandlerDeleteRemovesProject(t *testing.T) {

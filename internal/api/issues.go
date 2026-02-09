@@ -611,7 +611,21 @@ func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
-	updated, err := h.IssueStore.TransitionApprovalState(r.Context(), issueID, store.IssueApprovalStateApproved)
+	targetApprovalState := store.IssueApprovalStateApproved
+	requireHumanReview, err := h.projectRequiresHumanReview(r.Context(), before.ProjectID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	if requireHumanReview {
+		if strings.TrimSpace(strings.ToLower(before.ApprovalState)) == store.IssueApprovalStateApprovedByReviewer {
+			targetApprovalState = store.IssueApprovalStateApproved
+		} else {
+			targetApprovalState = store.IssueApprovalStateApprovedByReviewer
+		}
+	}
+
+	updated, err := h.IssueStore.TransitionApprovalState(r.Context(), issueID, targetApprovalState)
 	if err != nil {
 		handleIssueStoreError(w, err)
 		return
@@ -629,7 +643,9 @@ func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logIssueApprovalTransition(r.Context(), *before, *updated)
-	h.logIssueApproved(r.Context(), *before, *updated)
+	if strings.TrimSpace(strings.ToLower(updated.ApprovalState)) == store.IssueApprovalStateApproved {
+		h.logIssueApproved(r.Context(), *before, *updated)
+	}
 
 	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
 }
@@ -1124,6 +1140,32 @@ func (h *IssuesHandler) logIssueApprovalTransition(
 		"to_state":    updated.ApprovalState,
 		"issue_state": updated.State,
 	})
+}
+
+func (h *IssuesHandler) projectRequiresHumanReview(ctx context.Context, projectID string) (bool, error) {
+	if h.DB == nil {
+		return false, nil
+	}
+
+	conn, err := store.WithWorkspace(ctx, h.DB)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+
+	var requireHumanReview bool
+	err = conn.QueryRowContext(
+		ctx,
+		`SELECT require_human_review FROM projects WHERE id = $1`,
+		projectID,
+	).Scan(&requireHumanReview)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, store.ErrNotFound
+		}
+		return false, err
+	}
+	return requireHumanReview, nil
 }
 
 func (h *IssuesHandler) logIssueApproved(
