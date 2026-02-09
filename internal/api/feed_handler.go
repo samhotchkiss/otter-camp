@@ -450,6 +450,8 @@ func buildEnrichedFeedQuery(orgID string, types []string, from, to *time.Time, l
 				NULLIF(u.display_name, ''),
 				NULLIF(a.metadata->>'pusher_name', ''),
 				NULLIF(a.metadata->>'pusher', ''),
+				NULLIF(a.metadata->>'sender_login', ''),
+				NULLIF(a.metadata->>'sender_name', ''),
 				NULLIF(a.metadata->>'sender', ''),
 				NULLIF(a.metadata->>'author_name', ''),
 				NULLIF(a.metadata->>'author', ''),

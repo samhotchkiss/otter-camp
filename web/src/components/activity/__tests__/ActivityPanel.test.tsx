@@ -212,6 +212,44 @@ describe("ActivityPanel", () => {
     expect(await screen.findByText(/no activity yet/i)).toBeInTheDocument();
   });
 
+  it("resolves actor names from sender_login metadata when agent_name is absent", async () => {
+    const wsState = {
+      connected: true,
+      lastMessage: null,
+      sendMessage: vi.fn(),
+    };
+    vi.mocked(useWS).mockImplementation(() => wsState);
+
+    localStorage.setItem("otter-camp-org-id", ORG_ID);
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          org_id: ORG_ID,
+          items: [
+            {
+              id: "1",
+              org_id: ORG_ID,
+              type: "git.push",
+              created_at: "2026-02-03T12:00:00.000Z",
+              metadata: {
+                sender_login: "samhotchkiss",
+                branch: "main",
+                commit_message: "Use metadata actor fallback",
+              },
+            },
+          ],
+        }),
+    });
+
+    render(<ActivityPanel />);
+
+    const actorMatches = await screen.findAllByText("samhotchkiss");
+    expect(actorMatches.length).toBeGreaterThan(0);
+    expect(screen.getByText(/main: "Use metadata actor fallback"/i)).toBeInTheDocument();
+  });
+
   it("includes auth and org headers when requesting feed data", async () => {
     const wsState = {
       connected: true,

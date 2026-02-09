@@ -87,6 +87,13 @@ const mapWebSocketToActivity = (
     (record.actor as string) ??
     (record.user as string) ??
     (record.agentName as string) ??
+    (record.pusher_name as string) ??
+    (record.pusher as string) ??
+    (record.sender_login as string) ??
+    (record.sender_name as string) ??
+    (record.sender as string) ??
+    (record.author_name as string) ??
+    (record.author as string) ??
     "System";
 
   switch (type) {

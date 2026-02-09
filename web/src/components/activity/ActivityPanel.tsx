@@ -49,7 +49,41 @@ function parseDateInput(value: string, endOfDay = false): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function metadataActorCandidate(metadata: Record<string, unknown>, key: string): string {
+  const value = metadata[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function resolveActorName(rawActorName: string, metadata: Record<string, unknown>, fallback: string): string {
+  const direct = rawActorName.trim();
+  if (direct && direct.toLowerCase() !== "unknown") {
+    return direct;
+  }
+
+  const candidates = [
+    metadataActorCandidate(metadata, "actor"),
+    metadataActorCandidate(metadata, "user"),
+    metadataActorCandidate(metadata, "agentName"),
+    metadataActorCandidate(metadata, "agent_name"),
+    metadataActorCandidate(metadata, "pusher_name"),
+    metadataActorCandidate(metadata, "pusher"),
+    metadataActorCandidate(metadata, "sender_login"),
+    metadataActorCandidate(metadata, "sender_name"),
+    metadataActorCandidate(metadata, "sender"),
+    metadataActorCandidate(metadata, "author_name"),
+    metadataActorCandidate(metadata, "author"),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && candidate.toLowerCase() !== "unknown") {
+      return candidate;
+    }
+  }
+
+  return fallback;
+}
+
 function normalizeFeedItem(raw: FeedApiItem): ActivityFeedItem {
+  const metadata = normalizeMetadata(raw.metadata);
   return {
     id: String(raw.id),
     orgId: String(raw.org_id),
@@ -57,10 +91,10 @@ function normalizeFeedItem(raw: FeedApiItem): ActivityFeedItem {
     agentId: raw.agent_id ? String(raw.agent_id) : undefined,
     type: String(raw.type),
     createdAt: new Date(String(raw.created_at)),
-    actorName: raw.agent_name?.trim() ? String(raw.agent_name) : "System",
+    actorName: resolveActorName(raw.agent_name?.trim() ?? "", metadata, "System"),
     taskTitle: raw.task_title?.trim() ? String(raw.task_title) : undefined,
     summary: raw.summary?.trim() ? String(raw.summary) : undefined,
-    metadata: normalizeMetadata(raw.metadata),
+    metadata,
     priority: raw.priority?.trim() ? String(raw.priority) : undefined,
   };
 }
@@ -250,16 +284,11 @@ function ActivityPanelComponent({
         const agentId = typeof record.agent_id === "string" ? record.agent_id : undefined;
         const metadata = normalizeMetadata(record.metadata);
 
-        const actorFromMetadata =
-          (typeof metadata.agent_name === "string" ? metadata.agent_name : "") ||
-          (typeof metadata.agentName === "string" ? metadata.agentName : "") ||
-          (typeof metadata.actor === "string" ? metadata.actor : "") ||
-          (typeof metadata.user === "string" ? metadata.user : "") ||
-          (typeof metadata.author === "string" ? metadata.author : "");
-
-        const actorName = agentId
-          ? agentNames.get(agentId) || actorFromMetadata || "Agent"
-          : actorFromMetadata || "System";
+        const actorName = resolveActorName(
+          agentId ? agentNames.get(agentId) ?? "" : "",
+          metadata,
+          agentId ? "Agent" : "System",
+        );
 
         const taskFromMetadata =
           (typeof metadata.task_title === "string" ? metadata.task_title : "") ||

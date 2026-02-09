@@ -194,10 +194,17 @@ type githubPublishResponse struct {
 }
 
 type githubWebhookPayload struct {
-	Ref        string                       `json:"ref"`
-	Before     string                       `json:"before"`
-	After      string                       `json:"after"`
-	Commits    []githubWebhookCommitPayload `json:"commits"`
+	Ref     string                       `json:"ref"`
+	Before  string                       `json:"before"`
+	After   string                       `json:"after"`
+	Commits []githubWebhookCommitPayload `json:"commits"`
+	Pusher  struct {
+		Name string `json:"name"`
+	} `json:"pusher"`
+	Sender struct {
+		Login string `json:"login"`
+		Name  string `json:"name"`
+	} `json:"sender"`
 	Repository struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
@@ -219,6 +226,51 @@ type githubWebhookCommitPayload struct {
 		Email    string `json:"email"`
 		Username string `json:"username"`
 	} `json:"author"`
+}
+
+type githubPushActorMetadata struct {
+	PusherName  string
+	SenderLogin string
+	SenderName  string
+}
+
+func resolveGitHubPushActorMetadata(payload githubWebhookPayload) githubPushActorMetadata {
+	senderLogin := strings.TrimSpace(payload.Sender.Login)
+	senderName := strings.TrimSpace(payload.Sender.Name)
+	pusherName := strings.TrimSpace(payload.Pusher.Name)
+	if pusherName == "" {
+		if senderName != "" {
+			pusherName = senderName
+		} else if senderLogin != "" {
+			pusherName = senderLogin
+		}
+	}
+
+	return githubPushActorMetadata{
+		PusherName:  pusherName,
+		SenderLogin: senderLogin,
+		SenderName:  senderName,
+	}
+}
+
+func applyGitHubPushActorMetadata(metadata map[string]any, actor githubPushActorMetadata) {
+	if actor.PusherName != "" {
+		metadata["pusher_name"] = actor.PusherName
+		metadata["pusher"] = actor.PusherName
+	}
+	if actor.SenderLogin != "" {
+		metadata["sender_login"] = actor.SenderLogin
+	}
+	if actor.SenderName != "" {
+		metadata["sender_name"] = actor.SenderName
+	}
+	sender := actor.SenderLogin
+	if sender == "" {
+		sender = actor.SenderName
+	}
+	if sender != "" {
+		metadata["sender"] = sender
+	}
 }
 
 func NewGitHubIntegrationHandler(db *sql.DB) *GitHubIntegrationHandler {
@@ -1419,14 +1471,18 @@ func (h *GitHubIntegrationHandler) GitHubWebhook(w http.ResponseWriter, r *http.
 		issueSyncProcessed = true
 	}
 
-	_ = logGitHubActivity(r.Context(), h.DB, orgID, projectID, "github.webhook."+eventType, map[string]any{
+	activityMetadata := map[string]any{
 		"delivery_id":    deliveryID,
 		"repository":     payload.Repository.FullName,
 		"webhook_job_id": webhookJob.ID,
 		"repo_sync":      repoSyncQueued,
 		"commits":        commitsIngested,
 		"issue_sync":     issueSyncProcessed,
-	})
+	}
+	if eventType == "push" {
+		applyGitHubPushActorMetadata(activityMetadata, resolveGitHubPushActorMetadata(payload))
+	}
+	_ = logGitHubActivity(r.Context(), h.DB, orgID, projectID, "github.webhook."+eventType, activityMetadata)
 
 	sendJSON(w, http.StatusAccepted, map[string]any{
 		"ok":               true,
@@ -1542,6 +1598,7 @@ func (h *GitHubIntegrationHandler) ingestPushCommits(
 	if repositoryFullName == "" || branch == "" {
 		return 0, nil
 	}
+	pushActor := resolveGitHubPushActorMetadata(payload)
 
 	createdCount := 0
 	for _, item := range payload.Commits {
@@ -1604,12 +1661,14 @@ func (h *GitHubIntegrationHandler) ingestPushCommits(
 		}
 		if created {
 			createdCount++
-			_ = logGitHubActivity(ctx, h.DB, orgID, &projectID, "github.commit.ingested", map[string]any{
+			metadata := map[string]any{
 				"project_id": projectID,
 				"branch":     branch,
 				"sha":        commit.SHA,
 				"subject":    commit.Subject,
-			})
+			}
+			applyGitHubPushActorMetadata(metadata, pushActor)
+			_ = logGitHubActivity(ctx, h.DB, orgID, &projectID, "github.commit.ingested", metadata)
 		}
 	}
 
