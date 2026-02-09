@@ -48,10 +48,10 @@ Agent profiles live in Otter Camp, not in the runtime. Add a new agent in 30 sec
 Git-native project management. Every piece of work — content, code, designs, research — lives in version-tracked repos with full history. Issues flow through a pipeline (plan → build → review → ship) with approvals at each stage. If an agent goes off the rails at 3am, you can roll back.
 
 **🔄 Real-Time Sync**
-A bridge connects your [OpenClaw](https://github.com/openclaw/openclaw) instance to Otter Camp. Live agent status, session tracking, workflow management, and bidirectional messaging. Agents don't know or care that Otter Camp exists — it observes and coordinates from above.
+A bridge connects your [OpenClaw](https://github.com/openclaw/openclaw) instance to Otter Camp. Live agent status, session tracking, workflow project sync, and bidirectional messaging. Agents don't know or care that Otter Camp exists — it observes and coordinates from above.
 
-**📊 Dashboard & Workflows**
-See all your agents at a glance: who's active, what they're working on, how much context they've used. Manage recurring workflows (cron jobs) with pause/resume/run controls. Activity feed shows everything that's happening across the system.
+**📊 Dashboard & Workflow Projects**
+See all your agents at a glance: who's active, what they're working on, how much context they've used. Manage recurring workflow projects with pause/resume/run controls and run history in project issues. Activity feed shows everything that's happening across the system.
 
 **💬 Segmented Sessions**
 Context doesn't get bloated by unrelated conversations. Work sessions are scoped to projects and issues — each one gets only the context it needs. Saves tokens, improves quality, and makes it trivial to trace any decision back to the conversation where it happened.
@@ -178,7 +178,11 @@ otter auth login
 
 # Projects
 otter project list
+otter project list --workflow
 otter project create "My Project" --description "What it does"
+otter project create "Morning Briefing" --workflow --schedule "0 6 * * *" --tz "America/Denver" --template-title "Morning Briefing — {{date}}" --auto-close
+otter project run "Morning Briefing"
+otter project runs "Morning Briefing" --limit 20
 otter clone my-project
 
 # Issues
@@ -191,13 +195,41 @@ otter memory search "what did we decide about the homepage"
 otter memory write --kind decision --title "Chose pgvector" --content "Because we're already on Postgres..."
 ```
 
+## Workflows Are Projects
+
+Otter Camp models recurring workflows as standard projects with extra workflow fields:
+
+- `workflow_enabled`
+- `workflow_schedule`
+- `workflow_template`
+- `workflow_agent_id`
+- run tracking fields (`workflow_last_run_at`, `workflow_next_run_at`, `workflow_run_count`)
+
+### API migration map
+
+| Legacy endpoint | Project workflow endpoint |
+|---|---|
+| `GET /api/workflows` | `GET /api/projects?workflow=true` |
+| `PATCH /api/workflows/{id}` | `PATCH /api/projects/{id}` |
+| `POST /api/workflows/{id}/run` | `POST /api/projects/{id}/runs/trigger` |
+
+Legacy `/api/workflows` routes remain as compatibility adapters while clients migrate.
+
+### Bridge migration behavior
+
+On sync, the bridge auto-discovers OpenClaw cron jobs and maps each job to a workflow project (via embedded `cron_id` in schedule metadata, with name fallback). When cron `last_run_at` advances, the bridge triggers:
+
+- `POST /api/projects/{id}/runs/trigger`
+
+This creates a project issue per run and preserves a queryable run history.
+
 ## Roadmap
 
 - [x] Project management with git repos
 - [x] Issue tracking with pipeline stages
 - [x] Real-time OpenClaw bridge sync
 - [x] Agent dashboard with live status
-- [x] Workflow management (cron jobs)
+- [x] Workflow projects (cron-backed recurring issue creation)
 - [x] CLI for agents and humans
 - [ ] 🧠 Memory infrastructure (vector search, auto-recall, compaction recovery)
 - [ ] 🦎 Chameleon agent architecture (dynamic identity management)
