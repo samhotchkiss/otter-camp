@@ -428,11 +428,12 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
-		Name               *string `json:"name"`
-		Description        *string `json:"description"`
-		Status             *string `json:"status"`
-		RepoURL            *string `json:"repo_url"`
-		RequireHumanReview *bool   `json:"requireHumanReview"`
+		Name                    *string `json:"name"`
+		Description             *string `json:"description"`
+		Status                  *string `json:"status"`
+		RepoURL                 *string `json:"repo_url"`
+		RequireHumanReview      *bool   `json:"requireHumanReview"`
+		RequireHumanReviewSnake *bool   `json:"require_human_review"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -496,8 +497,13 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			updateInput.RepoURL = &repoURL
 		}
 	}
-	if input.RequireHumanReview != nil {
-		updateInput.RequireHumanReview = *input.RequireHumanReview
+	requireHumanReview, err := resolveRequireHumanReviewPatch(input.RequireHumanReviewSnake, input.RequireHumanReview)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	if requireHumanReview != nil {
+		updateInput.RequireHumanReview = *requireHumanReview
 	}
 
 	updated, err := h.Store.Update(ctx, projectID, updateInput)
@@ -511,6 +517,19 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, updated)
+}
+
+func resolveRequireHumanReviewPatch(snakeCase, camelCase *bool) (*bool, error) {
+	if snakeCase == nil && camelCase == nil {
+		return nil, nil
+	}
+	if snakeCase != nil && camelCase != nil && *snakeCase != *camelCase {
+		return nil, fmt.Errorf("require_human_review and requireHumanReview must match when both are provided")
+	}
+	if snakeCase != nil {
+		return snakeCase, nil
+	}
+	return camelCase, nil
 }
 
 // Delete removes a project.
