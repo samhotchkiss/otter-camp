@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
+import useNowTicker from "../hooks/useNowTicker";
 
 type TimestampValue = string | number | Date | null | undefined;
 
@@ -60,16 +61,7 @@ export default function LiveTimestamp({
   timestamp,
   className,
 }: LiveTimestampProps) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    const intervalID = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 1000);
-    return () => {
-      window.clearInterval(intervalID);
-    };
-  }, []);
+  const nowMs = useNowTicker();
 
   const text = useMemo(
     () => formatLiveTimestamp(timestamp, new Date(nowMs)),

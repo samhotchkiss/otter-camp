@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { Emission } from "../hooks/useEmissions";
+import useNowTicker from "../hooks/useNowTicker";
 import LiveTimestamp from "./LiveTimestamp";
 
 type AgentWorkingIndicatorProps = {
@@ -42,16 +43,7 @@ export default function AgentWorkingIndicator({
   activeText = "Agent is working",
   idleText = "Idle",
 }: AgentWorkingIndicatorProps) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    const intervalID = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 1000);
-    return () => {
-      window.clearInterval(intervalID);
-    };
-  }, []);
+  const nowMs = useNowTicker();
 
   const active = useMemo(
     () =>
