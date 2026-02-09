@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
@@ -22,18 +24,25 @@ type ProjectsHandler struct {
 }
 
 type projectAPIResponse struct {
-	ID             string        `json:"id"`
-	OrgID          string        `json:"org_id,omitempty"`
-	Name           string        `json:"name"`
-	Description    string        `json:"description,omitempty"`
-	RepoURL        string        `json:"repo_url,omitempty"`
-	Status         string        `json:"status"`
-	Labels         []store.Label `json:"labels"`
-	Lead           string        `json:"lead,omitempty"`
-	PrimaryAgentID *string       `json:"primary_agent_id,omitempty"`
-	CreatedAt      string        `json:"created_at,omitempty"`
-	TaskCount      int           `json:"taskCount"`
-	CompletedCount int           `json:"completedCount"`
+	ID                string          `json:"id"`
+	OrgID             string          `json:"org_id,omitempty"`
+	Name              string          `json:"name"`
+	Description       string          `json:"description,omitempty"`
+	RepoURL           string          `json:"repo_url,omitempty"`
+	Status            string          `json:"status"`
+	Labels            []store.Label   `json:"labels"`
+	Lead              string          `json:"lead,omitempty"`
+	PrimaryAgentID    *string         `json:"primary_agent_id,omitempty"`
+	WorkflowEnabled   bool            `json:"workflow_enabled"`
+	WorkflowSchedule  json.RawMessage `json:"workflow_schedule,omitempty"`
+	WorkflowTemplate  json.RawMessage `json:"workflow_template,omitempty"`
+	WorkflowAgentID   *string         `json:"workflow_agent_id,omitempty"`
+	WorkflowLastRunAt *string         `json:"workflow_last_run_at,omitempty"`
+	WorkflowNextRunAt *string         `json:"workflow_next_run_at,omitempty"`
+	WorkflowRunCount  int             `json:"workflow_run_count"`
+	CreatedAt         string          `json:"created_at,omitempty"`
+	TaskCount         int             `json:"taskCount"`
+	CompletedCount    int             `json:"completedCount"`
 }
 
 // Demo projects for when database is unavailable
@@ -195,8 +204,15 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	workflowOnly, err := parseWorkflowFilter(r.URL.Query().Get("workflow"))
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
 	usePrimaryAgent := supportsProjectPrimaryAgentColumn(r.Context(), h.DB)
-	rows, err := h.DB.QueryContext(r.Context(), listProjectsQuery(usePrimaryAgent), workspaceID)
+	useWorkflow := supportsProjectWorkflowColumns(r.Context(), h.DB)
+	rows, err := h.DB.QueryContext(r.Context(), listProjectsQuery(usePrimaryAgent, useWorkflow, workflowOnly), workspaceID)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list projects"})
 		return
@@ -206,22 +222,10 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	projects := make([]projectAPIResponse, 0)
 	projectIDs := make([]string, 0)
 	for rows.Next() {
-		var p projectAPIResponse
-		var createdAt interface{}
-		if usePrimaryAgent {
-			var primaryAgentID sql.NullString
-			if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount); err != nil {
-				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to parse projects"})
-				return
-			}
-			if primaryAgentID.Valid {
-				p.PrimaryAgentID = &primaryAgentID.String
-			}
-		} else {
-			if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount); err != nil {
-				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to parse projects"})
-				return
-			}
+		p, scanErr := scanProjectAPIResponse(rows, usePrimaryAgent, useWorkflow)
+		if scanErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to parse projects"})
+			return
 		}
 		if allowedProjectIDs != nil {
 			if _, ok := allowedProjectIDs[p.ID]; !ok {
@@ -293,21 +297,15 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
 
 	usePrimaryAgent := supportsProjectPrimaryAgentColumn(r.Context(), h.DB)
+	useWorkflow := supportsProjectWorkflowColumns(r.Context(), h.DB)
 
 	var p projectAPIResponse
-	var createdAt interface{}
 	var err error
-	if usePrimaryAgent {
-		var primaryAgentID sql.NullString
-		err = h.DB.QueryRowContext(r.Context(), getProjectQuery(true), projectID, workspaceID).Scan(
-			&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount)
-		if primaryAgentID.Valid {
-			p.PrimaryAgentID = &primaryAgentID.String
-		}
-	} else {
-		err = h.DB.QueryRowContext(r.Context(), getProjectQuery(false), projectID, workspaceID).Scan(
-			&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount)
-	}
+	p, err = scanProjectAPIResponse(
+		h.DB.QueryRowContext(r.Context(), getProjectQuery(usePrimaryAgent, useWorkflow), projectID, workspaceID),
+		usePrimaryAgent,
+		useWorkflow,
+	)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -348,10 +346,17 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
-		Name        string  `json:"name"`
-		Description *string `json:"description"`
-		Status      string  `json:"status"`
-		RepoURL     *string `json:"repo_url"`
+		Name              string           `json:"name"`
+		Description       *string          `json:"description"`
+		Status            string           `json:"status"`
+		RepoURL           *string          `json:"repo_url"`
+		WorkflowEnabled   bool             `json:"workflow_enabled"`
+		WorkflowSchedule  *json.RawMessage `json:"workflow_schedule"`
+		WorkflowTemplate  *json.RawMessage `json:"workflow_template"`
+		WorkflowAgentID   *string          `json:"workflow_agent_id"`
+		WorkflowLastRunAt *string          `json:"workflow_last_run_at"`
+		WorkflowNextRunAt *string          `json:"workflow_next_run_at"`
+		WorkflowRunCount  *int             `json:"workflow_run_count"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -369,13 +374,89 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		input.Status = "active"
 	}
 
+	workflowSchedule := json.RawMessage(nil)
+	if input.WorkflowSchedule != nil {
+		var normalizeErr error
+		workflowSchedule, normalizeErr = normalizeWorkflowPatchJSON(*input.WorkflowSchedule, "workflow_schedule")
+		if normalizeErr != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: normalizeErr.Error()})
+			return
+		}
+	}
+	workflowTemplate := json.RawMessage(nil)
+	if input.WorkflowTemplate != nil {
+		var normalizeErr error
+		workflowTemplate, normalizeErr = normalizeWorkflowPatchJSON(*input.WorkflowTemplate, "workflow_template")
+		if normalizeErr != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: normalizeErr.Error()})
+			return
+		}
+	}
+
+	workflowAgentID := input.WorkflowAgentID
+	if workflowAgentID != nil {
+		trimmed := strings.TrimSpace(*workflowAgentID)
+		if trimmed == "" {
+			workflowAgentID = nil
+		} else {
+			workflowAgentID = &trimmed
+		}
+	}
+	if workflowAgentID != nil {
+		if !uuidRegex.MatchString(*workflowAgentID) {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workflow_agent_id must be a UUID"})
+			return
+		}
+		var exists bool
+		err := h.DB.QueryRowContext(
+			r.Context(),
+			"SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1 AND org_id = $2)",
+			*workflowAgentID,
+			workspaceID,
+		).Scan(&exists)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate workflow agent"})
+			return
+		}
+		if !exists {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workflow_agent_id not found in workspace"})
+			return
+		}
+	}
+
+	workflowLastRunAt, err := parseProjectOptionalRFC3339(input.WorkflowLastRunAt, "workflow_last_run_at")
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	workflowNextRunAt, err := parseProjectOptionalRFC3339(input.WorkflowNextRunAt, "workflow_next_run_at")
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	workflowRunCount := 0
+	if input.WorkflowRunCount != nil {
+		if *input.WorkflowRunCount < 0 {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workflow_run_count must be non-negative"})
+			return
+		}
+		workflowRunCount = *input.WorkflowRunCount
+	}
+
 	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
 
 	project, err := h.Store.Create(ctx, store.CreateProjectInput{
-		Name:        input.Name,
-		Description: input.Description,
-		Status:      input.Status,
-		RepoURL:     input.RepoURL,
+		Name:              input.Name,
+		Description:       input.Description,
+		Status:            input.Status,
+		RepoURL:           input.RepoURL,
+		WorkflowEnabled:   input.WorkflowEnabled,
+		WorkflowSchedule:  workflowSchedule,
+		WorkflowTemplate:  workflowTemplate,
+		WorkflowAgentID:   workflowAgentID,
+		WorkflowLastRunAt: workflowLastRunAt,
+		WorkflowNextRunAt: workflowNextRunAt,
+		WorkflowRunCount:  workflowRunCount,
 	})
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create project"})
@@ -427,10 +508,17 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
-		Name        *string `json:"name"`
-		Description *string `json:"description"`
-		Status      *string `json:"status"`
-		RepoURL     *string `json:"repo_url"`
+		Name              *string          `json:"name"`
+		Description       *string          `json:"description"`
+		Status            *string          `json:"status"`
+		RepoURL           *string          `json:"repo_url"`
+		WorkflowEnabled   *bool            `json:"workflow_enabled"`
+		WorkflowSchedule  *json.RawMessage `json:"workflow_schedule"`
+		WorkflowTemplate  *json.RawMessage `json:"workflow_template"`
+		WorkflowAgentID   *string          `json:"workflow_agent_id"`
+		WorkflowLastRunAt *string          `json:"workflow_last_run_at"`
+		WorkflowNextRunAt *string          `json:"workflow_next_run_at"`
+		WorkflowRunCount  *int             `json:"workflow_run_count"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -455,10 +543,17 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updateInput := store.UpdateProjectInput{
-		Name:        existing.Name,
-		Description: existing.Description,
-		Status:      existing.Status,
-		RepoURL:     existing.RepoURL,
+		Name:              existing.Name,
+		Description:       existing.Description,
+		Status:            existing.Status,
+		RepoURL:           existing.RepoURL,
+		WorkflowEnabled:   existing.WorkflowEnabled,
+		WorkflowSchedule:  existing.WorkflowSchedule,
+		WorkflowTemplate:  existing.WorkflowTemplate,
+		WorkflowAgentID:   existing.WorkflowAgentID,
+		WorkflowLastRunAt: existing.WorkflowLastRunAt,
+		WorkflowNextRunAt: existing.WorkflowNextRunAt,
+		WorkflowRunCount:  existing.WorkflowRunCount,
 	}
 
 	if input.Name != nil {
@@ -491,6 +586,77 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			updateInput.RepoURL = nil
 		} else {
 			updateInput.RepoURL = &repoURL
+		}
+	}
+	if input.WorkflowEnabled != nil {
+		updateInput.WorkflowEnabled = *input.WorkflowEnabled
+	}
+	if input.WorkflowSchedule != nil {
+		normalized, normalizeErr := normalizeWorkflowPatchJSON(*input.WorkflowSchedule, "workflow_schedule")
+		if normalizeErr != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: normalizeErr.Error()})
+			return
+		}
+		updateInput.WorkflowSchedule = normalized
+	}
+	if input.WorkflowTemplate != nil {
+		normalized, normalizeErr := normalizeWorkflowPatchJSON(*input.WorkflowTemplate, "workflow_template")
+		if normalizeErr != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: normalizeErr.Error()})
+			return
+		}
+		updateInput.WorkflowTemplate = normalized
+	}
+	if input.WorkflowAgentID != nil {
+		workflowAgentID := strings.TrimSpace(*input.WorkflowAgentID)
+		if workflowAgentID == "" {
+			updateInput.WorkflowAgentID = nil
+		} else {
+			updateInput.WorkflowAgentID = &workflowAgentID
+		}
+	}
+	if input.WorkflowLastRunAt != nil {
+		lastRunAt, parseErr := parseProjectOptionalRFC3339(input.WorkflowLastRunAt, "workflow_last_run_at")
+		if parseErr != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: parseErr.Error()})
+			return
+		}
+		updateInput.WorkflowLastRunAt = lastRunAt
+	}
+	if input.WorkflowNextRunAt != nil {
+		nextRunAt, parseErr := parseProjectOptionalRFC3339(input.WorkflowNextRunAt, "workflow_next_run_at")
+		if parseErr != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: parseErr.Error()})
+			return
+		}
+		updateInput.WorkflowNextRunAt = nextRunAt
+	}
+	if input.WorkflowRunCount != nil {
+		if *input.WorkflowRunCount < 0 {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workflow_run_count must be non-negative"})
+			return
+		}
+		updateInput.WorkflowRunCount = *input.WorkflowRunCount
+	}
+	if updateInput.WorkflowAgentID != nil && !uuidRegex.MatchString(strings.TrimSpace(*updateInput.WorkflowAgentID)) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workflow_agent_id must be a UUID"})
+		return
+	}
+	if updateInput.WorkflowAgentID != nil {
+		var exists bool
+		existsErr := h.DB.QueryRowContext(
+			r.Context(),
+			"SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1 AND org_id = $2)",
+			*updateInput.WorkflowAgentID,
+			workspaceID,
+		).Scan(&exists)
+		if existsErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate workflow agent"})
+			return
+		}
+		if !exists {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workflow_agent_id not found in workspace"})
+			return
 		}
 	}
 
@@ -672,6 +838,20 @@ func supportsProjectPrimaryAgentColumn(ctx context.Context, db *sql.DB) bool {
 	return err == nil && exists
 }
 
+func supportsProjectWorkflowColumns(ctx context.Context, db *sql.DB) bool {
+	var exists bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'projects'
+			  AND column_name = 'workflow_enabled'
+		)
+	`).Scan(&exists)
+	return err == nil && exists
+}
+
 func parseProjectLabelFilterIDs(rawValues []string) ([]string, error) {
 	if len(rawValues) == 0 {
 		return nil, nil
@@ -695,31 +875,36 @@ func parseProjectLabelFilterIDs(rawValues []string) ([]string, error) {
 	return labelIDs, nil
 }
 
-func listProjectsQuery(usePrimaryAgent bool) string {
+func listProjectsQuery(usePrimaryAgent bool, useWorkflow bool, workflowOnly bool) string {
+	workflowSelect := ""
+	workflowFilter := ""
+	if useWorkflow {
+		workflowSelect = `,
+			p.workflow_enabled,
+			p.workflow_schedule,
+			p.workflow_template,
+			p.workflow_agent_id,
+			p.workflow_last_run_at,
+			p.workflow_next_run_at,
+			p.workflow_run_count`
+		if workflowOnly {
+			workflowFilter = " AND p.workflow_enabled = true"
+		}
+	}
+
+	leadJoin := ""
+	leadSelect := ""
 	if usePrimaryAgent {
-		return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-			COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
-			p.primary_agent_id, COALESCE(a.display_name, '') as lead,
-			COALESCE(t.task_count, 0) as task_count,
-			COALESCE(t.completed_count, 0) as completed_count
-			FROM projects p
-			LEFT JOIN agents a ON a.id = p.primary_agent_id
-			LEFT JOIN (
-				SELECT project_id,
-					COUNT(*) as task_count,
-					COUNT(*) FILTER (WHERE status = 'done') as completed_count
-				FROM tasks
-				WHERE org_id = $1 AND project_id IS NOT NULL
-				GROUP BY project_id
-			) t ON t.project_id = p.id
-			WHERE p.org_id = $1 ORDER BY p.created_at DESC`
+		leadJoin = "LEFT JOIN agents a ON a.id = p.primary_agent_id"
+		leadSelect = ", p.primary_agent_id, COALESCE(a.display_name, '') as lead"
 	}
 
 	return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at` + leadSelect + workflowSelect + `,
 		COALESCE(t.task_count, 0) as task_count,
 		COALESCE(t.completed_count, 0) as completed_count
 		FROM projects p
+		` + leadJoin + `
 		LEFT JOIN (
 			SELECT project_id,
 				COUNT(*) as task_count,
@@ -728,34 +913,35 @@ func listProjectsQuery(usePrimaryAgent bool) string {
 			WHERE org_id = $1 AND project_id IS NOT NULL
 			GROUP BY project_id
 		) t ON t.project_id = p.id
-		WHERE p.org_id = $1 ORDER BY p.created_at DESC`
+		WHERE p.org_id = $1` + workflowFilter + ` ORDER BY p.created_at DESC`
 }
 
-func getProjectQuery(usePrimaryAgent bool) string {
+func getProjectQuery(usePrimaryAgent bool, useWorkflow bool) string {
+	workflowSelect := ""
+	if useWorkflow {
+		workflowSelect = `,
+			p.workflow_enabled,
+			p.workflow_schedule,
+			p.workflow_template,
+			p.workflow_agent_id,
+			p.workflow_last_run_at,
+			p.workflow_next_run_at,
+			p.workflow_run_count`
+	}
+
+	leadJoin := ""
+	leadSelect := ""
 	if usePrimaryAgent {
-		return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-			COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
-			p.primary_agent_id, COALESCE(a.display_name, '') as lead,
-			COALESCE(t.task_count, 0) as task_count,
-			COALESCE(t.completed_count, 0) as completed_count
-			FROM projects p
-			LEFT JOIN agents a ON a.id = p.primary_agent_id
-			LEFT JOIN (
-				SELECT project_id,
-					COUNT(*) as task_count,
-					COUNT(*) FILTER (WHERE status = 'done') as completed_count
-				FROM tasks
-				WHERE org_id = $2 AND project_id IS NOT NULL
-				GROUP BY project_id
-			) t ON t.project_id = p.id
-			WHERE p.id = $1 AND p.org_id = $2`
+		leadJoin = "LEFT JOIN agents a ON a.id = p.primary_agent_id"
+		leadSelect = ", p.primary_agent_id, COALESCE(a.display_name, '') as lead"
 	}
 
 	return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at` + leadSelect + workflowSelect + `,
 		COALESCE(t.task_count, 0) as task_count,
 		COALESCE(t.completed_count, 0) as completed_count
 		FROM projects p
+		` + leadJoin + `
 		LEFT JOIN (
 			SELECT project_id,
 				COUNT(*) as task_count,
@@ -765,4 +951,110 @@ func getProjectQuery(usePrimaryAgent bool) string {
 			GROUP BY project_id
 		) t ON t.project_id = p.id
 		WHERE p.id = $1 AND p.org_id = $2`
+}
+
+func scanProjectAPIResponse(scanner interface{ Scan(...any) error }, usePrimaryAgent bool, useWorkflow bool) (projectAPIResponse, error) {
+	var p projectAPIResponse
+	var createdAt interface{}
+	var primaryAgentID sql.NullString
+	var workflowSchedule []byte
+	var workflowTemplate []byte
+	var workflowAgentID sql.NullString
+	var workflowLastRunAt sql.NullTime
+	var workflowNextRunAt sql.NullTime
+
+	baseDest := []any{
+		&p.ID,
+		&p.OrgID,
+		&p.Name,
+		&p.Description,
+		&p.RepoURL,
+		&p.Status,
+		&createdAt,
+	}
+	if usePrimaryAgent {
+		baseDest = append(baseDest, &primaryAgentID, &p.Lead)
+	}
+	if useWorkflow {
+		baseDest = append(
+			baseDest,
+			&p.WorkflowEnabled,
+			&workflowSchedule,
+			&workflowTemplate,
+			&workflowAgentID,
+			&workflowLastRunAt,
+			&workflowNextRunAt,
+			&p.WorkflowRunCount,
+		)
+	}
+	baseDest = append(baseDest, &p.TaskCount, &p.CompletedCount)
+
+	if err := scanner.Scan(baseDest...); err != nil {
+		return p, err
+	}
+
+	if primaryAgentID.Valid {
+		p.PrimaryAgentID = &primaryAgentID.String
+	}
+	if useWorkflow {
+		if len(workflowSchedule) > 0 {
+			p.WorkflowSchedule = append(json.RawMessage(nil), workflowSchedule...)
+		}
+		if len(workflowTemplate) > 0 {
+			p.WorkflowTemplate = append(json.RawMessage(nil), workflowTemplate...)
+		}
+		if workflowAgentID.Valid {
+			p.WorkflowAgentID = &workflowAgentID.String
+		}
+		if workflowLastRunAt.Valid {
+			formatted := workflowLastRunAt.Time.UTC().Format(time.RFC3339)
+			p.WorkflowLastRunAt = &formatted
+		}
+		if workflowNextRunAt.Valid {
+			formatted := workflowNextRunAt.Time.UTC().Format(time.RFC3339)
+			p.WorkflowNextRunAt = &formatted
+		}
+	}
+
+	return p, nil
+}
+
+func parseWorkflowFilter(raw string) (bool, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false, nil
+	}
+	parsed, err := strconv.ParseBool(trimmed)
+	if err != nil {
+		return false, fmt.Errorf("workflow filter must be true or false")
+	}
+	return parsed, nil
+}
+
+func normalizeWorkflowPatchJSON(value json.RawMessage, fieldName string) (json.RawMessage, error) {
+	trimmed := strings.TrimSpace(string(value))
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil
+	}
+	raw := json.RawMessage(trimmed)
+	if !json.Valid(raw) {
+		return nil, fmt.Errorf("%s must be valid JSON", fieldName)
+	}
+	return raw, nil
+}
+
+func parseProjectOptionalRFC3339(value *string, fieldName string) (*time.Time, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be RFC3339 timestamp", fieldName)
+	}
+	utc := parsed.UTC()
+	return &utc, nil
 }

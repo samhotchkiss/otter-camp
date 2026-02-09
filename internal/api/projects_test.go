@@ -375,3 +375,82 @@ func TestProjectsHandlerDeleteRemovesProject(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, count)
 }
+
+func TestProjectsHandlerListWorkflowFilter(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-workflow-filter-org")
+
+	workflowProjectID := insertProjectTestProject(t, db, orgID, "Workflow Project")
+	nonWorkflowProjectID := insertProjectTestProject(t, db, orgID, "Regular Project")
+
+	_, err := db.Exec(`UPDATE projects SET workflow_enabled = true, workflow_run_count = 3 WHERE id = $1`, workflowProjectID)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE projects SET workflow_enabled = false WHERE id = $1`, nonWorkflowProjectID)
+	require.NoError(t, err)
+
+	handler := &ProjectsHandler{
+		DB:    db,
+		Store: store.NewProjectStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects?org_id="+orgID+"&workflow=true", nil)
+	rec := httptest.NewRecorder()
+	handler.List(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Projects []struct {
+			ID               string `json:"id"`
+			WorkflowEnabled  bool   `json:"workflow_enabled"`
+			WorkflowRunCount int    `json:"workflow_run_count"`
+		} `json:"projects"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Projects, 1)
+	require.Equal(t, workflowProjectID, resp.Projects[0].ID)
+	require.True(t, resp.Projects[0].WorkflowEnabled)
+	require.Equal(t, 3, resp.Projects[0].WorkflowRunCount)
+}
+
+func TestProjectsHandlerPatchWorkflowFields(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-workflow-patch-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Workflow Patch Project")
+	agentID := insertMessageTestAgent(t, db, orgID, "workflow-patch-agent")
+
+	handler := &ProjectsHandler{
+		DB:    db,
+		Store: store.NewProjectStore(db),
+	}
+
+	body := []byte(`{
+		"workflow_enabled": true,
+		"workflow_schedule": {"kind":"cron","expr":"0 6 * * *","tz":"America/Denver"},
+		"workflow_template": {"title_pattern":"Morning Briefing — {{date}}","body":"Generate briefing","pipeline":"auto_close"},
+		"workflow_agent_id": "` + agentID + `",
+		"workflow_run_count": 4
+	}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/projects/"+projectID+"?org_id="+orgID, bytes.NewReader(body))
+	req = addRouteParam(req, "id", projectID)
+	rec := httptest.NewRecorder()
+
+	handler.Patch(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		ID               string          `json:"id"`
+		WorkflowEnabled  bool            `json:"workflow_enabled"`
+		WorkflowSchedule json.RawMessage `json:"workflow_schedule"`
+		WorkflowTemplate json.RawMessage `json:"workflow_template"`
+		WorkflowAgentID  *string         `json:"workflow_agent_id"`
+		WorkflowRunCount int             `json:"workflow_run_count"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, projectID, resp.ID)
+	require.True(t, resp.WorkflowEnabled)
+	require.NotNil(t, resp.WorkflowAgentID)
+	require.Equal(t, agentID, *resp.WorkflowAgentID)
+	require.Equal(t, 4, resp.WorkflowRunCount)
+	require.JSONEq(t, `{"kind":"cron","expr":"0 6 * * *","tz":"America/Denver"}`, string(resp.WorkflowSchedule))
+	require.JSONEq(t, `{"title_pattern":"Morning Briefing — {{date}}","body":"Generate briefing","pipeline":"auto_close"}`, string(resp.WorkflowTemplate))
+}
