@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useWS } from "../../contexts/WebSocketContext";
 import WebSocketIssueSubscriber from "../WebSocketIssueSubscriber";
 import { DocumentWorkspace } from "../content-review";
+import LabelPicker from "../LabelPicker";
+import LabelPill, { type LabelOption } from "../LabelPill";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
@@ -19,6 +21,7 @@ type IssueSummary = {
   approval_state?: IssueApprovalState | null;
   document_path?: string | null;
   document_content?: string | null;
+  labels?: LabelOption[];
 };
 
 type IssueParticipant = {
@@ -119,6 +122,10 @@ type AgentOption = {
 
 type AgentsResponse = {
   agents: AgentOption[];
+};
+
+type LabelsResponse = {
+  labels: LabelOption[];
 };
 
 type IssueThreadPanelProps = {
@@ -326,6 +333,37 @@ function approvalActionButtonClass(style: ApprovalAction["style"]): string {
   }
 }
 
+function normalizeLabelOption(label: LabelOption): LabelOption | null {
+  const id = typeof label.id === "string" ? label.id.trim() : "";
+  const name = typeof label.name === "string" ? label.name.trim() : "";
+  const color = typeof label.color === "string" ? label.color.trim() : "";
+  if (!id || !name) {
+    return null;
+  }
+  return {
+    id,
+    name,
+    color: color || "#6b7280",
+  };
+}
+
+function mergeLabelOptions(primary: LabelOption[], secondary: LabelOption[]): LabelOption[] {
+  const out = new Map<string, LabelOption>();
+  for (const label of primary) {
+    const normalized = normalizeLabelOption(label);
+    if (normalized) {
+      out.set(normalized.id, normalized);
+    }
+  }
+  for (const label of secondary) {
+    const normalized = normalizeLabelOption(label);
+    if (normalized) {
+      out.set(normalized.id, normalized);
+    }
+  }
+  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function sortComments(comments: IssueComment[]): IssueComment[] {
   return [...comments].sort((a, b) => {
     const aMs = Date.parse(a.created_at);
@@ -356,6 +394,10 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
   const [updatingParticipant, setUpdatingParticipant] = useState(false);
   const [updatingApprovalState, setUpdatingApprovalState] = useState<IssueApprovalState | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [labelOptions, setLabelOptions] = useState<LabelOption[]>([]);
+  const [labelsLoaded, setLabelsLoaded] = useState(false);
+  const [updatingLabels, setUpdatingLabels] = useState(false);
+  const [labelError, setLabelError] = useState<string | null>(null);
   const [showApprovalConfetti, setShowApprovalConfetti] = useState(false);
   const [parentIssue, setParentIssue] = useState<IssueRelationSummary | null>(null);
   const [parentIssueMissing, setParentIssueMissing] = useState(false);
@@ -373,6 +415,14 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
   const [reviewRealtimeRefreshNonce, setReviewRealtimeRefreshNonce] = useState(0);
 
   const { lastMessage } = useWS();
+
+  useEffect(() => {
+    const currentLabels = issue?.labels ?? [];
+    if (currentLabels.length === 0) {
+      return;
+    }
+    setLabelOptions((existing) => mergeLabelOptions(existing, currentLabels));
+  }, [issue?.labels]);
 
   const activeParticipants = useMemo(
     () => participants.filter((participant) => !participant.removed_at),
@@ -447,6 +497,8 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
         setReviewVersionError(null);
         setReviewChanges(null);
         setReviewChangesError(null);
+        setLabelError(null);
+        setUpdatingLabels(false);
         setParentIssue(null);
         setParentIssueMissing(false);
         setChildIssues([]);
@@ -935,6 +987,155 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
     }
   }
 
+  async function ensureLabelOptionsLoaded(): Promise<void> {
+    const orgID = getOrgID();
+    if (!orgID || labelsLoaded) {
+      return;
+    }
+    try {
+      const response = await fetch(
+        `${API_URL}/api/labels?org_id=${encodeURIComponent(orgID)}`,
+        { headers: { "Content-Type": "application/json" } },
+      );
+      if (!response.ok) {
+        return;
+      }
+      const payload = await response.json() as LabelsResponse;
+      const labels = Array.isArray(payload.labels) ? payload.labels : [];
+      setLabelOptions((existing) => mergeLabelOptions(existing, labels));
+      setLabelsLoaded(true);
+    } catch {
+      // Keep picker usable with already-loaded labels when label catalog fetch fails.
+    }
+  }
+
+  async function handleAddIssueLabel(labelID: string, providedLabel?: LabelOption): Promise<void> {
+    const orgID = getOrgID();
+    const projectID = issue?.project_id?.trim() ?? "";
+    if (!orgID || !issue || !projectID) {
+      return;
+    }
+
+    const currentLabels = issue.labels ?? [];
+    if (currentLabels.some((label) => label.id === labelID)) {
+      return;
+    }
+
+    const resolvedLabel =
+      providedLabel ??
+      issueLabelOptions.find((label) => label.id === labelID) ??
+      null;
+    if (!resolvedLabel) {
+      return;
+    }
+
+    const nextLabels = mergeLabelOptions(currentLabels, [resolvedLabel]);
+    setIssue((current) => {
+      if (!current) {
+        return current;
+      }
+      return { ...current, labels: nextLabels };
+    });
+    setLabelError(null);
+    setUpdatingLabels(true);
+    try {
+      const response = await fetch(
+        `${API_URL}/api/projects/${encodeURIComponent(projectID)}/issues/${encodeURIComponent(issue.id)}/labels?org_id=${encodeURIComponent(orgID)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label_ids: [labelID] }),
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to add label");
+      }
+    } catch (err) {
+      setIssue((current) => {
+        if (!current) {
+          return current;
+        }
+        return { ...current, labels: currentLabels };
+      });
+      setLabelError(err instanceof Error ? err.message : "Failed to add label");
+    } finally {
+      setUpdatingLabels(false);
+    }
+  }
+
+  async function handleRemoveIssueLabel(label: LabelOption): Promise<void> {
+    const orgID = getOrgID();
+    const projectID = issue?.project_id?.trim() ?? "";
+    if (!orgID || !issue || !projectID) {
+      return;
+    }
+
+    const currentLabels = issue.labels ?? [];
+    const nextLabels = currentLabels.filter((existing) => existing.id !== label.id);
+    setIssue((current) => {
+      if (!current) {
+        return current;
+      }
+      return { ...current, labels: nextLabels };
+    });
+    setLabelError(null);
+    setUpdatingLabels(true);
+    try {
+      const response = await fetch(
+        `${API_URL}/api/projects/${encodeURIComponent(projectID)}/issues/${encodeURIComponent(issue.id)}/labels/${encodeURIComponent(label.id)}?org_id=${encodeURIComponent(orgID)}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to remove label");
+      }
+    } catch (err) {
+      setIssue((current) => {
+        if (!current) {
+          return current;
+        }
+        return { ...current, labels: currentLabels };
+      });
+      setLabelError(err instanceof Error ? err.message : "Failed to remove label");
+    } finally {
+      setUpdatingLabels(false);
+    }
+  }
+
+  async function handleCreateIssueLabel(name: string, color: string): Promise<void> {
+    const orgID = getOrgID();
+    if (!orgID) {
+      return;
+    }
+    setLabelError(null);
+    try {
+      const response = await fetch(
+        `${API_URL}/api/labels?org_id=${encodeURIComponent(orgID)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, color }),
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to create label");
+      }
+      const createdLabel = normalizeLabelOption(await response.json() as LabelOption);
+      if (!createdLabel) {
+        throw new Error("Failed to create label");
+      }
+      setLabelOptions((existing) => mergeLabelOptions(existing, [createdLabel]));
+      await handleAddIssueLabel(createdLabel.id, createdLabel);
+    } catch (err) {
+      setLabelError(err instanceof Error ? err.message : "Failed to create label");
+    }
+  }
+
   const agentNameByID = useMemo(() => {
     const out = new Map<string, string>();
     for (const agent of agents) {
@@ -942,6 +1143,15 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
     }
     return out;
   }, [agents]);
+
+  const issueLabelOptions = useMemo(
+    () => mergeLabelOptions(labelOptions, issue?.labels ?? []),
+    [issue?.labels, labelOptions],
+  );
+  const selectedIssueLabelIDs = useMemo(
+    () => (issue?.labels ?? []).map((label) => label.id),
+    [issue?.labels],
+  );
 
   const normalizedApprovalState = useMemo(
     () => normalizeApprovalState(issue?.approval_state),
@@ -1003,6 +1213,34 @@ export default function IssueThreadPanel({ issueID }: IssueThreadPanelProps) {
                 {approvalStateLabel(normalizedApprovalState)}
               </span>
             </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {(issue.labels ?? []).map((label) => (
+                <LabelPill
+                  key={label.id}
+                  label={label}
+                  editable
+                  onRemove={() => void handleRemoveIssueLabel(label)}
+                />
+              ))}
+              <LabelPicker
+                labels={issueLabelOptions}
+                selectedLabelIDs={selectedIssueLabelIDs}
+                onAdd={(labelID) => void handleAddIssueLabel(labelID)}
+                onRemove={(labelID) => {
+                  const label = (issue.labels ?? []).find((entry) => entry.id === labelID);
+                  if (!label) {
+                    return;
+                  }
+                  void handleRemoveIssueLabel(label);
+                }}
+                onCreate={(name, color) => handleCreateIssueLabel(name, color)}
+                onOpen={() => ensureLabelOptionsLoaded()}
+                buttonLabel={updatingLabels ? "Updating labels..." : "Manage labels"}
+              />
+            </div>
+            {labelError && (
+              <p className="mt-2 text-xs text-red-700">{labelError}</p>
+            )}
             {(issue.parent_issue_id || childIssues.length > 0) && (
               <div className="mt-2 space-y-1 text-xs text-[var(--text-muted)]">
                 {issue.parent_issue_id && parentIssue && (

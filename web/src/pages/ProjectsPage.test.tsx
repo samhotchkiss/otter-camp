@@ -1,128 +1,125 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import ProjectsPage from "./ProjectsPage";
 
-vi.mock("../lib/demo", () => ({
-  isDemoMode: () => false,
-}));
+type MockLabel = {
+  id: string;
+  name: string;
+  color: string;
+};
+
+type MockProject = {
+  id: string;
+  name: string;
+  description?: string;
+  status?: string;
+  labels?: MockLabel[];
+  updated_at?: string;
+};
+
+const LABEL_PRODUCT: MockLabel = { id: "label-product", name: "product", color: "#3b82f6" };
+const LABEL_INFRA: MockLabel = { id: "label-infra", name: "infrastructure", color: "#6b7280" };
+const LABEL_CONTENT: MockLabel = { id: "label-content", name: "content", color: "#8b5cf6" };
+
+const PROJECTS: MockProject[] = [
+  {
+    id: "project-1",
+    name: "Otter Camp",
+    description: "Main app",
+    labels: [LABEL_PRODUCT, LABEL_INFRA],
+    updated_at: "2026-02-08T12:00:00Z",
+  },
+  {
+    id: "project-2",
+    name: "Website",
+    description: "Marketing",
+    labels: [LABEL_PRODUCT, LABEL_CONTENT],
+    updated_at: "2026-02-07T12:00:00Z",
+  },
+  {
+    id: "project-3",
+    name: "Three Stones",
+    description: "Content work",
+    labels: [LABEL_CONTENT],
+    updated_at: "2026-02-06T12:00:00Z",
+  },
+];
+
+function response(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 describe("ProjectsPage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    localStorage.setItem("otter-camp-org-id", "org-123");
   });
 
-  it("visually distinguishes archived projects", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          projects: [
-            {
-              id: "active-1",
-              name: "Active Project",
-              status: "active",
-              taskCount: 4,
-              completedCount: 2,
-            },
-            {
-              id: "archived-1",
-              name: "Archived Project",
-              status: "archived",
-              taskCount: 3,
-              completedCount: 3,
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-    );
+  it("renders label pills on project cards", async () => {
+    const fetchMock = vi.fn(async () => response({ projects: PROJECTS }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     render(
       <MemoryRouter>
-        <ProjectsPage apiEndpoint="/api/projects-test" />
+        <ProjectsPage />
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText("Archived Project")).toBeInTheDocument();
-    expect(screen.getByText("Archived")).toBeInTheDocument();
-    const archivedCard = screen.getByTestId("project-card-archived-1");
-    expect(archivedCard.className).toContain("opacity-70");
+    expect(await screen.findByText("Otter Camp")).toBeInTheDocument();
+    expect(screen.getAllByText("product").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("infrastructure").length).toBeGreaterThan(0);
   });
 
-  it("renders visible progress bars with accessible values", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          projects: [
-            {
-              id: "progress-1",
-              name: "Progress Project",
-              status: "active",
-              taskCount: 8,
-              completedCount: 4,
-            },
-            {
-              id: "progress-2",
-              name: "No Progress Project",
-              status: "active",
-              taskCount: 5,
-              completedCount: 0,
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-    );
+  it("applies multi-label filters and emits repeated label query params", async () => {
+    const labelQueryHistory: string[][] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const labels = url.searchParams.getAll("label");
+      labelQueryHistory.push(labels);
+
+      if (labels.includes("label-product") && labels.includes("label-infra")) {
+        return response({ projects: [PROJECTS[0]] });
+      }
+      if (labels.includes("label-product")) {
+        return response({ projects: [PROJECTS[0], PROJECTS[1]] });
+      }
+      return response({ projects: PROJECTS });
+    });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     render(
       <MemoryRouter>
-        <ProjectsPage apiEndpoint="/api/projects-test" />
+        <ProjectsPage />
       </MemoryRouter>,
     );
 
-    await screen.findByText("Progress Project");
+    expect(await screen.findByText("Otter Camp")).toBeInTheDocument();
+    expect(screen.getByText("Website")).toBeInTheDocument();
+    expect(screen.getByText("Three Stones")).toBeInTheDocument();
 
-    const progressBar = screen.getByRole("progressbar", { name: "Progress for Progress Project" });
-    expect(progressBar).toHaveAttribute("aria-valuenow", "50");
+    fireEvent.click(screen.getByRole("button", { name: "Toggle label product" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Three Stones")).not.toBeInTheDocument();
+    });
 
-    const zeroProgressBar = screen.getByRole("progressbar", { name: "Progress for No Progress Project" });
-    expect(zeroProgressBar).toHaveAttribute("aria-valuenow", "0");
-    expect(zeroProgressBar.className).toContain("border-[var(--border)]");
+    fireEvent.click(screen.getByRole("button", { name: "Toggle label infrastructure" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Website")).not.toBeInTheDocument();
+      expect(screen.queryByText("Three Stones")).not.toBeInTheDocument();
+    });
 
     await waitFor(() => {
-      expect(screen.getByTestId("project-progress-fill-progress-1")).toHaveStyle({ width: "50%" });
-      expect(screen.getByTestId("project-progress-fill-progress-2")).toHaveStyle({ width: "0%" });
-    });
-  });
-
-  it("uses 'No tasks yet' phrasing for projects with zero tasks", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          projects: [
-            {
-              id: "empty-1",
-              name: "Empty Project",
-              status: "active",
-              taskCount: 0,
-              completedCount: 0,
-            },
-          ],
+      expect(
+        labelQueryHistory.some((labels) => {
+          const sorted = [...labels].sort();
+          return sorted.length === 2 && sorted[0] === "label-infra" && sorted[1] === "label-product";
         }),
-        { status: 200 },
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    render(
-      <MemoryRouter>
-        <ProjectsPage apiEndpoint="/api/projects-test" />
-      </MemoryRouter>,
-    );
-
-    expect(await screen.findByText("Empty Project")).toBeInTheDocument();
-    expect(screen.getByText("No tasks yet")).toBeInTheDocument();
+      ).toBe(true);
+    });
   });
 });

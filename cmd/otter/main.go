@@ -21,8 +21,9 @@ import (
 var issueUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
 
 const (
-	authSetupCommand = "otter auth login --token <your-token> --org <org-id>"
-	authTokenHelpURL = "https://otter.camp/settings"
+	authSetupCommand  = "otter auth login --token <your-token> --org <org-id>"
+	authTokenHelpURL  = "https://otter.camp/settings"
+	defaultLabelColor = "#6b7280"
 )
 
 func main() {
@@ -47,6 +48,8 @@ func main() {
 		handleRepo(os.Args[2:])
 	case "issue":
 		handleIssue(os.Args[2:])
+	case "label":
+		handleLabel(os.Args[2:])
 	case "version":
 		fmt.Println("otter dev")
 	default:
@@ -66,6 +69,7 @@ Commands:
   remote add       Add origin remote for project
   repo info        Show repo URL for project
   issue            Manage project issues
+  label            Manage labels
   version          Show CLI version`)
 }
 
@@ -136,24 +140,30 @@ func handleWhoami(args []string) {
 }
 
 func handleProject(args []string) {
-	const projectUsage = "usage: otter project <list|create|view|archive|delete> ..."
+	const projectUsage = "usage: otter project <list|create|view|archive|delete|label> ..."
 	if len(args) == 0 {
 		fmt.Println(projectUsage)
 		os.Exit(1)
 	}
 
 	switch args[0] {
+	case "label":
+		handleProjectLabel(args[1:])
+		return
 	case "list":
 		flags := flag.NewFlagSet("project list", flag.ExitOnError)
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
+		var labels stringSliceFlag
+		flags.Var(&labels, "label", "label name or id filter (repeatable)")
 		_ = flags.Parse(args[1:])
 
 		cfg, err := ottercli.LoadConfig()
 		dieIf(err)
 		client, _ := ottercli.NewClient(cfg, *org)
-
-		projects, err := client.ListProjects()
+		labelIDs, err := resolveLabelFilterIDs(client, labels)
+		dieIf(err)
+		projects, err := client.ListProjects(labelIDs...)
 		dieIf(err)
 
 		if *jsonOut {
@@ -537,11 +547,14 @@ func handleRepo(args []string) {
 
 func handleIssue(args []string) {
 	if len(args) == 0 {
-		fmt.Println("usage: otter issue <create|list|view|comment|assign|close|reopen> ...")
+		fmt.Println("usage: otter issue <create|list|view|comment|assign|close|reopen|label> ...")
 		os.Exit(1)
 	}
 
 	switch args[0] {
+	case "label":
+		handleIssueLabel(args[1:])
+		return
 	case "create":
 		flags := flag.NewFlagSet("issue create", flag.ExitOnError)
 		projectRef := flags.String("project", "", "project name or id (required)")
@@ -623,6 +636,8 @@ func handleIssue(args []string) {
 		mine := flags.Bool("mine", false, "filter to current agent id (OTTER_AGENT_ID)")
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
+		var labels stringSliceFlag
+		flags.Var(&labels, "label", "label name or id filter (repeatable)")
 		_ = flags.Parse(args[1:])
 
 		if strings.TrimSpace(*projectRef) == "" {
@@ -665,7 +680,9 @@ func handleIssue(args []string) {
 			filters["owner_agent_id"] = agent.ID
 		}
 
-		issues, err := client.ListIssues(project.ID, filters)
+		labelIDs, err := resolveLabelFilterIDs(client, labels)
+		dieIf(err)
+		issues, err := client.ListIssues(project.ID, filters, labelIDs...)
 		dieIf(err)
 
 		if *jsonOut {
@@ -834,9 +851,286 @@ func handleIssue(args []string) {
 		fmt.Printf("Reopened issue #%d\n", updated.IssueNumber)
 
 	default:
-		fmt.Println("usage: otter issue <create|list|view|comment|assign|close|reopen> ...")
+		fmt.Println("usage: otter issue <create|list|view|comment|assign|close|reopen|label> ...")
 		os.Exit(1)
 	}
+}
+
+func handleLabel(args []string) {
+	if len(args) == 0 {
+		fmt.Println("usage: otter label <list|create|delete> ...")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "list":
+		flags := flag.NewFlagSet("label list", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		labels, err := client.ListLabels()
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(labels)
+			return
+		}
+		if len(labels) == 0 {
+			fmt.Println("No labels found.")
+			return
+		}
+		for _, label := range labels {
+			fmt.Printf("%s\t%s\t%s\n", label.ID, label.Name, label.Color)
+		}
+	case "create":
+		flags := flag.NewFlagSet("label create", flag.ExitOnError)
+		color := flags.String("color", "", "label color (hex)")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter label create <name> [--color <hex>]")
+		}
+		name := strings.TrimSpace(strings.Join(flags.Args(), " "))
+		if name == "" {
+			die("label name is required")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		label, err := client.CreateLabel(name, strings.TrimSpace(*color))
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(label)
+			return
+		}
+		fmt.Printf("Created label: %s (%s)\n", label.Name, label.ID)
+	case "delete":
+		flags := flag.NewFlagSet("label delete", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter label delete <label-id-or-name>")
+		}
+		labelRef := strings.TrimSpace(strings.Join(flags.Args(), " "))
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		label, err := client.ResolveLabel(labelRef)
+		dieIf(err)
+		dieIf(client.DeleteLabel(label.ID))
+
+		if *jsonOut {
+			printJSON(map[string]any{"deleted": true, "label": label})
+			return
+		}
+		fmt.Printf("Deleted label: %s (%s)\n", label.Name, label.ID)
+	default:
+		fmt.Println("usage: otter label <list|create|delete> ...")
+		os.Exit(1)
+	}
+}
+
+func handleProjectLabel(args []string) {
+	if len(args) == 0 {
+		fmt.Println("usage: otter project label <add|remove> ...")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "add":
+		flags := flag.NewFlagSet("project label add", flag.ExitOnError)
+		projectRef := flags.String("project", "", "project name or id (required)")
+		color := flags.String("color", defaultLabelColor, "default color when auto-creating labels")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if strings.TrimSpace(*projectRef) == "" {
+			die("--project is required")
+		}
+		if len(flags.Args()) == 0 {
+			die("usage: otter project label add --project <project> <label-id-or-name>")
+		}
+		labelRef := strings.TrimSpace(strings.Join(flags.Args(), " "))
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		project, err := client.FindProject(*projectRef)
+		dieIf(err)
+		label, err := resolveLabelForAdd(client, labelRef, strings.TrimSpace(*color))
+		dieIf(err)
+		labels, err := client.AddProjectLabels(project.ID, []string{label.ID})
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(labels)
+			return
+		}
+		fmt.Printf("Added label %s to project %s\n", label.Name, project.Name)
+	case "remove":
+		flags := flag.NewFlagSet("project label remove", flag.ExitOnError)
+		projectRef := flags.String("project", "", "project name or id (required)")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if strings.TrimSpace(*projectRef) == "" {
+			die("--project is required")
+		}
+		if len(flags.Args()) == 0 {
+			die("usage: otter project label remove --project <project> <label-id-or-name>")
+		}
+		labelRef := strings.TrimSpace(strings.Join(flags.Args(), " "))
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		project, err := client.FindProject(*projectRef)
+		dieIf(err)
+		label, err := client.ResolveLabel(labelRef)
+		dieIf(err)
+		dieIf(client.RemoveProjectLabel(project.ID, label.ID))
+
+		if *jsonOut {
+			printJSON(map[string]any{"removed": true, "label": label, "project_id": project.ID})
+			return
+		}
+		fmt.Printf("Removed label %s from project %s\n", label.Name, project.Name)
+	default:
+		fmt.Println("usage: otter project label <add|remove> ...")
+		os.Exit(1)
+	}
+}
+
+func handleIssueLabel(args []string) {
+	if len(args) == 0 {
+		fmt.Println("usage: otter issue label <add|remove> ...")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "add":
+		flags := flag.NewFlagSet("issue label add", flag.ExitOnError)
+		projectRef := flags.String("project", "", "project name or id (required for issue number)")
+		color := flags.String("color", defaultLabelColor, "default color when auto-creating labels")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) < 2 {
+			die("usage: otter issue label add [--project <project>] <issue-id-or-number> <label-id-or-name>")
+		}
+		issueRef := strings.TrimSpace(flags.Args()[0])
+		labelRef := strings.TrimSpace(strings.Join(flags.Args()[1:], " "))
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		issueID, err := resolveIssueID(client, strings.TrimSpace(*projectRef), issueRef)
+		dieIf(err)
+		issue, err := client.GetIssue(issueID)
+		dieIf(err)
+		label, err := resolveLabelForAdd(client, labelRef, strings.TrimSpace(*color))
+		dieIf(err)
+		labels, err := client.AddIssueLabels(issue.ProjectID, issue.ID, []string{label.ID})
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(labels)
+			return
+		}
+		fmt.Printf("Added label %s to issue #%d\n", label.Name, issue.IssueNumber)
+	case "remove":
+		flags := flag.NewFlagSet("issue label remove", flag.ExitOnError)
+		projectRef := flags.String("project", "", "project name or id (required for issue number)")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) < 2 {
+			die("usage: otter issue label remove [--project <project>] <issue-id-or-number> <label-id-or-name>")
+		}
+		issueRef := strings.TrimSpace(flags.Args()[0])
+		labelRef := strings.TrimSpace(strings.Join(flags.Args()[1:], " "))
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		issueID, err := resolveIssueID(client, strings.TrimSpace(*projectRef), issueRef)
+		dieIf(err)
+		issue, err := client.GetIssue(issueID)
+		dieIf(err)
+		label, err := client.ResolveLabel(labelRef)
+		dieIf(err)
+		dieIf(client.RemoveIssueLabel(issue.ProjectID, issue.ID, label.ID))
+
+		if *jsonOut {
+			printJSON(map[string]any{"removed": true, "label": label, "issue_id": issue.ID})
+			return
+		}
+		fmt.Printf("Removed label %s from issue #%d\n", label.Name, issue.IssueNumber)
+	default:
+		fmt.Println("usage: otter issue label <add|remove> ...")
+		os.Exit(1)
+	}
+}
+
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return strings.Join(*s, ",")
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	*s = append(*s, trimmed)
+	return nil
+}
+
+func resolveLabelForAdd(client *ottercli.Client, labelRef, color string) (ottercli.Label, error) {
+	trimmed := strings.TrimSpace(labelRef)
+	if trimmed == "" {
+		return ottercli.Label{}, errors.New("label is required")
+	}
+	if issueUUIDPattern.MatchString(trimmed) {
+		return client.ResolveLabel(trimmed)
+	}
+	color = strings.TrimSpace(color)
+	if color == "" {
+		color = defaultLabelColor
+	}
+	return client.EnsureLabel(trimmed, color)
+}
+
+func resolveLabelFilterIDs(client *ottercli.Client, raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(raw))
+	labelIDs := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		label, err := client.ResolveLabel(trimmed)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[label.ID]; exists {
+			continue
+		}
+		seen[label.ID] = struct{}{}
+		labelIDs = append(labelIDs, label.ID)
+	}
+	return labelIDs, nil
 }
 
 func resolveAgentName(client *ottercli.Client, agentID string) string {

@@ -5,6 +5,8 @@ import LoadingSpinner from "../components/LoadingSpinner";
 import { ErrorFallback } from "../components/ErrorBoundary";
 import { NoProjectsEmpty } from "../components/EmptyState";
 import { SkeletonList } from "../components/Skeleton";
+import LabelFilter from "../components/LabelFilter";
+import LabelPill, { type LabelOption } from "../components/LabelPill";
 import api from "../lib/api";
 import { isDemoMode } from "../lib/demo";
 import { formatProjectTaskSummary } from "../lib/projectTaskSummary";
@@ -25,6 +27,7 @@ type Project = {
   updated_at?: string;
   createdAt?: string;
   created_at?: string;
+  labels?: LabelOption[];
 };
 
 const SAMPLE_PROJECTS: Project[] = [
@@ -117,6 +120,45 @@ const getUpdatedAtMs = (project: Project) => {
   return Number.isNaN(ms) ? 0 : ms;
 };
 
+const normalizeProjectLabel = (label: LabelOption): LabelOption | null => {
+  const id = typeof label.id === "string" ? label.id.trim() : "";
+  const name = typeof label.name === "string" ? label.name.trim() : "";
+  const color = typeof label.color === "string" ? label.color.trim() : "";
+  if (!id || !name) {
+    return null;
+  }
+  return {
+    id,
+    name,
+    color: color || "#6b7280",
+  };
+};
+
+const mergeLabelCatalog = (
+  existing: LabelOption[],
+  projects: Project[],
+  replaceExisting: boolean,
+): LabelOption[] => {
+  const catalog = new Map<string, LabelOption>();
+  if (!replaceExisting) {
+    for (const label of existing) {
+      const normalized = normalizeProjectLabel(label);
+      if (normalized) {
+        catalog.set(normalized.id, normalized);
+      }
+    }
+  }
+  for (const project of projects) {
+    for (const label of project.labels ?? []) {
+      const normalized = normalizeProjectLabel(label);
+      if (normalized) {
+        catalog.set(normalized.id, normalized);
+      }
+    }
+  }
+  return [...catalog.values()].sort((a, b) => a.name.localeCompare(b.name));
+};
+
 function ProjectCard({ project, onClick }: { project: Project; onClick: () => void }) {
   const taskCount = project.taskCount ?? 0;
   const completedCount = project.completedCount ?? 0;
@@ -156,6 +198,14 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
       <p className="mt-1 text-sm text-[var(--text-muted)]">
         {project.description ?? ""}
       </p>
+
+      {(project.labels ?? []).length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(project.labels ?? []).map((label) => (
+            <LabelPill key={label.id} label={label} />
+          ))}
+        </div>
+      )}
 
       {(project.status || project.priority || project.assignee) && (
         <div className="mt-3 flex flex-wrap gap-2">
@@ -223,6 +273,8 @@ export default function ProjectsPage({
 }: ProjectsPageProps) {
   const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [labelCatalog, setLabelCatalog] = useState<LabelOption[]>([]);
+  const [selectedLabelIDs, setSelectedLabelIDs] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -230,11 +282,19 @@ export default function ProjectsPage({
   const fetchProjects = useCallback(async () => {
     try {
       if (apiEndpoint === "https://api.otter.camp/api/projects") {
-        const data = await api.projects();
+        const data = await api.projects(selectedLabelIDs);
         return (data.projects || []) as Project[];
       }
 
-      const response = await fetch(apiEndpoint);
+      const url = new URL(apiEndpoint, window.location.origin);
+      for (const labelID of selectedLabelIDs) {
+        const normalized = labelID.trim();
+        if (!normalized) {
+          continue;
+        }
+        url.searchParams.append("label", normalized);
+      }
+      const response = await fetch(url.toString());
       if (!response.ok) {
         throw new Error("Failed to fetch projects");
       }
@@ -243,7 +303,7 @@ export default function ProjectsPage({
     } catch (err) {
       throw err instanceof Error ? err : new Error("Failed to load projects");
     }
-  }, [apiEndpoint]);
+  }, [apiEndpoint, selectedLabelIDs]);
 
   // Initial fetch
   useEffect(() => {
@@ -256,10 +316,14 @@ export default function ProjectsPage({
           setProjects(SAMPLE_PROJECTS);
         } else {
           setProjects(fetchedProjects);
+          setLabelCatalog((existing) =>
+            mergeLabelCatalog(existing, fetchedProjects, selectedLabelIDs.length === 0),
+          );
         }
       } catch (err) {
         if (isDemoMode()) {
           setProjects(SAMPLE_PROJECTS);
+          setLabelCatalog([]);
         } else {
           setProjects([]);
           setError(err instanceof Error ? err.message : "Failed to load projects");
@@ -270,7 +334,7 @@ export default function ProjectsPage({
     };
 
     loadProjects();
-  }, [fetchProjects]);
+  }, [fetchProjects, selectedLabelIDs.length]);
 
   const handleCreateProject = () => {
     window.alert("Project creation coming soon!");
@@ -317,7 +381,7 @@ export default function ProjectsPage({
     );
   }
 
-  if (projects.length === 0) {
+  if (projects.length === 0 && selectedLabelIDs.length === 0) {
     return (
       <div className="w-full">
         <div className="mb-6">
@@ -329,6 +393,37 @@ export default function ProjectsPage({
           </p>
         </div>
         <NoProjectsEmpty onCreate={handleCreateProject} />
+      </div>
+    );
+  }
+
+  if (projects.length === 0 && selectedLabelIDs.length > 0) {
+    return (
+      <div className="w-full">
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-[var(--text)]">
+              Projects
+            </h1>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              No projects match the selected labels.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSelectedLabelIDs([])}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            Clear filters
+          </button>
+        </div>
+        {labelCatalog.length > 0 && (
+          <LabelFilter
+            labels={labelCatalog}
+            selectedLabelIDs={selectedLabelIDs}
+            onChange={setSelectedLabelIDs}
+          />
+        )}
       </div>
     );
   }
@@ -362,6 +457,16 @@ export default function ProjectsPage({
           {projects.length} projects • Press <kbd className="rounded bg-[var(--surface-alt)] px-1.5 py-0.5 text-xs">⌘K</kbd> to search
         </p>
       </div>
+
+      {labelCatalog.length > 0 && (
+        <div className="mb-4">
+          <LabelFilter
+            labels={labelCatalog}
+            selectedLabelIDs={selectedLabelIDs}
+            onChange={setSelectedLabelIDs}
+          />
+        </div>
+      )}
 
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {sortedProjects.map((project) => (

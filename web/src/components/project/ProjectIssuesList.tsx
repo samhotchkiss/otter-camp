@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import LabelFilter from "../LabelFilter";
+import LabelPill, { type LabelOption } from "../LabelPill";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
@@ -23,6 +25,7 @@ type ProjectIssueItem = {
   github_url?: string | null;
   github_state?: string | null;
   github_repository_full_name?: string | null;
+  labels?: LabelOption[];
 };
 
 type ProjectIssuesResponse = {
@@ -112,6 +115,45 @@ function approvalStateBadgeClass(state: IssueApprovalState): string {
   }
 }
 
+function normalizeIssueLabel(label: LabelOption): LabelOption | null {
+  const id = typeof label.id === "string" ? label.id.trim() : "";
+  const name = typeof label.name === "string" ? label.name.trim() : "";
+  const color = typeof label.color === "string" ? label.color.trim() : "";
+  if (!id || !name) {
+    return null;
+  }
+  return {
+    id,
+    name,
+    color: color || "#6b7280",
+  };
+}
+
+function mergeLabelCatalog(
+  existing: LabelOption[],
+  items: ProjectIssueItem[],
+  replaceExisting: boolean,
+): LabelOption[] {
+  const catalog = new Map<string, LabelOption>();
+  if (!replaceExisting) {
+    for (const label of existing) {
+      const normalized = normalizeIssueLabel(label);
+      if (normalized) {
+        catalog.set(normalized.id, normalized);
+      }
+    }
+  }
+  for (const issue of items) {
+    for (const label of issue.labels ?? []) {
+      const normalized = normalizeIssueLabel(label);
+      if (normalized) {
+        catalog.set(normalized.id, normalized);
+      }
+    }
+  }
+  return [...catalog.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export default function ProjectIssuesList({
   projectId,
   selectedIssueID,
@@ -125,6 +167,8 @@ export default function ProjectIssuesList({
   const [originFilter, setOriginFilter] = useState<IssueFilterOrigin>("all");
   const [refreshKey, setRefreshKey] = useState(0);
   const [agentNameByID, setAgentNameByID] = useState<Map<string, string>>(new Map());
+  const [labelCatalog, setLabelCatalog] = useState<LabelOption[]>([]);
+  const [selectedLabelIDs, setSelectedLabelIDs] = useState<string[]>([]);
   const issueByID = useMemo(() => {
     const index = new Map<string, ProjectIssueItem>();
     for (const issue of items) {
@@ -167,6 +211,13 @@ export default function ProjectIssuesList({
     if (originFilter !== "all") {
       issuesURL.searchParams.set("origin", originFilter);
     }
+    for (const labelID of selectedLabelIDs) {
+      const normalized = labelID.trim();
+      if (!normalized) {
+        continue;
+      }
+      issuesURL.searchParams.append("label", normalized);
+    }
     const agentsURL = new URL(`${API_URL}/api/agents`);
     agentsURL.searchParams.set("org_id", orgID);
 
@@ -202,7 +253,11 @@ export default function ProjectIssuesList({
         if (cancelled) {
           return;
         }
-        setItems(Array.isArray(issuesPayload.items) ? issuesPayload.items : []);
+        const nextItems = Array.isArray(issuesPayload.items) ? issuesPayload.items : [];
+        setItems(nextItems);
+        setLabelCatalog((existing) =>
+          mergeLabelCatalog(existing, nextItems, selectedLabelIDs.length === 0),
+        );
         setAgentNameByID(agentMap);
       })
       .catch((fetchError: unknown) => {
@@ -222,7 +277,7 @@ export default function ProjectIssuesList({
     return () => {
       cancelled = true;
     };
-  }, [kindFilter, originFilter, projectId, refreshKey, stateFilter]);
+  }, [kindFilter, originFilter, projectId, refreshKey, selectedLabelIDs, stateFilter]);
 
   const ownerLabelByIssueID = useMemo(() => {
     const labels = new Map<string, string>();
@@ -296,6 +351,15 @@ export default function ProjectIssuesList({
           </select>
         </div>
       </div>
+      {(labelCatalog.length > 0 || selectedLabelIDs.length > 0) && (
+        <div className="mb-4">
+          <LabelFilter
+            labels={labelCatalog}
+            selectedLabelIDs={selectedLabelIDs}
+            onChange={setSelectedLabelIDs}
+          />
+        </div>
+      )}
 
       {isLoading && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-6 text-sm text-[var(--text-muted)]">
@@ -361,6 +425,13 @@ export default function ProjectIssuesList({
                       {approvalStateLabel(approvalState)}
                     </span>
                   </div>
+                  {(issue.labels ?? []).length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(issue.labels ?? []).map((label) => (
+                        <LabelPill key={label.id} label={label} />
+                      ))}
+                    </div>
+                  )}
                   <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-[var(--text-muted)]">
                     {parentIssueID !== "" && (
                       <span>

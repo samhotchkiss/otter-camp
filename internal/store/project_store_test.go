@@ -354,3 +354,76 @@ func TestProjectStore_WorkspaceIsolation(t *testing.T) {
 		assert.Equal(t, orgID2, p.OrgID)
 	}
 }
+
+func TestProjectStoreListWithLabels(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "project-label-filter-org")
+	otherOrgID := createTestOrganization(t, db, "project-label-filter-other-org")
+	ctx := ctxWithWorkspace(orgID)
+	otherCtx := ctxWithWorkspace(otherOrgID)
+
+	projectStore := NewProjectStore(db)
+	labelStore := NewLabelStore(db)
+
+	projectA, err := projectStore.Create(ctx, CreateProjectInput{Name: "Project A", Status: "active"})
+	require.NoError(t, err)
+	projectB, err := projectStore.Create(ctx, CreateProjectInput{Name: "Project B", Status: "active"})
+	require.NoError(t, err)
+	projectC, err := projectStore.Create(ctx, CreateProjectInput{Name: "Project C", Status: "active"})
+	require.NoError(t, err)
+
+	labelBug, err := labelStore.Create(ctx, "bug", "#ef4444")
+	require.NoError(t, err)
+	labelBackend, err := labelStore.Create(ctx, "backend", "#22c55e")
+	require.NoError(t, err)
+	labelOps, err := labelStore.Create(ctx, "ops", "#3b82f6")
+	require.NoError(t, err)
+
+	require.NoError(t, labelStore.AddToProject(ctx, projectA.ID, labelBug.ID))
+	require.NoError(t, labelStore.AddToProject(ctx, projectA.ID, labelBackend.ID))
+	require.NoError(t, labelStore.AddToProject(ctx, projectB.ID, labelBug.ID))
+	require.NoError(t, labelStore.AddToProject(ctx, projectC.ID, labelOps.ID))
+
+	otherProject, err := projectStore.Create(otherCtx, CreateProjectInput{Name: "Other Project", Status: "active"})
+	require.NoError(t, err)
+	otherLabel, err := labelStore.Create(otherCtx, "other", "#a855f7")
+	require.NoError(t, err)
+	require.NoError(t, labelStore.AddToProject(otherCtx, otherProject.ID, otherLabel.ID))
+
+	allProjects, err := projectStore.ListWithLabels(ctx, nil)
+	require.NoError(t, err)
+	labelsByProject := make(map[string][]Label, len(allProjects))
+	for _, project := range allProjects {
+		labelsByProject[project.ID] = project.Labels
+		assert.Equal(t, orgID, project.OrgID)
+	}
+	require.Len(t, labelsByProject[projectA.ID], 2)
+	require.Len(t, labelsByProject[projectB.ID], 1)
+	require.Len(t, labelsByProject[projectC.ID], 1)
+	_, foundOtherOrgProject := labelsByProject[otherProject.ID]
+	require.False(t, foundOtherOrgProject)
+
+	filteredBug, err := projectStore.ListWithLabels(ctx, []string{labelBug.ID})
+	require.NoError(t, err)
+	require.Len(t, filteredBug, 2)
+
+	filteredBugAndBackend, err := projectStore.ListWithLabels(ctx, []string{labelBug.ID, labelBackend.ID})
+	require.NoError(t, err)
+	require.Len(t, filteredBugAndBackend, 1)
+	require.Equal(t, projectA.ID, filteredBugAndBackend[0].ID)
+	require.Len(t, filteredBugAndBackend[0].Labels, 2)
+
+	filteredNone, err := projectStore.ListWithLabels(ctx, []string{labelBug.ID, labelOps.ID})
+	require.NoError(t, err)
+	require.Len(t, filteredNone, 0)
+
+	_, err = projectStore.ListWithLabels(ctx, []string{"not-a-uuid"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid label filter")
+
+	foundProject, err := projectStore.GetByID(ctx, projectA.ID)
+	require.NoError(t, err)
+	require.Len(t, foundProject.Labels, 2)
+}

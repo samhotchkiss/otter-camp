@@ -90,6 +90,7 @@ func NewRouter() http.Handler {
 	knowledgeHandler := &KnowledgeHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
+	labelsHandler := &LabelsHandler{}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -97,12 +98,16 @@ func NewRouter() http.Handler {
 	var projectRepoStore *store.ProjectRepoStore
 	var activityStore *store.ActivityStore
 	var agentActivityStore *store.AgentActivityEventStore
+	var labelStore *store.LabelStore
 	if db != nil {
 		projectStore = store.NewProjectStore(db)
 		githubSyncJobStore = store.NewGitHubSyncJobStore(db)
 		projectRepoStore = store.NewProjectRepoStore(db)
 		activityStore = store.NewActivityStore(db)
 		agentActivityStore = store.NewAgentActivityEventStore(db)
+		labelStore = store.NewLabelStore(db)
+		labelsHandler.Store = labelStore
+		labelsHandler.DB = db
 		agentActivityHandler.Store = agentActivityStore
 		adminConnectionsHandler.EventStore = store.NewConnectionEventStore(db)
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
@@ -194,6 +199,16 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}", projectsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}", projectsHandler.Patch)
 		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}", projectsHandler.Delete)
+		r.With(middleware.OptionalWorkspace).Get("/labels", labelsHandler.List)
+		r.With(middleware.OptionalWorkspace).Post("/labels", labelsHandler.Create)
+		r.With(middleware.OptionalWorkspace).Patch("/labels/{id}", labelsHandler.Patch)
+		r.With(middleware.OptionalWorkspace).Delete("/labels/{id}", labelsHandler.Delete)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/labels", labelsHandler.ListProjectLabels)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/labels", labelsHandler.AddProjectLabels)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/labels/{lid}", labelsHandler.RemoveProjectLabel)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{pid}/issues/{iid}/labels", labelsHandler.ListIssueLabels)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{pid}/issues/{iid}/labels", labelsHandler.AddIssueLabels)
+		r.With(middleware.OptionalWorkspace).Delete("/projects/{pid}/issues/{iid}/labels/{lid}", labelsHandler.RemoveIssueLabel)
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/settings", projectsHandler.UpdateSettings)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/tasks/{taskId}", taskHandler.GetProjectTaskDetail)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)

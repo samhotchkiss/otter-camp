@@ -106,6 +106,13 @@ export interface Project {
   status?: string;
   taskCount?: number;
   completedCount?: number;
+  labels?: Label[];
+}
+
+export interface Label {
+  id: string;
+  name: string;
+  color: string;
 }
 
 export interface Approval {
@@ -194,7 +201,19 @@ export const api = {
   tasks: () => apiFetch<Task[]>(`/api/tasks${getOrgQueryParam()}`),
   inbox: () => apiFetch<InboxResponse>(`/api/inbox${getOrgQueryParam()}`),
   approvals: () => apiFetch<Approval[]>(`/api/approvals/exec${getOrgQueryParam()}`),
-  projects: () => apiFetch<{ projects: Project[] }>(`/api/projects${getOrgQueryParam()}`),
+  projects: (labels: string[] = []) => {
+    const params = new URLSearchParams(getOrgQueryParam().replace(/^\?/, ""));
+    for (const labelID of labels) {
+      const normalized = labelID.trim();
+      if (!normalized) {
+        continue;
+      }
+      params.append("label", normalized);
+    }
+    const query = params.toString();
+    const path = query ? `/api/projects?${query}` : "/api/projects";
+    return apiFetch<{ projects: Project[] }>(path);
+  },
   syncAgents: () => apiFetch<SyncAgentsResponse>(`/api/sync/agents`),
   
   // Approval actions

@@ -33,6 +33,7 @@ type ProjectIssue struct {
 	DueAt         *time.Time `json:"due_at,omitempty"`
 	NextStep      *string    `json:"next_step,omitempty"`
 	NextStepDueAt *time.Time `json:"next_step_due_at,omitempty"`
+	Labels        []Label    `json:"labels,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 	ClosedAt      *time.Time `json:"closed_at,omitempty"`
@@ -118,6 +119,7 @@ type ProjectIssueFilter struct {
 	OwnerAgentID  *string
 	WorkStatus    *string
 	Priority      *string
+	LabelIDs      []string
 	Limit         int
 }
 
@@ -1803,6 +1805,12 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
+	labelIDs := normalizeIDList(filter.LabelIDs)
+	for _, labelID := range labelIDs {
+		if !uuidRegex.MatchString(labelID) {
+			return nil, fmt.Errorf("invalid label filter")
+		}
+	}
 
 	query := `SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.owner_agent_id, i.parent_issue_id, i.work_status, i.priority, i.due_at, i.next_step, i.next_step_due_at, i.active_branch, i.last_commit_sha, i.created_at, i.updated_at, i.closed_at
 		FROM project_issues i
@@ -1884,6 +1892,18 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		args = append(args, priority)
 		argPos++
 	}
+	for _, labelID := range labelIDs {
+		query += fmt.Sprintf(` AND EXISTS (
+			SELECT 1
+			FROM issue_labels il
+			INNER JOIN labels l ON l.id = il.label_id
+			WHERE il.issue_id = i.id
+			  AND il.label_id = $%d
+			  AND l.org_id = i.org_id
+		)`, argPos)
+		args = append(args, labelID)
+		argPos++
+	}
 
 	query += fmt.Sprintf(" ORDER BY i.issue_number DESC LIMIT $%d", argPos)
 	args = append(args, limit)
@@ -1913,6 +1933,9 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to read issue rows: %w", err)
+	}
+	if err := s.attachIssueLabels(ctx, items); err != nil {
+		return nil, err
 	}
 	return items, nil
 }
@@ -2142,7 +2165,30 @@ func (s *ProjectIssueStore) GetIssueByID(ctx context.Context, issueID string) (*
 	if issue.OrgID != workspaceID {
 		return nil, ErrForbidden
 	}
+	labels, err := NewLabelStore(s.db).ListForIssue(ctx, issue.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list labels for issue: %w", err)
+	}
+	issue.Labels = labels
 	return &issue, nil
+}
+
+func (s *ProjectIssueStore) attachIssueLabels(ctx context.Context, issues []ProjectIssue) error {
+	if len(issues) == 0 {
+		return nil
+	}
+	issueIDs := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		issueIDs = append(issueIDs, issue.ID)
+	}
+	labelMap, err := NewLabelStore(s.db).MapForIssues(ctx, issueIDs)
+	if err != nil {
+		return fmt.Errorf("failed to map labels for issues: %w", err)
+	}
+	for idx := range issues {
+		issues[idx].Labels = labelMap[issues[idx].ID]
+	}
+	return nil
 }
 
 func (s *ProjectIssueStore) ListIssuesByDocumentPath(

@@ -2,12 +2,14 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -86,6 +88,91 @@ func TestProjectsHandlerListIncludesTaskCounts(t *testing.T) {
 	require.Equal(t, 2, projectCounts[projectOne].CompletedCount)
 	require.Equal(t, 0, projectCounts[projectTwo].TaskCount)
 	require.Equal(t, 0, projectCounts[projectTwo].CompletedCount)
+}
+
+func TestProjectsHandlerLabelFilter(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-label-filter-org")
+
+	projectOne := insertProjectTestProject(t, db, orgID, "Project Label One")
+	projectTwo := insertProjectTestProject(t, db, orgID, "Project Label Two")
+	projectThree := insertProjectTestProject(t, db, orgID, "Project Label Three")
+
+	labelStore := store.NewLabelStore(db)
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	bugLabel, err := labelStore.Create(ctx, "bug", "#ef4444")
+	require.NoError(t, err)
+	backendLabel, err := labelStore.Create(ctx, "backend", "#22c55e")
+	require.NoError(t, err)
+	opsLabel, err := labelStore.Create(ctx, "ops", "#3b82f6")
+	require.NoError(t, err)
+
+	require.NoError(t, labelStore.AddToProject(ctx, projectOne, bugLabel.ID))
+	require.NoError(t, labelStore.AddToProject(ctx, projectOne, backendLabel.ID))
+	require.NoError(t, labelStore.AddToProject(ctx, projectTwo, bugLabel.ID))
+	require.NoError(t, labelStore.AddToProject(ctx, projectThree, opsLabel.ID))
+
+	handler := &ProjectsHandler{
+		DB:    db,
+		Store: store.NewProjectStore(db),
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/projects?org_id="+orgID, nil)
+	listRec := httptest.NewRecorder()
+	handler.List(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+
+	var listResp struct {
+		Projects []struct {
+			ID     string        `json:"id"`
+			Labels []store.Label `json:"labels"`
+		} `json:"projects"`
+	}
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	require.Len(t, listResp.Projects, 3)
+
+	labelsByProject := make(map[string]int, len(listResp.Projects))
+	for _, project := range listResp.Projects {
+		labelsByProject[project.ID] = len(project.Labels)
+	}
+	require.Equal(t, 2, labelsByProject[projectOne])
+	require.Equal(t, 1, labelsByProject[projectTwo])
+	require.Equal(t, 1, labelsByProject[projectThree])
+
+	filterReq := httptest.NewRequest(http.MethodGet, "/api/projects?org_id="+orgID+"&label="+bugLabel.ID+"&label="+backendLabel.ID, nil)
+	filterRec := httptest.NewRecorder()
+	handler.List(filterRec, filterReq)
+	require.Equal(t, http.StatusOK, filterRec.Code)
+
+	var filterResp struct {
+		Projects []struct {
+			ID     string        `json:"id"`
+			Labels []store.Label `json:"labels"`
+		} `json:"projects"`
+	}
+	require.NoError(t, json.NewDecoder(filterRec.Body).Decode(&filterResp))
+	require.Len(t, filterResp.Projects, 1)
+	require.Equal(t, projectOne, filterResp.Projects[0].ID)
+	require.Len(t, filterResp.Projects[0].Labels, 2)
+
+	invalidFilterReq := httptest.NewRequest(http.MethodGet, "/api/projects?org_id="+orgID+"&label=not-a-uuid", nil)
+	invalidFilterRec := httptest.NewRecorder()
+	handler.List(invalidFilterRec, invalidFilterReq)
+	require.Equal(t, http.StatusBadRequest, invalidFilterRec.Code)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectOne+"?org_id="+orgID, nil)
+	getReq = addRouteParam(getReq, "id", projectOne)
+	getRec := httptest.NewRecorder()
+	handler.Get(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	var getResp struct {
+		ID     string        `json:"id"`
+		Labels []store.Label `json:"labels"`
+	}
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&getResp))
+	require.Equal(t, projectOne, getResp.ID)
+	require.Len(t, getResp.Labels, 2)
 }
 
 func TestNormalizeProjectCreateNameAndDescription(t *testing.T) {

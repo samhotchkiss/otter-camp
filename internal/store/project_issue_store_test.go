@@ -278,6 +278,92 @@ func TestProjectIssueStore_ListIssuesFiltersByOwnerStatusAndPriority(t *testing.
 	require.Contains(t, err.Error(), "work_status")
 }
 
+func TestProjectIssueStoreListWithLabels(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "issue-label-filter-org")
+	projectID := createTestProject(t, db, orgID, "Issue Label Filter Project")
+
+	issueStore := NewProjectIssueStore(db)
+	labelStore := NewLabelStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	issueA, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue A",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	issueB, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue B",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	issueC, err := issueStore.CreateIssue(ctx, CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue C",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	labelBug, err := labelStore.Create(ctx, "bug", "#ef4444")
+	require.NoError(t, err)
+	labelBackend, err := labelStore.Create(ctx, "backend", "#22c55e")
+	require.NoError(t, err)
+	labelOps, err := labelStore.Create(ctx, "ops", "#3b82f6")
+	require.NoError(t, err)
+
+	require.NoError(t, labelStore.AddToIssue(ctx, issueA.ID, labelBug.ID))
+	require.NoError(t, labelStore.AddToIssue(ctx, issueA.ID, labelBackend.ID))
+	require.NoError(t, labelStore.AddToIssue(ctx, issueB.ID, labelBug.ID))
+	require.NoError(t, labelStore.AddToIssue(ctx, issueC.ID, labelOps.ID))
+
+	allIssues, err := issueStore.ListIssues(ctx, ProjectIssueFilter{ProjectID: projectID})
+	require.NoError(t, err)
+	labelsByIssue := make(map[string][]Label, len(allIssues))
+	for _, issue := range allIssues {
+		labelsByIssue[issue.ID] = issue.Labels
+	}
+	require.Len(t, labelsByIssue[issueA.ID], 2)
+	require.Len(t, labelsByIssue[issueB.ID], 1)
+	require.Len(t, labelsByIssue[issueC.ID], 1)
+
+	filteredBug, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID: projectID,
+		LabelIDs:  []string{labelBug.ID},
+	})
+	require.NoError(t, err)
+	require.Len(t, filteredBug, 2)
+
+	filteredBugAndBackend, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID: projectID,
+		LabelIDs:  []string{labelBug.ID, labelBackend.ID},
+	})
+	require.NoError(t, err)
+	require.Len(t, filteredBugAndBackend, 1)
+	require.Equal(t, issueA.ID, filteredBugAndBackend[0].ID)
+	require.Len(t, filteredBugAndBackend[0].Labels, 2)
+
+	filteredNone, err := issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID: projectID,
+		LabelIDs:  []string{labelBug.ID, labelOps.ID},
+	})
+	require.NoError(t, err)
+	require.Len(t, filteredNone, 0)
+
+	_, err = issueStore.ListIssues(ctx, ProjectIssueFilter{
+		ProjectID: projectID,
+		LabelIDs:  []string{"not-a-uuid"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid label filter")
+
+	foundIssue, err := issueStore.GetIssueByID(ctx, issueA.ID)
+	require.NoError(t, err)
+	require.Len(t, foundIssue.Labels, 2)
+}
+
 func TestIssueRoleAssignmentStore_UpsertAndListByProject(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

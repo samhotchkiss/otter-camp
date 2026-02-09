@@ -22,17 +22,18 @@ type ProjectsHandler struct {
 }
 
 type projectAPIResponse struct {
-	ID             string  `json:"id"`
-	OrgID          string  `json:"org_id,omitempty"`
-	Name           string  `json:"name"`
-	Description    string  `json:"description,omitempty"`
-	RepoURL        string  `json:"repo_url,omitempty"`
-	Status         string  `json:"status"`
-	Lead           string  `json:"lead,omitempty"`
-	PrimaryAgentID *string `json:"primary_agent_id,omitempty"`
-	CreatedAt      string  `json:"created_at,omitempty"`
-	TaskCount      int     `json:"taskCount"`
-	CompletedCount int     `json:"completedCount"`
+	ID             string        `json:"id"`
+	OrgID          string        `json:"org_id,omitempty"`
+	Name           string        `json:"name"`
+	Description    string        `json:"description,omitempty"`
+	RepoURL        string        `json:"repo_url,omitempty"`
+	Status         string        `json:"status"`
+	Labels         []store.Label `json:"labels"`
+	Lead           string        `json:"lead,omitempty"`
+	PrimaryAgentID *string       `json:"primary_agent_id,omitempty"`
+	CreatedAt      string        `json:"created_at,omitempty"`
+	TaskCount      int           `json:"taskCount"`
+	CompletedCount int           `json:"completedCount"`
 }
 
 // Demo projects for when database is unavailable
@@ -164,6 +165,35 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
 		return
 	}
+	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
+	labelFilterIDs, err := parseProjectLabelFilterIDs(r.URL.Query()["label"])
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	var allowedProjectIDs map[string]struct{}
+	if len(labelFilterIDs) > 0 {
+		projectStore := h.Store
+		if projectStore == nil {
+			projectStore = store.NewProjectStore(h.DB)
+		}
+		filteredProjects, listErr := projectStore.ListWithLabels(ctx, labelFilterIDs)
+		if listErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to filter projects"})
+			return
+		}
+		if len(filteredProjects) == 0 {
+			sendJSON(w, http.StatusOK, map[string]interface{}{
+				"projects": []projectAPIResponse{},
+				"total":    0,
+			})
+			return
+		}
+		allowedProjectIDs = make(map[string]struct{}, len(filteredProjects))
+		for _, project := range filteredProjects {
+			allowedProjectIDs[project.ID] = struct{}{}
+		}
+	}
 
 	usePrimaryAgent := supportsProjectPrimaryAgentColumn(r.Context(), h.DB)
 	rows, err := h.DB.QueryContext(r.Context(), listProjectsQuery(usePrimaryAgent), workspaceID)
@@ -174,6 +204,7 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	projects := make([]projectAPIResponse, 0)
+	projectIDs := make([]string, 0)
 	for rows.Next() {
 		var p projectAPIResponse
 		var createdAt interface{}
@@ -192,11 +223,28 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if allowedProjectIDs != nil {
+			if _, ok := allowedProjectIDs[p.ID]; !ok {
+				continue
+			}
+		}
+		p.Labels = []store.Label{}
 		projects = append(projects, p)
+		projectIDs = append(projectIDs, p.ID)
 	}
 	if err := rows.Err(); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list projects"})
 		return
+	}
+	if len(projectIDs) > 0 {
+		labelMap, mapErr := store.NewLabelStore(h.DB).MapForProjects(ctx, projectIDs)
+		if mapErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load project labels"})
+			return
+		}
+		for idx := range projects {
+			projects[idx].Labels = labelMap[projects[idx].ID]
+		}
 	}
 
 	sendJSON(w, http.StatusOK, map[string]interface{}{
@@ -240,6 +288,7 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
 		return
 	}
+	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
 
 	usePrimaryAgent := supportsProjectPrimaryAgentColumn(r.Context(), h.DB)
 
@@ -266,6 +315,12 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to get project"})
 		return
 	}
+	labels, labelsErr := store.NewLabelStore(h.DB).ListForProject(ctx, p.ID)
+	if labelsErr != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load project labels"})
+		return
+	}
+	p.Labels = labels
 
 	sendJSON(w, http.StatusOK, p)
 }
@@ -611,6 +666,29 @@ func supportsProjectPrimaryAgentColumn(ctx context.Context, db *sql.DB) bool {
 		)
 	`).Scan(&exists)
 	return err == nil && exists
+}
+
+func parseProjectLabelFilterIDs(rawValues []string) ([]string, error) {
+	if len(rawValues) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(rawValues))
+	labelIDs := make([]string, 0, len(rawValues))
+	for _, raw := range rawValues {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if !uuidRegex.MatchString(trimmed) {
+			return nil, fmt.Errorf("invalid label filter")
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		labelIDs = append(labelIDs, trimmed)
+	}
+	return labelIDs, nil
 }
 
 func listProjectsQuery(usePrimaryAgent bool) string {

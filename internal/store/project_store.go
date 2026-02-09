@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
@@ -18,6 +19,7 @@ type Project struct {
 	Description    *string   `json:"description,omitempty"`
 	Status         string    `json:"status"`
 	RepoURL        *string   `json:"repo_url,omitempty"`
+	Labels         []Label   `json:"labels,omitempty"`
 	PrimaryAgentID *string   `json:"primary_agent_id,omitempty"`
 	LocalRepoPath  *string   `json:"local_repo_path,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -62,6 +64,11 @@ func (s *ProjectStore) GetByID(ctx context.Context, id string) (*Project, error)
 	if project.OrgID != workspaceID {
 		return nil, ErrForbidden
 	}
+	labels, err := NewLabelStore(s.db).ListForProject(ctx, project.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list labels for project: %w", err)
+	}
+	project.Labels = labels
 
 	return &project, nil
 }
@@ -87,15 +94,32 @@ func (s *ProjectStore) GetByName(ctx context.Context, name string) (*Project, er
 		}
 		return nil, fmt.Errorf("failed to get project by name: %w", err)
 	}
+	labels, err := NewLabelStore(s.db).ListForProject(ctx, project.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list labels for project: %w", err)
+	}
+	project.Labels = labels
 
 	return &project, nil
 }
 
 // List retrieves all projects in the current workspace.
 func (s *ProjectStore) List(ctx context.Context) ([]Project, error) {
+	return s.ListWithLabels(ctx, nil)
+}
+
+// ListWithLabels retrieves all projects in the current workspace, filtered by
+// the provided label IDs with AND semantics when one or more filters are set.
+func (s *ProjectStore) ListWithLabels(ctx context.Context, labelIDs []string) ([]Project, error) {
 	workspaceID := middleware.WorkspaceFromContext(ctx)
 	if workspaceID == "" {
 		return nil, ErrNoWorkspace
+	}
+	normalizedLabelIDs := normalizeIDList(labelIDs)
+	for _, labelID := range normalizedLabelIDs {
+		if !uuidRegex.MatchString(labelID) {
+			return nil, fmt.Errorf("invalid label filter")
+		}
 	}
 
 	conn, err := WithWorkspace(ctx, s.db)
@@ -104,8 +128,28 @@ func (s *ProjectStore) List(ctx context.Context) ([]Project, error) {
 	}
 	defer conn.Close()
 
-	query := "SELECT " + projectSelectColumns + " FROM projects WHERE org_id = $1 ORDER BY created_at DESC"
-	rows, err := conn.QueryContext(ctx, query, workspaceID)
+	queryBuilder := strings.Builder{}
+	queryBuilder.WriteString("SELECT ")
+	queryBuilder.WriteString(projectSelectColumns)
+	queryBuilder.WriteString(" FROM projects p WHERE p.org_id = $1")
+	args := []any{workspaceID}
+	argPos := 2
+	for _, labelID := range normalizedLabelIDs {
+		queryBuilder.WriteString(fmt.Sprintf(`
+			AND EXISTS (
+				SELECT 1
+				FROM project_labels pl
+				INNER JOIN labels l ON l.id = pl.label_id
+				WHERE pl.project_id = p.id
+				  AND pl.label_id = $%d
+				  AND l.org_id = $1
+			)`, argPos))
+		args = append(args, labelID)
+		argPos++
+	}
+	queryBuilder.WriteString(" ORDER BY p.created_at DESC")
+
+	rows, err := conn.QueryContext(ctx, queryBuilder.String(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list projects: %w", err)
 	}
@@ -122,6 +166,9 @@ func (s *ProjectStore) List(ctx context.Context) ([]Project, error) {
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error reading projects: %w", err)
+	}
+	if err := s.attachLabels(ctx, projects); err != nil {
+		return nil, err
 	}
 
 	return projects, nil
@@ -285,4 +332,22 @@ func scanProject(scanner interface{ Scan(...any) error }) (Project, error) {
 	}
 
 	return project, nil
+}
+
+func (s *ProjectStore) attachLabels(ctx context.Context, projects []Project) error {
+	if len(projects) == 0 {
+		return nil
+	}
+	projectIDs := make([]string, 0, len(projects))
+	for _, project := range projects {
+		projectIDs = append(projectIDs, project.ID)
+	}
+	labelMap, err := NewLabelStore(s.db).MapForProjects(ctx, projectIDs)
+	if err != nil {
+		return fmt.Errorf("failed to map labels for projects: %w", err)
+	}
+	for idx := range projects {
+		projects[idx].Labels = labelMap[projects[idx].ID]
+	}
+	return nil
 }

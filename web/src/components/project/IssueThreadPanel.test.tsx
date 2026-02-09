@@ -193,6 +193,84 @@ describe("IssueThreadPanel", () => {
     });
   });
 
+  it("renders issue labels and supports inline add/remove actions", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.includes("/api/projects/project-1/issues/issue-1/labels/label-bug") &&
+        init?.method === "DELETE"
+      ) {
+        return mockJSONResponse({});
+      }
+      if (url.includes("/api/projects/project-1/issues/issue-1/labels?") && init?.method === "POST") {
+        return mockJSONResponse({});
+      }
+      if (url.includes("/api/labels?")) {
+        return mockJSONResponse({
+          labels: [
+            { id: "label-bug", name: "bug", color: "#ef4444" },
+            { id: "label-feature", name: "feature", color: "#22c55e" },
+          ],
+        });
+      }
+      if (url.includes("/api/issues/issue-1?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-1",
+            project_id: "project-1",
+            issue_number: 1,
+            title: "Label issue",
+            state: "open",
+            origin: "local",
+            labels: [{ id: "label-bug", name: "bug", color: "#ef4444" }],
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const user = userEvent.setup();
+    render(<IssueThreadPanel issueID="issue-1" />);
+
+    expect(await screen.findByText("#1 Label issue")).toBeInTheDocument();
+    expect(screen.getAllByText("bug").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Manage labels" }));
+    await user.click(await screen.findByRole("button", { name: "Add label feature" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("feature").length).toBeGreaterThan(0);
+    });
+
+    await user.click(screen.getByRole("button", { name: "Manage labels" }));
+    await user.click(screen.getByRole("button", { name: "Remove label bug" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("bug")).not.toBeInTheDocument();
+    });
+
+    expect(
+      fetchMock.mock.calls.some(([input, reqInit]) =>
+        String(input).includes("/api/projects/project-1/issues/issue-1/labels?") &&
+        (reqInit as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(([input, reqInit]) =>
+        String(input).includes("/api/projects/project-1/issues/issue-1/labels/label-bug?") &&
+        (reqInit as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toBe(true);
+  });
+
   it("shows approval badge and renders linked post in markdown workspace", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
