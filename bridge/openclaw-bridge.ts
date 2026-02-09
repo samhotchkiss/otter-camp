@@ -77,6 +77,8 @@ const MAX_TRACKED_SESSION_CONTEXTS = (() => {
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const PROJECT_ID_PATTERN = /(?:^|:)project:([0-9a-f-]{36})(?:$|:)/i;
 const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
+const CHAMELEON_SESSION_KEY_PATTERN =
+  /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
@@ -850,7 +852,23 @@ function setSessionContext(sessionKey: string, context: SessionContext): void {
   }
 }
 
+export function parseChameleonSessionKey(sessionKey: string): string | null {
+  const match = CHAMELEON_SESSION_KEY_PATTERN.exec(getTrimmedString(sessionKey));
+  if (!match || !match[1]) {
+    return null;
+  }
+  return match[1].toLowerCase();
+}
+
+export function isCanonicalChameleonSessionKey(sessionKey: string): boolean {
+  return parseChameleonSessionKey(sessionKey) !== null;
+}
+
 function parseAgentIDFromSessionKey(sessionKey: string): string {
+  const chameleonAgentID = parseChameleonSessionKey(sessionKey);
+  if (chameleonAgentID) {
+    return chameleonAgentID;
+  }
   const match = /^agent:([^:]+):/i.exec(sessionKey.trim());
   if (!match || !match[1]) {
     return '';
