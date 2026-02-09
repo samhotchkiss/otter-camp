@@ -260,6 +260,7 @@ func NewRouter() http.Handler {
 		// Agent Activity
 		r.With(middleware.OptionalWorkspace).Get("/activity/recent", agentActivityHandler.ListRecent)
 		r.With(middleware.OptionalWorkspace).Post("/activity/ingest", agentActivityHandler.IngestEvents)
+		r.With(middleware.OptionalWorkspace).Post("/activity/events", agentActivityHandler.IngestEvents)
 		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/activity", agentActivityHandler.ListByAgent)
 
 		// Labels
