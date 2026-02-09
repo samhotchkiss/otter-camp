@@ -201,12 +201,38 @@ func TestIsWebSocketOriginAllowed_SameOrigin(t *testing.T) {
 }
 
 func TestIsWebSocketOriginAllowed_CrossOriginDeniedByDefault(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+
 	req := httptest.NewRequest(http.MethodGet, "http://api.otter.camp/ws", nil)
 	req.Host = "api.otter.camp"
 	req.Header.Set("Origin", "https://evil.example")
 
 	if isWebSocketOriginAllowed(req) {
 		t.Fatalf("expected cross-origin websocket to be denied by default")
+	}
+}
+
+func TestIsWebSocketOriginAllowed_DevelopmentAllowsCrossOrigin(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+
+	req := httptest.NewRequest(http.MethodGet, "http://api.otter.camp/ws", nil)
+	req.Host = "api.otter.camp"
+	req.Header.Set("Origin", "https://evil.example")
+
+	if !isWebSocketOriginAllowed(req) {
+		t.Fatalf("expected development mode to allow cross-origin websocket")
+	}
+}
+
+func TestIsWebSocketOriginAllowed_EmptyAppEnvAllowsCrossOrigin(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+
+	req := httptest.NewRequest(http.MethodGet, "http://api.otter.camp/ws", nil)
+	req.Host = "api.otter.camp"
+	req.Header.Set("Origin", "https://evil.example")
+
+	if !isWebSocketOriginAllowed(req) {
+		t.Fatalf("expected empty APP_ENV to allow cross-origin websocket")
 	}
 }
 
