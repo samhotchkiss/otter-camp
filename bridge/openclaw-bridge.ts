@@ -136,6 +136,15 @@ interface OpenClawCronJobSnapshot {
   enabled: boolean;
 }
 
+interface BridgeWorkflowProjectSnapshot {
+  id: string;
+  name: string;
+  workflow_enabled?: boolean;
+  workflow_schedule?: unknown;
+  workflow_template?: unknown;
+  workflow_agent_id?: string;
+}
+
 interface OpenClawProcessSnapshot {
   id: string;
   command?: string;
@@ -391,6 +400,8 @@ const progressLogLineHashOrder: string[] = [];
 let progressLogByteOffset = 0;
 let progressLogOffsetInitialized = false;
 let previousSessionsByKey = new Map<string, OpenClawSession>();
+const previousCronLastRunByID = new Map<string, string>();
+let cronRunDetectionInitialized = false;
 const queuedActivityEventsByOrg = new Map<string, BridgeAgentActivityEvent[]>();
 const queuedActivityEventIDs = new Set<string>();
 const deliveredActivityEventIDs = new Set<string>();
@@ -2588,6 +2599,12 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   if (!response.ok) {
     throw new Error(`sync push failed: ${response.status} ${response.statusText}`);
   }
+
+  try {
+    await syncWorkflowProjectsFromCronJobs(cronJobs);
+  } catch (err) {
+    console.error('[bridge] workflow project cron sync failed:', err);
+  }
 }
 
 async function pullDispatchQueueJobs(limit = 50): Promise<DispatchQueueJob[]> {
@@ -3017,6 +3034,89 @@ function flattenSchedule(schedule: unknown): string | undefined {
   return undefined;
 }
 
+function parseDurationStringToMs(value: string): number | undefined {
+  const match = /^(\d+)\s*(ms|s|m|h)$/i.exec(value.trim());
+  if (!match) return undefined;
+  const amount = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(amount) || amount <= 0) return undefined;
+  const unit = match[2].toLowerCase();
+  if (unit === 'ms') return amount;
+  if (unit === 's') return amount * 1000;
+  if (unit === 'm') return amount * 60_000;
+  return amount * 3_600_000;
+}
+
+function splitCronExprAndTZ(value: string): { expr: string; tz?: string } {
+  const trimmed = value.trim();
+  const tzMatch = /^(.*)\(([^)]+)\)\s*$/.exec(trimmed);
+  if (tzMatch) {
+    const expr = tzMatch[1].trim();
+    const tz = tzMatch[2].trim();
+    return { expr, ...(tz ? { tz } : {}) };
+  }
+  return { expr: trimmed };
+}
+
+export function shouldTreatAsSystemWorkflow(name: string): boolean {
+  const lower = name.toLowerCase();
+  return (
+    lower.includes('heartbeat') ||
+    lower.includes('memory extract') ||
+    lower.includes('health sweep') ||
+    lower.includes('github dispatch')
+  );
+}
+
+export function workflowTemplateForCronJob(job: OpenClawCronJobSnapshot): Record<string, unknown> {
+  const name = getTrimmedString(job.name) || getTrimmedString(job.id) || 'Workflow';
+  const pipeline = shouldTreatAsSystemWorkflow(name) ? 'none' : 'auto_close';
+  return {
+    title_pattern: `${name} — {{datetime}}`,
+    body: name,
+    priority: 'P3',
+    labels: ['automated'],
+    auto_close: pipeline !== 'standard',
+    pipeline,
+  };
+}
+
+export function cronJobToWorkflowSchedule(job: OpenClawCronJobSnapshot): Record<string, unknown> {
+  const schedule = getTrimmedString(job.schedule);
+  if (!schedule) {
+    return { kind: 'manual', cron_id: getTrimmedString(job.id) };
+  }
+  if (schedule.startsWith('at:')) {
+    return { kind: 'at', at: schedule.slice(3).trim(), cron_id: getTrimmedString(job.id) };
+  }
+  const everyMs = parseDurationStringToMs(schedule);
+  if (everyMs !== undefined) {
+    return { kind: 'every', everyMs, cron_id: getTrimmedString(job.id) };
+  }
+  const { expr, tz } = splitCronExprAndTZ(schedule);
+  return {
+    kind: 'cron',
+    expr,
+    ...(tz ? { tz } : {}),
+    cron_id: getTrimmedString(job.id),
+  };
+}
+
+function normalizeWorkflowProjectName(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+export function projectMatchesCronJob(project: BridgeWorkflowProjectSnapshot, job: OpenClawCronJobSnapshot): boolean {
+  const cronID = getTrimmedString(job.id);
+  const projectSchedule = asRecord(project.workflow_schedule);
+  const scheduleCronID = getTrimmedString(projectSchedule?.cron_id);
+  if (cronID && scheduleCronID && cronID === scheduleCronID) {
+    return true;
+  }
+  const projectName = normalizeWorkflowProjectName(project.name);
+  const jobName = normalizeWorkflowProjectName(getTrimmedString(job.name) || getTrimmedString(job.id));
+  return projectName !== '' && projectName === jobName;
+}
+
 /**
  * Extract payload.kind from a nested payload object.
  */
@@ -3185,6 +3285,163 @@ async function fetchProcessesSnapshot(): Promise<OpenClawProcessSnapshot[]> {
     }
   }
   return [];
+}
+
+function buildOtterCampAuthHeaders(contentTypeJSON = false): Record<string, string> {
+  const headers: Record<string, string> = {
+    ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    ...(OTTERCAMP_ORG_ID ? { 'X-Org-ID': OTTERCAMP_ORG_ID } : {}),
+  };
+  if (contentTypeJSON) {
+    headers['Content-Type'] = 'application/json';
+  }
+  return headers;
+}
+
+async function fetchWorkflowProjectsSnapshot(): Promise<BridgeWorkflowProjectSnapshot[]> {
+  const url = new URL('/api/projects', OTTERCAMP_URL);
+  url.searchParams.set('workflow', 'true');
+  const response = await fetchWithRetry(
+    url.toString(),
+    {
+      method: 'GET',
+      headers: buildOtterCampAuthHeaders(),
+    },
+    'list workflow projects',
+  );
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => '')).slice(0, 240);
+    throw new Error(`workflow project list failed: ${response.status} ${response.statusText} ${detail}`.trim());
+  }
+  const payload = (await response.json().catch(() => ({}))) as { projects?: BridgeWorkflowProjectSnapshot[] };
+  if (!Array.isArray(payload.projects)) {
+    return [];
+  }
+  return payload.projects;
+}
+
+async function createWorkflowProjectFromCron(job: OpenClawCronJobSnapshot): Promise<BridgeWorkflowProjectSnapshot> {
+  const name = getTrimmedString(job.name) || getTrimmedString(job.id) || 'Workflow';
+  const schedule = cronJobToWorkflowSchedule(job);
+  const template = workflowTemplateForCronJob(job);
+  const response = await fetchWithRetry(
+    `${OTTERCAMP_URL}/api/projects`,
+    {
+      method: 'POST',
+      headers: buildOtterCampAuthHeaders(true),
+      body: JSON.stringify({
+        name,
+        description: `Imported from OpenClaw cron job ${getTrimmedString(job.id) || name}`,
+        workflow_enabled: job.enabled,
+        workflow_schedule: schedule,
+        workflow_template: template,
+      }),
+    },
+    `create workflow project for cron ${job.id}`,
+  );
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => '')).slice(0, 240);
+    throw new Error(`workflow project create failed: ${response.status} ${response.statusText} ${detail}`.trim());
+  }
+  return (await response.json()) as BridgeWorkflowProjectSnapshot;
+}
+
+async function patchWorkflowProjectFromCron(
+  projectID: string,
+  job: OpenClawCronJobSnapshot,
+): Promise<void> {
+  const response = await fetchWithRetry(
+    `${OTTERCAMP_URL}/api/projects/${encodeURIComponent(projectID)}`,
+    {
+      method: 'PATCH',
+      headers: buildOtterCampAuthHeaders(true),
+      body: JSON.stringify({
+        workflow_enabled: job.enabled,
+        workflow_schedule: cronJobToWorkflowSchedule(job),
+      }),
+    },
+    `patch workflow project ${projectID} from cron ${job.id}`,
+  );
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => '')).slice(0, 240);
+    throw new Error(`workflow project patch failed: ${response.status} ${response.statusText} ${detail}`.trim());
+  }
+}
+
+async function triggerWorkflowRun(projectID: string, job: OpenClawCronJobSnapshot): Promise<void> {
+  const response = await fetchWithRetry(
+    `${OTTERCAMP_URL}/api/projects/${encodeURIComponent(projectID)}/runs/trigger`,
+    {
+      method: 'POST',
+      headers: buildOtterCampAuthHeaders(),
+    },
+    `trigger workflow run for cron ${job.id}`,
+  );
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => '')).slice(0, 240);
+    throw new Error(`workflow trigger failed: ${response.status} ${response.statusText} ${detail}`.trim());
+  }
+}
+
+async function syncWorkflowProjectsFromCronJobs(cronJobs: OpenClawCronJobSnapshot[]): Promise<void> {
+  if (cronJobs.length === 0) {
+    return;
+  }
+
+  let workflowProjects = await fetchWorkflowProjectsSnapshot();
+  const wasInitialized = cronRunDetectionInitialized;
+
+  for (const job of cronJobs) {
+    const jobID = getTrimmedString(job.id);
+    if (!jobID) {
+      continue;
+    }
+
+    let project = workflowProjects.find((candidate) => projectMatchesCronJob(candidate, job));
+    if (!project) {
+      try {
+        project = await createWorkflowProjectFromCron(job);
+        workflowProjects.push(project);
+        console.log(`[bridge] created workflow project ${project.id} for cron job ${jobID}`);
+      } catch (err) {
+        console.error(`[bridge] failed to create workflow project for cron ${jobID}:`, err);
+      }
+    }
+
+    if (project) {
+      try {
+        await patchWorkflowProjectFromCron(project.id, job);
+      } catch (err) {
+        console.error(`[bridge] failed to patch workflow project ${project.id} from cron ${jobID}:`, err);
+      }
+    }
+
+    const currentLastRun = getTrimmedString(job.last_run_at);
+    const previousLastRun = previousCronLastRunByID.get(jobID) || '';
+    let shouldUpdateLastRun = true;
+
+    if (wasInitialized && project && currentLastRun && currentLastRun !== previousLastRun) {
+      const dedupeRunID = `cron:${jobID}:${currentLastRun}`;
+      if (!deliveredRunIDs.has(dedupeRunID)) {
+        try {
+          await triggerWorkflowRun(project.id, job);
+          markRunIDDelivered(dedupeRunID);
+          console.log(`[bridge] triggered workflow run for cron ${jobID} via project ${project.id}`);
+        } catch (err) {
+          shouldUpdateLastRun = false;
+          console.error(`[bridge] failed to trigger workflow run for cron ${jobID}:`, err);
+        }
+      }
+    }
+
+    if (shouldUpdateLastRun) {
+      previousCronLastRunByID.set(jobID, currentLastRun);
+    }
+  }
+
+  if (!cronRunDetectionInitialized) {
+    cronRunDetectionInitialized = true;
+  }
 }
 
 export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatchEvent): Promise<void> {
