@@ -145,24 +145,33 @@ describe("ProjectIssuesList", () => {
     });
   });
 
-  it("enforces default open filter visibility for mixed API payloads", async () => {
+  it("requests default open filter from API and renders server-filtered rows", async () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/agents")) {
+      const raw = String(input);
+      const url = new URL(raw);
+      if (url.pathname.includes("/api/agents")) {
         return mockJSONResponse({ agents: [] });
+      }
+      const state = url.searchParams.get("state");
+      if (state === "open") {
+        return mockJSONResponse({
+          items: [
+            {
+              id: "issue-open-cli",
+              issue_number: 77,
+              title: "CLI-created open issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: null,
+              last_activity_at: "2026-02-08T07:00:00Z",
+            } satisfies MockIssue,
+          ],
+          total: 1,
+        });
       }
       return mockJSONResponse({
         items: [
-          {
-            id: "issue-open-cli",
-            issue_number: 77,
-            title: "CLI-created open issue",
-            state: "open",
-            origin: "local",
-            kind: "issue",
-            owner_agent_id: null,
-            last_activity_at: "2026-02-08T07:00:00Z",
-          } satisfies MockIssue,
           {
             id: "issue-closed",
             issue_number: 78,
@@ -182,6 +191,12 @@ describe("ProjectIssuesList", () => {
 
     expect(await screen.findByText("#77 CLI-created open issue")).toBeInTheDocument();
     expect(screen.queryByText("#78 Closed issue")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("state=open"),
+        expect.any(Object),
+      );
+    });
   });
 
   it("renders loading and empty states", async () => {
