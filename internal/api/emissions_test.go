@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -282,6 +284,41 @@ func TestEmissionWebsocketBroadcast(t *testing.T) {
 	require.Equal(t, ws.MessageEmissionReceived, event.Type)
 	require.Equal(t, "em-ws-1", event.Emission.ID)
 	require.Equal(t, "agent-1", event.Emission.SourceID)
+}
+
+func TestBroadcastEmissionEventMarshalErrorLogsWarning(t *testing.T) {
+	broadcaster := &fakeEmissionBroadcaster{}
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	emission := Emission{
+		ID:         "em-marshal-1",
+		OrgID:      orgID,
+		SourceType: "agent",
+		SourceID:   "agent-1",
+		Kind:       "status",
+		Summary:    "marshal failure path",
+		Timestamp:  time.Now().UTC(),
+	}
+
+	originalMarshal := emissionEventJSONMarshal
+	emissionEventJSONMarshal = func(v any) ([]byte, error) {
+		return nil, errors.New("marshal boom")
+	}
+	t.Cleanup(func() {
+		emissionEventJSONMarshal = originalMarshal
+	})
+
+	var logs bytes.Buffer
+	originalLogOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() {
+		log.SetOutput(originalLogOutput)
+	})
+
+	broadcastEmissionEvent(broadcaster, orgID, emission)
+
+	require.Empty(t, broadcaster.orgBroadcasts)
+	require.Contains(t, logs.String(), "failed to marshal emission broadcast payload")
+	require.Contains(t, logs.String(), "marshal boom")
 }
 
 func TestEmissionHandlerIngestBatchSizeLimit(t *testing.T) {

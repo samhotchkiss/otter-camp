@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ const (
 )
 
 var emissionIDSequence uint64
+var emissionEventJSONMarshal = json.Marshal
 
 type Emission struct {
 	ID         string            `json:"id"`
@@ -362,11 +364,18 @@ func broadcastEmissionEvent(hub emissionBroadcaster, orgID string, emission Emis
 	if hub == nil {
 		return
 	}
-	payload, err := json.Marshal(emissionReceivedEvent{
+	payload, err := emissionEventJSONMarshal(emissionReceivedEvent{
 		Type:     ws.MessageEmissionReceived,
 		Emission: emission,
 	})
 	if err != nil {
+		log.Printf(
+			"warning: failed to marshal emission broadcast payload: org_id=%s source_type=%s source_id=%s err=%v",
+			orgID,
+			emission.SourceType,
+			emission.SourceID,
+			err,
+		)
 		return
 	}
 	hub.Broadcast(orgID, payload)
