@@ -22,18 +22,19 @@ type ProjectsHandler struct {
 }
 
 type projectAPIResponse struct {
-	ID             string        `json:"id"`
-	OrgID          string        `json:"org_id,omitempty"`
-	Name           string        `json:"name"`
-	Description    string        `json:"description,omitempty"`
-	RepoURL        string        `json:"repo_url,omitempty"`
-	Status         string        `json:"status"`
-	Labels         []store.Label `json:"labels"`
-	Lead           string        `json:"lead,omitempty"`
-	PrimaryAgentID *string       `json:"primary_agent_id,omitempty"`
-	CreatedAt      string        `json:"created_at,omitempty"`
-	TaskCount      int           `json:"taskCount"`
-	CompletedCount int           `json:"completedCount"`
+	ID                 string        `json:"id"`
+	OrgID              string        `json:"org_id,omitempty"`
+	Name               string        `json:"name"`
+	Description        string        `json:"description,omitempty"`
+	RepoURL            string        `json:"repo_url,omitempty"`
+	RequireHumanReview bool          `json:"require_human_review"`
+	Status             string        `json:"status"`
+	Labels             []store.Label `json:"labels"`
+	Lead               string        `json:"lead,omitempty"`
+	PrimaryAgentID     *string       `json:"primary_agent_id,omitempty"`
+	CreatedAt          string        `json:"created_at,omitempty"`
+	TaskCount          int           `json:"taskCount"`
+	CompletedCount     int           `json:"completedCount"`
 }
 
 // Demo projects for when database is unavailable
@@ -210,7 +211,7 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 		var createdAt interface{}
 		if usePrimaryAgent {
 			var primaryAgentID sql.NullString
-			if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount); err != nil {
+			if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.RequireHumanReview, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount); err != nil {
 				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to parse projects"})
 				return
 			}
@@ -218,7 +219,7 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 				p.PrimaryAgentID = &primaryAgentID.String
 			}
 		} else {
-			if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount); err != nil {
+			if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.RequireHumanReview, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount); err != nil {
 				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to parse projects"})
 				return
 			}
@@ -300,13 +301,13 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if usePrimaryAgent {
 		var primaryAgentID sql.NullString
 		err = h.DB.QueryRowContext(r.Context(), getProjectQuery(true), projectID, workspaceID).Scan(
-			&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount)
+			&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.RequireHumanReview, &p.Status, &createdAt, &primaryAgentID, &p.Lead, &p.TaskCount, &p.CompletedCount)
 		if primaryAgentID.Valid {
 			p.PrimaryAgentID = &primaryAgentID.String
 		}
 	} else {
 		err = h.DB.QueryRowContext(r.Context(), getProjectQuery(false), projectID, workspaceID).Scan(
-			&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount)
+			&p.ID, &p.OrgID, &p.Name, &p.Description, &p.RepoURL, &p.RequireHumanReview, &p.Status, &createdAt, &p.TaskCount, &p.CompletedCount)
 	}
 
 	if err != nil {
@@ -427,10 +428,11 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
-		Name        *string `json:"name"`
-		Description *string `json:"description"`
-		Status      *string `json:"status"`
-		RepoURL     *string `json:"repo_url"`
+		Name               *string `json:"name"`
+		Description        *string `json:"description"`
+		Status             *string `json:"status"`
+		RepoURL            *string `json:"repo_url"`
+		RequireHumanReview *bool   `json:"requireHumanReview"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -455,10 +457,11 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updateInput := store.UpdateProjectInput{
-		Name:        existing.Name,
-		Description: existing.Description,
-		Status:      existing.Status,
-		RepoURL:     existing.RepoURL,
+		Name:               existing.Name,
+		Description:        existing.Description,
+		Status:             existing.Status,
+		RepoURL:            existing.RepoURL,
+		RequireHumanReview: existing.RequireHumanReview,
 	}
 
 	if input.Name != nil {
@@ -492,6 +495,9 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		} else {
 			updateInput.RepoURL = &repoURL
 		}
+	}
+	if input.RequireHumanReview != nil {
+		updateInput.RequireHumanReview = *input.RequireHumanReview
 	}
 
 	updated, err := h.Store.Update(ctx, projectID, updateInput)
@@ -698,7 +704,7 @@ func parseProjectLabelFilterIDs(rawValues []string) ([]string, error) {
 func listProjectsQuery(usePrimaryAgent bool) string {
 	if usePrimaryAgent {
 		return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-			COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+			COALESCE(p.repo_url, '') as repo_url, COALESCE(p.require_human_review, FALSE) as require_human_review, COALESCE(p.status, 'active') as status, p.created_at,
 			p.primary_agent_id, COALESCE(a.display_name, '') as lead,
 			COALESCE(t.task_count, 0) as task_count,
 			COALESCE(t.completed_count, 0) as completed_count
@@ -716,7 +722,7 @@ func listProjectsQuery(usePrimaryAgent bool) string {
 	}
 
 	return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.require_human_review, FALSE) as require_human_review, COALESCE(p.status, 'active') as status, p.created_at,
 		COALESCE(t.task_count, 0) as task_count,
 		COALESCE(t.completed_count, 0) as completed_count
 		FROM projects p
@@ -734,7 +740,7 @@ func listProjectsQuery(usePrimaryAgent bool) string {
 func getProjectQuery(usePrimaryAgent bool) string {
 	if usePrimaryAgent {
 		return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-			COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+			COALESCE(p.repo_url, '') as repo_url, COALESCE(p.require_human_review, FALSE) as require_human_review, COALESCE(p.status, 'active') as status, p.created_at,
 			p.primary_agent_id, COALESCE(a.display_name, '') as lead,
 			COALESCE(t.task_count, 0) as task_count,
 			COALESCE(t.completed_count, 0) as completed_count
@@ -752,7 +758,7 @@ func getProjectQuery(usePrimaryAgent bool) string {
 	}
 
 	return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.status, 'active') as status, p.created_at,
+		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.require_human_review, FALSE) as require_human_review, COALESCE(p.status, 'active') as status, p.created_at,
 		COALESCE(t.task_count, 0) as task_count,
 		COALESCE(t.completed_count, 0) as completed_count
 		FROM projects p

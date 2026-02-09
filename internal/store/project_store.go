@@ -13,17 +13,18 @@ import (
 
 // Project represents a project entity.
 type Project struct {
-	ID             string    `json:"id"`
-	OrgID          string    `json:"org_id"`
-	Name           string    `json:"name"`
-	Description    *string   `json:"description,omitempty"`
-	Status         string    `json:"status"`
-	RepoURL        *string   `json:"repo_url,omitempty"`
-	Labels         []Label   `json:"labels,omitempty"`
-	PrimaryAgentID *string   `json:"primary_agent_id,omitempty"`
-	LocalRepoPath  *string   `json:"local_repo_path,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	OrgID              string    `json:"org_id"`
+	Name               string    `json:"name"`
+	Description        *string   `json:"description,omitempty"`
+	Status             string    `json:"status"`
+	RepoURL            *string   `json:"repo_url,omitempty"`
+	RequireHumanReview bool      `json:"require_human_review"`
+	Labels             []Label   `json:"labels,omitempty"`
+	PrimaryAgentID     *string   `json:"primary_agent_id,omitempty"`
+	LocalRepoPath      *string   `json:"local_repo_path,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // ProjectStore provides workspace-isolated access to projects.
@@ -36,7 +37,7 @@ func NewProjectStore(db *sql.DB) *ProjectStore {
 	return &ProjectStore{db: db}
 }
 
-const projectSelectColumns = "id, org_id, name, description, status, repo_url, local_repo_path, created_at, updated_at"
+const projectSelectColumns = "id, org_id, name, description, status, repo_url, require_human_review, local_repo_path, created_at, updated_at"
 
 // GetByID retrieves a project by ID within the current workspace.
 func (s *ProjectStore) GetByID(ctx context.Context, id string) (*Project, error) {
@@ -227,10 +228,11 @@ func (s *ProjectStore) Create(ctx context.Context, input CreateProjectInput) (*P
 
 // UpdateProjectInput defines the input for updating a project.
 type UpdateProjectInput struct {
-	Name        string
-	Description *string
-	Status      string
-	RepoURL     *string
+	Name               string
+	Description        *string
+	Status             string
+	RepoURL            *string
+	RequireHumanReview bool
 }
 
 // Update updates a project in the current workspace.
@@ -247,8 +249,8 @@ func (s *ProjectStore) Update(ctx context.Context, id string, input UpdateProjec
 	defer conn.Close()
 
 	query := `UPDATE projects SET
-		name = $1, description = $2, status = $3, repo_url = $4
-	WHERE id = $5 AND org_id = $6
+		name = $1, description = $2, status = $3, repo_url = $4, require_human_review = $5
+	WHERE id = $6 AND org_id = $7
 	RETURNING ` + projectSelectColumns
 
 	args := []interface{}{
@@ -256,6 +258,7 @@ func (s *ProjectStore) Update(ctx context.Context, id string, input UpdateProjec
 		nullableString(input.Description),
 		input.Status,
 		nullableString(input.RepoURL),
+		input.RequireHumanReview,
 		id,
 		workspaceID,
 	}
@@ -313,6 +316,7 @@ func scanProject(scanner interface{ Scan(...any) error }) (Project, error) {
 		&description,
 		&project.Status,
 		&repoURL,
+		&project.RequireHumanReview,
 		&localRepoPath,
 		&project.CreatedAt,
 		&project.UpdatedAt,
