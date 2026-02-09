@@ -758,7 +758,7 @@ func (h *AdminAgentsHandler) writeAgentFilesResolveError(w http.ResponseWriter, 
 func rowToAgentSummary(row adminAgentRow) adminAgentSummary {
 	status := normalizeWorkspaceAgentStatus(row.WorkspaceStatus)
 	if row.SyncUpdatedAt.Valid {
-		status = deriveAgentStatus(row.SyncUpdatedAt.Time.UTC(), int(row.ContextTokens.Int64))
+		status = deriveAgentStatus(row.SyncUpdatedAt.Time.UTC(), int(row.TotalTokens.Int64))
 	}
 
 	name := strings.TrimSpace(row.SyncName.String)

@@ -201,7 +201,7 @@ func (h *AdminConnectionsHandler) loadSessions(_ context.Context) []adminConnect
 	if h.DB == nil {
 		sessions := make([]adminConnectionsSession, 0, len(memoryAgentStates))
 		for _, state := range memoryAgentStates {
-			derivedStatus := deriveAgentStatus(state.UpdatedAt, state.ContextTokens)
+			derivedStatus := deriveAgentStatus(state.UpdatedAt, state.TotalTokens)
 			sessions = append(sessions, adminConnectionsSession{
 				ID:            state.ID,
 				Name:          state.Name,
@@ -213,7 +213,7 @@ func (h *AdminConnectionsHandler) loadSessions(_ context.Context) []adminConnect
 				SessionKey:    state.SessionKey,
 				LastSeen:      state.LastSeen,
 				UpdatedAt:     state.UpdatedAt,
-				Stalled:       isSessionStalled(state.ContextTokens, state.UpdatedAt),
+				Stalled:       isSessionStalled(state.TotalTokens, state.UpdatedAt),
 			})
 		}
 		sort.Slice(sessions, func(i, j int) bool {
@@ -273,8 +273,8 @@ func (h *AdminConnectionsHandler) loadSessions(_ context.Context) []adminConnect
 			if lastSeen.Valid {
 				session.LastSeen = lastSeen.String
 			}
-			session.Status = deriveAgentStatus(session.UpdatedAt, session.ContextTokens)
-		session.Stalled = isSessionStalled(session.ContextTokens, session.UpdatedAt)
+			session.Status = deriveAgentStatus(session.UpdatedAt, session.TotalTokens)
+		session.Stalled = isSessionStalled(session.TotalTokens, session.UpdatedAt)
 		out = append(out, session)
 	}
 	return out
