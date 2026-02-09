@@ -104,7 +104,7 @@ function Input({
 }: InputProps) {
   return (
     <label className="block">
-      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+      <span className="text-sm font-medium text-[var(--text)]">
         {label}
       </span>
       <input
@@ -114,7 +114,7 @@ function Input({
         placeholder={placeholder}
         disabled={disabled}
         readOnly={readOnly}
-        className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-emerald-500 dark:disabled:bg-slate-900"
+        className="mt-1 block w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-[var(--text)] shadow-sm transition placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:cursor-not-allowed disabled:bg-[var(--surface-alt)] disabled:text-[var(--text-muted)]"
       />
     </label>
   );
@@ -136,20 +136,20 @@ function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
         aria-checked={checked}
         disabled={disabled}
         onClick={() => onChange(!checked)}
-        className={`relative h-6 w-11 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-slate-900 ${
+        className={`relative h-6 w-11 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-50 ${
           checked
             ? "bg-emerald-500"
-            : "bg-slate-200 dark:bg-slate-700"
+            : "bg-[var(--border)]"
         }`}
       >
         <span
-          className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+          className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-[var(--surface)] shadow-sm transition-transform ${
             checked ? "translate-x-5" : "translate-x-0"
           }`}
         />
       </button>
       {label && (
-        <span className="text-sm text-slate-700 dark:text-slate-300">
+        <span className="text-sm text-[var(--text)]">
           {label}
         </span>
       )}
@@ -175,13 +175,13 @@ function Button({
   type = "button",
 }: ButtonProps) {
   const baseClasses =
-    "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-slate-900";
+    "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-50";
 
   const variantClasses = {
     primary:
       "bg-emerald-500 text-white hover:bg-emerald-600 focus:ring-emerald-500",
     secondary:
-      "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus:ring-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700",
+      "border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-alt)] focus:ring-[var(--accent)]",
     danger:
       "bg-red-500 text-white hover:bg-red-600 focus:ring-red-500",
   };
@@ -228,8 +228,8 @@ type SectionCardProps = {
 
 function SectionCard({ title, description, icon, children }: SectionCardProps) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
-      <div className="border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+    <section className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm backdrop-blur">
+      <div className="border-b border-[var(--border)] px-6 py-4">
         <div className="flex items-center gap-3">
           {icon && (
             <span className="text-2xl" aria-hidden="true">
@@ -237,11 +237,11 @@ function SectionCard({ title, description, icon, children }: SectionCardProps) {
             </span>
           )}
           <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+            <h2 className="text-lg font-semibold text-[var(--text)]">
               {title}
             </h2>
             {description && (
-              <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+              <p className="mt-0.5 text-sm text-[var(--text-muted)]">
                 {description}
               </p>
             )}
