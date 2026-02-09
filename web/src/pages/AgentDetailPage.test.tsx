@@ -17,6 +17,7 @@ describe("AgentDetailPage", () => {
           JSON.stringify({
             agent: {
               id: "main",
+              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
               name: "Main",
               status: "online",
             },
@@ -60,9 +61,7 @@ describe("AgentDetailPage", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
-
-    expect(await screen.findByTestId("agent-activity-timeline")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Activity" }));
     expect(await screen.findByText("Ran codex-progress-summary")).toBeInTheDocument();
     expect(screen.getByText("Cron")).toBeInTheDocument();
   });
@@ -77,6 +76,7 @@ describe("AgentDetailPage", () => {
           JSON.stringify({
             agent: {
               id: "main",
+              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
               name: "Main",
               status: "online",
             },
@@ -100,8 +100,7 @@ describe("AgentDetailPage", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
-
+    fireEvent.click(await screen.findByRole("button", { name: "Activity" }));
     expect(await screen.findByText("No activity events for this agent yet.")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Status"), {

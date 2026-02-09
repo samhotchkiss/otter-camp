@@ -242,7 +242,10 @@ export default function AgentDetailPage() {
       )}
 
       {activeTab === "memory" && (
-        <AgentMemoryBrowser agentID={id} />
+        <AgentMemoryBrowser
+          agentID={id}
+          workspaceAgentID={agentDetail?.agent?.workspace_agent_id}
+        />
       )}
 
       {activeTab === "activity" && (

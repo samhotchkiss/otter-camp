@@ -7,87 +7,102 @@ describe("AgentMemoryBrowser", () => {
     vi.restoreAllMocks();
   });
 
-  it("loads memory files and previews selected date", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  it("loads memory entries and supports creating a new memory entry", async () => {
+    let loadCount = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/api/admin/agents/main/memory/2026-02-08")) {
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url.includes("/api/agents/11111111-1111-1111-1111-111111111111/memory") && method === "GET") {
+        loadCount += 1;
         return new Response(
           JSON.stringify({
-            ref: "HEAD",
-            path: "/memory/2026-02-08.md",
-            content: "# Memory\n- Investigated queue latency",
-            encoding: "utf-8",
-            size: 37,
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/admin/agents/main/memory/2026-02-07")) {
-        return new Response(
-          JSON.stringify({
-            ref: "HEAD",
-            path: "/memory/2026-02-07.md",
-            content: "# Memory\n- Reviewed deploy logs",
-            encoding: "utf-8",
-            size: 31,
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/admin/agents/main/memory")) {
-        return new Response(
-          JSON.stringify({
-            ref: "HEAD",
-            path: "/memory",
-            entries: [
-              { name: "2026-02-08.md", type: "file", path: "2026-02-08.md" },
-              { name: "2026-02-07.md", type: "file", path: "2026-02-07.md" },
+            agent_id: "11111111-1111-1111-1111-111111111111",
+            daily: [
+              {
+                id: "daily-1",
+                agent_id: "11111111-1111-1111-1111-111111111111",
+                kind: "daily",
+                date: loadCount > 1 ? "2026-02-09" : "2026-02-08",
+                content: loadCount > 1 ? "Shipped cutover checklist." : "Investigated queue latency",
+                created_at: "2026-02-09T00:00:00Z",
+                updated_at: "2026-02-09T00:00:00Z",
+              },
+            ],
+            long_term: [
+              {
+                id: "lt-1",
+                agent_id: "11111111-1111-1111-1111-111111111111",
+                kind: "long_term",
+                content: "Prefers short standups.",
+                created_at: "2026-02-08T00:00:00Z",
+                updated_at: "2026-02-08T00:00:00Z",
+              },
             ],
           }),
           { status: 200 },
         );
       }
-      throw new Error(`unexpected url: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    render(<AgentMemoryBrowser agentID="main" />);
-
-    expect(await screen.findByRole("button", { name: "2026-02-08.md" })).toBeInTheDocument();
-    await waitFor(() => {
-      const textarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
-      expect(textarea.value).toContain("Investigated queue latency");
-    });
-    expect(screen.getByText("Ref: HEAD")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "2026-02-07.md" }));
-    await waitFor(() => {
-      const textarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
-      expect(textarea.value).toContain("Reviewed deploy logs");
-    });
-  });
-
-  it("renders an empty state when memory files are absent", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/admin/agents/main/memory")) {
-        return new Response(JSON.stringify({ ref: "HEAD", path: "/memory", entries: [] }), { status: 200 });
+      if (url.includes("/api/agents/11111111-1111-1111-1111-111111111111/memory") && method === "POST") {
+        return new Response(
+          JSON.stringify({ id: "daily-new", kind: "daily", date: "2026-02-09", content: "Shipped cutover checklist." }),
+          { status: 201 },
+        );
       }
       throw new Error(`unexpected url: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    render(<AgentMemoryBrowser agentID="main" />);
-    expect(await screen.findByText("No memory files found for this agent.")).toBeInTheDocument();
+    render(<AgentMemoryBrowser agentID="main" workspaceAgentID="11111111-1111-1111-1111-111111111111" />);
+
+    expect(await screen.findByText("Investigated queue latency")).toBeInTheDocument();
+    expect(screen.getByText("Prefers short standups.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "daily" } });
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-02-09" } });
+    fireEvent.change(screen.getByLabelText("Memory Content"), { target: { value: "Shipped cutover checklist." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Memory" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([request, requestInit]) => {
+          if (!String(request).includes("/api/agents/11111111-1111-1111-1111-111111111111/memory")) {
+            return false;
+          }
+          const method = String(requestInit?.method || "GET").toUpperCase();
+          if (method !== "POST") {
+            return false;
+          }
+          const body = JSON.parse(String(requestInit?.body || "{}")) as Record<string, unknown>;
+          return body.kind === "daily" && body.date === "2026-02-09" && body.content === "Shipped cutover checklist.";
+        }),
+      ).toBe(true);
+    });
+
+    expect(await screen.findByText("Saved memory entry.")).toBeInTheDocument();
+    expect(await screen.findByText("Shipped cutover checklist.")).toBeInTheDocument();
+  });
+
+  it("renders an empty state when memory entries are absent", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/agents/11111111-1111-1111-1111-111111111111/memory")) {
+        return new Response(JSON.stringify({ agent_id: "11111111-1111-1111-1111-111111111111", daily: [], long_term: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<AgentMemoryBrowser agentID="main" workspaceAgentID="11111111-1111-1111-1111-111111111111" />);
+    expect(await screen.findByText("No memory entries for this agent yet.")).toBeInTheDocument();
   });
 
   it("renders fetch errors", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    render(<AgentMemoryBrowser agentID="main" />);
+    render(<AgentMemoryBrowser agentID="main" workspaceAgentID="11111111-1111-1111-1111-111111111111" />);
     await waitFor(() => {
-      expect(screen.getByText(/Failed to load memory files/)).toBeInTheDocument();
+      expect(screen.getByText(/Failed to load memory entries/)).toBeInTheDocument();
     });
   });
 });

@@ -25,6 +25,19 @@ type AgentBlobResponse = {
   size?: number;
 };
 
+type ProjectsResponse = {
+  projects?: Array<{
+    id?: string;
+    name?: string;
+  }>;
+};
+
+type ProjectCommitCreateResponse = {
+  commit?: {
+    sha?: string;
+  };
+};
+
 function encodePathForURL(path: string): string {
   return path
     .split("/")
@@ -55,8 +68,12 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
   const [filesRef, setFilesRef] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [blob, setBlob] = useState<AgentBlobResponse | null>(null);
+  const [draftContent, setDraftContent] = useState<string>("");
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [isLoadingBlob, setIsLoadingBlob] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -146,6 +163,80 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
 
   const content = useMemo(() => decodeBlobContent(blob), [blob]);
 
+  useEffect(() => {
+    setDraftContent(content);
+    setSaveError(null);
+  }, [content, selectedPath]);
+
+  const getEditorContent = (): string => {
+    const source = document.querySelector('[data-testid="source-textarea"]');
+    if (source instanceof HTMLTextAreaElement) {
+      return source.value;
+    }
+    return draftContent;
+  };
+
+  const handleSave = async () => {
+    if (!agentID || !selectedPath) {
+      return;
+    }
+    setIsSaving(true);
+    setSaveError(null);
+    setSaveMessage(null);
+    const nextContent = getEditorContent();
+
+    try {
+      const projectsResponse = await fetch(`${API_URL}/api/projects`);
+      if (!projectsResponse.ok) {
+        throw new Error(`Failed to load projects (${projectsResponse.status})`);
+      }
+      const projectsPayload = (await projectsResponse.json()) as ProjectsResponse;
+      const projects = Array.isArray(projectsPayload.projects) ? projectsPayload.projects : [];
+      const agentFilesProject = projects.find(
+        (project) => String(project.name || "").trim().toLowerCase() === "agent files",
+      );
+      const projectID = String(agentFilesProject?.id || "").trim();
+      if (!projectID) {
+        throw new Error("Agent Files project is not configured");
+      }
+
+      const commitResponse = await fetch(`${API_URL}/api/projects/${encodeURIComponent(projectID)}/commits`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          path: `/agents/${agentID}/${selectedPath}`,
+          content: nextContent,
+          commit_subject: "Update agent identity file",
+          commit_type: "system",
+        }),
+      });
+      if (!commitResponse.ok) {
+        const payload = (await commitResponse.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error || `Failed to save identity file (${commitResponse.status})`);
+      }
+      const commitPayload = (await commitResponse.json()) as ProjectCommitCreateResponse;
+      const nextRef = String(commitPayload.commit?.sha || "").trim();
+      if (nextRef) {
+        setFilesRef(nextRef);
+      }
+      setBlob((previous) => ({
+        ...(previous || {}),
+        ref: nextRef || previous?.ref || filesRef,
+        content: nextContent,
+        encoding: "utf-8",
+        size: new Blob([nextContent]).size,
+      }));
+      setDraftContent(nextContent);
+      setSaveMessage("Saved identity file.");
+    } catch (saveErr) {
+      setSaveError(saveErr instanceof Error ? saveErr.message : "Failed to save identity file");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   if (isLoadingFiles) {
     return (
       <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--text-muted)]">
@@ -197,12 +288,29 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
           <span className="mx-2">•</span>
           <span>Size: {blob?.size ?? 0} bytes</span>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={!selectedPath || isLoadingBlob || isSaving}
+            className="rounded-lg border border-[#C9A86C] bg-[#C9A86C]/20 px-3 py-1.5 text-xs font-medium text-[#C9A86C] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSaving ? "Saving..." : "Save Identity File"}
+          </button>
+          {saveMessage && <p className="text-xs text-emerald-600">{saveMessage}</p>}
+          {saveError && <p className="text-xs text-rose-500">{saveError}</p>}
+        </div>
         {isLoadingBlob ? (
           <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--text-muted)]">
             Loading file...
           </div>
         ) : (
-          <DocumentWorkspace path={selectedPath} content={content} readOnly />
+          <DocumentWorkspace
+            path={selectedPath}
+            content={draftContent}
+            readOnly={false}
+            onContentChange={setDraftContent}
+          />
         )}
       </div>
     </section>
