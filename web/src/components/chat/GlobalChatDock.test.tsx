@@ -6,6 +6,8 @@ import type { GlobalChatConversation } from "../../contexts/GlobalChatContext";
 const globalChatState = {
   isOpen: true,
   totalUnread: 0,
+  agentNamesByID: new Map<string, string>(),
+  resolveAgentName: (raw: string) => raw,
   conversations: [] as GlobalChatConversation[],
   selectedConversation: null as GlobalChatConversation | null,
   selectedKey: null as string | null,
@@ -26,12 +28,14 @@ vi.mock("./GlobalChatSurface", () => ({
 
 describe("GlobalChatDock", () => {
   it("renders initials from display names in chat list rows", () => {
+    globalChatState.resolveAgentName = (raw: string) =>
+      raw === "avatar-design" ? "Jeff G" : raw;
     globalChatState.conversations = [
       {
         key: "dm:dm_avatar-design",
         type: "dm",
         threadId: "dm_avatar-design",
-        title: "Jeff G",
+        title: "avatar-design",
         contextLabel: "Direct message",
         subtitle: "Agent chat",
         unreadCount: 0,
@@ -59,6 +63,8 @@ describe("GlobalChatDock", () => {
     render(<GlobalChatDock />);
 
     expect(screen.getByTestId("chat-initials-dm:dm_avatar-design")).toHaveTextContent("JG");
+    expect(screen.getAllByText("Jeff G").length).toBeGreaterThan(0);
+    expect(screen.queryByText("avatar-design")).not.toBeInTheDocument();
     expect(screen.getByTestId("chat-initials-project:project-1")).toHaveTextContent("OC");
   });
 });

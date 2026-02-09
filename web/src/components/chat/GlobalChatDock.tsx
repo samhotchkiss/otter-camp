@@ -20,6 +20,8 @@ export default function GlobalChatDock() {
   const {
     isOpen,
     totalUnread,
+    agentNamesByID,
+    resolveAgentName,
     conversations,
     selectedConversation,
     selectedKey,
@@ -78,6 +80,35 @@ export default function GlobalChatDock() {
       </span>
     );
   }, [totalUnread]);
+
+  const resolveConversationTitle = useCallback(
+    (conversation: GlobalChatConversation): string => {
+      if (conversation.type !== "dm") {
+        return conversation.title || "Untitled chat";
+      }
+
+      const candidates = [
+        conversation.title,
+        conversation.agent.name,
+        conversation.agent.id,
+        conversation.threadId,
+      ];
+
+      for (const candidate of candidates) {
+        const trimmed = candidate.trim();
+        if (!trimmed) {
+          continue;
+        }
+        const resolved = resolveAgentName(trimmed).trim();
+        if (resolved) {
+          return resolved;
+        }
+      }
+
+      return conversation.title || conversation.agent.name || "Untitled chat";
+    },
+    [resolveAgentName],
+  );
 
   const handleClearSession = useCallback(async () => {
     if (!selectedConversation) {
@@ -266,6 +297,7 @@ export default function GlobalChatDock() {
               ) : (
                 visibleConversations.map((conversation) => {
                   const active = selectedKey === conversation.key;
+                  const displayTitle = resolveConversationTitle(conversation);
                   return (
                     <button
                       key={conversation.key}
@@ -286,10 +318,10 @@ export default function GlobalChatDock() {
                             data-testid={`chat-initials-${conversation.key}`}
                             className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-alt)] text-[10px] font-semibold text-[var(--text-muted)]"
                           >
-                            {getInitials(conversation.title || "Untitled chat")}
+                            {getInitials(displayTitle || "Untitled chat")}
                           </div>
                           <span className="truncate text-sm font-semibold text-[var(--text)]">
-                            {conversation.title || "Untitled chat"}
+                            {displayTitle || "Untitled chat"}
                           </span>
                         </div>
                         {conversation.unreadCount > 0 ? (
@@ -317,28 +349,35 @@ export default function GlobalChatDock() {
           <div className="flex h-full min-h-0 flex-col">
             {selectedConversation ? (
               <>
-                <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2">
-                  <div>
-                    <h3 className="text-sm font-semibold text-[var(--text)]">
-                      {selectedConversation.title || "Untitled chat"}
-                    </h3>
-                    <p className="text-xs text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleClearSession();
-                    }}
-                    disabled={resettingProjectSession}
-                    className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {resettingProjectSession ? "Clearing..." : "Clear session"}
-                  </button>
-                </div>
+                {(() => {
+                  const selectedTitle = resolveConversationTitle(selectedConversation);
+                  return (
+                    <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2">
+                      <div>
+                        <h3 className="text-sm font-semibold text-[var(--text)]">
+                          {selectedTitle || "Untitled chat"}
+                        </h3>
+                        <p className="text-xs text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleClearSession();
+                        }}
+                        disabled={resettingProjectSession}
+                        className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {resettingProjectSession ? "Clearing..." : "Clear session"}
+                      </button>
+                    </div>
+                  );
+                })()}
                 <div className="min-h-0 flex-1">
                   <GlobalChatSurface
                     conversation={selectedConversation}
                     refreshVersion={refreshVersion}
+                    agentNamesByID={agentNamesByID}
+                    resolveAgentName={resolveAgentName}
                     onRemoveConversation={() => {
                       removeConversation(selectedConversation.key);
                     }}
