@@ -1359,7 +1359,6 @@ func TestIssuesHandlerApproveRequiresHumanActorForSecondApproval(t *testing.T) {
 	require.Equal(t, store.IssueApprovalStateApprovedByReviewer, detail.Issue.ApprovalState)
 	require.Equal(t, "open", detail.Issue.State)
 }
-
 func issueTestStringPtr(v string) *string {
 	return &v
 }
