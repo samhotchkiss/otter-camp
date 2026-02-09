@@ -50,19 +50,19 @@ func NewPipelineRoleStore(db *sql.DB) *PipelineRoleStore {
 func normalizePipelineRoleAssignmentInput(input UpsertPipelineRoleAssignmentInput) (UpsertPipelineRoleAssignmentInput, error) {
 	projectID := strings.TrimSpace(input.ProjectID)
 	if !uuidRegex.MatchString(projectID) {
-		return UpsertPipelineRoleAssignmentInput{}, fmt.Errorf("invalid project_id")
+		return UpsertPipelineRoleAssignmentInput{}, fmt.Errorf("%w: invalid project_id", ErrValidation)
 	}
 
 	role := strings.ToLower(strings.TrimSpace(input.Role))
 	switch role {
 	case PipelineRolePlanner, PipelineRoleWorker, PipelineRoleReviewer:
 	default:
-		return UpsertPipelineRoleAssignmentInput{}, fmt.Errorf("role must be planner, worker, or reviewer")
+		return UpsertPipelineRoleAssignmentInput{}, fmt.Errorf("%w: role must be planner, worker, or reviewer", ErrValidation)
 	}
 
 	agentID := normalizeOptionalPipelineAgentID(input.AgentID)
 	if agentID != nil && !uuidRegex.MatchString(*agentID) {
-		return UpsertPipelineRoleAssignmentInput{}, fmt.Errorf("invalid agent_id")
+		return UpsertPipelineRoleAssignmentInput{}, fmt.Errorf("%w: invalid agent_id", ErrValidation)
 	}
 
 	return UpsertPipelineRoleAssignmentInput{
@@ -134,7 +134,7 @@ func (s *PipelineRoleStore) UpsertBatch(ctx context.Context, inputs []UpsertPipe
 	projectID := normalized[0].ProjectID
 	for _, input := range normalized[1:] {
 		if input.ProjectID != projectID {
-			return fmt.Errorf("all pipeline role updates must target the same project")
+			return fmt.Errorf("%w: all pipeline role updates must target the same project", ErrValidation)
 		}
 	}
 
@@ -170,7 +170,7 @@ func (s *PipelineRoleStore) ListByProject(ctx context.Context, projectID string)
 
 	projectID = strings.TrimSpace(projectID)
 	if !uuidRegex.MatchString(projectID) {
-		return nil, fmt.Errorf("invalid project_id")
+		return nil, fmt.Errorf("%w: invalid project_id", ErrValidation)
 	}
 
 	conn, err := WithWorkspace(ctx, s.db)

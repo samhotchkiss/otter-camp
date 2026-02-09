@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -218,4 +219,12 @@ func TestPipelineRoleStoreErrorMessageSanitizesUnexpectedError(t *testing.T) {
 	err := errors.New(`pq: relation "issue_role_assignments" does not exist`)
 	require.Equal(t, http.StatusInternalServerError, pipelineRoleStoreErrorStatus(err))
 	require.Equal(t, "internal server error", pipelineRoleStoreErrorMessage(err))
+}
+
+func TestPipelineRolesHandlerValidationErrorClassification(t *testing.T) {
+	validationErr := fmt.Errorf("%w: invalid agent_id", store.ErrValidation)
+	require.Equal(t, http.StatusBadRequest, pipelineRoleStoreErrorStatus(validationErr))
+
+	falsePositiveErr := errors.New("postgres transaction invalidated unexpectedly")
+	require.Equal(t, http.StatusInternalServerError, pipelineRoleStoreErrorStatus(falsePositiveErr))
 }

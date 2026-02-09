@@ -106,7 +106,7 @@ func deployConfigStoreErrorStatus(err error) int {
 		return http.StatusForbidden
 	case errors.Is(err, store.ErrNotFound):
 		return http.StatusNotFound
-	case strings.Contains(err.Error(), "invalid"):
+	case errors.Is(err, store.ErrValidation):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
