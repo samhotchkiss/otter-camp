@@ -239,11 +239,13 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if len(projectIDs) > 0 {
 		labelMap, mapErr := store.NewLabelStore(h.DB).MapForProjects(ctx, projectIDs)
 		if mapErr != nil {
-			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load project labels"})
-			return
-		}
-		for idx := range projects {
-			projects[idx].Labels = labelMap[projects[idx].ID]
+			// Non-fatal: labels table may not exist yet (missing migration).
+			// Log and continue — projects should still load without labels.
+			log.Printf("WARN: failed to load project labels: %v", mapErr)
+		} else {
+			for idx := range projects {
+				projects[idx].Labels = labelMap[projects[idx].ID]
+			}
 		}
 	}
 
@@ -317,10 +319,12 @@ func (h *ProjectsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	labels, labelsErr := store.NewLabelStore(h.DB).ListForProject(ctx, p.ID)
 	if labelsErr != nil {
-		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load project labels"})
-		return
+		// Non-fatal: labels table may not exist yet (missing migration).
+		log.Printf("WARN: failed to load project labels for %s: %v", p.ID, labelsErr)
+		p.Labels = []store.Label{}
+	} else {
+		p.Labels = labels
 	}
-	p.Labels = labels
 
 	sendJSON(w, http.StatusOK, p)
 }
