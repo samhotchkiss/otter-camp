@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, it } from "node:test";
 import {
   buildIdentityPreamble,
   formatSessionContextMessageForTest,
   formatSessionDisplayLabel,
+  getSessionContextForTest,
+  isPathWithinProjectRoot,
   formatQuestionnaireForFallback,
   isCompactWhoAmIInsufficient,
   isCanonicalChameleonSessionKey,
@@ -12,6 +17,8 @@ import {
   parseNumberedAnswers,
   parseNumberedQuestionnaireResponse,
   parseQuestionnaireAnswer,
+  resolveExecutionMode,
+  resolveProjectWorktreeRoot,
   resetSessionContextsForTest,
   setSessionContextForTest,
   type QuestionnairePayload,
@@ -179,6 +186,91 @@ describe("bridge identity preamble helpers", () => {
     assert.ok(preamble.includes("You are Nova, Writer."));
     assert.ok(preamble.includes("Active tasks: Docs / #42 / Draft release note [in_progress]"));
     assert.ok(preamble.includes("Task: Prepare launch draft"));
+  });
+});
+
+describe("bridge execution mode + path guard helpers", () => {
+  beforeEach(() => {
+    resetSessionContextsForTest();
+  });
+
+  it("enforces conversation mode policy when no project_id is present", async () => {
+    const sessionKey = "agent:main:slack";
+    setSessionContextForTest(sessionKey, {
+      kind: "dm",
+      orgID: "org-1",
+      threadID: "dm_3",
+      agentID: "main",
+    });
+
+    assert.equal(
+      resolveExecutionMode({
+        kind: "dm",
+      }),
+      "conversation",
+    );
+
+    const contextual = await formatSessionContextMessageForTest(sessionKey, "Please review this plan.");
+    assert.ok(contextual.includes("[OTTERCAMP_EXECUTION_MODE]"));
+    assert.ok(contextual.includes("- mode: conversation"));
+    assert.ok(contextual.includes("deny write/edit/apply_patch"));
+  });
+
+  it("assigns deterministic project worktree roots and exposes cwd metadata", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "otter-worktree-test-"));
+    process.env.OTTER_PROJECT_WORKTREE_ROOT = tempRoot;
+    const projectID = "11111111-2222-3333-4444-555555555555";
+    const sessionKey = `agent:main:project:${projectID}`;
+
+    try {
+      setSessionContextForTest(sessionKey, {
+        kind: "project_chat",
+        orgID: "org-1",
+        projectID,
+        agentID: "main",
+      });
+
+      assert.equal(
+        resolveExecutionMode({
+          kind: "project_chat",
+          projectID,
+        }),
+        "project",
+      );
+
+      const expectedRoot = resolveProjectWorktreeRoot(projectID, sessionKey);
+      const contextual = await formatSessionContextMessageForTest(sessionKey, "Implement API handlers.");
+      assert.ok(contextual.includes("- mode: project"));
+      assert.ok(contextual.includes(`- cwd: ${expectedRoot}`));
+
+      const updatedContext = getSessionContextForTest(sessionKey);
+      assert.equal(updatedContext?.executionMode, "project");
+      assert.equal(updatedContext?.projectRoot, expectedRoot);
+      assert.equal(fs.existsSync(expectedRoot), true);
+    } finally {
+      delete process.env.OTTER_PROJECT_WORKTREE_ROOT;
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks traversal and symlink escapes outside project root", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "otter-path-guard-"));
+    const projectRoot = path.join(tempRoot, "project");
+    const projectRootLink = path.join(tempRoot, "project-link");
+    const outsideRoot = path.join(tempRoot, "outside");
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.mkdirSync(outsideRoot, { recursive: true });
+    fs.symlinkSync(projectRoot, projectRootLink);
+    fs.symlinkSync(outsideRoot, path.join(projectRoot, "linked-outside"));
+
+    try {
+      assert.equal(await isPathWithinProjectRoot(projectRoot, "notes/today.md"), true);
+      assert.equal(await isPathWithinProjectRoot(projectRoot, "../outside/secret.md"), false);
+      assert.equal(await isPathWithinProjectRoot(projectRoot, "linked-outside/secret.md"), false);
+      assert.equal(await isPathWithinProjectRoot(projectRootLink, "notes/today.md"), false);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });
 
