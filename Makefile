@@ -1,4 +1,4 @@
-.PHONY: dev run build build-otter install test migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
+.PHONY: dev run setup seed build build-otter install test migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
 
 # Development
 dev:
@@ -12,6 +12,12 @@ dev-api:
 dev-web:
 	@echo "🎨 Starting frontend..."
 	cd web && npm run dev
+
+setup:
+	@bash scripts/setup.sh
+
+seed:
+	go run ./scripts/seed/seed.go
 
 # Build
 build:
