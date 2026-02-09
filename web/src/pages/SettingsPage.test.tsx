@@ -114,4 +114,34 @@ describe("SettingsPage label management", () => {
       ),
     ).toBe(true);
   });
+
+  it("uses theme token classes for section shell and shared controls", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/settings/")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/labels?org_id=org-123&seed=true")) {
+        return jsonResponse({ labels: [] });
+      }
+      return jsonResponse({ error: "unexpected request" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<SettingsPage />);
+
+    const profileCardHeading = await screen.findByRole("heading", { name: "Profile" });
+    const profileCard = profileCardHeading.closest("section");
+    expect(profileCard).not.toBeNull();
+    expect(profileCard?.className).toContain("bg-[var(--surface)]");
+    expect(profileCard?.className).toContain("border-[var(--border)]");
+
+    const displayNameInput = screen.getByLabelText("Display Name");
+    expect(displayNameInput.className).toContain("bg-[var(--surface)]");
+    expect(displayNameInput.className).toContain("border-[var(--border)]");
+
+    const inviteMemberButton = screen.getByRole("button", { name: "Invite Member" });
+    expect(inviteMemberButton.className).toContain("bg-[var(--surface)]");
+    expect(inviteMemberButton.className).toContain("border-[var(--border)]");
+  });
 });
