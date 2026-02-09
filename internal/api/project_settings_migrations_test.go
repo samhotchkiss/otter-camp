@@ -65,7 +65,6 @@ func checkConstraintDefinition(t *testing.T, db *sql.DB, tableName, constraintNa
 	require.NoError(t, err)
 	return definition
 }
-
 func TestProjectSettingsMigrationsCreateDeployConfigAndHumanReviewColumn(t *testing.T) {
 	db := setupMessageTestDB(t)
 
