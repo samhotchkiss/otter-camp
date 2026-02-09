@@ -519,6 +519,52 @@ func (c *Client) SearchAgentMemory(agentID, query string, limit int) (map[string
 	return response, nil
 }
 
+func (c *Client) RunReleaseGate() (map[string]any, int, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, 0, err
+	}
+
+	requestBody, err := json.Marshal(map[string]bool{
+		"confirm": true,
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	req, err := c.newRequest(
+		http.MethodPost,
+		"/api/admin/config/release-gate",
+		bytes.NewReader(requestBody),
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	payload := map[string]any{}
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, resp.StatusCode, readErr
+	}
+	trimmedBody := strings.TrimSpace(string(bodyBytes))
+	if trimmedBody != "" {
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			return nil, resp.StatusCode, fmt.Errorf("invalid response (%d): %s", resp.StatusCode, trimmedBody)
+		}
+	}
+
+	if resp.StatusCode >= 400 {
+		return payload, resp.StatusCode, fmt.Errorf("request failed (%d)", resp.StatusCode)
+	}
+	return payload, resp.StatusCode, nil
+}
+
 func (c *Client) ResolveAgent(query string) (Agent, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
