@@ -619,6 +619,10 @@ func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	}
 	if requireHumanReview {
 		if strings.TrimSpace(strings.ToLower(before.ApprovalState)) == store.IssueApprovalStateApprovedByReviewer {
+			if strings.TrimSpace(middleware.UserFromContext(r.Context())) == "" {
+				sendJSON(w, http.StatusForbidden, errorResponse{Error: "human approval required"})
+				return
+			}
 			targetApprovalState = store.IssueApprovalStateApproved
 		} else {
 			targetApprovalState = store.IssueApprovalStateApprovedByReviewer
