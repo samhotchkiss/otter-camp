@@ -182,6 +182,90 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 		t.Fatalf("expected /api/admin/agents/{id}/reset route to be registered, got status %d", recAgentReset.Code)
 	}
 
+	reqAdminAgentsList := httptest.NewRequest(http.MethodGet, "/api/admin/agents?org_id="+orgID, nil)
+	recAdminAgentsList := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentsList, reqAdminAgentsList)
+	if recAdminAgentsList.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents route to be registered, got status %d", recAdminAgentsList.Code)
+	}
+
+	reqAdminAgentsCreate := httptest.NewRequest(http.MethodPost, "/api/admin/agents?org_id="+orgID, strings.NewReader(`{"slot":"research","display_name":"Riley","model":"gpt-5.2-codex"}`))
+	recAdminAgentsCreate := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentsCreate, reqAdminAgentsCreate)
+	if recAdminAgentsCreate.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents POST route to be registered, got status %d", recAdminAgentsCreate.Code)
+	}
+
+	reqAdminAgentsGet := httptest.NewRequest(http.MethodGet, "/api/admin/agents/main?org_id="+orgID, nil)
+	recAdminAgentsGet := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentsGet, reqAdminAgentsGet)
+	if recAdminAgentsGet.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents/{id} route to be registered, got status %d", recAdminAgentsGet.Code)
+	}
+
+	reqAdminAgentFiles := httptest.NewRequest(http.MethodGet, "/api/admin/agents/main/files?org_id="+orgID, nil)
+	recAdminAgentFiles := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentFiles, reqAdminAgentFiles)
+	if recAdminAgentFiles.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents/{id}/files route to be registered, got status %d", recAdminAgentFiles.Code)
+	}
+
+	reqAdminAgentFile := httptest.NewRequest(http.MethodGet, "/api/admin/agents/main/files/SOUL.md?org_id="+orgID, nil)
+	recAdminAgentFile := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentFile, reqAdminAgentFile)
+	if recAdminAgentFile.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents/{id}/files/{path} route to be registered, got status %d", recAdminAgentFile.Code)
+	}
+
+	reqAdminAgentMemory := httptest.NewRequest(http.MethodGet, "/api/admin/agents/main/memory?org_id="+orgID, nil)
+	recAdminAgentMemory := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentMemory, reqAdminAgentMemory)
+	if recAdminAgentMemory.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents/{id}/memory route to be registered, got status %d", recAdminAgentMemory.Code)
+	}
+
+	reqAdminAgentMemoryDate := httptest.NewRequest(http.MethodGet, "/api/admin/agents/main/memory/2026-02-07?org_id="+orgID, nil)
+	recAdminAgentMemoryDate := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentMemoryDate, reqAdminAgentMemoryDate)
+	if recAdminAgentMemoryDate.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents/{id}/memory/{date} route to be registered, got status %d", recAdminAgentMemoryDate.Code)
+	}
+
+	reqAdminAgentRetire := httptest.NewRequest(http.MethodPost, "/api/admin/agents/main/retire?org_id="+orgID, nil)
+	recAdminAgentRetire := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentRetire, reqAdminAgentRetire)
+	if recAdminAgentRetire.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents/{id}/retire route to be registered, got status %d", recAdminAgentRetire.Code)
+	}
+
+	reqAdminAgentReactivate := httptest.NewRequest(http.MethodPost, "/api/admin/agents/main/reactivate?org_id="+orgID, nil)
+	recAdminAgentReactivate := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentReactivate, reqAdminAgentReactivate)
+	if recAdminAgentReactivate.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents/{id}/reactivate route to be registered, got status %d", recAdminAgentReactivate.Code)
+	}
+
+	reqAdminConfig := httptest.NewRequest(http.MethodGet, "/api/admin/config?org_id="+orgID, nil)
+	recAdminConfig := httptest.NewRecorder()
+	router.ServeHTTP(recAdminConfig, reqAdminConfig)
+	if recAdminConfig.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/config route to be registered, got status %d", recAdminConfig.Code)
+	}
+
+	reqAdminConfigPatch := httptest.NewRequest(http.MethodPatch, "/api/admin/config?org_id="+orgID, strings.NewReader(`{"confirm":true,"patch":{"agents":{"main":{"model":{"primary":"gpt-5.2-codex"}}}}}`))
+	recAdminConfigPatch := httptest.NewRecorder()
+	router.ServeHTTP(recAdminConfigPatch, reqAdminConfigPatch)
+	if recAdminConfigPatch.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/config PATCH route to be registered, got status %d", recAdminConfigPatch.Code)
+	}
+
+	reqAdminConfigHistory := httptest.NewRequest(http.MethodGet, "/api/admin/config/history?org_id="+orgID, nil)
+	recAdminConfigHistory := httptest.NewRecorder()
+	router.ServeHTTP(recAdminConfigHistory, reqAdminConfigHistory)
+	if recAdminConfigHistory.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/config/history route to be registered, got status %d", recAdminConfigHistory.Code)
+	}
+
 	reqDiagnostics := httptest.NewRequest(http.MethodPost, "/api/admin/diagnostics?org_id="+orgID, nil)
 	recDiagnostics := httptest.NewRecorder()
 	router.ServeHTTP(recDiagnostics, reqDiagnostics)

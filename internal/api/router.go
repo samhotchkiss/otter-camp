@@ -75,6 +75,8 @@ func NewRouter() http.Handler {
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
+	adminAgentsHandler := &AdminAgentsHandler{DB: db, Store: agentStore, OpenClawHandler: openClawWSHandler}
+	adminConfigHandler := &AdminConfigHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	workflowsHandler := &WorkflowsHandler{DB: db}
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
 	adminConnectionsHandler := &AdminConnectionsHandler{DB: db, OpenClawHandler: openClawWSHandler}
@@ -110,6 +112,8 @@ func NewRouter() http.Handler {
 		labelsHandler.DB = db
 		agentActivityHandler.Store = agentActivityStore
 		adminConnectionsHandler.EventStore = store.NewConnectionEventStore(db)
+		adminAgentsHandler.EventStore = adminConnectionsHandler.EventStore
+		adminConfigHandler.EventStore = adminConnectionsHandler.EventStore
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
 		githubSyncHealthHandler.Store = githubSyncJobStore
 		githubPullRequestsHandler.Store = store.NewGitHubIssuePRStore(db)
@@ -134,6 +138,8 @@ func NewRouter() http.Handler {
 		projectIssueSyncHandler.SyncJobs = githubSyncJobStore
 		projectIssueSyncHandler.IssueStore = issuesHandler.IssueStore
 		knowledgeHandler.Store = store.NewKnowledgeEntryStore(db)
+		adminAgentsHandler.ProjectStore = projectStore
+		adminAgentsHandler.ProjectRepos = projectRepoStore
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	projectChatHandler.ProjectStore = projectStore
@@ -297,6 +303,18 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/admin/connections", adminConnectionsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/admin/events", adminConnectionsHandler.GetEvents)
 		r.With(middleware.OptionalWorkspace).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)
+		r.With(middleware.OptionalWorkspace).Post("/admin/agents", adminAgentsHandler.Create)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents", adminAgentsHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}", adminAgentsHandler.Get)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files", adminAgentsHandler.ListFiles)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files/{path:.*}", adminAgentsHandler.GetFile)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory", adminAgentsHandler.ListMemoryFiles)
+		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory/{date}", adminAgentsHandler.GetMemoryFileByDate)
+		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/retire", adminAgentsHandler.Retire)
+		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reactivate", adminAgentsHandler.Reactivate)
+		r.With(middleware.OptionalWorkspace).Patch("/admin/config", adminConfigHandler.Patch)
+		r.With(middleware.OptionalWorkspace).Get("/admin/config", adminConfigHandler.GetCurrent)
+		r.With(middleware.OptionalWorkspace).Get("/admin/config/history", adminConfigHandler.ListHistory)
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)
 		r.With(middleware.OptionalWorkspace).Post("/admin/diagnostics", adminConnectionsHandler.RunDiagnostics)

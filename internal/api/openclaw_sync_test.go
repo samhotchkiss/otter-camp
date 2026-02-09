@@ -188,6 +188,128 @@ func TestOpenClawSyncHandlePersistsDiagnosticsMetadata(t *testing.T) {
 	require.Equal(t, 4242, processes[0].PID)
 }
 
+func TestOpenClawSyncHandlePersistsConfigSnapshot(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	handler := &OpenClawSyncHandler{DB: db}
+
+	baseTime := time.Now().UTC().Truncate(time.Second)
+	originalConfig := map[string]any{
+		"gateway": map[string]any{
+			"port": 18791,
+		},
+		"agents": []map[string]any{
+			{
+				"id": "main",
+				"model": map[string]any{
+					"primary": "gpt-5.2-codex",
+				},
+			},
+		},
+	}
+
+	firstPayload := SyncPayload{
+		Type:      "full",
+		Timestamp: baseTime,
+		Source:    "bridge",
+		Config: &OpenClawConfigSnapshot{
+			Path:       "/Users/sam/.openclaw/openclaw.json",
+			CapturedAt: baseTime,
+			Data:       originalConfig,
+		},
+	}
+	firstBody, err := json.Marshal(firstPayload)
+	require.NoError(t, err)
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(firstBody))
+	firstReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	firstRec := httptest.NewRecorder()
+	handler.Handle(firstRec, firstReq)
+	require.Equal(t, http.StatusOK, firstRec.Code)
+
+	var snapshotValue string
+	err = db.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'openclaw_config_snapshot'`).Scan(&snapshotValue)
+	require.NoError(t, err)
+
+	var snapshot openClawConfigSnapshotRecord
+	require.NoError(t, json.Unmarshal([]byte(snapshotValue), &snapshot))
+	require.Equal(t, "/Users/sam/.openclaw/openclaw.json", snapshot.Path)
+	require.Equal(t, "bridge", snapshot.Source)
+	require.NotZero(t, snapshot.CapturedAt)
+	require.NotEmpty(t, snapshot.Hash)
+	require.JSONEq(t, `{"agents":[{"id":"main","model":{"primary":"gpt-5.2-codex"}}],"gateway":{"port":18791}}`, string(snapshot.Data))
+
+	// Duplicate snapshot should not create a second history record.
+	duplicatePayload := firstPayload
+	duplicatePayload.Timestamp = baseTime.Add(30 * time.Second)
+	duplicatePayload.Config = &OpenClawConfigSnapshot{
+		Path:       firstPayload.Config.Path,
+		CapturedAt: duplicatePayload.Timestamp,
+		Data:       originalConfig,
+	}
+	duplicateBody, err := json.Marshal(duplicatePayload)
+	require.NoError(t, err)
+	duplicateReq := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(duplicateBody))
+	duplicateReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	duplicateRec := httptest.NewRecorder()
+	handler.Handle(duplicateRec, duplicateReq)
+	require.Equal(t, http.StatusOK, duplicateRec.Code)
+
+	var historyValue string
+	err = db.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'openclaw_config_history'`).Scan(&historyValue)
+	require.NoError(t, err)
+	var history []openClawConfigSnapshotRecord
+	require.NoError(t, json.Unmarshal([]byte(historyValue), &history))
+	require.Len(t, history, 1)
+	require.Equal(t, snapshot.Hash, history[0].Hash)
+
+	updatedConfig := map[string]any{
+		"gateway": map[string]any{
+			"port": 18888,
+		},
+		"agents": []map[string]any{
+			{
+				"id": "main",
+				"model": map[string]any{
+					"primary": "gpt-5.2-codex",
+				},
+			},
+			{
+				"id": "2b",
+				"model": map[string]any{
+					"primary": "claude-opus-4-6",
+				},
+			},
+		},
+	}
+	thirdPayload := SyncPayload{
+		Type:      "full",
+		Timestamp: baseTime.Add(1 * time.Minute),
+		Source:    "bridge",
+		Config: &OpenClawConfigSnapshot{
+			Path:       "/Users/sam/.openclaw/openclaw.json",
+			CapturedAt: baseTime.Add(1 * time.Minute),
+			Data:       updatedConfig,
+		},
+	}
+	thirdBody, err := json.Marshal(thirdPayload)
+	require.NoError(t, err)
+	thirdReq := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(thirdBody))
+	thirdReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	thirdRec := httptest.NewRecorder()
+	handler.Handle(thirdRec, thirdReq)
+	require.Equal(t, http.StatusOK, thirdRec.Code)
+
+	err = db.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'openclaw_config_history'`).Scan(&historyValue)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal([]byte(historyValue), &history))
+	require.Len(t, history, 2)
+	require.NotEqual(t, history[0].Hash, history[1].Hash)
+}
+
 func TestOpenClawDispatchQueuePullAndAck(t *testing.T) {
 	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
 	t.Setenv("OPENCLAW_SYNC_TOKEN", "")

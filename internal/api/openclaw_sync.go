@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -29,13 +32,15 @@ const maxOpenClawSyncBodySize = 2 << 20 // 2 MB
 
 // In-memory fallback store (used when DB is unavailable)
 var (
-	memoryAgentStates  = make(map[string]*AgentState)
-	memoryAgentConfigs = make(map[string]*OpenClawAgentConfig)
-	memoryLastSync     time.Time
-	memoryHostDiag     *OpenClawHostDiagnostics
-	memoryBridgeDiag   *OpenClawBridgeDiagnostics
-	memoryCronJobs     []OpenClawCronJobDiagnostics
-	memoryProcesses    []OpenClawProcessDiagnostics
+	memoryAgentStates   = make(map[string]*AgentState)
+	memoryAgentConfigs  = make(map[string]*OpenClawAgentConfig)
+	memoryLastSync      time.Time
+	memoryHostDiag      *OpenClawHostDiagnostics
+	memoryBridgeDiag    *OpenClawBridgeDiagnostics
+	memoryCronJobs      []OpenClawCronJobDiagnostics
+	memoryProcesses     []OpenClawProcessDiagnostics
+	memoryConfig        *openClawConfigSnapshotRecord
+	memoryConfigHistory []openClawConfigSnapshotRecord
 )
 
 // OpenClawSession represents a session from OpenClaw's sessions_list
@@ -145,6 +150,27 @@ type OpenClawProcessDiagnostics struct {
 	StartedAt       *time.Time `json:"started_at,omitempty"`
 }
 
+type OpenClawConfigSnapshot struct {
+	Path       string      `json:"path,omitempty"`
+	Source     string      `json:"source,omitempty"`
+	CapturedAt time.Time   `json:"captured_at,omitempty"`
+	Data       interface{} `json:"data,omitempty"`
+}
+
+type openClawConfigSnapshotRecord struct {
+	Hash       string          `json:"hash"`
+	Source     string          `json:"source,omitempty"`
+	Path       string          `json:"path,omitempty"`
+	CapturedAt time.Time       `json:"captured_at"`
+	Data       json.RawMessage `json:"data"`
+}
+
+const (
+	syncMetadataOpenClawConfigSnapshotKey = "openclaw_config_snapshot"
+	syncMetadataOpenClawConfigHistoryKey  = "openclaw_config_history"
+	maxOpenClawConfigHistoryEntries       = 50
+)
+
 // SyncPayload is the payload sent from OpenClaw bridge
 type SyncPayload struct {
 	Type      string                       `json:"type"` // "full" or "delta"
@@ -155,6 +181,7 @@ type SyncPayload struct {
 	Bridge    *OpenClawBridgeDiagnostics   `json:"bridge,omitempty"`
 	CronJobs  []OpenClawCronJobDiagnostics `json:"cron_jobs,omitempty"`
 	Processes []OpenClawProcessDiagnostics `json:"processes,omitempty"`
+	Config    *OpenClawConfigSnapshot      `json:"config,omitempty"`
 	Source    string                       `json:"source"` // "bridge" or "webhook"
 }
 
@@ -423,6 +450,20 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		if db != nil {
 			if err := upsertSyncMetadataJSON(r.Context(), db, "openclaw_processes", payload.Processes, now); err != nil {
 				log.Printf("Failed to persist process diagnostics metadata: %v", err)
+			}
+		}
+	}
+	if payload.Config != nil {
+		snapshot, err := normalizeOpenClawConfigSnapshot(*payload.Config, now, payload.Source)
+		if err != nil {
+			log.Printf("Failed to normalize OpenClaw config snapshot: %v", err)
+		} else {
+			memoryConfig = snapshot
+			memoryConfigHistory = appendConfigHistorySnapshot(memoryConfigHistory, *snapshot)
+			if db != nil {
+				if err := persistOpenClawConfigSnapshot(r.Context(), db, *snapshot, now); err != nil {
+					log.Printf("Failed to persist OpenClaw config snapshot metadata: %v", err)
+				}
 			}
 		}
 	}
@@ -795,4 +836,117 @@ func upsertSyncMetadataJSON(ctx context.Context, db *sql.DB, key string, value i
 		now,
 	)
 	return err
+}
+
+func normalizeOpenClawConfigSnapshot(
+	snapshot OpenClawConfigSnapshot,
+	now time.Time,
+	fallbackSource string,
+) (*openClawConfigSnapshotRecord, error) {
+	dataBytes, err := canonicalizeOpenClawConfigData(snapshot.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	hash := sha256.Sum256(dataBytes)
+	source := strings.TrimSpace(snapshot.Source)
+	if source == "" {
+		source = strings.TrimSpace(fallbackSource)
+	}
+	if source == "" {
+		source = "bridge"
+	}
+	capturedAt := snapshot.CapturedAt.UTC()
+	if capturedAt.IsZero() {
+		capturedAt = now.UTC()
+	}
+
+	return &openClawConfigSnapshotRecord{
+		Hash:       hex.EncodeToString(hash[:]),
+		Source:     source,
+		Path:       strings.TrimSpace(snapshot.Path),
+		CapturedAt: capturedAt,
+		Data:       append(json.RawMessage(nil), dataBytes...),
+	}, nil
+}
+
+func canonicalizeOpenClawConfigData(data interface{}) (json.RawMessage, error) {
+	if data == nil {
+		return json.RawMessage("null"), nil
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	var normalized interface{}
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return nil, err
+	}
+	canonical, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(canonical), nil
+}
+
+func appendConfigHistorySnapshot(
+	history []openClawConfigSnapshotRecord,
+	snapshot openClawConfigSnapshotRecord,
+) []openClawConfigSnapshotRecord {
+	out := make([]openClawConfigSnapshotRecord, len(history))
+	copy(out, history)
+	if len(out) > 0 && out[len(out)-1].Hash == snapshot.Hash {
+		return out
+	}
+	out = append(out, snapshot)
+	if len(out) > maxOpenClawConfigHistoryEntries {
+		out = out[len(out)-maxOpenClawConfigHistoryEntries:]
+	}
+	return out
+}
+
+func loadOpenClawConfigHistory(ctx context.Context, db *sql.DB) ([]openClawConfigSnapshotRecord, error) {
+	if db == nil {
+		return nil, nil
+	}
+	var raw string
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT value FROM sync_metadata WHERE key = $1`,
+		syncMetadataOpenClawConfigHistoryKey,
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return []openClawConfigSnapshotRecord{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(raw) == "" {
+		return []openClawConfigSnapshotRecord{}, nil
+	}
+	var history []openClawConfigSnapshotRecord
+	if err := json.Unmarshal([]byte(raw), &history); err != nil {
+		return nil, err
+	}
+	return history, nil
+}
+
+func persistOpenClawConfigSnapshot(
+	ctx context.Context,
+	db *sql.DB,
+	snapshot openClawConfigSnapshotRecord,
+	now time.Time,
+) error {
+	if db == nil {
+		return nil
+	}
+	if err := upsertSyncMetadataJSON(ctx, db, syncMetadataOpenClawConfigSnapshotKey, snapshot, now); err != nil {
+		return err
+	}
+	history, err := loadOpenClawConfigHistory(ctx, db)
+	if err != nil {
+		return err
+	}
+	history = appendConfigHistorySnapshot(history, snapshot)
+	return upsertSyncMetadataJSON(ctx, db, syncMetadataOpenClawConfigHistoryKey, history, now)
 }
