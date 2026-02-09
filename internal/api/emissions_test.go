@@ -309,6 +309,35 @@ func TestEmissionHandlerIngestBatchSizeLimit(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, maxRec.Code)
 }
 
+func TestEmissionHandlerRecentLimitClamp(t *testing.T) {
+	buffer := NewEmissionBuffer(500)
+	handler := &EmissionsHandler{Buffer: buffer}
+	router := newEmissionsTestRouter(handler)
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+
+	for i := 0; i < 250; i++ {
+		buffer.Push(Emission{
+			ID:         "em-clamp-" + strconv.Itoa(i),
+			OrgID:      orgID,
+			SourceType: "agent",
+			SourceID:   "agent-clamp",
+			Kind:       "status",
+			Summary:    "limit clamp test",
+			Timestamp:  time.Now().Add(time.Duration(i) * time.Millisecond),
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/emissions/recent?org_id="+orgID+"&limit=9999", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload emissionListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Len(t, payload.Items, 200)
+	require.Equal(t, 200, payload.Total)
+}
+
 func TestEmissionBufferOrgIsolation(t *testing.T) {
 	buffer := NewEmissionBuffer(10)
 	buffer.Push(Emission{

@@ -17,6 +17,7 @@ import (
 const (
 	defaultEmissionBufferSize = 100
 	maxEmissionBatchSize      = 100
+	maxEmissionRecentLimit    = 200
 )
 
 var emissionIDSequence uint64
@@ -187,6 +188,9 @@ func (h *EmissionsHandler) Recent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		limit = parsed
+	}
+	if limit > maxEmissionRecentLimit {
+		limit = maxEmissionRecentLimit
 	}
 
 	records := h.Buffer.Recent(limit, EmissionFilter{
