@@ -10,6 +10,7 @@ import {
 import TaskThread from "./TaskThread";
 import { useWS } from "../contexts/WebSocketContext";
 import { useFocusTrap } from "../hooks/useFocusTrap";
+import { API_URL } from "../lib/api";
 
 // =============================================================================
 // Types
@@ -29,6 +30,8 @@ export type TaskAssignee = {
   name: string;
   avatarUrl?: string;
 };
+
+const DEFAULT_TASKS_ENDPOINT = `${API_URL}/api/tasks`;
 
 export type TaskAttachment = {
   id: string;
@@ -500,7 +503,7 @@ export default function TaskDetail({
   onClose,
   onTaskUpdated,
   onTaskDeleted,
-  apiEndpoint = "https://api.otter.camp/api/tasks",
+  apiEndpoint = DEFAULT_TASKS_ENDPOINT,
 }: TaskDetailProps) {
   const [task, setTask] = useState<TaskDetailData | null>(null);
   const [isLoading, setIsLoading] = useState(true);

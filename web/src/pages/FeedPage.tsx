@@ -3,8 +3,7 @@ import ActivityPanel from "../components/activity/ActivityPanel";
 import AgentActivityTimeline from "../components/agents/AgentActivityTimeline";
 import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
 import { useAgentActivity, type AgentActivityEvent } from "../hooks/useAgentActivity";
-
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+import { API_URL } from "../lib/api";
 
 type FeedFallbackItem = {
   id?: string;

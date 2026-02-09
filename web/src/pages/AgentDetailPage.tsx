@@ -4,9 +4,9 @@ import AgentActivityTimeline from "../components/agents/AgentActivityTimeline";
 import AgentIdentityEditor from "../components/agents/AgentIdentityEditor";
 import AgentMemoryBrowser from "../components/agents/AgentMemoryBrowser";
 import { useAgentActivity } from "../hooks/useAgentActivity";
+import { API_URL } from "../lib/api";
 
 const STATUS_OPTIONS = ["started", "completed", "failed", "timeout"];
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 
 type AgentDetailPayload = {
   agent?: {
