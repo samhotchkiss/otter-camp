@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -559,6 +560,41 @@ func TestIssuesHandlerCreateIssueValidatesPayload(t *testing.T) {
 	invalidDueAtRec := httptest.NewRecorder()
 	router.ServeHTTP(invalidDueAtRec, invalidDueAtReq)
 	require.Equal(t, http.StatusBadRequest, invalidDueAtRec.Code)
+}
+
+func TestIssuesHandlerUnexpectedStoreErrorReturns500(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-store-error-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Store Error Project")
+
+	handler := &IssuesHandler{
+		IssueStore: store.NewProjectIssueStore(db),
+	}
+	router := newIssueTestRouter(handler)
+
+	_, err := db.Exec(`DROP TABLE project_issues`)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/issues?org_id="+orgID+"&project_id="+projectID, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "internal server error", payload.Error)
+}
+
+func TestHandleIssueStoreErrorUnexpectedReturns500(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handleIssueStoreError(rec, errors.New(`pq: relation "project_issues" does not exist`))
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "internal server error", payload.Error)
 }
 
 func TestIssuesHandlerCommentCreateDispatchesToOpenClawOwner(t *testing.T) {

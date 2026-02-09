@@ -133,6 +133,6 @@ func pipelineRoleStoreErrorMessage(err error) string {
 	case errors.Is(err, store.ErrNotFound):
 		return "project or agent not found"
 	default:
-		return err.Error()
+		return "internal server error"
 	}
 }

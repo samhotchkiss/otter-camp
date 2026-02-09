@@ -1218,6 +1218,6 @@ func handleIssueStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrNotFound):
 		sendJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
 	default:
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
 	}
 }

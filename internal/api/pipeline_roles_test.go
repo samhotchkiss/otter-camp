@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -150,4 +152,35 @@ func TestRouterRegistersPipelineRolesRoutes(t *testing.T) {
 	putRec := httptest.NewRecorder()
 	router.ServeHTTP(putRec, putReq)
 	require.NotEqual(t, http.StatusNotFound, putRec.Code)
+}
+
+func TestPipelineRolesHandlerUnexpectedStoreErrorSanitized(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "pipeline-roles-api-store-error-org")
+	projectID := insertPipelineRolesTestProject(t, db, orgID, "Pipeline API Error Project")
+
+	handler := &PipelineRolesHandler{
+		Store: store.NewPipelineRoleStore(db),
+	}
+	router := pipelineRolesTestRouter(handler)
+
+	_, err := db.Exec(`DROP TABLE issue_role_assignments`)
+	require.NoError(t, err)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/pipeline-roles?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+
+	require.Equal(t, http.StatusInternalServerError, getRec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&payload))
+	require.Equal(t, "internal server error", payload.Error)
+	require.False(t, strings.Contains(strings.ToLower(payload.Error), "issue_role_assignments"))
+}
+
+func TestPipelineRoleStoreErrorMessageSanitizesUnexpectedError(t *testing.T) {
+	err := errors.New(`pq: relation "issue_role_assignments" does not exist`)
+	require.Equal(t, http.StatusInternalServerError, pipelineRoleStoreErrorStatus(err))
+	require.Equal(t, "internal server error", pipelineRoleStoreErrorMessage(err))
 }
