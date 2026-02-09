@@ -134,6 +134,42 @@ func TestPipelineRolesHandlerValidation(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, crossOrgRec.Code)
 }
 
+func TestPipelineRolesHandlerPutIsAtomicOnMixedValidity(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "pipeline-roles-atomic-org")
+	projectID := insertPipelineRolesTestProject(t, db, orgID, "Pipeline Atomic Project")
+	plannerAgentID := insertPipelineRolesTestAgent(t, db, orgID, "atomic-planner")
+	otherOrgID := insertMessageTestOrganization(t, db, "pipeline-roles-atomic-other-org")
+	invalidWorkerAgentID := insertPipelineRolesTestAgent(t, db, otherOrgID, "atomic-invalid-worker")
+
+	handler := &PipelineRolesHandler{
+		Store: store.NewPipelineRoleStore(db),
+	}
+	router := pipelineRolesTestRouter(handler)
+
+	putPayload := []byte(`{
+	  "planner": {"agentId":"` + plannerAgentID + `"},
+	  "worker": {"agentId":"` + invalidWorkerAgentID + `"},
+	  "reviewer": {"agentId":null}
+	}`)
+	putReq := httptest.NewRequest(http.MethodPut, "/api/projects/"+projectID+"/pipeline-roles?org_id="+orgID, bytes.NewReader(putPayload))
+	putReq.Header.Set("Content-Type", "application/json")
+	putRec := httptest.NewRecorder()
+	router.ServeHTTP(putRec, putReq)
+	require.Equal(t, http.StatusNotFound, putRec.Code)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/pipeline-roles?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	var roles map[string]map[string]*string
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&roles))
+	require.Nil(t, roles["planner"]["agentId"])
+	require.Nil(t, roles["worker"]["agentId"])
+	require.Nil(t, roles["reviewer"]["agentId"])
+}
+
 func TestRouterRegistersPipelineRolesRoutes(t *testing.T) {
 	router := NewRouter()
 	projectID := "550e8400-e29b-41d4-a716-446655440000"

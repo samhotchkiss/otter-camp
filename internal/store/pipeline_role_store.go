@@ -110,25 +110,56 @@ func (s *PipelineRoleStore) Upsert(ctx context.Context, input UpsertPipelineRole
 		}
 	}
 
-	row := conn.QueryRowContext(
-		ctx,
-		`INSERT INTO issue_role_assignments (
-			org_id, project_id, role, agent_id
-		) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (project_id, role)
-		DO UPDATE SET agent_id = EXCLUDED.agent_id
-		RETURNING id, org_id, project_id, role, agent_id, created_at, updated_at`,
-		workspaceID,
-		normalized.ProjectID,
-		normalized.Role,
-		nullableString(normalized.AgentID),
-	)
+	return upsertPipelineRoleAssignment(ctx, conn, workspaceID, normalized)
+}
 
-	assignment, err := scanPipelineRoleAssignment(row)
-	if err != nil {
-		return nil, fmt.Errorf("failed to upsert pipeline role assignment: %w", err)
+func (s *PipelineRoleStore) UpsertBatch(ctx context.Context, inputs []UpsertPipelineRoleAssignmentInput) error {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return ErrNoWorkspace
 	}
-	return &assignment, nil
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	normalized := make([]UpsertPipelineRoleAssignmentInput, 0, len(inputs))
+	for _, input := range inputs {
+		clean, err := normalizePipelineRoleAssignmentInput(input)
+		if err != nil {
+			return err
+		}
+		normalized = append(normalized, clean)
+	}
+
+	projectID := normalized[0].ProjectID
+	for _, input := range normalized[1:] {
+		if input.ProjectID != projectID {
+			return fmt.Errorf("all pipeline role updates must target the same project")
+		}
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := ensurePipelineProjectVisible(ctx, tx, projectID); err != nil {
+		return err
+	}
+
+	for _, input := range normalized {
+		if input.AgentID != nil {
+			if err := ensurePipelineAgentVisible(ctx, tx, *input.AgentID); err != nil {
+				return err
+			}
+		}
+		if _, err := upsertPipelineRoleAssignment(ctx, tx, workspaceID, input); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (s *PipelineRoleStore) ListByProject(ctx context.Context, projectID string) ([]PipelineRoleAssignment, error) {
@@ -192,7 +223,7 @@ func (s *PipelineRoleStore) ListByProject(ctx context.Context, projectID string)
 	return ordered, nil
 }
 
-func ensurePipelineProjectVisible(ctx context.Context, conn *sql.Conn, projectID string) error {
+func ensurePipelineProjectVisible(ctx context.Context, conn Querier, projectID string) error {
 	var exists bool
 	if err := conn.QueryRowContext(
 		ctx,
@@ -207,7 +238,7 @@ func ensurePipelineProjectVisible(ctx context.Context, conn *sql.Conn, projectID
 	return nil
 }
 
-func ensurePipelineAgentVisible(ctx context.Context, conn *sql.Conn, agentID string) error {
+func ensurePipelineAgentVisible(ctx context.Context, conn Querier, agentID string) error {
 	var exists bool
 	if err := conn.QueryRowContext(
 		ctx,
@@ -220,6 +251,28 @@ func ensurePipelineAgentVisible(ctx context.Context, conn *sql.Conn, agentID str
 		return ErrNotFound
 	}
 	return nil
+}
+
+func upsertPipelineRoleAssignment(ctx context.Context, querier Querier, workspaceID string, normalized UpsertPipelineRoleAssignmentInput) (*PipelineRoleAssignment, error) {
+	row := querier.QueryRowContext(
+		ctx,
+		`INSERT INTO issue_role_assignments (
+			org_id, project_id, role, agent_id
+		) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (project_id, role)
+		DO UPDATE SET agent_id = EXCLUDED.agent_id
+		RETURNING id, org_id, project_id, role, agent_id, created_at, updated_at`,
+		workspaceID,
+		normalized.ProjectID,
+		normalized.Role,
+		nullableString(normalized.AgentID),
+	)
+
+	assignment, err := scanPipelineRoleAssignment(row)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upsert pipeline role assignment: %w", err)
+	}
+	return &assignment, nil
 }
 
 func scanPipelineRoleAssignment(scanner interface{ Scan(...any) error }) (PipelineRoleAssignment, error) {

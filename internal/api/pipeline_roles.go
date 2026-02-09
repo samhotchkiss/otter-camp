@@ -77,16 +77,17 @@ func (h *PipelineRolesHandler) Put(w http.ResponseWriter, r *http.Request) {
 		{role: store.PipelineRoleWorker, member: req.Worker},
 		{role: store.PipelineRoleReviewer, member: req.Reviewer},
 	}
+	inputs := make([]store.UpsertPipelineRoleAssignmentInput, 0, len(upserts))
 	for _, upsert := range upserts {
-		_, err := h.Store.Upsert(r.Context(), store.UpsertPipelineRoleAssignmentInput{
+		inputs = append(inputs, store.UpsertPipelineRoleAssignmentInput{
 			ProjectID: projectID,
 			Role:      upsert.role,
 			AgentID:   upsert.member.AgentID,
 		})
-		if err != nil {
-			sendJSON(w, pipelineRoleStoreErrorStatus(err), errorResponse{Error: pipelineRoleStoreErrorMessage(err)})
-			return
-		}
+	}
+	if err := h.Store.UpsertBatch(r.Context(), inputs); err != nil {
+		sendJSON(w, pipelineRoleStoreErrorStatus(err), errorResponse{Error: pipelineRoleStoreErrorMessage(err)})
+		return
 	}
 
 	assignments, err := h.Store.ListByProject(r.Context(), projectID)
