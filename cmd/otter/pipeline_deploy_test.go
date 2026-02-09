@@ -77,6 +77,88 @@ func TestHandlePipelineSetRoleCallsSetPipelineRoles(t *testing.T) {
 	}
 }
 
+func TestHandlePipelineRolesShowsRoles(t *testing.T) {
+	client := &fakeSettingsCommandClient{
+		project: ottercli.Project{ID: "project-123", Name: "Alpha"},
+		pipelineRoles: ottercli.PipelineRoles{
+			Planner:  ottercli.PipelineRoleAssignment{AgentID: strPtr("planner-1")},
+			Worker:   ottercli.PipelineRoleAssignment{AgentID: nil},
+			Reviewer: ottercli.PipelineRoleAssignment{AgentID: strPtr("reviewer-1")},
+		},
+	}
+
+	var out bytes.Buffer
+	err := runPipelineCommand(
+		[]string{"roles", "--project", "Alpha"},
+		func(org string) (pipelineCommandClient, error) {
+			if org != "" {
+				t.Fatalf("org override = %q, want empty", org)
+			}
+			return client, nil
+		},
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runPipelineCommand() error = %v", err)
+	}
+
+	if client.findProjectQuery != "Alpha" {
+		t.Fatalf("FindProject query = %q, want Alpha", client.findProjectQuery)
+	}
+	if client.getPipelineRolesProject != "project-123" {
+		t.Fatalf("GetPipelineRoles project id = %q, want project-123", client.getPipelineRolesProject)
+	}
+	output := out.String()
+	if !strings.Contains(output, "Planner:  planner-1") {
+		t.Fatalf("expected planner assignment in output, got %q", output)
+	}
+	if !strings.Contains(output, "Worker:   unassigned") {
+		t.Fatalf("expected worker assignment in output, got %q", output)
+	}
+	if !strings.Contains(output, "Reviewer: reviewer-1") {
+		t.Fatalf("expected reviewer assignment in output, got %q", output)
+	}
+}
+
+func TestHandlePipelineSetRoleClearsAssignment(t *testing.T) {
+	client := &fakeSettingsCommandClient{
+		project: ottercli.Project{ID: "project-123", Name: "Alpha"},
+		pipelineRoles: ottercli.PipelineRoles{
+			Planner:  ottercli.PipelineRoleAssignment{AgentID: strPtr("planner-1")},
+			Worker:   ottercli.PipelineRoleAssignment{AgentID: strPtr("worker-1")},
+			Reviewer: ottercli.PipelineRoleAssignment{AgentID: strPtr("reviewer-1")},
+		},
+	}
+
+	var out bytes.Buffer
+	err := runPipelineCommand(
+		[]string{"set-role", "--project", "Alpha", "--role", "planner", "--none"},
+		func(org string) (pipelineCommandClient, error) {
+			return client, nil
+		},
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runPipelineCommand() error = %v", err)
+	}
+
+	if client.resolveAgentQuery != "" {
+		t.Fatalf("ResolveAgent should not be called for --none, got query %q", client.resolveAgentQuery)
+	}
+	if got := client.setPipelinePayload.Planner.AgentID; got != nil {
+		t.Fatalf("planner assignment = %#v, want nil", got)
+	}
+	if got := client.setPipelinePayload.Worker.AgentID; got == nil || *got != "worker-1" {
+		t.Fatalf("worker assignment = %#v, want worker-1", got)
+	}
+	if got := client.setPipelinePayload.Reviewer.AgentID; got == nil || *got != "reviewer-1" {
+		t.Fatalf("reviewer assignment = %#v, want reviewer-1", got)
+	}
+	if !strings.Contains(out.String(), "to unassigned") {
+		t.Fatalf("expected clear output message, got %q", out.String())
+	}
+}
+
 func TestHandlePipelineSetUpdatesRequireHumanReview(t *testing.T) {
 	client := &fakeSettingsCommandClient{
 		project: ottercli.Project{ID: "project-123", Name: "Alpha"},
