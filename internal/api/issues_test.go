@@ -1285,6 +1285,7 @@ func TestIssuesHandlerApproveUsesReviewerGateWhenProjectRequiresHumanReview(t *t
 		"/api/issues/"+issue.ID+"/approve?org_id="+orgID,
 		nil,
 	)
+	humanApproveReq = humanApproveReq.WithContext(context.WithValue(humanApproveReq.Context(), middleware.UserIDKey, "human-reviewer"))
 	humanApproveRec := httptest.NewRecorder()
 	router.ServeHTTP(humanApproveRec, humanApproveReq)
 	require.Equal(t, http.StatusOK, humanApproveRec.Code)
@@ -1293,6 +1294,70 @@ func TestIssuesHandlerApproveUsesReviewerGateWhenProjectRequiresHumanReview(t *t
 	require.NoError(t, json.NewDecoder(humanApproveRec.Body).Decode(&finalApproved))
 	require.Equal(t, store.IssueApprovalStateApproved, finalApproved.ApprovalState)
 	require.Equal(t, "closed", finalApproved.State)
+}
+
+func TestIssuesHandlerApproveRequiresHumanActorForSecondApproval(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-human-review-caller-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Human Review Caller Project")
+
+	_, err := db.Exec(`UPDATE projects SET require_human_review = true WHERE id = $1`, projectID)
+	require.NoError(t, err)
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Human gate caller check",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore: issueStore,
+		DB:         db,
+	}
+	router := newIssueTestRouter(handler)
+
+	moveReadyReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/approval-state?org_id="+orgID,
+		bytes.NewReader([]byte(`{"approval_state":"ready_for_review"}`)),
+	)
+	moveReadyRec := httptest.NewRecorder()
+	router.ServeHTTP(moveReadyRec, moveReadyReq)
+	require.Equal(t, http.StatusOK, moveReadyRec.Code)
+
+	reviewerApproveReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/approve?org_id="+orgID,
+		nil,
+	)
+	reviewerApproveRec := httptest.NewRecorder()
+	router.ServeHTTP(reviewerApproveRec, reviewerApproveReq)
+	require.Equal(t, http.StatusOK, reviewerApproveRec.Code)
+
+	secondApproveReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/approve?org_id="+orgID,
+		nil,
+	)
+	secondApproveRec := httptest.NewRecorder()
+	router.ServeHTTP(secondApproveRec, secondApproveReq)
+	require.Equal(t, http.StatusForbidden, secondApproveRec.Code)
+
+	var denied errorResponse
+	require.NoError(t, json.NewDecoder(secondApproveRec.Body).Decode(&denied))
+	require.Equal(t, "human approval required", denied.Error)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/issues/"+issue.ID+"?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	var detail issueDetailPayload
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&detail))
+	require.Equal(t, store.IssueApprovalStateApprovedByReviewer, detail.Issue.ApprovalState)
+	require.Equal(t, "open", detail.Issue.State)
 }
 
 func issueTestStringPtr(v string) *string {
