@@ -5,6 +5,10 @@ import LoadingSpinner from "../components/LoadingSpinner";
 import ProjectFileBrowser from "../components/project/ProjectFileBrowser";
 import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
+import WorkflowConfig, {
+  defaultWorkflowConfigState,
+  type WorkflowConfigState,
+} from "../components/project/WorkflowConfig";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
 
@@ -43,6 +47,23 @@ type Project = {
   lead?: string;
   repo_url?: string;
   primary_agent_id?: string;
+  workflow_enabled?: boolean;
+  workflow_schedule?: {
+    kind?: string;
+    expr?: string;
+    tz?: string;
+    everyMs?: number;
+    at?: string;
+  } | null;
+  workflow_template?: {
+    title_pattern?: string;
+    body?: string;
+    priority?: "P0" | "P1" | "P2" | "P3";
+    labels?: string[];
+    auto_close?: boolean;
+    pipeline?: "none" | "auto_close" | "standard";
+  } | null;
+  workflow_agent_id?: string | null;
 };
 
 type AgentOption = {
@@ -114,6 +135,65 @@ function buildProjectIssueRequestMessage(projectName: string, issueTitle: string
     "",
     "Please create a new project issue for this request.",
   ].join("\n");
+}
+
+function workflowConfigFromProject(project: Project): WorkflowConfigState {
+  const base = defaultWorkflowConfigState();
+  const schedule = project.workflow_schedule || undefined;
+  const template = project.workflow_template || undefined;
+  const kind = schedule?.kind === "every" || schedule?.kind === "at" ? schedule.kind : "cron";
+  return {
+    ...base,
+    enabled: project.workflow_enabled === true,
+    scheduleKind: kind,
+    cronExpr: schedule?.expr || base.cronExpr,
+    tz: schedule?.tz || base.tz,
+    everyMs: typeof schedule?.everyMs === "number" ? String(schedule.everyMs) : base.everyMs,
+    at: schedule?.at || "",
+    titlePattern: template?.title_pattern || "",
+    body: template?.body || "",
+    priority: template?.priority || base.priority,
+    labels: Array.isArray(template?.labels) ? template?.labels.join(", ") : base.labels,
+    pipeline: template?.pipeline || base.pipeline,
+    autoClose: template?.auto_close ?? base.autoClose,
+    workflowAgentID: project.workflow_agent_id || "",
+  };
+}
+
+function workflowSchedulePayloadFromConfig(config: WorkflowConfigState): Record<string, unknown> {
+  if (config.scheduleKind === "every") {
+    const everyMs = Number.parseInt(config.everyMs.trim(), 10);
+    return {
+      kind: "every",
+      everyMs: Number.isFinite(everyMs) && everyMs > 0 ? everyMs : 900000,
+    };
+  }
+  if (config.scheduleKind === "at") {
+    return {
+      kind: "at",
+      at: config.at.trim(),
+    };
+  }
+  return {
+    kind: "cron",
+    expr: config.cronExpr.trim(),
+    tz: config.tz.trim(),
+  };
+}
+
+function workflowTemplatePayloadFromConfig(config: WorkflowConfigState): Record<string, unknown> {
+  const labels = config.labels
+    .split(",")
+    .map((label) => label.trim())
+    .filter((label) => label !== "");
+  return {
+    title_pattern: config.titlePattern.trim(),
+    body: config.body.trim(),
+    priority: config.priority,
+    labels,
+    auto_close: config.autoClose,
+    pipeline: config.pipeline,
+  };
 }
 
 type TaskColumn = {
@@ -316,6 +396,7 @@ export default function ProjectDetailPage() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
+  const [workflowConfig, setWorkflowConfig] = useState<WorkflowConfigState>(defaultWorkflowConfigState());
   const agentIdToNameRef = useRef<Record<string, string>>({});
   const { upsertConversation, openConversation } = useGlobalChat();
 
@@ -342,6 +423,7 @@ export default function ProjectDetailPage() {
         const projectData = await projectRes.json();
         setProject(projectData);
         setSelectedPrimaryAgentID(projectData.primary_agent_id || "");
+        setWorkflowConfig(workflowConfigFromProject(projectData));
         
         // Fetch canonical workspace agents (UUID-backed) for mapping and settings.
         const agentsUrl = orgId
@@ -620,9 +702,36 @@ export default function ProjectDetailPage() {
           (payload && (payload.error || payload.message)) || "Failed to save project settings",
         );
       }
-      const updatedProject = await response.json();
-      setProject(updatedProject);
-      setSelectedPrimaryAgentID(updatedProject.primary_agent_id || "");
+      const updatedSettingsProject = await response.json();
+
+      const projectPatchUrl = orgId
+        ? `${API_URL}/api/projects/${id}?org_id=${encodeURIComponent(orgId)}`
+        : `${API_URL}/api/projects/${id}`;
+      const workflowResponse = await fetch(projectPatchUrl, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workflow_enabled: workflowConfig.enabled,
+          workflow_schedule: workflowSchedulePayloadFromConfig(workflowConfig),
+          workflow_template: workflowTemplatePayloadFromConfig(workflowConfig),
+          workflow_agent_id: workflowConfig.workflowAgentID || null,
+        }),
+      });
+      if (!workflowResponse.ok) {
+        const payload = await workflowResponse.json().catch(() => null);
+        throw new Error(
+          (payload && (payload.error || payload.message)) || "Failed to save workflow settings",
+        );
+      }
+      const updatedWorkflowProject = await workflowResponse.json();
+
+      const mergedProject = {
+        ...updatedSettingsProject,
+        ...updatedWorkflowProject,
+      };
+      setProject(mergedProject);
+      setSelectedPrimaryAgentID(mergedProject.primary_agent_id || "");
+      setWorkflowConfig(workflowConfigFromProject(mergedProject));
       setSettingsSuccess("Project settings saved.");
     } catch (err) {
       setSettingsError(err instanceof Error ? err.message : "Failed to save project settings");
@@ -975,6 +1084,12 @@ export default function ProjectDetailPage() {
                 ))}
               </select>
             </div>
+
+            <WorkflowConfig
+              value={workflowConfig}
+              onChange={setWorkflowConfig}
+              agents={availableAgents}
+            />
 
             {settingsError ? (
               <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
