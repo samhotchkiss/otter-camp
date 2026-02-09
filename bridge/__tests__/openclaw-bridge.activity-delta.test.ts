@@ -1,5 +1,5 @@
-// @vitest-environment node
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import {
   buildActivityEventsFromSessionDeltas,
   getSessionContextStateForTest,
@@ -26,7 +26,7 @@ function makeSession(overrides: Partial<OpenClawSession> = {}): OpenClawSession 
 
 describe('inferActivityTrigger', () => {
   it('maps cron/spawn/chat/heartbeat/system trigger patterns', () => {
-    expect(
+    assert.deepEqual(
       inferActivityTrigger(
         makeSession({
           key: 'cron:summary:job-1',
@@ -34,9 +34,10 @@ describe('inferActivityTrigger', () => {
           channel: 'system',
         }),
       ),
-    ).toEqual({ trigger: 'cron.scheduled', channel: 'cron' });
+      { trigger: 'cron.scheduled', channel: 'cron' },
+    );
 
-    expect(
+    assert.deepEqual(
       inferActivityTrigger(
         makeSession({
           key: 'spawn:sub-agent:1',
@@ -44,9 +45,10 @@ describe('inferActivityTrigger', () => {
           channel: 'system',
         }),
       ),
-    ).toEqual({ trigger: 'spawn.sub_agent', channel: 'system' });
+      { trigger: 'spawn.sub_agent', channel: 'system' },
+    );
 
-    expect(
+    assert.deepEqual(
       inferActivityTrigger(
         makeSession({
           key: 'agent:main:isolated',
@@ -54,9 +56,10 @@ describe('inferActivityTrigger', () => {
           channel: 'system',
         }),
       ),
-    ).toEqual({ trigger: 'spawn.isolated', channel: 'system' });
+      { trigger: 'spawn.isolated', channel: 'system' },
+    );
 
-    expect(
+    assert.deepEqual(
       inferActivityTrigger(
         makeSession({
           key: 'agent:main:heartbeat',
@@ -64,9 +67,10 @@ describe('inferActivityTrigger', () => {
           channel: 'system',
         }),
       ),
-    ).toEqual({ trigger: 'heartbeat', channel: 'system' });
+      { trigger: 'heartbeat', channel: 'system' },
+    );
 
-    expect(
+    assert.deepEqual(
       inferActivityTrigger(
         makeSession({
           key: 'agent:main:slack',
@@ -74,9 +78,10 @@ describe('inferActivityTrigger', () => {
           channel: 'slack',
         }),
       ),
-    ).toEqual({ trigger: 'chat.slack', channel: 'slack' });
+      { trigger: 'chat.slack', channel: 'slack' },
+    );
 
-    expect(
+    assert.deepEqual(
       inferActivityTrigger(
         makeSession({
           key: 'worker:maintenance',
@@ -84,7 +89,8 @@ describe('inferActivityTrigger', () => {
           channel: '',
         }),
       ),
-    ).toEqual({ trigger: 'system.event', channel: 'system' });
+      { trigger: 'system.event', channel: 'system' },
+    );
   });
 });
 
@@ -129,32 +135,32 @@ describe('buildActivityEventsFromSessionDeltas', () => {
     ];
 
     const events = buildActivityEventsFromSessionDeltas({ previousByKey, currentSessions });
-    expect(events).toHaveLength(2);
+    assert.equal(events.length, 2);
 
     const updated = events[0];
-    expect(updated.id.startsWith('act_')).toBe(true);
-    expect(updated.agent_id).toBe('main');
-    expect(updated.session_key).toBe(`agent:main:project:${projectID}`);
-    expect(updated.trigger).toBe('chat.slack');
-    expect(updated.tokens_used).toBe(60);
-    expect(updated.duration_ms).toBe(5000);
-    expect(updated.status).toBe('completed');
-    expect(updated.scope).toEqual({ project_id: projectID });
-    expect(updated.model_used).toBe('opus-4-6');
-    expect(updated.completed_at).toBe(updated.started_at);
+    assert.equal(updated.id.startsWith('act_'), true);
+    assert.equal(updated.agent_id, 'main');
+    assert.equal(updated.session_key, `agent:main:project:${projectID}`);
+    assert.equal(updated.trigger, 'chat.slack');
+    assert.equal(updated.tokens_used, 60);
+    assert.equal(updated.duration_ms, 5000);
+    assert.equal(updated.status, 'completed');
+    assert.deepEqual(updated.scope, { project_id: projectID });
+    assert.equal(updated.model_used, 'opus-4-6');
+    assert.equal(updated.completed_at, updated.started_at);
 
     const created = events[1];
-    expect(created.agent_id).toBe('worker');
-    expect(created.trigger).toBe('chat.telegram');
-    expect(created.status).toBe('started');
-    expect(created.tokens_used).toBe(20);
-    expect(created.model_used).toBe('sonnet-4');
-    expect(created.scope).toEqual({
+    assert.equal(created.agent_id, 'worker');
+    assert.equal(created.trigger, 'chat.telegram');
+    assert.equal(created.status, 'started');
+    assert.equal(created.tokens_used, 20);
+    assert.equal(created.model_used, 'sonnet-4');
+    assert.deepEqual(created.scope, {
       issue_id: issueID,
       issue_number: 42,
       thread_id: 'issue-thread-42',
     });
-    expect(created.completed_at).toBeUndefined();
+    assert.equal(created.completed_at, undefined);
   });
 
   it('returns deterministic results and skips unchanged sessions', () => {
@@ -170,8 +176,8 @@ describe('buildActivityEventsFromSessionDeltas', () => {
     const first = buildActivityEventsFromSessionDeltas({ previousByKey, currentSessions });
     const second = buildActivityEventsFromSessionDeltas({ previousByKey, currentSessions });
 
-    expect(first).toEqual([]);
-    expect(second).toEqual([]);
+    assert.deepEqual(first, []);
+    assert.deepEqual(second, []);
   });
 });
 
@@ -184,9 +190,9 @@ describe('session context retention', () => {
     }
 
     const state = getSessionContextStateForTest();
-    expect(state.count).toBe(5000);
-    expect(state.keys.includes('session-0')).toBe(false);
-    expect(state.keys[0]).toBe('session-1');
-    expect(state.keys[state.keys.length - 1]).toBe('session-5000');
+    assert.equal(state.count, 5000);
+    assert.equal(state.keys.includes('session-0'), false);
+    assert.equal(state.keys[0], 'session-1');
+    assert.equal(state.keys[state.keys.length - 1], 'session-5000');
   });
 });
