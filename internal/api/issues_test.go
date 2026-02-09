@@ -1319,6 +1319,18 @@ func TestIssuesHandlerApproveReturnsErrorWhenDBNil(t *testing.T) {
 	require.Equal(t, "database not available", resp.Error)
 }
 
+func TestIssuesHandlerApproveFromDraftWithHumanReviewReturns409(t *testing.T) {
+	targetState, statusCode, message := resolveApproveTargetApprovalState(
+		store.IssueApprovalStateDraft,
+		true,
+		"reviewer-actor",
+	)
+
+	require.Equal(t, "", targetState)
+	require.Equal(t, http.StatusConflict, statusCode)
+	require.Equal(t, "issue must be ready_for_review for reviewer approval", message)
+}
+
 func TestIssuesHandlerApproveRequiresHumanActorForSecondApproval(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-human-review-caller-org")
