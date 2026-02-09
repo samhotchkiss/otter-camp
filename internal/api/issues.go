@@ -1243,6 +1243,10 @@ func handleIssueStoreError(w http.ResponseWriter, err error) {
 		sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
 	case errors.Is(err, store.ErrNotFound):
 		sendJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
+	case errors.Is(err, store.ErrValidation):
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request"})
+	case errors.Is(err, store.ErrConflict):
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "invalid state transition"})
 	default:
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
 	}
