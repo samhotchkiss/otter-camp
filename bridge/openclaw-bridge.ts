@@ -231,6 +231,8 @@ type AdminCommandDispatchEvent = {
     process_id?: string;
     enabled?: boolean;
     config_patch?: unknown;
+    config_full?: unknown;
+    config_hash?: string;
     confirm?: boolean;
     dry_run?: boolean;
   };
@@ -309,7 +311,18 @@ let gitCompletionBranch = '';
 let gitCompletionRemote = '';
 
 const genId = () => `req-${++requestId}`;
-const execFileAsync = promisify(execFile);
+const defaultExecFileAsync = promisify(execFile);
+let execFileAsync = defaultExecFileAsync;
+
+export function setExecFileForTest(
+  fn: ((file: string, args: readonly string[], options: { timeout?: number; maxBuffer?: number }, callback: (error: Error | null, stdout?: string, stderr?: string) => void) => void) | null,
+): void {
+  if (!fn) {
+    execFileAsync = defaultExecFileAsync;
+    return;
+  }
+  execFileAsync = promisify(fn);
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -2621,6 +2634,53 @@ function applyJSONMergePatch(target: unknown, patch: unknown): unknown {
   return targetRecord;
 }
 
+function canonicalizeJSONValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeJSONValue(item));
+  }
+  if (value && typeof value === 'object') {
+    const input = value as Record<string, unknown>;
+    const keys = Object.keys(input).sort();
+    const out: Record<string, unknown> = {};
+    for (const key of keys) {
+      out[key] = canonicalizeJSONValue(input[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function hashCanonicalJSON(value: unknown): string {
+  const canonical = canonicalizeJSONValue(value);
+  const serialized = JSON.stringify(canonical);
+  return crypto.createHash('sha256').update(serialized).digest('hex');
+}
+
+function readOpenClawConfigFile(configPath: string): unknown {
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    return parseJSONValue(raw);
+  } catch (err) {
+    const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
+    if (code === 'ENOENT') {
+      return {};
+    }
+    throw err;
+  }
+}
+
+function writeOpenClawConfigFile(configPath: string, configValue: unknown): void {
+  const backupPath = `${configPath}.bak.${Date.now()}`;
+  try {
+    if (fs.existsSync(configPath)) {
+      fs.copyFileSync(configPath, backupPath);
+    }
+  } catch (err) {
+    console.warn(`[bridge] failed to create config backup ${backupPath}:`, err);
+  }
+  fs.writeFileSync(configPath, `${JSON.stringify(configValue, null, 2)}\n`, 'utf8');
+}
+
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   const [cronJobs, processes, progressLogLines] = await Promise.all([
     fetchCronJobsSnapshot(),
@@ -3179,6 +3239,8 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
   const jobID = getTrimmedString(event.data?.job_id);
   const processID = getTrimmedString(event.data?.process_id);
   const configPatch = event.data?.config_patch;
+  const configFull = event.data?.config_full;
+  const configHash = getTrimmedString(event.data?.config_hash);
   const confirm = event.data?.confirm === true;
   const dryRun = event.data?.dry_run === true;
   const sessionKey = getTrimmedString(event.data?.session_key) || (agentID ? `agent:${agentID}:main` : '');
@@ -3280,29 +3342,40 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
     }
 
     const configPath = resolveOpenClawConfigPath();
-    let currentConfig: unknown = {};
-    try {
-      const raw = fs.readFileSync(configPath, 'utf8');
-      currentConfig = parseJSONValue(raw);
-    } catch (err) {
-      const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
-      if (code !== 'ENOENT') {
-        throw err;
+    const currentConfig = readOpenClawConfigFile(configPath);
+
+    const mergedConfig = applyJSONMergePatch(currentConfig, patchObject);
+    writeOpenClawConfigFile(configPath, mergedConfig);
+    await runOpenClawCommand(['gateway', 'restart']);
+    console.log(`[bridge] executed admin.command config.patch (${commandID})`);
+    return;
+  }
+
+  if (action === 'config.cutover' || action === 'config.rollback') {
+    if (!confirm) {
+      throw new Error(`${action} requires confirm=true`);
+    }
+    const fullConfigObject = asRecord(configFull);
+    if (!fullConfigObject) {
+      throw new Error(`${action} missing config_full object`);
+    }
+    if (dryRun) {
+      console.log(`[bridge] validated admin.command ${action} dry-run (${commandID})`);
+      return;
+    }
+
+    const configPath = resolveOpenClawConfigPath();
+    const currentConfig = readOpenClawConfigFile(configPath);
+    if (action === 'config.rollback' && configHash) {
+      const currentHash = hashCanonicalJSON(currentConfig);
+      if (currentHash !== configHash) {
+        throw new Error(`config.rollback hash mismatch: expected ${configHash}, got ${currentHash}`);
       }
     }
 
-    const mergedConfig = applyJSONMergePatch(currentConfig, patchObject);
-    const backupPath = `${configPath}.bak.${Date.now()}`;
-    try {
-      if (fs.existsSync(configPath)) {
-        fs.copyFileSync(configPath, backupPath);
-      }
-    } catch (err) {
-      console.warn(`[bridge] failed to create config backup ${backupPath}:`, err);
-    }
-    fs.writeFileSync(configPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, 'utf8');
+    writeOpenClawConfigFile(configPath, fullConfigObject);
     await runOpenClawCommand(['gateway', 'restart']);
-    console.log(`[bridge] executed admin.command config.patch (${commandID})`);
+    console.log(`[bridge] executed admin.command ${action} (${commandID})`);
     return;
   }
 

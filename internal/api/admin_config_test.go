@@ -196,3 +196,55 @@ func TestAdminConfigPatchDispatchesCommand(t *testing.T) {
 	require.False(t, event.Data.DryRun)
 	require.JSONEq(t, `{"agents":{"main":{"model":{"primary":"gpt-5.2-codex"}}}}`, string(event.Data.ConfigPatch))
 }
+
+func TestOpenClawConfigCutoverBuildTwoAgentConfig(t *testing.T) {
+	reduced, primaryAgentID, err := buildTwoAgentOpenClawConfig(json.RawMessage(`{
+		"gateway":{"port":18791},
+		"agents":{
+			"list":[
+				{"id":"main","name":"Frank","default":true,"workspace":"~/.openclaw/workspace"},
+				{"id":"writer","name":"Writer","workspace":"~/.openclaw/workspace-writer"},
+				{"id":"chameleon","name":"Chameleon","workspace":"~/.openclaw/workspace-chameleon"}
+			]
+		}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, "main", primaryAgentID)
+
+	var parsed map[string]interface{}
+	require.NoError(t, json.Unmarshal(reduced, &parsed))
+	agentsNode, ok := parsed["agents"].(map[string]interface{})
+	require.True(t, ok)
+	list, ok := agentsNode["list"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, list, 2)
+
+	first, ok := list[0].(map[string]interface{})
+	require.True(t, ok)
+	second, ok := list[1].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "main", first["id"])
+	require.Equal(t, "chameleon", second["id"])
+}
+
+func TestOpenClawRollbackHashValidationChecksCanonicalConfig(t *testing.T) {
+	firstHash, err := hashCanonicalJSONRaw(json.RawMessage(`{
+		"agents":{"main":{"enabled":true},"chameleon":{"enabled":true}},
+		"gateway":{"port":18791}
+	}`))
+	require.NoError(t, err)
+
+	secondHash, err := hashCanonicalJSONRaw(json.RawMessage(`{
+		"gateway":{"port":18791},
+		"agents":{"chameleon":{"enabled":true},"main":{"enabled":true}}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, firstHash, secondHash)
+
+	thirdHash, err := hashCanonicalJSONRaw(json.RawMessage(`{
+		"gateway":{"port":18888},
+		"agents":{"main":{"enabled":true},"chameleon":{"enabled":true}}
+	}`))
+	require.NoError(t, err)
+	require.NotEqual(t, firstHash, thirdHash)
+}

@@ -127,6 +127,8 @@ type openClawAdminCommandData struct {
 	ProcessID   string          `json:"process_id,omitempty"`
 	Enabled     *bool           `json:"enabled,omitempty"`
 	ConfigPatch json.RawMessage `json:"config_patch,omitempty"`
+	ConfigFull  json.RawMessage `json:"config_full,omitempty"`
+	ConfigHash  string          `json:"config_hash,omitempty"`
 	Confirm     bool            `json:"confirm,omitempty"`
 	DryRun      bool            `json:"dry_run,omitempty"`
 }
@@ -137,6 +139,8 @@ type adminCommandDispatchInput struct {
 	ProcessID   string
 	Enabled     *bool
 	ConfigPatch json.RawMessage
+	ConfigFull  json.RawMessage
+	ConfigHash  string
 	Confirm     bool
 	DryRun      bool
 }
@@ -158,6 +162,8 @@ const (
 	adminCommandActionCronDisable    = "cron.disable"
 	adminCommandActionProcessKill    = "process.kill"
 	adminCommandActionConfigPatch    = "config.patch"
+	adminCommandActionConfigCutover  = "config.cutover"
+	adminCommandActionConfigRollback = "config.rollback"
 )
 
 var sensitiveTokenPattern = regexp.MustCompile(`(?i)(oc_git_[a-z0-9]+|bearer\s+[a-z0-9._-]+)`)
@@ -263,17 +269,17 @@ func (h *AdminConnectionsHandler) loadSessions(_ context.Context) []adminConnect
 		if totalTokens.Valid {
 			session.TotalTokens = int(totalTokens.Int64)
 		}
-			if sessionKey.Valid {
-				session.SessionKey = sessionKey.String
-			}
-			if channel.Valid {
-				session.Channel = channel.String
-			}
-			session.Channel = deriveSessionChannel(session.Channel, session.SessionKey)
-			if lastSeen.Valid {
-				session.LastSeen = lastSeen.String
-			}
-			session.Status = deriveAgentStatus(session.UpdatedAt, session.TotalTokens)
+		if sessionKey.Valid {
+			session.SessionKey = sessionKey.String
+		}
+		if channel.Valid {
+			session.Channel = channel.String
+		}
+		session.Channel = deriveSessionChannel(session.Channel, session.SessionKey)
+		if lastSeen.Valid {
+			session.LastSeen = lastSeen.String
+		}
+		session.Status = deriveAgentStatus(session.UpdatedAt, session.TotalTokens)
 		session.Stalled = isSessionStalled(session.TotalTokens, session.UpdatedAt)
 		out = append(out, session)
 	}
@@ -568,6 +574,8 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 			ProcessID:   strings.TrimSpace(input.ProcessID),
 			Enabled:     input.Enabled,
 			ConfigPatch: append(json.RawMessage(nil), input.ConfigPatch...),
+			ConfigFull:  append(json.RawMessage(nil), input.ConfigFull...),
+			ConfigHash:  strings.TrimSpace(input.ConfigHash),
 			Confirm:     input.Confirm,
 			DryRun:      input.DryRun,
 		},
@@ -593,6 +601,12 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 	}
 	if len(event.Data.ConfigPatch) > 0 {
 		metadata["config_patch"] = true
+	}
+	if len(event.Data.ConfigFull) > 0 {
+		metadata["config_full"] = true
+	}
+	if event.Data.ConfigHash != "" {
+		metadata["config_hash"] = event.Data.ConfigHash
 	}
 	if event.Data.Confirm {
 		metadata["confirm"] = true
