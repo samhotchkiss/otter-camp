@@ -167,10 +167,6 @@ func parseDeploySetOptions(args []string) (deploySetOptions, error) {
 		commandPtr = &commandCopy
 	}
 
-	if branchVal == "" {
-		branchVal = "main"
-	}
-
 	return deploySetOptions{
 		ProjectRef: strings.TrimSpace(*project),
 		Method:     normalizedMethod,
