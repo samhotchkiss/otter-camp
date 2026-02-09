@@ -97,6 +97,7 @@ func NewRouter() http.Handler {
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
 	adminAgentsHandler := &AdminAgentsHandler{DB: db, OpenClawHandler: openClawWSHandler}
+	adminConfigHandler := &AdminConfigHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	labelsHandler := &LabelsHandler{}
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
 	// Settings uses standalone handler functions (no struct needed)
@@ -112,6 +113,7 @@ func NewRouter() http.Handler {
 		projectRepoStore = store.NewProjectRepoStore(db)
 		activityStore = store.NewActivityStore(db)
 		adminConnectionsHandler.EventStore = store.NewConnectionEventStore(db)
+		adminConfigHandler.EventStore = adminConnectionsHandler.EventStore
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
 		githubSyncHealthHandler.Store = githubSyncJobStore
 		githubPullRequestsHandler.Store = store.NewGitHubIssuePRStore(db)
@@ -356,6 +358,11 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Patch("/admin/cron/jobs/{id}", adminConnectionsHandler.ToggleCronJob)
 		r.With(middleware.OptionalWorkspace).Get("/admin/processes", adminConnectionsHandler.GetProcesses)
 		r.With(middleware.OptionalWorkspace).Post("/admin/processes/{id}/kill", adminConnectionsHandler.KillProcess)
+		r.With(middleware.OptionalWorkspace).Get("/admin/config", adminConfigHandler.GetCurrent)
+		r.With(middleware.OptionalWorkspace).Get("/admin/config/history", adminConfigHandler.ListHistory)
+		r.With(middleware.OptionalWorkspace).Patch("/admin/config", adminConfigHandler.Patch)
+		r.With(middleware.OptionalWorkspace).Post("/admin/config/cutover", adminConfigHandler.Cutover)
+		r.With(middleware.OptionalWorkspace).Post("/admin/config/rollback", adminConfigHandler.Rollback)
 	})
 
 	// WebSocket handlers
