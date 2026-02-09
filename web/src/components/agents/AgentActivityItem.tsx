@@ -61,6 +61,7 @@ function AgentActivityItemComponent({ event, defaultExpanded = false }: AgentAct
           <button
             type="button"
             onClick={() => setExpanded((prev) => !prev)}
+            aria-expanded={expanded}
             className="text-xs font-semibold text-slate-600 underline-offset-2 hover:underline"
           >
             {expanded ? "Hide details" : "Show details"}

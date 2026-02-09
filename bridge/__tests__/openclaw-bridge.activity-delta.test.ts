@@ -1,7 +1,11 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import {
   buildActivityEventsFromSessionDeltas,
+  getSessionContextStateForTest,
   inferActivityTrigger,
+  resetSessionContextsForTest,
+  setSessionContextForTest,
   type OpenClawSession,
 } from '../openclaw-bridge';
 
@@ -168,5 +172,21 @@ describe('buildActivityEventsFromSessionDeltas', () => {
 
     expect(first).toEqual([]);
     expect(second).toEqual([]);
+  });
+});
+
+describe('session context retention', () => {
+  it('evicts oldest contexts once max size is exceeded', () => {
+    resetSessionContextsForTest();
+
+    for (let i = 0; i <= 5000; i += 1) {
+      setSessionContextForTest(`session-${i}`, { orgID: 'org-a' });
+    }
+
+    const state = getSessionContextStateForTest();
+    expect(state.count).toBe(5000);
+    expect(state.keys.includes('session-0')).toBe(false);
+    expect(state.keys[0]).toBe('session-1');
+    expect(state.keys[state.keys.length - 1]).toBe('session-5000');
   });
 });

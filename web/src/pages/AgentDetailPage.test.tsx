@@ -9,32 +9,9 @@ describe("AgentDetailPage", () => {
     localStorage.setItem("otter-camp-org-id", "org-123");
   });
 
-  it("loads and renders tabbed agent detail with overview data", async () => {
+  it("loads and renders activity timeline for agent route", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/admin/agents/main")) {
-        return new Response(
-          JSON.stringify({
-            agent: {
-              id: "main",
-              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
-              name: "Frank",
-              status: "online",
-              model: "gpt-5.2-codex",
-              heartbeat_every: "15m",
-              channel: "slack:#engineering",
-              session_key: "agent:main:main",
-              last_seen: "just now",
-            },
-            sync: {
-              current_task: "Coordinating deployment",
-              context_tokens: 4200,
-              total_tokens: 22000,
-            },
-          }),
-          { status: 200 },
-        );
-      }
       if (url.includes("/api/agents/main/activity")) {
         return new Response(
           JSON.stringify({
@@ -71,37 +48,16 @@ describe("AgentDetailPage", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "Agent Details" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Identity" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Memory" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
-
-    expect(await screen.findByText("Frank")).toBeInTheDocument();
-    expect(await screen.findByText("gpt-5.2-codex")).toBeInTheDocument();
-    expect(await screen.findByText("15m")).toBeInTheDocument();
-    expect(await screen.findByText("Coordinating deployment")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Agent Activity" })).toBeInTheDocument();
+    expect(await screen.findByText("Ran codex-progress-summary")).toBeInTheDocument();
+    expect(screen.getByText("Cron")).toBeInTheDocument();
   });
 
-  it("keeps activity filters working from the activity tab", async () => {
+  it("applies filter controls to activity query", async () => {
     const urls: string[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       urls.push(url);
-      if (url.includes("/api/admin/agents/main")) {
-        return new Response(
-          JSON.stringify({
-            agent: {
-              id: "main",
-              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
-              name: "Frank",
-              status: "online",
-            },
-          }),
-          { status: 200 },
-        );
-      }
       if (url.includes("/api/agents/main/activity")) {
         return new Response(JSON.stringify({ items: [] }), { status: 200 });
       }
@@ -118,8 +74,7 @@ describe("AgentDetailPage", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "Agent Details" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    expect(await screen.findByRole("heading", { name: "Agent Activity" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Status"), {
       target: { value: "failed" },
@@ -130,147 +85,5 @@ describe("AgentDetailPage", () => {
     });
 
     expect(urls[urls.length - 1]).toContain("status=failed");
-  });
-
-  it("loads identity and memory tabs using admin file endpoints", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/admin/agents/main") && !url.includes("/files") && !url.includes("/memory")) {
-        return new Response(
-          JSON.stringify({
-            agent: {
-              id: "main",
-              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
-              name: "Frank",
-              status: "online",
-            },
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/agents/main/activity")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200 });
-      }
-      if (url.includes("/api/admin/agents/main/files/SOUL.md")) {
-        return new Response(
-          JSON.stringify({
-            ref: "HEAD",
-            path: "/SOUL.md",
-            content: "# SOUL\nSteady",
-            encoding: "utf-8",
-            size: 13,
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/admin/agents/main/files")) {
-        return new Response(
-          JSON.stringify({
-            ref: "HEAD",
-            path: "/",
-            entries: [{ name: "SOUL.md", type: "file", path: "SOUL.md" }],
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/admin/agents/main/memory/2026-02-08")) {
-        return new Response(
-          JSON.stringify({
-            ref: "HEAD",
-            path: "/memory/2026-02-08.md",
-            content: "# Memory\nNoted updates",
-            encoding: "utf-8",
-            size: 20,
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/admin/agents/main/memory")) {
-        return new Response(
-          JSON.stringify({
-            ref: "HEAD",
-            path: "/memory",
-            entries: [{ name: "2026-02-08.md", type: "file", path: "2026-02-08.md" }],
-          }),
-          { status: 200 },
-        );
-      }
-      throw new Error(`unexpected url: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    render(
-      <MemoryRouter initialEntries={["/agents/main"]}>
-        <Routes>
-          <Route path="/agents/:id" element={<AgentDetailPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    expect(await screen.findByRole("heading", { name: "Agent Details" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Identity" }));
-    await waitFor(() => {
-      const textarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
-      expect(textarea.value).toContain("Steady");
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Memory" }));
-    await waitFor(() => {
-      const textarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
-      expect(textarea.value).toContain("Noted updates");
-    });
-  });
-
-  it("triggers retire action from settings tab", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/admin/agents/main/retire")) {
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      }
-      if (url.includes("/api/admin/agents/main") && !url.includes("/files") && !url.includes("/memory")) {
-        return new Response(
-          JSON.stringify({
-            agent: {
-              id: "main",
-              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
-              name: "Frank",
-              status: "online",
-              model: "gpt-5.2-codex",
-            },
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/api/agents/main/activity")) {
-        return new Response(JSON.stringify({ items: [] }), { status: 200 });
-      }
-      throw new Error(`unexpected url: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    render(
-      <MemoryRouter initialEntries={["/agents/main"]}>
-        <Routes>
-          <Route path="/agents/:id" element={<AgentDetailPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    expect(await screen.findByRole("heading", { name: "Agent Details" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Retire Agent" }));
-
-    await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.some(([request, init]) => {
-          return String(request).includes("/api/admin/agents/main/retire") && init?.method === "POST";
-        }),
-      ).toBe(true);
-    });
-    expect(confirmSpy).toHaveBeenCalled();
-    expect(await screen.findByText("Retire Agent request sent.")).toBeInTheDocument();
   });
 });

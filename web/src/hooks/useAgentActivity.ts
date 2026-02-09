@@ -5,6 +5,7 @@ const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const TOKEN_STORAGE_KEY = "otter_camp_token";
 const DEFAULT_LIMIT = 50;
+const MAX_PROCESSED_REALTIME_IDS = 1000;
 
 export type AgentActivityStatus = "started" | "completed" | "failed" | "timeout";
 
@@ -240,6 +241,26 @@ export function matchesActivityFilters(
   return true;
 }
 
+export function trackProcessedRealtimeID(
+  idSet: Set<string>,
+  idOrder: string[],
+  id: string,
+  maxSize = MAX_PROCESSED_REALTIME_IDS,
+): boolean {
+  if (idSet.has(id)) {
+    return false;
+  }
+  idSet.add(id);
+  idOrder.push(id);
+  while (idOrder.length > maxSize) {
+    const oldest = idOrder.shift();
+    if (oldest) {
+      idSet.delete(oldest);
+    }
+  }
+  return true;
+}
+
 function resolveOrgId(explicitOrgId?: string): string {
   const fromArg = normalizeString(explicitOrgId);
   if (fromArg) {
@@ -319,6 +340,7 @@ export function useAgentActivity(options: UseAgentActivityOptions = {}): UseAgen
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [filters, setFiltersState] = useState<AgentActivityFilters>(options.initialFilters ?? {});
   const processedRealtimeIDsRef = useRef<Set<string>>(new Set());
+  const processedRealtimeIDOrderRef = useRef<string[]>([]);
 
   const hasMore = Boolean(nextBefore);
 
@@ -425,10 +447,14 @@ export function useAgentActivity(options: UseAgentActivityOptions = {}): UseAgen
     if (!realtimeEvent) {
       return;
     }
-    if (processedRealtimeIDsRef.current.has(realtimeEvent.id)) {
+    const isNewRealtimeID = trackProcessedRealtimeID(
+      processedRealtimeIDsRef.current,
+      processedRealtimeIDOrderRef.current,
+      realtimeEvent.id,
+    );
+    if (!isNewRealtimeID) {
       return;
     }
-    processedRealtimeIDsRef.current.add(realtimeEvent.id);
 
     const scopedAgentID = normalizeString(options.agentId);
     if (
