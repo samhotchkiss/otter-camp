@@ -7,7 +7,7 @@ import { NoProjectsEmpty } from "../components/EmptyState";
 import { SkeletonList } from "../components/Skeleton";
 import LabelFilter from "../components/LabelFilter";
 import LabelPill, { type LabelOption } from "../components/LabelPill";
-import api from "../lib/api";
+import api, { API_URL } from "../lib/api";
 import { isDemoMode } from "../lib/demo";
 import { formatProjectTaskSummary } from "../lib/projectTaskSummary";
 // Filters removed - use magic bar (Cmd+K) for search
@@ -84,6 +84,8 @@ const SAMPLE_PROJECTS: Project[] = [
     updatedAt: "2025-12-18T15:45:00Z",
   },
 ];
+
+const DEFAULT_PROJECTS_ENDPOINT = `${API_URL}/api/projects`;
 
 // All projects use gold/amber accent color per DESIGN-SPEC.md
 const colorClasses: Record<string, { bg: string; text: string; progress: string }> = {
@@ -269,7 +271,7 @@ export type ProjectsPageProps = {
 };
 
 export default function ProjectsPage({
-  apiEndpoint = "https://api.otter.camp/api/projects",
+  apiEndpoint = DEFAULT_PROJECTS_ENDPOINT,
 }: ProjectsPageProps) {
   const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -281,7 +283,7 @@ export default function ProjectsPage({
   // Fetch projects from API
   const fetchProjects = useCallback(async () => {
     try {
-      if (apiEndpoint === "https://api.otter.camp/api/projects") {
+      if (apiEndpoint === DEFAULT_PROJECTS_ENDPOINT) {
         const data = await api.projects(selectedLabelIDs);
         return (data.projects || []) as Project[];
       }

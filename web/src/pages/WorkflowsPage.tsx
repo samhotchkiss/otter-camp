@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+import { API_URL } from "../lib/api";
 
 interface WorkflowTrigger {
   type: string;
