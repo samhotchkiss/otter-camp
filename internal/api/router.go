@@ -204,6 +204,7 @@ func NewRouter() http.Handler {
 		r.Get("/tasks", taskHandler.ListTasks)
 		r.Post("/tasks", taskHandler.CreateTask)
 		r.With(middleware.OptionalWorkspace).Get("/agents", agentsHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/whoami", agentsHandler.WhoAmI)
 		r.Get("/workflows", workflowsHandler.List)
 		r.Patch("/workflows/{id}", workflowsHandler.Toggle)
 		r.Post("/workflows/{id}/run", workflowsHandler.Run)
