@@ -93,6 +93,7 @@ func NewRouter() http.Handler {
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
 	adminAgentsHandler := &AdminAgentsHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	labelsHandler := &LabelsHandler{}
+	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -129,6 +130,7 @@ func NewRouter() http.Handler {
 		projectIssueSyncHandler.Projects = projectStore
 		labelsHandler.Store = store.NewLabelStore(db)
 		labelsHandler.DB = db
+		agentActivityHandler.Store = store.NewAgentActivityEventStore(db)
 		adminAgentsHandler.Store = agentStore
 		adminAgentsHandler.ProjectStore = projectStore
 		adminAgentsHandler.ProjectRepos = projectRepoStore
@@ -248,6 +250,11 @@ func NewRouter() http.Handler {
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/repo/sync", githubIntegrationHandler.ManualRepoSync)
 		r.With(RequireCapability(db, CapabilityGitHubPublish)).Post("/projects/{id}/publish", githubIntegrationHandler.PublishProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects", projectsHandler.Create)
+
+		// Agent Activity
+		r.With(middleware.OptionalWorkspace).Get("/activity/recent", agentActivityHandler.ListRecent)
+		r.With(middleware.OptionalWorkspace).Post("/activity/ingest", agentActivityHandler.IngestEvents)
+		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/activity", agentActivityHandler.ListByAgent)
 
 		// Labels
 		r.With(middleware.OptionalWorkspace).Get("/labels", labelsHandler.List)
