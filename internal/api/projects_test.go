@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -453,4 +455,150 @@ func TestProjectsHandlerPatchWorkflowFields(t *testing.T) {
 	require.Equal(t, 4, resp.WorkflowRunCount)
 	require.JSONEq(t, `{"kind":"cron","expr":"0 6 * * *","tz":"America/Denver"}`, string(resp.WorkflowSchedule))
 	require.JSONEq(t, `{"title_pattern":"Morning Briefing — {{date}}","body":"Generate briefing","pipeline":"auto_close"}`, string(resp.WorkflowTemplate))
+}
+
+func TestProjectsHandlerTriggerRunCreatesIssueAndIncrementsRunCount(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-workflow-run-trigger-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Morning Briefing")
+	agentID := insertMessageTestAgent(t, db, orgID, "workflow-run-agent")
+	_, err := db.Exec(`
+		UPDATE projects
+		SET workflow_enabled = true,
+			workflow_agent_id = $1,
+			workflow_template = $2::jsonb,
+			workflow_run_count = 2
+		WHERE id = $3
+	`, agentID, `{"title_pattern":"Briefing {{run_number}}","body":"Agent {{agent_name}} run {{run_number}}","priority":"P1","labels":["automated"]}`, projectID)
+	require.NoError(t, err)
+
+	handler := &ProjectsHandler{
+		DB:    db,
+		Store: store.NewProjectStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/runs/trigger?org_id="+orgID, nil)
+	req = addRouteParam(req, "id", projectID)
+	rec := httptest.NewRecorder()
+	handler.TriggerRun(rec, req)
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var resp struct {
+		Run struct {
+			ID          string `json:"id"`
+			Title       string `json:"title"`
+			IssueNumber int64  `json:"issue_number"`
+		} `json:"run"`
+		RunNumber int `json:"run_number"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, 3, resp.RunNumber)
+	require.Contains(t, resp.Run.Title, "Briefing 3")
+	require.NotEmpty(t, resp.Run.ID)
+	require.Greater(t, resp.Run.IssueNumber, int64(0))
+}
+
+func TestWorkflowTemplateForProjectRendersVariables(t *testing.T) {
+	runCount := 7
+	agentID := "550e8400-e29b-41d4-a716-446655440111"
+	project := &store.Project{
+		Name:            "Morning Briefing",
+		WorkflowAgentID: &agentID,
+		WorkflowTemplate: json.RawMessage(
+			`{"title_pattern":"Morning — {{date}} #{{run_number}}","body":"At {{datetime}} by {{agent_name}}","priority":"P1","labels":["automated"]}`,
+		),
+	}
+
+	template := workflowTemplateForProject(project, runCount, "Frank")
+	require.Contains(t, template.TitlePattern, "Morning — ")
+	require.Contains(t, template.TitlePattern, "#"+strconv.Itoa(runCount))
+	require.NotContains(t, template.TitlePattern, "{{")
+	require.Contains(t, template.Body, "by Frank")
+	require.NotContains(t, template.Body, "{{")
+	require.Equal(t, "P1", template.Priority)
+}
+
+func TestWorkflowRunFromIssueFormatsClosedAt(t *testing.T) {
+	created := time.Date(2026, 2, 9, 12, 0, 0, 0, time.UTC)
+	closed := created.Add(30 * time.Minute)
+	issue := store.ProjectIssue{
+		ID:          "issue-1",
+		ProjectID:   "project-1",
+		IssueNumber: 11,
+		Title:       "Run",
+		State:       "closed",
+		WorkStatus:  "done",
+		Priority:    "P2",
+		CreatedAt:   created,
+		ClosedAt:    &closed,
+	}
+
+	run := workflowRunFromIssue(issue)
+	require.Equal(t, "issue-1", run.ID)
+	require.Equal(t, "2026-02-09T12:00:00Z", run.CreatedAt)
+	require.NotNil(t, run.ClosedAt)
+	require.Equal(t, "2026-02-09T12:30:00Z", *run.ClosedAt)
+}
+
+func TestProjectsHandlerListRunsAndLatest(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-workflow-runs-list-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Workflow History Project")
+	agentID := insertMessageTestAgent(t, db, orgID, "workflow-history-agent")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	first, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Run 1",
+		Origin:       "local",
+		OwnerAgentID: &agentID,
+		Priority:     store.IssuePriorityP2,
+	})
+	require.NoError(t, err)
+	second, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Run 2",
+		Origin:       "local",
+		OwnerAgentID: &agentID,
+		Priority:     store.IssuePriorityP2,
+	})
+	require.NoError(t, err)
+	require.Greater(t, second.IssueNumber, first.IssueNumber)
+
+	handler := &ProjectsHandler{
+		DB:    db,
+		Store: store.NewProjectStore(db),
+	}
+
+	reqList := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runs?org_id="+orgID+"&limit=10", nil)
+	reqList = addRouteParam(reqList, "id", projectID)
+	recList := httptest.NewRecorder()
+	handler.ListRuns(recList, reqList)
+	require.Equal(t, http.StatusOK, recList.Code)
+
+	var listResp struct {
+		Runs []struct {
+			ID          string `json:"id"`
+			IssueNumber int64  `json:"issue_number"`
+		} `json:"runs"`
+		Total int `json:"total"`
+	}
+	require.NoError(t, json.NewDecoder(recList.Body).Decode(&listResp))
+	require.Len(t, listResp.Runs, 2)
+	require.Equal(t, 2, listResp.Total)
+	require.Equal(t, second.ID, listResp.Runs[0].ID)
+	require.Equal(t, first.ID, listResp.Runs[1].ID)
+
+	reqLatest := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runs/latest?org_id="+orgID, nil)
+	reqLatest = addRouteParam(reqLatest, "id", projectID)
+	recLatest := httptest.NewRecorder()
+	handler.GetLatestRun(recLatest, reqLatest)
+	require.Equal(t, http.StatusOK, recLatest.Code)
+
+	var latest struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.NewDecoder(recLatest.Body).Decode(&latest))
+	require.Equal(t, second.ID, latest.ID)
 }
