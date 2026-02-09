@@ -1,33 +1,39 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
-	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
-
-	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
-// Workflow represents an ongoing automation workflow.
+// Workflow represents a recurring automation workflow.
 type Workflow struct {
-	ID      string          `json:"id"`
-	Name    string          `json:"name"`
-	Trigger WorkflowTrigger `json:"trigger"`
-	Steps   []WorkflowStep  `json:"steps"`
-	Status  string          `json:"status"`
-	LastRun *time.Time      `json:"last_run,omitempty"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Trigger     WorkflowTrigger `json:"trigger"`
+	Steps       []WorkflowStep  `json:"steps,omitempty"`
+	Status      string          `json:"status"`
+	Enabled     bool            `json:"enabled"`
+	LastRun     *time.Time      `json:"last_run,omitempty"`
+	NextRun     *time.Time      `json:"next_run,omitempty"`
+	LastStatus  string          `json:"last_status,omitempty"`
+	AgentID     string          `json:"agent_id,omitempty"`
+	AgentName   string          `json:"agent_name,omitempty"`
+	Source      string          `json:"source"` // "cron", "heartbeat"
 }
 
 // WorkflowTrigger describes how a workflow starts.
 type WorkflowTrigger struct {
-	Type  string `json:"type"`             // cron, event, manual
-	Every string `json:"every,omitempty"`  // e.g. 5m
-	Cron  string `json:"cron,omitempty"`   // cron expression
-	Event string `json:"event,omitempty"`  // event name
-	Label string `json:"label,omitempty"`  // human-readable label
+	Type  string `json:"type"`            // cron, interval, event, manual
+	Every string `json:"every,omitempty"` // e.g. 5m, 15m
+	Cron  string `json:"cron,omitempty"`  // cron expression
+	Event string `json:"event,omitempty"` // event name
+	Label string `json:"label,omitempty"` // human-readable label
 }
 
 // WorkflowStep describes a step in a workflow.
@@ -39,202 +45,254 @@ type WorkflowStep struct {
 
 // WorkflowsHandler handles workflow-related requests.
 type WorkflowsHandler struct {
-	DB *sql.DB
+	DB              *sql.DB
+	ConnectionsHandler *AdminConnectionsHandler
 }
 
-// List returns all workflows.
+// List returns all workflows derived from OpenClaw cron jobs and agent heartbeats.
 func (h *WorkflowsHandler) List(w http.ResponseWriter, r *http.Request) {
-	demo := r.URL.Query().Get("demo") == "true"
-
-	if demo {
-		json.NewEncoder(w).Encode(getDemoWorkflows())
-		return
-	}
-
-	db := h.DB
-	if db == nil {
-		if dbConn, err := store.DB(); err == nil {
-			db = dbConn
-		}
-	}
-
-	workflows, err := getOpenClawWorkflows(db)
-	if err != nil {
-		log.Printf("Failed to load workflows: %v", err)
-		workflows = []Workflow{}
-	}
-
+	workflows := h.buildWorkflows(r.Context())
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(workflows)
 }
 
-func getOpenClawWorkflows(db *sql.DB) ([]Workflow, error) {
-	configs, err := getOpenClawAgentConfigs(db)
-	if err != nil {
-		return nil, err
+// Toggle enables or disables a workflow.
+func (h *WorkflowsHandler) Toggle(w http.ResponseWriter, r *http.Request) {
+	// Forward to cron toggle if available
+	if h.ConnectionsHandler != nil {
+		h.ConnectionsHandler.ToggleCronJob(w, r)
+		return
 	}
+	sendJSON(w, http.StatusNotImplemented, errorResponse{Error: "toggle not available"})
+}
 
-	workflows := make([]Workflow, 0, len(configs))
-	for _, config := range configs {
-		name := agentNames[config.ID]
+// Run triggers a workflow immediately.
+func (h *WorkflowsHandler) Run(w http.ResponseWriter, r *http.Request) {
+	if h.ConnectionsHandler != nil {
+		h.ConnectionsHandler.RunCronJob(w, r)
+		return
+	}
+	sendJSON(w, http.StatusNotImplemented, errorResponse{Error: "run not available"})
+}
+
+func (h *WorkflowsHandler) buildWorkflows(ctx context.Context) []Workflow {
+	var workflows []Workflow
+
+	// 1. Build workflows from cron jobs (primary source)
+	cronJobs := h.loadCronJobs(ctx)
+	for _, job := range cronJobs {
+		name := job.Name
 		if name == "" {
-			name = config.ID
+			name = job.ID
 		}
 
-		trigger := WorkflowTrigger{Type: "manual"}
-		if config.HeartbeatEvery != "" {
-			trigger = WorkflowTrigger{
-				Type:  "cron",
-				Every: config.HeartbeatEvery,
-				Label: "Every " + config.HeartbeatEvery,
-			}
-		}
-
-		lastRun, agentStatus := lookupAgentLastRun(db, config.ID)
+		trigger := parseCronTrigger(job)
 		status := "active"
-		if agentStatus == "offline" {
+		if !job.Enabled {
 			status = "paused"
 		}
 
-		steps := []WorkflowStep{
-			{
-				ID:   config.ID + "-run",
-				Name: "Run agent workflow",
-				Kind: "agent",
-			},
+		// Derive agent name from the cron job context
+		agentID := deriveAgentFromCronName(name, job.SessionTarget)
+		agentDisplayName := ""
+		if agentID != "" {
+			if n, ok := agentNames[agentID]; ok {
+				agentDisplayName = n
+			}
 		}
 
+		description := describeCronJob(name, job.PayloadType, job.SessionTarget)
+
 		workflows = append(workflows, Workflow{
-			ID:      "openclaw-" + config.ID,
-			Name:    name + " workflow",
-			Trigger: trigger,
-			Steps:   steps,
-			Status:  status,
-			LastRun: lastRun,
+			ID:          job.ID,
+			Name:        humanizeCronName(name),
+			Description: description,
+			Trigger:     trigger,
+			Status:      status,
+			Enabled:     job.Enabled,
+			LastRun:     job.LastRunAt,
+			NextRun:     job.NextRunAt,
+			LastStatus:  job.LastStatus,
+			AgentID:     agentID,
+			AgentName:   agentDisplayName,
+			Source:      "cron",
 		})
 	}
 
 	sort.Slice(workflows, func(i, j int) bool {
-		return workflows[i].Name < workflows[j].Name
+		// Active before paused, then alphabetical
+		if workflows[i].Status != workflows[j].Status {
+			return workflows[i].Status < workflows[j].Status // "active" < "paused"
+		}
+		return strings.ToLower(workflows[i].Name) < strings.ToLower(workflows[j].Name)
 	})
 
-	return workflows, nil
+	return workflows
 }
 
-func getOpenClawAgentConfigs(db *sql.DB) ([]OpenClawAgentConfig, error) {
-	if db == nil {
-		configs := make([]OpenClawAgentConfig, 0, len(memoryAgentConfigs))
-		for _, config := range memoryAgentConfigs {
-			configs = append(configs, *config)
-		}
-		return configs, nil
+func (h *WorkflowsHandler) loadCronJobs(ctx context.Context) []OpenClawCronJobDiagnostics {
+	// Try loading from the connections handler first (reuse existing logic)
+	if h.ConnectionsHandler != nil {
+		return h.ConnectionsHandler.loadCronJobs(ctx)
 	}
 
-	rows, err := db.Query(`
-		SELECT id, heartbeat_every, updated_at
-		FROM openclaw_agent_configs
-		ORDER BY id
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	configs := []OpenClawAgentConfig{}
-	for rows.Next() {
-		var config OpenClawAgentConfig
-		var heartbeat sql.NullString
-		if err := rows.Scan(&config.ID, &heartbeat, &config.UpdatedAt); err != nil {
-			continue
+	// Fallback: read from DB directly
+	if h.DB != nil {
+		var value string
+		if err := h.DB.QueryRow(`SELECT value FROM sync_metadata WHERE key = 'openclaw_cron_jobs'`).Scan(&value); err == nil && value != "" {
+			var payload []OpenClawCronJobDiagnostics
+			if err := json.Unmarshal([]byte(value), &payload); err == nil {
+				return payload
+			}
 		}
-		if heartbeat.Valid {
-			config.HeartbeatEvery = heartbeat.String
-		}
-		configs = append(configs, config)
 	}
 
-	return configs, rows.Err()
+	// Fallback: memory
+	if len(memoryCronJobs) > 0 {
+		return append([]OpenClawCronJobDiagnostics(nil), memoryCronJobs...)
+	}
+
+	return nil
 }
 
-func lookupAgentLastRun(db *sql.DB, agentID string) (*time.Time, string) {
-	if db == nil {
-		if state, ok := memoryAgentStates[agentID]; ok {
-			lastRun := state.UpdatedAt
-			return &lastRun, state.Status
+func parseCronTrigger(job OpenClawCronJobDiagnostics) WorkflowTrigger {
+	schedule := job.Schedule
+	if schedule == "" {
+		return WorkflowTrigger{Type: "manual", Label: "Manual"}
+	}
+
+	// Check if it looks like a duration (e.g., "5m", "15m", "1h")
+	if len(schedule) >= 2 {
+		lastChar := schedule[len(schedule)-1]
+		if lastChar == 'm' || lastChar == 'h' || lastChar == 's' {
+			return WorkflowTrigger{
+				Type:  "interval",
+				Every: schedule,
+				Label: "Every " + schedule,
+			}
 		}
-		return nil, ""
 	}
 
-	var updatedAt time.Time
-	var status sql.NullString
-	err := db.QueryRow(`
-		SELECT updated_at, status
-		FROM agent_sync_state
-		WHERE id = $1
-	`, agentID).Scan(&updatedAt, &status)
-	if err != nil {
-		return nil, ""
+	// Strip timezone suffix if present: "0 21 * * * (America/Denver)" → "0 21 * * *"
+	cronExpr := schedule
+	if idx := strings.Index(schedule, " ("); idx > 0 {
+		cronExpr = strings.TrimSpace(schedule[:idx])
 	}
 
-	statusValue := ""
-	if status.Valid {
-		statusValue = status.String
+	return WorkflowTrigger{
+		Type:  "cron",
+		Cron:  cronExpr,
+		Label: humanizeCronSchedule(cronExpr),
 	}
-
-	return &updatedAt, statusValue
 }
 
-func getDemoWorkflows() []Workflow {
-	now := time.Now()
+func humanizeCronSchedule(expr string) string {
+	parts := strings.Fields(expr)
+	if len(parts) != 5 {
+		return "Cron: " + expr
+	}
+	min, hour := parts[0], parts[1]
 
-	return []Workflow{
-		{
-			ID:   "demo-nova-twitter",
-			Name: "Twitter Engagement",
-			Trigger: WorkflowTrigger{
-				Type:  "cron",
-				Every: "5m",
-				Label: "Every 5 minutes",
-			},
-			Steps: []WorkflowStep{
-				{ID: "step-1", Name: "Scan mentions", Kind: "social"},
-				{ID: "step-2", Name: "Draft response", Kind: "social"},
-				{ID: "step-3", Name: "Publish update", Kind: "social"},
-			},
-			Status:  "active",
-			LastRun: ptrTime(now.Add(-15 * time.Minute)),
-		},
-		{
-			ID:   "demo-penny-email",
-			Name: "Inbox Triage",
-			Trigger: WorkflowTrigger{
-				Type:  "event",
-				Event: "New email received",
-				Label: "On new email",
-			},
-			Steps: []WorkflowStep{
-				{ID: "step-1", Name: "Classify sender", Kind: "email"},
-				{ID: "step-2", Name: "Flag urgent threads", Kind: "email"},
-			},
-			Status:  "active",
-			LastRun: ptrTime(now.Add(-45 * time.Minute)),
-		},
-		{
-			ID:   "demo-stone-content",
-			Name: "Content Review",
-			Trigger: WorkflowTrigger{
-				Type:  "manual",
-				Label: "Manual",
-			},
-			Steps: []WorkflowStep{
-				{ID: "step-1", Name: "Draft outline", Kind: "content"},
-				{ID: "step-2", Name: "Write section", Kind: "content"},
-			},
-			Status:  "paused",
-			LastRun: ptrTime(now.Add(-6 * time.Hour)),
-		},
+	// Common patterns
+	if min == "*/5" && hour == "*" {
+		return "Every 5 minutes"
+	}
+	if min == "*/15" && hour == "*" {
+		return "Every 15 minutes"
+	}
+	if min == "*/30" && hour == "*" {
+		return "Every 30 minutes"
+	}
+	if min == "0" && hour == "*" {
+		return "Every hour"
+	}
+	if min == "0" {
+		return "Daily at " + hour + ":00"
+	}
+	if hour != "*" {
+		return "Daily at " + hour + ":" + padMinute(min)
+	}
+	return "Cron: " + expr
+}
+
+func padMinute(m string) string {
+	if len(m) == 1 {
+		return "0" + m
+	}
+	return m
+}
+
+func humanizeCronName(name string) string {
+	// Turn kebab-case and snake_case into title case
+	name = strings.ReplaceAll(name, "-", " ")
+	name = strings.ReplaceAll(name, "_", " ")
+	words := strings.Fields(name)
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+func describeCronJob(name, payloadType, sessionTarget string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.Contains(lower, "heartbeat"):
+		return "Periodic health check and task polling"
+	case strings.Contains(lower, "memory") && strings.Contains(lower, "extract"):
+		return "Extracts and persists agent memories from session transcripts"
+	case strings.Contains(lower, "morning") && strings.Contains(lower, "briefing"):
+		return "Daily morning status summary delivered to Sam"
+	case strings.Contains(lower, "evening") && strings.Contains(lower, "summary"):
+		return "Daily evening wrap-up and next-day priorities"
+	case strings.Contains(lower, "health") && strings.Contains(lower, "sweep"):
+		return "System health monitoring and diagnostics"
+	case strings.Contains(lower, "codex") && strings.Contains(lower, "progress"):
+		return "Summarizes Codex implementation pipeline progress"
+	case strings.Contains(lower, "github") && strings.Contains(lower, "dispatch"):
+		return "Routes GitHub notifications to the right agents"
+	case strings.Contains(lower, "junk") && strings.Contains(lower, "mail"):
+		return "Filters and summarizes low-priority email"
+	case strings.Contains(lower, "temple") && strings.Contains(lower, "ticket"):
+		return "Monitors Salt Lake Temple open house ticket availability"
+	default:
+		if sessionTarget == "isolated" {
+			return "Runs in isolated session"
+		}
+		if payloadType == "systemEvent" {
+			return "System event injection"
+		}
+		return "Recurring automation"
+	}
+}
+
+func deriveAgentFromCronName(name, sessionTarget string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.Contains(lower, "heartbeat"):
+		return "main"
+	case strings.Contains(lower, "memory"):
+		return "main"
+	case strings.Contains(lower, "morning") || strings.Contains(lower, "evening"):
+		return "main"
+	case strings.Contains(lower, "health"):
+		return "main"
+	case strings.Contains(lower, "codex"):
+		return "main"
+	case strings.Contains(lower, "github"):
+		return "main"
+	case strings.Contains(lower, "junk") || strings.Contains(lower, "mail"):
+		return "email-mgmt"
+	case strings.Contains(lower, "temple"):
+		return "main"
+	default:
+		return "main"
 	}
 }
 
 func ptrTime(t time.Time) *time.Time {
 	return &t
 }
+
+// OpenClawAgentConfig is defined in openclaw_sync.go

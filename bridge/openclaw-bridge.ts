@@ -2314,6 +2314,45 @@ async function runOpenClawCommand(args: string[]): Promise<void> {
   await runOpenClawCommandCapture(args);
 }
 
+/**
+ * Flatten an OpenClaw schedule object into a human-readable string.
+ * Input shapes: {kind:"every", everyMs:300000} or {kind:"cron", expr:"0 9 * * *", tz:"America/Denver"}
+ * or {kind:"at", at:"2026-02-10T15:00:00Z"}
+ */
+function flattenSchedule(schedule: unknown): string | undefined {
+  const obj = asRecord(schedule);
+  if (!obj) return undefined;
+
+  const kind = getTrimmedString(obj.kind);
+  if (kind === 'every') {
+    const ms = typeof obj.everyMs === 'number' ? obj.everyMs : 0;
+    if (ms > 0) {
+      if (ms >= 3600000) return `${Math.round(ms / 3600000)}h`;
+      if (ms >= 60000) return `${Math.round(ms / 60000)}m`;
+      return `${Math.round(ms / 1000)}s`;
+    }
+  }
+  if (kind === 'cron') {
+    const expr = getTrimmedString(obj.expr);
+    const tz = getTrimmedString(obj.tz);
+    if (expr) return tz ? `${expr} (${tz})` : expr;
+  }
+  if (kind === 'at') {
+    const at = getTrimmedString(obj.at);
+    if (at) return `at:${at}`;
+  }
+  return undefined;
+}
+
+/**
+ * Extract payload.kind from a nested payload object.
+ */
+function flattenPayloadType(payload: unknown): string | undefined {
+  const obj = asRecord(payload);
+  if (!obj) return undefined;
+  return getTrimmedString(obj.kind) || undefined;
+}
+
 function extractCronJobs(raw: unknown): OpenClawCronJobSnapshot[] {
   const root = asRecord(raw);
   let jobs: unknown = raw;
@@ -2340,6 +2379,7 @@ function extractCronJobs(raw: unknown): OpenClawCronJobSnapshot[] {
       id,
       name: getTrimmedString(row.name) || undefined,
       schedule:
+        flattenSchedule(row.schedule) ||
         getTrimmedString(row.schedule) ||
         getTrimmedString(row.cron) ||
         getTrimmedString(row.every) ||
@@ -2350,21 +2390,25 @@ function extractCronJobs(raw: unknown): OpenClawCronJobSnapshot[] {
         getTrimmedString(row.target) ||
         undefined,
       payload_type:
+        flattenPayloadType(row.payload) ||
         getTrimmedString(row.payload_type) ||
         getTrimmedString(row.payloadType) ||
         getTrimmedString(row.type) ||
         undefined,
       last_run_at:
+        normalizeTimeString(asRecord(row.state)?.lastRunAtMs) ||
         normalizeTimeString(row.last_run_at) ||
         normalizeTimeString(row.lastRunAt) ||
         normalizeTimeString(row.last_run) ||
         undefined,
       last_status:
+        getTrimmedString(asRecord(row.state)?.lastStatus) ||
         getTrimmedString(row.last_status) ||
         getTrimmedString(row.lastStatus) ||
         getTrimmedString(row.status) ||
         undefined,
       next_run_at:
+        normalizeTimeString(asRecord(row.state)?.nextRunAtMs) ||
         normalizeTimeString(row.next_run_at) ||
         normalizeTimeString(row.nextRunAt) ||
         normalizeTimeString(row.next_run) ||
