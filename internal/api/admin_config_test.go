@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,16 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
+
+type adminConfigReleaseGatePayload struct {
+	OK     bool `json:"ok"`
+	Checks []struct {
+		Category string `json:"category"`
+		Status   string `json:"status"`
+		Message  string `json:"message"`
+	} `json:"checks"`
+	GeneratedAt time.Time `json:"generated_at"`
+}
 
 func TestAdminConfigGetCurrent(t *testing.T) {
 	db := setupMessageTestDB(t)
@@ -247,4 +258,216 @@ func TestOpenClawRollbackHashValidationChecksCanonicalConfig(t *testing.T) {
 	}`))
 	require.NoError(t, err)
 	require.NotEqual(t, firstHash, thirdHash)
+}
+
+func TestAdminConfigReleaseGateFailsWithoutSnapshot(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-config-release-gate-no-snapshot")
+	handler := &AdminConfigHandler{DB: db}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/config/release-gate",
+		strings.NewReader(`{"confirm":true}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.ReleaseGate(rec, req)
+	require.Equal(t, http.StatusPreconditionFailed, rec.Code)
+
+	var payload adminConfigReleaseGatePayload
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.False(t, payload.OK)
+	require.NotEmpty(t, payload.Checks)
+
+	statusByCategory := map[string]string{}
+	for _, check := range payload.Checks {
+		statusByCategory[check.Category] = check.Status
+	}
+	require.Equal(t, "fail", statusByCategory["migration"])
+}
+
+func TestAdminConfigCutoverBlockedWhenReleaseGateFails(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-config-cutover-gate-fail")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+	handler := &AdminConfigHandler{
+		DB:              db,
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	upsertSyncMetadataForAdminConfigGateTest(t, db, syncMetadataOpenClawConfigSnapshotKey, `{
+		"hash":"snapshot-hash",
+		"source":"bridge",
+		"captured_at":"2026-02-09T19:00:00Z",
+		"data":{
+			"gateway":{"port":18791},
+			"agents":{"list":[
+				{"id":"main","name":"Frank","default":true,"workspace":"~/.openclaw/workspace"},
+				{"id":"writer","name":"Writer","workspace":"~/.openclaw/workspace-writer"}
+			]}
+		}
+	}`)
+	upsertSyncMetadataForAdminConfigGateTest(t, db, "openclaw_bridge_diagnostics", `{"dispatch_queue_depth":0,"errors_last_hour":0}`)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/config/cutover",
+		strings.NewReader(`{"confirm":true}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Cutover(rec, req)
+	require.Equal(t, http.StatusPreconditionFailed, rec.Code)
+
+	var payload struct {
+		Error string                        `json:"error"`
+		Gate  adminConfigReleaseGatePayload `json:"gate"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Contains(t, strings.ToLower(payload.Error), "release gate")
+	require.False(t, payload.Gate.OK)
+	require.Len(t, dispatcher.calls, 0)
+}
+
+func TestAdminConfigReleaseGatePassesAndCutoverDispatches(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-config-cutover-gate-pass")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+	handler := &AdminConfigHandler{
+		DB:              db,
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	upsertSyncMetadataForAdminConfigGateTest(t, db, syncMetadataOpenClawConfigSnapshotKey, `{
+		"source":"bridge",
+		"captured_at":"2026-02-09T19:10:00Z",
+		"data":{
+			"gateway":{"port":18791},
+			"agents":{"list":[
+				{"id":"main","name":"Frank","default":true,"workspace":"~/.openclaw/workspace"},
+				{"id":"writer","name":"Writer","workspace":"~/.openclaw/workspace-writer"}
+			]}
+		}
+	}`)
+	upsertSyncMetadataForAdminConfigGateTest(t, db, syncMetadataOpenClawLegacyImportKey, `{
+		"imported_agents":2,
+		"imported_long_term_memories":1,
+		"imported_daily_memories":1,
+		"transition_files_generated":1,
+		"skipped_workspace_count":0,
+		"processed_workspace_count":2,
+		"processed_retired_workspaces":1
+	}`)
+	upsertSyncMetadataForAdminConfigGateTest(t, db, "openclaw_bridge_diagnostics", `{"dispatch_queue_depth":0,"errors_last_hour":0}`)
+
+	releaseReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/config/release-gate",
+		strings.NewReader(`{"confirm":true}`),
+	)
+	releaseReq = releaseReq.WithContext(context.WithValue(releaseReq.Context(), middleware.WorkspaceIDKey, orgID))
+	releaseRec := httptest.NewRecorder()
+	handler.ReleaseGate(releaseRec, releaseReq)
+	require.Equal(t, http.StatusOK, releaseRec.Code)
+
+	var gatePayload adminConfigReleaseGatePayload
+	require.NoError(t, json.NewDecoder(releaseRec.Body).Decode(&gatePayload))
+	require.True(t, gatePayload.OK)
+	require.Len(t, gatePayload.Checks, 5)
+	for _, check := range gatePayload.Checks {
+		require.Equal(t, "pass", check.Status, check.Category)
+	}
+
+	cutoverReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/config/cutover",
+		strings.NewReader(`{"confirm":true}`),
+	)
+	cutoverReq = cutoverReq.WithContext(context.WithValue(cutoverReq.Context(), middleware.WorkspaceIDKey, orgID))
+	cutoverRec := httptest.NewRecorder()
+	handler.Cutover(cutoverRec, cutoverReq)
+	require.Equal(t, http.StatusOK, cutoverRec.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
+	require.True(t, ok)
+	require.Equal(t, adminCommandActionConfigCutover, event.Data.Action)
+}
+
+func TestSpec110GateFailsWithoutSnapshot(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "spec110-gate-fail-no-snapshot")
+	handler := &AdminConfigHandler{DB: db}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/config/release-gate",
+		strings.NewReader(`{"confirm":true}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.ReleaseGate(rec, req)
+	require.Equal(t, http.StatusPreconditionFailed, rec.Code)
+
+	var payload adminConfigReleaseGatePayload
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.False(t, payload.OK)
+}
+
+func TestSpec110GatePassesWithHealthyPrerequisites(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "spec110-gate-pass")
+	handler := &AdminConfigHandler{DB: db}
+
+	upsertSyncMetadataForAdminConfigGateTest(t, db, syncMetadataOpenClawConfigSnapshotKey, `{
+		"source":"bridge",
+		"captured_at":"2026-02-09T19:20:00Z",
+		"data":{
+			"gateway":{"port":18791},
+			"agents":{"list":[
+				{"id":"main","name":"Frank","default":true,"workspace":"~/.openclaw/workspace"},
+				{"id":"writer","name":"Writer","workspace":"~/.openclaw/workspace-writer"}
+			]}
+		}
+	}`)
+	upsertSyncMetadataForAdminConfigGateTest(t, db, syncMetadataOpenClawLegacyImportKey, `{
+		"imported_agents":2,
+		"imported_long_term_memories":1,
+		"imported_daily_memories":1,
+		"transition_files_generated":1,
+		"skipped_workspace_count":0,
+		"processed_workspace_count":2,
+		"processed_retired_workspaces":1
+	}`)
+	upsertSyncMetadataForAdminConfigGateTest(t, db, "openclaw_bridge_diagnostics", `{"dispatch_queue_depth":0,"errors_last_hour":0}`)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/config/release-gate",
+		strings.NewReader(`{"confirm":true}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.ReleaseGate(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminConfigReleaseGatePayload
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.True(t, payload.OK)
+	require.Len(t, payload.Checks, 5)
+}
+
+func upsertSyncMetadataForAdminConfigGateTest(t *testing.T, db *sql.DB, key, value string) {
+	t.Helper()
+	_, err := db.Exec(
+		`INSERT INTO sync_metadata (key, value, updated_at)
+		 VALUES ($1, $2, NOW())
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+		key,
+		value,
+	)
+	require.NoError(t, err)
 }

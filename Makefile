@@ -1,4 +1,4 @@
-.PHONY: dev run build build-otter install test migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
+.PHONY: dev run build build-otter install test release-gate migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
 
 # Development
 dev:
@@ -74,6 +74,9 @@ down:
 # Testing
 test:
 	go test ./...
+
+release-gate:
+	go run ./cmd/otter release-gate
 
 test-web:
 	cd web && npm test
