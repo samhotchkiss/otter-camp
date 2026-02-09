@@ -863,17 +863,7 @@ func (h *OpenClawSyncHandler) getAgentsFromDB(db *sql.DB) ([]AgentState, error) 
 }
 
 func extractAgentID(sessionKey string) string {
-	// Session keys look like: "agent:main:slack:channel:..." or "agent:2b:main"
-	if len(sessionKey) < 7 || sessionKey[:6] != "agent:" {
-		return ""
-	}
-	rest := sessionKey[6:]
-	for i, c := range rest {
-		if c == ':' {
-			return rest[:i]
-		}
-	}
-	return rest
+	return ExtractSessionAgentIdentity(sessionKey)
 }
 
 func formatTimeSince(t time.Time) string {
