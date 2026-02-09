@@ -82,6 +82,8 @@ type GlobalChatSurfaceProps = {
   conversation: GlobalChatConversation;
   onConversationTouched?: () => void;
   refreshVersion?: number;
+  agentNamesByID?: Map<string, string>;
+  resolveAgentName?: (raw: string) => string;
 };
 
 function getStoredOrgID(): string {
@@ -500,6 +502,8 @@ export default function GlobalChatSurface({
   conversation,
   onConversationTouched,
   refreshVersion = 0,
+  agentNamesByID,
+  resolveAgentName,
 }: GlobalChatSurfaceProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1411,6 +1415,8 @@ export default function GlobalChatSurface({
         currentUserId={conversationType === "issue" ? issueAuthorID || currentUserID : currentUserID}
         threadId={threadID}
         agent={pseudoAgent}
+        agentNamesByID={agentNamesByID}
+        resolveAgentName={resolveAgentName}
         onRetryMessage={handleRetryMessage}
         onSubmitQuestionnaire={submitQuestionnaireResponse}
       />

@@ -177,4 +177,31 @@ describe("MessageHistory", () => {
     expect(screen.getByTestId("project-chat-session-divider")).toBeInTheDocument();
     expect(screen.getByText(/New chat session started/i)).toBeInTheDocument();
   });
+
+  it("resolves agent sender labels and initials at render time", () => {
+    const messages: DMMessage[] = [
+      {
+        id: "m-agent-1",
+        threadId: "dm_avatar-design",
+        senderId: "agent:avatar-design",
+        senderName: "avatar-design",
+        senderType: "agent",
+        content: "Working on your mockups now.",
+        createdAt: "2026-02-08T00:00:00.000Z",
+      },
+    ];
+
+    render(
+      <MessageHistory
+        messages={messages}
+        currentUserId="user-1"
+        agent={agent}
+        agentNamesByID={new Map([["avatar-design", "Jeff G"]])}
+      />,
+    );
+
+    expect(screen.getByText("Jeff G")).toBeInTheDocument();
+    expect(screen.queryByText("avatar-design")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Jeff G")).toHaveTextContent("JG");
+  });
 });

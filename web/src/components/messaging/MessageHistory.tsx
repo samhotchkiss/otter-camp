@@ -81,6 +81,90 @@ function MessageAttachments({ attachments }: { attachments: MessageAttachment[] 
   );
 }
 
+function appendCandidate(candidates: string[], seen: Set<string>, value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || seen.has(trimmed)) {
+    return;
+  }
+  seen.add(trimmed);
+  candidates.push(trimmed);
+}
+
+function buildAgentLookupCandidates(raw: string): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return candidates;
+  }
+
+  appendCandidate(candidates, seen, trimmed);
+  appendCandidate(candidates, seen, trimmed.toLowerCase());
+
+  if (trimmed.startsWith("agent:")) {
+    const withoutPrefix = trimmed.slice("agent:".length).trim();
+    appendCandidate(candidates, seen, withoutPrefix);
+    appendCandidate(candidates, seen, withoutPrefix.toLowerCase());
+  }
+
+  if (trimmed.startsWith("dm_")) {
+    const withoutDM = trimmed.slice("dm_".length).trim();
+    appendCandidate(candidates, seen, withoutDM);
+    appendCandidate(candidates, seen, withoutDM.toLowerCase());
+  }
+
+  const separatorIndex = trimmed.lastIndexOf(":");
+  if (separatorIndex > -1 && separatorIndex + 1 < trimmed.length) {
+    const tail = trimmed.slice(separatorIndex + 1).trim();
+    appendCandidate(candidates, seen, tail);
+    appendCandidate(candidates, seen, tail.toLowerCase());
+  }
+
+  return candidates;
+}
+
+function lookupAgentName(agentNamesByID: Map<string, string> | undefined, raw: string): string | null {
+  if (!agentNamesByID || agentNamesByID.size === 0) {
+    return null;
+  }
+  for (const candidate of buildAgentLookupCandidates(raw)) {
+    const resolved = (agentNamesByID.get(candidate) ?? "").trim();
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
+function resolveMessageSenderName(
+  message: DMMessage,
+  agentNamesByID?: Map<string, string>,
+  resolveAgentName?: (raw: string) => string,
+): string {
+  if (message.senderType !== "agent") {
+    return message.senderName;
+  }
+
+  const candidates = [message.senderId, message.senderName, message.threadId];
+  for (const candidate of candidates) {
+    const resolved = lookupAgentName(agentNamesByID, candidate);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  if (resolveAgentName) {
+    for (const candidate of candidates) {
+      const resolved = resolveAgentName(candidate).trim();
+      if (resolved && resolved !== candidate.trim()) {
+        return resolved;
+      }
+    }
+  }
+
+  return message.senderName;
+}
+
 function MessageAvatar({
   name,
   avatarUrl,
@@ -119,11 +203,13 @@ function MessageAvatar({
 
 function MessageBubble({
   message,
+  displaySenderName,
   isOwnMessage,
   onRetryMessage,
   onSubmitQuestionnaire,
 }: {
   message: DMMessage;
+  displaySenderName: string;
   isOwnMessage: boolean;
   onRetryMessage?: (message: DMMessage) => void;
   onSubmitQuestionnaire?: (
@@ -158,7 +244,7 @@ function MessageBubble({
       className={`flex gap-3 ${isOwnMessage ? "flex-row-reverse" : "flex-row"}`}
     >
       <MessageAvatar
-        name={message.senderName}
+        name={displaySenderName}
         avatarUrl={message.senderAvatarUrl}
         senderType={message.senderType}
       />
@@ -167,7 +253,7 @@ function MessageBubble({
       >
         <div className="mb-1 flex items-center gap-2">
           <span className="text-xs font-medium text-[var(--text-muted)]">
-            {message.senderName}
+            {displaySenderName}
           </span>
           {message.senderType === "agent" && (
             <span className="rounded-full bg-[var(--accent)]/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--accent)]">
@@ -307,6 +393,8 @@ export type MessageHistoryProps = {
     questionnaireID: string,
     responses: Record<string, unknown>,
   ) => Promise<void> | void;
+  agentNamesByID?: Map<string, string>;
+  resolveAgentName?: (raw: string) => string;
   className?: string;
 };
 
@@ -320,6 +408,8 @@ export default function MessageHistory({
   onLoadMore,
   onRetryMessage,
   onSubmitQuestionnaire,
+  agentNamesByID,
+  resolveAgentName,
   className = "",
 }: MessageHistoryProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -419,6 +509,7 @@ export default function MessageHistory({
             <MessageBubble
               key={message.id}
               message={message}
+              displaySenderName={resolveMessageSenderName(message, agentNamesByID, resolveAgentName)}
               isOwnMessage={message.senderId === currentUserId}
               onRetryMessage={onRetryMessage}
               onSubmitQuestionnaire={onSubmitQuestionnaire}
