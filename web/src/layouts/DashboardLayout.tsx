@@ -48,6 +48,48 @@ type DashboardLayoutProps = {
   children: ReactNode;
 };
 
+type BridgeStatus = "healthy" | "degraded" | "unhealthy";
+
+type AdminConnectionsBridgePayload = {
+  connected?: boolean;
+  sync_healthy?: boolean;
+  status?: string;
+};
+
+type AdminConnectionsPayload = {
+  bridge?: AdminConnectionsBridgePayload;
+};
+
+function normalizeBridgeStatus(
+  bridge: AdminConnectionsBridgePayload | undefined,
+  wsConnectedFallback: boolean,
+): BridgeStatus {
+  const rawStatus = (bridge?.status || "").trim().toLowerCase();
+  if (rawStatus === "healthy" || rawStatus === "degraded" || rawStatus === "unhealthy") {
+    return rawStatus;
+  }
+  if (bridge?.connected === false) {
+    return "unhealthy";
+  }
+  if (bridge?.sync_healthy === true) {
+    return "healthy";
+  }
+  if (bridge?.connected === true || wsConnectedFallback) {
+    return "degraded";
+  }
+  return "unhealthy";
+}
+
+function getBridgeStatusLabel(status: BridgeStatus): string {
+  if (status === "healthy") {
+    return "Bridge healthy";
+  }
+  if (status === "degraded") {
+    return "Bridge delayed";
+  }
+  return "Bridge offline";
+}
+
 function logOut() {
   // Clear auth cookies
   document.cookie = "otter_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
@@ -68,6 +110,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const { connected: wsConnected } = useWS();
   // In demo mode, always show as connected for better UX
   const connected = isDemoMode() || wsConnected;
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(connected ? "healthy" : "unhealthy");
   
   const {
     openCommandPalette,
@@ -222,6 +265,56 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    let pollTimer: number | undefined;
+
+    async function loadBridgeStatus() {
+      if (isDemoMode()) {
+        if (!cancelled) {
+          setBridgeStatus("healthy");
+        }
+        return;
+      }
+      try {
+        const payload = await api.adminConnections() as AdminConnectionsPayload;
+        if (cancelled) {
+          return;
+        }
+        setBridgeStatus(normalizeBridgeStatus(payload.bridge, connected));
+      } catch {
+        if (!cancelled) {
+          setBridgeStatus((previous) => previous || (connected ? "healthy" : "unhealthy"));
+        }
+      }
+    }
+
+    void loadBridgeStatus();
+    pollTimer = window.setInterval(() => {
+      void loadBridgeStatus();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) {
+        window.clearInterval(pollTimer);
+      }
+    };
+  }, [connected]);
+
+  const bridgeStatusLabel = getBridgeStatusLabel(bridgeStatus);
+  const bridgeStatusClass = bridgeStatus === "healthy"
+    ? "connected"
+    : bridgeStatus === "degraded"
+      ? "degraded"
+      : "disconnected";
+  const bridgeDotClass = bridgeStatus === "healthy"
+    ? "status-live"
+    : bridgeStatus === "degraded"
+      ? "status-degraded"
+      : "status-offline";
+  const showBridgeDelayBanner = bridgeStatus !== "healthy";
+
   return (
     <div className="app">
       {/* ========== DEMO BANNER ========== */}
@@ -267,9 +360,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         {/* Right Side */}
         <div className="topbar-right">
           {/* Connection Status */}
-          <div className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
-            <span className={`status-dot ${connected ? 'status-live' : 'status-offline'}`}></span>
-            <span className="status-text">{connected ? 'Live' : 'Offline'}</span>
+          <div
+            className={`connection-status ${bridgeStatusClass}`}
+            aria-label={bridgeStatusLabel}
+            role="status"
+          >
+            <span className={`status-dot ${bridgeDotClass}`}></span>
+            <span className="status-text">{bridgeStatusLabel}</span>
           </div>
 
           {/* User Avatar + Dropdown */}
@@ -327,6 +424,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           </svg>
         </button>
       </header>
+
+      {showBridgeDelayBanner && (
+        <div className={`bridge-delay-banner ${bridgeStatus}`} role="status" aria-live="polite">
+          Messages may be delayed - bridge reconnecting
+        </div>
+      )}
 
       {/* Mobile Navigation */}
       {mobileMenuOpen && (

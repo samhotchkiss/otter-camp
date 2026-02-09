@@ -460,6 +460,10 @@ body {
   background: var(--red);
 }
 
+.status-degraded {
+  background: var(--orange);
+}
+
 .status-blocked {
   background: var(--red);
 }
@@ -680,7 +684,20 @@ textarea::placeholder {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  opacity: 0.8;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.connection-status.connected {
+  background: var(--green-bg, rgba(90, 122, 92, 0.2));
+  color: var(--green);
+}
+
+.connection-status.degraded {
+  background: rgba(200, 121, 65, 0.2);
+  color: var(--orange);
 }
 
 /* ========================================
@@ -720,6 +737,25 @@ textarea::placeholder {
 .mobile-nav-link:hover,
 .mobile-nav-link.active {
   background: var(--surface-alt);
+}
+
+.bridge-delay-banner {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-bottom: 1px solid transparent;
+}
+
+.bridge-delay-banner.degraded {
+  background: rgba(200, 121, 65, 0.2);
+  color: var(--orange);
+  border-color: rgba(200, 121, 65, 0.3);
+}
+
+.bridge-delay-banner.unhealthy {
+  background: var(--red-bg, rgba(184, 92, 56, 0.2));
+  color: var(--red);
+  border-color: rgba(184, 92, 56, 0.3);
 }
 
 @media (max-width: 900px) {
@@ -1112,10 +1148,6 @@ body.has-demo-banner .topbar {
 .connection-status.disconnected {
   background: var(--red-bg, rgba(184, 92, 56, 0.2));
   color: var(--red);
-  padding: 4px 10px;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 500;
 }
 
 /* Agent card padding */

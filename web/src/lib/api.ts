@@ -169,7 +169,19 @@ export type DashboardFeedResponse = FeedResponse | PaginatedFeedResponse;
 
 export interface SyncAgentsResponse {
   last_sync?: string;
+  last_sync_age_seconds?: number;
+  bridge_status?: 'healthy' | 'degraded' | 'unhealthy';
   sync_healthy?: boolean;
+}
+
+export interface AdminConnectionsResponse {
+  bridge?: {
+    connected?: boolean;
+    sync_healthy?: boolean;
+    status?: 'healthy' | 'degraded' | 'unhealthy';
+    last_sync?: string;
+    last_sync_age_seconds?: number;
+  };
 }
 
 export interface ApprovalResponse {
@@ -215,6 +227,7 @@ export const api = {
     return apiFetch<{ projects: Project[] }>(path);
   },
   syncAgents: () => apiFetch<SyncAgentsResponse>(`/api/sync/agents`),
+  adminConnections: () => apiFetch<AdminConnectionsResponse>(`/api/admin/connections`),
   
   // Approval actions
   approveItem: (id: string) => apiFetch<ApprovalResponse>(`/api/approvals/exec/${id}/respond`, {
