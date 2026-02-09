@@ -32,6 +32,10 @@ describe("parseAgentActivityEvent", () => {
       trigger: "chat.slack",
       summary: "Responded in Slack",
       tokens_used: "45",
+      commit_sha: "abcdef1234567",
+      commit_branch: "main",
+      commit_remote: "origin",
+      push_status: "succeeded",
       duration_ms: "1200",
       status: "failed",
       started_at: "2026-02-08T20:10:00.000Z",
@@ -45,6 +49,10 @@ describe("parseAgentActivityEvent", () => {
     expect(parsed?.durationMs).toBe(1200);
     expect(parsed?.status).toBe("failed");
     expect(parsed?.issueNumber).toBe(42);
+    expect(parsed?.commitSha).toBe("abcdef1234567");
+    expect(parsed?.commitBranch).toBe("main");
+    expect(parsed?.commitRemote).toBe("origin");
+    expect(parsed?.pushStatus).toBe("succeeded");
     expect(parsed?.startedAt.toISOString()).toBe("2026-02-08T20:10:00.000Z");
   });
 

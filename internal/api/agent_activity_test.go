@@ -84,6 +84,123 @@ func TestActivityEventsIngestHandler(t *testing.T) {
 	require.Equal(t, "chat.slack", trigger)
 }
 
+func TestActivityEventsIngestCompletionMetadataUpsert(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "activity-ingest-completion-org")
+	handler := &AgentActivityHandler{DB: db}
+
+	startedAt := time.Date(2026, 2, 8, 18, 0, 0, 0, time.UTC)
+	eventID := "01HZZ000000000000000000750"
+
+	firstBody, err := json.Marshal(ingestAgentActivityEventsRequest{
+		OrgID: orgID,
+		Events: []ingestAgentActivityRecord{
+			{
+				ID:           eventID,
+				AgentID:      "main",
+				Trigger:      "task.completion",
+				Summary:      "Captured completion metadata",
+				CommitSHA:    "abcdef1234567",
+				CommitBranch: "main",
+				CommitRemote: "origin",
+				PushStatus:   "succeeded",
+				Status:       "completed",
+				StartedAt:    startedAt,
+				Scope: &ingestAgentActivityScope{
+					IssueNumber: intPtr(42),
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/activity/events", bytes.NewReader(firstBody))
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	firstRec := httptest.NewRecorder()
+	handler.IngestEvents(firstRec, firstReq)
+	require.Equal(t, http.StatusOK, firstRec.Code)
+
+	secondBody, err := json.Marshal(ingestAgentActivityEventsRequest{
+		OrgID: orgID,
+		Events: []ingestAgentActivityRecord{
+			{
+				ID:           eventID,
+				AgentID:      "main",
+				Trigger:      "task.completion",
+				Summary:      "Captured completion metadata (retry)",
+				CommitSHA:    "abcdef1234567",
+				CommitBranch: "release/2026-02-09",
+				CommitRemote: "upstream",
+				PushStatus:   "failed",
+				Status:       "failed",
+				StartedAt:    startedAt,
+				Scope: &ingestAgentActivityScope{
+					IssueNumber: intPtr(42),
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/activity/events", bytes.NewReader(secondBody))
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondReq.Header.Set("X-OpenClaw-Token", "sync-secret")
+	secondRec := httptest.NewRecorder()
+	handler.IngestEvents(secondRec, secondReq)
+	require.Equal(t, http.StatusOK, secondRec.Code)
+
+	var eventCount int
+	err = db.QueryRow(`SELECT COUNT(*) FROM agent_activity_events WHERE org_id = $1 AND id = $2`, orgID, eventID).Scan(&eventCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, eventCount)
+
+	var summary, branch, remote, pushStatus, status string
+	err = db.QueryRow(
+		`SELECT summary, commit_branch, commit_remote, push_status, status
+		 FROM agent_activity_events
+		 WHERE id = $1`,
+		eventID,
+	).Scan(&summary, &branch, &remote, &pushStatus, &status)
+	require.NoError(t, err)
+	require.Equal(t, "Captured completion metadata (retry)", summary)
+	require.Equal(t, "release/2026-02-09", branch)
+	require.Equal(t, "upstream", remote)
+	require.Equal(t, "failed", pushStatus)
+	require.Equal(t, "failed", status)
+
+	var feedCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM activity_log
+		 WHERE org_id = $1
+		   AND action = 'git.push'
+		   AND metadata->>'completion_event_id' = $2`,
+		orgID,
+		eventID,
+	).Scan(&feedCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, feedCount)
+
+	var feedPushStatus, feedCommitSHA string
+	err = db.QueryRow(
+		`SELECT metadata->>'push_status', metadata->>'commit_sha'
+		 FROM activity_log
+		 WHERE org_id = $1
+		   AND action = 'git.push'
+		   AND metadata->>'completion_event_id' = $2`,
+		orgID,
+		eventID,
+	).Scan(&feedPushStatus, &feedCommitSHA)
+	require.NoError(t, err)
+	require.Equal(t, "failed", feedPushStatus)
+	require.Equal(t, "abcdef1234567", feedCommitSHA)
+}
+
 func TestActivityEventWebsocketBroadcast(t *testing.T) {
 	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
 	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
@@ -115,17 +232,21 @@ func TestActivityEventWebsocketBroadcast(t *testing.T) {
 		OrgID: orgID,
 		Events: []ingestAgentActivityRecord{
 			{
-				ID:         "01HZZ000000000000000000799",
-				AgentID:    "main",
-				SessionKey: "agent:main:main",
-				Trigger:    "chat.slack",
-				Channel:    "slack",
-				Summary:    "Answered a Slack prompt",
-				TokensUsed: 120,
-				ModelUsed:  "opus-4-6",
-				DurationMs: 800,
-				Status:     "completed",
-				StartedAt:  startedAt,
+				ID:           "01HZZ000000000000000000799",
+				AgentID:      "main",
+				SessionKey:   "agent:main:main",
+				Trigger:      "chat.slack",
+				Channel:      "slack",
+				Summary:      "Answered a Slack prompt",
+				TokensUsed:   120,
+				ModelUsed:    "opus-4-6",
+				CommitSHA:    "abcdef1234567",
+				CommitBranch: "main",
+				CommitRemote: "origin",
+				PushStatus:   "succeeded",
+				DurationMs:   800,
+				Status:       "completed",
+				StartedAt:    startedAt,
 			},
 		},
 	})
@@ -154,6 +275,10 @@ func TestActivityEventWebsocketBroadcast(t *testing.T) {
 		require.Equal(t, "main", event.Data.Event["agent_id"])
 		require.Equal(t, "chat.slack", event.Data.Event["trigger"])
 		require.Equal(t, "Answered a Slack prompt", event.Data.Event["summary"])
+		require.Equal(t, "abcdef1234567", event.Data.Event["commit_sha"])
+		require.Equal(t, "main", event.Data.Event["commit_branch"])
+		require.Equal(t, "origin", event.Data.Event["commit_remote"])
+		require.Equal(t, "succeeded", event.Data.Event["push_status"])
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("expected websocket subscriber to receive activity broadcast")
 	}
@@ -243,6 +368,41 @@ func TestActivityEventsIngestHandlerValidation(t *testing.T) {
 			token:      "sync-secret",
 			wantStatus: http.StatusBadRequest,
 			wantError:  "org_id must be a UUID",
+		},
+		{
+			name: "invalid commit sha",
+			payload: ingestAgentActivityEventsRequest{
+				OrgID: orgID,
+				Events: []ingestAgentActivityRecord{{
+					ID:        "01HZZ000000000000000000805",
+					AgentID:   "main",
+					Trigger:   "task.completion",
+					Summary:   "Bad commit sha",
+					CommitSHA: "g123456",
+					StartedAt: time.Now().UTC(),
+				}},
+			},
+			token:      "sync-secret",
+			wantStatus: http.StatusBadRequest,
+			wantError:  "commit_sha must be a hex git SHA",
+		},
+		{
+			name: "invalid push status",
+			payload: ingestAgentActivityEventsRequest{
+				OrgID: orgID,
+				Events: []ingestAgentActivityRecord{{
+					ID:         "01HZZ000000000000000000806",
+					AgentID:    "main",
+					Trigger:    "task.completion",
+					Summary:    "Bad push status",
+					CommitSHA:  "abcdef1234567",
+					PushStatus: "done",
+					StartedAt:  time.Now().UTC(),
+				}},
+			},
+			token:      "sync-secret",
+			wantStatus: http.StatusBadRequest,
+			wantError:  "push_status is invalid",
 		},
 	}
 

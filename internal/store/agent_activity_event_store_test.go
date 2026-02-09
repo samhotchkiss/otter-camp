@@ -246,6 +246,108 @@ func TestAgentActivityEventStoreBatchCreate(t *testing.T) {
 	assert.Equal(t, "01HZZ000000000000000000301", recent[1].ID)
 }
 
+func TestAgentActivityEventStoreBatchCreateIdempotentCompletionMetadata(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "agent-activity-batch-idempotent")
+	ctx := ctxWithWorkspace(orgID)
+
+	store := NewAgentActivityEventStore(db)
+	startedAt := time.Date(2026, 2, 8, 9, 30, 0, 0, time.UTC)
+	completedAt := startedAt.Add(2 * time.Minute)
+
+	err := store.CreateEvents(ctx, []CreateAgentActivityEventInput{
+		{
+			ID:           "01HZZ000000000000000000399",
+			AgentID:      "main",
+			Trigger:      "task.completion",
+			Summary:      "Completion metadata captured",
+			Status:       "completed",
+			StartedAt:    startedAt,
+			CompletedAt:  &completedAt,
+			CommitSHA:    "abcdef1234567",
+			CommitBranch: "main",
+			CommitRemote: "origin",
+			PushStatus:   "succeeded",
+		},
+	})
+	require.NoError(t, err)
+
+	err = store.CreateEvents(ctx, []CreateAgentActivityEventInput{
+		{
+			ID:           "01HZZ000000000000000000399",
+			AgentID:      "main",
+			Trigger:      "task.completion",
+			Summary:      "Completion metadata updated",
+			Status:       "failed",
+			StartedAt:    startedAt,
+			CompletedAt:  &completedAt,
+			CommitSHA:    "abcdef1234567",
+			CommitBranch: "feature/branch",
+			CommitRemote: "upstream",
+			PushStatus:   "failed",
+		},
+	})
+	require.NoError(t, err)
+
+	events, err := store.ListByAgent(ctx, "main", ListAgentActivityOptions{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "01HZZ000000000000000000399", events[0].ID)
+	assert.Equal(t, "Completion metadata updated", events[0].Summary)
+	assert.Equal(t, "abcdef1234567", events[0].CommitSHA)
+	assert.Equal(t, "feature/branch", events[0].CommitBranch)
+	assert.Equal(t, "upstream", events[0].CommitRemote)
+	assert.Equal(t, "failed", events[0].PushStatus)
+	assert.Equal(t, "failed", events[0].Status)
+}
+
+func TestAgentActivityEventStoreBatchCreateRejectsCrossOrgIDConflict(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgA := createTestOrganization(t, db, "agent-activity-batch-conflict-org-a")
+	orgB := createTestOrganization(t, db, "agent-activity-batch-conflict-org-b")
+	ctxA := ctxWithWorkspace(orgA)
+	ctxB := ctxWithWorkspace(orgB)
+
+	store := NewAgentActivityEventStore(db)
+	startedAt := time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+
+	err := store.CreateEvents(ctxA, []CreateAgentActivityEventInput{
+		{
+			ID:        "01HZZ000000000000000000401",
+			AgentID:   "main",
+			Trigger:   "task.completion",
+			Summary:   "Org A completion metadata",
+			Status:    "completed",
+			StartedAt: startedAt,
+		},
+	})
+	require.NoError(t, err)
+
+	err = store.CreateEvents(ctxB, []CreateAgentActivityEventInput{
+		{
+			ID:        "01HZZ000000000000000000401",
+			AgentID:   "main",
+			Trigger:   "task.completion",
+			Summary:   "Org B conflicting completion metadata",
+			Status:    "completed",
+			StartedAt: startedAt,
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicts outside workspace")
+
+	orgAEvents, err := store.ListByAgent(ctxA, "main", ListAgentActivityOptions{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, orgAEvents, 1)
+	assert.Equal(t, "Org A completion metadata", orgAEvents[0].Summary)
+
+	orgBEvents, err := store.ListByAgent(ctxB, "main", ListAgentActivityOptions{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, orgBEvents, 0)
+}
+
 func TestAgentActivityEventStoreLatestByAgent(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
