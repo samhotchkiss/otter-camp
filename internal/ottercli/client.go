@@ -439,6 +439,86 @@ func (c *Client) ArchiveAgent(agentID string) error {
 	return c.do(req, nil)
 }
 
+func (c *Client) WriteAgentMemory(agentID string, input map[string]any) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/agents/"+url.PathEscape(agentID)+"/memory", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ReadAgentMemory(agentID string, days int, includeLongTerm bool) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	if days <= 0 {
+		days = 2
+	}
+	q := url.Values{}
+	q.Set("days", fmt.Sprintf("%d", days))
+	if includeLongTerm {
+		q.Set("include_long_term", "true")
+	}
+	req, err := c.newRequest(http.MethodGet, "/api/agents/"+url.PathEscape(agentID)+"/memory?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) SearchAgentMemory(agentID, query string, limit int) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	query = strings.TrimSpace(query)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	if query == "" {
+		return nil, errors.New("query is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	q := url.Values{}
+	q.Set("q", query)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	req, err := c.newRequest(http.MethodGet, "/api/agents/"+url.PathEscape(agentID)+"/memory/search?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 func (c *Client) ResolveAgent(query string) (Agent, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
