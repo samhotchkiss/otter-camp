@@ -22,6 +22,8 @@ var (
 	ErrInvalidWorkspace = errors.New("invalid workspace ID")
 	// ErrValidation is returned when caller input fails validation.
 	ErrValidation = errors.New("validation failed")
+	// ErrConflict is returned when a requested state transition is not allowed.
+	ErrConflict = errors.New("state transition conflict")
 	// ErrNotFound is returned when a requested entity does not exist.
 	ErrNotFound = errors.New("entity not found")
 	// ErrForbidden is returned when access to an entity is denied.

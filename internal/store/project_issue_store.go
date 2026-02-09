@@ -560,12 +560,12 @@ func (s *ProjectIssueStore) TransitionApprovalState(
 
 	issueID = strings.TrimSpace(issueID)
 	if !uuidRegex.MatchString(issueID) {
-		return nil, fmt.Errorf("invalid issue_id")
+		return nil, fmt.Errorf("%w: invalid issue_id", ErrValidation)
 	}
 
 	normalizedNext := normalizeIssueApprovalState(nextState)
 	if !isValidIssueApprovalState(normalizedNext) {
-		return nil, fmt.Errorf("invalid approval_state")
+		return nil, fmt.Errorf("%w: invalid approval_state", ErrValidation)
 	}
 
 	tx, err := WithWorkspaceTx(ctx, s.db)
@@ -597,7 +597,7 @@ func (s *ProjectIssueStore) TransitionApprovalState(
 		currentState = defaultApprovalStateForLegacyState(current.State)
 	}
 	if !canTransitionIssueApprovalState(currentState, normalizedNext) {
-		return nil, fmt.Errorf("invalid approval_state transition")
+		return nil, fmt.Errorf("%w: invalid approval_state transition", ErrConflict)
 	}
 
 	updated := current
@@ -645,12 +645,12 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 
 	issueID = strings.TrimSpace(issueID)
 	if !uuidRegex.MatchString(issueID) {
-		return nil, fmt.Errorf("invalid issue_id")
+		return nil, fmt.Errorf("%w: invalid issue_id", ErrValidation)
 	}
 
 	normalizedNext := normalizeIssueWorkStatus(nextStatus)
 	if !isValidIssueWorkStatus(normalizedNext) {
-		return nil, fmt.Errorf("invalid work_status")
+		return nil, fmt.Errorf("%w: invalid work_status", ErrValidation)
 	}
 
 	tx, err := WithWorkspaceTx(ctx, s.db)
@@ -682,7 +682,7 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 		currentStatus = defaultIssueWorkStatusForState(current.State)
 	}
 	if !canTransitionIssueWorkStatus(currentStatus, normalizedNext) {
-		return nil, fmt.Errorf("invalid work_status transition")
+		return nil, fmt.Errorf("%w: invalid work_status transition", ErrConflict)
 	}
 
 	nextIssueState := current.State

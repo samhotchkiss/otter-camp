@@ -396,7 +396,7 @@ func TestIssuesHandlerPatchIssueRejectsInvalidTransitionsAndValues(t *testing.T)
 	)
 	invalidTransitionRec := httptest.NewRecorder()
 	router.ServeHTTP(invalidTransitionRec, invalidTransitionReq)
-	require.Equal(t, http.StatusBadRequest, invalidTransitionRec.Code)
+	require.Equal(t, http.StatusConflict, invalidTransitionRec.Code)
 
 	invalidPriorityReq := httptest.NewRequest(
 		http.MethodPatch,
@@ -595,6 +595,17 @@ func TestHandleIssueStoreErrorUnexpectedReturns500(t *testing.T) {
 	var payload errorResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.Equal(t, "internal server error", payload.Error)
+}
+
+func TestHandleIssueStoreErrorTransitionValidationMapsTo409(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handleIssueStoreError(rec, fmt.Errorf("%w: invalid approval_state transition", store.ErrConflict))
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "invalid state transition", payload.Error)
 }
 
 func TestIssuesHandlerCommentCreateDispatchesToOpenClawOwner(t *testing.T) {
@@ -1112,7 +1123,7 @@ func TestIssuesHandlerTransitionApprovalStateEnforcesStateMachineAndEmitsActivit
 	)
 	invalidTransitionRec := httptest.NewRecorder()
 	router.ServeHTTP(invalidTransitionRec, invalidTransitionReq)
-	require.Equal(t, http.StatusBadRequest, invalidTransitionRec.Code)
+	require.Equal(t, http.StatusConflict, invalidTransitionRec.Code)
 
 	validTransitionReq := httptest.NewRequest(
 		http.MethodPost,
@@ -1178,7 +1189,7 @@ func TestIssuesHandlerApproveRequiresReadyForReviewAndEmitsCompletionActivity(t 
 	)
 	earlyApproveRec := httptest.NewRecorder()
 	router.ServeHTTP(earlyApproveRec, earlyApproveReq)
-	require.Equal(t, http.StatusBadRequest, earlyApproveRec.Code)
+	require.Equal(t, http.StatusConflict, earlyApproveRec.Code)
 
 	moveReadyReq := httptest.NewRequest(
 		http.MethodPost,
