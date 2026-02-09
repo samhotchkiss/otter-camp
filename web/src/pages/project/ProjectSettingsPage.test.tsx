@@ -8,6 +8,12 @@ vi.mock("../../components/project/PipelineSettings", () => ({
   ),
 }));
 
+vi.mock("../../components/project/DeploySettings", () => ({
+  default: ({ projectId }: { projectId: string }) => (
+    <div data-testid="deploy-settings-mock">Deploy settings for {projectId}</div>
+  ),
+}));
+
 describe("ProjectSettingsPage", () => {
   it("renders general settings controls and pipeline section", () => {
     const onPrimaryAgentChange = vi.fn();
@@ -32,6 +38,9 @@ describe("ProjectSettingsPage", () => {
     expect(screen.getByLabelText("Primary Agent")).toHaveValue("agent-1");
     expect(screen.getByTestId("pipeline-settings-mock")).toHaveTextContent(
       "Pipeline settings for project-1",
+    );
+    expect(screen.getByTestId("deploy-settings-mock")).toHaveTextContent(
+      "Deploy settings for project-1",
     );
 
     fireEvent.change(screen.getByLabelText("Primary Agent"), { target: { value: "agent-2" } });
