@@ -1,5 +1,5 @@
 // Cache bust: 2026-02-05-11:15
-import { useState, useEffect, useMemo, type FormEvent } from "react";
+import { useState, useEffect, useMemo, useRef, type FormEvent } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProjectFileBrowser from "../components/project/ProjectFileBrowser";
@@ -125,9 +125,6 @@ function buildProjectIssueRequestMessage(projectName: string, issueTitle: string
     "Please create a new project issue for this request.",
   ].join("\n");
 }
-
-// Agent ID to name mapping (from database)
-const agentIdToName: Record<string, string> = {};
 
 type TaskColumn = {
   key: string;
@@ -329,6 +326,7 @@ export default function ProjectDetailPage() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
+  const agentIdToNameRef = useRef<Record<string, string>>({});
   const { upsertConversation, openConversation } = useGlobalChat();
 
   // Fetch project and issue work items
@@ -338,6 +336,7 @@ export default function ProjectDetailPage() {
       
       setIsLoading(true);
       setError(null);
+      agentIdToNameRef.current = {};
       
       try {
         const orgId = localStorage.getItem('otter-camp-org-id');
@@ -371,7 +370,7 @@ export default function ProjectDetailPage() {
               (typeof agent.display_name === "string" && agent.display_name.trim()) ||
               agent.id;
             const agentID = agent.id.trim();
-            agentIdToName[agentID] = agentName;
+            agentIdToNameRef.current[agentID] = agentName;
             parsedAgents.push({ id: agentID, name: agentName });
           }
           parsedAgents.sort((a, b) => a.name.localeCompare(b.name));
@@ -422,7 +421,7 @@ export default function ProjectDetailPage() {
               ? priorityRaw
               : "P2";
             const agentName = ownerAgentID
-              ? (agentIdToName[ownerAgentID] || "Unassigned")
+              ? (agentIdToNameRef.current[ownerAgentID] || "Unassigned")
               : "Unassigned";
             return {
               id: raw.id,
@@ -607,7 +606,10 @@ export default function ProjectDetailPage() {
 
   const primaryAgentName =
     project.lead ||
-    (project.primary_agent_id ? agentIdToName[project.primary_agent_id] : undefined);
+    (project.primary_agent_id
+      ? availableAgents.find((agent) => agent.id === project.primary_agent_id)?.name ||
+        agentIdToNameRef.current[project.primary_agent_id]
+      : undefined);
 
   const handleSaveSettings = async () => {
     if (!id) return;

@@ -641,4 +641,92 @@ describe("ProjectDetailPage files tab", () => {
     expect(screen.getByText("No active issues")).toBeInTheDocument();
     expect(screen.queryByText("No active tasks")).not.toBeInTheDocument();
   });
+
+  it("does not leak agent name mappings across project remounts", async () => {
+    const ownerID = "550e8400-e29b-41d4-a716-446655440abc";
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Project One",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          agents: [{ id: ownerID, name: "Ivy" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-1",
+              issue_number: 101,
+              title: "Project one issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: ownerID,
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-2",
+          name: "Project Two",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          items: [
+            {
+              id: "issue-2",
+              issue_number: 202,
+              title: "Project two issue",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              owner_agent_id: ownerID,
+              work_status: "in_progress",
+              priority: "P1",
+              last_activity_at: "2026-02-08T12:00:00Z",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    const firstRender = render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Project One" })).toBeInTheDocument();
+    expect(screen.getByText("Ivy")).toBeInTheDocument();
+    firstRender.unmount();
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-2"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Project Two" })).toBeInTheDocument();
+    expect(screen.getByText("Project two issue")).toBeInTheDocument();
+    expect(screen.getByText("Unassigned")).toBeInTheDocument();
+    expect(screen.queryByText("Ivy")).not.toBeInTheDocument();
+  });
 });
