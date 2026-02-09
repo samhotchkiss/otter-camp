@@ -347,7 +347,11 @@ type emissionReceivedEvent struct {
 }
 
 func (h *EmissionsHandler) broadcastEmission(orgID string, emission Emission) {
-	if h.Hub == nil {
+	broadcastEmissionEvent(h.Hub, orgID, emission)
+}
+
+func broadcastEmissionEvent(hub emissionBroadcaster, orgID string, emission Emission) {
+	if hub == nil {
 		return
 	}
 	payload, err := json.Marshal(emissionReceivedEvent{
@@ -357,15 +361,15 @@ func (h *EmissionsHandler) broadcastEmission(orgID string, emission Emission) {
 	if err != nil {
 		return
 	}
-	h.Hub.Broadcast(orgID, payload)
+	hub.Broadcast(orgID, payload)
 
 	if emission.Scope == nil {
 		return
 	}
 	if emission.Scope.ProjectID != nil && strings.TrimSpace(*emission.Scope.ProjectID) != "" {
-		h.Hub.BroadcastTopic(orgID, "project:"+strings.TrimSpace(*emission.Scope.ProjectID), payload)
+		hub.BroadcastTopic(orgID, "project:"+strings.TrimSpace(*emission.Scope.ProjectID), payload)
 	}
 	if emission.Scope.IssueID != nil && strings.TrimSpace(*emission.Scope.IssueID) != "" {
-		h.Hub.BroadcastTopic(orgID, "issue:"+strings.TrimSpace(*emission.Scope.IssueID), payload)
+		hub.BroadcastTopic(orgID, "issue:"+strings.TrimSpace(*emission.Scope.IssueID), payload)
 	}
 }

@@ -25,9 +25,10 @@ import (
 
 // OpenClawSyncHandler handles real-time sync from OpenClaw
 type OpenClawSyncHandler struct {
-	Hub            *ws.Hub
-	DB             *sql.DB
-	EmissionBuffer *EmissionBuffer
+	Hub                 *ws.Hub
+	DB                  *sql.DB
+	EmissionBuffer      *EmissionBuffer
+	EmissionBroadcaster emissionBroadcaster
 }
 
 const maxOpenClawSyncBodySize = 2 << 20 // 2 MB
@@ -307,6 +308,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	processedCount := 0
 	now := time.Now()
+	syncBroadcaster := h.resolveEmissionBroadcaster()
 
 	if h.EmissionBuffer != nil && len(payload.Emissions) > 0 {
 		if workspaceID == "" {
@@ -320,6 +322,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 				}
 				emission.OrgID = workspaceID
 				h.EmissionBuffer.Push(emission)
+				broadcastEmissionEvent(syncBroadcaster, workspaceID, emission)
 			}
 		}
 	}
@@ -337,6 +340,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 				}
 				emission.OrgID = workspaceID
 				h.EmissionBuffer.Push(emission)
+				broadcastEmissionEvent(syncBroadcaster, workspaceID, emission)
 			}
 		}
 	}
@@ -686,6 +690,16 @@ func resolveOpenClawSyncWorkspaceID(r *http.Request) string {
 		return workspaceID
 	}
 	return ""
+}
+
+func (h *OpenClawSyncHandler) resolveEmissionBroadcaster() emissionBroadcaster {
+	if h.EmissionBroadcaster != nil {
+		return h.EmissionBroadcaster
+	}
+	if h.Hub != nil {
+		return h.Hub
+	}
+	return nil
 }
 
 // GetAgents returns current agent states
