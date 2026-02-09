@@ -302,6 +302,17 @@ func NewRouter() http.Handler {
 		r.Post("/import", HandleImport)
 		r.Post("/import/validate", HandleImportValidate)
 
+		r.Get("/settings/profile", HandleSettingsProfileGet)
+		r.Put("/settings/profile", HandleSettingsProfilePut)
+		r.Get("/settings/notifications", HandleSettingsNotificationsGet)
+		r.Put("/settings/notifications", HandleSettingsNotificationsPut)
+		r.Get("/settings/workspace", HandleSettingsWorkspaceGet)
+		r.Put("/settings/workspace", HandleSettingsWorkspacePut)
+		r.Get("/settings/integrations", HandleSettingsIntegrationsGet)
+		r.Put("/settings/integrations", HandleSettingsIntegrationsPut)
+		r.Post("/settings/integrations/api-keys", HandleSettingsAPIKeyCreate)
+		r.Delete("/settings/integrations/api-keys/{id}", HandleSettingsAPIKeyDelete)
+
 		// Admin endpoints
 		r.With(middleware.OptionalWorkspace).Post("/admin/init-repos", HandleAdminInitRepos(db))
 		r.With(middleware.OptionalWorkspace).Get("/admin/connections", adminConnectionsHandler.Get)
