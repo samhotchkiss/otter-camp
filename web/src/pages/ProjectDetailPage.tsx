@@ -6,6 +6,7 @@ import ProjectFileBrowser from "../components/project/ProjectFileBrowser";
 import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
 import PipelineMiniProgress from "../components/issues/PipelineMiniProgress";
+import ProjectSettingsPage from "./project/ProjectSettingsPage";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
 
@@ -43,6 +44,7 @@ type Project = {
   status?: string;
   lead?: string;
   repo_url?: string;
+  require_human_review?: boolean;
   primary_agent_id?: string;
 };
 
@@ -957,57 +959,20 @@ export default function ProjectDetailPage() {
       )}
 
       {activeTab === "settings" && (
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
-          <h2 className="mb-4 text-lg font-semibold text-[var(--text)]">
-            Project Settings
-          </h2>
-          <div className="max-w-xl space-y-5">
-            <div>
-              <label
-                htmlFor="primary-agent"
-                className="mb-2 block text-sm font-medium text-[var(--text)]"
-              >
-                Primary Agent
-              </label>
-              <p className="mb-2 text-xs text-[var(--text-muted)]">
-                This agent will be used as the default owner for project chat routing.
-              </p>
-              <select
-                id="primary-agent"
-                value={selectedPrimaryAgentID}
-                onChange={(event) => setSelectedPrimaryAgentID(event.target.value)}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)]"
-              >
-                <option value="">No primary agent</option>
-                {availableAgents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {settingsError ? (
-              <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-                {settingsError}
-              </div>
-            ) : null}
-            {settingsSuccess ? (
-              <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
-                {settingsSuccess}
-              </div>
-            ) : null}
-
-            <button
-              type="button"
-              disabled={isSavingSettings}
-              onClick={handleSaveSettings}
-              className="rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#B8975B] disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {isSavingSettings ? "Saving..." : "Save settings"}
-            </button>
-          </div>
-        </div>
+        <ProjectSettingsPage
+          projectID={project.id}
+          availableAgents={availableAgents}
+          selectedPrimaryAgentID={selectedPrimaryAgentID}
+          onPrimaryAgentChange={setSelectedPrimaryAgentID}
+          onSaveGeneralSettings={handleSaveSettings}
+          isSavingGeneralSettings={isSavingSettings}
+          generalError={settingsError}
+          generalSuccess={settingsSuccess}
+          initialRequireHumanReview={Boolean(project.require_human_review)}
+          onRequireHumanReviewSaved={(value) =>
+            setProject((prev) => (prev ? { ...prev, require_human_review: value } : prev))
+          }
+        />
       )}
     </div>
   );
