@@ -46,6 +46,28 @@ type projectAPIResponse struct {
 	CompletedCount    int             `json:"completedCount"`
 }
 
+type projectWorkflowRunResponse struct {
+	ID           string  `json:"id"`
+	ProjectID    string  `json:"project_id"`
+	IssueNumber  int64   `json:"issue_number"`
+	Title        string  `json:"title"`
+	State        string  `json:"state"`
+	WorkStatus   string  `json:"work_status"`
+	Priority     string  `json:"priority"`
+	OwnerAgentID *string `json:"owner_agent_id,omitempty"`
+	CreatedAt    string  `json:"created_at"`
+	ClosedAt     *string `json:"closed_at,omitempty"`
+}
+
+type projectWorkflowTemplate struct {
+	TitlePattern string   `json:"title_pattern"`
+	Body         string   `json:"body"`
+	Priority     string   `json:"priority"`
+	Labels       []string `json:"labels"`
+	AutoClose    bool     `json:"auto_close"`
+	Pipeline     string   `json:"pipeline"`
+}
+
 // Demo projects for when database is unavailable
 var demoProjects = []map[string]interface{}{
 	{
@@ -836,6 +858,342 @@ func (h *ProjectsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request)
 	}
 
 	h.Get(w, r)
+}
+
+// ListRuns returns workflow run history for a project.
+func (h *ProjectsHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil || h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project ID is required"})
+		return
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.URL.Query().Get("org_id"))
+	}
+	if workspaceID == "" {
+		if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+			workspaceID = identity.OrgID
+		}
+	}
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+		return
+	}
+
+	limit := 20
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "limit must be a positive integer"})
+			return
+		}
+		if parsed > 200 {
+			parsed = 200
+		}
+		limit = parsed
+	}
+
+	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
+	if _, err := h.Store.GetByID(ctx, projectID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
+			return
+		}
+		if errors.Is(err, store.ErrForbidden) {
+			sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
+			return
+		}
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load project"})
+		return
+	}
+
+	issueStore := store.NewProjectIssueStore(h.DB)
+	issues, err := issueStore.ListIssues(ctx, store.ProjectIssueFilter{
+		ProjectID: projectID,
+		Limit:     limit,
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	runs := make([]projectWorkflowRunResponse, 0, len(issues))
+	for _, issue := range issues {
+		runs = append(runs, workflowRunFromIssue(issue))
+	}
+
+	sendJSON(w, http.StatusOK, map[string]any{
+		"runs":  runs,
+		"total": len(runs),
+	})
+}
+
+// GetLatestRun returns the latest workflow run issue for a project.
+func (h *ProjectsHandler) GetLatestRun(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil || h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project ID is required"})
+		return
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.URL.Query().Get("org_id"))
+	}
+	if workspaceID == "" {
+		if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+			workspaceID = identity.OrgID
+		}
+	}
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+		return
+	}
+
+	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
+	if _, err := h.Store.GetByID(ctx, projectID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
+			return
+		}
+		if errors.Is(err, store.ErrForbidden) {
+			sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
+			return
+		}
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load project"})
+		return
+	}
+
+	issueStore := store.NewProjectIssueStore(h.DB)
+	issues, err := issueStore.ListIssues(ctx, store.ProjectIssueFilter{
+		ProjectID: projectID,
+		Limit:     1,
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	if len(issues) == 0 {
+		sendJSON(w, http.StatusNotFound, errorResponse{Error: "no workflow runs found"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, workflowRunFromIssue(issues[0]))
+}
+
+// TriggerRun creates a workflow run issue immediately for a project.
+func (h *ProjectsHandler) TriggerRun(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil || h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project ID is required"})
+		return
+	}
+
+	workspaceID := middleware.WorkspaceFromContext(r.Context())
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.URL.Query().Get("org_id"))
+	}
+	if workspaceID == "" {
+		if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+			workspaceID = identity.OrgID
+		}
+	}
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+		return
+	}
+
+	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
+	project, err := h.Store.GetByID(ctx, projectID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
+			return
+		}
+		if errors.Is(err, store.ErrForbidden) {
+			sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
+			return
+		}
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load project"})
+		return
+	}
+
+	runNumber := project.WorkflowRunCount + 1
+	agentName := workflowAgentDisplayName(ctx, h.DB, project.WorkflowAgentID)
+	template := workflowTemplateForProject(project, runNumber, agentName)
+
+	issueStore := store.NewProjectIssueStore(h.DB)
+	issueBody := strings.TrimSpace(template.Body)
+	var issueBodyPtr *string
+	if issueBody != "" {
+		issueBodyPtr = &issueBody
+	}
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID:    project.ID,
+		Title:        template.TitlePattern,
+		Body:         issueBodyPtr,
+		Origin:       "local",
+		Priority:     template.Priority,
+		OwnerAgentID: project.WorkflowAgentID,
+		WorkStatus:   store.IssueWorkStatusQueued,
+		State:        "open",
+	})
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	if issue.OwnerAgentID != nil {
+		if _, err := issueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
+			IssueID: issue.ID,
+			AgentID: *issue.OwnerAgentID,
+			Role:    "owner",
+		}); err != nil {
+			handleIssueStoreError(w, err)
+			return
+		}
+	}
+
+	if len(template.Labels) > 0 {
+		labelStore := store.NewLabelStore(h.DB)
+		for _, raw := range template.Labels {
+			name := strings.TrimSpace(raw)
+			if name == "" {
+				continue
+			}
+			label, err := labelStore.GetByName(ctx, name)
+			if err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					label, err = labelStore.Create(ctx, name, "")
+				}
+				if err != nil {
+					sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create workflow label"})
+					return
+				}
+			}
+			if err := labelStore.AddToIssue(ctx, issue.ID, label.ID); err != nil {
+				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to apply workflow labels"})
+				return
+			}
+		}
+	}
+
+	now := time.Now().UTC()
+	updateInput := store.UpdateProjectInput{
+		Name:              project.Name,
+		Description:       project.Description,
+		Status:            project.Status,
+		RepoURL:           project.RepoURL,
+		WorkflowEnabled:   project.WorkflowEnabled,
+		WorkflowSchedule:  project.WorkflowSchedule,
+		WorkflowTemplate:  project.WorkflowTemplate,
+		WorkflowAgentID:   project.WorkflowAgentID,
+		WorkflowLastRunAt: &now,
+		WorkflowNextRunAt: project.WorkflowNextRunAt,
+		WorkflowRunCount:  runNumber,
+	}
+	if _, err := h.Store.Update(ctx, project.ID, updateInput); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update workflow run metadata"})
+		return
+	}
+
+	sendJSON(w, http.StatusCreated, map[string]any{
+		"run":        workflowRunFromIssue(*issue),
+		"run_number": runNumber,
+	})
+}
+
+func workflowTemplateForProject(project *store.Project, runNumber int, agentName string) projectWorkflowTemplate {
+	template := projectWorkflowTemplate{
+		TitlePattern: strings.TrimSpace(project.Name) + " — {{datetime}}",
+		Body:         "",
+		Priority:     store.IssuePriorityP3,
+		Labels:       []string{"automated"},
+		Pipeline:     "none",
+	}
+
+	if len(project.WorkflowTemplate) > 0 {
+		_ = json.Unmarshal(project.WorkflowTemplate, &template)
+	}
+	if strings.TrimSpace(template.TitlePattern) == "" {
+		template.TitlePattern = strings.TrimSpace(project.Name) + " — {{datetime}}"
+	}
+	if strings.TrimSpace(template.Priority) == "" {
+		template.Priority = store.IssuePriorityP3
+	}
+	if len(template.Labels) == 0 {
+		template.Labels = []string{"automated"}
+	}
+
+	vars := map[string]string{
+		"date":       time.Now().Format("Jan 2, 2006"),
+		"datetime":   time.Now().Format(time.RFC3339),
+		"run_number": strconv.Itoa(runNumber),
+		"agent_name": strings.TrimSpace(agentName),
+	}
+	template.TitlePattern = renderWorkflowTemplateText(template.TitlePattern, vars)
+	template.Body = renderWorkflowTemplateText(template.Body, vars)
+	return template
+}
+
+func renderWorkflowTemplateText(value string, vars map[string]string) string {
+	updated := value
+	for key, replacement := range vars {
+		updated = strings.ReplaceAll(updated, "{{"+key+"}}", replacement)
+	}
+	return strings.TrimSpace(updated)
+}
+
+func workflowAgentDisplayName(ctx context.Context, db *sql.DB, agentID *string) string {
+	if agentID == nil || strings.TrimSpace(*agentID) == "" || db == nil {
+		return ""
+	}
+	var displayName string
+	err := db.QueryRowContext(
+		ctx,
+		"SELECT COALESCE(display_name, name, '') FROM agents WHERE id = $1",
+		*agentID,
+	).Scan(&displayName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(displayName)
+}
+
+func workflowRunFromIssue(issue store.ProjectIssue) projectWorkflowRunResponse {
+	run := projectWorkflowRunResponse{
+		ID:           issue.ID,
+		ProjectID:    issue.ProjectID,
+		IssueNumber:  issue.IssueNumber,
+		Title:        issue.Title,
+		State:        issue.State,
+		WorkStatus:   issue.WorkStatus,
+		Priority:     issue.Priority,
+		OwnerAgentID: issue.OwnerAgentID,
+		CreatedAt:    issue.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if issue.ClosedAt != nil {
+		closedAt := issue.ClosedAt.UTC().Format(time.RFC3339)
+		run.ClosedAt = &closedAt
+	}
+	return run
 }
 
 func isSupportedProjectStatus(status string) bool {
