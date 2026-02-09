@@ -2,13 +2,39 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   formatQuestionnaireForFallback,
+  isCanonicalChameleonSessionKey,
   normalizeQuestionnairePayload,
+  parseChameleonSessionKey,
   parseNumberedAnswers,
   parseNumberedQuestionnaireResponse,
   parseQuestionnaireAnswer,
   type QuestionnairePayload,
   type QuestionnaireQuestion,
 } from "./openclaw-bridge";
+
+describe("bridge chameleon session key helpers", () => {
+  it("validates canonical chameleon session keys", () => {
+    assert.equal(
+      isCanonicalChameleonSessionKey("agent:chameleon:oc:a1b2c3d4-5678-90ab-cdef-1234567890ab"),
+      true,
+    );
+    assert.equal(
+      isCanonicalChameleonSessionKey("agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB"),
+      true,
+    );
+    assert.equal(isCanonicalChameleonSessionKey("agent:main:slack"), false);
+    assert.equal(isCanonicalChameleonSessionKey("agent:chameleon:oc:not-a-uuid"), false);
+  });
+
+  it("extracts the agent UUID from canonical chameleon session keys", () => {
+    assert.equal(
+      parseChameleonSessionKey("agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB"),
+      "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+    );
+    assert.equal(parseChameleonSessionKey("agent:main:slack"), null);
+    assert.equal(parseChameleonSessionKey("agent:chameleon:oc:not-a-uuid"), null);
+  });
+});
 
 describe("bridge questionnaire helpers", () => {
   it("formats fallback text for all questionnaire field types", () => {
