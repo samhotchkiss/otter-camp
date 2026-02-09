@@ -13,6 +13,7 @@ describe("getActivityDescription", () => {
 
     expect(description).toContain("main");
     expect(description).toContain("Fix feed fallback wiring");
+    expect(description.toLowerCase()).not.toContain("pushed to");
   });
 
   it("ignores summary echoes that only repeat git push type", () => {

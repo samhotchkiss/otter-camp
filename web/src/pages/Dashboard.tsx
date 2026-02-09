@@ -138,17 +138,52 @@ function resolveFeedBadgeClass(type: string, priority?: string | null): string {
   return FEED_TYPE_CLASS_MAP[type] || "progress";
 }
 
+function metadataActorCandidate(metadata: Record<string, unknown>, key: string): string {
+  const value = metadata[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function resolveFeedActorName(item: FeedApiItem): string {
+  if (item.agent_name?.trim()) {
+    return item.agent_name.trim();
+  }
+
+  const metadata = normalizeMetadata(item.metadata);
+  const actorCandidates = [
+    metadataActorCandidate(metadata, "actor"),
+    metadataActorCandidate(metadata, "user"),
+    metadataActorCandidate(metadata, "agentName"),
+    metadataActorCandidate(metadata, "agent_name"),
+    metadataActorCandidate(metadata, "pusher_name"),
+    metadataActorCandidate(metadata, "pusher"),
+    metadataActorCandidate(metadata, "sender_login"),
+    metadataActorCandidate(metadata, "sender_name"),
+    metadataActorCandidate(metadata, "sender"),
+    metadataActorCandidate(metadata, "author_name"),
+    metadataActorCandidate(metadata, "author"),
+  ];
+
+  for (const candidate of actorCandidates) {
+    if (candidate && candidate.toLowerCase() !== "unknown") {
+      return candidate;
+    }
+  }
+
+  return "System";
+}
+
 function mapActivityToFeedItems(items: FeedApiItem[]): FeedItem[] {
   return items.map((item) => {
-    const actorName = item.agent_name?.trim() || "System";
+    const actorName = resolveFeedActorName(item);
     const type = item.type || "activity";
     const typeConfig = getTypeConfig(type);
+    const metadata = normalizeMetadata(item.metadata);
     const description = getActivityDescription({
       type,
       actorName,
       taskTitle: item.task_title || undefined,
       summary: item.summary || undefined,
-      metadata: normalizeMetadata(item.metadata),
+      metadata,
     });
 
     return {

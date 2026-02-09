@@ -93,4 +93,29 @@ describe("Dashboard", () => {
     expect(await screen.findByText("Live emission summary")).toBeInTheDocument();
     expect(screen.getByText("LIVE")).toBeInTheDocument();
   });
+
+  it("resolves git push actor from metadata sender_login and avoids redundant push wording", async () => {
+    vi.mocked(api.feed).mockResolvedValueOnce({
+      org_id: "org-1",
+      items: [
+        {
+          id: "feed-1",
+          org_id: "org-1",
+          type: "git.push",
+          created_at: "2026-02-08T12:00:00Z",
+          metadata: {
+            sender_login: "samhotchkiss",
+            branch: "main",
+            commit_message: "Fix feed actor fallback",
+          },
+        },
+      ],
+    } as Awaited<ReturnType<typeof api.feed>>);
+
+    render(<Dashboard />);
+
+    expect(await screen.findByText("samhotchkiss")).toBeInTheDocument();
+    expect(screen.getByText(/main: "Fix feed actor fallback"/i)).toBeInTheDocument();
+    expect(screen.queryByText(/pushed to/i)).not.toBeInTheDocument();
+  });
 });
