@@ -12,46 +12,54 @@ import (
 
 // AgentActivityEvent represents a persistent agent activity timeline event.
 type AgentActivityEvent struct {
-	ID          string     `json:"id"`
-	OrgID       string     `json:"org_id"`
-	AgentID     string     `json:"agent_id"`
-	SessionKey  string     `json:"session_key,omitempty"`
-	Trigger     string     `json:"trigger"`
-	Channel     string     `json:"channel,omitempty"`
-	Summary     string     `json:"summary"`
-	Detail      string     `json:"detail,omitempty"`
-	ProjectID   string     `json:"project_id,omitempty"`
-	IssueID     string     `json:"issue_id,omitempty"`
-	IssueNumber int        `json:"issue_number,omitempty"`
-	ThreadID    string     `json:"thread_id,omitempty"`
-	TokensUsed  int        `json:"tokens_used"`
-	ModelUsed   string     `json:"model_used,omitempty"`
-	DurationMs  int64      `json:"duration_ms"`
-	Status      string     `json:"status"`
-	StartedAt   time.Time  `json:"started_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID           string     `json:"id"`
+	OrgID        string     `json:"org_id"`
+	AgentID      string     `json:"agent_id"`
+	SessionKey   string     `json:"session_key,omitempty"`
+	Trigger      string     `json:"trigger"`
+	Channel      string     `json:"channel,omitempty"`
+	Summary      string     `json:"summary"`
+	Detail       string     `json:"detail,omitempty"`
+	ProjectID    string     `json:"project_id,omitempty"`
+	IssueID      string     `json:"issue_id,omitempty"`
+	IssueNumber  int        `json:"issue_number,omitempty"`
+	ThreadID     string     `json:"thread_id,omitempty"`
+	TokensUsed   int        `json:"tokens_used"`
+	ModelUsed    string     `json:"model_used,omitempty"`
+	CommitSHA    string     `json:"commit_sha,omitempty"`
+	CommitBranch string     `json:"commit_branch,omitempty"`
+	CommitRemote string     `json:"commit_remote,omitempty"`
+	PushStatus   string     `json:"push_status,omitempty"`
+	DurationMs   int64      `json:"duration_ms"`
+	Status       string     `json:"status"`
+	StartedAt    time.Time  `json:"started_at"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 // CreateAgentActivityEventInput defines required fields to insert one event.
 type CreateAgentActivityEventInput struct {
-	ID          string
-	AgentID     string
-	SessionKey  string
-	Trigger     string
-	Channel     string
-	Summary     string
-	Detail      string
-	ProjectID   string
-	IssueID     string
-	IssueNumber int
-	ThreadID    string
-	TokensUsed  int
-	ModelUsed   string
-	DurationMs  int64
-	Status      string
-	StartedAt   time.Time
-	CompletedAt *time.Time
+	ID           string
+	AgentID      string
+	SessionKey   string
+	Trigger      string
+	Channel      string
+	Summary      string
+	Detail       string
+	ProjectID    string
+	IssueID      string
+	IssueNumber  int
+	ThreadID     string
+	TokensUsed   int
+	ModelUsed    string
+	CommitSHA    string
+	CommitBranch string
+	CommitRemote string
+	PushStatus   string
+	DurationMs   int64
+	Status       string
+	StartedAt    time.Time
+	CompletedAt  *time.Time
 }
 
 // ListAgentActivityOptions controls filtering for timeline queries.
@@ -95,6 +103,10 @@ const agentActivityEventSelectColumns = `
 	thread_id,
 	tokens_used,
 	model_used,
+	commit_sha,
+	commit_branch,
+	commit_remote,
+	push_status,
 	duration_ms,
 	status,
 	started_at,
@@ -130,13 +142,39 @@ func (s *AgentActivityEventStore) Create(ctx context.Context, input CreateAgentA
 		thread_id,
 		tokens_used,
 		model_used,
+		commit_sha,
+		commit_branch,
+		commit_remote,
+		push_status,
 		duration_ms,
 		status,
 		started_at,
 		completed_at
 	) VALUES (
-		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
 	)
+	ON CONFLICT (id) DO UPDATE SET
+		agent_id = EXCLUDED.agent_id,
+		session_key = EXCLUDED.session_key,
+		trigger = EXCLUDED.trigger,
+		channel = EXCLUDED.channel,
+		summary = EXCLUDED.summary,
+		detail = EXCLUDED.detail,
+		project_id = EXCLUDED.project_id,
+		issue_id = EXCLUDED.issue_id,
+		issue_number = EXCLUDED.issue_number,
+		thread_id = EXCLUDED.thread_id,
+		tokens_used = EXCLUDED.tokens_used,
+		model_used = EXCLUDED.model_used,
+		commit_sha = EXCLUDED.commit_sha,
+		commit_branch = EXCLUDED.commit_branch,
+		commit_remote = EXCLUDED.commit_remote,
+		push_status = EXCLUDED.push_status,
+		duration_ms = EXCLUDED.duration_ms,
+		status = EXCLUDED.status,
+		started_at = EXCLUDED.started_at,
+		completed_at = EXCLUDED.completed_at
+	WHERE agent_activity_events.org_id = EXCLUDED.org_id
 	RETURNING ` + agentActivityEventSelectColumns
 
 	event, err := scanAgentActivityEvent(conn.QueryRowContext(
@@ -156,12 +194,19 @@ func (s *AgentActivityEventStore) Create(ctx context.Context, input CreateAgentA
 		nullIfEmpty(input.ThreadID),
 		input.TokensUsed,
 		nullIfEmpty(input.ModelUsed),
+		nullIfEmpty(input.CommitSHA),
+		nullIfEmpty(input.CommitBranch),
+		nullIfEmpty(input.CommitRemote),
+		nullIfEmpty(input.PushStatus),
 		input.DurationMs,
 		nonEmptyOrDefault(input.Status, "completed"),
 		input.StartedAt.UTC(),
 		input.CompletedAt,
 	))
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("failed to create agent activity event: agent activity event id %q conflicts outside workspace", input.ID)
+		}
 		return nil, fmt.Errorf("failed to create agent activity event: %w", err)
 	}
 
@@ -268,16 +313,42 @@ func (s *AgentActivityEventStore) CreateEvents(ctx context.Context, inputs []Cre
 		thread_id,
 		tokens_used,
 		model_used,
+		commit_sha,
+		commit_branch,
+		commit_remote,
+		push_status,
 		duration_ms,
 		status,
 		started_at,
 		completed_at
 	) VALUES (
-		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
-	)`
+		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+	)
+	ON CONFLICT (id) DO UPDATE SET
+		agent_id = EXCLUDED.agent_id,
+		session_key = EXCLUDED.session_key,
+		trigger = EXCLUDED.trigger,
+		channel = EXCLUDED.channel,
+		summary = EXCLUDED.summary,
+		detail = EXCLUDED.detail,
+		project_id = EXCLUDED.project_id,
+		issue_id = EXCLUDED.issue_id,
+		issue_number = EXCLUDED.issue_number,
+		thread_id = EXCLUDED.thread_id,
+		tokens_used = EXCLUDED.tokens_used,
+		model_used = EXCLUDED.model_used,
+		commit_sha = EXCLUDED.commit_sha,
+		commit_branch = EXCLUDED.commit_branch,
+		commit_remote = EXCLUDED.commit_remote,
+		push_status = EXCLUDED.push_status,
+		duration_ms = EXCLUDED.duration_ms,
+		status = EXCLUDED.status,
+		started_at = EXCLUDED.started_at,
+		completed_at = EXCLUDED.completed_at
+	WHERE agent_activity_events.org_id = EXCLUDED.org_id`
 
 	for _, input := range inputs {
-		_, execErr := tx.ExecContext(
+		result, execErr := tx.ExecContext(
 			ctx,
 			query,
 			strings.TrimSpace(input.ID),
@@ -294,6 +365,10 @@ func (s *AgentActivityEventStore) CreateEvents(ctx context.Context, inputs []Cre
 			nullIfEmpty(input.ThreadID),
 			input.TokensUsed,
 			nullIfEmpty(input.ModelUsed),
+			nullIfEmpty(input.CommitSHA),
+			nullIfEmpty(input.CommitBranch),
+			nullIfEmpty(input.CommitRemote),
+			nullIfEmpty(input.PushStatus),
 			input.DurationMs,
 			nonEmptyOrDefault(input.Status, "completed"),
 			input.StartedAt.UTC(),
@@ -301,6 +376,10 @@ func (s *AgentActivityEventStore) CreateEvents(ctx context.Context, inputs []Cre
 		)
 		if execErr != nil {
 			return fmt.Errorf("failed to batch create agent activity events: %w", execErr)
+		}
+		rowsAffected, rowsErr := result.RowsAffected()
+		if rowsErr == nil && rowsAffected == 0 {
+			return fmt.Errorf("failed to batch create agent activity events: agent activity event id %q conflicts outside workspace", input.ID)
 		}
 	}
 
@@ -463,6 +542,10 @@ func scanAgentActivityEvent(scanner interface{ Scan(...any) error }) (AgentActiv
 	var issueNumber sql.NullInt64
 	var threadID sql.NullString
 	var modelUsed sql.NullString
+	var commitSHA sql.NullString
+	var commitBranch sql.NullString
+	var commitRemote sql.NullString
+	var pushStatus sql.NullString
 	var completedAt sql.NullTime
 
 	err := scanner.Scan(
@@ -480,6 +563,10 @@ func scanAgentActivityEvent(scanner interface{ Scan(...any) error }) (AgentActiv
 		&threadID,
 		&out.TokensUsed,
 		&modelUsed,
+		&commitSHA,
+		&commitBranch,
+		&commitRemote,
+		&pushStatus,
 		&out.DurationMs,
 		&out.Status,
 		&out.StartedAt,
@@ -513,6 +600,18 @@ func scanAgentActivityEvent(scanner interface{ Scan(...any) error }) (AgentActiv
 	}
 	if modelUsed.Valid {
 		out.ModelUsed = modelUsed.String
+	}
+	if commitSHA.Valid {
+		out.CommitSHA = commitSHA.String
+	}
+	if commitBranch.Valid {
+		out.CommitBranch = commitBranch.String
+	}
+	if commitRemote.Valid {
+		out.CommitRemote = commitRemote.String
+	}
+	if pushStatus.Valid {
+		out.PushStatus = pushStatus.String
 	}
 	if completedAt.Valid {
 		completed := completedAt.Time.UTC()
