@@ -4,10 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
 // Workflow represents a recurring automation workflow.
@@ -45,12 +50,72 @@ type WorkflowStep struct {
 
 // WorkflowsHandler handles workflow-related requests.
 type WorkflowsHandler struct {
-	DB              *sql.DB
+	DB                 *sql.DB
 	ConnectionsHandler *AdminConnectionsHandler
+	ProjectStore       *store.ProjectStore
+	ProjectsHandler    *ProjectsHandler
 }
 
 // List returns all workflows derived from OpenClaw cron jobs and agent heartbeats.
 func (h *WorkflowsHandler) List(w http.ResponseWriter, r *http.Request) {
+	if h.ProjectStore != nil && h.DB != nil {
+		workspaceID := middleware.WorkspaceFromContext(r.Context())
+		if workspaceID == "" {
+			workspaceID = strings.TrimSpace(r.URL.Query().Get("org_id"))
+		}
+		if workspaceID == "" {
+			if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+				workspaceID = identity.OrgID
+			}
+		}
+		if workspaceID == "" {
+			sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
+		projects, err := h.ProjectStore.List(ctx)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list workflows"})
+			return
+		}
+
+		workflows := make([]Workflow, 0, len(projects))
+		for _, project := range projects {
+			if !project.WorkflowEnabled {
+				continue
+			}
+			status := "active"
+			if !project.WorkflowEnabled {
+				status = "paused"
+			}
+			agentName := workflowAgentDisplayName(ctx, h.DB, project.WorkflowAgentID)
+			workflows = append(workflows, Workflow{
+				ID:          project.ID,
+				Name:        project.Name,
+				Description: valueOrEmpty(project.Description),
+				Trigger:     parseProjectWorkflowTrigger(project.WorkflowSchedule),
+				Status:      status,
+				Enabled:     project.WorkflowEnabled,
+				LastRun:     project.WorkflowLastRunAt,
+				NextRun:     project.WorkflowNextRunAt,
+				LastStatus:  deriveLegacyWorkflowLastStatus(project.WorkflowLastRunAt),
+				AgentID:     valueOrEmpty(project.WorkflowAgentID),
+				AgentName:   agentName,
+				Source:      "project",
+			})
+		}
+		sort.Slice(workflows, func(i, j int) bool {
+			if workflows[i].Status != workflows[j].Status {
+				return workflows[i].Status < workflows[j].Status
+			}
+			return strings.ToLower(workflows[i].Name) < strings.ToLower(workflows[j].Name)
+		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(workflows)
+		return
+	}
+
 	workflows := h.buildWorkflows(r.Context())
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(workflows)
@@ -58,6 +123,81 @@ func (h *WorkflowsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // Toggle enables or disables a workflow.
 func (h *WorkflowsHandler) Toggle(w http.ResponseWriter, r *http.Request) {
+	if h.ProjectStore != nil && h.DB != nil {
+		projectID := strings.TrimSpace(chi.URLParam(r, "id"))
+		if projectID == "" {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workflow id is required"})
+			return
+		}
+
+		workspaceID := middleware.WorkspaceFromContext(r.Context())
+		if workspaceID == "" {
+			workspaceID = strings.TrimSpace(r.URL.Query().Get("org_id"))
+		}
+		if workspaceID == "" {
+			if identity, err := requireSessionIdentity(r.Context(), h.DB, r); err == nil {
+				workspaceID = identity.OrgID
+			}
+		}
+		if workspaceID == "" {
+			sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "authentication required"})
+			return
+		}
+
+		var req struct {
+			Enabled *bool `json:"enabled"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+			return
+		}
+		if req.Enabled == nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "enabled is required"})
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, workspaceID)
+		project, err := h.ProjectStore.GetByID(ctx, projectID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
+				return
+			}
+			if errors.Is(err, store.ErrForbidden) {
+				sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
+				return
+			}
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load workflow project"})
+			return
+		}
+
+		updated, err := h.ProjectStore.Update(ctx, project.ID, store.UpdateProjectInput{
+			Name:              project.Name,
+			Description:       project.Description,
+			Status:            project.Status,
+			RepoURL:           project.RepoURL,
+			WorkflowEnabled:   *req.Enabled,
+			WorkflowSchedule:  project.WorkflowSchedule,
+			WorkflowTemplate:  project.WorkflowTemplate,
+			WorkflowAgentID:   project.WorkflowAgentID,
+			WorkflowLastRunAt: project.WorkflowLastRunAt,
+			WorkflowNextRunAt: project.WorkflowNextRunAt,
+			WorkflowRunCount:  project.WorkflowRunCount,
+		})
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update workflow state"})
+			return
+		}
+		sendJSON(w, http.StatusOK, map[string]any{
+			"id":      updated.ID,
+			"enabled": updated.WorkflowEnabled,
+			"status":  map[bool]string{true: "active", false: "paused"}[updated.WorkflowEnabled],
+		})
+		return
+	}
+
 	// Forward to cron toggle if available
 	if h.ConnectionsHandler != nil {
 		h.ConnectionsHandler.ToggleCronJob(w, r)
@@ -68,11 +208,77 @@ func (h *WorkflowsHandler) Toggle(w http.ResponseWriter, r *http.Request) {
 
 // Run triggers a workflow immediately.
 func (h *WorkflowsHandler) Run(w http.ResponseWriter, r *http.Request) {
+	if h.ProjectsHandler != nil {
+		h.ProjectsHandler.TriggerRun(w, r)
+		return
+	}
 	if h.ConnectionsHandler != nil {
 		h.ConnectionsHandler.RunCronJob(w, r)
 		return
 	}
 	sendJSON(w, http.StatusNotImplemented, errorResponse{Error: "run not available"})
+}
+
+func parseProjectWorkflowTrigger(raw json.RawMessage) WorkflowTrigger {
+	if len(raw) == 0 {
+		return WorkflowTrigger{Type: "manual", Label: "Manual"}
+	}
+	var schedule struct {
+		Kind    string `json:"kind"`
+		Expr    string `json:"expr"`
+		TZ      string `json:"tz"`
+		EveryMS int64  `json:"everyMs"`
+		At      string `json:"at"`
+	}
+	if err := json.Unmarshal(raw, &schedule); err != nil {
+		return WorkflowTrigger{Type: "manual", Label: "Manual"}
+	}
+	switch strings.TrimSpace(strings.ToLower(schedule.Kind)) {
+	case "cron":
+		cronExpr := strings.TrimSpace(schedule.Expr)
+		label := humanizeCronSchedule(cronExpr)
+		if strings.TrimSpace(schedule.TZ) != "" {
+			label = label + " " + strings.TrimSpace(schedule.TZ)
+		}
+		return WorkflowTrigger{
+			Type:  "cron",
+			Cron:  cronExpr,
+			Label: strings.TrimSpace(label),
+		}
+	case "every":
+		if schedule.EveryMS <= 0 {
+			return WorkflowTrigger{Type: "interval", Label: "Interval"}
+		}
+		d := time.Duration(schedule.EveryMS) * time.Millisecond
+		every := d.String()
+		return WorkflowTrigger{
+			Type:  "interval",
+			Every: every,
+			Label: "Every " + every,
+		}
+	case "at":
+		return WorkflowTrigger{
+			Type:  "event",
+			Event: strings.TrimSpace(schedule.At),
+			Label: strings.TrimSpace(schedule.At),
+		}
+	default:
+		return WorkflowTrigger{Type: "manual", Label: "Manual"}
+	}
+}
+
+func deriveLegacyWorkflowLastStatus(lastRunAt *time.Time) string {
+	if lastRunAt == nil {
+		return ""
+	}
+	return "ok"
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func (h *WorkflowsHandler) buildWorkflows(ctx context.Context) []Workflow {
