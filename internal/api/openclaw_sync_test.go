@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +97,54 @@ func TestRequireOpenClawSyncAuth_BackwardCompatibleTokenVariable(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, status)
 	}
+}
+
+func TestOpenClawMigrationExtractWorkspaceDescriptors(t *testing.T) {
+	config := map[string]interface{}{
+		"agents": map[string]interface{}{
+			"list": []interface{}{
+				map[string]interface{}{
+					"id":        "main",
+					"name":      "Frank",
+					"workspace": "/tmp/workspace-main",
+					"default":   true,
+				},
+				map[string]interface{}{
+					"id":             "writer",
+					"name":           "Writer",
+					"workspace_path": "/tmp/workspace-writer",
+				},
+			},
+		},
+	}
+
+	descriptors := extractOpenClawConfigWorkspaceDescriptors(config)
+	require.Len(t, descriptors, 2)
+	require.Equal(t, "main", descriptors[0].ID)
+	require.Equal(t, "/tmp/workspace-main", descriptors[0].Workspace)
+	require.True(t, descriptors[0].IsDefault)
+	require.Equal(t, "writer", descriptors[1].ID)
+	require.Equal(t, "/tmp/workspace-writer", descriptors[1].Workspace)
+	require.Equal(t, 0, resolvePrimaryWorkspaceDescriptorIndex(descriptors))
+}
+
+func TestLegacyTransitionEnsureFilesIdempotent(t *testing.T) {
+	workspace := t.TempDir()
+	agentsPath := filepath.Join(workspace, "AGENTS.md")
+	require.NoError(t, os.WriteFile(agentsPath, []byte("# AGENTS\nOriginal instructions"), 0o644))
+
+	require.NoError(t, ensureLegacyTransitionFiles(workspace))
+	require.NoError(t, ensureLegacyTransitionFiles(workspace))
+
+	transitionBytes, err := os.ReadFile(filepath.Join(workspace, legacyTransitionFilename))
+	require.NoError(t, err)
+	require.Contains(t, string(transitionBytes), "OtterCamp + Chameleon is now the active execution path")
+
+	agentsBytes, err := os.ReadFile(agentsPath)
+	require.NoError(t, err)
+	agentsBody := string(agentsBytes)
+	require.Contains(t, agentsBody, "Original instructions")
+	require.Equal(t, 1, strings.Count(agentsBody, legacyTransitionMarker))
 }
 
 func TestOpenClawSyncHandlePersistsDiagnosticsMetadata(t *testing.T) {
@@ -310,6 +361,213 @@ func TestOpenClawSyncHandlePersistsConfigSnapshot(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(historyValue), &history))
 	require.Len(t, history, 2)
 	require.NotEqual(t, history[0].Hash, history[1].Hash)
+}
+
+func TestOpenClawMigrationImportsLegacyWorkspacesIdempotent(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	handler := &OpenClawSyncHandler{DB: db}
+	orgID := insertMessageTestOrganization(t, db, "openclaw-migration-idempotent")
+
+	root := t.TempDir()
+	mainWorkspace := filepath.Join(root, "workspace-main")
+	legacyWorkspace := filepath.Join(root, "workspace-2b")
+	require.NoError(t, os.MkdirAll(filepath.Join(mainWorkspace, "memory"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(legacyWorkspace, "memory"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(legacyWorkspace, "SOUL.md"), []byte("# SOUL\nLegacy systems thinker"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(legacyWorkspace, "IDENTITY.md"), []byte("# IDENTITY\n- Name: Derek"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(legacyWorkspace, "TOOLS.md"), []byte("# TOOLS\n- rg\n- git"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(legacyWorkspace, "AGENTS.md"), []byte("# AGENTS\nOriginal legacy instructions"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(legacyWorkspace, "MEMORY.md"), []byte("# MEMORY\nLong-term memory"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(legacyWorkspace, "memory", "2026-02-08.md"), []byte("# 2026-02-08\n- Shipped migration"), 0o644))
+
+	buildRequest := func() *http.Request {
+		payload := SyncPayload{
+			Type:      "full",
+			Timestamp: time.Now().UTC(),
+			Source:    "bridge",
+			Config: &OpenClawConfigSnapshot{
+				Path: "/Users/sam/.openclaw/openclaw.json",
+				Data: map[string]any{
+					"agents": map[string]any{
+						"list": []map[string]any{
+							{"id": "main", "name": "Frank", "workspace": mainWorkspace, "default": true},
+							{"id": "2b", "name": "Derek", "workspace": legacyWorkspace},
+						},
+					},
+				},
+			},
+		}
+		body, err := json.Marshal(payload)
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+		req.Header.Set("X-OpenClaw-Token", "sync-secret")
+		return req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	}
+
+	rec1 := httptest.NewRecorder()
+	handler.Handle(rec1, buildRequest())
+	require.Equal(t, http.StatusOK, rec1.Code)
+
+	rec2 := httptest.NewRecorder()
+	handler.Handle(rec2, buildRequest())
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	var (
+		agentID      string
+		soulMD       string
+		identityMD   string
+		instructions string
+	)
+	err := db.QueryRow(
+		`SELECT id::text, COALESCE(soul_md, ''), COALESCE(identity_md, ''), COALESCE(instructions_md, '')
+		 FROM agents
+		 WHERE org_id = $1 AND slug = '2b'`,
+		orgID,
+	).Scan(&agentID, &soulMD, &identityMD, &instructions)
+	require.NoError(t, err)
+	require.Contains(t, soulMD, "Legacy systems thinker")
+	require.Contains(t, identityMD, "Name: Derek")
+	require.Contains(t, instructions, "Original legacy instructions")
+	require.Contains(t, instructions, "# TOOLS")
+
+	var memoryCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM agent_memories
+		 WHERE org_id = $1 AND agent_id = $2`,
+		orgID,
+		agentID,
+	).Scan(&memoryCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, memoryCount)
+
+	_, err = os.Stat(filepath.Join(legacyWorkspace, "MEMORY.md"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(legacyWorkspace, "memory", "2026-02-08.md"))
+	require.NoError(t, err)
+}
+
+func TestLegacyTransitionFileGenerationPrependsAgentsPointerIdempotent(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	handler := &OpenClawSyncHandler{DB: db}
+	orgID := insertMessageTestOrganization(t, db, "legacy-transition-generation")
+
+	root := t.TempDir()
+	mainWorkspace := filepath.Join(root, "workspace-main")
+	legacyWorkspace := filepath.Join(root, "workspace-legacy")
+	require.NoError(t, os.MkdirAll(mainWorkspace, 0o755))
+	require.NoError(t, os.MkdirAll(legacyWorkspace, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(legacyWorkspace, "AGENTS.md"), []byte("# AGENTS\nExisting legacy instructions"), 0o644))
+
+	payload := SyncPayload{
+		Type:      "full",
+		Timestamp: time.Now().UTC(),
+		Source:    "bridge",
+		Config: &OpenClawConfigSnapshot{
+			Path: "/Users/sam/.openclaw/openclaw.json",
+			Data: map[string]any{
+				"agents": map[string]any{
+					"list": []map[string]any{
+						{"id": "main", "name": "Frank", "workspace": mainWorkspace, "default": true},
+						{"id": "writer", "name": "Writer", "workspace": legacyWorkspace},
+					},
+				},
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	runSync := func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+		req.Header.Set("X-OpenClaw-Token", "sync-secret")
+		req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+		rec := httptest.NewRecorder()
+		handler.Handle(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+	runSync()
+	runSync()
+
+	transitionBytes, err := os.ReadFile(filepath.Join(legacyWorkspace, "LEGACY_TRANSITION.md"))
+	require.NoError(t, err)
+	transition := string(transitionBytes)
+	require.Contains(t, transition, "OtterCamp + Chameleon is now the active execution path")
+	require.Contains(t, transition, "create one before writing deliverables")
+	require.Contains(t, transition, "Do not keep final work product in the legacy workspace")
+
+	agentsBytes, err := os.ReadFile(filepath.Join(legacyWorkspace, "AGENTS.md"))
+	require.NoError(t, err)
+	agentsBody := string(agentsBytes)
+	require.Contains(t, agentsBody, "LEGACY_TRANSITION.md")
+	require.Contains(t, agentsBody, "Existing legacy instructions")
+	require.Equal(t, 1, strings.Count(agentsBody, "OtterCamp Legacy Transition"))
+
+	_, err = os.Stat(filepath.Join(mainWorkspace, "LEGACY_TRANSITION.md"))
+	require.Error(t, err)
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestOpenClawMigrationPartialImportRecoveryContinuesOnWorkspaceErrors(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	handler := &OpenClawSyncHandler{DB: db}
+	orgID := insertMessageTestOrganization(t, db, "openclaw-migration-partial-recovery")
+
+	root := t.TempDir()
+	mainWorkspace := filepath.Join(root, "workspace-main")
+	validWorkspace := filepath.Join(root, "workspace-valid")
+	missingWorkspace := filepath.Join(root, "workspace-missing")
+	require.NoError(t, os.MkdirAll(mainWorkspace, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(validWorkspace, "memory"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(validWorkspace, "SOUL.md"), []byte("# SOUL\nRecovered workspace"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(validWorkspace, "AGENTS.md"), []byte("# AGENTS\nRecovered instructions"), 0o644))
+
+	payload := SyncPayload{
+		Type:      "full",
+		Timestamp: time.Now().UTC(),
+		Source:    "bridge",
+		Config: &OpenClawConfigSnapshot{
+			Path: "/Users/sam/.openclaw/openclaw.json",
+			Data: map[string]any{
+				"agents": map[string]any{
+					"list": []map[string]any{
+						{"id": "main", "name": "Frank", "workspace": mainWorkspace, "default": true},
+						{"id": "missing-agent", "name": "Missing", "workspace": missingWorkspace},
+						{"id": "valid-agent", "name": "Valid", "workspace": validWorkspace},
+					},
+				},
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var validCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM agents WHERE org_id = $1 AND slug = 'valid-agent'`,
+		orgID,
+	).Scan(&validCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, validCount)
 }
 
 func TestOpenClawSyncEmissionsPayloadIngestsIntoBuffer(t *testing.T) {
