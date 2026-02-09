@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -142,4 +144,35 @@ func TestRouterRegistersDeployConfigRoutes(t *testing.T) {
 	putRec := httptest.NewRecorder()
 	router.ServeHTTP(putRec, putReq)
 	require.NotEqual(t, http.StatusNotFound, putRec.Code)
+}
+
+func TestDeployConfigHandlerUnexpectedStoreErrorSanitized(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "deploy-config-api-store-error-org")
+	projectID := insertDeployConfigTestProject(t, db, orgID, "Deploy API Error Project")
+
+	handler := &DeployConfigHandler{
+		Store: store.NewDeployConfigStore(db),
+	}
+	router := deployConfigTestRouter(handler)
+
+	_, err := db.Exec(`DROP TABLE project_deploy_config`)
+	require.NoError(t, err)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/deploy-config?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+
+	require.Equal(t, http.StatusInternalServerError, getRec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&payload))
+	require.Equal(t, "internal server error", payload.Error)
+	require.False(t, strings.Contains(strings.ToLower(payload.Error), "project_deploy_config"))
+}
+
+func TestDeployConfigStoreErrorMessageSanitizesUnexpectedError(t *testing.T) {
+	err := errors.New(`pq: relation "project_deploy_config" does not exist`)
+	require.Equal(t, http.StatusInternalServerError, deployConfigStoreErrorStatus(err))
+	require.Equal(t, "internal server error", deployConfigStoreErrorMessage(err))
 }

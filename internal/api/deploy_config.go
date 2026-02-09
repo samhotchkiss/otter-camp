@@ -122,6 +122,6 @@ func deployConfigStoreErrorMessage(err error) string {
 	case errors.Is(err, store.ErrNotFound):
 		return "project not found"
 	default:
-		return err.Error()
+		return "internal server error"
 	}
 }
