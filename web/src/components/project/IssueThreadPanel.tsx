@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { useWS } from "../../contexts/WebSocketContext";
 import WebSocketIssueSubscriber from "../WebSocketIssueSubscriber";
 import { DocumentWorkspace } from "../content-review";
@@ -1046,12 +1047,12 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
           <p className="mt-1 text-sm text-[var(--text-muted)]">
             The requested issue could not be found.
           </p>
-          <a
-            href={backToProjectPath}
+          <Link
+            to={backToProjectPath}
             className="mt-3 inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-alt)]"
           >
             Back to Project
-          </a>
+          </Link>
         </div>
       )}
 

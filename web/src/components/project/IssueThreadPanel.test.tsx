@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useWS } from "../../contexts/WebSocketContext";
@@ -309,7 +310,11 @@ describe("IssueThreadPanel", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    render(<IssueThreadPanel issueID="missing-issue" projectID="project-1" />);
+    render(
+      <MemoryRouter>
+        <IssueThreadPanel issueID="missing-issue" projectID="project-1" />
+      </MemoryRouter>,
+    );
 
     expect(await screen.findByRole("heading", { name: "Issue not found" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to Project" })).toHaveAttribute("href", "/projects/project-1");
