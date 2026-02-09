@@ -639,7 +639,7 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Optional unsafe mode for local-only development.
-	if strings.HasPrefix(token, "oc_magic_") && allowInsecureMagicTokenValidation() {
+	if shouldBypassDBTokenValidation(token) {
 		// Set the auth cookie
 		http.SetCookie(w, &http.Cookie{
 			Name:     "otter_auth",
@@ -716,6 +716,11 @@ func allowInsecureMagicTokenValidation() bool {
 		value = strings.ToLower(strings.TrimSpace(os.Getenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION")))
 	}
 	return value == "1" || value == "true" || value == "yes"
+}
+
+func shouldBypassDBTokenValidation(token string) bool {
+	token = strings.TrimSpace(token)
+	return strings.HasPrefix(token, "oc_magic_") && allowInsecureMagicTokenValidation()
 }
 
 var slugifyOrgRegex = regexp.MustCompile(`[^a-z0-9]+`)

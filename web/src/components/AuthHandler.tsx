@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { isDemoMode } from '../lib/demo';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
+const PRIMARY_AUTH_TOKEN_KEY = 'otter_camp_token';
+const LEGACY_AUTH_TOKEN_KEY = 'otter_auth_token';
 
 interface User {
   id: string;
@@ -20,6 +22,19 @@ export default function AuthHandler({ children }: { children: React.ReactNode })
   const [, setUser] = useState<User | null>(null);
 
   useEffect(() => {
+    const persistToken = (token: string) => {
+      localStorage.setItem(PRIMARY_AUTH_TOKEN_KEY, token);
+      localStorage.setItem(LEGACY_AUTH_TOKEN_KEY, token);
+    };
+
+    const getStoredToken = () => {
+      const primary = localStorage.getItem(PRIMARY_AUTH_TOKEN_KEY);
+      if (primary) {
+        return primary;
+      }
+      return localStorage.getItem(LEGACY_AUTH_TOKEN_KEY);
+    };
+
     const handleAuth = async () => {
       // Skip auth entirely in demo mode
       if (isDemoMode()) {
@@ -37,6 +52,7 @@ export default function AuthHandler({ children }: { children: React.ReactNode })
       const authToken = params.get('auth');
       
       if (authToken) {
+        persistToken(authToken);
         try {
           // Validate token and set cookie
           const response = await fetch(`${API_URL}/api/auth/validate?token=${authToken}`, {
@@ -47,20 +63,19 @@ export default function AuthHandler({ children }: { children: React.ReactNode })
             const data = await response.json();
             if (data.valid && data.user) {
               setUser(data.user);
-              // Store token in localStorage as backup
-              localStorage.setItem('otter_auth_token', authToken);
-              // Remove auth param from URL
-              params.delete('auth');
-              const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
-              window.history.replaceState({}, '', newUrl);
             }
           }
         } catch (err) {
           console.error('Auth validation failed:', err);
         }
+
+        // Remove auth param from URL after processing.
+        params.delete('auth');
+        const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+        window.history.replaceState({}, '', newUrl);
       } else {
         // Check for existing token in localStorage
-        const storedToken = localStorage.getItem('otter_auth_token');
+        const storedToken = getStoredToken();
         if (storedToken) {
           // Optionally validate stored token
           // For MVP, just trust it
@@ -100,7 +115,7 @@ export function useAuth() {
     };
   }
   
-  const token = localStorage.getItem('otter_auth_token');
+  const token = localStorage.getItem(PRIMARY_AUTH_TOKEN_KEY) || localStorage.getItem(LEGACY_AUTH_TOKEN_KEY);
   return {
     isAuthenticated: !!token,
     token,
