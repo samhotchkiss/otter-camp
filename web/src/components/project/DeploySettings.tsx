@@ -119,7 +119,10 @@ export default function DeploySettings({ projectId }: DeploySettingsProps) {
             <select
               id="deploy-method"
               value={deployMethod}
-              onChange={(event) => setDeployMethod(normalizeMethod(event.target.value))}
+              onChange={(event) => {
+                setDeployMethod(normalizeMethod(event.target.value));
+                setSuccess(null);
+              }}
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)]"
             >
               <option value="none">None</option>
@@ -141,7 +144,10 @@ export default function DeploySettings({ projectId }: DeploySettingsProps) {
                   id="deploy-github-repo-url"
                   type="text"
                   value={githubRepoUrl}
-                  onChange={(event) => setGithubRepoUrl(event.target.value)}
+                  onChange={(event) => {
+                    setGithubRepoUrl(event.target.value);
+                    setSuccess(null);
+                  }}
                   placeholder="https://github.com/org/repo"
                   className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)]"
                 />
@@ -154,7 +160,10 @@ export default function DeploySettings({ projectId }: DeploySettingsProps) {
                   id="deploy-github-branch"
                   type="text"
                   value={githubBranch}
-                  onChange={(event) => setGithubBranch(event.target.value)}
+                  onChange={(event) => {
+                    setGithubBranch(event.target.value);
+                    setSuccess(null);
+                  }}
                   placeholder="main"
                   className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)]"
                 />
@@ -171,7 +180,10 @@ export default function DeploySettings({ projectId }: DeploySettingsProps) {
                 id="deploy-cli-command"
                 type="text"
                 value={cliCommand}
-                onChange={(event) => setCliCommand(event.target.value)}
+                onChange={(event) => {
+                  setCliCommand(event.target.value);
+                  setSuccess(null);
+                }}
                 placeholder="npx itsalive-co"
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text)]"
               />

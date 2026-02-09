@@ -230,6 +230,46 @@ describe("PipelineSettings", () => {
     ).toBeInTheDocument();
   });
 
+  it("clears success message when form values change after save", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          planner: { agentId: null },
+          worker: { agentId: null },
+          reviewer: { agentId: null },
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          planner: { agentId: null },
+          worker: { agentId: null },
+          reviewer: { agentId: null },
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          require_human_review: false,
+        }),
+      );
+
+    render(
+      <PipelineSettings
+        projectId="project-1"
+        agents={[{ id: "agent-1", name: "Agent One" }]}
+        initialRequireHumanReview={false}
+      />,
+    );
+
+    await screen.findByLabelText("Planner role");
+    await user.click(screen.getByRole("button", { name: "Save pipeline settings" }));
+    expect(await screen.findByText("Pipeline settings saved.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Planner role"), { target: { value: "agent-1" } });
+    expect(screen.queryByText("Pipeline settings saved.")).not.toBeInTheDocument();
+  });
+
   it("URL-encodes project id in API paths", async () => {
     fetchMock.mockResolvedValueOnce(
       mockJSONResponse({
