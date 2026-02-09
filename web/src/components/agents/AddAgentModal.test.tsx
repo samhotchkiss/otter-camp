@@ -27,6 +27,14 @@ describe("AddAgentModal", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
     expect(fetchMock.mock.calls[0]?.[0]).toContain("/api/admin/agents");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body || "{}"))).toMatchObject({
+      slot: "research",
+      display_name: "Riley",
+      model: "gpt-5.2-codex",
+      heartbeat_every: "15m",
+      channel: "slack:#engineering",
+    });
+    expect(screen.getByText("Creates a managed OtterCamp identity + memory scaffold for chameleon routing.")).toBeInTheDocument();
     expect(onCreated).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
   });

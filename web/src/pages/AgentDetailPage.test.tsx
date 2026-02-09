@@ -12,6 +12,19 @@ describe("AgentDetailPage", () => {
   it("loads and renders activity timeline for agent route", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("/api/admin/agents/main")) {
+        return new Response(
+          JSON.stringify({
+            agent: {
+              id: "main",
+              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
+              name: "Main",
+              status: "online",
+            },
+          }),
+          { status: 200 },
+        );
+      }
       if (url.includes("/api/agents/main/activity")) {
         return new Response(
           JSON.stringify({
@@ -48,7 +61,7 @@ describe("AgentDetailPage", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "Agent Activity" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Activity" }));
     expect(await screen.findByText("Ran codex-progress-summary")).toBeInTheDocument();
     expect(screen.getByText("Cron")).toBeInTheDocument();
   });
@@ -58,6 +71,19 @@ describe("AgentDetailPage", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       urls.push(url);
+      if (url.includes("/api/admin/agents/main")) {
+        return new Response(
+          JSON.stringify({
+            agent: {
+              id: "main",
+              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
+              name: "Main",
+              status: "online",
+            },
+          }),
+          { status: 200 },
+        );
+      }
       if (url.includes("/api/agents/main/activity")) {
         return new Response(JSON.stringify({ items: [] }), { status: 200 });
       }
@@ -74,7 +100,7 @@ describe("AgentDetailPage", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "Agent Activity" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Activity" }));
 
     fireEvent.change(screen.getByLabelText("Status"), {
       target: { value: "failed" },
