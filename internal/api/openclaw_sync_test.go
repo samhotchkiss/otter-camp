@@ -413,6 +413,65 @@ func TestOpenClawSyncEmissionsOrgIsolation(t *testing.T) {
 	require.Len(t, otherRecent, 0)
 }
 
+func TestOpenClawSyncEmissionsBroadcastsToWebSocket(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	resetProgressLogEmissionSeen()
+	t.Cleanup(resetProgressLogEmissionSeen)
+
+	buffer := NewEmissionBuffer(10)
+	broadcaster := &fakeEmissionBroadcaster{}
+	handler := &OpenClawSyncHandler{
+		EmissionBuffer:      buffer,
+		EmissionBroadcaster: broadcaster,
+	}
+
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	projectID := "project-live"
+	issueID := "issue-live"
+	now := time.Now().UTC()
+	payload := SyncPayload{
+		Type:      "delta",
+		Timestamp: now,
+		Source:    "bridge",
+		Emissions: []Emission{
+			{
+				ID:         "sync-ws-1",
+				SourceType: "bridge",
+				SourceID:   "bridge-main",
+				Kind:       "status",
+				Summary:    "Bridge heartbeat",
+				Timestamp:  now,
+				Scope: &EmissionScope{
+					ProjectID: &projectID,
+					IssueID:   &issueID,
+				},
+			},
+		},
+		ProgressLogLines: []string{
+			"- [2026-02-08 12:30 MST] Issue #406 | Commit abc1234 | in_progress | Completed 1/2 checklist items | Tests: go test ./internal/api -run TestOpenClawSyncEmissionsBroadcastsToWebSocket -count=1",
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Handle(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, broadcaster.orgBroadcasts, 2)
+	for _, actualOrgID := range broadcaster.orgBroadcasts {
+		require.Equal(t, orgID, actualOrgID)
+	}
+	require.Contains(t, broadcaster.topicBroadcasts, orgID+":project:"+projectID)
+	require.Contains(t, broadcaster.topicBroadcasts, orgID+":issue:"+issueID)
+}
+
 func TestOpenClawDispatchQueuePullAndAck(t *testing.T) {
 	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
 	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
