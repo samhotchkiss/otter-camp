@@ -24,6 +24,16 @@ function ConversationTitles() {
   );
 }
 
+function ResolverProbe() {
+  const { resolveAgentName, agentNamesByID } = useGlobalChat();
+  return (
+    <div data-testid="resolver-probe">
+      {resolveAgentName("agent:avatar-design")}|{resolveAgentName("dm_avatar-design")}|
+      {resolveAgentName("avatar-design")}|{agentNamesByID.size}
+    </div>
+  );
+}
+
 describe("GlobalChatContext", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -125,6 +135,18 @@ describe("GlobalChatContext", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Jeff G")).toBeInTheDocument();
+    });
+  });
+
+  it("exposes a resolver that handles prefixed agent identifiers", async () => {
+    render(
+      <GlobalChatProvider>
+        <ResolverProbe />
+      </GlobalChatProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("resolver-probe")).toHaveTextContent("Jeff G|Jeff G|Jeff G|1");
     });
   });
 });

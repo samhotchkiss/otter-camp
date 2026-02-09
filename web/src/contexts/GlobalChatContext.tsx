@@ -80,9 +80,11 @@ type OpenConversationOptions = {
 type GlobalChatContextValue = {
   isOpen: boolean;
   conversations: GlobalChatConversation[];
+  agentNamesByID: Map<string, string>;
   selectedKey: string | null;
   selectedConversation: GlobalChatConversation | null;
   totalUnread: number;
+  resolveAgentName: (raw: string) => string;
   setDockOpen: (open: boolean) => void;
   toggleDock: () => void;
   selectConversation: (key: string) => void;
@@ -211,6 +213,67 @@ function parseDMThreadAgentID(threadId: string): string {
   return trimmed.slice(3).trim();
 }
 
+function appendUniqueCandidate(candidates: string[], seen: Set<string>, value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return;
+  }
+  if (seen.has(trimmed)) {
+    return;
+  }
+  seen.add(trimmed);
+  candidates.push(trimmed);
+}
+
+function buildAgentLookupCandidates(raw: string): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return candidates;
+  }
+
+  appendUniqueCandidate(candidates, seen, trimmed);
+  appendUniqueCandidate(candidates, seen, trimmed.toLowerCase());
+
+  if (trimmed.startsWith("agent:")) {
+    const withoutPrefix = trimmed.slice("agent:".length).trim();
+    appendUniqueCandidate(candidates, seen, withoutPrefix);
+    appendUniqueCandidate(candidates, seen, withoutPrefix.toLowerCase());
+  }
+
+  const threadAgentID = parseDMThreadAgentID(trimmed);
+  if (threadAgentID) {
+    appendUniqueCandidate(candidates, seen, threadAgentID);
+    appendUniqueCandidate(candidates, seen, threadAgentID.toLowerCase());
+  }
+
+  const colonIdx = trimmed.lastIndexOf(":");
+  if (colonIdx > -1 && colonIdx + 1 < trimmed.length) {
+    const tail = trimmed.slice(colonIdx + 1).trim();
+    appendUniqueCandidate(candidates, seen, tail);
+    appendUniqueCandidate(candidates, seen, tail.toLowerCase());
+  }
+
+  return candidates;
+}
+
+function lookupAgentDisplayName(
+  agentNamesByID: Map<string, string> | undefined,
+  raw: string,
+): string | null {
+  if (!agentNamesByID || agentNamesByID.size === 0) {
+    return null;
+  }
+  for (const candidate of buildAgentLookupCandidates(raw)) {
+    const resolved = (agentNamesByID.get(candidate) ?? "").trim();
+    if (resolved !== "") {
+      return resolved;
+    }
+  }
+  return null;
+}
+
 function looksLikeProjectIdentifierTitle(title: string): boolean {
   return /^project\s+[a-f0-9-]{6,}$/i.test(title.trim());
 }
@@ -250,6 +313,9 @@ function normalizeAgentDirectory(payload: unknown): Map<string, string> {
       continue;
     }
     result.set(id, name);
+    if (id.toLowerCase() !== id) {
+      result.set(id.toLowerCase(), name);
+    }
   }
   return result;
 }
@@ -514,7 +580,9 @@ function parseIncomingEvent(lastMessage: {
       parseDMThreadAgentID(threadId) ||
       `agent-${threadId}`;
     const resolvedAgentName =
-      resolution?.agentNamesByID?.get(agentId) ||
+      lookupAgentDisplayName(resolution?.agentNamesByID, agentId) ||
+      lookupAgentDisplayName(resolution?.agentNamesByID, senderName) ||
+      lookupAgentDisplayName(resolution?.agentNamesByID, threadId) ||
       senderName;
 
     return {
@@ -733,7 +801,11 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         if (conversation.type === "dm") {
           const threadAgentID = parseDMThreadAgentID(conversation.threadId);
           const agentID = conversation.agent.id || threadAgentID;
-          const resolvedName = agentNamesByID.get(agentID);
+          const resolvedName =
+            lookupAgentDisplayName(agentNamesByID, agentID) ||
+            lookupAgentDisplayName(agentNamesByID, conversation.agent.name) ||
+            lookupAgentDisplayName(agentNamesByID, conversation.title) ||
+            lookupAgentDisplayName(agentNamesByID, conversation.threadId);
           if (!resolvedName) {
             return conversation;
           }
@@ -939,13 +1011,27 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     [conversations],
   );
 
+  const resolveAgentName = useCallback(
+    (raw: string): string => {
+      const resolved = lookupAgentDisplayName(agentNamesByID, raw);
+      if (resolved) {
+        return resolved;
+      }
+      const trimmed = raw.trim();
+      return trimmed || raw;
+    },
+    [agentNamesByID],
+  );
+
   const value = useMemo<GlobalChatContextValue>(
     () => ({
       isOpen,
       conversations,
+      agentNamesByID,
       selectedKey,
       selectedConversation,
       totalUnread,
+      resolveAgentName,
       setDockOpen: setIsOpen,
       toggleDock: () => setIsOpen((open) => !open),
       selectConversation: setSelectedKey,
@@ -956,10 +1042,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     }),
     [
       conversations,
+      agentNamesByID,
       isOpen,
       markConversationRead,
       removeConversation,
       openConversation,
+      resolveAgentName,
       selectedConversation,
       selectedKey,
       totalUnread,
