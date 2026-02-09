@@ -1311,6 +1311,8 @@ func TestGitHubWebhookPushIngestsCommitsAndUpdatesBranchCheckpoint(t *testing.T)
 		"after":"9999999999999999999999999999999999999999",
 		"repository":{"full_name":"samhotchkiss/otter-camp"},
 		"installation":{"id":4326},
+		"pusher":{"name":"Sam"},
+		"sender":{"login":"samhotchkiss"},
 		"commits":[
 			{
 				"id":"1111111111111111111111111111111111111111",
@@ -1358,6 +1360,44 @@ func TestGitHubWebhookPushIngestsCommitsAndUpdatesBranchCheckpoint(t *testing.T)
 	).Scan(&activityCount)
 	require.NoError(t, err)
 	require.Equal(t, 2, activityCount)
+
+	var webhookMetadata []byte
+	err = db.QueryRow(
+		`SELECT metadata
+			FROM activity_log
+			WHERE org_id = $1
+			  AND project_id = $2
+			  AND action = 'github.webhook.push'
+			ORDER BY created_at DESC
+			LIMIT 1`,
+		orgID,
+		projectID,
+	).Scan(&webhookMetadata)
+	require.NoError(t, err)
+
+	var webhookMetadataMap map[string]any
+	require.NoError(t, json.Unmarshal(webhookMetadata, &webhookMetadataMap))
+	require.Equal(t, "Sam", webhookMetadataMap["pusher_name"])
+	require.Equal(t, "samhotchkiss", webhookMetadataMap["sender_login"])
+
+	var commitMetadata []byte
+	err = db.QueryRow(
+		`SELECT metadata
+			FROM activity_log
+			WHERE org_id = $1
+			  AND project_id = $2
+			  AND action = 'github.commit.ingested'
+			ORDER BY created_at DESC
+			LIMIT 1`,
+		orgID,
+		projectID,
+	).Scan(&commitMetadata)
+	require.NoError(t, err)
+
+	var commitMetadataMap map[string]any
+	require.NoError(t, json.Unmarshal(commitMetadata, &commitMetadataMap))
+	require.Equal(t, "Sam", commitMetadataMap["pusher_name"])
+	require.Equal(t, "samhotchkiss", commitMetadataMap["sender_login"])
 
 	sendGitHubWebhook(t, handler, "push", "delivery-push-commits-2", payload)
 	commits, err = handler.Commits.ListCommits(ctx, store.ProjectCommitFilter{ProjectID: projectID, Limit: 20})
