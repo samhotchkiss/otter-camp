@@ -580,4 +580,117 @@ describe("IssueThreadPanel", () => {
     expect(await screen.findByText("Sub-issues: 1")).toBeInTheDocument();
     expect(await screen.findByText("#3 Grandchild issue")).toBeInTheDocument();
   });
+
+  it("renders workflow pipeline and updates stage when selecting the next stage", async () => {
+    const patchStatuses: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/issues/issue-1?") && method === "PATCH") {
+        const payload = JSON.parse(String(init?.body));
+        patchStatuses.push(payload.work_status);
+        return mockJSONResponse({
+          id: "issue-1",
+          issue_number: 1,
+          title: "Flow issue",
+          state: "open",
+          origin: "local",
+          work_status: payload.work_status,
+          last_activity_at: "2026-02-08T20:30:00Z",
+        });
+      }
+      if (url.includes("/api/issues/issue-1?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-1",
+            issue_number: 1,
+            title: "Flow issue",
+            state: "open",
+            origin: "local",
+            work_status: "in_progress",
+            last_activity_at: "2026-02-08T20:00:00Z",
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const user = userEvent.setup();
+    render(<IssueThreadPanel issueID="issue-1" />);
+
+    expect(await screen.findByText("#1 Flow issue")).toBeInTheDocument();
+    expect(screen.getByTestId("pipeline-stage-in_progress")).toHaveAttribute("data-stage-state", "current");
+
+    await user.click(screen.getByTestId("pipeline-stage-review"));
+
+    await waitFor(() => {
+      expect(patchStatuses).toEqual(["review"]);
+    });
+    expect(screen.getByTestId("pipeline-stage-review")).toHaveAttribute("data-stage-state", "current");
+  });
+
+  it("asks for confirmation before skipping workflow stages", async () => {
+    const patchStatuses: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/issues/issue-1?") && method === "PATCH") {
+        const payload = JSON.parse(String(init?.body));
+        patchStatuses.push(payload.work_status);
+        return mockJSONResponse({
+          id: "issue-1",
+          issue_number: 1,
+          title: "Skip flow issue",
+          state: payload.work_status === "done" ? "closed" : "open",
+          origin: "local",
+          work_status: payload.work_status,
+          last_activity_at: "2026-02-08T21:00:00Z",
+        });
+      }
+      if (url.includes("/api/issues/issue-1?")) {
+        return mockJSONResponse({
+          issue: {
+            id: "issue-1",
+            issue_number: 1,
+            title: "Skip flow issue",
+            state: "open",
+            origin: "local",
+            work_status: "queued",
+            last_activity_at: "2026-02-08T20:00:00Z",
+          },
+          participants: [],
+          comments: [],
+        });
+      }
+      if (url.includes("/api/agents?")) {
+        return mockJSONResponse({
+          agents: [{ id: "sam", name: "Sam" }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const user = userEvent.setup();
+    render(<IssueThreadPanel issueID="issue-1" />);
+
+    expect(await screen.findByText("#1 Skip flow issue")).toBeInTheDocument();
+    await user.click(screen.getByTestId("pipeline-stage-done"));
+
+    expect(screen.getByText("Skip workflow stages?")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(patchStatuses).toEqual(["in_progress", "review", "done"]);
+    });
+    expect(screen.getByTestId("pipeline-stage-done")).toHaveAttribute("data-stage-state", "current");
+  });
 });

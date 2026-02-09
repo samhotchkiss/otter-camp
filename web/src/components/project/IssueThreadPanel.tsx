@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { useWS } from "../../contexts/WebSocketContext";
 import WebSocketIssueSubscriber from "../WebSocketIssueSubscriber";
 import { DocumentWorkspace } from "../content-review";
+import IssuePipelineFlow from "../issues/IssuePipelineFlow";
+import { mapIssueStatusToPipeline, pipelineStageIndex, type PipelineStageKey } from "../issues/pipelineStages";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
@@ -24,6 +26,7 @@ type IssueSummary = {
   approval_state?: IssueApprovalState | null;
   document_path?: string | null;
   document_content?: string | null;
+  last_activity_at?: string;
 };
 
 type IssueParticipant = {
@@ -350,6 +353,100 @@ function formatWorkStatus(raw: string | null | undefined): string {
   }
 }
 
+type TransitionWorkStatus = "queued" | "in_progress" | "blocked" | "review" | "done" | "cancelled";
+
+type PendingWorkStatusTransition = {
+  targetStage: PipelineStageKey;
+  statuses: TransitionWorkStatus[];
+};
+
+function normalizeTransitionWorkStatus(raw: string | null | undefined): TransitionWorkStatus {
+  const normalized = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  switch (normalized) {
+    case "in_progress":
+      return "in_progress";
+    case "blocked":
+      return "blocked";
+    case "review":
+      return "review";
+    case "done":
+      return "done";
+    case "cancelled":
+      return "cancelled";
+    case "queued":
+    case "planning":
+    case "ready":
+    case "ready_for_work":
+    case "dispatched":
+    default:
+      return "queued";
+  }
+}
+
+function stageToTransitionWorkStatus(stage: PipelineStageKey): TransitionWorkStatus {
+  switch (stage) {
+    case "in_progress":
+      return "in_progress";
+    case "review":
+      return "review";
+    case "done":
+      return "done";
+    case "queued":
+    case "planning":
+    default:
+      return "queued";
+  }
+}
+
+function pipelineStageLabel(stage: PipelineStageKey): string {
+  switch (stage) {
+    case "in_progress":
+      return "Active";
+    case "review":
+      return "Review";
+    case "done":
+      return "Done";
+    case "planning":
+      return "Planning";
+    case "queued":
+    default:
+      return "Queued";
+  }
+}
+
+function buildTransitionPath(
+  currentWorkStatus: string | null | undefined,
+  targetStage: PipelineStageKey,
+): TransitionWorkStatus[] {
+  const currentNormalized = normalizeTransitionWorkStatus(currentWorkStatus);
+  const targetStatus = stageToTransitionWorkStatus(targetStage);
+  if (currentNormalized === targetStatus) {
+    return [];
+  }
+
+  const currentStage = mapIssueStatusToPipeline(currentWorkStatus).currentStage;
+  const linearStages: PipelineStageKey[] = ["queued", "in_progress", "review", "done"];
+  const normalizedCurrentStage = currentStage === "planning" ? "queued" : currentStage;
+  const normalizedTargetStage = targetStage === "planning" ? "queued" : targetStage;
+  const currentIndex = linearStages.indexOf(normalizedCurrentStage);
+  const targetIndex = linearStages.indexOf(normalizedTargetStage);
+  if (currentIndex >= 0 && targetIndex > currentIndex) {
+    const forwardStatuses = linearStages
+      .slice(currentIndex + 1, targetIndex + 1)
+      .map((stage) => stageToTransitionWorkStatus(stage));
+    if (currentNormalized === "blocked") {
+      return ["in_progress", ...forwardStatuses];
+    }
+    return forwardStatuses;
+  }
+
+  if (currentNormalized === "blocked" && targetStatus === "in_progress") {
+    return ["in_progress"];
+  }
+
+  return [targetStatus];
+}
+
 function sortComments(comments: IssueComment[]): IssueComment[] {
   return [...comments].sort((a, b) => {
     const aMs = Date.parse(a.created_at);
@@ -381,6 +478,9 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
   const [updatingParticipant, setUpdatingParticipant] = useState(false);
   const [updatingApprovalState, setUpdatingApprovalState] = useState<IssueApprovalState | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [updatingWorkStatus, setUpdatingWorkStatus] = useState(false);
+  const [workStatusError, setWorkStatusError] = useState<string | null>(null);
+  const [pendingWorkStatusTransition, setPendingWorkStatusTransition] = useState<PendingWorkStatusTransition | null>(null);
   const [showApprovalConfetti, setShowApprovalConfetti] = useState(false);
   const [parentIssue, setParentIssue] = useState<IssueRelationSummary | null>(null);
   const [parentIssueMissing, setParentIssueMissing] = useState(false);
@@ -1023,6 +1123,10 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
   }, [issue?.priority]);
 
   const issueWorkStatusLabel = useMemo(() => formatWorkStatus(issue?.work_status), [issue?.work_status]);
+  const issuePipelineStage = useMemo(
+    () => mapIssueStatusToPipeline(issue?.work_status).currentStage,
+    [issue?.work_status],
+  );
 
   const backToProjectPath = useMemo(() => {
     const resolvedProjectID = issue?.project_id?.trim() || projectID?.trim();
@@ -1031,6 +1135,77 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     }
     return "/projects";
   }, [issue?.project_id, projectID]);
+
+  useEffect(() => {
+    setPendingWorkStatusTransition(null);
+    setWorkStatusError(null);
+  }, [issue?.id, issue?.work_status]);
+
+  async function runWorkStatusTransition(statuses: TransitionWorkStatus[]): Promise<void> {
+    const orgID = getOrgID();
+    if (!orgID || !issue || statuses.length === 0) {
+      return;
+    }
+    setUpdatingWorkStatus(true);
+    setWorkStatusError(null);
+    try {
+      for (const nextStatus of statuses) {
+        const response = await fetch(
+          `${API_URL}/api/issues/${issue.id}?org_id=${encodeURIComponent(orgID)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ work_status: nextStatus }),
+          },
+        );
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to update workflow stage");
+        }
+        const updated = await response.json() as IssueSummary;
+        setIssue((current) => {
+          if (!current) {
+            return current;
+          }
+          return {
+            ...current,
+            ...updated,
+            document_content: current.document_content,
+          };
+        });
+      }
+    } catch (err) {
+      setWorkStatusError(err instanceof Error ? err.message : "Failed to update workflow stage");
+    } finally {
+      setUpdatingWorkStatus(false);
+    }
+  }
+
+  function handleSelectPipelineStage(stage: PipelineStageKey): void {
+    if (!issue || updatingWorkStatus) {
+      return;
+    }
+    const transitionStatuses = buildTransitionPath(issue.work_status, stage);
+    if (transitionStatuses.length === 0) {
+      return;
+    }
+    const currentStage = mapIssueStatusToPipeline(issue.work_status).currentStage;
+    const distance = Math.abs(pipelineStageIndex(stage) - pipelineStageIndex(currentStage));
+    if (distance > 1) {
+      setPendingWorkStatusTransition({ targetStage: stage, statuses: transitionStatuses });
+      return;
+    }
+    void runWorkStatusTransition(transitionStatuses);
+  }
+
+  function handleConfirmSkippedTransition(): void {
+    if (!pendingWorkStatusTransition || updatingWorkStatus) {
+      return;
+    }
+    const statuses = pendingWorkStatusTransition.statuses;
+    setPendingWorkStatusTransition(null);
+    void runWorkStatusTransition(statuses);
+  }
 
   return (
     <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
@@ -1083,6 +1258,45 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
               <p>{`Priority: ${issuePriorityLabel}`}</p>
               <p>{`Work Status: ${issueWorkStatusLabel}`}</p>
               <p>{`Assignee: ${issueOwnerLabel}`}</p>
+            </div>
+            <div className="mt-3 space-y-2">
+              <IssuePipelineFlow
+                status={issue.work_status}
+                assigneeName={issue.owner_agent_id ? issueOwnerLabel : null}
+                stageUpdatedAt={issue.last_activity_at ?? null}
+                onStageSelect={handleSelectPipelineStage}
+                disabled={updatingWorkStatus}
+              />
+              {updatingWorkStatus && (
+                <p className="text-xs text-[var(--text-muted)]">Updating workflow stage...</p>
+              )}
+              {pendingWorkStatusTransition && (
+                <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
+                  <p className="text-xs font-semibold text-amber-200">Skip workflow stages?</p>
+                  <p className="mt-1 text-xs text-amber-100">
+                    Move this issue to {pipelineStageLabel(pendingWorkStatusTransition.targetStage)} and skip intermediate stages.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="rounded border border-amber-300/70 bg-amber-400/20 px-2.5 py-1 text-xs font-semibold text-amber-100 hover:bg-amber-400/30"
+                      onClick={handleConfirmSkippedTransition}
+                    >
+                      Continue
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-alt)]"
+                      onClick={() => setPendingWorkStatusTransition(null)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+              {workStatusError && (
+                <p className="text-xs text-red-700">{workStatusError}</p>
+              )}
             </div>
             {issue.body && issue.body.trim() !== "" && (
               <p className="mt-2 whitespace-pre-wrap text-sm text-[var(--text)]">{issue.body}</p>
