@@ -57,6 +57,9 @@ const RECONNECT_FAILURE_EXIT_THRESHOLD = 5;
 const HEARTBEAT_INTERVAL_MS = 10000;
 const HEARTBEAT_PONG_TIMEOUT_MS = 5000;
 const HEARTBEAT_MISS_THRESHOLD = 2;
+const DISPATCH_REPLAY_MAX_ITEMS = 1000;
+const DISPATCH_REPLAY_MAX_BYTES = 10 * 1024 * 1024;
+const MAX_TRACKED_DISPATCH_REPLAY_IDS = 5000;
 const BRIDGE_HEALTH_PORT = (() => {
   const raw = Number.parseInt((process.env.OTTER_BRIDGE_HEALTH_PORT || '').trim(), 10);
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -303,6 +306,14 @@ type SocketHeartbeatController = {
   lastMessageAt: number;
 };
 
+type DispatchReplayQueueItem = {
+  id: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  sizeBytes: number;
+  queuedAtMs: number;
+};
+
 export type BridgeConnectionHealthInput = {
   uptimeSeconds: number;
   queueDepth: number;
@@ -368,6 +379,7 @@ const connectionStateByRole: Record<BridgeSocketRole, BridgeConnectionState> = {
   ottercamp: 'disconnected',
 };
 let isDispatchQueuePolling = false;
+let isDispatchReplayFlushing = false;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
 const sessionContexts = new Map<string, SessionContext>();
@@ -383,6 +395,11 @@ const queuedActivityEventsByOrg = new Map<string, BridgeAgentActivityEvent[]>();
 const queuedActivityEventIDs = new Set<string>();
 const deliveredActivityEventIDs = new Set<string>();
 const deliveredActivityEventIDOrder: string[] = [];
+const dispatchReplayQueue: DispatchReplayQueueItem[] = [];
+const queuedDispatchReplayIDs = new Set<string>();
+const deliveredDispatchReplayIDs = new Set<string>();
+const deliveredDispatchReplayIDOrder: string[] = [];
+let dispatchReplayQueueBytes = 0;
 
 const genId = () => `req-${++requestId}`;
 const execFileAsync = promisify(execFile);
@@ -450,7 +467,7 @@ export function buildHealthPayload(input: BridgeConnectionHealthInput): BridgeHe
 }
 
 function getDispatchQueueDepthForHealth(): number {
-  return 0;
+  return dispatchReplayQueue.length;
 }
 
 function buildRuntimeHealthInput(): BridgeConnectionHealthInput {
@@ -677,6 +694,141 @@ function getTrimmedString(value: unknown): string {
     return '';
   }
   return value.trim();
+}
+
+function estimateDispatchReplayPayloadSize(eventType: string, payload: Record<string, unknown>, dedupeID: string): number {
+  return Buffer.byteLength(
+    JSON.stringify({
+      id: dedupeID,
+      event_type: eventType,
+      payload,
+    }),
+    'utf8',
+  );
+}
+
+function rememberDeliveredDispatchReplayID(eventID: string): void {
+  if (!eventID) {
+    return;
+  }
+  if (deliveredDispatchReplayIDs.has(eventID)) {
+    return;
+  }
+  deliveredDispatchReplayIDs.add(eventID);
+  deliveredDispatchReplayIDOrder.push(eventID);
+  while (deliveredDispatchReplayIDOrder.length > MAX_TRACKED_DISPATCH_REPLAY_IDS) {
+    const oldest = deliveredDispatchReplayIDOrder.shift();
+    if (oldest) {
+      deliveredDispatchReplayIDs.delete(oldest);
+    }
+  }
+}
+
+function dropOldestDispatchReplayItem(): void {
+  const oldest = dispatchReplayQueue.shift();
+  if (!oldest) {
+    return;
+  }
+  queuedDispatchReplayIDs.delete(oldest.id);
+  dispatchReplayQueueBytes = Math.max(0, dispatchReplayQueueBytes - oldest.sizeBytes);
+}
+
+function deriveDispatchReplayID(eventType: string, payload: Record<string, unknown>): string {
+  const eventRecord = payload as {
+    data?: {
+      message_id?: string;
+      command_id?: string;
+      thread_id?: string;
+      session_key?: string;
+    };
+  };
+  const messageID = getTrimmedString(eventRecord.data?.message_id);
+  if (messageID) {
+    return `${eventType}:${messageID}`;
+  }
+  const commandID = getTrimmedString(eventRecord.data?.command_id);
+  if (commandID) {
+    return `${eventType}:${commandID}`;
+  }
+  const sessionKey = getTrimmedString(eventRecord.data?.session_key);
+  const threadID = getTrimmedString(eventRecord.data?.thread_id);
+  const fallback = `${eventType}:${sessionKey}:${threadID}:${JSON.stringify(payload).slice(0, 240)}`;
+  return crypto.createHash('sha1').update(fallback).digest('hex');
+}
+
+export function queueDispatchEventForReplay(
+  eventType: string,
+  payload: Record<string, unknown>,
+  dedupeID?: string,
+  options?: { maxItems?: number; maxBytes?: number },
+): boolean {
+  const normalizedEventType = getTrimmedString(eventType);
+  if (!normalizedEventType || !payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return false;
+  }
+
+  const id = getTrimmedString(dedupeID) || deriveDispatchReplayID(normalizedEventType, payload);
+  if (!id || queuedDispatchReplayIDs.has(id) || deliveredDispatchReplayIDs.has(id)) {
+    return false;
+  }
+
+  const sizeBytes = estimateDispatchReplayPayloadSize(normalizedEventType, payload, id);
+  const maxItems = options?.maxItems && options.maxItems > 0 ? options.maxItems : DISPATCH_REPLAY_MAX_ITEMS;
+  const maxBytes = options?.maxBytes && options.maxBytes > 0 ? options.maxBytes : DISPATCH_REPLAY_MAX_BYTES;
+  const item: DispatchReplayQueueItem = {
+    id,
+    eventType: normalizedEventType,
+    payload,
+    sizeBytes,
+    queuedAtMs: Date.now(),
+  };
+  dispatchReplayQueue.push(item);
+  queuedDispatchReplayIDs.add(id);
+  dispatchReplayQueueBytes += sizeBytes;
+
+  while (dispatchReplayQueue.length > maxItems || dispatchReplayQueueBytes > maxBytes) {
+    dropOldestDispatchReplayItem();
+  }
+  return queuedDispatchReplayIDs.has(id);
+}
+
+export function getDispatchReplayQueueStateForTest(): {
+  depth: number;
+  totalBytes: number;
+  ids: string[];
+} {
+  return {
+    depth: dispatchReplayQueue.length,
+    totalBytes: dispatchReplayQueueBytes,
+    ids: dispatchReplayQueue.map((item) => item.id),
+  };
+}
+
+export function resetDispatchReplayQueueForTest(): void {
+  dispatchReplayQueue.length = 0;
+  queuedDispatchReplayIDs.clear();
+  deliveredDispatchReplayIDs.clear();
+  deliveredDispatchReplayIDOrder.length = 0;
+  dispatchReplayQueueBytes = 0;
+}
+
+export async function replayQueuedDispatchEventsForTest(
+  dispatcher: (eventType: string, payload: Record<string, unknown>) => Promise<void>,
+): Promise<string[]> {
+  const flushedIDs: string[] = [];
+  while (dispatchReplayQueue.length > 0) {
+    const current = dispatchReplayQueue[0];
+    if (!current) {
+      break;
+    }
+    await dispatcher(current.eventType, current.payload);
+    dispatchReplayQueue.shift();
+    queuedDispatchReplayIDs.delete(current.id);
+    dispatchReplayQueueBytes = Math.max(0, dispatchReplayQueueBytes - current.sizeBytes);
+    rememberDeliveredDispatchReplayID(current.id);
+    flushedIDs.push(current.id);
+  }
+  return flushedIDs;
 }
 
 function setSessionContext(sessionKey: string, context: SessionContext): void {
@@ -1938,6 +2090,9 @@ async function connectToOpenClaw(): Promise<void> {
           pendingRequests.set(connectId, {
             resolve: () => {
               console.log('[bridge] connected to OpenClaw gateway');
+              void flushDispatchReplayQueue('openclaw-connected').catch((replayErr) => {
+                console.error('[bridge] failed to flush replay queue after OpenClaw connect:', replayErr);
+              });
               resolveOnce();
             },
             reject: (err) => rejectOnce(err),
@@ -2513,17 +2668,7 @@ async function processDispatchQueue(): Promise<void> {
       }
 
       try {
-        if (eventType === 'dm.message') {
-          await handleDMDispatchEvent(payload as DMDispatchEvent);
-        } else if (eventType === 'project.chat.message') {
-          await handleProjectChatDispatchEvent(payload as ProjectChatDispatchEvent);
-        } else if (eventType === 'issue.comment.message') {
-          await handleIssueCommentDispatchEvent(payload as IssueCommentDispatchEvent);
-        } else if (eventType === 'admin.command') {
-          await handleAdminCommandDispatchEvent(payload as AdminCommandDispatchEvent);
-        } else {
-          throw new Error(`unsupported event type: ${eventType}`);
-        }
+        await dispatchInboundEvent(eventType, payload, 'replay');
         await ackDispatchQueueJob(jobID, claimToken, true);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -2538,6 +2683,100 @@ async function processDispatchQueue(): Promise<void> {
   } finally {
     isDispatchQueuePolling = false;
   }
+}
+
+async function dispatchInboundEvent(
+  eventType: string,
+  payload: Record<string, unknown>,
+  source: 'socket' | 'replay' = 'socket',
+): Promise<void> {
+  const normalizedType = getTrimmedString(eventType);
+  const record = asRecord(payload);
+  if (!normalizedType || !record) {
+    throw new Error('invalid dispatch payload');
+  }
+
+  const dispatch = async () => {
+    if (normalizedType === 'dm.message') {
+      await handleDMDispatchEvent(record as DMDispatchEvent);
+      return;
+    }
+    if (normalizedType === 'project.chat.message') {
+      await handleProjectChatDispatchEvent(record as ProjectChatDispatchEvent);
+      return;
+    }
+    if (normalizedType === 'issue.comment.message') {
+      await handleIssueCommentDispatchEvent(record as IssueCommentDispatchEvent);
+      return;
+    }
+    if (normalizedType === 'admin.command') {
+      await handleAdminCommandDispatchEvent(record as AdminCommandDispatchEvent);
+      return;
+    }
+    throw new Error(`unsupported event type: ${normalizedType}`);
+  };
+
+  try {
+    await dispatch();
+  } catch (err) {
+    if (source === 'replay') {
+      throw err;
+    }
+    const queued = queueDispatchEventForReplay(normalizedType, record);
+    const queueState = getDispatchReplayQueueStateForTest();
+    const message = err instanceof Error ? err.message : String(err);
+    if (queued) {
+      console.warn(
+        `[bridge] queued dispatch event for replay (type=${normalizedType}, queue_depth=${queueState.depth}): ${message}`,
+      );
+      return;
+    }
+    throw err;
+  }
+}
+
+async function flushDispatchReplayQueue(reason: string): Promise<number> {
+  if (isDispatchReplayFlushing) {
+    return 0;
+  }
+  if (!openClawWS || openClawWS.readyState !== WebSocket.OPEN) {
+    return 0;
+  }
+  if (dispatchReplayQueue.length === 0) {
+    return 0;
+  }
+
+  let flushed = 0;
+  isDispatchReplayFlushing = true;
+  try {
+    while (dispatchReplayQueue.length > 0) {
+      const next = dispatchReplayQueue[0];
+      if (!next) {
+        break;
+      }
+      try {
+        await dispatchInboundEvent(next.eventType, next.payload, 'replay');
+      } catch (err) {
+        console.error(
+          `[bridge] failed replaying queued dispatch event ${next.id} (${next.eventType}):`,
+          err,
+        );
+        break;
+      }
+      dispatchReplayQueue.shift();
+      queuedDispatchReplayIDs.delete(next.id);
+      dispatchReplayQueueBytes = Math.max(0, dispatchReplayQueueBytes - next.sizeBytes);
+      rememberDeliveredDispatchReplayID(next.id);
+      flushed += 1;
+    }
+  } finally {
+    isDispatchReplayFlushing = false;
+  }
+
+  if (flushed > 0) {
+    console.log(`[bridge] replayed ${flushed} queued dispatch event(s) (${reason})`);
+  }
+  return flushed;
 }
 
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
@@ -3061,24 +3300,14 @@ function connectOtterCampDispatchSocket(): void {
   otterCampWS.on('message', (data) => {
     markSocketMessage('ottercamp');
     try {
-      const event = JSON.parse(data.toString()) as DMDispatchEvent | ProjectChatDispatchEvent | IssueCommentDispatchEvent | AdminCommandDispatchEvent;
-      if (event.type === 'dm.message') {
-        void handleDMDispatchEvent(event as DMDispatchEvent).catch(() => {});
+      const event = JSON.parse(data.toString()) as Record<string, unknown>;
+      const eventType = getTrimmedString(event.type);
+      if (!eventType) {
         return;
       }
-      if (event.type === 'project.chat.message') {
-        void handleProjectChatDispatchEvent(event as ProjectChatDispatchEvent).catch(() => {});
-        return;
-      }
-      if (event.type === 'issue.comment.message') {
-        void handleIssueCommentDispatchEvent(event as IssueCommentDispatchEvent).catch(() => {});
-        return;
-      }
-      if (event.type === 'admin.command') {
-        void handleAdminCommandDispatchEvent(event as AdminCommandDispatchEvent).catch((err) => {
-          console.error('[bridge] failed to execute admin.command:', err);
-        });
-      }
+      void dispatchInboundEvent(eventType, event, 'socket').catch((err) => {
+        console.error(`[bridge] failed dispatching socket event ${eventType}:`, err);
+      });
     } catch (err) {
       console.error('[bridge] failed to parse OtterCamp websocket message:', err);
     }
@@ -3153,6 +3382,9 @@ async function runContinuous(): Promise<void> {
   await processDispatchQueue().catch((err) => {
     console.error('[bridge] initial dispatch queue drain failed:', err);
   });
+  await flushDispatchReplayQueue('initial-dispatch-replay').catch((err) => {
+    console.error('[bridge] failed to flush replay queue after initial dispatch drain:', err);
+  });
   await flushBufferedActivityEvents('initial-dispatch');
 
   setInterval(async () => {
@@ -3176,6 +3408,7 @@ async function runContinuous(): Promise<void> {
   setInterval(async () => {
     try {
       await processDispatchQueue();
+      await flushDispatchReplayQueue('dispatch-loop');
       await flushBufferedActivityEvents('dispatch-loop');
     } catch (err) {
       console.error('[bridge] periodic dispatch queue drain failed:', err);
