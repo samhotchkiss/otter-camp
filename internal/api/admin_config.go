@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -9,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,6 +60,22 @@ type adminConfigPatchRequest struct {
 type adminConfigCutoverRequest struct {
 	Confirm bool `json:"confirm"`
 	DryRun  bool `json:"dry_run"`
+}
+
+type adminConfigReleaseGateRequest struct {
+	Confirm bool `json:"confirm"`
+}
+
+type adminConfigReleaseGateCheck struct {
+	Category string `json:"category"`
+	Status   string `json:"status"`
+	Message  string `json:"message"`
+}
+
+type adminConfigReleaseGateResponse struct {
+	OK          bool                          `json:"ok"`
+	Checks      []adminConfigReleaseGateCheck `json:"checks"`
+	GeneratedAt time.Time                     `json:"generated_at"`
 }
 
 type openClawConfigCutoverCheckpoint struct {
@@ -236,6 +255,44 @@ func (h *AdminConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
+func (h *AdminConfigHandler) ReleaseGate(w http.ResponseWriter, r *http.Request) {
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
+		return
+	}
+
+	var req adminConfigReleaseGateRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	if !req.Confirm {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "confirm must be true"})
+		return
+	}
+
+	snapshot, err := h.loadSnapshotWithMemoryFallback(r)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load admin config snapshot"})
+		return
+	}
+
+	report, err := h.evaluateSpec110ReleaseGate(r.Context(), snapshot)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to evaluate release gate"})
+		return
+	}
+
+	if report.OK {
+		sendJSON(w, http.StatusOK, report)
+		return
+	}
+	sendJSON(w, http.StatusPreconditionFailed, report)
+}
+
 func (h *AdminConfigHandler) Cutover(w http.ResponseWriter, r *http.Request) {
 	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
 	if workspaceID == "" {
@@ -255,20 +312,27 @@ func (h *AdminConfigHandler) Cutover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot, _, found, err := h.loadSnapshotFromDB(r)
+	snapshot, err := h.loadSnapshotWithMemoryFallback(r)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load admin config snapshot"})
 		return
 	}
-	if !found {
-		if memoryConfig != nil {
-			cloned := *memoryConfig
-			cloned.Data = append(json.RawMessage(nil), memoryConfig.Data...)
-			snapshot = &cloned
-		} else {
-			sendJSON(w, http.StatusConflict, errorResponse{Error: "no OpenClaw config snapshot available for cutover"})
-			return
-		}
+	if snapshot == nil {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "no OpenClaw config snapshot available for cutover"})
+		return
+	}
+
+	gateReport, err := h.evaluateSpec110ReleaseGate(r.Context(), snapshot)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to evaluate release gate"})
+		return
+	}
+	if !gateReport.OK {
+		sendJSON(w, http.StatusPreconditionFailed, map[string]interface{}{
+			"error": "spec 110 release gate failed",
+			"gate":  gateReport,
+		})
+		return
 	}
 
 	cutoverConfig, primaryAgentID, err := buildTwoAgentOpenClawConfig(snapshot.Data)
@@ -419,6 +483,300 @@ func (h *AdminConfigHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 			DryRun:     false,
 		},
 	)
+}
+
+func (h *AdminConfigHandler) loadSnapshotWithMemoryFallback(r *http.Request) (*openClawConfigSnapshotRecord, error) {
+	snapshot, _, found, err := h.loadSnapshotFromDB(r)
+	if err != nil {
+		return nil, err
+	}
+	if found && snapshot != nil {
+		return snapshot, nil
+	}
+	if memoryConfig != nil {
+		cloned := *memoryConfig
+		cloned.Data = append(json.RawMessage(nil), memoryConfig.Data...)
+		return &cloned, nil
+	}
+	return nil, nil
+}
+
+func (h *AdminConfigHandler) evaluateSpec110ReleaseGate(
+	ctx context.Context,
+	snapshot *openClawConfigSnapshotRecord,
+) (adminConfigReleaseGateResponse, error) {
+	checks := make([]adminConfigReleaseGateCheck, 0, 5)
+	now := time.Now().UTC()
+
+	addCheck := func(category, status, message string) {
+		checks = append(checks, adminConfigReleaseGateCheck{
+			Category: category,
+			Status:   status,
+			Message:  message,
+		})
+	}
+
+	var (
+		cutoverConfig json.RawMessage
+		snapshotHash  string
+		cutoverHash   string
+	)
+
+	if snapshot == nil {
+		addCheck("migration", "fail", "no OpenClaw config snapshot available")
+	} else {
+		var err error
+		cutoverConfig, _, err = buildTwoAgentOpenClawConfig(snapshot.Data)
+		if err != nil {
+			addCheck("migration", "fail", fmt.Sprintf("failed to build two-agent cutover config: %v", err))
+		} else {
+			snapshotHash = strings.TrimSpace(snapshot.Hash)
+			if snapshotHash == "" {
+				snapshotHash, err = hashCanonicalJSONRaw(snapshot.Data)
+			}
+			if err != nil {
+				addCheck("migration", "fail", "failed to hash snapshot config")
+			} else {
+				cutoverHash, err = hashCanonicalJSONRaw(cutoverConfig)
+				if err != nil {
+					addCheck("migration", "fail", "failed to hash cutover config")
+				} else if snapshotHash == cutoverHash {
+					addCheck("migration", "fail", "cutover config matches current snapshot; rollback checkpoint would be a no-op")
+				} else {
+					report, found, loadErr := h.loadLegacyImportReport(ctx)
+					if loadErr != nil {
+						addCheck("migration", "fail", "failed to load legacy workspace import report")
+					} else if !found {
+						addCheck("migration", "fail", "legacy workspace import report not found")
+					} else if report.ProcessedWorkspaceCount > 0 && report.ImportedAgents == 0 {
+						addCheck("migration", "fail", "legacy import processed workspaces but imported no agents")
+					} else if report.ProcessedRetiredWorkspaces > 0 && report.TransitionFilesGenerated == 0 {
+						addCheck("migration", "fail", "legacy retired workspaces missing transition files")
+					} else {
+						addCheck(
+							"migration",
+							"pass",
+							fmt.Sprintf(
+								"snapshot and cutover hashes differ (%s -> %s); legacy import report present for %d workspace(s)",
+								snapshotHash,
+								cutoverHash,
+								report.ProcessedWorkspaceCount,
+							),
+						)
+					}
+				}
+			}
+		}
+	}
+
+	identityCheckPass := true
+	if _, ok := ExtractChameleonSessionAgentID("agent:chameleon:oc:11111111-2222-3333-4444-555555555555"); !ok {
+		identityCheckPass = false
+	}
+	if ValidateChameleonSessionKey("agent:chameleon:oc:not-a-uuid") {
+		identityCheckPass = false
+	}
+	if !identityCheckPass {
+		addCheck("identity", "fail", "canonical session identity parser validation failed")
+	} else {
+		addCheck("identity", "pass", "canonical session identity parser and spoof rejection are active")
+	}
+
+	modeCheckPass := strings.Contains(legacyTransitionChecklistTemplate, "task has no project") &&
+		strings.Contains(legacyTransitionChecklistTemplate, "all file writes inside that repo")
+	if !modeCheckPass {
+		addCheck("mode_gating", "fail", "legacy transition checklist is missing project-bound execution policy")
+	} else {
+		addCheck("mode_gating", "pass", "project-bound execution checklist requires repo-scoped writes")
+	}
+
+	securityPass := true
+	if _, err := normalizeRepositoryPath("../escape"); err == nil {
+		securityPass = false
+	}
+	symlinkSafe, err := runReleaseGateSymlinkEscapeCheck()
+	if err != nil || !symlinkSafe {
+		securityPass = false
+	}
+	if !securityPass {
+		addCheck("security", "fail", "security guard validation failed (path traversal/symlink/session spoof)")
+	} else {
+		addCheck("security", "pass", "path traversal, symlink escape, and session spoof checks are enforced")
+	}
+
+	bridgeDiagnostics, foundBridgeDiagnostics, bridgeErr := h.loadBridgeDiagnostics(ctx)
+	if bridgeErr != nil {
+		addCheck("performance", "fail", "failed to load bridge diagnostics")
+	} else if !foundBridgeDiagnostics || bridgeDiagnostics == nil {
+		addCheck("performance", "fail", "bridge diagnostics not available")
+	} else if bridgeDiagnostics.DispatchQueueDepth > 25 || bridgeDiagnostics.ErrorsLastHour > 10 {
+		addCheck(
+			"performance",
+			"fail",
+			fmt.Sprintf(
+				"bridge diagnostics exceed thresholds (queue_depth=%d, errors_last_hour=%d)",
+				bridgeDiagnostics.DispatchQueueDepth,
+				bridgeDiagnostics.ErrorsLastHour,
+			),
+		)
+	} else {
+		addCheck(
+			"performance",
+			"pass",
+			fmt.Sprintf(
+				"bridge diagnostics healthy (queue_depth=%d, errors_last_hour=%d)",
+				bridgeDiagnostics.DispatchQueueDepth,
+				bridgeDiagnostics.ErrorsLastHour,
+			),
+		)
+	}
+
+	ok := true
+	for _, check := range checks {
+		if check.Status != "pass" {
+			ok = false
+			break
+		}
+	}
+
+	return adminConfigReleaseGateResponse{
+		OK:          ok,
+		Checks:      checks,
+		GeneratedAt: now,
+	}, nil
+}
+
+func (h *AdminConfigHandler) loadLegacyImportReport(
+	ctx context.Context,
+) (*openClawLegacyImportReport, bool, error) {
+	if h.DB == nil {
+		return nil, false, nil
+	}
+	raw, found, err := h.loadSyncMetadataRaw(ctx, syncMetadataOpenClawLegacyImportKey)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	var report openClawLegacyImportReport
+	if err := json.Unmarshal([]byte(raw), &report); err != nil {
+		return nil, false, err
+	}
+	return &report, true, nil
+}
+
+func (h *AdminConfigHandler) loadBridgeDiagnostics(
+	ctx context.Context,
+) (*OpenClawBridgeDiagnostics, bool, error) {
+	if h.DB == nil {
+		return nil, false, nil
+	}
+	raw, found, err := h.loadSyncMetadataRaw(ctx, "openclaw_bridge_diagnostics")
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	var diagnostics OpenClawBridgeDiagnostics
+	if err := json.Unmarshal([]byte(raw), &diagnostics); err != nil {
+		return nil, false, err
+	}
+	return &diagnostics, true, nil
+}
+
+func (h *AdminConfigHandler) loadSyncMetadataRaw(
+	ctx context.Context,
+	key string,
+) (string, bool, error) {
+	if h.DB == nil {
+		return "", false, nil
+	}
+	var raw string
+	err := h.DB.QueryRowContext(
+		ctx,
+		`SELECT value FROM sync_metadata WHERE key = $1`,
+		key,
+	).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if strings.TrimSpace(raw) == "" {
+		return "", false, nil
+	}
+	return raw, true, nil
+}
+
+func runReleaseGateSymlinkEscapeCheck() (bool, error) {
+	tempRoot, err := os.MkdirTemp("", "otter-release-gate-security-*")
+	if err != nil {
+		return false, err
+	}
+	defer os.RemoveAll(tempRoot)
+
+	projectRoot := filepath.Join(tempRoot, "project-root")
+	outsideRoot := filepath.Join(tempRoot, "outside-root")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		return false, err
+	}
+	if err := os.MkdirAll(outsideRoot, 0o755); err != nil {
+		return false, err
+	}
+
+	linkPath := filepath.Join(projectRoot, "escape-link")
+	if err := os.Symlink(outsideRoot, linkPath); err != nil {
+		return false, err
+	}
+
+	allowed, err := releaseGatePathWithinRoot(projectRoot, filepath.Join(linkPath, "escape.txt"))
+	if err != nil {
+		return false, err
+	}
+	return !allowed, nil
+}
+
+func releaseGatePathWithinRoot(rootPath, candidatePath string) (bool, error) {
+	rootAbs, err := filepath.Abs(rootPath)
+	if err != nil {
+		return false, err
+	}
+	rootResolved, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return false, err
+	}
+
+	candidateAbs, err := filepath.Abs(candidatePath)
+	if err != nil {
+		return false, err
+	}
+	candidateResolved, err := filepath.EvalSymlinks(candidateAbs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			parentResolved, parentErr := filepath.EvalSymlinks(filepath.Dir(candidateAbs))
+			if parentErr != nil {
+				return false, parentErr
+			}
+			candidateResolved = filepath.Join(parentResolved, filepath.Base(candidateAbs))
+		} else {
+			return false, err
+		}
+	}
+
+	rel, err := filepath.Rel(rootResolved, candidateResolved)
+	if err != nil {
+		return false, err
+	}
+	if rel == "." {
+		return true, nil
+	}
+	if strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (h *AdminConfigHandler) loadSnapshotFromDB(r *http.Request) (

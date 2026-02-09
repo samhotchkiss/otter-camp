@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -40,6 +41,8 @@ func main() {
 		handleAuth(os.Args[2:])
 	case "whoami":
 		handleWhoami(os.Args[2:])
+	case "release-gate":
+		handleReleaseGate(os.Args[2:])
 	case "project":
 		handleProject(os.Args[2:])
 	case "agent":
@@ -72,6 +75,7 @@ func usage() {
 Commands:
   auth login       Store API token + default org
   whoami           Validate token and show user
+  release-gate     Run Spec 110 release gate checks
   project          Manage projects
   agent            Manage agents
   memory           Manage agent memory
@@ -148,6 +152,64 @@ func handleWhoami(args []string) {
 	if cfg.DefaultOrg != "" {
 		fmt.Printf("Default org: %s\n", cfg.DefaultOrg)
 	}
+}
+
+func handleReleaseGate(args []string) {
+	flags := flag.NewFlagSet("release-gate", flag.ExitOnError)
+	org := flags.String("org", "", "org id override")
+	jsonOut := flags.Bool("json", false, "JSON output")
+	_ = flags.Parse(args)
+
+	cfg, err := ottercli.LoadConfig()
+	dieIf(err)
+	client, _ := ottercli.NewClient(cfg, *org)
+	payload, statusCode, requestErr := client.RunReleaseGate()
+	if payload == nil {
+		dieIf(requestErr)
+		return
+	}
+
+	if *jsonOut {
+		printJSON(payload)
+		if requestErr != nil || !releaseGatePayloadOK(payload) || statusCode >= http.StatusBadRequest {
+			os.Exit(1)
+		}
+		return
+	}
+
+	fmt.Println("Spec 110 Release Gate")
+	checkList, _ := payload["checks"].([]interface{})
+	for _, item := range checkList {
+		check, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		category := strings.TrimSpace(toString(check["category"]))
+		status := strings.ToUpper(strings.TrimSpace(toString(check["status"])))
+		message := strings.TrimSpace(toString(check["message"]))
+		if category == "" {
+			category = "unknown"
+		}
+		if status == "" {
+			status = "UNKNOWN"
+		}
+		if message == "" {
+			fmt.Printf("[%s] %s\n", status, category)
+			continue
+		}
+		fmt.Printf("[%s] %s - %s\n", status, category, message)
+	}
+
+	passed := releaseGatePayloadOK(payload)
+	if requestErr == nil && statusCode < http.StatusBadRequest && passed {
+		fmt.Println("Gate result: PASS")
+		return
+	}
+	fmt.Println("Gate result: FAIL")
+	if requestErr != nil {
+		fmt.Fprintln(os.Stderr, formatCLIError(requestErr))
+	}
+	os.Exit(1)
 }
 
 func handleAgent(args []string) {
@@ -1676,6 +1738,14 @@ func toString(value interface{}) string {
 		return str
 	}
 	return fmt.Sprintf("%v", value)
+}
+
+func releaseGatePayloadOK(payload map[string]interface{}) bool {
+	if payload == nil {
+		return false
+	}
+	parsed, ok := payload["ok"].(bool)
+	return ok && parsed
 }
 
 func prompt(label string) string {

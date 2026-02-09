@@ -329,6 +329,18 @@ func TestBuildWorkflowSchedulePayload(t *testing.T) {
 	}
 }
 
+func TestReleaseGatePayloadOK(t *testing.T) {
+	if releaseGatePayloadOK(nil) {
+		t.Fatalf("releaseGatePayloadOK(nil) = true, want false")
+	}
+	if releaseGatePayloadOK(map[string]interface{}{"ok": false}) {
+		t.Fatalf("releaseGatePayloadOK(false) = true, want false")
+	}
+	if !releaseGatePayloadOK(map[string]interface{}{"ok": true}) {
+		t.Fatalf("releaseGatePayloadOK(true) = false, want true")
+	}
+}
+
 func TestParseChameleonSessionAgentID(t *testing.T) {
 	tests := []struct {
 		name    string

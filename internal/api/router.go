@@ -374,6 +374,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/admin/config", adminConfigHandler.GetCurrent)
 		r.With(middleware.OptionalWorkspace).Get("/admin/config/history", adminConfigHandler.ListHistory)
 		r.With(middleware.OptionalWorkspace).Patch("/admin/config", adminConfigHandler.Patch)
+		r.With(middleware.OptionalWorkspace).Post("/admin/config/release-gate", adminConfigHandler.ReleaseGate)
 		r.With(middleware.OptionalWorkspace).Post("/admin/config/cutover", adminConfigHandler.Cutover)
 		r.With(middleware.OptionalWorkspace).Post("/admin/config/rollback", adminConfigHandler.Rollback)
 	})
