@@ -97,6 +97,7 @@ export default function PipelineSettings({
     setError(null);
     setSuccess(null);
     setIsSaving(true);
+    let rolesSaved = false;
 
     try {
       await apiFetch<PipelineRolesResponse>(`/api/projects/${encodeURIComponent(projectId)}/pipeline-roles`, {
@@ -107,6 +108,7 @@ export default function PipelineSettings({
           reviewer: { agentId: normalizeAgentID(roles.reviewer) },
         }),
       });
+      rolesSaved = true;
 
       await apiFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
         method: "PATCH",
@@ -118,7 +120,11 @@ export default function PipelineSettings({
       onRequireHumanReviewSaved?.(requireHumanReview);
       setSuccess("Pipeline settings saved.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save pipeline settings");
+      if (rolesSaved) {
+        setError("Roles saved, but failed to update human review setting.");
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to save pipeline settings");
+      }
     } finally {
       setIsSaving(false);
     }

@@ -138,6 +138,41 @@ describe("PipelineSettings", () => {
     expect(await screen.findByText("bad role payload")).toBeInTheDocument();
   });
 
+  it("shows partial save error when roles save succeeds but human review update fails", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          planner: { agentId: null },
+          worker: { agentId: null },
+          reviewer: { agentId: null },
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          planner: { agentId: null },
+          worker: { agentId: null },
+          reviewer: { agentId: null },
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ error: "toggle failed" }, false));
+
+    render(
+      <PipelineSettings
+        projectId="project-1"
+        agents={[{ id: "agent-1", name: "Agent One" }]}
+        initialRequireHumanReview={false}
+      />,
+    );
+
+    await screen.findByLabelText("Planner role");
+    await user.click(screen.getByRole("button", { name: "Save pipeline settings" }));
+
+    expect(
+      await screen.findByText("Roles saved, but failed to update human review setting."),
+    ).toBeInTheDocument();
+  });
+
   it("URL-encodes project id in API paths", async () => {
     fetchMock.mockResolvedValueOnce(
       mockJSONResponse({
