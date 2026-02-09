@@ -357,8 +357,17 @@ export default function ProjectDetailPage() {
           : `${API_URL}/api/tasks?project_id=${id}`;
         const tasksRes = await fetch(tasksUrl);
         if (tasksRes.ok) {
-          const tasksData = await tasksRes.json();
-          const apiTasks: ApiTask[] = tasksData.tasks || tasksData || [];
+          const tasksData = (await tasksRes.json()) as unknown;
+          const tasksRecord =
+            tasksData && typeof tasksData === "object" && !Array.isArray(tasksData)
+              ? (tasksData as { tasks?: unknown })
+              : null;
+          const apiTasksRaw = Array.isArray(tasksRecord?.tasks)
+            ? tasksRecord.tasks
+            : Array.isArray(tasksData)
+              ? tasksData
+              : [];
+          const apiTasks = apiTasksRaw as ApiTask[];
           
           // Transform API tasks to UI tasks
           const transformedTasks: Task[] = apiTasks.map((t) => {

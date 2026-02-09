@@ -224,13 +224,22 @@ export default function ProjectIssuesList({
     setIsLoading(true);
     setError(null);
 
+    const loadAgentsResponse = async (): Promise<Response | null> => {
+      try {
+        const response = await fetch(agentsURL.toString(), {
+          headers: { "Content-Type": "application/json" },
+        });
+        return (response as Response | null) ?? null;
+      } catch {
+        return null;
+      }
+    };
+
     void Promise.all([
       fetch(issuesURL.toString(), {
         headers: { "Content-Type": "application/json" },
       }),
-      fetch(agentsURL.toString(), {
-        headers: { "Content-Type": "application/json" },
-      }).catch(() => null),
+      loadAgentsResponse(),
     ])
       .then(async ([issuesResponse, agentsResponse]) => {
         if (!issuesResponse.ok) {

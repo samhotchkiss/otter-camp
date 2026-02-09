@@ -185,7 +185,21 @@ const parseWSMessageEmission = (data: unknown): Emission | null => {
 export default function useEmissions(
   options: UseEmissionsOptions = {},
 ): UseEmissionsResult {
-  const { connected, lastMessage, sendMessage } = useWS();
+  let hasWebSocketContext = true;
+  let connected = false;
+  let lastMessage: ReturnType<typeof useWS>["lastMessage"] = null;
+  let sendMessage: ReturnType<typeof useWS>["sendMessage"] = () => false;
+  try {
+    const ws = useWS();
+    connected = ws.connected;
+    lastMessage = ws.lastMessage;
+    sendMessage = ws.sendMessage;
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.includes("WebSocketProvider")) {
+      throw err;
+    }
+    hasWebSocketContext = false;
+  }
   const orgID = useMemo(() => resolveOrgID(options.orgId), [options.orgId]);
   const projectID = (options.projectId ?? "").trim();
   const issueID = (options.issueId ?? "").trim();
@@ -199,7 +213,7 @@ export default function useEmissions(
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!orgID) {
+    if (!orgID || !hasWebSocketContext) {
       setEmissions([]);
       setLoading(false);
       setError(null);
@@ -246,14 +260,14 @@ export default function useEmissions(
     } finally {
       setLoading(false);
     }
-  }, [issueID, limit, orgID, projectID, sourceID]);
+  }, [hasWebSocketContext, issueID, limit, orgID, projectID, sourceID]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   useEffect(() => {
-    if (!connected) {
+    if (!hasWebSocketContext || !connected) {
       return;
     }
     const topics: string[] = [];
@@ -272,7 +286,7 @@ export default function useEmissions(
         sendMessage({ type: "unsubscribe", topic });
       }
     };
-  }, [connected, issueID, projectID, sendMessage]);
+  }, [connected, hasWebSocketContext, issueID, projectID, sendMessage]);
 
   useEffect(() => {
     if (!lastMessage || lastMessage.type !== "EmissionReceived") {
