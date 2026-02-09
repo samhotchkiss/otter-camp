@@ -274,7 +274,6 @@ func upsertPipelineRoleAssignment(ctx context.Context, querier Querier, workspac
 	}
 	return &assignment, nil
 }
-
 func scanPipelineRoleAssignment(scanner interface{ Scan(...any) error }) (PipelineRoleAssignment, error) {
 	var assignment PipelineRoleAssignment
 	var agentID sql.NullString
