@@ -131,6 +131,7 @@ func NewRouter() http.Handler {
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	projectChatHandler.ProjectStore = projectStore
+	websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{IssueStore: issuesHandler.IssueStore}
 
 	if db != nil && projectStore != nil {
 		gitHandler := &gitserver.Handler{
