@@ -3,7 +3,6 @@ package api
 import (
 	"database/sql"
 	"errors"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +50,22 @@ func currentSchemaVersion(t *testing.T, db *sql.DB) int64 {
 	return version
 }
 
+func checkConstraintDefinition(t *testing.T, db *sql.DB, tableName, constraintName string) string {
+	t.Helper()
+	var definition string
+	err := db.QueryRow(
+		`SELECT pg_get_constraintdef(c.oid)
+		FROM pg_constraint c
+		INNER JOIN pg_class t ON t.oid = c.conrelid
+		INNER JOIN pg_namespace n ON n.oid = t.relnamespace
+		WHERE n.nspname = 'public' AND t.relname = $1 AND c.conname = $2`,
+		tableName,
+		constraintName,
+	).Scan(&definition)
+	require.NoError(t, err)
+	return definition
+}
+
 func TestProjectSettingsMigrationsCreateDeployConfigAndHumanReviewColumn(t *testing.T) {
 	db := setupMessageTestDB(t)
 
@@ -67,6 +82,8 @@ func TestProjectSettingsMigrationFilesExist(t *testing.T) {
 		"047_create_project_deploy_config.down.sql",
 		"048_add_require_human_review.up.sql",
 		"048_add_require_human_review.down.sql",
+		"049_allow_reviewer_gate_approval_state.up.sql",
+		"049_allow_reviewer_gate_approval_state.down.sql",
 	}
 
 	for _, filename := range required {
@@ -81,7 +98,7 @@ func TestProjectSettingsMigrationFilesContainExpectedDDL(t *testing.T) {
 
 	checkContains := func(filename string, snippets ...string) {
 		t.Helper()
-		raw, readErr := ioutil.ReadFile(filepath.Join(migrationsDir, filename))
+		raw, readErr := os.ReadFile(filepath.Join(migrationsDir, filename))
 		require.NoError(t, readErr)
 		body := strings.ToLower(string(raw))
 		for _, snippet := range snippets {
@@ -101,6 +118,18 @@ func TestProjectSettingsMigrationFilesContainExpectedDDL(t *testing.T) {
 		"alter table projects",
 		"add column require_human_review boolean not null default false",
 	)
+	checkContains(
+		"049_allow_reviewer_gate_approval_state.up.sql",
+		"alter table project_issues",
+		"project_issues_approval_state_check",
+		"approved_by_reviewer",
+	)
+	checkContains(
+		"049_allow_reviewer_gate_approval_state.down.sql",
+		"update project_issues",
+		"where approval_state = 'approved_by_reviewer'",
+		"approval_state in ('draft', 'ready_for_review', 'needs_changes', 'approved')",
+	)
 }
 
 func TestProjectSettingsMigrationsRollbackDeployConfigAndHumanReviewColumn(t *testing.T) {
@@ -111,7 +140,7 @@ func TestProjectSettingsMigrationsRollbackDeployConfigAndHumanReviewColumn(t *te
 
 	db := setupMessageTestDB(t)
 	version := currentSchemaVersion(t, db)
-	require.GreaterOrEqual(t, version, int64(48))
+	require.GreaterOrEqual(t, version, int64(49))
 
 	migrationsDir, err := filepath.Abs(filepath.Join("..", "..", "migrations"))
 	require.NoError(t, err)
@@ -132,4 +161,8 @@ func TestProjectSettingsMigrationsRollbackDeployConfigAndHumanReviewColumn(t *te
 
 	require.False(t, tableExists(t, db, "project_deploy_config"))
 	require.False(t, columnExists(t, db, "projects", "require_human_review"))
+	constraint := strings.ToLower(checkConstraintDefinition(t, db, "project_issues", "project_issues_approval_state_check"))
+	require.NotContains(t, constraint, "approved_by_reviewer")
+	require.Contains(t, constraint, "ready_for_review")
+	require.Contains(t, constraint, "approved")
 }
