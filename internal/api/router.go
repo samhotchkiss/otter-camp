@@ -96,7 +96,7 @@ func NewRouter() http.Handler {
 	adminAgentsHandler := &AdminAgentsHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	labelsHandler := &LabelsHandler{}
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
-	settingsHandler := &SettingsHandler{DB: db}
+	// Settings uses standalone handler functions (no struct needed)
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -274,14 +274,14 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/projects/{pid}/issues/{iid}/labels", labelsHandler.AddIssueLabels)
 		r.With(middleware.OptionalWorkspace).Delete("/projects/{pid}/issues/{iid}/labels/{lid}", labelsHandler.RemoveIssueLabel)
 
-		r.With(middleware.OptionalWorkspace).Get("/settings/profile", settingsHandler.GetProfile)
-		r.With(middleware.OptionalWorkspace).Put("/settings/profile", settingsHandler.PutProfile)
-		r.With(middleware.OptionalWorkspace).Get("/settings/notifications", settingsHandler.GetNotifications)
-		r.With(middleware.OptionalWorkspace).Put("/settings/notifications", settingsHandler.PutNotifications)
-		r.With(middleware.OptionalWorkspace).Get("/settings/workspace", settingsHandler.GetWorkspace)
-		r.With(middleware.OptionalWorkspace).Put("/settings/workspace", settingsHandler.PutWorkspace)
-		r.With(middleware.OptionalWorkspace).Get("/settings/integrations", settingsHandler.GetIntegrations)
-		r.With(middleware.OptionalWorkspace).Put("/settings/integrations", settingsHandler.PutIntegrations)
+		r.With(middleware.OptionalWorkspace).Get("/settings/profile", HandleSettingsProfileGet)
+		r.With(middleware.OptionalWorkspace).Put("/settings/profile", HandleSettingsProfilePut)
+		r.With(middleware.OptionalWorkspace).Get("/settings/notifications", HandleSettingsNotificationsGet)
+		r.With(middleware.OptionalWorkspace).Put("/settings/notifications", HandleSettingsNotificationsPut)
+		r.With(middleware.OptionalWorkspace).Get("/settings/workspace", HandleSettingsWorkspaceGet)
+		r.With(middleware.OptionalWorkspace).Put("/settings/workspace", HandleSettingsWorkspacePut)
+		r.With(middleware.OptionalWorkspace).Get("/settings/integrations", HandleSettingsIntegrationsGet)
+		r.With(middleware.OptionalWorkspace).Put("/settings/integrations", HandleSettingsIntegrationsPut)
 
 		r.With(middleware.OptionalWorkspace).Get("/github/integration/status", githubIntegrationHandler.IntegrationStatus)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/github/integration/repos", githubIntegrationHandler.ListRepos)
@@ -311,6 +311,17 @@ func NewRouter() http.Handler {
 		r.Get("/export", HandleExport)
 		r.Post("/import", HandleImport)
 		r.Post("/import/validate", HandleImportValidate)
+
+		r.Get("/settings/profile", HandleSettingsProfileGet)
+		r.Put("/settings/profile", HandleSettingsProfilePut)
+		r.Get("/settings/notifications", HandleSettingsNotificationsGet)
+		r.Put("/settings/notifications", HandleSettingsNotificationsPut)
+		r.Get("/settings/workspace", HandleSettingsWorkspaceGet)
+		r.Put("/settings/workspace", HandleSettingsWorkspacePut)
+		r.Get("/settings/integrations", HandleSettingsIntegrationsGet)
+		r.Put("/settings/integrations", HandleSettingsIntegrationsPut)
+		r.Post("/settings/integrations/api-keys", HandleSettingsAPIKeyCreate)
+		r.Delete("/settings/integrations/api-keys/{id}", HandleSettingsAPIKeyDelete)
 
 		// Admin endpoints
 		r.With(middleware.OptionalWorkspace).Post("/admin/init-repos", HandleAdminInitRepos(db))
