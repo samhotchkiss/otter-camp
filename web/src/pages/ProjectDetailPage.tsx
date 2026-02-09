@@ -5,6 +5,7 @@ import LoadingSpinner from "../components/LoadingSpinner";
 import ProjectFileBrowser from "../components/project/ProjectFileBrowser";
 import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
+import PipelineMiniProgress from "../components/issues/PipelineMiniProgress";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
 
@@ -215,6 +216,11 @@ function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
       <h4 className="mb-3 text-sm font-semibold text-[var(--text)]">
         {task.title}
       </h4>
+      <div className="mb-3">
+        <div data-testid={`project-board-mini-${task.id}`}>
+          <PipelineMiniProgress status={task.status} />
+        </div>
+      </div>
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-2">
           <div
@@ -891,9 +897,14 @@ export default function ProjectDetailPage() {
                     <span className="text-xs text-[var(--text-muted)]">
                       {task.assignee}
                     </span>
-                    <span className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold ${LIST_STATUS_BADGE[task.status].className}`}>
-                      {LIST_STATUS_BADGE[task.status].label}
-                    </span>
+                    <div className="flex flex-col items-start gap-1">
+                      <span className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold ${LIST_STATUS_BADGE[task.status].className}`}>
+                        {LIST_STATUS_BADGE[task.status].label}
+                      </span>
+                      <div data-testid={`project-list-mini-${task.id}`}>
+                        <PipelineMiniProgress status={task.status} />
+                      </div>
+                    </div>
                     <span className={`w-fit rounded px-2 py-0.5 text-[10px] font-semibold ${
                       task.priority === "P0" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
                       task.priority === "P1" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :

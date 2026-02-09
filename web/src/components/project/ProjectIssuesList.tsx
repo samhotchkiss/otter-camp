@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import PipelineMiniProgress from "../issues/PipelineMiniProgress";
 
 const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
@@ -18,6 +19,7 @@ type ProjectIssueItem = {
   kind: "issue" | "pull_request";
   approval_state?: IssueApprovalState | null;
   owner_agent_id?: string | null;
+  work_status?: string;
   last_activity_at: string;
   github_number?: number | null;
   github_url?: string | null;
@@ -361,6 +363,7 @@ export default function ProjectIssuesList({
                     >
                       {approvalStateLabel(approvalState)}
                     </span>
+                    <PipelineMiniProgress status={issue.work_status ?? "queued"} />
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-[var(--text-muted)]">
                     {parentIssueID !== "" && (

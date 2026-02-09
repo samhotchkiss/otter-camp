@@ -338,6 +338,7 @@ describe("ProjectDetailPage files tab", () => {
     expect(within(queuedColumn).getByText("Planning issue")).toBeInTheDocument();
     expect(within(queuedColumn).getByText("Ready for work issue")).toBeInTheDocument();
     expect(within(inProgressColumn).getByText("In progress issue")).toBeInTheDocument();
+    expect(within(inProgressColumn).getByTestId("project-board-mini-issue-in-progress")).toBeInTheDocument();
     expect(within(reviewColumn).getByText("Review issue")).toBeInTheDocument();
     expect(within(reviewColumn).getByText("Blocked issue")).toBeInTheDocument();
     expect(within(reviewColumn).getByText("Flagged issue")).toBeInTheDocument();
@@ -539,6 +540,7 @@ describe("ProjectDetailPage files tab", () => {
 
     expect(screen.getByText(/Ship status column/i)).toBeInTheDocument();
     expect(screen.getByText("In Progress")).toBeInTheDocument();
+    expect(screen.getByTestId("project-list-mini-issue-status-1")).toBeInTheDocument();
   });
 
   it("shows issue list columns for status, assignee, and priority", async () => {
