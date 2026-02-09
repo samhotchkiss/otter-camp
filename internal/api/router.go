@@ -36,12 +36,14 @@ func NewRouter() http.Handler {
 	// Initialize database connection (graceful - demo mode if unavailable)
 	var db *sql.DB
 	var agentStore *store.AgentStore
+	var agentMemoryStore *store.AgentMemoryStore
 
 	if dbConn, err := store.DB(); err != nil {
 		log.Printf("⚠️  Database not available, using demo mode: %v", err)
 	} else {
 		db = dbConn
 		agentStore = store.NewAgentStore(db)
+		agentMemoryStore = store.NewAgentMemoryStore(db)
 		log.Printf("✅ Database connected, Postgres-backed stores ready")
 	}
 
@@ -77,7 +79,7 @@ func NewRouter() http.Handler {
 	emissionsHandler := &EmissionsHandler{Buffer: emissionBuffer, Hub: hub}
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
-	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
+	agentsHandler := &AgentsHandler{Store: agentStore, MemoryStore: agentMemoryStore, DB: db}
 	var workflowsHandler *WorkflowsHandler // initialized below after adminConnectionsHandler
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db, EmissionBuffer: emissionBuffer}
 	adminConnectionsHandler := &AdminConnectionsHandler{DB: db, OpenClawHandler: openClawWSHandler}
@@ -211,6 +213,9 @@ func NewRouter() http.Handler {
 		r.Post("/tasks", taskHandler.CreateTask)
 		r.With(middleware.OptionalWorkspace).Get("/agents", agentsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/whoami", agentsHandler.WhoAmI)
+		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/memory", agentsHandler.GetMemory)
+		r.With(middleware.OptionalWorkspace).Post("/agents/{id}/memory", agentsHandler.CreateMemory)
+		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/memory/search", agentsHandler.SearchMemory)
 		r.With(middleware.OptionalWorkspace).Get("/workflows", workflowsHandler.List)
 		r.With(middleware.OptionalWorkspace).Patch("/workflows/{id}", workflowsHandler.Toggle)
 		r.With(middleware.OptionalWorkspace).Post("/workflows/{id}/run", workflowsHandler.Run)
