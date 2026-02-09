@@ -66,7 +66,7 @@ describe("ProjectDetailPage files tab", () => {
         }),
       )
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
-      .mockResolvedValueOnce(mockJSONResponse({ tasks: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
       .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
 
     render(
@@ -98,7 +98,7 @@ describe("ProjectDetailPage files tab", () => {
         }),
       )
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
-      .mockResolvedValueOnce(mockJSONResponse({ tasks: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
       .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
 
     render(
@@ -359,7 +359,7 @@ describe("ProjectDetailPage files tab", () => {
         }),
       )
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
-      .mockResolvedValueOnce(mockJSONResponse({ tasks: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
       .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
       .mockResolvedValueOnce(
         mockJSONResponse({
@@ -510,11 +510,15 @@ describe("ProjectDetailPage files tab", () => {
       .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
       .mockResolvedValueOnce(
         mockJSONResponse({
-          tasks: [
+          items: [
             {
-              id: "task-1",
+              id: "issue-status-1",
+              issue_number: 301,
               title: "Ship status column",
-              status: "in_progress",
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "in_progress",
               priority: "P1",
             },
           ],
@@ -533,7 +537,7 @@ describe("ProjectDetailPage files tab", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "List" }));
 
-    expect(screen.getByText("Ship status column")).toBeInTheDocument();
+    expect(screen.getByText(/Ship status column/i)).toBeInTheDocument();
     expect(screen.getByText("In Progress")).toBeInTheDocument();
   });
 

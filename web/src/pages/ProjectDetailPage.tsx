@@ -54,16 +54,6 @@ const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
 
-type ApiTask = {
-  id: string;
-  title: string;
-  description?: string;
-  status: string;
-  priority: string;
-  assigned_agent_id?: string;
-  number?: number;
-};
-
 type ApiIssue = {
   id: string;
   title: string;
@@ -384,22 +374,18 @@ export default function ProjectDetailPage() {
         const issuesRes = await fetch(issuesUrl);
         if (issuesRes.ok) {
           const payload = await issuesRes.json() as
-            | { items?: ApiIssue[]; tasks?: ApiTask[] }
-            | ApiTask[]
+            | { items?: ApiIssue[] }
             | ApiIssue[];
           const apiIssues = Array.isArray(payload)
             ? payload
             : Array.isArray(payload.items)
               ? payload.items
-              : Array.isArray(payload.tasks)
-                ? payload.tasks
                 : [];
 
           const transformedTasks: Task[] = apiIssues.map((raw) => {
             const issue = raw as ApiIssue;
-            const legacyTask = raw as ApiTask;
-            const ownerAgentID = issue.owner_agent_id ?? legacyTask.assigned_agent_id;
-            const issueStatusRaw = issue.work_status ?? legacyTask.status ?? "queued";
+            const ownerAgentID = issue.owner_agent_id;
+            const issueStatusRaw = issue.work_status ?? "queued";
             const normalizedStatus = issueStatusRaw.trim().toLowerCase();
             const status = (
               normalizedStatus === "queued" ||
@@ -416,7 +402,7 @@ export default function ProjectDetailPage() {
             )
               ? normalizedStatus
               : "queued";
-            const priorityRaw = (issue.priority ?? legacyTask.priority ?? "P2").toUpperCase();
+            const priorityRaw = (issue.priority ?? "P2").toUpperCase();
             const priority = (priorityRaw === "P0" || priorityRaw === "P1" || priorityRaw === "P2" || priorityRaw === "P3")
               ? priorityRaw
               : "P2";
@@ -425,7 +411,7 @@ export default function ProjectDetailPage() {
               : "Unassigned";
             return {
               id: raw.id,
-              issueNumber: issue.issue_number ?? legacyTask.number,
+              issueNumber: issue.issue_number,
               title: raw.title,
               status,
               priority,
