@@ -28,6 +28,38 @@ export type MessageAttachment = {
   thumbnail_url?: string;
 };
 
+export type QuestionnaireQuestionType =
+  | "text"
+  | "textarea"
+  | "boolean"
+  | "select"
+  | "multiselect"
+  | "number"
+  | "date";
+
+export type MessageQuestionnaireQuestion = {
+  id: string;
+  text: string;
+  type: QuestionnaireQuestionType;
+  required: boolean;
+  options?: string[];
+  placeholder?: string;
+  default?: unknown;
+};
+
+export type MessageQuestionnaire = {
+  id: string;
+  context_type: "issue" | "project_chat" | "template";
+  context_id: string;
+  author: string;
+  title?: string;
+  questions: MessageQuestionnaireQuestion[];
+  responses?: Record<string, unknown>;
+  responded_by?: string;
+  responded_at?: string;
+  created_at: string;
+};
+
 /**
  * Represents a single message in a DM thread.
  */
@@ -40,6 +72,7 @@ export type DMMessage = {
   senderAvatarUrl?: string;
   content: string;
   attachments?: MessageAttachment[];
+  questionnaire?: MessageQuestionnaire;
   createdAt: string;
   optimistic?: boolean;
   failed?: boolean;

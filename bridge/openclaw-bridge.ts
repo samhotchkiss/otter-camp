@@ -31,17 +31,9 @@ const OTTERCAMP_WS_SECRET = process.env.OPENCLAW_WS_SECRET || '';
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
 const MAX_TRACKED_RUN_IDS = 2000;
 const DISPATCH_QUEUE_POLL_INTERVAL_MS = 5000;
-const ACTIVITY_EVENT_FLUSH_INTERVAL_MS = 5000;
-const ACTIVITY_EVENTS_BATCH_SIZE = 200;
-const MAX_TRACKED_ACTIVITY_EVENT_IDS = 5000;
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-const PROJECT_ID_PATTERN = /(?:^|:)project:([0-9a-f-]{36})(?:$|:)/i;
-const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
-const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
-const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
-const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 
-export interface OpenClawSession {
+interface OpenClawSession {
   key: string;
   kind: string;
   channel: string;
@@ -59,30 +51,6 @@ export interface OpenClawSession {
   lastAccountId?: string;
   transcriptPath?: string;
 }
-
-export type AgentActivityScope = {
-  project_id?: string;
-  issue_id?: string;
-  issue_number?: number;
-  thread_id?: string;
-};
-
-export type BridgeAgentActivityEvent = {
-  id: string;
-  agent_id: string;
-  session_key: string;
-  trigger: string;
-  channel?: string;
-  summary: string;
-  detail?: string;
-  scope?: AgentActivityScope;
-  tokens_used: number;
-  model_used?: string;
-  duration_ms: number;
-  status: 'started' | 'completed' | 'failed' | 'timeout';
-  started_at: string;
-  completed_at?: string;
-};
 
 interface OpenClawCronJobSnapshot {
   id: string;
@@ -105,13 +73,6 @@ interface OpenClawProcessSnapshot {
   agent_id?: string;
   session_key?: string;
   started_at?: string;
-}
-
-interface OpenClawConfigSyncSnapshot {
-  path: string;
-  source: string;
-  captured_at: string;
-  data: unknown;
 }
 
 interface SessionsListResponse {
@@ -150,6 +111,7 @@ type ProjectChatDispatchEvent = {
     session_key?: string;
     content?: string;
     author?: string;
+    questionnaire?: unknown;
   };
 };
 
@@ -170,7 +132,26 @@ type IssueCommentDispatchEvent = {
     sender_type?: string;
     session_key?: string;
     content?: string;
+    questionnaire?: unknown;
   };
+};
+
+export type QuestionnaireQuestion = {
+  id: string;
+  text: string;
+  type: 'text' | 'textarea' | 'boolean' | 'select' | 'multiselect' | 'number' | 'date';
+  required?: boolean;
+  options?: string[];
+};
+
+export type QuestionnairePayload = {
+  id: string;
+  contextType?: string;
+  contextID?: string;
+  author?: string;
+  title?: string;
+  questions: QuestionnaireQuestion[];
+  responses?: Record<string, unknown>;
 };
 
 type AdminCommandDispatchEvent = {
@@ -184,9 +165,6 @@ type AdminCommandDispatchEvent = {
     job_id?: string;
     process_id?: string;
     enabled?: boolean;
-    config_patch?: unknown;
-    confirm?: boolean;
-    dry_run?: boolean;
   };
 };
 
@@ -210,6 +188,7 @@ type SessionContext = {
   issueTitle?: string;
   documentPath?: string;
   responderAgentID?: string;
+  pendingQuestionnaire?: QuestionnairePayload;
 };
 
 type DeviceIdentity = {
@@ -229,11 +208,6 @@ const sessionContexts = new Map<string, SessionContext>();
 const contextPrimedSessions = new Set<string>();
 const deliveredRunIDs = new Set<string>();
 const deliveredRunIDOrder: string[] = [];
-let previousSessionsByKey = new Map<string, OpenClawSession>();
-const queuedActivityEventsByOrg = new Map<string, BridgeAgentActivityEvent[]>();
-const queuedActivityEventIDs = new Set<string>();
-const deliveredActivityEventIDs = new Set<string>();
-const deliveredActivityEventIDOrder: string[] = [];
 
 const genId = () => `req-${++requestId}`;
 const execFileAsync = promisify(execFile);
@@ -258,269 +232,6 @@ function parseAgentIDFromSessionKey(sessionKey: string): string {
     return '';
   }
   return match[1].trim();
-}
-
-function normalizeUpdatedAt(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) {
-    return Date.now();
-  }
-  if (value > 1_000_000_000_000) {
-    return Math.floor(value);
-  }
-  return Math.floor(value * 1000);
-}
-
-function deriveAgentID(session: OpenClawSession): string {
-  const fromSessionKey = parseAgentIDFromSessionKey(session.key);
-  if (fromSessionKey) {
-    return fromSessionKey;
-  }
-  const context = sessionContexts.get(session.key);
-  const fromContext = getTrimmedString(context?.agentID);
-  if (fromContext) {
-    return fromContext;
-  }
-  const deliveryContext = asRecord(session.deliveryContext);
-  const fromDelivery =
-    getTrimmedString(deliveryContext?.agent_id) ||
-    getTrimmedString(deliveryContext?.agentId) ||
-    getTrimmedString(session.lastTo);
-  if (fromDelivery) {
-    return fromDelivery;
-  }
-  return 'system';
-}
-
-function deriveActivityScope(session: OpenClawSession): AgentActivityScope | undefined {
-  const scope: AgentActivityScope = {};
-  const sessionKey = getTrimmedString(session.key);
-  if (!sessionKey) {
-    return undefined;
-  }
-
-  const context = sessionContexts.get(sessionKey);
-  const deliveryContext = asRecord(session.deliveryContext);
-
-  const projectFromSession = PROJECT_ID_PATTERN.exec(sessionKey)?.[1];
-  const issueFromSession = ISSUE_ID_PATTERN.exec(sessionKey)?.[1];
-  const projectID =
-    projectFromSession ||
-    getTrimmedString(context?.projectID) ||
-    getTrimmedString(deliveryContext?.project_id) ||
-    getTrimmedString(deliveryContext?.projectId);
-  const issueID =
-    issueFromSession ||
-    getTrimmedString(context?.issueID) ||
-    getTrimmedString(deliveryContext?.issue_id) ||
-    getTrimmedString(deliveryContext?.issueId);
-  const threadID =
-    getTrimmedString(context?.threadID) ||
-    getTrimmedString(deliveryContext?.thread_id) ||
-    getTrimmedString(deliveryContext?.threadId);
-  const issueNumber =
-    context?.issueNumber ??
-    getNumeric(deliveryContext?.issue_number) ??
-    getNumeric(deliveryContext?.issueNumber);
-
-  if (projectID) {
-    scope.project_id = projectID;
-  }
-  if (issueID) {
-    scope.issue_id = issueID;
-  }
-  if (Number.isFinite(issueNumber)) {
-    scope.issue_number = Number(issueNumber);
-  }
-  if (threadID) {
-    scope.thread_id = threadID;
-  }
-  if (!scope.project_id && !scope.issue_id && !scope.issue_number && !scope.thread_id) {
-    return undefined;
-  }
-  return scope;
-}
-
-export function inferActivityTrigger(
-  session: OpenClawSession,
-  previous?: OpenClawSession,
-): { trigger: string; channel: string } {
-  const sessionKey = getTrimmedString(session.key).toLowerCase();
-  const displayName = getTrimmedString(session.displayName).toLowerCase();
-  const channel =
-    getTrimmedString(session.channel).toLowerCase() ||
-    getTrimmedString(session.lastChannel).toLowerCase() ||
-    getTrimmedString(previous?.channel).toLowerCase();
-
-  if (sessionKey.startsWith('cron:') || sessionKey.includes(':cron:')) {
-    return { trigger: 'cron.scheduled', channel: 'cron' };
-  }
-  if (HEARTBEAT_PATTERN.test(sessionKey) || HEARTBEAT_PATTERN.test(displayName)) {
-    return { trigger: 'heartbeat', channel: channel || 'system' };
-  }
-  if (sessionKey.startsWith('spawn:') || session.kind === 'sub') {
-    return { trigger: 'spawn.sub_agent', channel: channel || 'system' };
-  }
-  if (session.kind === 'isolated') {
-    return { trigger: 'spawn.isolated', channel: channel || 'system' };
-  }
-  if (CHAT_CHANNELS.has(channel)) {
-    return { trigger: `chat.${channel}`, channel };
-  }
-  if (session.kind === 'main') {
-    const chatChannel = channel || 'tui';
-    return { trigger: `chat.${chatChannel}`, channel: chatChannel };
-  }
-  return { trigger: 'system.event', channel: channel || 'system' };
-}
-
-function shouldEmitActivityDelta(current: OpenClawSession, previous?: OpenClawSession): boolean {
-  if (!previous) {
-    return true;
-  }
-  const currentUpdatedAt = normalizeUpdatedAt(current.updatedAt);
-  const previousUpdatedAt = normalizeUpdatedAt(previous.updatedAt);
-  if (currentUpdatedAt > previousUpdatedAt) {
-    return true;
-  }
-  if (getTrimmedString(current.displayName) !== getTrimmedString(previous.displayName)) {
-    return true;
-  }
-  if ((current.totalTokens || 0) !== (previous.totalTokens || 0)) {
-    return true;
-  }
-  if (Boolean(current.abortedLastRun) !== Boolean(previous.abortedLastRun)) {
-    return true;
-  }
-  return false;
-}
-
-function buildActivitySummary(
-  session: OpenClawSession,
-  previous: OpenClawSession | undefined,
-  trigger: string,
-): string {
-  const displayName = getTrimmedString(session.displayName);
-  const previousDisplayName = getTrimmedString(previous?.displayName);
-  if (!previous) {
-    if (displayName) {
-      return `Started ${displayName}`;
-    }
-    return `Started ${trigger}`;
-  }
-  if (displayName && displayName !== previousDisplayName) {
-    return `Updated task: ${displayName}`;
-  }
-  if (session.abortedLastRun) {
-    return displayName ? `Failed while working on ${displayName}` : 'Session run failed';
-  }
-  return displayName ? `Worked on ${displayName}` : `Session activity (${session.key})`;
-}
-
-function buildActivityDetail(session: OpenClawSession, previous?: OpenClawSession): string {
-  const parts: string[] = [];
-  if (previous && getTrimmedString(previous.displayName) !== getTrimmedString(session.displayName)) {
-    const from = getTrimmedString(previous.displayName) || 'unknown';
-    const to = getTrimmedString(session.displayName) || 'unknown';
-    parts.push(`task: ${from} -> ${to}`);
-  }
-  if (session.model) {
-    parts.push(`model=${session.model}`);
-  }
-  parts.push(`session=${session.key}`);
-  return parts.join(' | ');
-}
-
-function buildActivityEventID(session: OpenClawSession, previous?: OpenClawSession): string {
-  const seed = [
-    getTrimmedString(session.key),
-    String(normalizeUpdatedAt(session.updatedAt)),
-    String(session.totalTokens || 0),
-    String(previous?.totalTokens || 0),
-    getTrimmedString(session.displayName),
-  ].join('|');
-  return `act_${crypto.createHash('sha1').update(seed).digest('hex').slice(0, 24)}`;
-}
-
-function mapSessionDeltaToActivityEvent(
-  session: OpenClawSession,
-  previous?: OpenClawSession,
-): BridgeAgentActivityEvent | null {
-  if (!shouldEmitActivityDelta(session, previous)) {
-    return null;
-  }
-
-  const triggerInfo = inferActivityTrigger(session, previous);
-  const updatedAtMs = normalizeUpdatedAt(session.updatedAt);
-  const previousUpdatedAtMs = previous ? normalizeUpdatedAt(previous.updatedAt) : updatedAtMs;
-  const durationMs = Math.max(0, updatedAtMs - previousUpdatedAtMs);
-  const totalTokens = Number.isFinite(session.totalTokens) ? Math.max(0, session.totalTokens) : 0;
-  const previousTokens = previous && Number.isFinite(previous.totalTokens) ? Math.max(0, previous.totalTokens) : 0;
-  const tokensUsed = previous ? Math.max(0, totalTokens - previousTokens) : totalTokens;
-
-  let status: BridgeAgentActivityEvent['status'] = 'completed';
-  if (!previous) {
-    status = 'started';
-  } else if (session.abortedLastRun) {
-    status = 'failed';
-  }
-
-  const startedAtISO = new Date(updatedAtMs).toISOString();
-  const completedAt = status === 'started' ? undefined : startedAtISO;
-  const event: BridgeAgentActivityEvent = {
-    id: buildActivityEventID(session, previous),
-    agent_id: deriveAgentID(session),
-    session_key: getTrimmedString(session.key),
-    trigger: triggerInfo.trigger,
-    channel: triggerInfo.channel || undefined,
-    summary: buildActivitySummary(session, previous, triggerInfo.trigger),
-    detail: buildActivityDetail(session, previous),
-    tokens_used: tokensUsed,
-    model_used: getTrimmedString(session.model) || undefined,
-    duration_ms: durationMs,
-    status,
-    started_at: startedAtISO,
-    completed_at: completedAt,
-  };
-
-  const scope = deriveActivityScope(session);
-  if (scope) {
-    event.scope = scope;
-  }
-
-  return event;
-}
-
-export function buildActivityEventsFromSessionDeltas(params: {
-  previousByKey: Map<string, OpenClawSession>;
-  currentSessions: OpenClawSession[];
-}): BridgeAgentActivityEvent[] {
-  const events: BridgeAgentActivityEvent[] = [];
-  for (const session of params.currentSessions) {
-    const key = getTrimmedString(session.key);
-    if (!key) {
-      continue;
-    }
-    const previous = params.previousByKey.get(key);
-    const event = mapSessionDeltaToActivityEvent(session, previous);
-    if (!event) {
-      continue;
-    }
-    events.push(event);
-  }
-  events.sort((a, b) => a.started_at.localeCompare(b.started_at));
-  return events;
-}
-
-function sessionsByKey(sessions: OpenClawSession[]): Map<string, OpenClawSession> {
-  const next = new Map<string, OpenClawSession>();
-  for (const session of sessions) {
-    const key = getTrimmedString(session.key);
-    if (!key) {
-      continue;
-    }
-    next.set(key, session);
-  }
-  return next;
 }
 
 function getNumeric(value: unknown): number | undefined {
@@ -592,14 +303,6 @@ function resolveOpenClawStateDir(): string {
     return envDir;
   }
   return path.join(os.homedir(), '.openclaw');
-}
-
-function resolveOpenClawConfigPath(): string {
-  const envPath = getTrimmedString(process.env.OPENCLAW_CONFIG_PATH);
-  if (envPath) {
-    return envPath;
-  }
-  return path.join(resolveOpenClawStateDir(), 'openclaw.json');
 }
 
 function resolveOpenClawIdentityPath(fileName: string): string {
@@ -776,6 +479,315 @@ function extractMessageContent(value: unknown): string {
   );
 }
 
+function normalizeQuestionnaireType(value: unknown): QuestionnaireQuestion['type'] | null {
+  const normalized = getTrimmedString(value).toLowerCase();
+  switch (normalized) {
+    case 'text':
+    case 'textarea':
+    case 'boolean':
+    case 'select':
+    case 'multiselect':
+    case 'number':
+    case 'date':
+      return normalized;
+    default:
+      return null;
+  }
+}
+
+export function normalizeQuestionnairePayload(raw: unknown): QuestionnairePayload | null {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+  const id = getTrimmedString(record.id);
+  if (!id) {
+    return null;
+  }
+
+  const rawQuestions = Array.isArray(record.questions) ? record.questions : [];
+  const questions: QuestionnaireQuestion[] = [];
+  for (const entry of rawQuestions) {
+    const question = asRecord(entry);
+    if (!question) {
+      continue;
+    }
+    const questionID = getTrimmedString(question.id);
+    const text = getTrimmedString(question.text);
+    const questionType = normalizeQuestionnaireType(question.type);
+    if (!questionID || !text || !questionType) {
+      continue;
+    }
+    const optionsRaw = Array.isArray(question.options) ? question.options : [];
+    const optionSet = new Set<string>();
+    for (const option of optionsRaw) {
+      const trimmed = getTrimmedString(option);
+      if (!trimmed) {
+        continue;
+      }
+      optionSet.add(trimmed);
+    }
+    const options = Array.from(optionSet);
+
+    questions.push({
+      id: questionID,
+      text,
+      type: questionType,
+      required: getBoolean(question.required),
+      options: options.length > 0 ? options : undefined,
+    });
+  }
+  if (questions.length === 0) {
+    return null;
+  }
+
+  const responsesRecord = asRecord(record.responses);
+  const responses = responsesRecord ? responsesRecord : undefined;
+  return {
+    id,
+    contextType: getTrimmedString(record.context_type) || undefined,
+    contextID: getTrimmedString(record.context_id) || undefined,
+    author: getTrimmedString(record.author) || undefined,
+    title: getTrimmedString(record.title) || undefined,
+    questions,
+    responses,
+  };
+}
+
+export function formatQuestionnaireForFallback(questionnaire: QuestionnairePayload): string {
+  const lines: string[] = [];
+  lines.push('[QUESTIONNAIRE]');
+  lines.push(`Questionnaire ID: ${questionnaire.id}`);
+  if (questionnaire.title) {
+    lines.push(`Title: ${questionnaire.title}`);
+  }
+  if (questionnaire.author) {
+    lines.push(`Author: ${questionnaire.author}`);
+  }
+  lines.push('Reply with numbered answers, for example:');
+  lines.push('1. ...');
+  lines.push('2. ...');
+  lines.push('');
+
+  questionnaire.questions.forEach((question, index) => {
+    const meta: string[] = [question.type];
+    if (question.required) {
+      meta.push('required');
+    }
+    lines.push(`${index + 1}. ${question.text} [id=${question.id}; ${meta.join(', ')}]`);
+    if (question.options && question.options.length > 0) {
+      lines.push(`   options: ${question.options.join(' | ')}`);
+    }
+  });
+  lines.push('[/QUESTIONNAIRE]');
+  return lines.join('\n');
+}
+
+export function parseNumberedAnswers(content: string): Map<number, string> {
+  const lines = content.split(/\r?\n/);
+  const answers = new Map<number, string>();
+  let currentIndex = -1;
+  let currentLines: string[] = [];
+
+  const flush = () => {
+    if (currentIndex <= 0) {
+      return;
+    }
+    const value = currentLines.join('\n').trim();
+    if (value) {
+      answers.set(currentIndex, value);
+    }
+  };
+
+  for (const line of lines) {
+    const match = /^\s*(\d+)[\.\)]\s*(.*)$/.exec(line);
+    if (match) {
+      flush();
+      currentIndex = Number(match[1]);
+      currentLines = [match[2] || ''];
+      continue;
+    }
+    if (currentIndex > 0) {
+      currentLines.push(line);
+    }
+  }
+  flush();
+
+  return answers;
+}
+
+function parseBooleanText(value: string): boolean | null {
+  const normalized = value.trim().toLowerCase();
+  if (['true', 'yes', 'y', '1'].includes(normalized)) {
+    return true;
+  }
+  if (['false', 'no', 'n', '0'].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+export function parseQuestionnaireAnswer(
+  question: QuestionnaireQuestion,
+  rawAnswer: string,
+): { value: unknown; valid: boolean } {
+  const trimmed = rawAnswer.trim();
+  if (!trimmed) {
+    return { value: undefined, valid: false };
+  }
+
+  switch (question.type) {
+    case 'text':
+    case 'textarea':
+    case 'date':
+      return { value: trimmed, valid: true };
+    case 'boolean': {
+      const parsed = parseBooleanText(trimmed);
+      if (parsed === null) {
+        return { value: undefined, valid: false };
+      }
+      return { value: parsed, valid: true };
+    }
+    case 'number': {
+      const value = Number(trimmed);
+      if (!Number.isFinite(value)) {
+        return { value: undefined, valid: false };
+      }
+      return { value, valid: true };
+    }
+    case 'select':
+      if (!question.options || question.options.length === 0) {
+        return { value: trimmed, valid: true };
+      }
+      for (const option of question.options) {
+        if (option.toLowerCase() === trimmed.toLowerCase()) {
+          return { value: option, valid: true };
+        }
+      }
+      return { value: undefined, valid: false };
+    case 'multiselect': {
+      const parts = trimmed
+        .split(/[,|]/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (parts.length === 0) {
+        return { value: undefined, valid: false };
+      }
+      if (!question.options || question.options.length === 0) {
+        return { value: parts, valid: true };
+      }
+      const normalized: string[] = [];
+      const seen = new Set<string>();
+      for (const part of parts) {
+        const match = question.options.find((option) => option.toLowerCase() === part.toLowerCase());
+        if (!match) {
+          return { value: undefined, valid: false };
+        }
+        if (seen.has(match)) {
+          continue;
+        }
+        seen.add(match);
+        normalized.push(match);
+      }
+      if (normalized.length === 0) {
+        return { value: undefined, valid: false };
+      }
+      return { value: normalized, valid: true };
+    }
+    default:
+      return { value: undefined, valid: false };
+  }
+}
+
+export function parseNumberedQuestionnaireResponse(
+  content: string,
+  questionnaire: QuestionnairePayload,
+): {
+  responses: Record<string, unknown>;
+  highConfidence: boolean;
+} | null {
+  const answers = parseNumberedAnswers(content);
+  if (answers.size === 0) {
+    return null;
+  }
+
+  const responses: Record<string, unknown> = {};
+  let invalidCount = 0;
+  let requiredCount = 0;
+  let requiredAnswered = 0;
+  let answeredCount = 0;
+
+  questionnaire.questions.forEach((question, idx) => {
+    if (question.required) {
+      requiredCount += 1;
+    }
+
+    const answer = answers.get(idx + 1);
+    if (!answer) {
+      return;
+    }
+
+    answeredCount += 1;
+    const parsed = parseQuestionnaireAnswer(question, answer);
+    if (!parsed.valid) {
+      invalidCount += 1;
+      return;
+    }
+
+    responses[question.id] = parsed.value;
+    if (question.required) {
+      requiredAnswered += 1;
+    }
+  });
+
+  if (Object.keys(responses).length === 0) {
+    return null;
+  }
+
+  return {
+    responses,
+    highConfidence: invalidCount === 0 && requiredAnswered >= requiredCount && answeredCount > 0,
+  };
+}
+
+async function submitQuestionnaireResponse(
+  orgID: string,
+  questionnaireID: string,
+  respondedBy: string,
+  responses: Record<string, unknown>,
+): Promise<boolean> {
+  if (!orgID || !questionnaireID || !respondedBy || Object.keys(responses).length === 0) {
+    return false;
+  }
+
+  const url = new URL(
+    `/api/questionnaires/${encodeURIComponent(questionnaireID)}/response`,
+    OTTERCAMP_URL,
+  );
+  url.searchParams.set('org_id', orgID);
+
+  const response = await fetchWithRetry(url.toString(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    },
+    body: JSON.stringify({
+      responded_by: respondedBy,
+      responses,
+    }),
+  }, 'persist questionnaire response');
+
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    console.warn(
+      `[bridge] questionnaire response submit failed (${response.status} ${response.statusText} ${snippet})`,
+    );
+    return false;
+  }
+  return true;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -798,199 +810,6 @@ function markRunIDDelivered(runID: string): void {
       deliveredRunIDs.delete(stale);
     }
   }
-}
-
-function markActivityEventDelivered(eventID: string): void {
-  const normalized = getTrimmedString(eventID);
-  if (!normalized || deliveredActivityEventIDs.has(normalized)) {
-    return;
-  }
-  deliveredActivityEventIDs.add(normalized);
-  deliveredActivityEventIDOrder.push(normalized);
-  while (deliveredActivityEventIDOrder.length > MAX_TRACKED_ACTIVITY_EVENT_IDS) {
-    const stale = deliveredActivityEventIDOrder.shift();
-    if (stale) {
-      deliveredActivityEventIDs.delete(stale);
-    }
-  }
-}
-
-function resolveActivityOrgID(sessionKey: string): string {
-  const fromContext = getTrimmedString(sessionContexts.get(sessionKey)?.orgID);
-  if (fromContext) {
-    return fromContext;
-  }
-  return OTTERCAMP_ORG_ID;
-}
-
-export function queueActivityEventsForOrg(orgID: string, events: BridgeAgentActivityEvent[]): number {
-  const normalizedOrgID = getTrimmedString(orgID);
-  if (!normalizedOrgID || events.length === 0) {
-    return 0;
-  }
-
-  const queue = queuedActivityEventsByOrg.get(normalizedOrgID) || [];
-  let queued = 0;
-  for (const event of events) {
-    const eventID = getTrimmedString(event.id);
-    if (!eventID) {
-      continue;
-    }
-    if (queuedActivityEventIDs.has(eventID) || deliveredActivityEventIDs.has(eventID)) {
-      continue;
-    }
-    queue.push(event);
-    queuedActivityEventIDs.add(eventID);
-    queued += 1;
-  }
-  if (queue.length > 0) {
-    queuedActivityEventsByOrg.set(normalizedOrgID, queue);
-  }
-  return queued;
-}
-
-function queueSessionDeltaActivityEvents(events: BridgeAgentActivityEvent[]): number {
-  let queued = 0;
-  const grouped = new Map<string, BridgeAgentActivityEvent[]>();
-  for (const event of events) {
-    const orgID = resolveActivityOrgID(event.session_key);
-    if (!orgID) {
-      continue;
-    }
-    const bucket = grouped.get(orgID) || [];
-    bucket.push(event);
-    grouped.set(orgID, bucket);
-  }
-  for (const [orgID, orgEvents] of grouped.entries()) {
-    queued += queueActivityEventsForOrg(orgID, orgEvents);
-  }
-  return queued;
-}
-
-function buildDispatchCorrelationEvent(params: {
-  orgID: string;
-  trigger: 'dispatch.dm' | 'dispatch.project_chat' | 'dispatch.issue';
-  correlationID: string;
-  sessionKey: string;
-  agentID: string;
-  summary: string;
-  detail?: string;
-  scope?: AgentActivityScope;
-}): BridgeAgentActivityEvent | null {
-  const orgID = getTrimmedString(params.orgID);
-  const correlationID = getTrimmedString(params.correlationID);
-  const sessionKey = getTrimmedString(params.sessionKey);
-  const agentID = getTrimmedString(params.agentID);
-  if (!orgID || !correlationID || !sessionKey || !agentID) {
-    return null;
-  }
-
-  const startedAt = new Date().toISOString();
-  const idSeed = [orgID, params.trigger, correlationID, sessionKey, agentID].join('|');
-  const event: BridgeAgentActivityEvent = {
-    id: `dispatch_${crypto.createHash('sha1').update(idSeed).digest('hex').slice(0, 24)}`,
-    agent_id: agentID,
-    session_key: sessionKey,
-    trigger: params.trigger,
-    channel: 'system',
-    summary: getTrimmedString(params.summary) || 'Dispatch processed',
-    detail: getTrimmedString(params.detail) || undefined,
-    tokens_used: 0,
-    duration_ms: 0,
-    status: 'completed',
-    started_at: startedAt,
-    completed_at: startedAt,
-  };
-  if (params.scope && (params.scope.project_id || params.scope.issue_id || params.scope.issue_number || params.scope.thread_id)) {
-    event.scope = params.scope;
-  }
-  return event;
-}
-
-function queueDispatchCorrelationEvent(params: {
-  orgID: string;
-  trigger: 'dispatch.dm' | 'dispatch.project_chat' | 'dispatch.issue';
-  correlationID: string;
-  sessionKey: string;
-  agentID: string;
-  summary: string;
-  detail?: string;
-  scope?: AgentActivityScope;
-}): void {
-  const event = buildDispatchCorrelationEvent(params);
-  if (!event) {
-    return;
-  }
-  queueActivityEventsForOrg(params.orgID, [event]);
-}
-
-async function pushActivityEventBatch(orgID: string, events: BridgeAgentActivityEvent[]): Promise<boolean> {
-  if (!orgID || events.length === 0) {
-    return true;
-  }
-
-  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/activity/events`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(OTTERCAMP_TOKEN
-        ? {
-            Authorization: `Bearer ${OTTERCAMP_TOKEN}`,
-            'X-OpenClaw-Token': OTTERCAMP_TOKEN,
-          }
-        : {}),
-    },
-    body: JSON.stringify({
-      org_id: orgID,
-      events,
-    }),
-  }, 'push activity events');
-  if (!response.ok) {
-    const snippet = (await response.text().catch(() => '')).slice(0, 240);
-    console.error(
-      `[bridge] activity event push failed (${orgID}): ${response.status} ${response.statusText} ${snippet}`.trim(),
-    );
-    return false;
-  }
-  return true;
-}
-
-export async function flushBufferedActivityEvents(reason = 'manual'): Promise<number> {
-  let pushed = 0;
-  for (const [orgID, queue] of Array.from(queuedActivityEventsByOrg.entries())) {
-    while (queue.length > 0) {
-      const batch = queue.slice(0, ACTIVITY_EVENTS_BATCH_SIZE);
-      const ok = await pushActivityEventBatch(orgID, batch);
-      if (!ok) {
-        break;
-      }
-      queue.splice(0, batch.length);
-      for (const event of batch) {
-        const eventID = getTrimmedString(event.id);
-        if (eventID) {
-          queuedActivityEventIDs.delete(eventID);
-          markActivityEventDelivered(eventID);
-        }
-      }
-      pushed += batch.length;
-    }
-    if (queue.length === 0) {
-      queuedActivityEventsByOrg.delete(orgID);
-    } else {
-      queuedActivityEventsByOrg.set(orgID, queue);
-    }
-  }
-  if (pushed > 0) {
-    console.log(`[bridge] flushed ${pushed} activity event(s) (${reason})`);
-  }
-  return pushed;
-}
-
-export function resetBufferedActivityEventsForTest(): void {
-  queuedActivityEventsByOrg.clear();
-  queuedActivityEventIDs.clear();
-  deliveredActivityEventIDs.clear();
-  deliveredActivityEventIDOrder.length = 0;
 }
 
 async function fetchWithRetry(
@@ -1247,6 +1066,49 @@ async function persistAssistantReplyToOtterCamp(params: {
   }
   let persistedTarget = sessionKey;
 
+  const pendingQuestionnaire = context.pendingQuestionnaire;
+  if (
+    pendingQuestionnaire &&
+    !pendingQuestionnaire.responses &&
+    (context.kind === 'project_chat' || context.kind === 'issue_comment')
+  ) {
+    const parsed = parseNumberedQuestionnaireResponse(content, pendingQuestionnaire);
+    if (parsed?.highConfidence) {
+      const orgID = getTrimmedString(context.orgID);
+      const respondedBy =
+        params.assistantName?.trim() ||
+        getTrimmedString(context.agentName) ||
+        getTrimmedString(context.agentID) ||
+        'Bridge responder';
+      try {
+        const submitted = await submitQuestionnaireResponse(
+          orgID,
+          pendingQuestionnaire.id,
+          respondedBy,
+          parsed.responses,
+        );
+        if (submitted) {
+          sessionContexts.set(sessionKey, {
+            ...context,
+            pendingQuestionnaire: undefined,
+          });
+          if (params.runID) {
+            markRunIDDelivered(params.runID);
+          }
+          console.log(
+            `[bridge] captured numbered questionnaire response for ${pendingQuestionnaire.id} from ${sessionKey}`,
+          );
+          return;
+        }
+      } catch (err) {
+        console.warn(
+          `[bridge] failed to persist structured questionnaire response for ${pendingQuestionnaire.id}:`,
+          err,
+        );
+      }
+    }
+  }
+
   if (context.kind === 'dm') {
     const orgID = getTrimmedString(context.orgID);
     const threadID = getTrimmedString(context.threadID);
@@ -1418,73 +1280,14 @@ async function fetchSessions(): Promise<OpenClawSession[]> {
   return response.sessions || [];
 }
 
-function fetchOpenClawConfigSnapshot(): OpenClawConfigSyncSnapshot | undefined {
-  const configPath = resolveOpenClawConfigPath();
-  try {
-    const raw = fs.readFileSync(configPath, 'utf8');
-    const parsed = parseJSONValue(raw);
-    return {
-      path: configPath,
-      source: 'bridge',
-      captured_at: new Date().toISOString(),
-      data: parsed,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function applyJSONMergePatch(target: unknown, patch: unknown): unknown {
-  if (patch === null) {
-    return null;
-  }
-  if (Array.isArray(patch) || typeof patch !== 'object') {
-    return patch;
-  }
-
-  const targetRecord: Record<string, unknown> =
-    target && typeof target === 'object' && !Array.isArray(target) ? { ...(target as Record<string, unknown>) } : {};
-  for (const [key, patchValue] of Object.entries(patch as Record<string, unknown>)) {
-    if (patchValue === null) {
-      delete targetRecord[key];
-      continue;
-    }
-    const currentValue = targetRecord[key];
-    if (
-      patchValue &&
-      typeof patchValue === 'object' &&
-      !Array.isArray(patchValue) &&
-      currentValue &&
-      typeof currentValue === 'object' &&
-      !Array.isArray(currentValue)
-    ) {
-      targetRecord[key] = applyJSONMergePatch(currentValue, patchValue);
-      continue;
-    }
-    targetRecord[key] = patchValue;
-  }
-  return targetRecord;
-}
-
-function collectSessionDeltaActivityEvents(currentSessions: OpenClawSession[]): BridgeAgentActivityEvent[] {
-  const events = buildActivityEventsFromSessionDeltas({
-    previousByKey: previousSessionsByKey,
-    currentSessions,
-  });
-  previousSessionsByKey = sessionsByKey(currentSessions);
-  return events;
-}
-
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   const [cronJobs, processes] = await Promise.all([fetchCronJobsSnapshot(), fetchProcessesSnapshot()]);
-  const configSnapshot = fetchOpenClawConfigSnapshot();
   const payload = {
     type: 'full',
     timestamp: new Date().toISOString(),
     sessions,
     cron_jobs: cronJobs,
     processes,
-    ...(configSnapshot ? { config: configSnapshot } : {}),
     source: 'bridge',
   };
 
@@ -1611,10 +1414,6 @@ async function processDispatchQueue(): Promise<void> {
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   const sessionKey = (event.data?.session_key || '').trim();
   const content = (event.data?.content || '').trim();
-  const orgID = getTrimmedString(event.org_id);
-  const threadID = getTrimmedString(event.data?.thread_id);
-  const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(sessionKey);
-  const messageID = getTrimmedString(event.data?.message_id);
 
   if (!sessionKey || !content) {
     console.warn('[bridge] skipped dm.message with missing session key or content');
@@ -1623,30 +1422,17 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
 
   sessionContexts.set(sessionKey, {
     kind: 'dm',
-    orgID,
-    threadID,
-    agentID,
+    orgID: getTrimmedString(event.org_id),
+    threadID: getTrimmedString(event.data?.thread_id),
+    agentID:
+      getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(sessionKey),
   });
 
   try {
-    await sendMessageToSession(sessionKey, content, messageID || undefined);
+    await sendMessageToSession(sessionKey, content, event.data?.message_id);
     console.log(
-      `[bridge] delivered dm.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
+      `[bridge] delivered dm.message to ${sessionKey} (message_id=${event.data?.message_id || 'n/a'})`,
     );
-    if (orgID && agentID) {
-      queueDispatchCorrelationEvent({
-        orgID,
-        trigger: 'dispatch.dm',
-        correlationID: messageID || `${sessionKey}:${content.slice(0, 80)}`,
-        sessionKey,
-        agentID,
-        summary: `Dispatched DM to ${agentID}`,
-        detail: content.slice(0, 500),
-        scope: {
-          thread_id: threadID || undefined,
-        },
-      });
-    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('missing scope')) {
@@ -1664,13 +1450,19 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
   const agentID = getTrimmedString(event.data?.agent_id);
   const agentName = getTrimmedString(event.data?.agent_name);
   const content = getTrimmedString(event.data?.content);
+  const questionnaire = normalizeQuestionnairePayload(event.data?.questionnaire);
   const orgID = getTrimmedString(event.org_id);
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
   const sessionKey =
     getTrimmedString(event.data?.session_key) ||
     (agentID && projectID ? `agent:${agentID}:project:${projectID}` : '');
+  let outboundContent = content;
+  if (questionnaire) {
+    const formatted = formatQuestionnaireForFallback(questionnaire);
+    outboundContent = outboundContent ? `${outboundContent}\n\n${formatted}` : formatted;
+  }
 
-  if (!sessionKey || !projectID || !orgID || !content) {
+  if (!sessionKey || !projectID || !orgID || !outboundContent) {
     console.warn('[bridge] skipped project.chat.message with missing org/project/session/content');
     return;
   }
@@ -1681,27 +1473,14 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
     agentID,
     agentName,
     projectID,
+    pendingQuestionnaire: questionnaire || undefined,
   });
 
   try {
-    await sendMessageToSession(sessionKey, content, messageID);
+    await sendMessageToSession(sessionKey, outboundContent, messageID);
     console.log(
       `[bridge] delivered project.chat.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
-    if (orgID && agentID) {
-      queueDispatchCorrelationEvent({
-        orgID,
-        trigger: 'dispatch.project_chat',
-        correlationID: messageID || `${sessionKey}:${content.slice(0, 80)}`,
-        sessionKey,
-        agentID,
-        summary: `Dispatched project chat for ${projectID}`,
-        detail: content.slice(0, 500),
-        scope: {
-          project_id: projectID,
-        },
-      });
-    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('missing scope')) {
@@ -1723,6 +1502,7 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   const issueTitle = getTrimmedString(event.data?.issue_title);
   const documentPath = getTrimmedString(event.data?.document_path);
   const content = getTrimmedString(event.data?.content);
+  const questionnaire = normalizeQuestionnairePayload(event.data?.questionnaire);
   const orgID = getTrimmedString(event.org_id);
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
   const parsedIssueNumber = Number(event.data?.issue_number);
@@ -1730,8 +1510,13 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   const sessionKey =
     getTrimmedString(event.data?.session_key) ||
     (agentID && issueID ? `agent:${agentID}:issue:${issueID}` : '');
+  let outboundContent = content;
+  if (questionnaire) {
+    const formatted = formatQuestionnaireForFallback(questionnaire);
+    outboundContent = outboundContent ? `${outboundContent}\n\n${formatted}` : formatted;
+  }
 
-  if (!sessionKey || !issueID || !projectID || !orgID || !content) {
+  if (!sessionKey || !issueID || !projectID || !orgID || !outboundContent) {
     console.warn('[bridge] skipped issue.comment.message with missing org/project/issue/session/content');
     return;
   }
@@ -1747,31 +1532,14 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
     agentID,
     agentName,
     responderAgentID,
+    pendingQuestionnaire: questionnaire || undefined,
   });
 
   try {
-    await sendMessageToSession(sessionKey, content, messageID);
+    await sendMessageToSession(sessionKey, outboundContent, messageID);
     console.log(
       `[bridge] delivered issue.comment.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );
-    const correlationAgentID = responderAgentID || agentID || parseAgentIDFromSessionKey(sessionKey);
-    if (orgID && correlationAgentID) {
-      const issueLabel = Number.isFinite(issueNumber) ? `#${issueNumber}` : issueID;
-      queueDispatchCorrelationEvent({
-        orgID,
-        trigger: 'dispatch.issue',
-        correlationID: messageID || `${sessionKey}:${content.slice(0, 80)}`,
-        sessionKey,
-        agentID: correlationAgentID,
-        summary: `Dispatched issue comment for ${issueLabel}`,
-        detail: content.slice(0, 500),
-        scope: {
-          project_id: projectID,
-          issue_id: issueID,
-          issue_number: issueNumber,
-        },
-      });
-    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('missing scope')) {
@@ -1958,15 +1726,12 @@ async function fetchProcessesSnapshot(): Promise<OpenClawProcessSnapshot[]> {
   return [];
 }
 
-export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatchEvent): Promise<void> {
+async function handleAdminCommandDispatchEvent(event: AdminCommandDispatchEvent): Promise<void> {
   const action = getTrimmedString(event.data?.action);
   const commandID = getTrimmedString(event.data?.command_id) || 'n/a';
   const agentID = getTrimmedString(event.data?.agent_id);
   const jobID = getTrimmedString(event.data?.job_id);
   const processID = getTrimmedString(event.data?.process_id);
-  const configPatch = event.data?.config_patch;
-  const confirm = event.data?.confirm === true;
-  const dryRun = event.data?.dry_run === true;
   const sessionKey = getTrimmedString(event.data?.session_key) || (agentID ? `agent:${agentID}:main` : '');
 
   if (!action) {
@@ -2040,46 +1805,6 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
       await runOpenClawCommand(['exec', 'kill', '--id', processID]);
     }
     console.log(`[bridge] executed admin.command process.kill for ${processID} (${commandID})`);
-    return;
-  }
-
-  if (action === 'config.patch') {
-    if (!confirm) {
-      throw new Error('config.patch requires confirm=true');
-    }
-    const patchObject = asRecord(configPatch);
-    if (!patchObject) {
-      throw new Error('config.patch missing config_patch object');
-    }
-    if (dryRun) {
-      console.log(`[bridge] validated admin.command config.patch dry-run (${commandID})`);
-      return;
-    }
-
-    const configPath = resolveOpenClawConfigPath();
-    let currentConfig: unknown = {};
-    try {
-      const raw = fs.readFileSync(configPath, 'utf8');
-      currentConfig = parseJSONValue(raw);
-    } catch (err) {
-      const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
-      if (code !== 'ENOENT') {
-        throw err;
-      }
-    }
-
-    const mergedConfig = applyJSONMergePatch(currentConfig, patchObject);
-    const backupPath = `${configPath}.bak.${Date.now()}`;
-    try {
-      if (fs.existsSync(configPath)) {
-        fs.copyFileSync(configPath, backupPath);
-      }
-    } catch (err) {
-      console.warn(`[bridge] failed to create config backup ${backupPath}:`, err);
-    }
-    fs.writeFileSync(configPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, 'utf8');
-    await runOpenClawCommand(['gateway', 'restart']);
-    console.log(`[bridge] executed admin.command config.patch (${commandID})`);
     return;
   }
 
@@ -2159,15 +1884,7 @@ async function runOnce(): Promise<void> {
   try {
     await connectToOpenClaw();
     const sessions = await fetchSessions();
-    const activityEvents = collectSessionDeltaActivityEvents(sessions);
-    queueSessionDeltaActivityEvents(activityEvents);
     await pushToOtterCamp(sessions);
-    const flushedCount = await flushBufferedActivityEvents('one-shot');
-    if (activityEvents.length > 0 || flushedCount > 0) {
-      console.log(
-        `[bridge] generated ${activityEvents.length} activity event(s) from session deltas; pushed ${flushedCount}`,
-      );
-    }
     console.log(`[bridge] sync complete (${sessions.length} sessions)`);
   } catch (err) {
     console.error('[bridge] one-shot sync failed:', err);
@@ -2184,33 +1901,16 @@ async function runContinuous(): Promise<void> {
   connectOtterCampDispatchSocket();
 
   const firstSessions = await fetchSessions();
-  const firstActivityEvents = collectSessionDeltaActivityEvents(firstSessions);
-  queueSessionDeltaActivityEvents(firstActivityEvents);
   await pushToOtterCamp(firstSessions);
-  const firstFlushedCount = await flushBufferedActivityEvents('initial-sync');
-  if (firstActivityEvents.length > 0 || firstFlushedCount > 0) {
-    console.log(
-      `[bridge] generated ${firstActivityEvents.length} initial activity event(s); pushed ${firstFlushedCount}`,
-    );
-  }
   console.log(`[bridge] initial sync complete (${firstSessions.length} sessions)`);
   await processDispatchQueue().catch((err) => {
     console.error('[bridge] initial dispatch queue drain failed:', err);
   });
-  await flushBufferedActivityEvents('initial-dispatch');
 
   setInterval(async () => {
     try {
       const sessions = await fetchSessions();
-      const activityEvents = collectSessionDeltaActivityEvents(sessions);
-      queueSessionDeltaActivityEvents(activityEvents);
       await pushToOtterCamp(sessions);
-      const flushedCount = await flushBufferedActivityEvents('periodic-sync');
-      if (activityEvents.length > 0 || flushedCount > 0) {
-        console.log(
-          `[bridge] generated ${activityEvents.length} activity event(s) from session deltas; pushed ${flushedCount}`,
-        );
-      }
       console.log(`[bridge] periodic sync complete (${sessions.length} sessions)`);
     } catch (err) {
       console.error('[bridge] periodic sync failed:', err);
@@ -2220,47 +1920,38 @@ async function runContinuous(): Promise<void> {
   setInterval(async () => {
     try {
       await processDispatchQueue();
-      await flushBufferedActivityEvents('dispatch-loop');
     } catch (err) {
       console.error('[bridge] periodic dispatch queue drain failed:', err);
     }
   }, DISPATCH_QUEUE_POLL_INTERVAL_MS);
 
-  setInterval(async () => {
-    try {
-      await flushBufferedActivityEvents('activity-flush-loop');
-    } catch (err) {
-      console.error('[bridge] activity flush loop failed:', err);
-    }
-  }, ACTIVITY_EVENT_FLUSH_INTERVAL_MS);
-
   console.log('[bridge] running continuously (Ctrl+C to stop)');
 }
 
-function isMainModule(): boolean {
-  const argvPath = getTrimmedString(process.argv[1]);
-  if (!argvPath) {
+const mode = normalizeModeArg(process.argv[2]);
+
+function isDirectExecution(): boolean {
+  const entryPath = process.argv[1];
+  if (!entryPath) {
     return false;
   }
   try {
-    return import.meta.url === pathToFileURL(argvPath).href;
+    return import.meta.url === pathToFileURL(entryPath).href;
   } catch {
     return false;
   }
 }
 
-async function runByMode(modeArg: string | undefined): Promise<void> {
-  const mode = normalizeModeArg(modeArg);
+if (isDirectExecution()) {
   if (mode === 'continuous') {
-    await runContinuous();
-    return;
+    runContinuous().catch((err) => {
+      console.error('[bridge] fatal error in continuous mode:', err);
+      process.exit(1);
+    });
+  } else {
+    runOnce().catch((err) => {
+      console.error('[bridge] fatal error in one-shot mode:', err);
+      process.exit(1);
+    });
   }
-  await runOnce();
-}
-
-if (isMainModule()) {
-  runByMode(process.argv[2]).catch((err) => {
-    console.error('[bridge] fatal error:', err);
-    process.exit(1);
-  });
 }

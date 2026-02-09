@@ -84,14 +84,13 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 }
 
 type Project struct {
-	ID          string  `json:"id"`
-	OrgID       string  `json:"org_id"`
-	Name        string  `json:"name"`
-	URLSlug     string  `json:"slug"`
-	Description string  `json:"description"`
-	RepoURL     string  `json:"repo_url"`
-	Status      string  `json:"status"`
-	Labels      []Label `json:"labels,omitempty"`
+	ID          string `json:"id"`
+	OrgID       string `json:"org_id"`
+	Name        string `json:"name"`
+	URLSlug     string `json:"slug"`
+	Description string `json:"description"`
+	RepoURL     string `json:"repo_url"`
+	Status      string `json:"status"`
 }
 
 type projectListResponse struct {
@@ -109,21 +108,9 @@ type agentListResponse struct {
 	Agents []Agent `json:"agents"`
 }
 
-type Label struct {
-	ID    string `json:"id"`
-	OrgID string `json:"org_id,omitempty"`
-	Name  string `json:"name"`
-	Color string `json:"color"`
-}
-
-type labelListResponse struct {
-	Labels []Label `json:"labels"`
-}
-
 type Issue struct {
 	ID            string  `json:"id"`
 	ProjectID     string  `json:"project_id"`
-	ParentIssueID *string `json:"parent_issue_id,omitempty"`
 	IssueNumber   int64   `json:"issue_number"`
 	Title         string  `json:"title"`
 	Body          *string `json:"body,omitempty"`
@@ -133,10 +120,43 @@ type Issue struct {
 	OwnerAgentID  *string `json:"owner_agent_id,omitempty"`
 	WorkStatus    string  `json:"work_status"`
 	Priority      string  `json:"priority"`
-	Labels        []Label `json:"labels,omitempty"`
 	DueAt         *string `json:"due_at,omitempty"`
 	NextStep      *string `json:"next_step,omitempty"`
 	NextStepDueAt *string `json:"next_step_due_at,omitempty"`
+}
+
+type QuestionnaireQuestion struct {
+	ID          string   `json:"id"`
+	Text        string   `json:"text"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required"`
+	Options     []string `json:"options,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
+	Default     any      `json:"default,omitempty"`
+}
+
+type Questionnaire struct {
+	ID          string                  `json:"id"`
+	ContextType string                  `json:"context_type"`
+	ContextID   string                  `json:"context_id"`
+	Author      string                  `json:"author"`
+	Title       *string                 `json:"title,omitempty"`
+	Questions   []QuestionnaireQuestion `json:"questions"`
+	Responses   map[string]any          `json:"responses,omitempty"`
+	RespondedBy *string                 `json:"responded_by,omitempty"`
+	RespondedAt *string                 `json:"responded_at,omitempty"`
+	CreatedAt   string                  `json:"created_at"`
+}
+
+type CreateIssueQuestionnaireInput struct {
+	Author    string                  `json:"author"`
+	Title     *string                 `json:"title,omitempty"`
+	Questions []QuestionnaireQuestion `json:"questions"`
+}
+
+type RespondIssueQuestionnaireInput struct {
+	RespondedBy string         `json:"responded_by"`
+	Responses   map[string]any `json:"responses"`
 }
 
 type issueListResponse struct {
@@ -148,23 +168,11 @@ type issueDetailResponse struct {
 	Issue Issue `json:"issue"`
 }
 
-func (c *Client) ListProjects(labels ...string) ([]Project, error) {
+func (c *Client) ListProjects() ([]Project, error) {
 	if err := c.requireAuth(); err != nil {
 		return nil, err
 	}
-	query := url.Values{}
-	for _, label := range labels {
-		trimmed := strings.TrimSpace(label)
-		if trimmed == "" {
-			continue
-		}
-		query.Add("label", trimmed)
-	}
-	path := "/api/projects"
-	if encoded := query.Encode(); encoded != "" {
-		path += "?" + encoded
-	}
-	req, err := c.newRequest(http.MethodGet, path, nil)
+	req, err := c.newRequest(http.MethodGet, "/api/projects", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -391,7 +399,7 @@ func (c *Client) CreateIssue(projectID string, input map[string]interface{}) (Is
 	return issue, nil
 }
 
-func (c *Client) ListIssues(projectID string, filters map[string]string, labels ...string) ([]Issue, error) {
+func (c *Client) ListIssues(projectID string, filters map[string]string) ([]Issue, error) {
 	if err := c.requireAuth(); err != nil {
 		return nil, err
 	}
@@ -406,13 +414,6 @@ func (c *Client) ListIssues(projectID string, filters map[string]string, labels 
 			continue
 		}
 		q.Set(key, strings.TrimSpace(value))
-	}
-	for _, label := range labels {
-		trimmed := strings.TrimSpace(label)
-		if trimmed == "" {
-			continue
-		}
-		q.Add("label", trimmed)
 	}
 	req, err := c.newRequest(http.MethodGet, "/api/issues?"+q.Encode(), nil)
 	if err != nil {
@@ -500,230 +501,72 @@ func (c *Client) CommentIssue(issueID, authorAgentID, body string) error {
 	return c.do(req, nil)
 }
 
-func (c *Client) ListLabels() ([]Label, error) {
+func (c *Client) AskIssueQuestionnaire(issueID string, input CreateIssueQuestionnaireInput) (Questionnaire, error) {
 	if err := c.requireAuth(); err != nil {
-		return nil, err
+		return Questionnaire{}, err
 	}
-	req, err := c.newRequest(http.MethodGet, "/api/labels", nil)
-	if err != nil {
-		return nil, err
-	}
-	var resp labelListResponse
-	if err := c.do(req, &resp); err != nil {
-		return nil, err
-	}
-	return resp.Labels, nil
-}
-
-func (c *Client) CreateLabel(name, color string) (Label, error) {
-	if err := c.requireAuth(); err != nil {
-		return Label{}, err
-	}
-	trimmedName := strings.TrimSpace(name)
-	if trimmedName == "" {
-		return Label{}, errors.New("label name is required")
-	}
-	payload := map[string]string{"name": trimmedName}
-	if trimmedColor := strings.TrimSpace(color); trimmedColor != "" {
-		payload["color"] = trimmedColor
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return Label{}, err
-	}
-	req, err := c.newRequest(http.MethodPost, "/api/labels", bytes.NewReader(body))
-	if err != nil {
-		return Label{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	var label Label
-	if err := c.do(req, &label); err != nil {
-		return Label{}, err
-	}
-	return label, nil
-}
-
-func (c *Client) DeleteLabel(labelID string) error {
-	if err := c.requireAuth(); err != nil {
-		return err
-	}
-	labelID = strings.TrimSpace(labelID)
-	if labelID == "" {
-		return errors.New("label id is required")
-	}
-	req, err := c.newRequest(http.MethodDelete, "/api/labels/"+url.PathEscape(labelID), nil)
-	if err != nil {
-		return err
-	}
-	return c.do(req, nil)
-}
-
-func (c *Client) ResolveLabel(query string) (Label, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return Label{}, errors.New("label is required")
-	}
-	labels, err := c.ListLabels()
-	if err != nil {
-		return Label{}, err
-	}
-	var matches []Label
-	for _, label := range labels {
-		if strings.EqualFold(label.ID, query) || strings.EqualFold(label.Name, query) {
-			matches = append(matches, label)
-		}
-	}
-	if len(matches) == 1 {
-		return matches[0], nil
-	}
-	if len(matches) == 0 {
-		return Label{}, fmt.Errorf("label not found: %s", query)
-	}
-	return Label{}, fmt.Errorf("multiple labels matched %q; use label id", query)
-}
-
-func (c *Client) EnsureLabel(name, color string) (Label, error) {
-	trimmedName := strings.TrimSpace(name)
-	if trimmedName == "" {
-		return Label{}, errors.New("label name is required")
-	}
-	label, err := c.ResolveLabel(trimmedName)
-	if err == nil {
-		return label, nil
-	}
-	if !strings.Contains(strings.ToLower(err.Error()), "label not found") {
-		return Label{}, err
-	}
-	created, createErr := c.CreateLabel(trimmedName, color)
-	if createErr == nil {
-		return created, nil
-	}
-	if strings.Contains(strings.ToLower(createErr.Error()), "(409)") {
-		return c.ResolveLabel(trimmedName)
-	}
-	return Label{}, createErr
-}
-
-func (c *Client) AddProjectLabels(projectID string, labelIDs []string) ([]Label, error) {
-	if err := c.requireAuth(); err != nil {
-		return nil, err
-	}
-	projectID = strings.TrimSpace(projectID)
-	if projectID == "" {
-		return nil, errors.New("project id is required")
-	}
-	normalized := normalizeLabelIDList(labelIDs)
-	if len(normalized) == 0 {
-		return nil, errors.New("label ids are required")
-	}
-	body, err := json.Marshal(map[string][]string{"label_ids": normalized})
-	if err != nil {
-		return nil, err
-	}
-	req, err := c.newRequest(http.MethodPost, "/api/projects/"+url.PathEscape(projectID)+"/labels", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	var resp labelListResponse
-	if err := c.do(req, &resp); err != nil {
-		return nil, err
-	}
-	return resp.Labels, nil
-}
-
-func (c *Client) RemoveProjectLabel(projectID, labelID string) error {
-	if err := c.requireAuth(); err != nil {
-		return err
-	}
-	projectID = strings.TrimSpace(projectID)
-	labelID = strings.TrimSpace(labelID)
-	if projectID == "" {
-		return errors.New("project id is required")
-	}
-	if labelID == "" {
-		return errors.New("label id is required")
-	}
-	req, err := c.newRequest(http.MethodDelete, "/api/projects/"+url.PathEscape(projectID)+"/labels/"+url.PathEscape(labelID), nil)
-	if err != nil {
-		return err
-	}
-	return c.do(req, nil)
-}
-
-func (c *Client) AddIssueLabels(projectID, issueID string, labelIDs []string) ([]Label, error) {
-	if err := c.requireAuth(); err != nil {
-		return nil, err
-	}
-	projectID = strings.TrimSpace(projectID)
 	issueID = strings.TrimSpace(issueID)
-	if projectID == "" {
-		return nil, errors.New("project id is required")
-	}
 	if issueID == "" {
-		return nil, errors.New("issue id is required")
+		return Questionnaire{}, errors.New("issue id is required")
 	}
-	normalized := normalizeLabelIDList(labelIDs)
-	if len(normalized) == 0 {
-		return nil, errors.New("label ids are required")
+	input.Author = strings.TrimSpace(input.Author)
+	if input.Author == "" {
+		return Questionnaire{}, errors.New("author is required")
 	}
-	body, err := json.Marshal(map[string][]string{"label_ids": normalized})
+	if len(input.Questions) == 0 {
+		return Questionnaire{}, errors.New("at least one question is required")
+	}
+	payload, err := json.Marshal(input)
 	if err != nil {
-		return nil, err
+		return Questionnaire{}, err
 	}
-	path := "/api/projects/" + url.PathEscape(projectID) + "/issues/" + url.PathEscape(issueID) + "/labels"
-	req, err := c.newRequest(http.MethodPost, path, bytes.NewReader(body))
+	req, err := c.newRequest(
+		http.MethodPost,
+		"/api/issues/"+url.PathEscape(issueID)+"/questionnaire",
+		bytes.NewReader(payload),
+	)
 	if err != nil {
-		return nil, err
+		return Questionnaire{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	var resp labelListResponse
-	if err := c.do(req, &resp); err != nil {
-		return nil, err
+	var questionnaire Questionnaire
+	if err := c.do(req, &questionnaire); err != nil {
+		return Questionnaire{}, err
 	}
-	return resp.Labels, nil
+	return questionnaire, nil
 }
 
-func (c *Client) RemoveIssueLabel(projectID, issueID, labelID string) error {
+func (c *Client) RespondIssueQuestionnaire(questionnaireID string, input RespondIssueQuestionnaireInput) (Questionnaire, error) {
 	if err := c.requireAuth(); err != nil {
-		return err
+		return Questionnaire{}, err
 	}
-	projectID = strings.TrimSpace(projectID)
-	issueID = strings.TrimSpace(issueID)
-	labelID = strings.TrimSpace(labelID)
-	if projectID == "" {
-		return errors.New("project id is required")
+	questionnaireID = strings.TrimSpace(questionnaireID)
+	if questionnaireID == "" {
+		return Questionnaire{}, errors.New("questionnaire id is required")
 	}
-	if issueID == "" {
-		return errors.New("issue id is required")
+	input.RespondedBy = strings.TrimSpace(input.RespondedBy)
+	if input.RespondedBy == "" {
+		return Questionnaire{}, errors.New("responded_by is required")
 	}
-	if labelID == "" {
-		return errors.New("label id is required")
+	if len(input.Responses) == 0 {
+		return Questionnaire{}, errors.New("at least one response is required")
 	}
-	path := "/api/projects/" + url.PathEscape(projectID) + "/issues/" + url.PathEscape(issueID) + "/labels/" + url.PathEscape(labelID)
-	req, err := c.newRequest(http.MethodDelete, path, nil)
+	payload, err := json.Marshal(input)
 	if err != nil {
-		return err
+		return Questionnaire{}, err
 	}
-	return c.do(req, nil)
-}
-
-func normalizeLabelIDList(values []string) []string {
-	if len(values) == 0 {
-		return nil
+	req, err := c.newRequest(
+		http.MethodPost,
+		"/api/questionnaires/"+url.PathEscape(questionnaireID)+"/response",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return Questionnaire{}, err
 	}
-	seen := make(map[string]struct{}, len(values))
-	normalized := make([]string, 0, len(values))
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			continue
-		}
-		if _, exists := seen[trimmed]; exists {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		normalized = append(normalized, trimmed)
+	req.Header.Set("Content-Type", "application/json")
+	var questionnaire Questionnaire
+	if err := c.do(req, &questionnaire); err != nil {
+		return Questionnaire{}, err
 	}
-	return normalized
+	return questionnaire, nil
 }

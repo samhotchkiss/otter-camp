@@ -66,6 +66,7 @@ func NewRouter() http.Handler {
 	})
 
 	r.Get("/health", handleHealth)
+	r.Get("/api/feed", FeedHandler)
 
 	webhookHandler := &WebhookHandler{Hub: hub}
 	feedPushHandler := NewFeedPushHandler(hub)
@@ -75,8 +76,6 @@ func NewRouter() http.Handler {
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
-	adminAgentsHandler := &AdminAgentsHandler{DB: db, Store: agentStore, OpenClawHandler: openClawWSHandler}
-	adminConfigHandler := &AdminConfigHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	workflowsHandler := &WorkflowsHandler{DB: db}
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db}
 	adminConnectionsHandler := &AdminConnectionsHandler{DB: db, OpenClawHandler: openClawWSHandler}
@@ -86,34 +85,24 @@ func NewRouter() http.Handler {
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 	projectChatHandler := &ProjectChatHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
 	issuesHandler := &IssuesHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
-	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
+	questionnaireHandler := &QuestionnaireHandler{}
 	projectCommitsHandler := &ProjectCommitsHandler{}
 	projectTreeHandler := &ProjectTreeHandler{}
 	knowledgeHandler := &KnowledgeHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
-	labelsHandler := &LabelsHandler{}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
 	var githubSyncJobStore *store.GitHubSyncJobStore
 	var projectRepoStore *store.ProjectRepoStore
 	var activityStore *store.ActivityStore
-	var agentActivityStore *store.AgentActivityEventStore
-	var labelStore *store.LabelStore
 	if db != nil {
 		projectStore = store.NewProjectStore(db)
 		githubSyncJobStore = store.NewGitHubSyncJobStore(db)
 		projectRepoStore = store.NewProjectRepoStore(db)
 		activityStore = store.NewActivityStore(db)
-		agentActivityStore = store.NewAgentActivityEventStore(db)
-		labelStore = store.NewLabelStore(db)
-		labelsHandler.Store = labelStore
-		labelsHandler.DB = db
-		agentActivityHandler.Store = agentActivityStore
 		adminConnectionsHandler.EventStore = store.NewConnectionEventStore(db)
-		adminAgentsHandler.EventStore = adminConnectionsHandler.EventStore
-		adminConfigHandler.EventStore = adminConnectionsHandler.EventStore
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
 		githubSyncHealthHandler.Store = githubSyncJobStore
 		githubPullRequestsHandler.Store = store.NewGitHubIssuePRStore(db)
@@ -121,8 +110,11 @@ func NewRouter() http.Handler {
 		githubIntegrationHandler.SyncJobs = githubSyncJobStore
 		projectChatHandler.ChatStore = store.NewProjectChatStore(db)
 		projectChatHandler.IssueStore = store.NewProjectIssueStore(db)
+		projectChatHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		projectChatHandler.DB = db
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
+		issuesHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
+		questionnaireHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		issuesHandler.ProjectStore = projectStore
 		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
 		issuesHandler.ProjectRepos = projectRepoStore
@@ -138,8 +130,6 @@ func NewRouter() http.Handler {
 		projectIssueSyncHandler.SyncJobs = githubSyncJobStore
 		projectIssueSyncHandler.IssueStore = issuesHandler.IssueStore
 		knowledgeHandler.Store = store.NewKnowledgeEntryStore(db)
-		adminAgentsHandler.ProjectStore = projectStore
-		adminAgentsHandler.ProjectRepos = projectRepoStore
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	projectChatHandler.ProjectStore = projectStore
@@ -175,9 +165,6 @@ func NewRouter() http.Handler {
 		r.Post("/commands/execute", CommandExecuteHandler)
 		r.Get("/feed", FeedHandlerV2)
 		r.Post("/feed", feedPushHandler.Handle)
-		r.Post("/activity/events", agentActivityHandler.IngestEvents)
-		r.With(middleware.OptionalWorkspace).Get("/activity/recent", agentActivityHandler.ListRecent)
-		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/activity", agentActivityHandler.ListByAgent)
 		r.Post("/auth/login", HandleLogin)
 		r.Post("/auth/exchange", HandleAuthExchange)
 		r.Get("/auth/exchange", HandleAuthExchange)
@@ -205,21 +192,11 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}", projectsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}", projectsHandler.Patch)
 		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}", projectsHandler.Delete)
-		r.With(middleware.OptionalWorkspace).Get("/labels", labelsHandler.List)
-		r.With(middleware.OptionalWorkspace).Post("/labels", labelsHandler.Create)
-		r.With(middleware.OptionalWorkspace).Patch("/labels/{id}", labelsHandler.Patch)
-		r.With(middleware.OptionalWorkspace).Delete("/labels/{id}", labelsHandler.Delete)
-		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/labels", labelsHandler.ListProjectLabels)
-		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/labels", labelsHandler.AddProjectLabels)
-		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/labels/{lid}", labelsHandler.RemoveProjectLabel)
-		r.With(middleware.OptionalWorkspace).Get("/projects/{pid}/issues/{iid}/labels", labelsHandler.ListIssueLabels)
-		r.With(middleware.OptionalWorkspace).Post("/projects/{pid}/issues/{iid}/labels", labelsHandler.AddIssueLabels)
-		r.With(middleware.OptionalWorkspace).Delete("/projects/{pid}/issues/{iid}/labels/{lid}", labelsHandler.RemoveIssueLabel)
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/settings", projectsHandler.UpdateSettings)
-		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/tasks/{taskId}", taskHandler.GetProjectTaskDetail)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat/search", projectChatHandler.Search)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages", projectChatHandler.Create)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/questionnaire", questionnaireHandler.CreateProjectChatQuestionnaire)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/reset", projectChatHandler.ResetSession)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages/{messageID}/save-to-notes", projectChatHandler.SaveToNotes)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/bootstrap", projectChatHandler.BootstrapContent)
@@ -228,10 +205,6 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/content/delete", projectChatHandler.DeleteContent)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/metadata", projectChatHandler.GetContentMetadata)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/content/search", projectChatHandler.SearchContent)
-		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/issues/queue", issuesHandler.RoleQueue)
-		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues/queue/claim-next", issuesHandler.ClaimNextQueueIssue)
-		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/issue-role-assignments", issuesHandler.ListRoleAssignments)
-		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/issue-role-assignments/{role}", issuesHandler.UpsertRoleAssignment)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/commits", projectCommitsHandler.Create)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits", projectCommitsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}", projectCommitsHandler.Get)
@@ -244,14 +217,12 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}", issuesHandler.Get)
-		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/sub-issues", issuesHandler.CreateSubIssuesBatch)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/comments", issuesHandler.CreateComment)
+		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/questionnaire", questionnaireHandler.CreateIssueQuestionnaire)
+		r.With(middleware.OptionalWorkspace).Post("/questionnaires/{id}/response", questionnaireHandler.Respond)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approval-state", issuesHandler.TransitionApprovalState)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/approve", issuesHandler.Approve)
 		r.With(middleware.OptionalWorkspace).Patch("/issues/{id}", issuesHandler.PatchIssue)
-		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/claim", issuesHandler.ClaimIssue)
-		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/release", issuesHandler.ReleaseIssue)
-		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/reviewer-decision", issuesHandler.ReviewerDecision)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/review/save", issuesHandler.SaveReview)
 		r.With(middleware.OptionalWorkspace).Post("/issues/{id}/review/address", issuesHandler.AddressReview)
 		r.With(middleware.OptionalWorkspace).Get("/issues/{id}/review/changes", issuesHandler.ReviewChanges)
@@ -303,18 +274,6 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/admin/connections", adminConnectionsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/admin/events", adminConnectionsHandler.GetEvents)
 		r.With(middleware.OptionalWorkspace).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)
-		r.With(middleware.OptionalWorkspace).Post("/admin/agents", adminAgentsHandler.Create)
-		r.With(middleware.OptionalWorkspace).Get("/admin/agents", adminAgentsHandler.List)
-		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}", adminAgentsHandler.Get)
-		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files", adminAgentsHandler.ListFiles)
-		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files/{path:.*}", adminAgentsHandler.GetFile)
-		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory", adminAgentsHandler.ListMemoryFiles)
-		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory/{date}", adminAgentsHandler.GetMemoryFileByDate)
-		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/retire", adminAgentsHandler.Retire)
-		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reactivate", adminAgentsHandler.Reactivate)
-		r.With(middleware.OptionalWorkspace).Patch("/admin/config", adminConfigHandler.Patch)
-		r.With(middleware.OptionalWorkspace).Get("/admin/config", adminConfigHandler.GetCurrent)
-		r.With(middleware.OptionalWorkspace).Get("/admin/config/history", adminConfigHandler.ListHistory)
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)
 		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)
 		r.With(middleware.OptionalWorkspace).Post("/admin/diagnostics", adminConnectionsHandler.RunDiagnostics)

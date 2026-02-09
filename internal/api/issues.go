@@ -24,6 +24,7 @@ import (
 
 type IssuesHandler struct {
 	IssueStore         *store.ProjectIssueStore
+	QuestionnaireStore *store.QuestionnaireStore
 	ProjectStore       *store.ProjectStore
 	CommitStore        *store.ProjectCommitStore
 	ProjectRepos       *store.ProjectRepoStore
@@ -33,32 +34,28 @@ type IssuesHandler struct {
 }
 
 type issueSummaryPayload struct {
-	ID                       string        `json:"id"`
-	ProjectID                string        `json:"project_id"`
-	IssueNumber              int64         `json:"issue_number"`
-	Title                    string        `json:"title"`
-	Body                     *string       `json:"body,omitempty"`
-	State                    string        `json:"state"`
-	Origin                   string        `json:"origin"`
-	DocumentPath             *string       `json:"document_path,omitempty"`
-	DocumentContent          *string       `json:"document_content,omitempty"`
-	ApprovalState            string        `json:"approval_state"`
-	Kind                     string        `json:"kind"`
-	OwnerAgentID             *string       `json:"owner_agent_id,omitempty"`
-	ParentIssueID            *string       `json:"parent_issue_id,omitempty"`
-	WorkStatus               string        `json:"work_status"`
-	Priority                 string        `json:"priority"`
-	Labels                   []store.Label `json:"labels"`
-	ActiveBranch             *string       `json:"active_branch,omitempty"`
-	LastCommitSHA            *string       `json:"last_commit_sha,omitempty"`
-	DueAt                    *string       `json:"due_at,omitempty"`
-	NextStep                 *string       `json:"next_step,omitempty"`
-	NextStepDueAt            *string       `json:"next_step_due_at,omitempty"`
-	LastActivityAt           string        `json:"last_activity_at"`
-	GitHubNumber             *int64        `json:"github_number,omitempty"`
-	GitHubURL                *string       `json:"github_url,omitempty"`
-	GitHubState              *string       `json:"github_state,omitempty"`
-	GitHubRepositoryFullName *string       `json:"github_repository_full_name,omitempty"`
+	ID                       string  `json:"id"`
+	ProjectID                string  `json:"project_id"`
+	IssueNumber              int64   `json:"issue_number"`
+	Title                    string  `json:"title"`
+	Body                     *string `json:"body,omitempty"`
+	State                    string  `json:"state"`
+	Origin                   string  `json:"origin"`
+	DocumentPath             *string `json:"document_path,omitempty"`
+	DocumentContent          *string `json:"document_content,omitempty"`
+	ApprovalState            string  `json:"approval_state"`
+	Kind                     string  `json:"kind"`
+	OwnerAgentID             *string `json:"owner_agent_id,omitempty"`
+	WorkStatus               string  `json:"work_status"`
+	Priority                 string  `json:"priority"`
+	DueAt                    *string `json:"due_at,omitempty"`
+	NextStep                 *string `json:"next_step,omitempty"`
+	NextStepDueAt            *string `json:"next_step_due_at,omitempty"`
+	LastActivityAt           string  `json:"last_activity_at"`
+	GitHubNumber             *int64  `json:"github_number,omitempty"`
+	GitHubURL                *string `json:"github_url,omitempty"`
+	GitHubState              *string `json:"github_state,omitempty"`
+	GitHubRepositoryFullName *string `json:"github_repository_full_name,omitempty"`
 }
 
 type issueParticipantPayload struct {
@@ -82,9 +79,10 @@ type issueCommentCreateResponse struct {
 }
 
 type issueDetailPayload struct {
-	Issue        issueSummaryPayload       `json:"issue"`
-	Participants []issueParticipantPayload `json:"participants"`
-	Comments     []issueCommentPayload     `json:"comments"`
+	Issue          issueSummaryPayload       `json:"issue"`
+	Participants   []issueParticipantPayload `json:"participants"`
+	Comments       []issueCommentPayload     `json:"comments"`
+	Questionnaires []questionnairePayload    `json:"questionnaires"`
 }
 
 type issueCommentCreatedEvent struct {
@@ -117,24 +115,6 @@ type openClawIssueCommentDispatchData struct {
 	SenderType       string `json:"sender_type,omitempty"`
 }
 
-type openClawIssueQueueDispatchEvent struct {
-	Type      string                         `json:"type"`
-	Timestamp time.Time                      `json:"timestamp"`
-	OrgID     string                         `json:"org_id"`
-	Data      openClawIssueQueueDispatchData `json:"data"`
-}
-
-type openClawIssueQueueDispatchData struct {
-	ProjectID     string  `json:"project_id"`
-	IssueID       string  `json:"issue_id"`
-	IssueNumber   int64   `json:"issue_number"`
-	IssueTitle    string  `json:"issue_title,omitempty"`
-	ParentIssueID *string `json:"parent_issue_id,omitempty"`
-	Role          string  `json:"role"`
-	WorkStatus    string  `json:"work_status"`
-	AgentID       string  `json:"agent_id"`
-}
-
 type issueCommentDispatchTarget struct {
 	ProjectID        string
 	IssueNumber      int64
@@ -151,27 +131,10 @@ type issueListResponse struct {
 	Total int                   `json:"total"`
 }
 
-type issueRoleAssignmentPayload struct {
-	ID        string  `json:"id"`
-	ProjectID string  `json:"project_id"`
-	Role      string  `json:"role"`
-	AgentID   *string `json:"agent_id,omitempty"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
-}
-
-type issueRoleAssignmentListResponse struct {
-	Items []issueRoleAssignmentPayload `json:"items"`
-	Total int                          `json:"total"`
-}
-
 type issuePatchRequest struct {
 	OwnerAgentID  *string `json:"owner_agent_id,omitempty"`
-	ParentIssueID *string `json:"parent_issue_id,omitempty"`
 	WorkStatus    *string `json:"work_status,omitempty"`
 	Priority      *string `json:"priority,omitempty"`
-	ActiveBranch  *string `json:"active_branch,omitempty"`
-	LastCommitSHA *string `json:"last_commit_sha,omitempty"`
 	DueAt         *string `json:"due_at,omitempty"`
 	NextStep      *string `json:"next_step,omitempty"`
 	NextStepDueAt *string `json:"next_step_due_at,omitempty"`
@@ -179,19 +142,6 @@ type issuePatchRequest struct {
 }
 
 const maxLinkedIssueDocumentBytes = 512 * 1024
-
-func resolveIssueQueueRoleWorkStatus(role string) (string, error) {
-	switch strings.TrimSpace(strings.ToLower(role)) {
-	case "planner":
-		return store.IssueWorkStatusReady, nil
-	case "worker":
-		return store.IssueWorkStatusReadyForWork, nil
-	case "reviewer":
-		return store.IssueWorkStatusReview, nil
-	default:
-		return "", fmt.Errorf("role must be planner, worker, or reviewer")
-	}
-}
 
 func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if h.IssueStore == nil {
@@ -217,9 +167,14 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("kind")); raw != "" {
 		kind = &raw
 	}
-	var parentIssueID *string
-	if raw := strings.TrimSpace(r.URL.Query().Get("parent_issue_id")); raw != "" {
-		parentIssueID = &raw
+	var issueNumber *int64
+	if raw := strings.TrimSpace(r.URL.Query().Get("issue_number")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue_number must be a positive integer"})
+			return
+		}
+		issueNumber = &parsed
 	}
 	var ownerAgentID *string
 	if raw := strings.TrimSpace(r.URL.Query().Get("owner_agent_id")); raw != "" {
@@ -233,11 +188,6 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("priority")); raw != "" {
 		priority = &raw
 	}
-	labelFilterIDs, err := parseIssueLabelFilterIDs(r.URL.Query()["label"])
-	if err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-		return
-	}
 
 	limit := 100
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
@@ -250,16 +200,15 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	issues, err := h.IssueStore.ListIssues(r.Context(), store.ProjectIssueFilter{
-		ProjectID:     projectID,
-		State:         state,
-		Origin:        origin,
-		Kind:          kind,
-		ParentIssueID: parentIssueID,
-		OwnerAgentID:  ownerAgentID,
-		WorkStatus:    workStatus,
-		Priority:      priority,
-		LabelIDs:      labelFilterIDs,
-		Limit:         limit,
+		ProjectID:    projectID,
+		State:        state,
+		Origin:       origin,
+		Kind:         kind,
+		IssueNumber:  issueNumber,
+		OwnerAgentID: ownerAgentID,
+		WorkStatus:   workStatus,
+		Priority:     priority,
+		Limit:        limit,
 	})
 	if err != nil {
 		handleIssueStoreError(w, err)
@@ -287,200 +236,6 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, issueListResponse{Items: items, Total: len(items)})
-}
-
-func (h *IssuesHandler) RoleQueue(w http.ResponseWriter, r *http.Request) {
-	if h.IssueStore == nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
-		return
-	}
-
-	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
-	if projectID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
-		return
-	}
-
-	workStatus, err := resolveIssueQueueRoleWorkStatus(r.URL.Query().Get("role"))
-	if err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-		return
-	}
-
-	limit := 100
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		parsed, parseErr := strconv.Atoi(raw)
-		if parseErr != nil || parsed <= 0 {
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "limit must be a positive integer"})
-			return
-		}
-		limit = parsed
-	}
-
-	issues, err := h.IssueStore.ListIssues(r.Context(), store.ProjectIssueFilter{
-		ProjectID:  projectID,
-		WorkStatus: &workStatus,
-		Limit:      limit,
-	})
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	issueIDs := make([]string, 0, len(issues))
-	for _, issue := range issues {
-		issueIDs = append(issueIDs, issue.ID)
-	}
-	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), issueIDs)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	items := make([]issueSummaryPayload, 0, len(issues))
-	for _, issue := range issues {
-		participants, err := h.IssueStore.ListParticipants(r.Context(), issue.ID, false)
-		if err != nil {
-			handleIssueStoreError(w, err)
-			return
-		}
-		items = append(items, toIssueSummaryPayload(issue, participants, findIssueLink(linksByIssueID, issue.ID)))
-	}
-
-	sendJSON(w, http.StatusOK, issueListResponse{Items: items, Total: len(items)})
-}
-
-func (h *IssuesHandler) ListRoleAssignments(w http.ResponseWriter, r *http.Request) {
-	if h.IssueStore == nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
-		return
-	}
-
-	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
-	if projectID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
-		return
-	}
-
-	assignments, err := h.IssueStore.ListIssueRoleAssignments(r.Context(), projectID)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	items := make([]issueRoleAssignmentPayload, 0, len(assignments))
-	for _, assignment := range assignments {
-		items = append(items, toIssueRoleAssignmentPayload(assignment))
-	}
-	sendJSON(w, http.StatusOK, issueRoleAssignmentListResponse{Items: items, Total: len(items)})
-}
-
-func (h *IssuesHandler) UpsertRoleAssignment(w http.ResponseWriter, r *http.Request) {
-	if h.IssueStore == nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
-		return
-	}
-
-	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
-	if projectID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
-		return
-	}
-
-	role := strings.TrimSpace(chi.URLParam(r, "role"))
-	if role == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "role is required"})
-		return
-	}
-
-	var req struct {
-		AgentID *string `json:"agent_id"`
-	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
-		return
-	}
-
-	if req.AgentID != nil {
-		trimmed := strings.TrimSpace(*req.AgentID)
-		if trimmed == "" {
-			req.AgentID = nil
-		} else {
-			req.AgentID = &trimmed
-		}
-	}
-
-	assignment, err := h.IssueStore.UpsertIssueRoleAssignment(r.Context(), store.UpsertIssueRoleAssignmentInput{
-		ProjectID: projectID,
-		Role:      role,
-		AgentID:   req.AgentID,
-	})
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	sendJSON(w, http.StatusOK, toIssueRoleAssignmentPayload(*assignment))
-}
-
-func (h *IssuesHandler) ClaimNextQueueIssue(w http.ResponseWriter, r *http.Request) {
-	if h.IssueStore == nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
-		return
-	}
-
-	projectID := strings.TrimSpace(chi.URLParam(r, "id"))
-	if projectID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
-		return
-	}
-
-	var req struct {
-		Role    string `json:"role"`
-		AgentID string `json:"agent_id"`
-	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
-		return
-	}
-	req.Role = strings.TrimSpace(req.Role)
-	req.AgentID = strings.TrimSpace(req.AgentID)
-	if req.Role == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "role is required"})
-		return
-	}
-	if req.AgentID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent_id is required"})
-		return
-	}
-
-	updated, err := h.IssueStore.ClaimNextQueueIssue(r.Context(), projectID, req.Role, req.AgentID)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	if err := h.syncIssueOwnerParticipant(r.Context(), updated.ID, &req.AgentID); err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	participants, err := h.IssueStore.ListParticipants(r.Context(), updated.ID, false)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{updated.ID})
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, updated.ID)))
 }
 
 func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -503,7 +258,6 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		Title         string  `json:"title"`
 		Body          *string `json:"body"`
 		OwnerAgentID  *string `json:"owner_agent_id"`
-		ParentIssueID *string `json:"parent_issue_id"`
 		Priority      string  `json:"priority"`
 		WorkStatus    string  `json:"work_status"`
 		State         string  `json:"state"`
@@ -545,7 +299,6 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		DocumentPath:  nil,
 		ApprovalState: req.ApprovalState,
 		OwnerAgentID:  req.OwnerAgentID,
-		ParentIssueID: req.ParentIssueID,
 		WorkStatus:    req.WorkStatus,
 		Priority:      req.Priority,
 		DueAt:         dueAt,
@@ -574,81 +327,7 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.enqueueIssueQueueNotification(r.Context(), nil, issue)
-
 	sendJSON(w, http.StatusCreated, toIssueSummaryPayload(*issue, participants, nil))
-}
-
-func (h *IssuesHandler) CreateSubIssuesBatch(w http.ResponseWriter, r *http.Request) {
-	if h.IssueStore == nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
-		return
-	}
-
-	parentIssueID := strings.TrimSpace(chi.URLParam(r, "id"))
-	if parentIssueID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
-		return
-	}
-
-	var req struct {
-		Items []struct {
-			Title      string  `json:"title"`
-			Body       *string `json:"body"`
-			Priority   string  `json:"priority"`
-			WorkStatus string  `json:"work_status"`
-		} `json:"items"`
-	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
-		return
-	}
-	if len(req.Items) == 0 {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "items are required"})
-		return
-	}
-
-	inputs := make([]store.CreateProjectSubIssueInput, 0, len(req.Items))
-	for _, item := range req.Items {
-		inputs = append(inputs, store.CreateProjectSubIssueInput{
-			Title:      item.Title,
-			Body:       item.Body,
-			Priority:   item.Priority,
-			WorkStatus: item.WorkStatus,
-		})
-	}
-
-	created, err := h.IssueStore.CreateSubIssuesBatch(r.Context(), parentIssueID, inputs)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	ids := make([]string, 0, len(created))
-	for _, issue := range created {
-		ids = append(ids, issue.ID)
-	}
-	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), ids)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	items := make([]issueSummaryPayload, 0, len(created))
-	for i := range created {
-		issue := created[i]
-		h.enqueueIssueQueueNotification(r.Context(), nil, &issue)
-		participants, err := h.IssueStore.ListParticipants(r.Context(), issue.ID, false)
-		if err != nil {
-			handleIssueStoreError(w, err)
-			return
-		}
-		items = append(items, toIssueSummaryPayload(issue, participants, findIssueLink(linksByIssueID, issue.ID)))
-	}
-
-	sendJSON(w, http.StatusCreated, issueListResponse{Items: items, Total: len(items)})
 }
 
 func (h *IssuesHandler) CreateLinkedIssue(w http.ResponseWriter, r *http.Request) {
@@ -732,6 +411,20 @@ func (h *IssuesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
+	questionnaires := make([]questionnairePayload, 0)
+	if h.QuestionnaireStore != nil {
+		records, listErr := h.QuestionnaireStore.ListByContext(r.Context(), store.QuestionnaireContextIssue, issueID)
+		if listErr != nil {
+			handleQuestionnaireStoreError(w, listErr)
+			return
+		}
+		payloads, mapErr := mapQuestionnairePayloads(records)
+		if mapErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load questionnaires"})
+			return
+		}
+		questionnaires = payloads
+	}
 	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
 	if err != nil {
 		handleIssueStoreError(w, err)
@@ -746,9 +439,10 @@ func (h *IssuesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	payload.DocumentContent = linkedDocumentContent
 
 	sendJSON(w, http.StatusOK, issueDetailPayload{
-		Issue:        payload,
-		Participants: mapIssueParticipants(participants),
-		Comments:     mapIssueComments(comments),
+		Issue:          payload,
+		Participants:   mapIssueParticipants(participants),
+		Comments:       mapIssueComments(comments),
+		Questionnaires: questionnaires,
 	})
 }
 
@@ -961,11 +655,8 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hasUpdate := req.OwnerAgentID != nil ||
-		req.ParentIssueID != nil ||
 		req.WorkStatus != nil ||
 		req.Priority != nil ||
-		req.ActiveBranch != nil ||
-		req.LastCommitSHA != nil ||
 		req.DueAt != nil ||
 		req.NextStep != nil ||
 		req.NextStepDueAt != nil ||
@@ -980,15 +671,6 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 		return
 	}
-
-	var before *store.ProjectIssue
-	if req.WorkStatus != nil {
-		before, err = h.IssueStore.GetIssueByID(r.Context(), issueID)
-		if err != nil {
-			handleIssueStoreError(w, err)
-			return
-		}
-	}
 	nextStepDueAt, err := parseOptionalRFC3339(req.NextStepDueAt, "next_step_due_at")
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
@@ -998,15 +680,11 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 	input := store.UpdateProjectIssueWorkTrackingInput{
 		IssueID: issueID,
 
-		SetOwnerAgentID:  req.OwnerAgentID != nil,
-		OwnerAgentID:     req.OwnerAgentID,
-		SetParentIssueID: req.ParentIssueID != nil,
-		ParentIssueID:    req.ParentIssueID,
+		SetOwnerAgentID: req.OwnerAgentID != nil,
+		OwnerAgentID:    req.OwnerAgentID,
 
 		SetWorkStatus:    req.WorkStatus != nil,
 		SetPriority:      req.Priority != nil,
-		SetActiveBranch:  req.ActiveBranch != nil,
-		SetLastCommitSHA: req.LastCommitSHA != nil,
 		SetDueAt:         req.DueAt != nil,
 		SetNextStep:      req.NextStep != nil,
 		SetNextStepDueAt: req.NextStepDueAt != nil,
@@ -1017,12 +695,6 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Priority != nil {
 		input.Priority = *req.Priority
-	}
-	if req.ActiveBranch != nil {
-		input.ActiveBranch = req.ActiveBranch
-	}
-	if req.LastCommitSHA != nil {
-		input.LastCommitSHA = req.LastCommitSHA
 	}
 	if req.State != nil {
 		input.State = *req.State
@@ -1043,8 +715,6 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.enqueueIssueQueueNotification(r.Context(), before, updated)
-
 	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
 	if err != nil {
 		handleIssueStoreError(w, err)
@@ -1055,168 +725,6 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
-
-	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
-}
-
-func (h *IssuesHandler) ClaimIssue(w http.ResponseWriter, r *http.Request) {
-	if h.IssueStore == nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
-		return
-	}
-
-	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
-	if issueID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
-		return
-	}
-
-	var req struct {
-		AgentID string `json:"agent_id"`
-	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
-		return
-	}
-	req.AgentID = strings.TrimSpace(req.AgentID)
-	if req.AgentID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent_id is required"})
-		return
-	}
-
-	updated, err := h.IssueStore.ClaimIssue(r.Context(), issueID, req.AgentID)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	if err := h.syncIssueOwnerParticipant(r.Context(), issueID, &req.AgentID); err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
-}
-
-func (h *IssuesHandler) ReleaseIssue(w http.ResponseWriter, r *http.Request) {
-	if h.IssueStore == nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
-		return
-	}
-
-	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
-	if issueID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
-		return
-	}
-
-	before, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	updated, err := h.IssueStore.ReleaseIssue(r.Context(), issueID)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	if err := h.syncIssueOwnerParticipant(r.Context(), issueID, nil); err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	h.enqueueIssueQueueNotification(r.Context(), before, updated)
-
-	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
-}
-
-func (h *IssuesHandler) ReviewerDecision(w http.ResponseWriter, r *http.Request) {
-	if h.IssueStore == nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
-		return
-	}
-
-	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
-	if issueID == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "issue id is required"})
-		return
-	}
-
-	var req struct {
-		Decision string  `json:"decision"`
-		Reason   *string `json:"reason,omitempty"`
-	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
-		return
-	}
-	req.Decision = strings.TrimSpace(req.Decision)
-	if req.Decision == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "decision is required"})
-		return
-	}
-
-	before, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	updated, err := h.IssueStore.ApplyReviewerDecision(r.Context(), issueID, req.Decision)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	if err := h.syncIssueOwnerParticipant(r.Context(), issueID, nil); err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-	linksByIssueID, err := h.IssueStore.ListGitHubLinksByIssueIDs(r.Context(), []string{issueID})
-	if err != nil {
-		handleIssueStoreError(w, err)
-		return
-	}
-
-	reason := ""
-	if req.Reason != nil {
-		reason = strings.TrimSpace(*req.Reason)
-	}
-	h.logIssueReviewerDecision(r.Context(), *before, *updated, req.Decision, reason)
 
 	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
 }
@@ -1331,10 +839,6 @@ func toIssueSummaryPayload(
 	participants []store.ProjectIssueParticipant,
 	link *store.ProjectIssueGitHubLink,
 ) issueSummaryPayload {
-	labels := issue.Labels
-	if labels == nil {
-		labels = []store.Label{}
-	}
 	payload := issueSummaryPayload{
 		ID:             issue.ID,
 		ProjectID:      issue.ProjectID,
@@ -1347,12 +851,8 @@ func toIssueSummaryPayload(
 		ApprovalState:  issue.ApprovalState,
 		Kind:           inferIssueKind(link),
 		OwnerAgentID:   ownerAgentIDFromParticipants(participants),
-		ParentIssueID:  issue.ParentIssueID,
 		WorkStatus:     issue.WorkStatus,
 		Priority:       issue.Priority,
-		Labels:         labels,
-		ActiveBranch:   issue.ActiveBranch,
-		LastCommitSHA:  issue.LastCommitSHA,
 		NextStep:       issue.NextStep,
 		LastActivityAt: issue.UpdatedAt.UTC().Format(time.RFC3339),
 	}
@@ -1387,29 +887,6 @@ func inferIssueKind(link *store.ProjectIssueGitHubLink) string {
 	return "issue"
 }
 
-func parseIssueLabelFilterIDs(rawValues []string) ([]string, error) {
-	if len(rawValues) == 0 {
-		return nil, nil
-	}
-	seen := make(map[string]struct{}, len(rawValues))
-	labelIDs := make([]string, 0, len(rawValues))
-	for _, raw := range rawValues {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			continue
-		}
-		if !uuidRegex.MatchString(trimmed) {
-			return nil, fmt.Errorf("invalid label filter")
-		}
-		if _, exists := seen[trimmed]; exists {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		labelIDs = append(labelIDs, trimmed)
-	}
-	return labelIDs, nil
-}
-
 func findIssueLink(
 	links map[string]store.ProjectIssueGitHubLink,
 	issueID string,
@@ -1420,133 +897,6 @@ func findIssueLink(
 	}
 	copy := link
 	return &copy
-}
-
-func toIssueRoleAssignmentPayload(assignment store.IssueRoleAssignment) issueRoleAssignmentPayload {
-	return issueRoleAssignmentPayload{
-		ID:        assignment.ID,
-		ProjectID: assignment.ProjectID,
-		Role:      assignment.Role,
-		AgentID:   assignment.AgentID,
-		CreatedAt: assignment.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt: assignment.UpdatedAt.UTC().Format(time.RFC3339),
-	}
-}
-
-func (h *IssuesHandler) syncIssueOwnerParticipant(ctx context.Context, issueID string, ownerAgentID *string) error {
-	participants, err := h.IssueStore.ListParticipants(ctx, issueID, false)
-	if err != nil {
-		return err
-	}
-
-	ownerID := ""
-	if ownerAgentID != nil {
-		ownerID = strings.TrimSpace(*ownerAgentID)
-	}
-	ownerPresent := false
-	for _, participant := range participants {
-		if participant.Role != "owner" || participant.RemovedAt != nil {
-			continue
-		}
-		if ownerID == "" || participant.AgentID != ownerID {
-			if err := h.IssueStore.RemoveParticipant(ctx, issueID, participant.AgentID); err != nil {
-				return err
-			}
-			continue
-		}
-		ownerPresent = true
-	}
-
-	if ownerID != "" && !ownerPresent {
-		_, err := h.IssueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
-			IssueID: issueID,
-			AgentID: ownerID,
-			Role:    "owner",
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func queueRoleForIssueWorkStatus(workStatus string) (string, bool) {
-	switch strings.TrimSpace(strings.ToLower(workStatus)) {
-	case store.IssueWorkStatusReady:
-		return "planner", true
-	case store.IssueWorkStatusReadyForWork:
-		return "worker", true
-	case store.IssueWorkStatusReview:
-		return "reviewer", true
-	default:
-		return "", false
-	}
-}
-
-func (h *IssuesHandler) enqueueIssueQueueNotification(
-	ctx context.Context,
-	before *store.ProjectIssue,
-	after *store.ProjectIssue,
-) {
-	if h.DB == nil || h.IssueStore == nil || after == nil {
-		return
-	}
-
-	role, ok := queueRoleForIssueWorkStatus(after.WorkStatus)
-	if !ok {
-		return
-	}
-	if before != nil && strings.EqualFold(strings.TrimSpace(before.WorkStatus), strings.TrimSpace(after.WorkStatus)) {
-		return
-	}
-
-	assignments, err := h.IssueStore.ListIssueRoleAssignments(ctx, after.ProjectID)
-	if err != nil {
-		log.Printf("issue queue notification skipped for issue %s: %v", after.ID, err)
-		return
-	}
-
-	assignedAgentID := ""
-	for _, assignment := range assignments {
-		if assignment.Role != role || assignment.AgentID == nil {
-			continue
-		}
-		assignedAgentID = strings.TrimSpace(*assignment.AgentID)
-		if assignedAgentID != "" {
-			break
-		}
-	}
-	if assignedAgentID == "" {
-		return
-	}
-
-	workStatus := strings.TrimSpace(strings.ToLower(after.WorkStatus))
-	event := openClawIssueQueueDispatchEvent{
-		Type:      "issue.queue.available",
-		Timestamp: time.Now().UTC(),
-		OrgID:     strings.TrimSpace(after.OrgID),
-		Data: openClawIssueQueueDispatchData{
-			ProjectID:     strings.TrimSpace(after.ProjectID),
-			IssueID:       strings.TrimSpace(after.ID),
-			IssueNumber:   after.IssueNumber,
-			IssueTitle:    strings.TrimSpace(after.Title),
-			ParentIssueID: after.ParentIssueID,
-			Role:          role,
-			WorkStatus:    workStatus,
-			AgentID:       assignedAgentID,
-		},
-	}
-	dedupeKey := fmt.Sprintf(
-		"issue.queue.available:%s:%s:%s:%d",
-		event.Data.IssueID,
-		event.Data.Role,
-		event.Data.WorkStatus,
-		after.UpdatedAt.UTC().UnixNano(),
-	)
-	if _, err := enqueueOpenClawDispatchEvent(ctx, h.DB, event.OrgID, event.Type, dedupeKey, event); err != nil {
-		log.Printf("failed to enqueue issue queue notification for issue %s: %v", after.ID, err)
-	}
 }
 
 func (h *IssuesHandler) broadcastIssueCommentCreated(
@@ -1798,35 +1148,6 @@ func (h *IssuesHandler) logIssueApproved(
 		"approval_state": updated.ApprovalState,
 		"issue_state":    updated.State,
 		"closed_at":      updated.ClosedAt,
-	})
-}
-
-func (h *IssuesHandler) logIssueReviewerDecision(
-	ctx context.Context,
-	before store.ProjectIssue,
-	updated store.ProjectIssue,
-	decision string,
-	reason string,
-) {
-	if h.DB == nil {
-		return
-	}
-	workspaceID := middleware.WorkspaceFromContext(ctx)
-	if workspaceID == "" {
-		return
-	}
-	decision = strings.TrimSpace(strings.ToLower(decision))
-	reason = strings.TrimSpace(reason)
-	_ = logGitHubActivity(ctx, h.DB, workspaceID, &updated.ProjectID, "issue.reviewer_decision", map[string]any{
-		"issue_id":           updated.ID,
-		"project_id":         updated.ProjectID,
-		"decision":           decision,
-		"reason":             reason,
-		"before_work_status": before.WorkStatus,
-		"after_work_status":  updated.WorkStatus,
-		"before_state":       before.State,
-		"after_state":        updated.State,
-		"closed_at":          updated.ClosedAt,
 	})
 }
 

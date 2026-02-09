@@ -74,6 +74,98 @@ func TestProjectChatHandlerCreateAndList(t *testing.T) {
 	require.False(t, listResp.HasMore)
 }
 
+func TestProjectChatHandlerListIncludesQuestionnaires(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-questionnaire-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Chat Questionnaire Project")
+
+	questionnaireStore := store.NewQuestionnaireStore(db)
+	ctx := testCtxWithWorkspace(orgID)
+
+	projectQuestionnaire, err := questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextProjectChat,
+		ContextID:   projectID,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Target date?","type":"date","required":true}]`),
+	})
+	require.NoError(t, err)
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue context questionnaire",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	_, err = questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextIssue,
+		ContextID:   issue.ID,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Ignore","type":"text","required":false}]`),
+	})
+	require.NoError(t, err)
+
+	handler := &ProjectChatHandler{
+		ProjectStore:       store.NewProjectStore(db),
+		ChatStore:          store.NewProjectChatStore(db),
+		QuestionnaireStore: questionnaireStore,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/chat?org_id="+orgID, nil)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+
+	require.Equal(t, http.StatusOK, listRec.Code)
+	var listResp projectChatListResponse
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	require.Len(t, listResp.Questionnaires, 1)
+	require.Equal(t, projectQuestionnaire.ID, listResp.Questionnaires[0].ID)
+	require.Equal(t, store.QuestionnaireContextProjectChat, listResp.Questionnaires[0].ContextType)
+}
+
+func TestProjectChatHandlerQuestionnaireContextIsolation(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-questionnaire-iso-org")
+	projectA := insertProjectTestProject(t, db, orgID, "Project A")
+	projectB := insertProjectTestProject(t, db, orgID, "Project B")
+
+	questionnaireStore := store.NewQuestionnaireStore(db)
+	ctx := testCtxWithWorkspace(orgID)
+
+	_, err := questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextProjectChat,
+		ContextID:   projectA,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Project A","type":"text","required":true}]`),
+	})
+	require.NoError(t, err)
+	_, err = questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextProjectChat,
+		ContextID:   projectB,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Project B","type":"text","required":true}]`),
+	})
+	require.NoError(t, err)
+
+	handler := &ProjectChatHandler{
+		ProjectStore:       store.NewProjectStore(db),
+		ChatStore:          store.NewProjectChatStore(db),
+		QuestionnaireStore: questionnaireStore,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectA+"/chat?org_id="+orgID, nil)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+
+	var listResp projectChatListResponse
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	require.Len(t, listResp.Questionnaires, 1)
+	require.Equal(t, projectA, listResp.Questionnaires[0].ContextID)
+}
+
 func TestProjectChatHandlerCreateValidatesPayload(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "project-chat-validate-org")

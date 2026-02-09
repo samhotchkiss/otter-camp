@@ -8,6 +8,8 @@ import type {
 } from "./types";
 import { formatTimestamp, getInitials } from "./utils";
 import MessageMarkdown from "./MessageMarkdown";
+import Questionnaire from "../Questionnaire";
+import QuestionnaireResponse from "../QuestionnaireResponse";
 
 const SCROLL_BOTTOM_THRESHOLD_PX = 40;
 
@@ -119,10 +121,15 @@ function MessageBubble({
   message,
   isOwnMessage,
   onRetryMessage,
+  onSubmitQuestionnaire,
 }: {
   message: DMMessage;
   isOwnMessage: boolean;
   onRetryMessage?: (message: DMMessage) => void;
+  onSubmitQuestionnaire?: (
+    questionnaireID: string,
+    responses: Record<string, unknown>,
+  ) => Promise<void> | void;
 }) {
   if (message.isSessionReset) {
     return (
@@ -169,13 +176,28 @@ function MessageBubble({
           )}
         </div>
         <div className={`rounded-2xl px-4 py-2.5 ${bubbleStyle}`}>
-          <MessageMarkdown
-            markdown={message.content}
-            className="text-sm leading-relaxed"
-          />
-          {message.attachments && message.attachments.length > 0 ? (
-            <MessageAttachments attachments={message.attachments} />
-          ) : null}
+          {message.questionnaire ? (
+            message.questionnaire.responses ? (
+              <QuestionnaireResponse questionnaire={message.questionnaire} />
+            ) : onSubmitQuestionnaire ? (
+              <Questionnaire
+                questionnaire={message.questionnaire}
+                onSubmit={(responses) => onSubmitQuestionnaire(message.questionnaire!.id, responses)}
+              />
+            ) : (
+              <QuestionnaireResponse questionnaire={message.questionnaire} />
+            )
+          ) : (
+            <>
+              <MessageMarkdown
+                markdown={message.content}
+                className="text-sm leading-relaxed"
+              />
+              {message.attachments && message.attachments.length > 0 ? (
+                <MessageAttachments attachments={message.attachments} />
+              ) : null}
+            </>
+          )}
         </div>
         {message.optimistic ? (
           <p className="mt-1 text-[10px] text-[var(--orange)]">Sending...</p>
@@ -281,6 +303,10 @@ export type MessageHistoryProps = {
   isLoadingMore?: boolean;
   onLoadMore?: () => Promise<void> | void;
   onRetryMessage?: (message: DMMessage) => void;
+  onSubmitQuestionnaire?: (
+    questionnaireID: string,
+    responses: Record<string, unknown>,
+  ) => Promise<void> | void;
   className?: string;
 };
 
@@ -293,6 +319,7 @@ export default function MessageHistory({
   isLoadingMore = false,
   onLoadMore,
   onRetryMessage,
+  onSubmitQuestionnaire,
   className = "",
 }: MessageHistoryProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -394,6 +421,7 @@ export default function MessageHistory({
               message={message}
               isOwnMessage={message.senderId === currentUserId}
               onRetryMessage={onRetryMessage}
+              onSubmitQuestionnaire={onSubmitQuestionnaire}
             />
           ))}
           <div ref={endRef} />

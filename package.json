@@ -1,5 +1,11 @@
 {
+  "scripts": {
+    "test:bridge": "tsx --test bridge/openclaw-bridge.test.ts"
+  },
   "dependencies": {
     "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
   }
 }

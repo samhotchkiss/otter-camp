@@ -17,7 +17,6 @@ type ProjectIssue struct {
 	ID            string     `json:"id"`
 	OrgID         string     `json:"org_id"`
 	ProjectID     string     `json:"project_id"`
-	ParentIssueID *string    `json:"parent_issue_id,omitempty"`
 	IssueNumber   int64      `json:"issue_number"`
 	Title         string     `json:"title"`
 	Body          *string    `json:"body,omitempty"`
@@ -28,12 +27,9 @@ type ProjectIssue struct {
 	OwnerAgentID  *string    `json:"owner_agent_id,omitempty"`
 	WorkStatus    string     `json:"work_status"`
 	Priority      string     `json:"priority"`
-	ActiveBranch  *string    `json:"active_branch,omitempty"`
-	LastCommitSHA *string    `json:"last_commit_sha,omitempty"`
 	DueAt         *time.Time `json:"due_at,omitempty"`
 	NextStep      *string    `json:"next_step,omitempty"`
 	NextStepDueAt *time.Time `json:"next_step_due_at,omitempty"`
-	Labels        []Label    `json:"labels,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 	ClosedAt      *time.Time `json:"closed_at,omitempty"`
@@ -41,7 +37,6 @@ type ProjectIssue struct {
 
 type CreateProjectIssueInput struct {
 	ProjectID     string
-	ParentIssueID *string
 	Title         string
 	Body          *string
 	State         string
@@ -57,33 +52,17 @@ type CreateProjectIssueInput struct {
 	ClosedAt      *time.Time
 }
 
-type CreateProjectSubIssueInput struct {
-	Title      string
-	Body       *string
-	Priority   string
-	WorkStatus string
-}
-
 type UpdateProjectIssueWorkTrackingInput struct {
 	IssueID string
 
 	SetOwnerAgentID bool
 	OwnerAgentID    *string
 
-	SetParentIssueID bool
-	ParentIssueID    *string
-
 	SetWorkStatus bool
 	WorkStatus    string
 
 	SetPriority bool
 	Priority    string
-
-	SetActiveBranch bool
-	ActiveBranch    *string
-
-	SetLastCommitSHA bool
-	LastCommitSHA    *string
 
 	SetDueAt bool
 	DueAt    *time.Time
@@ -110,17 +89,15 @@ type UpsertProjectIssueFromGitHubInput struct {
 }
 
 type ProjectIssueFilter struct {
-	ProjectID     string
-	ParentIssueID *string
-	State         *string
-	Origin        *string
-	Kind          *string
-	IssueNumber   *int64
-	OwnerAgentID  *string
-	WorkStatus    *string
-	Priority      *string
-	LabelIDs      []string
-	Limit         int
+	ProjectID    string
+	State        *string
+	Origin       *string
+	Kind         *string
+	IssueNumber  *int64
+	OwnerAgentID *string
+	WorkStatus   *string
+	Priority     *string
+	Limit        int
 }
 
 type ProjectIssueGitHubLink struct {
@@ -194,22 +171,6 @@ type CreateProjectIssueReviewNotificationInput struct {
 	Payload              json.RawMessage
 }
 
-type IssueRoleAssignment struct {
-	ID        string    `json:"id"`
-	OrgID     string    `json:"org_id"`
-	ProjectID string    `json:"project_id"`
-	Role      string    `json:"role"`
-	AgentID   *string   `json:"agent_id,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-type UpsertIssueRoleAssignmentInput struct {
-	ProjectID string
-	Role      string
-	AgentID   *string
-}
-
 type ProjectIssueCounts struct {
 	Total        int `json:"total"`
 	Open         int `json:"open"`
@@ -273,16 +234,12 @@ const (
 	IssueApprovalStateNeedsChanges   = "needs_changes"
 	IssueApprovalStateApproved       = "approved"
 
-	IssueWorkStatusQueued       = "queued"
-	IssueWorkStatusReady        = "ready"
-	IssueWorkStatusPlanning     = "planning"
-	IssueWorkStatusReadyForWork = "ready_for_work"
-	IssueWorkStatusInProgress   = "in_progress"
-	IssueWorkStatusBlocked      = "blocked"
-	IssueWorkStatusReview       = "review"
-	IssueWorkStatusFlagged      = "flagged"
-	IssueWorkStatusDone         = "done"
-	IssueWorkStatusCancelled    = "cancelled"
+	IssueWorkStatusQueued     = "queued"
+	IssueWorkStatusInProgress = "in_progress"
+	IssueWorkStatusBlocked    = "blocked"
+	IssueWorkStatusReview     = "review"
+	IssueWorkStatusDone       = "done"
+	IssueWorkStatusCancelled  = "cancelled"
 
 	IssuePriorityP0 = "P0"
 	IssuePriorityP1 = "P1"
@@ -341,13 +298,9 @@ func normalizeIssueWorkStatus(status string) string {
 func isValidIssueWorkStatus(status string) bool {
 	switch normalizeIssueWorkStatus(status) {
 	case IssueWorkStatusQueued,
-		IssueWorkStatusReady,
-		IssueWorkStatusPlanning,
-		IssueWorkStatusReadyForWork,
 		IssueWorkStatusInProgress,
 		IssueWorkStatusBlocked,
 		IssueWorkStatusReview,
-		IssueWorkStatusFlagged,
 		IssueWorkStatusDone,
 		IssueWorkStatusCancelled:
 		return true
@@ -372,107 +325,17 @@ func canTransitionIssueWorkStatus(currentStatus, nextStatus string) bool {
 
 	switch current {
 	case IssueWorkStatusQueued:
-		return next == IssueWorkStatusReady ||
-			next == IssueWorkStatusInProgress ||
-			next == IssueWorkStatusBlocked ||
-			next == IssueWorkStatusCancelled ||
-			next == IssueWorkStatusDone
-	case IssueWorkStatusReady:
-		return next == IssueWorkStatusPlanning || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled
-	case IssueWorkStatusPlanning:
-		return next == IssueWorkStatusReady ||
-			next == IssueWorkStatusReadyForWork ||
-			next == IssueWorkStatusBlocked ||
-			next == IssueWorkStatusCancelled
-	case IssueWorkStatusReadyForWork:
-		return next == IssueWorkStatusPlanning ||
-			next == IssueWorkStatusInProgress ||
-			next == IssueWorkStatusBlocked ||
-			next == IssueWorkStatusCancelled
+		return next == IssueWorkStatusInProgress || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled || next == IssueWorkStatusDone
 	case IssueWorkStatusInProgress:
-		return next == IssueWorkStatusReadyForWork ||
-			next == IssueWorkStatusReview ||
-			next == IssueWorkStatusBlocked ||
-			next == IssueWorkStatusCancelled ||
-			next == IssueWorkStatusDone
+		return next == IssueWorkStatusReview || next == IssueWorkStatusBlocked || next == IssueWorkStatusCancelled || next == IssueWorkStatusDone
 	case IssueWorkStatusBlocked:
-		return next == IssueWorkStatusReady ||
-			next == IssueWorkStatusPlanning ||
-			next == IssueWorkStatusReadyForWork ||
-			next == IssueWorkStatusInProgress ||
-			next == IssueWorkStatusCancelled
+		return next == IssueWorkStatusInProgress || next == IssueWorkStatusCancelled
 	case IssueWorkStatusReview:
-		return next == IssueWorkStatusInProgress ||
-			next == IssueWorkStatusFlagged ||
-			next == IssueWorkStatusDone ||
-			next == IssueWorkStatusCancelled
-	case IssueWorkStatusFlagged:
-		return next == IssueWorkStatusQueued ||
-			next == IssueWorkStatusPlanning ||
-			next == IssueWorkStatusInProgress ||
-			next == IssueWorkStatusCancelled
+		return next == IssueWorkStatusInProgress || next == IssueWorkStatusDone || next == IssueWorkStatusCancelled
 	case IssueWorkStatusDone, IssueWorkStatusCancelled:
-		return next == IssueWorkStatusQueued || next == IssueWorkStatusReady
+		return next == IssueWorkStatusQueued
 	default:
 		return false
-	}
-}
-
-func claimTransitionIssueWorkStatus(currentStatus string) (string, error) {
-	switch normalizeIssueWorkStatus(currentStatus) {
-	case IssueWorkStatusQueued:
-		return IssueWorkStatusInProgress, nil
-	case IssueWorkStatusReady:
-		return IssueWorkStatusPlanning, nil
-	case IssueWorkStatusReadyForWork:
-		return IssueWorkStatusInProgress, nil
-	case IssueWorkStatusReview:
-		return IssueWorkStatusReview, nil
-	default:
-		return "", fmt.Errorf("issue is not claimable from current work_status")
-	}
-}
-
-func releaseTransitionIssueWorkStatus(currentStatus string) (string, error) {
-	switch normalizeIssueWorkStatus(currentStatus) {
-	case IssueWorkStatusPlanning:
-		return IssueWorkStatusReady, nil
-	case IssueWorkStatusInProgress:
-		return IssueWorkStatusReadyForWork, nil
-	case IssueWorkStatusReview:
-		return IssueWorkStatusReview, nil
-	default:
-		return "", fmt.Errorf("issue is not releasable from current work_status")
-	}
-}
-
-func queueWorkStatusForRole(role string) (string, error) {
-	switch strings.TrimSpace(strings.ToLower(role)) {
-	case "planner":
-		return IssueWorkStatusReady, nil
-	case "worker":
-		return IssueWorkStatusReadyForWork, nil
-	case "reviewer":
-		return IssueWorkStatusReview, nil
-	default:
-		return "", fmt.Errorf("role must be planner, worker, or reviewer")
-	}
-}
-
-func normalizeReviewerDecision(decision string) string {
-	return strings.TrimSpace(strings.ToLower(decision))
-}
-
-func reviewerDecisionNextWorkStatus(decision string) (string, error) {
-	switch normalizeReviewerDecision(decision) {
-	case "approve":
-		return IssueWorkStatusDone, nil
-	case "request_changes":
-		return IssueWorkStatusInProgress, nil
-	case "escalate":
-		return IssueWorkStatusFlagged, nil
-	default:
-		return "", fmt.Errorf("decision must be approve, request_changes, or escalate")
 	}
 }
 
@@ -483,19 +346,6 @@ func normalizeIssuePriority(priority string) string {
 func isValidIssuePriority(priority string) bool {
 	switch normalizeIssuePriority(priority) {
 	case IssuePriorityP0, IssuePriorityP1, IssuePriorityP2, IssuePriorityP3:
-		return true
-	default:
-		return false
-	}
-}
-
-func normalizeIssueRoleAssignmentRole(role string) string {
-	return strings.TrimSpace(strings.ToLower(role))
-}
-
-func isValidIssueRoleAssignmentRole(role string) bool {
-	switch normalizeIssueRoleAssignmentRole(role) {
-	case "planner", "worker", "reviewer":
 		return true
 	default:
 		return false
@@ -513,50 +363,6 @@ func normalizeOptionalIssueText(value *string) *string {
 	return &trimmed
 }
 
-func normalizeOptionalIssueBranchName(value *string) (*string, error) {
-	if value == nil {
-		return nil, nil
-	}
-	trimmed := strings.TrimSpace(*value)
-	if trimmed == "" {
-		return nil, nil
-	}
-	if len(trimmed) > 255 {
-		return nil, fmt.Errorf("active_branch exceeds 255 characters")
-	}
-	if strings.ContainsAny(trimmed, " \t\r\n") {
-		return nil, fmt.Errorf("invalid active_branch")
-	}
-	if strings.HasPrefix(trimmed, "/") || strings.HasSuffix(trimmed, "/") {
-		return nil, fmt.Errorf("invalid active_branch")
-	}
-	if strings.Contains(trimmed, "..") || strings.Contains(trimmed, "//") {
-		return nil, fmt.Errorf("invalid active_branch")
-	}
-	return &trimmed, nil
-}
-
-func normalizeOptionalIssueCommitSHA(value *string) (*string, error) {
-	if value == nil {
-		return nil, nil
-	}
-	trimmed := strings.TrimSpace(*value)
-	if trimmed == "" {
-		return nil, nil
-	}
-	if len(trimmed) < 7 || len(trimmed) > 40 {
-		return nil, fmt.Errorf("invalid last_commit_sha")
-	}
-	for _, ch := range trimmed {
-		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') {
-			continue
-		}
-		return nil, fmt.Errorf("invalid last_commit_sha")
-	}
-	lower := strings.ToLower(trimmed)
-	return &lower, nil
-}
-
 func normalizeOptionalIssueAgentID(value *string) (*string, error) {
 	if value == nil {
 		return nil, nil
@@ -567,20 +373,6 @@ func normalizeOptionalIssueAgentID(value *string) (*string, error) {
 	}
 	if !uuidRegex.MatchString(trimmed) {
 		return nil, fmt.Errorf("invalid owner_agent_id")
-	}
-	return &trimmed, nil
-}
-
-func normalizeOptionalIssueID(value *string, field string) (*string, error) {
-	if value == nil {
-		return nil, nil
-	}
-	trimmed := strings.TrimSpace(*value)
-	if trimmed == "" {
-		return nil, nil
-	}
-	if !uuidRegex.MatchString(trimmed) {
-		return nil, fmt.Errorf("invalid %s", field)
 	}
 	return &trimmed, nil
 }
@@ -669,10 +461,6 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 	if err != nil {
 		return nil, err
 	}
-	parentIssueID, err := normalizeOptionalIssueID(input.ParentIssueID, "parent_issue_id")
-	if err != nil {
-		return nil, err
-	}
 
 	workStatus := normalizeIssueWorkStatus(input.WorkStatus)
 	if workStatus == "" {
@@ -713,20 +501,6 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 			return nil, err
 		}
 	}
-	if parentIssueID != nil {
-		if err := ensureIssueVisible(ctx, tx, *parentIssueID); err != nil {
-			if errors.Is(err, ErrNotFound) {
-				return nil, fmt.Errorf("parent_issue_id not found")
-			}
-			return nil, err
-		}
-		if err := ensureIssueBelongsToProject(ctx, tx, *parentIssueID, projectID); err != nil {
-			if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
-				return nil, fmt.Errorf("parent_issue_id must belong to the same project")
-			}
-			return nil, err
-		}
-	}
 
 	var nextIssueNumber int64
 	if err := tx.QueryRowContext(
@@ -741,9 +515,9 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 		ctx,
 		`INSERT INTO project_issues (
 			org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state,
-			owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, closed_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
+			owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, closed_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
 		workspaceID,
 		projectID,
 		nextIssueNumber,
@@ -754,7 +528,6 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 		nullableString(documentPath),
 		approvalState,
 		nullableString(ownerAgentID),
-		nullableString(parentIssueID),
 		workStatus,
 		priority,
 		input.DueAt,
@@ -770,110 +543,6 @@ func (s *ProjectIssueStore) CreateIssue(ctx context.Context, input CreateProject
 		return nil, fmt.Errorf("failed to commit issue create: %w", err)
 	}
 	return &record, nil
-}
-
-func (s *ProjectIssueStore) CreateSubIssuesBatch(
-	ctx context.Context,
-	parentIssueID string,
-	items []CreateProjectSubIssueInput,
-) ([]ProjectIssue, error) {
-	workspaceID := middleware.WorkspaceFromContext(ctx)
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
-	}
-	parentIssueID = strings.TrimSpace(parentIssueID)
-	if !uuidRegex.MatchString(parentIssueID) {
-		return nil, fmt.Errorf("invalid parent_issue_id")
-	}
-	if len(items) == 0 {
-		return nil, fmt.Errorf("items are required")
-	}
-
-	tx, err := WithWorkspaceTx(ctx, s.db)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	parent, err := scanProjectIssue(tx.QueryRowContext(
-		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
-			FROM project_issues
-			WHERE id = $1
-			FOR UPDATE`,
-		parentIssueID,
-	))
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("failed to load parent issue: %w", err)
-	}
-	if parent.OrgID != workspaceID {
-		return nil, ErrForbidden
-	}
-
-	nextIssueNumber := parent.IssueNumber + 1
-	if err := tx.QueryRowContext(
-		ctx,
-		`SELECT COALESCE(MAX(issue_number), 0) + 1 FROM project_issues WHERE project_id = $1`,
-		parent.ProjectID,
-	).Scan(&nextIssueNumber); err != nil {
-		return nil, fmt.Errorf("failed to allocate issue number range: %w", err)
-	}
-
-	created := make([]ProjectIssue, 0, len(items))
-	for _, item := range items {
-		title := strings.TrimSpace(item.Title)
-		if title == "" {
-			return nil, fmt.Errorf("title is required")
-		}
-
-		priority := normalizeIssuePriority(item.Priority)
-		if priority == "" {
-			priority = IssuePriorityP2
-		}
-		if !isValidIssuePriority(priority) {
-			return nil, fmt.Errorf("invalid priority")
-		}
-
-		workStatus := normalizeIssueWorkStatus(item.WorkStatus)
-		if workStatus == "" {
-			workStatus = IssueWorkStatusQueued
-		}
-		if !isValidIssueWorkStatus(workStatus) {
-			return nil, fmt.Errorf("invalid work_status")
-		}
-
-		body := normalizeOptionalIssueText(item.Body)
-		record, err := scanProjectIssue(tx.QueryRowContext(
-			ctx,
-			`INSERT INTO project_issues (
-				org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state,
-				owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, closed_at
-			) VALUES ($1,$2,$3,$4,$5,'open','local',NULL,$6,NULL,$7,$8,$9,NULL,NULL,NULL,NULL)
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
-			workspaceID,
-			parent.ProjectID,
-			nextIssueNumber,
-			title,
-			nullableString(body),
-			IssueApprovalStateDraft,
-			parentIssueID,
-			workStatus,
-			priority,
-		))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create sub-issue: %w", err)
-		}
-		created = append(created, record)
-		nextIssueNumber++
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit sub-issues batch: %w", err)
-	}
-	return created, nil
 }
 
 func (s *ProjectIssueStore) TransitionApprovalState(
@@ -904,7 +573,7 @@ func (s *ProjectIssueStore) TransitionApprovalState(
 
 	current, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE id = $1
 			FOR UPDATE`,
@@ -933,7 +602,7 @@ func (s *ProjectIssueStore) TransitionApprovalState(
 		updateQuery := `UPDATE project_issues
 				SET approval_state = $2
 				WHERE id = $1
-				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`
+				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`
 		if normalizedNext == IssueApprovalStateApproved {
 			updateQuery = `UPDATE project_issues
 				SET approval_state = $2,
@@ -941,7 +610,7 @@ func (s *ProjectIssueStore) TransitionApprovalState(
 					work_status = CASE WHEN work_status = '` + IssueWorkStatusCancelled + `' THEN work_status ELSE '` + IssueWorkStatusDone + `' END,
 					closed_at = COALESCE(closed_at, NOW())
 				WHERE id = $1
-				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`
+				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`
 		}
 
 		updated, err = scanProjectIssue(tx.QueryRowContext(
@@ -989,7 +658,7 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 
 	current, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE id = $1
 			FOR UPDATE`,
@@ -1019,14 +688,7 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 	case IssueWorkStatusDone, IssueWorkStatusCancelled:
 		nextIssueState = "closed"
 		nextClosedAt = current.ClosedAt
-	case IssueWorkStatusQueued,
-		IssueWorkStatusReady,
-		IssueWorkStatusPlanning,
-		IssueWorkStatusReadyForWork,
-		IssueWorkStatusInProgress,
-		IssueWorkStatusBlocked,
-		IssueWorkStatusReview,
-		IssueWorkStatusFlagged:
+	case IssueWorkStatusQueued, IssueWorkStatusInProgress, IssueWorkStatusBlocked, IssueWorkStatusReview:
 		nextIssueState = "open"
 		nextClosedAt = nil
 	}
@@ -1039,7 +701,7 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 				ELSE $4
 			END
 		WHERE id = $1
-		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`
+		RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`
 	updated, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
 		updateQuery,
@@ -1050,351 +712,6 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to update work_status: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &updated, nil
-}
-
-func (s *ProjectIssueStore) ClaimIssue(
-	ctx context.Context,
-	issueID string,
-	agentID string,
-) (*ProjectIssue, error) {
-	workspaceID := middleware.WorkspaceFromContext(ctx)
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
-	}
-
-	issueID = strings.TrimSpace(issueID)
-	if !uuidRegex.MatchString(issueID) {
-		return nil, fmt.Errorf("invalid issue_id")
-	}
-	agentID = strings.TrimSpace(agentID)
-	if !uuidRegex.MatchString(agentID) {
-		return nil, fmt.Errorf("invalid agent_id")
-	}
-
-	tx, err := WithWorkspaceTx(ctx, s.db)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	current, err := scanProjectIssue(tx.QueryRowContext(
-		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
-			FROM project_issues
-			WHERE id = $1
-			FOR UPDATE`,
-		issueID,
-	))
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("failed to load issue: %w", err)
-	}
-	if current.OrgID != workspaceID {
-		return nil, ErrForbidden
-	}
-
-	if current.OwnerAgentID != nil && strings.TrimSpace(*current.OwnerAgentID) != "" && *current.OwnerAgentID != agentID {
-		return nil, fmt.Errorf("issue is already claimed")
-	}
-	if err := ensureAgentVisible(ctx, tx, agentID); err != nil {
-		return nil, err
-	}
-
-	currentStatus := normalizeIssueWorkStatus(current.WorkStatus)
-	if currentStatus == "" {
-		currentStatus = defaultIssueWorkStatusForState(current.State)
-	}
-	nextStatus, err := claimTransitionIssueWorkStatus(currentStatus)
-	if err != nil {
-		return nil, err
-	}
-	if !canTransitionIssueWorkStatus(currentStatus, nextStatus) {
-		return nil, fmt.Errorf("invalid work_status transition")
-	}
-
-	updated, err := scanProjectIssue(tx.QueryRowContext(
-		ctx,
-		`UPDATE project_issues
-			SET owner_agent_id = $2,
-				work_status = $3,
-				state = 'open',
-				closed_at = NULL
-			WHERE id = $1
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
-		issueID,
-		agentID,
-		nextStatus,
-	))
-	if err != nil {
-		return nil, fmt.Errorf("failed to claim issue: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &updated, nil
-}
-
-func (s *ProjectIssueStore) ReleaseIssue(
-	ctx context.Context,
-	issueID string,
-) (*ProjectIssue, error) {
-	workspaceID := middleware.WorkspaceFromContext(ctx)
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
-	}
-
-	issueID = strings.TrimSpace(issueID)
-	if !uuidRegex.MatchString(issueID) {
-		return nil, fmt.Errorf("invalid issue_id")
-	}
-
-	tx, err := WithWorkspaceTx(ctx, s.db)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	current, err := scanProjectIssue(tx.QueryRowContext(
-		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
-			FROM project_issues
-			WHERE id = $1
-			FOR UPDATE`,
-		issueID,
-	))
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("failed to load issue: %w", err)
-	}
-	if current.OrgID != workspaceID {
-		return nil, ErrForbidden
-	}
-	if current.OwnerAgentID == nil || strings.TrimSpace(*current.OwnerAgentID) == "" {
-		return nil, fmt.Errorf("issue is not claimed")
-	}
-
-	currentStatus := normalizeIssueWorkStatus(current.WorkStatus)
-	if currentStatus == "" {
-		currentStatus = defaultIssueWorkStatusForState(current.State)
-	}
-	nextStatus, err := releaseTransitionIssueWorkStatus(currentStatus)
-	if err != nil {
-		return nil, err
-	}
-	if !canTransitionIssueWorkStatus(currentStatus, nextStatus) {
-		return nil, fmt.Errorf("invalid work_status transition")
-	}
-
-	updated, err := scanProjectIssue(tx.QueryRowContext(
-		ctx,
-		`UPDATE project_issues
-			SET owner_agent_id = NULL,
-				work_status = $2,
-				state = 'open',
-				closed_at = NULL
-			WHERE id = $1
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
-		issueID,
-		nextStatus,
-	))
-	if err != nil {
-		return nil, fmt.Errorf("failed to release issue: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &updated, nil
-}
-
-func (s *ProjectIssueStore) ClaimNextQueueIssue(
-	ctx context.Context,
-	projectID string,
-	role string,
-	agentID string,
-) (*ProjectIssue, error) {
-	workspaceID := middleware.WorkspaceFromContext(ctx)
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
-	}
-
-	projectID = strings.TrimSpace(projectID)
-	if !uuidRegex.MatchString(projectID) {
-		return nil, fmt.Errorf("invalid project_id")
-	}
-	agentID = strings.TrimSpace(agentID)
-	if !uuidRegex.MatchString(agentID) {
-		return nil, fmt.Errorf("invalid agent_id")
-	}
-
-	workStatus, err := queueWorkStatusForRole(role)
-	if err != nil {
-		return nil, err
-	}
-
-	tx, err := WithWorkspaceTx(ctx, s.db)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := ensureProjectVisible(ctx, tx, projectID); err != nil {
-		return nil, err
-	}
-	if err := ensureAgentVisible(ctx, tx, agentID); err != nil {
-		return nil, err
-	}
-
-	candidate, err := scanProjectIssue(tx.QueryRowContext(
-		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
-			FROM project_issues
-			WHERE project_id = $1
-			  AND work_status = $2
-			  AND state = 'open'
-			  AND owner_agent_id IS NULL
-			ORDER BY CASE priority
-				WHEN 'P0' THEN 0
-				WHEN 'P1' THEN 1
-				WHEN 'P2' THEN 2
-				WHEN 'P3' THEN 3
-				ELSE 4
-			END ASC, updated_at ASC, issue_number ASC
-			LIMIT 1
-			FOR UPDATE SKIP LOCKED`,
-		projectID,
-		workStatus,
-	))
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("failed to select next queue issue: %w", err)
-	}
-	if candidate.OrgID != workspaceID {
-		return nil, ErrForbidden
-	}
-
-	nextStatus, err := claimTransitionIssueWorkStatus(candidate.WorkStatus)
-	if err != nil {
-		return nil, err
-	}
-	if !canTransitionIssueWorkStatus(candidate.WorkStatus, nextStatus) {
-		return nil, fmt.Errorf("invalid work_status transition")
-	}
-
-	updated, err := scanProjectIssue(tx.QueryRowContext(
-		ctx,
-		`UPDATE project_issues
-			SET owner_agent_id = $2,
-				work_status = $3,
-				state = 'open',
-				closed_at = NULL
-			WHERE id = $1
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
-		candidate.ID,
-		agentID,
-		nextStatus,
-	))
-	if err != nil {
-		return nil, fmt.Errorf("failed to claim next queue issue: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &updated, nil
-}
-
-func (s *ProjectIssueStore) ApplyReviewerDecision(
-	ctx context.Context,
-	issueID string,
-	decision string,
-) (*ProjectIssue, error) {
-	workspaceID := middleware.WorkspaceFromContext(ctx)
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
-	}
-
-	issueID = strings.TrimSpace(issueID)
-	if !uuidRegex.MatchString(issueID) {
-		return nil, fmt.Errorf("invalid issue_id")
-	}
-
-	nextStatus, err := reviewerDecisionNextWorkStatus(decision)
-	if err != nil {
-		return nil, err
-	}
-
-	tx, err := WithWorkspaceTx(ctx, s.db)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	current, err := scanProjectIssue(tx.QueryRowContext(
-		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
-			FROM project_issues
-			WHERE id = $1
-			FOR UPDATE`,
-		issueID,
-	))
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("failed to load issue: %w", err)
-	}
-	if current.OrgID != workspaceID {
-		return nil, ErrForbidden
-	}
-
-	currentStatus := normalizeIssueWorkStatus(current.WorkStatus)
-	if currentStatus == "" {
-		currentStatus = defaultIssueWorkStatusForState(current.State)
-	}
-	if currentStatus != IssueWorkStatusReview {
-		return nil, fmt.Errorf("reviewer decision requires review work_status")
-	}
-	if !canTransitionIssueWorkStatus(currentStatus, nextStatus) {
-		return nil, fmt.Errorf("invalid work_status transition")
-	}
-
-	nextState := "open"
-	if nextStatus == IssueWorkStatusDone || nextStatus == IssueWorkStatusCancelled {
-		nextState = "closed"
-	}
-
-	updated, err := scanProjectIssue(tx.QueryRowContext(
-		ctx,
-		`UPDATE project_issues
-			SET owner_agent_id = NULL,
-				work_status = $2,
-				state = $3,
-				closed_at = CASE
-					WHEN $3 = 'closed' THEN COALESCE(closed_at, NOW())
-					ELSE NULL
-				END
-			WHERE id = $1
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
-		issueID,
-		nextStatus,
-		nextState,
-	))
-	if err != nil {
-		return nil, fmt.Errorf("failed to apply reviewer decision: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1425,7 +742,7 @@ func (s *ProjectIssueStore) UpdateIssueWorkTracking(
 
 	current, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE id = $1
 			FOR UPDATE`,
@@ -1454,31 +771,6 @@ func (s *ProjectIssueStore) UpdateIssueWorkTracking(
 		}
 		nextOwnerAgentID = normalizedOwner
 	}
-	nextParentIssueID := current.ParentIssueID
-	if input.SetParentIssueID {
-		normalizedParent, err := normalizeOptionalIssueID(input.ParentIssueID, "parent_issue_id")
-		if err != nil {
-			return nil, err
-		}
-		if normalizedParent != nil {
-			if *normalizedParent == issueID {
-				return nil, fmt.Errorf("parent_issue_id cannot reference the issue itself")
-			}
-			if err := ensureIssueVisible(ctx, tx, *normalizedParent); err != nil {
-				if errors.Is(err, ErrNotFound) {
-					return nil, fmt.Errorf("parent_issue_id not found")
-				}
-				return nil, err
-			}
-			if err := ensureIssueBelongsToProject(ctx, tx, *normalizedParent, current.ProjectID); err != nil {
-				if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
-					return nil, fmt.Errorf("parent_issue_id must belong to the same project")
-				}
-				return nil, err
-			}
-		}
-		nextParentIssueID = normalizedParent
-	}
 
 	currentWorkStatus := normalizeIssueWorkStatus(current.WorkStatus)
 	if currentWorkStatus == "" {
@@ -1506,24 +798,6 @@ func (s *ProjectIssueStore) UpdateIssueWorkTracking(
 			return nil, fmt.Errorf("invalid priority")
 		}
 		nextPriority = normalizedPriority
-	}
-
-	nextActiveBranch := current.ActiveBranch
-	if input.SetActiveBranch {
-		normalizedBranch, err := normalizeOptionalIssueBranchName(input.ActiveBranch)
-		if err != nil {
-			return nil, err
-		}
-		nextActiveBranch = normalizedBranch
-	}
-
-	nextLastCommitSHA := current.LastCommitSHA
-	if input.SetLastCommitSHA {
-		normalizedSHA, err := normalizeOptionalIssueCommitSHA(input.LastCommitSHA)
-		if err != nil {
-			return nil, err
-		}
-		nextLastCommitSHA = normalizedSHA
 	}
 
 	nextDueAt := current.DueAt
@@ -1581,28 +855,22 @@ func (s *ProjectIssueStore) UpdateIssueWorkTracking(
 		ctx,
 		`UPDATE project_issues
 			SET owner_agent_id = $2,
-				parent_issue_id = $3,
-				work_status = $4,
-				priority = $5,
-				active_branch = $6,
-				last_commit_sha = $7,
-				due_at = $8,
-				next_step = $9,
-				next_step_due_at = $10,
-				state = $11,
+				work_status = $3,
+				priority = $4,
+				due_at = $5,
+				next_step = $6,
+				next_step_due_at = $7,
+				state = $8,
 				closed_at = CASE
-					WHEN $11 = 'closed' THEN COALESCE(closed_at, NOW())
+					WHEN $8 = 'closed' THEN COALESCE(closed_at, NOW())
 					ELSE NULL
 				END
 			WHERE id = $1
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
 		issueID,
 		nullableString(nextOwnerAgentID),
-		nullableString(nextParentIssueID),
 		nextWorkStatus,
 		nextPriority,
-		nullableString(nextActiveBranch),
-		nullableString(nextLastCommitSHA),
 		nextDueAt,
 		nullableString(nextNextStep),
 		nextNextStepDueAt,
@@ -1663,7 +931,7 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 
 	existingIssue, err := scanProjectIssue(tx.QueryRowContext(
 		ctx,
-		`SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.owner_agent_id, i.parent_issue_id, i.work_status, i.priority, i.due_at, i.next_step, i.next_step_due_at, i.active_branch, i.last_commit_sha, i.created_at, i.updated_at, i.closed_at
+		`SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.owner_agent_id, i.work_status, i.priority, i.due_at, i.next_step, i.next_step_due_at, i.created_at, i.updated_at, i.closed_at
 			FROM project_issues i
 			JOIN project_issue_github_links l ON l.issue_id = i.id
 			WHERE i.project_id = $1 AND l.repository_full_name = $2 AND l.github_number = $3
@@ -1685,13 +953,13 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 					origin = 'github',
 					approval_state = $5,
 					work_status = CASE
-						WHEN $4 = 'closed' THEN '`+IssueWorkStatusDone+`'
-						WHEN work_status = '`+IssueWorkStatusDone+`' THEN '`+IssueWorkStatusQueued+`'
+						WHEN $4 = 'closed' THEN '` + IssueWorkStatusDone + `'
+						WHEN work_status = '` + IssueWorkStatusDone + `' THEN '` + IssueWorkStatusQueued + `'
 						ELSE work_status
 					END,
 					closed_at = $6
 				WHERE id = $1
-				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
+				RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
 			existingIssue.ID,
 			title,
 			nullableString(input.Body),
@@ -1719,7 +987,7 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 			`INSERT INTO project_issues (
 				org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, work_status, priority, closed_at
 			) VALUES ($1,$2,$3,$4,$5,$6,'github',NULL,$7,$8,$9,$10)
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
 			workspaceID,
 			projectID,
 			nextIssueNumber,
@@ -1805,14 +1073,8 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	labelIDs := normalizeIDList(filter.LabelIDs)
-	for _, labelID := range labelIDs {
-		if !uuidRegex.MatchString(labelID) {
-			return nil, fmt.Errorf("invalid label filter")
-		}
-	}
 
-	query := `SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.owner_agent_id, i.parent_issue_id, i.work_status, i.priority, i.due_at, i.next_step, i.next_step_due_at, i.active_branch, i.last_commit_sha, i.created_at, i.updated_at, i.closed_at
+	query := `SELECT i.id, i.org_id, i.project_id, i.issue_number, i.title, i.body, i.state, i.origin, i.document_path, i.approval_state, i.owner_agent_id, i.work_status, i.priority, i.due_at, i.next_step, i.next_step_due_at, i.created_at, i.updated_at, i.closed_at
 		FROM project_issues i
 		LEFT JOIN project_issue_github_links l ON l.issue_id = i.id
 		WHERE i.project_id = $1`
@@ -1856,15 +1118,6 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		args = append(args, *filter.IssueNumber)
 		argPos++
 	}
-	if filter.ParentIssueID != nil && strings.TrimSpace(*filter.ParentIssueID) != "" {
-		parentIssueID := strings.TrimSpace(*filter.ParentIssueID)
-		if !uuidRegex.MatchString(parentIssueID) {
-			return nil, fmt.Errorf("invalid parent_issue_id filter")
-		}
-		query += fmt.Sprintf(" AND i.parent_issue_id = $%d", argPos)
-		args = append(args, parentIssueID)
-		argPos++
-	}
 	if filter.OwnerAgentID != nil && strings.TrimSpace(*filter.OwnerAgentID) != "" {
 		ownerAgentID := strings.TrimSpace(*filter.OwnerAgentID)
 		if !uuidRegex.MatchString(ownerAgentID) {
@@ -1890,18 +1143,6 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		}
 		query += fmt.Sprintf(" AND i.priority = $%d", argPos)
 		args = append(args, priority)
-		argPos++
-	}
-	for _, labelID := range labelIDs {
-		query += fmt.Sprintf(` AND EXISTS (
-			SELECT 1
-			FROM issue_labels il
-			INNER JOIN labels l ON l.id = il.label_id
-			WHERE il.issue_id = i.id
-			  AND il.label_id = $%d
-			  AND l.org_id = i.org_id
-		)`, argPos)
-		args = append(args, labelID)
 		argPos++
 	}
 
@@ -1934,134 +1175,7 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to read issue rows: %w", err)
 	}
-	if err := s.attachIssueLabels(ctx, items); err != nil {
-		return nil, err
-	}
 	return items, nil
-}
-
-func (s *ProjectIssueStore) ListIssueRoleAssignments(
-	ctx context.Context,
-	projectID string,
-) ([]IssueRoleAssignment, error) {
-	workspaceID := middleware.WorkspaceFromContext(ctx)
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
-	}
-
-	projectID = strings.TrimSpace(projectID)
-	if !uuidRegex.MatchString(projectID) {
-		return nil, fmt.Errorf("invalid project_id")
-	}
-
-	conn, err := WithWorkspace(ctx, s.db)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-
-	if err := ensureProjectVisible(ctx, conn, projectID); err != nil {
-		return nil, err
-	}
-
-	rows, err := conn.QueryContext(
-		ctx,
-		`SELECT id, org_id, project_id, role, agent_id, created_at, updated_at
-			FROM issue_role_assignments
-			WHERE project_id = $1
-			ORDER BY CASE role
-				WHEN 'planner' THEN 0
-				WHEN 'worker' THEN 1
-				WHEN 'reviewer' THEN 2
-				ELSE 3
-			END, created_at ASC`,
-		projectID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list issue role assignments: %w", err)
-	}
-	defer rows.Close()
-
-	items := make([]IssueRoleAssignment, 0)
-	for rows.Next() {
-		item, err := scanIssueRoleAssignment(rows)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan issue role assignment: %w", err)
-		}
-		if item.OrgID != workspaceID {
-			return nil, ErrForbidden
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed reading issue role assignments: %w", err)
-	}
-
-	return items, nil
-}
-
-func (s *ProjectIssueStore) UpsertIssueRoleAssignment(
-	ctx context.Context,
-	input UpsertIssueRoleAssignmentInput,
-) (*IssueRoleAssignment, error) {
-	workspaceID := middleware.WorkspaceFromContext(ctx)
-	if workspaceID == "" {
-		return nil, ErrNoWorkspace
-	}
-
-	projectID := strings.TrimSpace(input.ProjectID)
-	if !uuidRegex.MatchString(projectID) {
-		return nil, fmt.Errorf("invalid project_id")
-	}
-
-	role := normalizeIssueRoleAssignmentRole(input.Role)
-	if !isValidIssueRoleAssignmentRole(role) {
-		return nil, fmt.Errorf("role must be planner, worker, or reviewer")
-	}
-
-	agentID, err := normalizeOptionalIssueID(input.AgentID, "agent_id")
-	if err != nil {
-		return nil, err
-	}
-
-	tx, err := WithWorkspaceTx(ctx, s.db)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := ensureProjectVisible(ctx, tx, projectID); err != nil {
-		return nil, err
-	}
-	if agentID != nil {
-		if err := ensureAgentVisible(ctx, tx, *agentID); err != nil {
-			return nil, err
-		}
-	}
-
-	record, err := scanIssueRoleAssignment(tx.QueryRowContext(
-		ctx,
-		`INSERT INTO issue_role_assignments (
-			org_id, project_id, role, agent_id
-		) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (project_id, role)
-		DO UPDATE SET
-			agent_id = EXCLUDED.agent_id,
-			updated_at = NOW()
-		RETURNING id, org_id, project_id, role, agent_id, created_at, updated_at`,
-		workspaceID,
-		projectID,
-		role,
-		nullableString(agentID),
-	))
-	if err != nil {
-		return nil, fmt.Errorf("failed to upsert issue role assignment: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &record, nil
 }
 
 func (s *ProjectIssueStore) ListGitHubLinksByIssueIDs(
@@ -2151,7 +1265,7 @@ func (s *ProjectIssueStore) GetIssueByID(ctx context.Context, issueID string) (*
 
 	issue, err := scanProjectIssue(conn.QueryRowContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE id = $1`,
 		issueID,
@@ -2165,30 +1279,7 @@ func (s *ProjectIssueStore) GetIssueByID(ctx context.Context, issueID string) (*
 	if issue.OrgID != workspaceID {
 		return nil, ErrForbidden
 	}
-	labels, err := NewLabelStore(s.db).ListForIssue(ctx, issue.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list labels for issue: %w", err)
-	}
-	issue.Labels = labels
 	return &issue, nil
-}
-
-func (s *ProjectIssueStore) attachIssueLabels(ctx context.Context, issues []ProjectIssue) error {
-	if len(issues) == 0 {
-		return nil
-	}
-	issueIDs := make([]string, 0, len(issues))
-	for _, issue := range issues {
-		issueIDs = append(issueIDs, issue.ID)
-	}
-	labelMap, err := NewLabelStore(s.db).MapForIssues(ctx, issueIDs)
-	if err != nil {
-		return fmt.Errorf("failed to map labels for issues: %w", err)
-	}
-	for idx := range issues {
-		issues[idx].Labels = labelMap[issues[idx].ID]
-	}
-	return nil
 }
 
 func (s *ProjectIssueStore) ListIssuesByDocumentPath(
@@ -2219,7 +1310,7 @@ func (s *ProjectIssueStore) ListIssuesByDocumentPath(
 
 	rows, err := conn.QueryContext(
 		ctx,
-		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at
+		`SELECT id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at
 			FROM project_issues
 			WHERE project_id = $1 AND document_path = $2
 			ORDER BY created_at ASC`,
@@ -2279,7 +1370,7 @@ func (s *ProjectIssueStore) UpdateIssueDocumentPath(
 		`UPDATE project_issues
 			SET document_path = $2
 			WHERE id = $1
-			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, parent_issue_id, work_status, priority, due_at, next_step, next_step_due_at, active_branch, last_commit_sha, created_at, updated_at, closed_at`,
+			RETURNING id, org_id, project_id, issue_number, title, body, state, origin, document_path, approval_state, owner_agent_id, work_status, priority, due_at, next_step, next_step_due_at, created_at, updated_at, closed_at`,
 		issueID,
 		nullableString(normalizedPath),
 	))
@@ -3262,21 +2353,6 @@ func ensureIssueVisible(ctx context.Context, q Querier, issueID string) error {
 	return nil
 }
 
-func ensureIssueBelongsToProject(ctx context.Context, q Querier, issueID string, projectID string) error {
-	var actualProjectID string
-	err := q.QueryRowContext(ctx, `SELECT project_id FROM project_issues WHERE id = $1`, issueID).Scan(&actualProjectID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		return err
-	}
-	if strings.TrimSpace(actualProjectID) != strings.TrimSpace(projectID) {
-		return ErrForbidden
-	}
-	return nil
-}
-
 func ensureAgentVisible(ctx context.Context, q Querier, agentID string) error {
 	var visible bool
 	err := q.QueryRowContext(ctx, `SELECT TRUE FROM agents WHERE id = $1`, agentID).Scan(&visible)
@@ -3310,9 +2386,6 @@ func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, er
 	var body sql.NullString
 	var documentPath sql.NullString
 	var ownerAgentID sql.NullString
-	var parentIssueID sql.NullString
-	var activeBranch sql.NullString
-	var lastCommitSHA sql.NullString
 	var dueAt sql.NullTime
 	var nextStep sql.NullString
 	var nextStepDueAt sql.NullTime
@@ -3330,14 +2403,11 @@ func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, er
 		&documentPath,
 		&issue.ApprovalState,
 		&ownerAgentID,
-		&parentIssueID,
 		&issue.WorkStatus,
 		&issue.Priority,
 		&dueAt,
 		&nextStep,
 		&nextStepDueAt,
-		&activeBranch,
-		&lastCommitSHA,
 		&issue.CreatedAt,
 		&issue.UpdatedAt,
 		&closedAt,
@@ -3353,15 +2423,6 @@ func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, er
 	}
 	if ownerAgentID.Valid {
 		issue.OwnerAgentID = &ownerAgentID.String
-	}
-	if parentIssueID.Valid {
-		issue.ParentIssueID = &parentIssueID.String
-	}
-	if activeBranch.Valid {
-		issue.ActiveBranch = &activeBranch.String
-	}
-	if lastCommitSHA.Valid {
-		issue.LastCommitSHA = &lastCommitSHA.String
 	}
 	issue.ApprovalState = normalizeIssueApprovalState(issue.ApprovalState)
 	if issue.ApprovalState == "" {
@@ -3388,28 +2449,6 @@ func scanProjectIssue(scanner interface{ Scan(...any) error }) (ProjectIssue, er
 		issue.ClosedAt = &closedAt.Time
 	}
 	return issue, nil
-}
-
-func scanIssueRoleAssignment(scanner interface{ Scan(...any) error }) (IssueRoleAssignment, error) {
-	var assignment IssueRoleAssignment
-	var agentID sql.NullString
-
-	err := scanner.Scan(
-		&assignment.ID,
-		&assignment.OrgID,
-		&assignment.ProjectID,
-		&assignment.Role,
-		&agentID,
-		&assignment.CreatedAt,
-		&assignment.UpdatedAt,
-	)
-	if err != nil {
-		return assignment, err
-	}
-	if agentID.Valid {
-		assignment.AgentID = &agentID.String
-	}
-	return assignment, nil
 }
 
 func scanProjectIssueGitHubLink(scanner interface{ Scan(...any) error }) (ProjectIssueGitHubLink, error) {

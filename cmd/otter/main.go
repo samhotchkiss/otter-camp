@@ -21,9 +21,8 @@ import (
 var issueUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
 
 const (
-	authSetupCommand  = "otter auth login --token <your-token> --org <org-id>"
-	authTokenHelpURL  = "https://otter.camp/settings"
-	defaultLabelColor = "#6b7280"
+	authSetupCommand = "otter auth login --token <your-token> --org <org-id>"
+	authTokenHelpURL = "https://otter.camp/settings"
 )
 
 func main() {
@@ -48,8 +47,6 @@ func main() {
 		handleRepo(os.Args[2:])
 	case "issue":
 		handleIssue(os.Args[2:])
-	case "label":
-		handleLabel(os.Args[2:])
 	case "version":
 		fmt.Println("otter dev")
 	default:
@@ -69,7 +66,6 @@ Commands:
   remote add       Add origin remote for project
   repo info        Show repo URL for project
   issue            Manage project issues
-  label            Manage labels
   version          Show CLI version`)
 }
 
@@ -140,30 +136,24 @@ func handleWhoami(args []string) {
 }
 
 func handleProject(args []string) {
-	const projectUsage = "usage: otter project <list|create|view|archive|delete|label> ..."
+	const projectUsage = "usage: otter project <list|create|view|archive|delete> ..."
 	if len(args) == 0 {
 		fmt.Println(projectUsage)
 		os.Exit(1)
 	}
 
 	switch args[0] {
-	case "label":
-		handleProjectLabel(args[1:])
-		return
 	case "list":
 		flags := flag.NewFlagSet("project list", flag.ExitOnError)
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
-		var labels stringSliceFlag
-		flags.Var(&labels, "label", "label name or id filter (repeatable)")
 		_ = flags.Parse(args[1:])
 
 		cfg, err := ottercli.LoadConfig()
 		dieIf(err)
 		client, _ := ottercli.NewClient(cfg, *org)
-		labelIDs, err := resolveLabelFilterIDs(client, labels)
-		dieIf(err)
-		projects, err := client.ListProjects(labelIDs...)
+
+		projects, err := client.ListProjects()
 		dieIf(err)
 
 		if *jsonOut {
@@ -547,19 +537,15 @@ func handleRepo(args []string) {
 
 func handleIssue(args []string) {
 	if len(args) == 0 {
-		fmt.Println("usage: otter issue <create|list|view|comment|assign|close|reopen|label> ...")
+		fmt.Println("usage: otter issue <create|list|view|comment|ask|respond|assign|close|reopen> ...")
 		os.Exit(1)
 	}
 
 	switch args[0] {
-	case "label":
-		handleIssueLabel(args[1:])
-		return
 	case "create":
 		flags := flag.NewFlagSet("issue create", flag.ExitOnError)
 		projectRef := flags.String("project", "", "project name or id (required)")
 		body := flags.String("body", "", "issue body")
-		parent := flags.String("parent", "", "parent issue id or number")
 		assign := flags.String("assign", "", "owner agent id/name/slug")
 		priority := flags.String("priority", "", "priority (P0-P3)")
 		workStatus := flags.String("work-status", "", "work status")
@@ -597,15 +583,6 @@ func handleIssue(args []string) {
 			dieIf(err)
 			payload["owner_agent_id"] = agent.ID
 		}
-		parentIssueID, err := resolveOptionalParentIssueID(
-			client,
-			strings.TrimSpace(*projectRef),
-			strings.TrimSpace(*parent),
-		)
-		dieIf(err)
-		if parentIssueID != nil {
-			payload["parent_issue_id"] = *parentIssueID
-		}
 
 		issue, err := client.CreateIssue(project.ID, payload)
 		dieIf(err)
@@ -618,9 +595,6 @@ func handleIssue(args []string) {
 		fmt.Printf("Project: %s\n", project.Name)
 		if issue.OwnerAgentID != nil {
 			fmt.Printf("Owner: %s\n", resolveAgentName(client, *issue.OwnerAgentID))
-		}
-		if issue.ParentIssueID != nil {
-			fmt.Printf("Parent: %s\n", *issue.ParentIssueID)
 		}
 		fmt.Printf("Status: %s / %s\n", issue.State, issue.WorkStatus)
 		fmt.Printf("Priority: %s\n", issue.Priority)
@@ -636,8 +610,6 @@ func handleIssue(args []string) {
 		mine := flags.Bool("mine", false, "filter to current agent id (OTTER_AGENT_ID)")
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
-		var labels stringSliceFlag
-		flags.Var(&labels, "label", "label name or id filter (repeatable)")
 		_ = flags.Parse(args[1:])
 
 		if strings.TrimSpace(*projectRef) == "" {
@@ -680,9 +652,7 @@ func handleIssue(args []string) {
 			filters["owner_agent_id"] = agent.ID
 		}
 
-		labelIDs, err := resolveLabelFilterIDs(client, labels)
-		dieIf(err)
-		issues, err := client.ListIssues(project.ID, filters, labelIDs...)
+		issues, err := client.ListIssues(project.ID, filters)
 		dieIf(err)
 
 		if *jsonOut {
@@ -734,7 +704,20 @@ func handleIssue(args []string) {
 		issue, err := client.GetIssue(issueID)
 		dieIf(err)
 
-		fmt.Print(issueViewOutput(client, issue, *jsonOut))
+		if *jsonOut {
+			printJSON(issue)
+			return
+		}
+		fmt.Printf("Issue #%d (%s)\n", issue.IssueNumber, issue.ID)
+		fmt.Printf("Title: %s\n", issue.Title)
+		fmt.Printf("State: %s / %s\n", issue.State, issue.WorkStatus)
+		fmt.Printf("Priority: %s\n", issue.Priority)
+		if issue.OwnerAgentID != nil {
+			fmt.Printf("Owner: %s\n", resolveAgentName(client, *issue.OwnerAgentID))
+		}
+		if issue.Body != nil {
+			fmt.Printf("\n%s\n", strings.TrimSpace(*issue.Body))
+		}
 
 	case "comment":
 		flags := flag.NewFlagSet("issue comment", flag.ExitOnError)
@@ -759,11 +742,118 @@ func handleIssue(args []string) {
 		dieIf(err)
 
 		authorRef := strings.TrimSpace(*author)
-		agentID, err := resolveIssueCommentAuthorRef(client, authorRef, os.Getenv("OTTER_AGENT_ID"))
+		if authorRef == "" {
+			authorRef = strings.TrimSpace(os.Getenv("OTTER_AGENT_ID"))
+		}
+		if authorRef == "" {
+			// Fall back to authenticated user's name
+			resp, err := client.WhoAmI()
+			if err == nil && resp.User.Name != "" {
+				authorRef = resp.User.Name
+			}
+		}
+		if authorRef == "" {
+			die("comment requires --author or OTTER_AGENT_ID")
+		}
+		agent, err := client.ResolveAgent(authorRef)
 		dieIf(err)
 
-		dieIf(client.CommentIssue(issueID, agentID, body))
+		dieIf(client.CommentIssue(issueID, agent.ID, body))
 		fmt.Println("Comment added.")
+
+	case "ask":
+		flags := flag.NewFlagSet("issue ask", flag.ExitOnError)
+		projectRef := flags.String("project", "", "project name or id (required for issue number)")
+		author := flags.String("author", "", "questionnaire author name (defaults to whoami name)")
+		title := flags.String("title", "", "questionnaire title")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		var questionSpecs cliRepeatedFlag
+		flags.Var(&questionSpecs, "question", "question JSON (repeatable)")
+		_ = flags.Parse(args[1:])
+
+		if len(flags.Args()) == 0 {
+			die("usage: otter issue ask <issue-id-or-number> --question '{\"id\":\"q1\",\"text\":\"...\",\"type\":\"text\"}'")
+		}
+		issueRef := strings.TrimSpace(flags.Args()[0])
+		questions, err := parseIssueAskQuestions(questionSpecs)
+		dieIf(err)
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		issueID, err := resolveIssueID(client, strings.TrimSpace(*projectRef), issueRef)
+		dieIf(err)
+
+		authorName := strings.TrimSpace(*author)
+		if authorName == "" {
+			if whoami, whoErr := client.WhoAmI(); whoErr == nil {
+				authorName = strings.TrimSpace(whoami.User.Name)
+			}
+		}
+		if authorName == "" {
+			die("--author is required when user identity cannot be inferred")
+		}
+
+		var titlePtr *string
+		if trimmedTitle := strings.TrimSpace(*title); trimmedTitle != "" {
+			titlePtr = &trimmedTitle
+		}
+
+		created, err := client.AskIssueQuestionnaire(issueID, ottercli.CreateIssueQuestionnaireInput{
+			Author:    authorName,
+			Title:     titlePtr,
+			Questions: questions,
+		})
+		dieIf(err)
+		if *jsonOut {
+			printJSON(created)
+			return
+		}
+		fmt.Printf("Created questionnaire %s on issue %s\n", created.ID, issueID)
+		fmt.Printf("Questions: %d\n", len(created.Questions))
+
+	case "respond":
+		flags := flag.NewFlagSet("issue respond", flag.ExitOnError)
+		respondedBy := flags.String("responded-by", "", "respondent name (defaults to whoami name)")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		var responseSpecs cliRepeatedFlag
+		flags.Var(&responseSpecs, "response", "response entry as question_id=value (repeatable)")
+		_ = flags.Parse(args[1:])
+
+		if len(flags.Args()) == 0 {
+			die("usage: otter issue respond <questionnaire-id> --response q1=true --response q2='\"text\"'")
+		}
+		questionnaireID := strings.TrimSpace(flags.Args()[0])
+		responses, err := parseIssueRespondEntries(responseSpecs)
+		dieIf(err)
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		responder := strings.TrimSpace(*respondedBy)
+		if responder == "" {
+			if whoami, whoErr := client.WhoAmI(); whoErr == nil {
+				responder = strings.TrimSpace(whoami.User.Name)
+			}
+		}
+		if responder == "" {
+			die("--responded-by is required when user identity cannot be inferred")
+		}
+
+		updated, err := client.RespondIssueQuestionnaire(questionnaireID, ottercli.RespondIssueQuestionnaireInput{
+			RespondedBy: responder,
+			Responses:   responses,
+		})
+		dieIf(err)
+		if *jsonOut {
+			printJSON(updated)
+			return
+		}
+		fmt.Printf("Submitted questionnaire response for %s\n", updated.ID)
 
 	case "assign":
 		flags := flag.NewFlagSet("issue assign", flag.ExitOnError)
@@ -851,286 +941,9 @@ func handleIssue(args []string) {
 		fmt.Printf("Reopened issue #%d\n", updated.IssueNumber)
 
 	default:
-		fmt.Println("usage: otter issue <create|list|view|comment|assign|close|reopen|label> ...")
+		fmt.Println("usage: otter issue <create|list|view|comment|ask|respond|assign|close|reopen> ...")
 		os.Exit(1)
 	}
-}
-
-func handleLabel(args []string) {
-	if len(args) == 0 {
-		fmt.Println("usage: otter label <list|create|delete> ...")
-		os.Exit(1)
-	}
-
-	switch args[0] {
-	case "list":
-		flags := flag.NewFlagSet("label list", flag.ExitOnError)
-		org := flags.String("org", "", "org id override")
-		jsonOut := flags.Bool("json", false, "JSON output")
-		_ = flags.Parse(args[1:])
-
-		cfg, err := ottercli.LoadConfig()
-		dieIf(err)
-		client, _ := ottercli.NewClient(cfg, *org)
-		labels, err := client.ListLabels()
-		dieIf(err)
-
-		if *jsonOut {
-			printJSON(labels)
-			return
-		}
-		if len(labels) == 0 {
-			fmt.Println("No labels found.")
-			return
-		}
-		for _, label := range labels {
-			fmt.Printf("%s\t%s\t%s\n", label.ID, label.Name, label.Color)
-		}
-	case "create":
-		flags := flag.NewFlagSet("label create", flag.ExitOnError)
-		color := flags.String("color", "", "label color (hex)")
-		org := flags.String("org", "", "org id override")
-		jsonOut := flags.Bool("json", false, "JSON output")
-		_ = flags.Parse(args[1:])
-		if len(flags.Args()) == 0 {
-			die("usage: otter label create <name> [--color <hex>]")
-		}
-		name := strings.TrimSpace(strings.Join(flags.Args(), " "))
-		if name == "" {
-			die("label name is required")
-		}
-
-		cfg, err := ottercli.LoadConfig()
-		dieIf(err)
-		client, _ := ottercli.NewClient(cfg, *org)
-		label, err := client.CreateLabel(name, strings.TrimSpace(*color))
-		dieIf(err)
-
-		if *jsonOut {
-			printJSON(label)
-			return
-		}
-		fmt.Printf("Created label: %s (%s)\n", label.Name, label.ID)
-	case "delete":
-		flags := flag.NewFlagSet("label delete", flag.ExitOnError)
-		org := flags.String("org", "", "org id override")
-		jsonOut := flags.Bool("json", false, "JSON output")
-		_ = flags.Parse(args[1:])
-		if len(flags.Args()) == 0 {
-			die("usage: otter label delete <label-id-or-name>")
-		}
-		labelRef := strings.TrimSpace(strings.Join(flags.Args(), " "))
-
-		cfg, err := ottercli.LoadConfig()
-		dieIf(err)
-		client, _ := ottercli.NewClient(cfg, *org)
-		label, err := client.ResolveLabel(labelRef)
-		dieIf(err)
-		dieIf(client.DeleteLabel(label.ID))
-
-		if *jsonOut {
-			printJSON(map[string]any{"deleted": true, "label": label})
-			return
-		}
-		fmt.Printf("Deleted label: %s (%s)\n", label.Name, label.ID)
-	default:
-		fmt.Println("usage: otter label <list|create|delete> ...")
-		os.Exit(1)
-	}
-}
-
-func handleProjectLabel(args []string) {
-	if len(args) == 0 {
-		fmt.Println("usage: otter project label <add|remove> ...")
-		os.Exit(1)
-	}
-	switch args[0] {
-	case "add":
-		flags := flag.NewFlagSet("project label add", flag.ExitOnError)
-		projectRef := flags.String("project", "", "project name or id (required)")
-		color := flags.String("color", defaultLabelColor, "default color when auto-creating labels")
-		org := flags.String("org", "", "org id override")
-		jsonOut := flags.Bool("json", false, "JSON output")
-		_ = flags.Parse(args[1:])
-		if strings.TrimSpace(*projectRef) == "" {
-			die("--project is required")
-		}
-		if len(flags.Args()) == 0 {
-			die("usage: otter project label add --project <project> <label-id-or-name>")
-		}
-		labelRef := strings.TrimSpace(strings.Join(flags.Args(), " "))
-
-		cfg, err := ottercli.LoadConfig()
-		dieIf(err)
-		client, _ := ottercli.NewClient(cfg, *org)
-		project, err := client.FindProject(*projectRef)
-		dieIf(err)
-		label, err := resolveLabelForAdd(client, labelRef, strings.TrimSpace(*color))
-		dieIf(err)
-		labels, err := client.AddProjectLabels(project.ID, []string{label.ID})
-		dieIf(err)
-
-		if *jsonOut {
-			printJSON(labels)
-			return
-		}
-		fmt.Printf("Added label %s to project %s\n", label.Name, project.Name)
-	case "remove":
-		flags := flag.NewFlagSet("project label remove", flag.ExitOnError)
-		projectRef := flags.String("project", "", "project name or id (required)")
-		org := flags.String("org", "", "org id override")
-		jsonOut := flags.Bool("json", false, "JSON output")
-		_ = flags.Parse(args[1:])
-		if strings.TrimSpace(*projectRef) == "" {
-			die("--project is required")
-		}
-		if len(flags.Args()) == 0 {
-			die("usage: otter project label remove --project <project> <label-id-or-name>")
-		}
-		labelRef := strings.TrimSpace(strings.Join(flags.Args(), " "))
-
-		cfg, err := ottercli.LoadConfig()
-		dieIf(err)
-		client, _ := ottercli.NewClient(cfg, *org)
-		project, err := client.FindProject(*projectRef)
-		dieIf(err)
-		label, err := client.ResolveLabel(labelRef)
-		dieIf(err)
-		dieIf(client.RemoveProjectLabel(project.ID, label.ID))
-
-		if *jsonOut {
-			printJSON(map[string]any{"removed": true, "label": label, "project_id": project.ID})
-			return
-		}
-		fmt.Printf("Removed label %s from project %s\n", label.Name, project.Name)
-	default:
-		fmt.Println("usage: otter project label <add|remove> ...")
-		os.Exit(1)
-	}
-}
-
-func handleIssueLabel(args []string) {
-	if len(args) == 0 {
-		fmt.Println("usage: otter issue label <add|remove> ...")
-		os.Exit(1)
-	}
-	switch args[0] {
-	case "add":
-		flags := flag.NewFlagSet("issue label add", flag.ExitOnError)
-		projectRef := flags.String("project", "", "project name or id (required for issue number)")
-		color := flags.String("color", defaultLabelColor, "default color when auto-creating labels")
-		org := flags.String("org", "", "org id override")
-		jsonOut := flags.Bool("json", false, "JSON output")
-		_ = flags.Parse(args[1:])
-		if len(flags.Args()) < 2 {
-			die("usage: otter issue label add [--project <project>] <issue-id-or-number> <label-id-or-name>")
-		}
-		issueRef := strings.TrimSpace(flags.Args()[0])
-		labelRef := strings.TrimSpace(strings.Join(flags.Args()[1:], " "))
-
-		cfg, err := ottercli.LoadConfig()
-		dieIf(err)
-		client, _ := ottercli.NewClient(cfg, *org)
-		issueID, err := resolveIssueID(client, strings.TrimSpace(*projectRef), issueRef)
-		dieIf(err)
-		issue, err := client.GetIssue(issueID)
-		dieIf(err)
-		label, err := resolveLabelForAdd(client, labelRef, strings.TrimSpace(*color))
-		dieIf(err)
-		labels, err := client.AddIssueLabels(issue.ProjectID, issue.ID, []string{label.ID})
-		dieIf(err)
-
-		if *jsonOut {
-			printJSON(labels)
-			return
-		}
-		fmt.Printf("Added label %s to issue #%d\n", label.Name, issue.IssueNumber)
-	case "remove":
-		flags := flag.NewFlagSet("issue label remove", flag.ExitOnError)
-		projectRef := flags.String("project", "", "project name or id (required for issue number)")
-		org := flags.String("org", "", "org id override")
-		jsonOut := flags.Bool("json", false, "JSON output")
-		_ = flags.Parse(args[1:])
-		if len(flags.Args()) < 2 {
-			die("usage: otter issue label remove [--project <project>] <issue-id-or-number> <label-id-or-name>")
-		}
-		issueRef := strings.TrimSpace(flags.Args()[0])
-		labelRef := strings.TrimSpace(strings.Join(flags.Args()[1:], " "))
-
-		cfg, err := ottercli.LoadConfig()
-		dieIf(err)
-		client, _ := ottercli.NewClient(cfg, *org)
-		issueID, err := resolveIssueID(client, strings.TrimSpace(*projectRef), issueRef)
-		dieIf(err)
-		issue, err := client.GetIssue(issueID)
-		dieIf(err)
-		label, err := client.ResolveLabel(labelRef)
-		dieIf(err)
-		dieIf(client.RemoveIssueLabel(issue.ProjectID, issue.ID, label.ID))
-
-		if *jsonOut {
-			printJSON(map[string]any{"removed": true, "label": label, "issue_id": issue.ID})
-			return
-		}
-		fmt.Printf("Removed label %s from issue #%d\n", label.Name, issue.IssueNumber)
-	default:
-		fmt.Println("usage: otter issue label <add|remove> ...")
-		os.Exit(1)
-	}
-}
-
-type stringSliceFlag []string
-
-func (s *stringSliceFlag) String() string {
-	return strings.Join(*s, ",")
-}
-
-func (s *stringSliceFlag) Set(value string) error {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil
-	}
-	*s = append(*s, trimmed)
-	return nil
-}
-
-func resolveLabelForAdd(client *ottercli.Client, labelRef, color string) (ottercli.Label, error) {
-	trimmed := strings.TrimSpace(labelRef)
-	if trimmed == "" {
-		return ottercli.Label{}, errors.New("label is required")
-	}
-	if issueUUIDPattern.MatchString(trimmed) {
-		return client.ResolveLabel(trimmed)
-	}
-	color = strings.TrimSpace(color)
-	if color == "" {
-		color = defaultLabelColor
-	}
-	return client.EnsureLabel(trimmed, color)
-}
-
-func resolveLabelFilterIDs(client *ottercli.Client, raw []string) ([]string, error) {
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	seen := make(map[string]struct{}, len(raw))
-	labelIDs := make([]string, 0, len(raw))
-	for _, entry := range raw {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			continue
-		}
-		label, err := client.ResolveLabel(trimmed)
-		if err != nil {
-			return nil, err
-		}
-		if _, exists := seen[label.ID]; exists {
-			continue
-		}
-		seen[label.ID] = struct{}{}
-		labelIDs = append(labelIDs, label.ID)
-	}
-	return labelIDs, nil
 }
 
 func resolveAgentName(client *ottercli.Client, agentID string) string {
@@ -1138,62 +951,6 @@ func resolveAgentName(client *ottercli.Client, agentID string) string {
 		return agent.Name
 	}
 	return agentID
-}
-
-func issueViewOutput(client *ottercli.Client, issue ottercli.Issue, jsonOut bool) string {
-	if jsonOut {
-		payload, _ := json.MarshalIndent(issue, "", "  ")
-		return string(payload) + "\n"
-	}
-
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "Issue #%d (%s)\n", issue.IssueNumber, issue.ID)
-	fmt.Fprintf(&builder, "Title: %s\n", issue.Title)
-	fmt.Fprintf(&builder, "State: %s / %s\n", issue.State, issue.WorkStatus)
-	fmt.Fprintf(&builder, "Priority: %s\n", issue.Priority)
-	if issue.OwnerAgentID != nil {
-		fmt.Fprintf(&builder, "Owner: %s\n", resolveAgentName(client, *issue.OwnerAgentID))
-	}
-	if issue.Body != nil {
-		fmt.Fprintf(&builder, "\n%s\n", strings.TrimSpace(*issue.Body))
-	}
-	return builder.String()
-}
-
-func resolveIssueCommentAuthorRef(client *ottercli.Client, explicitAuthorRef, envAuthorRef string) (string, error) {
-	authorRef := strings.TrimSpace(explicitAuthorRef)
-	if authorRef == "" {
-		authorRef = strings.TrimSpace(envAuthorRef)
-	}
-	if authorRef == "" {
-		resp, err := client.WhoAmI()
-		if err == nil {
-			authorRef = strings.TrimSpace(resp.User.Name)
-		}
-	}
-	if authorRef == "" {
-		return "", errors.New("comment requires --author or OTTER_AGENT_ID")
-	}
-	agent, err := client.ResolveAgent(authorRef)
-	if err != nil {
-		return "", err
-	}
-	return agent.ID, nil
-}
-
-func resolveOptionalParentIssueID(client *ottercli.Client, projectRef, parentRef string) (*string, error) {
-	parentRef = strings.TrimSpace(parentRef)
-	if parentRef == "" {
-		return nil, nil
-	}
-	if client == nil {
-		return nil, errors.New("client is required when --parent is set")
-	}
-	parentIssueID, err := resolveIssueID(client, projectRef, parentRef)
-	if err != nil {
-		return nil, fmt.Errorf("invalid --parent reference: %w", err)
-	}
-	return &parentIssueID, nil
 }
 
 func resolveIssueID(client *ottercli.Client, projectRef, issueRef string) (string, error) {
@@ -1238,17 +995,154 @@ func parsePositiveInt(raw string) (int, error) {
 	if raw == "" {
 		return 0, errors.New("empty value")
 	}
-	value := 0
-	for _, ch := range raw {
-		if ch < '0' || ch > '9' {
-			return 0, errors.New("not numeric")
-		}
-		value = value*10 + int(ch-'0')
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, errors.New("not numeric")
 	}
 	if value <= 0 {
 		return 0, errors.New("must be > 0")
 	}
 	return value, nil
+}
+
+type cliRepeatedFlag []string
+
+func (f *cliRepeatedFlag) String() string {
+	if f == nil {
+		return ""
+	}
+	return strings.Join(*f, ",")
+}
+
+func (f *cliRepeatedFlag) Set(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return errors.New("value is required")
+	}
+	*f = append(*f, trimmed)
+	return nil
+}
+
+func parseIssueAskQuestions(specs []string) ([]ottercli.QuestionnaireQuestion, error) {
+	if len(specs) == 0 {
+		return nil, errors.New("at least one --question is required")
+	}
+
+	questions := make([]ottercli.QuestionnaireQuestion, 0, len(specs))
+	seen := make(map[string]struct{}, len(specs))
+	for _, raw := range specs {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+
+		var question ottercli.QuestionnaireQuestion
+		if err := decoder.Decode(&question); err != nil {
+			return nil, fmt.Errorf("invalid --question value %q: %w", raw, err)
+		}
+
+		id := strings.TrimSpace(question.ID)
+		if id == "" {
+			return nil, errors.New("question id is required")
+		}
+		if _, exists := seen[id]; exists {
+			return nil, fmt.Errorf("duplicate question id: %s", id)
+		}
+		seen[id] = struct{}{}
+
+		questionText := strings.TrimSpace(question.Text)
+		if questionText == "" {
+			return nil, fmt.Errorf("question %s text is required", id)
+		}
+
+		questionType := strings.TrimSpace(strings.ToLower(question.Type))
+		if questionType == "" {
+			return nil, fmt.Errorf("question %s type is required", id)
+		}
+		if !isSupportedQuestionType(questionType) {
+			return nil, fmt.Errorf("question %s has unsupported type %q", id, questionType)
+		}
+
+		options := make([]string, 0, len(question.Options))
+		optionSeen := make(map[string]struct{}, len(question.Options))
+		for _, option := range question.Options {
+			trimmed := strings.TrimSpace(option)
+			if trimmed == "" {
+				continue
+			}
+			if _, exists := optionSeen[trimmed]; exists {
+				continue
+			}
+			optionSeen[trimmed] = struct{}{}
+			options = append(options, trimmed)
+		}
+
+		if questionType == "select" || questionType == "multiselect" {
+			if len(options) == 0 {
+				return nil, fmt.Errorf("question %s requires options", id)
+			}
+		} else {
+			options = nil
+		}
+
+		placeholder := ""
+		if questionType == "text" || questionType == "textarea" {
+			placeholder = strings.TrimSpace(question.Placeholder)
+		}
+
+		questions = append(questions, ottercli.QuestionnaireQuestion{
+			ID:          id,
+			Text:        questionText,
+			Type:        questionType,
+			Required:    question.Required,
+			Options:     options,
+			Placeholder: placeholder,
+			Default:     question.Default,
+		})
+	}
+
+	return questions, nil
+}
+
+func parseIssueRespondEntries(entries []string) (map[string]any, error) {
+	if len(entries) == 0 {
+		return nil, errors.New("at least one --response is required")
+	}
+
+	responses := make(map[string]any, len(entries))
+	for _, entry := range entries {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid --response value %q; expected question_id=value", entry)
+		}
+		key := strings.TrimSpace(parts[0])
+		if key == "" {
+			return nil, fmt.Errorf("invalid --response value %q: question id is required", entry)
+		}
+		if _, exists := responses[key]; exists {
+			return nil, fmt.Errorf("duplicate response key: %s", key)
+		}
+
+		rawValue := strings.TrimSpace(parts[1])
+		if rawValue == "" {
+			return nil, fmt.Errorf("invalid --response value %q: response value is required", entry)
+		}
+
+		var value any
+		if err := json.Unmarshal([]byte(rawValue), &value); err != nil {
+			value = rawValue
+		}
+		responses[key] = value
+	}
+
+	return responses, nil
+}
+
+func isSupportedQuestionType(questionType string) bool {
+	switch questionType {
+	case "text", "textarea", "boolean", "select", "multiselect", "number", "date":
+		return true
+	default:
+		return false
+	}
 }
 
 func prompt(label string) string {

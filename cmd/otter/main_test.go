@@ -1,10 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -24,6 +24,7 @@ func TestParsePositiveInt(t *testing.T) {
 		{name: "negative-like", input: "-1", wantErr: true},
 		{name: "alpha", input: "abc", wantErr: true},
 		{name: "empty", input: "", wantErr: true},
+		{name: "overflow", input: "99999999999999999999", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -54,62 +55,51 @@ func TestResolveIssueIDUUIDBypassesLookup(t *testing.T) {
 	}
 }
 
-func TestResolveOptionalParentIssueID(t *testing.T) {
-	t.Run("empty parent reference", func(t *testing.T) {
-		parentID, err := resolveOptionalParentIssueID(nil, "", "")
-		if err != nil {
-			t.Fatalf("resolveOptionalParentIssueID() error = %v", err)
-		}
-		if parentID != nil {
-			t.Fatalf("resolveOptionalParentIssueID() = %v, want nil", *parentID)
-		}
-	})
-
-	t.Run("numeric parent requires project", func(t *testing.T) {
-		client := &ottercli.Client{}
-		_, err := resolveOptionalParentIssueID(client, "", "42")
-		if err == nil {
-			t.Fatalf("expected error for numeric parent without project")
-		}
-		if !strings.Contains(err.Error(), "--project is required") {
-			t.Fatalf("error = %q, want contains --project is required", err.Error())
-		}
-	})
-
-	t.Run("numeric parent resolves via issue lookup", func(t *testing.T) {
-		var requestedIssueNumber string
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case r.Method == http.MethodGet && r.URL.Path == "/api/projects":
-				_, _ = w.Write([]byte(`{"projects":[{"id":"project-1","name":"Project 1","status":"active"}],"total":1}`))
-			case r.Method == http.MethodGet && r.URL.Path == "/api/issues":
-				requestedIssueNumber = r.URL.Query().Get("issue_number")
-				_, _ = w.Write([]byte(`{"items":[{"id":"issue-42","project_id":"project-1","issue_number":42,"title":"Issue 42","state":"open","origin":"local","approval_state":"draft","work_status":"queued","priority":"P2"}],"total":1}`))
-			default:
-				w.WriteHeader(http.StatusNotFound)
-				_, _ = w.Write([]byte(`{"error":"not found"}`))
+func TestResolveIssueIDUsesIssueNumberQueryFilter(t *testing.T) {
+	var requestedIssueNumber string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/projects":
+			_, _ = w.Write([]byte(`{"projects":[{"id":"project-1","name":"Project One","slug":"project-one"}],"total":1}`))
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues":
+			values, err := url.ParseQuery(r.URL.RawQuery)
+			if err != nil {
+				t.Fatalf("failed to parse query: %v", err)
 			}
-		}))
-		defer server.Close()
+			requestedIssueNumber = values.Get("issue_number")
+			if requestedIssueNumber == "42" {
+				_, _ = w.Write([]byte(`{"items":[{"id":"issue-42","project_id":"project-1","issue_number":42,"title":"Issue 42","state":"open","origin":"local","approval_state":"draft","work_status":"queued","priority":"P2"}],"total":1}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+			return
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+			return
+		}
+	}))
+	defer srv.Close()
 
-		client := &ottercli.Client{
-			BaseURL: server.URL,
-			Token:   "token-1",
-			OrgID:   "org-1",
-			HTTP:    server.Client(),
-		}
+	client := &ottercli.Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
 
-		parentID, err := resolveOptionalParentIssueID(client, "project-1", "42")
-		if err != nil {
-			t.Fatalf("resolveOptionalParentIssueID() error = %v", err)
-		}
-		if parentID == nil || *parentID != "issue-42" {
-			t.Fatalf("resolveOptionalParentIssueID() = %#v, want issue-42", parentID)
-		}
-		if requestedIssueNumber != "42" {
-			t.Fatalf("issue_number query = %q, want 42", requestedIssueNumber)
-		}
-	})
+	got, err := resolveIssueID(client, "project-1", "42")
+	if err != nil {
+		t.Fatalf("resolveIssueID() error = %v", err)
+	}
+	if got != "issue-42" {
+		t.Fatalf("resolveIssueID() = %q, want issue-42", got)
+	}
+	if requestedIssueNumber != "42" {
+		t.Fatalf("issue_number query = %q, want 42", requestedIssueNumber)
+	}
 }
 
 func TestFriendlyAuthErrorMessage(t *testing.T) {
@@ -276,257 +266,85 @@ func TestProjectCreateSplitArgsSupportsInterspersedFlags(t *testing.T) {
 	}
 }
 
-func TestResolveIssueCommentAuthorRef(t *testing.T) {
-	tests := []struct {
-		name            string
-		explicitAuthor  string
-		envAuthor       string
-		whoamiName      string
-		whoamiStatus    int
-		wantAgentID     string
-		wantErrContains string
-		wantWhoamiCalls int
-	}{
-		{
-			name:            "explicit author takes precedence",
-			explicitAuthor:  "stone",
-			envAuthor:       "ivy",
-			whoamiName:      "Sam User",
-			whoamiStatus:    http.StatusOK,
-			wantAgentID:     "agent-stone",
-			wantWhoamiCalls: 0,
-		},
-		{
-			name:            "env author used when explicit missing",
-			envAuthor:       "ivy",
-			whoamiName:      "Sam User",
-			whoamiStatus:    http.StatusOK,
-			wantAgentID:     "agent-ivy",
-			wantWhoamiCalls: 0,
-		},
-		{
-			name:            "whoami fallback when explicit and env missing",
-			whoamiName:      "Sam User",
-			whoamiStatus:    http.StatusOK,
-			wantAgentID:     "agent-sam",
-			wantWhoamiCalls: 1,
-		},
-		{
-			name:            "missing all author sources returns clear error",
-			whoamiName:      "",
-			whoamiStatus:    http.StatusOK,
-			wantErrContains: "comment requires --author or OTTER_AGENT_ID",
-			wantWhoamiCalls: 1,
-		},
-		{
-			name:            "whoami request failure still returns clear error",
-			whoamiStatus:    http.StatusInternalServerError,
-			wantErrContains: "comment requires --author or OTTER_AGENT_ID",
-			wantWhoamiCalls: 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			whoamiCalls := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/api/agents":
-					w.Header().Set("Content-Type", "application/json")
-					_, _ = w.Write([]byte(`{"agents":[{"id":"agent-stone","name":"Stone","slug":"stone"},{"id":"agent-ivy","name":"Ivy","slug":"ivy"},{"id":"agent-sam","name":"Sam User","slug":"sam-user"}]}`))
-				case "/api/auth/validate":
-					whoamiCalls++
-					if tt.whoamiStatus >= 400 {
-						w.WriteHeader(tt.whoamiStatus)
-						_, _ = w.Write([]byte(`{"error":"validation failed"}`))
-						return
-					}
-					w.Header().Set("Content-Type", "application/json")
-					_, _ = w.Write([]byte(`{"valid":true,"user":{"id":"user-1","name":"` + tt.whoamiName + `","email":"sam@example.com"}}`))
-				default:
-					w.WriteHeader(http.StatusNotFound)
-					_, _ = w.Write([]byte(`{"error":"not found"}`))
-				}
-			}))
-			defer server.Close()
-
-			client := &ottercli.Client{
-				BaseURL: server.URL,
-				Token:   "token-1",
-				OrgID:   "org-1",
-				HTTP:    server.Client(),
-			}
-
-			agentID, err := resolveIssueCommentAuthorRef(client, tt.explicitAuthor, tt.envAuthor)
-			if tt.wantErrContains != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tt.wantErrContains)
-				}
-				if !strings.Contains(err.Error(), tt.wantErrContains) {
-					t.Fatalf("error = %q, want contains %q", err.Error(), tt.wantErrContains)
-				}
-			} else if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if tt.wantErrContains == "" && agentID != tt.wantAgentID {
-				t.Fatalf("agentID = %q, want %q", agentID, tt.wantAgentID)
-			}
-			if whoamiCalls != tt.wantWhoamiCalls {
-				t.Fatalf("whoamiCalls = %d, want %d", whoamiCalls, tt.wantWhoamiCalls)
-			}
-		})
-	}
-}
-
-func TestIssueViewOutputResolvesOwnerName(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agents" {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"error":"not found"}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"agents":[{"id":"agent-1","name":"Stone","slug":"stone"}]}`))
-	}))
-	defer server.Close()
-
-	client := &ottercli.Client{
-		BaseURL: server.URL,
-		Token:   "token-1",
-		OrgID:   "org-1",
-		HTTP:    server.Client(),
-	}
-
-	ownerID := "agent-1"
-	body := "Details"
-	output := issueViewOutput(client, ottercli.Issue{
-		ID:           "issue-1",
-		IssueNumber:  7,
-		Title:        "View output test",
-		State:        "open",
-		WorkStatus:   "queued",
-		Priority:     "P2",
-		OwnerAgentID: &ownerID,
-		Body:         &body,
-	}, false)
-
-	if !strings.Contains(output, "Owner: Stone") {
-		t.Fatalf("expected owner name in output, got:\n%s", output)
-	}
-	if strings.Contains(output, "Owner: agent-1") {
-		t.Fatalf("expected owner id to be resolved, got:\n%s", output)
-	}
-}
-
-func TestIssueViewOutputJSON(t *testing.T) {
-	ownerID := "agent-1"
-	output := issueViewOutput(nil, ottercli.Issue{
-		ID:           "issue-1",
-		ProjectID:    "project-1",
-		IssueNumber:  8,
-		Title:        "JSON output test",
-		State:        "open",
-		WorkStatus:   "queued",
-		Priority:     "P1",
-		OwnerAgentID: &ownerID,
-	}, true)
-
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(output), &payload); err != nil {
-		t.Fatalf("expected valid JSON output, got error: %v\noutput: %s", err, output)
-	}
-	if payload["id"] != "issue-1" {
-		t.Fatalf("payload id = %#v, want issue-1", payload["id"])
-	}
-	if payload["work_status"] != "queued" {
-		t.Fatalf("payload work_status = %#v, want queued", payload["work_status"])
-	}
-}
-
-func TestLabelStringSliceFlagCollectsValues(t *testing.T) {
-	var values stringSliceFlag
-	if err := values.Set("bug"); err != nil {
-		t.Fatalf("Set() error = %v", err)
-	}
-	if err := values.Set("  backend  "); err != nil {
-		t.Fatalf("Set() error = %v", err)
-	}
-	if err := values.Set(" "); err != nil {
-		t.Fatalf("Set() error = %v", err)
-	}
-	if len(values) != 2 {
-		t.Fatalf("len(values) = %d, want 2", len(values))
-	}
-	if values[0] != "bug" || values[1] != "backend" {
-		t.Fatalf("values = %#v", values)
-	}
-}
-
-func TestLabelResolveLabelFilterIDs(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/labels" {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"error":"not found"}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"labels":[{"id":"11111111-1111-1111-1111-111111111111","name":"bug","color":"#ef4444"},{"id":"22222222-2222-2222-2222-222222222222","name":"backend","color":"#22c55e"}]}`))
-	}))
-	defer server.Close()
-
-	client := &ottercli.Client{
-		BaseURL: server.URL,
-		Token:   "token-1",
-		OrgID:   "org-1",
-		HTTP:    server.Client(),
-	}
-
-	ids, err := resolveLabelFilterIDs(client, []string{"bug", "backend", "bug"})
+func TestHandleIssueAskParsesQuestionSpecs(t *testing.T) {
+	questions, err := parseIssueAskQuestions([]string{
+		`{"id":"q1","text":"Realtime transport?","type":"select","required":true,"options":["WebSocket","Polling"]}`,
+		`{"id":"q2","text":"Target latency","type":"number","default":1.5}`,
+	})
 	if err != nil {
-		t.Fatalf("resolveLabelFilterIDs() error = %v", err)
+		t.Fatalf("parseIssueAskQuestions() error = %v", err)
 	}
-	if len(ids) != 2 {
-		t.Fatalf("len(ids) = %d, want 2", len(ids))
+	if len(questions) != 2 {
+		t.Fatalf("parseIssueAskQuestions() len = %d, want 2", len(questions))
 	}
-	if ids[0] != "11111111-1111-1111-1111-111111111111" || ids[1] != "22222222-2222-2222-2222-222222222222" {
-		t.Fatalf("ids = %#v", ids)
+	if questions[0].ID != "q1" || questions[0].Type != "select" || len(questions[0].Options) != 2 {
+		t.Fatalf("unexpected first question payload: %#v", questions[0])
+	}
+	if questions[1].ID != "q2" || questions[1].Type != "number" {
+		t.Fatalf("unexpected second question payload: %#v", questions[1])
 	}
 }
 
-func TestLabelResolveLabelForAddAutoCreate(t *testing.T) {
-	listCalls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/labels":
-			listCalls++
-			if listCalls == 1 {
-				_, _ = w.Write([]byte(`{"labels":[]}`))
-				return
-			}
-			_, _ = w.Write([]byte(`{"labels":[{"id":"33333333-3333-3333-3333-333333333333","name":"new-label","color":"#6b7280"}]}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/api/labels":
-			_, _ = w.Write([]byte(`{"id":"33333333-3333-3333-3333-333333333333","name":"new-label","color":"#6b7280"}`))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"error":"not found"}`))
-		}
-	}))
-	defer server.Close()
-
-	client := &ottercli.Client{
-		BaseURL: server.URL,
-		Token:   "token-1",
-		OrgID:   "org-1",
-		HTTP:    server.Client(),
+func TestHandleIssueAskRejectsMalformedQuestionSpecs(t *testing.T) {
+	_, err := parseIssueAskQuestions([]string{`{"id":"q1","text":"Bad"}`})
+	if err == nil || !strings.Contains(err.Error(), "type is required") {
+		t.Fatalf("expected type validation error, got %v", err)
 	}
 
-	label, err := resolveLabelForAdd(client, "new-label", "")
+	_, err = parseIssueAskQuestions([]string{`{"id":"q1","text":"Choose","type":"select"}`})
+	if err == nil || !strings.Contains(err.Error(), "requires options") {
+		t.Fatalf("expected options validation error, got %v", err)
+	}
+
+	_, err = parseIssueAskQuestions([]string{`{not-json}`})
+	if err == nil || !strings.Contains(err.Error(), "invalid --question") {
+		t.Fatalf("expected invalid json error, got %v", err)
+	}
+}
+
+func TestHandleIssueRespondParsesKeyedResponses(t *testing.T) {
+	responses, err := parseIssueRespondEntries([]string{
+		`q1="WebSocket"`,
+		`q2=true`,
+		`q3=["Desktop web","Mobile web"]`,
+		`q4=1.5`,
+		`q5=free-form text`,
+	})
 	if err != nil {
-		t.Fatalf("resolveLabelForAdd() error = %v", err)
+		t.Fatalf("parseIssueRespondEntries() error = %v", err)
 	}
-	if label.ID != "33333333-3333-3333-3333-333333333333" {
-		t.Fatalf("label.ID = %q", label.ID)
+
+	if responses["q1"] != "WebSocket" {
+		t.Fatalf("q1 = %#v, want %q", responses["q1"], "WebSocket")
+	}
+	if responses["q2"] != true {
+		t.Fatalf("q2 = %#v, want true", responses["q2"])
+	}
+	if responses["q4"] != 1.5 {
+		t.Fatalf("q4 = %#v, want 1.5", responses["q4"])
+	}
+	if responses["q5"] != "free-form text" {
+		t.Fatalf("q5 = %#v, want free-form text", responses["q5"])
+	}
+	rawList, ok := responses["q3"].([]interface{})
+	if !ok || len(rawList) != 2 {
+		t.Fatalf("q3 = %#v, want 2-entry list", responses["q3"])
+	}
+}
+
+func TestHandleIssueRespondRejectsMalformedResponses(t *testing.T) {
+	_, err := parseIssueRespondEntries([]string{`=true`})
+	if err == nil || !strings.Contains(err.Error(), "question id is required") {
+		t.Fatalf("expected missing id error, got %v", err)
+	}
+
+	_, err = parseIssueRespondEntries([]string{`q1=`})
+	if err == nil || !strings.Contains(err.Error(), "response value is required") {
+		t.Fatalf("expected missing value error, got %v", err)
+	}
+
+	_, err = parseIssueRespondEntries([]string{`q1=true`, `q1=false`})
+	if err == nil || !strings.Contains(err.Error(), "duplicate response key") {
+		t.Fatalf("expected duplicate key error, got %v", err)
 	}
 }

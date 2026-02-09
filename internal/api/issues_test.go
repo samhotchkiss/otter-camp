@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -21,14 +22,10 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router := chi.NewRouter()
 	router.With(middleware.OptionalWorkspace).Get("/api/issues", handler.List)
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}", handler.Get)
-	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/sub-issues", handler.CreateSubIssuesBatch)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/comments", handler.CreateComment)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approval-state", handler.TransitionApprovalState)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/approve", handler.Approve)
 	router.With(middleware.OptionalWorkspace).Patch("/api/issues/{id}", handler.PatchIssue)
-	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/claim", handler.ClaimIssue)
-	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/release", handler.ReleaseIssue)
-	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/reviewer-decision", handler.ReviewerDecision)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/review/save", handler.SaveReview)
 	router.With(middleware.OptionalWorkspace).Post("/api/issues/{id}/review/address", handler.AddressReview)
 	router.With(middleware.OptionalWorkspace).Get("/api/issues/{id}/review/changes", handler.ReviewChanges)
@@ -38,42 +35,11 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Delete("/api/issues/{id}/participants/{agentID}", handler.RemoveParticipant)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues", handler.CreateIssue)
 	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues/link", handler.CreateLinkedIssue)
-	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/issues/queue", handler.RoleQueue)
-	router.With(middleware.OptionalWorkspace).Post("/api/projects/{id}/issues/queue/claim-next", handler.ClaimNextQueueIssue)
-	router.With(middleware.OptionalWorkspace).Get("/api/projects/{id}/issue-role-assignments", handler.ListRoleAssignments)
-	router.With(middleware.OptionalWorkspace).Put("/api/projects/{id}/issue-role-assignments/{role}", handler.UpsertRoleAssignment)
 	return router
 }
 
 func issueTestCtx(orgID string) context.Context {
 	return context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
-}
-
-func TestResolveIssueQueueRoleWorkStatus(t *testing.T) {
-	testCases := []struct {
-		name       string
-		role       string
-		wantStatus string
-		wantErr    bool
-	}{
-		{name: "planner", role: "planner", wantStatus: store.IssueWorkStatusReady},
-		{name: "worker", role: "worker", wantStatus: store.IssueWorkStatusReadyForWork},
-		{name: "reviewer", role: "reviewer", wantStatus: store.IssueWorkStatusReview},
-		{name: "trim and case normalize", role: "  Worker  ", wantStatus: store.IssueWorkStatusReadyForWork},
-		{name: "invalid role", role: "observer", wantErr: true},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveIssueQueueRoleWorkStatus(tc.role)
-			if tc.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, tc.wantStatus, got)
-		})
-	}
 }
 
 func TestIssuesHandlerListAndGetIncludeOwnerParticipantsAndComments(t *testing.T) {
@@ -155,98 +121,44 @@ func TestIssuesHandlerListAndGetIncludeOwnerParticipantsAndComments(t *testing.T
 	require.NotEmpty(t, detail.Issue.LastActivityAt)
 }
 
-func TestProjectIssuesHandlerLabelFilter(t *testing.T) {
+func TestIssuesHandlerListFiltersByIssueNumber(t *testing.T) {
 	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-label-filter-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Label Filter API Project")
+	orgID := insertMessageTestOrganization(t, db, "issues-api-list-number-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Number Filter Project")
 
 	issueStore := store.NewProjectIssueStore(db)
-	labelStore := store.NewLabelStore(db)
 	ctx := issueTestCtx(orgID)
-
-	issueA, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+	_, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
 		ProjectID: projectID,
-		Title:     "Issue Label A",
+		Title:     "Issue One",
 		Origin:    "local",
 	})
 	require.NoError(t, err)
-	issueB, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+	second, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
 		ProjectID: projectID,
-		Title:     "Issue Label B",
+		Title:     "Issue Two",
 		Origin:    "local",
 	})
 	require.NoError(t, err)
-	issueC, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID: projectID,
-		Title:     "Issue Label C",
-		Origin:    "local",
-	})
-	require.NoError(t, err)
-
-	labelBug, err := labelStore.Create(ctx, "bug", "#ef4444")
-	require.NoError(t, err)
-	labelBackend, err := labelStore.Create(ctx, "backend", "#22c55e")
-	require.NoError(t, err)
-	labelOps, err := labelStore.Create(ctx, "ops", "#3b82f6")
-	require.NoError(t, err)
-
-	require.NoError(t, labelStore.AddToIssue(ctx, issueA.ID, labelBug.ID))
-	require.NoError(t, labelStore.AddToIssue(ctx, issueA.ID, labelBackend.ID))
-	require.NoError(t, labelStore.AddToIssue(ctx, issueB.ID, labelBug.ID))
-	require.NoError(t, labelStore.AddToIssue(ctx, issueC.ID, labelOps.ID))
 
 	handler := &IssuesHandler{IssueStore: issueStore}
 	router := newIssueTestRouter(handler)
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/issues?org_id="+orgID+"&project_id="+projectID, nil)
+	listReq := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/issues?org_id=%s&project_id=%s&issue_number=%d", orgID, projectID, second.IssueNumber),
+		nil,
+	)
 	listRec := httptest.NewRecorder()
 	router.ServeHTTP(listRec, listReq)
 	require.Equal(t, http.StatusOK, listRec.Code)
 
 	var listResp issueListResponse
 	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
-	require.Len(t, listResp.Items, 3)
-	labelsByIssue := make(map[string]int, len(listResp.Items))
-	for _, item := range listResp.Items {
-		labelsByIssue[item.ID] = len(item.Labels)
-	}
-	require.Equal(t, 2, labelsByIssue[issueA.ID])
-	require.Equal(t, 1, labelsByIssue[issueB.ID])
-	require.Equal(t, 1, labelsByIssue[issueC.ID])
-
-	filterReq := httptest.NewRequest(
-		http.MethodGet,
-		"/api/issues?org_id="+orgID+"&project_id="+projectID+"&label="+labelBug.ID+"&label="+labelBackend.ID,
-		nil,
-	)
-	filterRec := httptest.NewRecorder()
-	router.ServeHTTP(filterRec, filterReq)
-	require.Equal(t, http.StatusOK, filterRec.Code)
-
-	var filterResp issueListResponse
-	require.NoError(t, json.NewDecoder(filterRec.Body).Decode(&filterResp))
-	require.Len(t, filterResp.Items, 1)
-	require.Equal(t, issueA.ID, filterResp.Items[0].ID)
-	require.Len(t, filterResp.Items[0].Labels, 2)
-
-	invalidReq := httptest.NewRequest(
-		http.MethodGet,
-		"/api/issues?org_id="+orgID+"&project_id="+projectID+"&label=not-a-uuid",
-		nil,
-	)
-	invalidRec := httptest.NewRecorder()
-	router.ServeHTTP(invalidRec, invalidReq)
-	require.Equal(t, http.StatusBadRequest, invalidRec.Code)
-
-	getReq := httptest.NewRequest(http.MethodGet, "/api/issues/"+issueA.ID+"?org_id="+orgID, nil)
-	getRec := httptest.NewRecorder()
-	router.ServeHTTP(getRec, getReq)
-	require.Equal(t, http.StatusOK, getRec.Code)
-
-	var detail issueDetailPayload
-	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&detail))
-	require.Equal(t, issueA.ID, detail.Issue.ID)
-	require.Len(t, detail.Issue.Labels, 2)
+	require.Equal(t, 1, listResp.Total)
+	require.Len(t, listResp.Items, 1)
+	require.Equal(t, second.ID, listResp.Items[0].ID)
+	require.Equal(t, second.IssueNumber, listResp.Items[0].IssueNumber)
 }
 
 func TestIssuesHandlerCommentCreateValidatesAndPersists(t *testing.T) {
@@ -294,6 +206,110 @@ func TestIssuesHandlerCommentCreateValidatesAndPersists(t *testing.T) {
 	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&detail))
 	require.Len(t, detail.Comments, 1)
 	require.Equal(t, "Looks good", detail.Comments[0].Body)
+}
+
+func TestIssuesHandlerGetIncludesQuestionnaires(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-questionnaire-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Questionnaire Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	questionnaireStore := store.NewQuestionnaireStore(db)
+	ctx := issueTestCtx(orgID)
+
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue with questionnaire",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	issueQuestionnaire, err := questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextIssue,
+		ContextID:   issue.ID,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Protocol?","type":"select","options":["WebSocket","Polling"],"required":true}]`),
+	})
+	require.NoError(t, err)
+
+	_, err = questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextProjectChat,
+		ContextID:   projectID,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Ignore","type":"text","required":false}]`),
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		QuestionnaireStore: questionnaireStore,
+	}
+	router := newIssueTestRouter(handler)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/issues/"+issue.ID+"?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	var detail issueDetailPayload
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&detail))
+	require.Len(t, detail.Questionnaires, 1)
+	require.Equal(t, issueQuestionnaire.ID, detail.Questionnaires[0].ID)
+	require.Equal(t, store.QuestionnaireContextIssue, detail.Questionnaires[0].ContextType)
+}
+
+func TestIssuesHandlerQuestionnaireContextIsolation(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-questionnaire-iso-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Questionnaire Isolation Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	questionnaireStore := store.NewQuestionnaireStore(db)
+	ctx := issueTestCtx(orgID)
+
+	issueA, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue A",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+	issueB, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue B",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	_, err = questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextIssue,
+		ContextID:   issueA.ID,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Issue A question","type":"text","required":true}]`),
+	})
+	require.NoError(t, err)
+	_, err = questionnaireStore.Create(ctx, store.CreateQuestionnaireInput{
+		ContextType: store.QuestionnaireContextIssue,
+		ContextID:   issueB.ID,
+		Author:      "Planner",
+		Questions:   json.RawMessage(`[{"id":"q1","text":"Issue B question","type":"text","required":true}]`),
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		QuestionnaireStore: questionnaireStore,
+	}
+	router := newIssueTestRouter(handler)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/issues/"+issueA.ID+"?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	var detail issueDetailPayload
+	require.NoError(t, json.NewDecoder(getRec.Body).Decode(&detail))
+	require.Len(t, detail.Questionnaires, 1)
+	require.Equal(t, issueA.ID, detail.Questionnaires[0].ContextID)
 }
 
 func TestIssuesHandlerPatchIssueUpdatesAndClearsWorkTrackingFields(t *testing.T) {
@@ -356,71 +372,6 @@ func TestIssuesHandlerPatchIssueUpdatesAndClearsWorkTrackingFields(t *testing.T)
 	require.Nil(t, cleared.NextStepDueAt)
 }
 
-func TestIssuesHandlerPatchIssueBranchTracking(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-patch-branch-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Patch Branch Project")
-
-	issueStore := store.NewProjectIssueStore(db)
-	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
-		ProjectID: projectID,
-		Title:     "Branch patchable issue",
-		Origin:    "local",
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{IssueStore: issueStore}
-	router := newIssueTestRouter(handler)
-
-	setReq := httptest.NewRequest(
-		http.MethodPatch,
-		"/api/issues/"+issue.ID+"?org_id="+orgID,
-		bytes.NewReader([]byte(`{"active_branch":"feature/spec-105","last_commit_sha":"abcdef1234567"}`)),
-	)
-	setRec := httptest.NewRecorder()
-	router.ServeHTTP(setRec, setReq)
-	require.Equal(t, http.StatusOK, setRec.Code)
-
-	var updated issueSummaryPayload
-	require.NoError(t, json.NewDecoder(setRec.Body).Decode(&updated))
-	require.NotNil(t, updated.ActiveBranch)
-	require.Equal(t, "feature/spec-105", *updated.ActiveBranch)
-	require.NotNil(t, updated.LastCommitSHA)
-	require.Equal(t, "abcdef1234567", *updated.LastCommitSHA)
-
-	clearReq := httptest.NewRequest(
-		http.MethodPatch,
-		"/api/issues/"+issue.ID+"?org_id="+orgID,
-		bytes.NewReader([]byte(`{"active_branch":"","last_commit_sha":""}`)),
-	)
-	clearRec := httptest.NewRecorder()
-	router.ServeHTTP(clearRec, clearReq)
-	require.Equal(t, http.StatusOK, clearRec.Code)
-
-	var cleared issueSummaryPayload
-	require.NoError(t, json.NewDecoder(clearRec.Body).Decode(&cleared))
-	require.Nil(t, cleared.ActiveBranch)
-	require.Nil(t, cleared.LastCommitSHA)
-
-	invalidBranchReq := httptest.NewRequest(
-		http.MethodPatch,
-		"/api/issues/"+issue.ID+"?org_id="+orgID,
-		bytes.NewReader([]byte(`{"active_branch":"bad branch"}`)),
-	)
-	invalidBranchRec := httptest.NewRecorder()
-	router.ServeHTTP(invalidBranchRec, invalidBranchReq)
-	require.Equal(t, http.StatusBadRequest, invalidBranchRec.Code)
-
-	invalidSHAReq := httptest.NewRequest(
-		http.MethodPatch,
-		"/api/issues/"+issue.ID+"?org_id="+orgID,
-		bytes.NewReader([]byte(`{"last_commit_sha":"123xyz"}`)),
-	)
-	invalidSHARec := httptest.NewRecorder()
-	router.ServeHTTP(invalidSHARec, invalidSHAReq)
-	require.Equal(t, http.StatusBadRequest, invalidSHARec.Code)
-}
-
 func TestIssuesHandlerPatchIssueRejectsInvalidTransitionsAndValues(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-patch-validate-org")
@@ -454,290 +405,6 @@ func TestIssuesHandlerPatchIssueRejectsInvalidTransitionsAndValues(t *testing.T)
 	invalidPriorityRec := httptest.NewRecorder()
 	router.ServeHTTP(invalidPriorityRec, invalidPriorityReq)
 	require.Equal(t, http.StatusBadRequest, invalidPriorityRec.Code)
-}
-
-func TestIssuesHandlerPatchIssueAllowsClosingFromQueuedOrInProgress(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-patch-close-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Patch Close Project")
-
-	issueStore := store.NewProjectIssueStore(db)
-	handler := &IssuesHandler{IssueStore: issueStore}
-	router := newIssueTestRouter(handler)
-
-	testCases := []struct {
-		name           string
-		initialStatus  string
-		expectedStatus string
-	}{
-		{
-			name:           "close from queued",
-			initialStatus:  store.IssueWorkStatusQueued,
-			expectedStatus: store.IssueWorkStatusDone,
-		},
-		{
-			name:           "close from in progress",
-			initialStatus:  store.IssueWorkStatusInProgress,
-			expectedStatus: store.IssueWorkStatusDone,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
-				ProjectID:  projectID,
-				Title:      "Patch close " + tc.name,
-				Origin:     "local",
-				WorkStatus: tc.initialStatus,
-			})
-			require.NoError(t, err)
-
-			req := httptest.NewRequest(
-				http.MethodPatch,
-				"/api/issues/"+issue.ID+"?org_id="+orgID,
-				bytes.NewReader([]byte(`{"state":"closed","work_status":"done"}`)),
-			)
-			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, req)
-			require.Equal(t, http.StatusOK, rec.Code)
-
-			var payload issueSummaryPayload
-			require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-			require.Equal(t, "closed", payload.State)
-			require.Equal(t, tc.expectedStatus, payload.WorkStatus)
-		})
-	}
-}
-
-func TestIssuesHandlerClaimIssue(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-claim-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Claim API Project")
-	agentID := insertMessageTestAgent(t, db, orgID, "issue-claim-api-agent")
-
-	issueStore := store.NewProjectIssueStore(db)
-	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
-		ProjectID:  projectID,
-		Title:      "Claimable issue",
-		Origin:     "local",
-		WorkStatus: store.IssueWorkStatusReadyForWork,
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{IssueStore: issueStore}
-	router := newIssueTestRouter(handler)
-
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+issue.ID+"/claim?org_id="+orgID,
-		bytes.NewReader([]byte(`{"agent_id":"`+agentID+`"}`)),
-	)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	var payload issueSummaryPayload
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.NotNil(t, payload.OwnerAgentID)
-	require.Equal(t, agentID, *payload.OwnerAgentID)
-	require.Equal(t, store.IssueWorkStatusInProgress, payload.WorkStatus)
-
-	participants, err := issueStore.ListParticipants(issueTestCtx(orgID), issue.ID, false)
-	require.NoError(t, err)
-	require.Len(t, participants, 1)
-	require.Equal(t, "owner", participants[0].Role)
-	require.Equal(t, agentID, participants[0].AgentID)
-}
-
-func TestIssuesHandlerReleaseIssue(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-release-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Release API Project")
-	agentID := insertMessageTestAgent(t, db, orgID, "issue-release-api-agent")
-
-	issueStore := store.NewProjectIssueStore(db)
-	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
-		ProjectID:    projectID,
-		Title:        "Releasable issue",
-		Origin:       "local",
-		OwnerAgentID: &agentID,
-		WorkStatus:   store.IssueWorkStatusInProgress,
-	})
-	require.NoError(t, err)
-	_, err = issueStore.AddParticipant(issueTestCtx(orgID), store.AddProjectIssueParticipantInput{
-		IssueID: issue.ID,
-		AgentID: agentID,
-		Role:    "owner",
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{IssueStore: issueStore}
-	router := newIssueTestRouter(handler)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/issues/"+issue.ID+"/release?org_id="+orgID, bytes.NewReader([]byte(`{}`)))
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	var payload issueSummaryPayload
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.Nil(t, payload.OwnerAgentID)
-	require.Equal(t, store.IssueWorkStatusReadyForWork, payload.WorkStatus)
-
-	participants, err := issueStore.ListParticipants(issueTestCtx(orgID), issue.ID, false)
-	require.NoError(t, err)
-	require.Len(t, participants, 0)
-}
-
-func TestIssuesHandlerClaimIssueAndReleaseIssueValidation(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-claim-release-validate-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Claim Release Validate Project")
-	agentID := insertMessageTestAgent(t, db, orgID, "issue-claim-release-validate-agent")
-
-	issueStore := store.NewProjectIssueStore(db)
-	readyIssue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
-		ProjectID:  projectID,
-		Title:      "Ready queue issue",
-		Origin:     "local",
-		WorkStatus: store.IssueWorkStatusReady,
-	})
-	require.NoError(t, err)
-
-	doneIssue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
-		ProjectID:  projectID,
-		Title:      "Done issue",
-		Origin:     "local",
-		WorkStatus: store.IssueWorkStatusDone,
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{IssueStore: issueStore}
-	router := newIssueTestRouter(handler)
-
-	missingAgentReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+readyIssue.ID+"/claim?org_id="+orgID,
-		bytes.NewReader([]byte(`{}`)),
-	)
-	missingAgentRec := httptest.NewRecorder()
-	router.ServeHTTP(missingAgentRec, missingAgentReq)
-	require.Equal(t, http.StatusBadRequest, missingAgentRec.Code)
-
-	notClaimableReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+doneIssue.ID+"/claim?org_id="+orgID,
-		bytes.NewReader([]byte(`{"agent_id":"`+agentID+`"}`)),
-	)
-	notClaimableRec := httptest.NewRecorder()
-	router.ServeHTTP(notClaimableRec, notClaimableReq)
-	require.Equal(t, http.StatusBadRequest, notClaimableRec.Code)
-
-	unclaimedReleaseReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+readyIssue.ID+"/release?org_id="+orgID,
-		bytes.NewReader([]byte(`{}`)),
-	)
-	unclaimedReleaseRec := httptest.NewRecorder()
-	router.ServeHTTP(unclaimedReleaseRec, unclaimedReleaseReq)
-	require.Equal(t, http.StatusBadRequest, unclaimedReleaseRec.Code)
-}
-
-func TestIssuesHandlerReviewerDecision(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-reviewer-decision-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Reviewer Decision API Project")
-	reviewerID := insertMessageTestAgent(t, db, orgID, "issue-reviewer-decision-reviewer")
-
-	issueStore := store.NewProjectIssueStore(db)
-	ctx := issueTestCtx(orgID)
-	makeReviewIssue := func(title string) *store.ProjectIssue {
-		issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-			ProjectID:    projectID,
-			Title:        title,
-			Origin:       "local",
-			OwnerAgentID: &reviewerID,
-			WorkStatus:   store.IssueWorkStatusReview,
-		})
-		require.NoError(t, err)
-		_, err = issueStore.AddParticipant(ctx, store.AddProjectIssueParticipantInput{
-			IssueID: issue.ID,
-			AgentID: reviewerID,
-			Role:    "owner",
-		})
-		require.NoError(t, err)
-		return issue
-	}
-
-	approveIssue := makeReviewIssue("Approve candidate")
-	reworkIssue := makeReviewIssue("Rework candidate")
-	escalateIssue := makeReviewIssue("Escalate candidate")
-
-	handler := &IssuesHandler{IssueStore: issueStore, DB: db}
-	router := newIssueTestRouter(handler)
-
-	approveReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+approveIssue.ID+"/reviewer-decision?org_id="+orgID,
-		bytes.NewReader([]byte(`{"decision":"approve","reason":"LGTM"}`)),
-	)
-	approveRec := httptest.NewRecorder()
-	router.ServeHTTP(approveRec, approveReq)
-	require.Equal(t, http.StatusOK, approveRec.Code)
-
-	var approveResp issueSummaryPayload
-	require.NoError(t, json.NewDecoder(approveRec.Body).Decode(&approveResp))
-	require.Equal(t, store.IssueWorkStatusDone, approveResp.WorkStatus)
-	require.Equal(t, "closed", approveResp.State)
-	require.Nil(t, approveResp.OwnerAgentID)
-
-	reworkReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+reworkIssue.ID+"/reviewer-decision?org_id="+orgID,
-		bytes.NewReader([]byte(`{"decision":"request_changes"}`)),
-	)
-	reworkRec := httptest.NewRecorder()
-	router.ServeHTTP(reworkRec, reworkReq)
-	require.Equal(t, http.StatusOK, reworkRec.Code)
-
-	var reworkResp issueSummaryPayload
-	require.NoError(t, json.NewDecoder(reworkRec.Body).Decode(&reworkResp))
-	require.Equal(t, store.IssueWorkStatusInProgress, reworkResp.WorkStatus)
-	require.Equal(t, "open", reworkResp.State)
-	require.Nil(t, reworkResp.OwnerAgentID)
-
-	escalateReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+escalateIssue.ID+"/reviewer-decision?org_id="+orgID,
-		bytes.NewReader([]byte(`{"decision":"escalate","reason":"needs human decision"}`)),
-	)
-	escalateRec := httptest.NewRecorder()
-	router.ServeHTTP(escalateRec, escalateReq)
-	require.Equal(t, http.StatusOK, escalateRec.Code)
-
-	var escalateResp issueSummaryPayload
-	require.NoError(t, json.NewDecoder(escalateRec.Body).Decode(&escalateResp))
-	require.Equal(t, store.IssueWorkStatusFlagged, escalateResp.WorkStatus)
-	require.Equal(t, "open", escalateResp.State)
-	require.Nil(t, escalateResp.OwnerAgentID)
-
-	invalidDecisionReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+makeReviewIssue("Invalid decision candidate").ID+"/reviewer-decision?org_id="+orgID,
-		bytes.NewReader([]byte(`{"decision":"ship_it"}`)),
-	)
-	invalidDecisionRec := httptest.NewRecorder()
-	router.ServeHTTP(invalidDecisionRec, invalidDecisionReq)
-	require.Equal(t, http.StatusBadRequest, invalidDecisionRec.Code)
-
-	missingDecisionReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+makeReviewIssue("Missing decision candidate").ID+"/reviewer-decision?org_id="+orgID,
-		bytes.NewReader([]byte(`{}`)),
-	)
-	missingDecisionRec := httptest.NewRecorder()
-	router.ServeHTTP(missingDecisionRec, missingDecisionReq)
-	require.Equal(t, http.StatusBadRequest, missingDecisionRec.Code)
 }
 
 func TestIssuesHandlerListSupportsOwnerWorkStatusAndPriorityFilters(t *testing.T) {
@@ -798,477 +465,6 @@ func TestIssuesHandlerListSupportsOwnerWorkStatusAndPriorityFilters(t *testing.T
 	invalidFilterRec := httptest.NewRecorder()
 	router.ServeHTTP(invalidFilterRec, invalidFilterReq)
 	require.Equal(t, http.StatusBadRequest, invalidFilterRec.Code)
-}
-
-func TestIssuesHandlerCreateIssueSupportsParentIssueID(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-create-parent-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Create Parent Project")
-
-	issueStore := store.NewProjectIssueStore(db)
-	parent, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
-		ProjectID: projectID,
-		Title:     "Parent issue",
-		Origin:    "local",
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{
-		IssueStore:   issueStore,
-		ProjectStore: store.NewProjectStore(db),
-	}
-	router := newIssueTestRouter(handler)
-
-	body := `{
-		"title":"Child issue",
-		"parent_issue_id":"` + parent.ID + `",
-		"work_status":"ready_for_work"
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/issues?org_id="+orgID, bytes.NewReader([]byte(body)))
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusCreated, rec.Code)
-
-	var summary issueSummaryPayload
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&summary))
-	require.NotNil(t, summary.ParentIssueID)
-	require.Equal(t, parent.ID, *summary.ParentIssueID)
-	require.Equal(t, store.IssueWorkStatusReadyForWork, summary.WorkStatus)
-}
-
-func TestIssuesHandlerCreateSubIssuesBatch(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-sub-batch-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Sub Batch API Project")
-
-	issueStore := store.NewProjectIssueStore(db)
-	parent, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
-		ProjectID: projectID,
-		Title:     "Parent issue",
-		Origin:    "local",
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{IssueStore: issueStore}
-	router := newIssueTestRouter(handler)
-
-	reqBody := `{
-		"items":[
-			{"title":"Batch child 1","body":"First child","priority":"P1","work_status":"ready_for_work"},
-			{"title":"Batch child 2"}
-		]
-	}`
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+parent.ID+"/sub-issues?org_id="+orgID,
-		bytes.NewReader([]byte(reqBody)),
-	)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusCreated, rec.Code)
-
-	var resp issueListResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	require.Len(t, resp.Items, 2)
-	require.Equal(t, "Batch child 1", resp.Items[0].Title)
-	require.NotNil(t, resp.Items[0].ParentIssueID)
-	require.Equal(t, parent.ID, *resp.Items[0].ParentIssueID)
-	require.Equal(t, store.IssuePriorityP1, resp.Items[0].Priority)
-	require.Equal(t, store.IssueWorkStatusReadyForWork, resp.Items[0].WorkStatus)
-	require.Equal(t, "Batch child 2", resp.Items[1].Title)
-	require.NotNil(t, resp.Items[1].ParentIssueID)
-	require.Equal(t, parent.ID, *resp.Items[1].ParentIssueID)
-}
-
-func TestIssuesHandlerCreateSubIssuesBatchValidatesAndAvoidsPartialWrites(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-sub-batch-validate-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Sub Batch Validate API Project")
-
-	issueStore := store.NewProjectIssueStore(db)
-	parent, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
-		ProjectID: projectID,
-		Title:     "Parent issue",
-		Origin:    "local",
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{IssueStore: issueStore}
-	router := newIssueTestRouter(handler)
-
-	invalidReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+parent.ID+"/sub-issues?org_id="+orgID,
-		bytes.NewReader([]byte(`{"items":[{"title":"Valid child"},{"title":"   "}]}`)),
-	)
-	invalidRec := httptest.NewRecorder()
-	router.ServeHTTP(invalidRec, invalidReq)
-	require.Equal(t, http.StatusBadRequest, invalidRec.Code)
-
-	parentFilter := parent.ID
-	children, err := issueStore.ListIssues(issueTestCtx(orgID), store.ProjectIssueFilter{
-		ProjectID:     projectID,
-		ParentIssueID: &parentFilter,
-	})
-	require.NoError(t, err)
-	require.Len(t, children, 0)
-}
-
-func TestIssuesHandlerListSupportsParentIssueFilter(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-list-parent-filter-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue List Parent Filter Project")
-
-	issueStore := store.NewProjectIssueStore(db)
-	ctx := issueTestCtx(orgID)
-	parent, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID: projectID,
-		Title:     "Parent issue",
-		Origin:    "local",
-	})
-	require.NoError(t, err)
-
-	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID:     projectID,
-		Title:         "Child A",
-		Origin:        "local",
-		ParentIssueID: &parent.ID,
-	})
-	require.NoError(t, err)
-
-	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID:     projectID,
-		Title:         "Child B",
-		Origin:        "local",
-		ParentIssueID: &parent.ID,
-	})
-	require.NoError(t, err)
-
-	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID: projectID,
-		Title:     "Standalone",
-		Origin:    "local",
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{IssueStore: issueStore}
-	router := newIssueTestRouter(handler)
-
-	req := httptest.NewRequest(
-		http.MethodGet,
-		"/api/issues?org_id="+orgID+"&project_id="+projectID+"&parent_issue_id="+parent.ID,
-		nil,
-	)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	var response issueListResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&response))
-	require.Len(t, response.Items, 2)
-	for _, item := range response.Items {
-		require.NotNil(t, item.ParentIssueID)
-		require.Equal(t, parent.ID, *item.ParentIssueID)
-	}
-}
-
-func TestIssuesHandlerRoleQueueReturnsRoleMappedStatuses(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-role-queue-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Role Queue Project")
-
-	issueStore := store.NewProjectIssueStore(db)
-	ctx := issueTestCtx(orgID)
-	parent, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID:  projectID,
-		Title:      "Planner parent",
-		Origin:     "local",
-		WorkStatus: store.IssueWorkStatusReady,
-	})
-	require.NoError(t, err)
-
-	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID:     projectID,
-		Title:         "Planner child",
-		Origin:        "local",
-		ParentIssueID: &parent.ID,
-		WorkStatus:    store.IssueWorkStatusReady,
-	})
-	require.NoError(t, err)
-	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID:  projectID,
-		Title:      "Worker issue",
-		Origin:     "local",
-		WorkStatus: store.IssueWorkStatusReadyForWork,
-	})
-	require.NoError(t, err)
-	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID:  projectID,
-		Title:      "Reviewer issue",
-		Origin:     "local",
-		WorkStatus: store.IssueWorkStatusReview,
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{IssueStore: issueStore}
-	router := newIssueTestRouter(handler)
-
-	plannerReq := httptest.NewRequest(
-		http.MethodGet,
-		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID+"&role=planner&limit=10",
-		nil,
-	)
-	plannerRec := httptest.NewRecorder()
-	router.ServeHTTP(plannerRec, plannerReq)
-	require.Equal(t, http.StatusOK, plannerRec.Code)
-
-	var plannerResp issueListResponse
-	require.NoError(t, json.NewDecoder(plannerRec.Body).Decode(&plannerResp))
-	require.Len(t, plannerResp.Items, 2)
-	for _, item := range plannerResp.Items {
-		require.Equal(t, store.IssueWorkStatusReady, item.WorkStatus)
-	}
-	require.Equal(t, "Planner child", plannerResp.Items[0].Title)
-	require.NotNil(t, plannerResp.Items[0].ParentIssueID)
-	require.Equal(t, parent.ID, *plannerResp.Items[0].ParentIssueID)
-
-	workerReq := httptest.NewRequest(
-		http.MethodGet,
-		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID+"&role=worker",
-		nil,
-	)
-	workerRec := httptest.NewRecorder()
-	router.ServeHTTP(workerRec, workerReq)
-	require.Equal(t, http.StatusOK, workerRec.Code)
-
-	var workerResp issueListResponse
-	require.NoError(t, json.NewDecoder(workerRec.Body).Decode(&workerResp))
-	require.Len(t, workerResp.Items, 1)
-	require.Equal(t, "Worker issue", workerResp.Items[0].Title)
-	require.Equal(t, store.IssueWorkStatusReadyForWork, workerResp.Items[0].WorkStatus)
-
-	reviewerReq := httptest.NewRequest(
-		http.MethodGet,
-		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID+"&role=reviewer",
-		nil,
-	)
-	reviewerRec := httptest.NewRecorder()
-	router.ServeHTTP(reviewerRec, reviewerReq)
-	require.Equal(t, http.StatusOK, reviewerRec.Code)
-
-	var reviewerResp issueListResponse
-	require.NoError(t, json.NewDecoder(reviewerRec.Body).Decode(&reviewerResp))
-	require.Len(t, reviewerResp.Items, 1)
-	require.Equal(t, "Reviewer issue", reviewerResp.Items[0].Title)
-	require.Equal(t, store.IssueWorkStatusReview, reviewerResp.Items[0].WorkStatus)
-}
-
-func TestIssuesHandlerRoleQueueValidatesRoleAndLimit(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-role-queue-validate-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Role Queue Validate Project")
-
-	handler := &IssuesHandler{IssueStore: store.NewProjectIssueStore(db)}
-	router := newIssueTestRouter(handler)
-
-	missingRoleReq := httptest.NewRequest(
-		http.MethodGet,
-		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID,
-		nil,
-	)
-	missingRoleRec := httptest.NewRecorder()
-	router.ServeHTTP(missingRoleRec, missingRoleReq)
-	require.Equal(t, http.StatusBadRequest, missingRoleRec.Code)
-
-	invalidRoleReq := httptest.NewRequest(
-		http.MethodGet,
-		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID+"&role=invalid",
-		nil,
-	)
-	invalidRoleRec := httptest.NewRecorder()
-	router.ServeHTTP(invalidRoleRec, invalidRoleReq)
-	require.Equal(t, http.StatusBadRequest, invalidRoleRec.Code)
-
-	invalidLimitReq := httptest.NewRequest(
-		http.MethodGet,
-		"/api/projects/"+projectID+"/issues/queue?org_id="+orgID+"&role=planner&limit=0",
-		nil,
-	)
-	invalidLimitRec := httptest.NewRecorder()
-	router.ServeHTTP(invalidLimitRec, invalidLimitReq)
-	require.Equal(t, http.StatusBadRequest, invalidLimitRec.Code)
-}
-
-func TestIssuesHandlerClaimNextQueueIssue(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-claim-next-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Claim Next API Project")
-	agentID := insertMessageTestAgent(t, db, orgID, "issue-claim-next-api-agent")
-
-	issueStore := store.NewProjectIssueStore(db)
-	ctx := issueTestCtx(orgID)
-	first, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID:  projectID,
-		Title:      "First worker queue issue",
-		Origin:     "local",
-		WorkStatus: store.IssueWorkStatusReadyForWork,
-		Priority:   store.IssuePriorityP0,
-	})
-	require.NoError(t, err)
-	_, err = issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID:  projectID,
-		Title:      "Second worker queue issue",
-		Origin:     "local",
-		WorkStatus: store.IssueWorkStatusReadyForWork,
-		Priority:   store.IssuePriorityP1,
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{IssueStore: issueStore}
-	router := newIssueTestRouter(handler)
-
-	claimReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/projects/"+projectID+"/issues/queue/claim-next?org_id="+orgID,
-		bytes.NewReader([]byte(`{"role":"worker","agent_id":"`+agentID+`"}`)),
-	)
-	claimRec := httptest.NewRecorder()
-	router.ServeHTTP(claimRec, claimReq)
-	require.Equal(t, http.StatusOK, claimRec.Code)
-
-	var claimResp issueSummaryPayload
-	require.NoError(t, json.NewDecoder(claimRec.Body).Decode(&claimResp))
-	require.Equal(t, first.ID, claimResp.ID)
-	require.NotNil(t, claimResp.OwnerAgentID)
-	require.Equal(t, agentID, *claimResp.OwnerAgentID)
-	require.Equal(t, store.IssueWorkStatusInProgress, claimResp.WorkStatus)
-
-	participants, err := issueStore.ListParticipants(issueTestCtx(orgID), first.ID, false)
-	require.NoError(t, err)
-	require.Len(t, participants, 1)
-	require.Equal(t, "owner", participants[0].Role)
-	require.Equal(t, agentID, participants[0].AgentID)
-
-	claimAgainReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/projects/"+projectID+"/issues/queue/claim-next?org_id="+orgID,
-		bytes.NewReader([]byte(`{"role":"reviewer","agent_id":"`+agentID+`"}`)),
-	)
-	claimAgainRec := httptest.NewRecorder()
-	router.ServeHTTP(claimAgainRec, claimAgainReq)
-	require.Equal(t, http.StatusNotFound, claimAgainRec.Code)
-
-	invalidReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/projects/"+projectID+"/issues/queue/claim-next?org_id="+orgID,
-		bytes.NewReader([]byte(`{"role":"invalid","agent_id":"`+agentID+`"}`)),
-	)
-	invalidRec := httptest.NewRecorder()
-	router.ServeHTTP(invalidRec, invalidReq)
-	require.Equal(t, http.StatusBadRequest, invalidRec.Code)
-}
-
-func TestIssueRoleAssignmentsHandler_UpsertAndList(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-role-assignment-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Role Assignment API Project")
-	plannerID := insertMessageTestAgent(t, db, orgID, "issue-role-planner-api")
-	workerID := insertMessageTestAgent(t, db, orgID, "issue-role-worker-api")
-
-	handler := &IssuesHandler{IssueStore: store.NewProjectIssueStore(db)}
-	router := newIssueTestRouter(handler)
-
-	setPlannerReq := httptest.NewRequest(
-		http.MethodPut,
-		"/api/projects/"+projectID+"/issue-role-assignments/planner?org_id="+orgID,
-		bytes.NewReader([]byte(`{"agent_id":"`+plannerID+`"}`)),
-	)
-	setPlannerRec := httptest.NewRecorder()
-	router.ServeHTTP(setPlannerRec, setPlannerReq)
-	require.Equal(t, http.StatusOK, setPlannerRec.Code)
-
-	var plannerResp issueRoleAssignmentPayload
-	require.NoError(t, json.NewDecoder(setPlannerRec.Body).Decode(&plannerResp))
-	require.Equal(t, "planner", plannerResp.Role)
-	require.NotNil(t, plannerResp.AgentID)
-	require.Equal(t, plannerID, *plannerResp.AgentID)
-
-	setWorkerReq := httptest.NewRequest(
-		http.MethodPut,
-		"/api/projects/"+projectID+"/issue-role-assignments/worker?org_id="+orgID,
-		bytes.NewReader([]byte(`{"agent_id":"`+workerID+`"}`)),
-	)
-	setWorkerRec := httptest.NewRecorder()
-	router.ServeHTTP(setWorkerRec, setWorkerReq)
-	require.Equal(t, http.StatusOK, setWorkerRec.Code)
-
-	clearPlannerReq := httptest.NewRequest(
-		http.MethodPut,
-		"/api/projects/"+projectID+"/issue-role-assignments/planner?org_id="+orgID,
-		bytes.NewReader([]byte(`{"agent_id":null}`)),
-	)
-	clearPlannerRec := httptest.NewRecorder()
-	router.ServeHTTP(clearPlannerRec, clearPlannerReq)
-	require.Equal(t, http.StatusOK, clearPlannerRec.Code)
-
-	var clearedPlannerResp issueRoleAssignmentPayload
-	require.NoError(t, json.NewDecoder(clearPlannerRec.Body).Decode(&clearedPlannerResp))
-	require.Equal(t, "planner", clearedPlannerResp.Role)
-	require.Nil(t, clearedPlannerResp.AgentID)
-
-	listReq := httptest.NewRequest(
-		http.MethodGet,
-		"/api/projects/"+projectID+"/issue-role-assignments?org_id="+orgID,
-		nil,
-	)
-	listRec := httptest.NewRecorder()
-	router.ServeHTTP(listRec, listReq)
-	require.Equal(t, http.StatusOK, listRec.Code)
-
-	var listResp issueRoleAssignmentListResponse
-	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
-	require.Len(t, listResp.Items, 2)
-	require.Equal(t, "planner", listResp.Items[0].Role)
-	require.Nil(t, listResp.Items[0].AgentID)
-	require.Equal(t, "worker", listResp.Items[1].Role)
-	require.NotNil(t, listResp.Items[1].AgentID)
-	require.Equal(t, workerID, *listResp.Items[1].AgentID)
-}
-
-func TestIssueRoleAssignmentsHandler_ValidatesInputs(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-role-assignment-validate-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Role Assignment Validate API Project")
-
-	handler := &IssuesHandler{IssueStore: store.NewProjectIssueStore(db)}
-	router := newIssueTestRouter(handler)
-
-	invalidRoleReq := httptest.NewRequest(
-		http.MethodPut,
-		"/api/projects/"+projectID+"/issue-role-assignments/observer?org_id="+orgID,
-		bytes.NewReader([]byte(`{"agent_id":null}`)),
-	)
-	invalidRoleRec := httptest.NewRecorder()
-	router.ServeHTTP(invalidRoleRec, invalidRoleReq)
-	require.Equal(t, http.StatusBadRequest, invalidRoleRec.Code)
-
-	invalidAgentReq := httptest.NewRequest(
-		http.MethodPut,
-		"/api/projects/"+projectID+"/issue-role-assignments/planner?org_id="+orgID,
-		bytes.NewReader([]byte(`{"agent_id":"bad-id"}`)),
-	)
-	invalidAgentRec := httptest.NewRecorder()
-	router.ServeHTTP(invalidAgentRec, invalidAgentReq)
-	require.Equal(t, http.StatusBadRequest, invalidAgentRec.Code)
-
-	invalidJSONReq := httptest.NewRequest(
-		http.MethodPut,
-		"/api/projects/"+projectID+"/issue-role-assignments/worker?org_id="+orgID,
-		bytes.NewReader([]byte(`{"agent_id":"x","extra":true}`)),
-	)
-	invalidJSONRec := httptest.NewRecorder()
-	router.ServeHTTP(invalidJSONRec, invalidJSONReq)
-	require.Equal(t, http.StatusBadRequest, invalidJSONRec.Code)
 }
 
 func TestIssuesHandlerCreateIssueCreatesStandaloneIssueWithWorkTrackingFields(t *testing.T) {
@@ -1363,115 +559,6 @@ func TestIssuesHandlerCreateIssueValidatesPayload(t *testing.T) {
 	invalidDueAtRec := httptest.NewRecorder()
 	router.ServeHTTP(invalidDueAtRec, invalidDueAtReq)
 	require.Equal(t, http.StatusBadRequest, invalidDueAtRec.Code)
-}
-
-func TestIssuesHandlerQueueNotificationDispatch(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-queue-notify-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue Queue Notify Project")
-	unassignedProjectID := insertProjectTestProject(t, db, orgID, "Issue Queue Notify Unassigned Project")
-	plannerAgentID := insertMessageTestAgent(t, db, orgID, "issue-queue-notify-planner")
-	workerAgentID := insertMessageTestAgent(t, db, orgID, "issue-queue-notify-worker")
-
-	issueStore := store.NewProjectIssueStore(db)
-	ctx := issueTestCtx(orgID)
-	_, err := issueStore.UpsertIssueRoleAssignment(ctx, store.UpsertIssueRoleAssignmentInput{
-		ProjectID: projectID,
-		Role:      "planner",
-		AgentID:   &plannerAgentID,
-	})
-	require.NoError(t, err)
-	_, err = issueStore.UpsertIssueRoleAssignment(ctx, store.UpsertIssueRoleAssignmentInput{
-		ProjectID: projectID,
-		Role:      "worker",
-		AgentID:   &workerAgentID,
-	})
-	require.NoError(t, err)
-
-	handler := &IssuesHandler{
-		IssueStore:   issueStore,
-		ProjectStore: store.NewProjectStore(db),
-		DB:           db,
-	}
-	router := newIssueTestRouter(handler)
-
-	createReadyReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/projects/"+projectID+"/issues?org_id="+orgID,
-		bytes.NewReader([]byte(`{"title":"Planner queued issue","work_status":"ready"}`)),
-	)
-	createReadyRec := httptest.NewRecorder()
-	router.ServeHTTP(createReadyRec, createReadyReq)
-	require.Equal(t, http.StatusCreated, createReadyRec.Code)
-
-	var readyIssue issueSummaryPayload
-	require.NoError(t, json.NewDecoder(createReadyRec.Body).Decode(&readyIssue))
-
-	createPlanningReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/projects/"+projectID+"/issues?org_id="+orgID,
-		bytes.NewReader([]byte(`{"title":"Worker queue candidate","work_status":"planning"}`)),
-	)
-	createPlanningRec := httptest.NewRecorder()
-	router.ServeHTTP(createPlanningRec, createPlanningReq)
-	require.Equal(t, http.StatusCreated, createPlanningRec.Code)
-
-	var planningIssue issueSummaryPayload
-	require.NoError(t, json.NewDecoder(createPlanningRec.Body).Decode(&planningIssue))
-
-	patchReq := httptest.NewRequest(
-		http.MethodPatch,
-		"/api/issues/"+planningIssue.ID+"?org_id="+orgID,
-		bytes.NewReader([]byte(`{"work_status":"ready_for_work"}`)),
-	)
-	patchRec := httptest.NewRecorder()
-	router.ServeHTTP(patchRec, patchReq)
-	require.Equal(t, http.StatusOK, patchRec.Code)
-
-	unassignedReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/projects/"+unassignedProjectID+"/issues?org_id="+orgID,
-		bytes.NewReader([]byte(`{"title":"No assignment issue","work_status":"ready"}`)),
-	)
-	unassignedRec := httptest.NewRecorder()
-	router.ServeHTTP(unassignedRec, unassignedReq)
-	require.Equal(t, http.StatusCreated, unassignedRec.Code)
-
-	rows, err := db.Query(
-		`SELECT event_type, payload
-			FROM openclaw_dispatch_queue
-			WHERE event_type = 'issue.queue.available'
-			ORDER BY id ASC`,
-	)
-	require.NoError(t, err)
-	defer rows.Close()
-
-	var events []openClawIssueQueueDispatchEvent
-	for rows.Next() {
-		var eventType string
-		var payload []byte
-		require.NoError(t, rows.Scan(&eventType, &payload))
-		require.Equal(t, "issue.queue.available", eventType)
-		var event openClawIssueQueueDispatchEvent
-		require.NoError(t, json.Unmarshal(payload, &event))
-		events = append(events, event)
-	}
-	require.NoError(t, rows.Err())
-	require.Len(t, events, 2)
-
-	require.Equal(t, readyIssue.ID, events[0].Data.IssueID)
-	require.Equal(t, readyIssue.IssueNumber, events[0].Data.IssueNumber)
-	require.Equal(t, projectID, events[0].Data.ProjectID)
-	require.Equal(t, "planner", events[0].Data.Role)
-	require.Equal(t, store.IssueWorkStatusReady, events[0].Data.WorkStatus)
-	require.Equal(t, plannerAgentID, events[0].Data.AgentID)
-
-	require.Equal(t, planningIssue.ID, events[1].Data.IssueID)
-	require.Equal(t, planningIssue.IssueNumber, events[1].Data.IssueNumber)
-	require.Equal(t, projectID, events[1].Data.ProjectID)
-	require.Equal(t, "worker", events[1].Data.Role)
-	require.Equal(t, store.IssueWorkStatusReadyForWork, events[1].Data.WorkStatus)
-	require.Equal(t, workerAgentID, events[1].Data.AgentID)
 }
 
 func TestIssuesHandlerCommentCreateDispatchesToOpenClawOwner(t *testing.T) {
@@ -1629,56 +716,6 @@ func TestIssuesHandlerCommentCreateWarnsWhenBridgeOffline(t *testing.T) {
 	err = db.QueryRow(`SELECT COUNT(*) FROM openclaw_dispatch_queue WHERE event_type = 'issue.comment.message'`).Scan(&queued)
 	require.NoError(t, err)
 	require.Equal(t, 1, queued)
-}
-
-func TestIssuesHandlerCommentCreateWithoutOwnerStillPersistsAndWarns(t *testing.T) {
-	db := setupMessageTestDB(t)
-	orgID := insertMessageTestOrganization(t, db, "issues-api-comment-no-owner-org")
-	projectID := insertProjectTestProject(t, db, orgID, "Issue No Owner Project")
-	authorAgentID := insertMessageTestAgent(t, db, orgID, "sam")
-
-	issueStore := store.NewProjectIssueStore(db)
-	ctx := issueTestCtx(orgID)
-	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
-		ProjectID: projectID,
-		Title:     "Issue without owner",
-		Origin:    "local",
-	})
-	require.NoError(t, err)
-
-	dispatcher := &fakeOpenClawDispatcher{connected: true}
-	handler := &IssuesHandler{
-		IssueStore:         issueStore,
-		DB:                 db,
-		OpenClawDispatcher: dispatcher,
-	}
-	router := newIssueTestRouter(handler)
-
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/api/issues/"+issue.ID+"/comments?org_id="+orgID,
-		bytes.NewReader([]byte(`{"author_agent_id":"`+authorAgentID+`","body":"No owner yet"}`)),
-	)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusCreated, rec.Code)
-	require.Len(t, dispatcher.calls, 0)
-
-	var payload struct {
-		Body     string           `json:"body"`
-		Delivery dmDeliveryStatus `json:"delivery"`
-	}
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.Equal(t, "No owner yet", payload.Body)
-	require.False(t, payload.Delivery.Attempted)
-	require.False(t, payload.Delivery.Delivered)
-	require.Equal(t, "issue agent unavailable; message was saved but not delivered", payload.Delivery.Error)
-
-	comments, err := issueStore.ListComments(ctx, issue.ID, 10, 0)
-	require.NoError(t, err)
-	require.Len(t, comments, 1)
-	require.Equal(t, "No owner yet", comments[0].Body)
-	require.Equal(t, authorAgentID, comments[0].AuthorAgentID)
 }
 
 func TestIssuesHandlerParticipantAddRemove(t *testing.T) {
