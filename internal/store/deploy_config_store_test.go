@@ -122,12 +122,12 @@ func TestDeployConfigStore_RejectsCrossWorkspaceProject(t *testing.T) {
 	_, err := store.Upsert(ctxB, UpsertDeployConfigInput{
 		ProjectID:    projectA,
 		DeployMethod: DeployMethodCLICommand,
-		CLICommand:   stringPtr("echo deploy"),
+		CLICommand:   deployConfigStringPtr("echo deploy"),
 	})
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
-func stringPtr(v string) *string {
+func deployConfigStringPtr(v string) *string {
 	return &v
 }
