@@ -167,6 +167,39 @@ func TestHandleDeploySetCallsSetDeployConfig(t *testing.T) {
 	}
 }
 
+func TestDeploySetMethodNoneSendsEmptyBranch(t *testing.T) {
+	client := &fakeSettingsCommandClient{
+		project: ottercli.Project{ID: "project-123", Name: "Alpha"},
+		setDeployConfigResult: ottercli.DeployConfig{
+			DeployMethod: "none",
+		},
+	}
+
+	err := runDeployCommand(
+		[]string{"set", "--project", "Alpha", "--method", "none"},
+		func(org string) (deployCommandClient, error) {
+			return client, nil
+		},
+		io.Discard,
+	)
+	if err != nil {
+		t.Fatalf("runDeployCommand() error = %v", err)
+	}
+
+	if client.setDeployConfigPayload.DeployMethod != "none" {
+		t.Fatalf("deploy method = %q, want none", client.setDeployConfigPayload.DeployMethod)
+	}
+	if client.setDeployConfigPayload.GitHubBranch != "" {
+		t.Fatalf("branch = %q, want empty", client.setDeployConfigPayload.GitHubBranch)
+	}
+	if client.setDeployConfigPayload.GitHubRepoURL != nil {
+		t.Fatalf("repo url = %#v, want nil", client.setDeployConfigPayload.GitHubRepoURL)
+	}
+	if client.setDeployConfigPayload.CLICommand != nil {
+		t.Fatalf("cli command = %#v, want nil", client.setDeployConfigPayload.CLICommand)
+	}
+}
+
 func TestHandleDeployConfigCallsGetDeployConfig(t *testing.T) {
 	client := &fakeSettingsCommandClient{
 		project: ottercli.Project{ID: "project-123", Name: "Alpha"},
