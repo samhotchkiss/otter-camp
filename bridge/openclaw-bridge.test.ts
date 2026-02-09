@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, it } from "node:test";
 import {
+  buildCompletionActivityEventFromProgressLineForTest,
   buildIdentityPreamble,
   formatSessionContextMessageForTest,
   formatSessionDisplayLabel,
@@ -14,9 +15,11 @@ import {
   isCanonicalChameleonSessionKey,
   normalizeQuestionnairePayload,
   parseChameleonSessionKey,
+  parseCompletionProgressLine,
   parseNumberedAnswers,
   parseNumberedQuestionnaireResponse,
   parseQuestionnaireAnswer,
+  resetBufferedActivityEventsForTest,
   resolveExecutionMode,
   resolveProjectWorktreeRoot,
   resetSessionContextsForTest,
@@ -24,6 +27,56 @@ import {
   type QuestionnairePayload,
   type QuestionnaireQuestion,
 } from "./openclaw-bridge";
+
+describe("bridge completion metadata helpers", () => {
+  beforeEach(() => {
+    resetBufferedActivityEventsForTest();
+  });
+
+  it("parses pushed progress lines into completion metadata", () => {
+    const parsed = parseCompletionProgressLine(
+      "[2026-02-09 11:42 MST] Issue #471 | Commit 758bcc8 | pushed | Added worktree guards | Tests: npm run test:bridge",
+    );
+    assert.deepEqual(parsed, {
+      issueNumber: 471,
+      commitSHA: "758bcc8",
+      action: "pushed",
+      pushStatus: "succeeded",
+    });
+  });
+
+  it("parses failed push progress lines and ignores non-push activity lines", () => {
+    const failed = parseCompletionProgressLine(
+      "[2026-02-09 11:42 MST] Issue #471 | Commit 758bcc8 | push failed | remote rejected",
+    );
+    assert.deepEqual(failed, {
+      issueNumber: 471,
+      commitSHA: "758bcc8",
+      action: "push failed",
+      pushStatus: "failed",
+    });
+
+    const ignored = parseCompletionProgressLine(
+      "[2026-02-09 11:42 MST] Issue #471 | Commit 758bcc8 | closed | Added worktree guards | Tests: n/a",
+    );
+    assert.equal(ignored, null);
+  });
+
+  it("builds completion activity events with commit and push metadata", async () => {
+    const event = await buildCompletionActivityEventFromProgressLineForTest(
+      "00000000-0000-0000-0000-000000000123",
+      "[2026-02-09 11:42 MST] Issue #471 | Commit 758bcc8 | pushed | Added worktree guards | Tests: n/a",
+    );
+
+    assert.notEqual(event, null);
+    assert.equal(event?.trigger, "task.completion");
+    assert.equal(event?.session_key, "completion:issue:471");
+    assert.equal(event?.scope?.issue_number, 471);
+    assert.equal(event?.commit_sha, "758bcc8");
+    assert.equal(event?.push_status, "succeeded");
+    assert.equal(event?.status, "completed");
+  });
+});
 
 describe("bridge chameleon session key helpers", () => {
   it("validates canonical chameleon session keys", () => {

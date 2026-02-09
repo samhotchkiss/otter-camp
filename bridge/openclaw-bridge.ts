@@ -77,6 +77,7 @@ const MAX_TRACKED_SESSION_CONTEXTS = (() => {
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const PROJECT_ID_PATTERN = /(?:^|:)project:([0-9a-f-]{36})(?:$|:)/i;
 const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
+const COMPLETION_PROGRESS_LINE_PATTERN = /\bIssue\s+#(\d+)\s+\|\s+Commit\s+([0-9a-f]{7,40})\s+\|\s+([^|]+)\|/i;
 const CHAMELEON_SESSION_KEY_PATTERN =
   /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
@@ -123,6 +124,10 @@ export type BridgeAgentActivityEvent = {
   scope?: AgentActivityScope;
   tokens_used: number;
   model_used?: string;
+  commit_sha?: string;
+  commit_branch?: string;
+  commit_remote?: string;
+  push_status?: 'succeeded' | 'failed' | 'unknown';
   duration_ms: number;
   status: 'started' | 'completed' | 'failed' | 'timeout';
   started_at: string;
@@ -437,6 +442,9 @@ const queuedDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDOrder: string[] = [];
 let dispatchReplayQueueBytes = 0;
+let gitCompletionDefaultsResolved = false;
+let gitCompletionBranch = '';
+let gitCompletionRemote = '';
 
 const genId = () => `req-${++requestId}`;
 const execFileAsync = promisify(execFile);
@@ -2371,6 +2379,9 @@ export function resetBufferedActivityEventsForTest(): void {
   queuedActivityEventIDs.clear();
   deliveredActivityEventIDs.clear();
   deliveredActivityEventIDOrder.length = 0;
+  gitCompletionDefaultsResolved = false;
+  gitCompletionBranch = '';
+  gitCompletionRemote = '';
 }
 
 export function getBufferedActivityEventStateForTest(): {
@@ -2963,6 +2974,141 @@ async function fetchSessions(): Promise<OpenClawSession[]> {
   return response.sessions || [];
 }
 
+type ParsedCompletionProgressLine = {
+  issueNumber: number;
+  commitSHA: string;
+  action: string;
+  pushStatus: 'succeeded' | 'failed';
+};
+
+export function parseCompletionProgressLine(line: string): ParsedCompletionProgressLine | null {
+  const match = COMPLETION_PROGRESS_LINE_PATTERN.exec(getTrimmedString(line));
+  if (!match) {
+    return null;
+  }
+  const issueNumber = Number(match[1]);
+  const commitSHA = getTrimmedString(match[2]).toLowerCase();
+  const action = getTrimmedString(match[3]).toLowerCase();
+  if (!Number.isFinite(issueNumber) || issueNumber <= 0 || !commitSHA) {
+    return null;
+  }
+  let pushStatus: 'succeeded' | 'failed' | null = null;
+  if (action.includes('pushed')) {
+    pushStatus = 'succeeded';
+  } else if (action.includes('fail')) {
+    pushStatus = 'failed';
+  }
+  if (!pushStatus) {
+    return null;
+  }
+  return {
+    issueNumber,
+    commitSHA,
+    action,
+    pushStatus,
+  };
+}
+
+async function resolveGitCompletionDefaults(): Promise<{ branch: string; remote: string }> {
+  if (gitCompletionDefaultsResolved) {
+    return {
+      branch: gitCompletionBranch,
+      remote: gitCompletionRemote,
+    };
+  }
+  gitCompletionDefaultsResolved = true;
+
+  try {
+    const branchResult = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      timeout: 5000,
+      maxBuffer: 128 * 1024,
+    });
+    gitCompletionBranch = getTrimmedString(branchResult.stdout);
+  } catch {
+    gitCompletionBranch = '';
+  }
+
+  try {
+    const remoteResult = await execFileAsync('git', ['remote'], {
+      timeout: 5000,
+      maxBuffer: 128 * 1024,
+    });
+    const firstRemote = getTrimmedString(remoteResult.stdout).split(/\r?\n/).find((line) => line.trim().length > 0);
+    gitCompletionRemote = getTrimmedString(firstRemote) || 'origin';
+  } catch {
+    gitCompletionRemote = 'origin';
+  }
+
+  return {
+    branch: gitCompletionBranch,
+    remote: gitCompletionRemote,
+  };
+}
+
+async function buildCompletionActivityEventFromProgressLine(
+  orgID: string,
+  line: string,
+): Promise<BridgeAgentActivityEvent | null> {
+  const parsed = parseCompletionProgressLine(line);
+  if (!parsed) {
+    return null;
+  }
+
+  const defaults = await resolveGitCompletionDefaults();
+  const nowISO = new Date().toISOString();
+  const idSeed = [orgID, String(parsed.issueNumber), parsed.commitSHA, parsed.action].join('|');
+  const status: BridgeAgentActivityEvent['status'] =
+    parsed.pushStatus === 'failed' ? 'failed' : 'completed';
+
+  return {
+    id: `completion_${crypto.createHash('sha1').update(idSeed).digest('hex').slice(0, 24)}`,
+    agent_id: 'system',
+    session_key: `completion:issue:${parsed.issueNumber}`,
+    trigger: 'task.completion',
+    channel: 'system',
+    summary: `Captured completion metadata for issue #${parsed.issueNumber}`,
+    detail: line.trim(),
+    scope: {
+      issue_number: parsed.issueNumber,
+    },
+    tokens_used: 0,
+    model_used: undefined,
+    commit_sha: parsed.commitSHA,
+    commit_branch: defaults.branch || undefined,
+    commit_remote: defaults.remote || undefined,
+    push_status: parsed.pushStatus,
+    duration_ms: 0,
+    status,
+    started_at: nowISO,
+    completed_at: nowISO,
+  };
+}
+
+async function queueCompletionEventsFromProgressLines(orgID: string, lines: string[]): Promise<number> {
+  const normalizedOrgID = getTrimmedString(orgID);
+  if (!normalizedOrgID || lines.length === 0) {
+    return 0;
+  }
+  const events: BridgeAgentActivityEvent[] = [];
+  for (const line of lines) {
+    const event = await buildCompletionActivityEventFromProgressLine(normalizedOrgID, line);
+    if (event) {
+      events.push(event);
+    }
+  }
+  if (events.length === 0) {
+    return 0;
+  }
+  return queueActivityEventsForOrg(normalizedOrgID, events);
+}
+
+export async function buildCompletionActivityEventFromProgressLineForTest(
+  orgID: string,
+  line: string,
+): Promise<BridgeAgentActivityEvent | null> {
+  return buildCompletionActivityEventFromProgressLine(orgID, line);
+}
+
 function rememberProgressLogLine(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -3092,6 +3238,13 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
     processes,
     source: 'bridge',
   };
+
+  if (progressLogLines.length > 0 && OTTERCAMP_ORG_ID) {
+    const queuedCompletionEvents = await queueCompletionEventsFromProgressLines(OTTERCAMP_ORG_ID, progressLogLines);
+    if (queuedCompletionEvents > 0) {
+      console.log(`[bridge] queued ${queuedCompletionEvents} completion metadata event(s) from progress log`);
+    }
+  }
 
   const url = `${OTTERCAMP_URL}/api/sync/openclaw`;
   const response = await fetchWithRetry(url, {
