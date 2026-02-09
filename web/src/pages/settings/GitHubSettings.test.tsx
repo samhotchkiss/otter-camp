@@ -460,4 +460,42 @@ describe("GitHubSettings", () => {
     expect(screen.queryByText(/invalid session token/i)).not.toBeInTheDocument();
     expect(screen.getByText("Disconnected")).toBeInTheDocument();
   });
+
+  it("treats capability-forbidden bootstrap failures as disconnected state", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/github/integration/status")) {
+        return new Response(JSON.stringify({ connected: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/github/integration/repos")) {
+        return new Response(JSON.stringify({ error: "forbidden" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/github/integration/settings")) {
+        return new Response(JSON.stringify({ error: "forbidden" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "unexpected endpoint" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    render(<GitHubSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Not connected")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/forbidden/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Disconnected")).toBeInTheDocument();
+  });
 });
