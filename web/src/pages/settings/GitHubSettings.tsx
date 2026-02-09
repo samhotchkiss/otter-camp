@@ -229,13 +229,13 @@ function Button({
   type = "button",
 }: ButtonProps) {
   const baseClasses =
-    "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-slate-900";
+    "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-50";
 
   const variantClasses = {
     primary:
       "bg-emerald-500 text-white hover:bg-emerald-600 focus:ring-emerald-500",
     secondary:
-      "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus:ring-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700",
+      "border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-alt)] focus:ring-[var(--accent)]",
     danger: "bg-red-500 text-white hover:bg-red-600 focus:ring-red-500",
   };
 
@@ -284,18 +284,18 @@ function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
         aria-checked={checked}
         disabled={disabled}
         onClick={() => onChange(!checked)}
-        className={`relative h-6 w-11 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-slate-900 ${
-          checked ? "bg-emerald-500" : "bg-slate-200 dark:bg-slate-700"
+        className={`relative h-6 w-11 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-50 ${
+          checked ? "bg-emerald-500" : "bg-[var(--border)]"
         }`}
       >
         <span
-          className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+          className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-[var(--surface)] shadow-sm transition-transform ${
             checked ? "translate-x-5" : "translate-x-0"
           }`}
         />
       </button>
       {label && (
-        <span className="text-sm text-slate-700 dark:text-slate-300">{label}</span>
+        <span className="text-sm text-[var(--text)]">{label}</span>
       )}
     </label>
   );
@@ -313,16 +313,16 @@ type SelectProps = {
 function Select({ label, value, onChange, disabled, children, helperText }: SelectProps) {
   return (
     <label className="block">
-      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
+      <span className="text-sm font-medium text-[var(--text)]">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-900 shadow-sm transition focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:border-emerald-500 dark:disabled:bg-slate-900"
+        className="mt-1 block w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-[var(--text)] shadow-sm transition focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:cursor-not-allowed disabled:bg-[var(--surface-alt)] disabled:text-[var(--text-muted)]"
       >
         {children}
       </select>
-      {helperText && <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">{helperText}</p>}
+      {helperText && <p className="mt-1.5 text-xs text-[var(--text-muted)]">{helperText}</p>}
     </label>
   );
 }
@@ -339,23 +339,23 @@ type InputProps = {
 function Input({ label, value, onChange, placeholder, disabled, helperText }: InputProps) {
   return (
     <label className="block">
-      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</span>
+      <span className="text-sm font-medium text-[var(--text)]">{label}</span>
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
-        className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-emerald-500 dark:disabled:bg-slate-900"
+        className="mt-1 block w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-[var(--text)] shadow-sm transition placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:cursor-not-allowed disabled:bg-[var(--surface-alt)] disabled:text-[var(--text-muted)]"
       />
-      {helperText && <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">{helperText}</p>}
+      {helperText && <p className="mt-1.5 text-xs text-[var(--text-muted)]">{helperText}</p>}
     </label>
   );
 }
 
 function StatusBadge({ tone, label }: { tone: "neutral" | "success" | "warning" | "danger" | "info"; label: string }) {
   const toneClasses: Record<string, string> = {
-    neutral: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
+    neutral: "bg-[var(--surface-alt)] text-[var(--text)]",
     success: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200",
     warning: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200",
     danger: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200",
@@ -761,22 +761,22 @@ export default function GitHubSettings() {
 
   if (loading) {
     return (
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
-        <p className="text-sm text-slate-500 dark:text-slate-400">Loading GitHub settings…</p>
+      <section className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm">
+        <p className="text-sm text-[var(--text-muted)]">Loading GitHub settings…</p>
       </section>
     );
   }
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
-      <div className="border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+    <section className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm backdrop-blur">
+      <div className="border-b border-[var(--border)] px-6 py-4">
         <div className="flex items-center gap-3">
           <span className="text-2xl" aria-hidden="true">
             🐙
           </span>
           <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">GitHub</h2>
-            <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+            <h2 className="text-lg font-semibold text-[var(--text)]">GitHub</h2>
+            <p className="mt-0.5 text-sm text-[var(--text-muted)]">
               Connect your GitHub App installation and map repos to projects.
             </p>
           </div>
@@ -790,20 +790,20 @@ export default function GitHubSettings() {
           </div>
         )}
 
-        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-950/20">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-200 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-200">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--surface-alt)] text-sm font-semibold text-[var(--text-muted)]">
                 GH
               </div>
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-medium text-slate-900 dark:text-white">
+                  <p className="font-medium text-[var(--text)]">
                     {connection ? `@${connection.accountLogin}` : "Not connected"}
                   </p>
                   {connection ? <StatusBadge tone="success" label="Connected" /> : <StatusBadge tone="neutral" label="Disconnected" />}
                 </div>
-                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                   {connection
                     ? `Installation #${connection.installationId} (${connection.accountType})`
                     : "Connect GitHub to configure project sync settings."}
@@ -830,7 +830,7 @@ export default function GitHubSettings() {
           </div>
 
           {connection && (
-            <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+            <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-[var(--text-muted)]">
               <span>Connected {formatDateTime(connection.connectedAt)}</span>
               {lastSuccessfulSync && (
                 <>
@@ -844,7 +844,7 @@ export default function GitHubSettings() {
 
         <div>
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">Available repositories</h3>
+            <h3 className="text-sm font-medium text-[var(--text)]">Available repositories</h3>
             <Button variant="secondary" disabled={!connection} onClick={handleRefreshRepos} loading={refreshingRepos}>
               Refresh
             </Button>
@@ -852,14 +852,14 @@ export default function GitHubSettings() {
 
           {connection ? (
             repos.length > 0 ? (
-              <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-700">
+              <div className="mt-3 divide-y divide-[var(--border)]/60 rounded-lg border border-[var(--border)]">
                 {repoOptions.map((repo) => (
                   <div key={repo.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <a href={buildRepoUrl(repo.fullName)} target="_blank" rel="noreferrer" className="font-medium text-slate-900 hover:underline dark:text-white">
+                      <a href={buildRepoUrl(repo.fullName)} target="_blank" rel="noreferrer" className="font-medium text-[var(--text)] hover:underline">
                         {repo.fullName}
                       </a>
-                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                      <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                         Default branch: <span className="font-mono">{repo.defaultBranch}</span>
                       </p>
                     </div>
@@ -870,13 +870,13 @@ export default function GitHubSettings() {
                 ))}
               </div>
             ) : (
-              <div className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-6 py-8 text-center dark:border-slate-700 dark:bg-slate-800/50">
-                <p className="text-sm text-slate-500 dark:text-slate-400">No repositories found for this installation.</p>
+              <div className="mt-3 rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface-alt)] px-6 py-8 text-center">
+                <p className="text-sm text-[var(--text-muted)]">No repositories found for this installation.</p>
               </div>
             )
           ) : (
-            <div className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-6 py-8 text-center dark:border-slate-700 dark:bg-slate-800/50">
-              <p className="text-sm text-slate-500 dark:text-slate-400">Connect GitHub to view repositories</p>
+            <div className="mt-3 rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface-alt)] px-6 py-8 text-center">
+              <p className="text-sm text-[var(--text-muted)]">Connect GitHub to view repositories</p>
             </div>
           )}
         </div>
@@ -884,20 +884,20 @@ export default function GitHubSettings() {
         <div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">Project sync</h3>
-              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              <h3 className="text-sm font-medium text-[var(--text)]">Project sync</h3>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                 {configuredCount} of {projects.length} projects configured
               </p>
             </div>
-            <div className="text-xs text-slate-500 dark:text-slate-400">Sync state is backed by the GitHub integration APIs.</div>
+            <div className="text-xs text-[var(--text-muted)]">Sync state is backed by the GitHub integration APIs.</div>
           </div>
 
           {projects.length === 0 ? (
-            <div className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-6 py-8 text-center dark:border-slate-700 dark:bg-slate-800/50">
-              <p className="text-sm text-slate-500 dark:text-slate-400">No projects found</p>
+            <div className="mt-3 rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface-alt)] px-6 py-8 text-center">
+              <p className="text-sm text-[var(--text-muted)]">No projects found</p>
             </div>
           ) : (
-            <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-700">
+            <div className="mt-3 divide-y divide-[var(--border)]/60 rounded-lg border border-[var(--border)]">
               {projects.map((project) => {
                 const settings = projectSettings[project.id] ?? DEFAULT_PROJECT_SETTINGS;
                 const status = projectStatus[project.id];
@@ -920,10 +920,10 @@ export default function GitHubSettings() {
 
                 return (
                   <details key={project.id} className="group">
-                    <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 [&::-webkit-details-marker]:hidden">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-4 hover:bg-[var(--surface-alt)] [&::-webkit-details-marker]:hidden">
                       <div className="min-w-0">
-                        <p className="truncate font-medium text-slate-900 dark:text-white">{project.name}</p>
-                        <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">
+                        <p className="truncate font-medium text-[var(--text)]">{project.name}</p>
+                        <p className="mt-0.5 truncate text-xs text-[var(--text-muted)]">
                           {settings.repoFullName ? (
                             <>
                               Linked to <span className="font-mono">{settings.repoFullName}</span>
@@ -952,7 +952,7 @@ export default function GitHubSettings() {
                       </div>
                     </summary>
 
-                    <div className="border-t border-slate-200 bg-slate-50/60 px-4 py-4 dark:border-slate-800 dark:bg-slate-900/40">
+                    <div className="border-t border-[var(--border)] bg-[var(--surface-alt)] px-4 py-4">
                       <div className="grid gap-4 md:grid-cols-2">
                         <Toggle
                           checked={settings.enabled}
@@ -1028,11 +1028,11 @@ export default function GitHubSettings() {
                         </Button>
                       </div>
 
-                      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900/40">
+                      <div className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                           <div>
-                            <h4 className="text-sm font-semibold text-slate-900 dark:text-white">Publish</h4>
-                            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                            <h4 className="text-sm font-semibold text-[var(--text)]">Publish</h4>
+                            <p className="mt-0.5 text-xs text-[var(--text-muted)]">
                               Run preflight checks and publish commits to GitHub.
                             </p>
                           </div>
@@ -1057,11 +1057,11 @@ export default function GitHubSettings() {
                         </div>
 
                         {latestPublishSummary && (
-                          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-700 dark:bg-slate-800/40">
-                            <p className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                          <div className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-3">
+                            <p className="text-xs font-medium text-[var(--text)]">
                               Dry-run summary
                             </p>
-                            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            <p className="mt-1 text-xs text-[var(--text-muted)]">
                               Status: <span className="font-semibold">{latestPublishSummary.status}</span> • Commits ahead:{" "}
                               {latestPublishSummary.commits_ahead}
                             </p>
@@ -1070,7 +1070,7 @@ export default function GitHubSettings() {
                                 Published at {formatDateTime(publishState.lastPublish.published_at)}
                               </p>
                             )}
-                            <ul className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">
+                            <ul className="mt-2 space-y-1 text-xs text-[var(--text-muted)]">
                               {latestPublishSummary.checks.map((check) => (
                                 <li key={`${project.id}-${check.name}`}>
                                   <span className="font-semibold">{check.name}</span>: {check.detail} •{" "}
@@ -1095,8 +1095,8 @@ export default function GitHubSettings() {
 
                         {publishState.logs.length > 0 && (
                           <div className="mt-3">
-                            <p className="text-xs font-medium text-slate-700 dark:text-slate-200">Publish progress log</p>
-                            <ul className="mt-1 space-y-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">
+                            <p className="text-xs font-medium text-[var(--text)]">Publish progress log</p>
+                            <ul className="mt-1 space-y-1 rounded-md border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-xs text-[var(--text-muted)]">
                               {publishState.logs.map((line, index) => (
                                 <li key={`${project.id}-publish-log-${index}`}>{line}</li>
                               ))}

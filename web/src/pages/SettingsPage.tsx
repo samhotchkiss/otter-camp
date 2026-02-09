@@ -104,7 +104,7 @@ function Input({
 }: InputProps) {
   return (
     <label className="block">
-      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+      <span className="text-sm font-medium text-[var(--text)]">
         {label}
       </span>
       <input
@@ -114,7 +114,7 @@ function Input({
         placeholder={placeholder}
         disabled={disabled}
         readOnly={readOnly}
-        className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-emerald-500 dark:disabled:bg-slate-900"
+        className="mt-1 block w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-[var(--text)] shadow-sm transition placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:cursor-not-allowed disabled:bg-[var(--surface-alt)] disabled:text-[var(--text-muted)]"
       />
     </label>
   );
@@ -136,20 +136,20 @@ function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
         aria-checked={checked}
         disabled={disabled}
         onClick={() => onChange(!checked)}
-        className={`relative h-6 w-11 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-slate-900 ${
+        className={`relative h-6 w-11 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-50 ${
           checked
             ? "bg-emerald-500"
-            : "bg-slate-200 dark:bg-slate-700"
+            : "bg-[var(--border)]"
         }`}
       >
         <span
-          className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+          className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-[var(--surface)] shadow-sm transition-transform ${
             checked ? "translate-x-5" : "translate-x-0"
           }`}
         />
       </button>
       {label && (
-        <span className="text-sm text-slate-700 dark:text-slate-300">
+        <span className="text-sm text-[var(--text)]">
           {label}
         </span>
       )}
@@ -175,13 +175,13 @@ function Button({
   type = "button",
 }: ButtonProps) {
   const baseClasses =
-    "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-slate-900";
+    "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-50";
 
   const variantClasses = {
     primary:
       "bg-emerald-500 text-white hover:bg-emerald-600 focus:ring-emerald-500",
     secondary:
-      "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus:ring-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700",
+      "border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-alt)] focus:ring-[var(--accent)]",
     danger:
       "bg-red-500 text-white hover:bg-red-600 focus:ring-red-500",
   };
@@ -228,8 +228,8 @@ type SectionCardProps = {
 
 function SectionCard({ title, description, icon, children }: SectionCardProps) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
-      <div className="border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+    <section className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm backdrop-blur">
+      <div className="border-b border-[var(--border)] px-6 py-4">
         <div className="flex items-center gap-3">
           {icon && (
             <span className="text-2xl" aria-hidden="true">
@@ -237,11 +237,11 @@ function SectionCard({ title, description, icon, children }: SectionCardProps) {
             </span>
           )}
           <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+            <h2 className="text-lg font-semibold text-[var(--text)]">
               {title}
             </h2>
             {description && (
-              <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+              <p className="mt-0.5 text-sm text-[var(--text-muted)]">
                 {description}
               </p>
             )}
@@ -316,9 +316,9 @@ function ProfileSection({
                 {getInitials(profile.name || "OC")}
               </div>
             )}
-            <label className="absolute -bottom-1 -right-1 cursor-pointer rounded-full bg-white p-2 shadow-md transition hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700">
+            <label className="absolute -bottom-1 -right-1 cursor-pointer rounded-full bg-[var(--surface)] p-2 shadow-md transition hover:bg-[var(--surface-alt)]">
               <svg
-                className="h-4 w-4 text-slate-600 dark:text-slate-300"
+                className="h-4 w-4 text-[var(--text-muted)]"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -344,7 +344,7 @@ function ProfileSection({
               />
             </label>
           </div>
-          <div className="text-sm text-slate-500 dark:text-slate-400">
+          <div className="text-sm text-[var(--text-muted)]">
             <p>Upload a new avatar</p>
             <p className="mt-1 text-xs">JPG, PNG, GIF. Max 2MB.</p>
           </div>
@@ -416,24 +416,24 @@ function NotificationsSection({
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700">
-                <th className="pb-3 text-left text-sm font-medium text-slate-500 dark:text-slate-400">
+              <tr className="border-b border-[var(--border)]">
+                <th className="pb-3 text-left text-sm font-medium text-[var(--text-muted)]">
                   Event Type
                 </th>
                 {channels.map((channel) => (
                   <th
                     key={channel}
-                    className="pb-3 text-center text-sm font-medium text-slate-500 dark:text-slate-400"
+                    className="pb-3 text-center text-sm font-medium text-[var(--text-muted)]"
                   >
                     {NOTIFICATION_CHANNEL_LABELS[channel]}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            <tbody className="divide-y divide-[var(--border)]/60">
               {events.map((event) => (
                 <tr key={event}>
-                  <td className="py-4 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <td className="py-4 text-sm font-medium text-[var(--text)]">
                     {NOTIFICATION_EVENT_LABELS[event]}
                   </td>
                   {channels.map((channel) => (
@@ -499,10 +499,10 @@ function WorkspaceSection({
 
         {/* Members List */}
         <div>
-          <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">
+          <h3 className="text-sm font-medium text-[var(--text)]">
             Members ({workspace.members.length})
           </h3>
-          <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-700">
+          <div className="mt-3 divide-y divide-[var(--border)]/60 rounded-lg border border-[var(--border)]">
             {workspace.members.map((member) => (
               <div
                 key={member.id}
@@ -518,15 +518,15 @@ function WorkspaceSection({
                       className="h-10 w-10 rounded-full object-cover"
                     />
                   ) : (
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-200 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--surface-alt)] text-sm font-semibold text-[var(--text-muted)]">
                       {getInitials(member.name)}
                     </div>
                   )}
                   <div>
-                    <p className="font-medium text-slate-900 dark:text-white">
+                    <p className="font-medium text-[var(--text)]">
                       {member.name}
                     </p>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                    <p className="text-sm text-[var(--text-muted)]">
                       {member.email}
                     </p>
                   </div>
@@ -537,7 +537,7 @@ function WorkspaceSection({
                       ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-200"
                       : member.role === "admin"
                         ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-200"
-                        : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                        : "bg-[var(--surface-alt)] text-[var(--text-muted)]"
                   }`}
                 >
                   {ROLE_LABELS[member.role]}
@@ -620,7 +620,7 @@ function IntegrationsSection({
             }
             placeholder="https://your-openclaw-instance.com/webhook"
           />
-          <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+          <p className="mt-1.5 text-xs text-[var(--text-muted)]">
             Events will be sent to this URL when triggered
           </p>
         </div>
@@ -628,7 +628,7 @@ function IntegrationsSection({
         {/* API Keys */}
         <div>
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300">
+            <h3 className="text-sm font-medium text-[var(--text)]">
               API Keys
             </h3>
             <Button
@@ -641,20 +641,20 @@ function IntegrationsSection({
           </div>
 
           {integrations.apiKeys.length > 0 ? (
-            <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-700">
+            <div className="mt-3 divide-y divide-[var(--border)]/60 rounded-lg border border-[var(--border)]">
               {integrations.apiKeys.map((key) => (
                 <div
                   key={key.id}
                   className="flex items-center justify-between px-4 py-3"
                 >
                   <div>
-                    <p className="font-medium text-slate-900 dark:text-white">
+                    <p className="font-medium text-[var(--text)]">
                       {key.name}
                     </p>
-                    <p className="mt-0.5 font-mono text-sm text-slate-500 dark:text-slate-400">
+                    <p className="mt-0.5 font-mono text-sm text-[var(--text-muted)]">
                       {key.prefix}••••••••
                     </p>
-                    <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                    <p className="mt-1 text-xs text-[var(--text-muted)]">
                       Created {formatDate(key.createdAt)}
                     </p>
                   </div>
@@ -669,11 +669,11 @@ function IntegrationsSection({
               ))}
             </div>
           ) : (
-            <div className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-6 py-8 text-center dark:border-slate-700 dark:bg-slate-800/50">
-              <p className="text-sm text-slate-500 dark:text-slate-400">
+            <div className="mt-3 rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface-alt)] px-6 py-8 text-center">
+              <p className="text-sm text-[var(--text-muted)]">
                 No API keys yet
               </p>
-              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
                 Generate a key to access the API programmatically
               </p>
             </div>
@@ -740,7 +740,7 @@ function LabelManagementSection({
             placeholder="e.g. blocked"
           />
           <label className="block">
-            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+            <span className="text-sm font-medium text-[var(--text)]">
               New label color
             </span>
             <input
@@ -748,7 +748,7 @@ function LabelManagementSection({
               type="color"
               value={newLabelColor}
               onChange={(event) => onNewLabelColorChange(event.target.value)}
-              className="mt-1 h-11 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white px-1 py-1 dark:border-slate-700 dark:bg-slate-800"
+              className="mt-1 h-11 w-16 cursor-pointer rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1 py-1"
             />
           </label>
           <Button onClick={() => void onCreate()} loading={creating}>
@@ -757,14 +757,14 @@ function LabelManagementSection({
         </div>
 
         {loading && (
-          <p className="text-sm text-slate-500 dark:text-slate-400">Loading labels…</p>
+          <p className="text-sm text-[var(--text-muted)]">Loading labels…</p>
         )}
         {error && (
           <p className="text-sm text-red-700">{error}</p>
         )}
 
         {!loading && labels.length === 0 && (
-          <p className="text-sm text-slate-500 dark:text-slate-400">
+          <p className="text-sm text-[var(--text-muted)]">
             No labels yet. Create one above to get started.
           </p>
         )}
@@ -779,14 +779,14 @@ function LabelManagementSection({
                 <div
                   key={label.id}
                   data-testid={`label-row-${label.id}`}
-                  className="grid gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700 sm:grid-cols-[1fr_auto_auto_auto]"
+                  className="grid gap-2 rounded-lg border border-[var(--border)] p-3 sm:grid-cols-[1fr_auto_auto_auto]"
                 >
                   <input
                     aria-label={`Label name ${label.name}`}
                     data-testid={`label-name-${label.id}`}
                     value={draft.name}
                     onChange={(event) => onDraftChange(label.id, "name", event.target.value)}
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
                   />
                   <input
                     aria-label={`Label color ${label.name}`}
@@ -794,7 +794,7 @@ function LabelManagementSection({
                     type="color"
                     value={draft.color}
                     onChange={(event) => onDraftChange(label.id, "color", event.target.value)}
-                    className="h-10 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white px-1 py-1 dark:border-slate-700 dark:bg-slate-800"
+                    className="h-10 w-16 cursor-pointer rounded-lg border border-[var(--border)] bg-[var(--surface)] px-1 py-1"
                   />
                   <Button
                     variant="secondary"
@@ -840,7 +840,7 @@ function AppearanceSection({ theme, onUpdate }: AppearanceSectionProps) {
       icon="🎨"
     >
       <div className="space-y-4">
-        <p className="text-sm text-slate-600 dark:text-slate-300">
+        <p className="text-sm text-[var(--text-muted)]">
           Choose your preferred theme
         </p>
 
@@ -853,7 +853,7 @@ function AppearanceSection({ theme, onUpdate }: AppearanceSectionProps) {
               className={`flex flex-col items-center gap-2 rounded-xl border-2 px-6 py-4 transition ${
                 theme === value
                   ? "border-emerald-500 bg-emerald-50 dark:border-emerald-500 dark:bg-emerald-900/20"
-                  : "border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600"
+                  : "border-[var(--border)] bg-[var(--surface)] hover:border-[var(--accent)]/50 hover:bg-[var(--surface-alt)]"
               }`}
             >
               <span className="text-2xl">{icon}</span>
@@ -861,7 +861,7 @@ function AppearanceSection({ theme, onUpdate }: AppearanceSectionProps) {
                 className={`text-sm font-medium ${
                   theme === value
                     ? "text-emerald-700 dark:text-emerald-200"
-                    : "text-slate-700 dark:text-slate-300"
+                    : "text-[var(--text)]"
                 }`}
               >
                 {label}
@@ -1264,10 +1264,10 @@ export default function SettingsPage() {
     <div className="w-full">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">
+        <h1 className="text-3xl font-semibold tracking-tight text-[var(--text)]">
           ⚙️ Settings
         </h1>
-        <p className="mt-2 text-slate-600 dark:text-slate-300">
+        <p className="mt-2 text-[var(--text-muted)]">
           Manage your account, preferences, and integrations
         </p>
       </div>

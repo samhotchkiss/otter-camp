@@ -82,6 +82,47 @@ describe("GitHubSettings", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("uses theme token classes for shell and secondary controls", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/github/integration/status")) {
+        return new Response(JSON.stringify({ connected: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/github/integration/repos")) {
+        return new Response(JSON.stringify({ repos: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/github/integration/settings")) {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "unexpected endpoint" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<GitHubSettings />);
+
+    const shellHeading = await screen.findByRole("heading", { name: "GitHub" });
+    const shell = shellHeading.closest("section");
+    expect(shell).not.toBeNull();
+    expect(shell?.className).toContain("bg-[var(--surface)]");
+    expect(shell?.className).toContain("border-[var(--border)]");
+
+    const refreshButton = screen.getByRole("button", { name: "Refresh" });
+    expect(refreshButton.className).toContain("bg-[var(--surface)]");
+    expect(refreshButton.className).toContain("border-[var(--border)]");
+  });
+
   it("shows local issue-review mode label for push-mode projects", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
