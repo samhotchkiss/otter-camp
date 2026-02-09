@@ -97,6 +97,23 @@ func TestFeedHandlerRequiresOrgID(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestNormalizeFeedActorName(t *testing.T) {
+	t.Run("returns System for empty", func(t *testing.T) {
+		require.Equal(t, "System", normalizeFeedActorName(""))
+		require.Equal(t, "System", normalizeFeedActorName("   "))
+	})
+
+	t.Run("returns System for unknown placeholder", func(t *testing.T) {
+		require.Equal(t, "System", normalizeFeedActorName("Unknown"))
+		require.Equal(t, "System", normalizeFeedActorName(" unknown "))
+	})
+
+	t.Run("preserves meaningful actor names", func(t *testing.T) {
+		require.Equal(t, "Sam", normalizeFeedActorName("Sam"))
+		require.Equal(t, "Frank the Agent", normalizeFeedActorName(" Frank the Agent "))
+	})
+}
+
 func TestFeedHandlerInvalidLimitOffset(t *testing.T) {
 	orgID := "00000000-0000-0000-0000-000000000000"
 

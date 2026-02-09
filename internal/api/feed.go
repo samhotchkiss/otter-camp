@@ -46,6 +46,14 @@ type FeedResponse struct {
 	Items  []FeedItem `json:"items"`
 }
 
+func normalizeFeedActorName(raw string) string {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" || strings.EqualFold(candidate, "unknown") {
+		return "System"
+	}
+	return candidate
+}
+
 // FeedHandler handles GET /api/feed
 func FeedHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -206,9 +214,11 @@ func scanFeedItem(scanner interface{ Scan(...any) error }) (FeedItem, error) {
 	if agentID.Valid {
 		item.AgentID = &agentID.String
 	}
+	normalizedAgentName := "System"
 	if agentName.Valid {
-		item.AgentName = &agentName.String
+		normalizedAgentName = normalizeFeedActorName(agentName.String)
 	}
+	item.AgentName = &normalizedAgentName
 	if len(metadataBytes) == 0 {
 		item.Metadata = json.RawMessage("{}")
 	} else {

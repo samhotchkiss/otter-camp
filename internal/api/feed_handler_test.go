@@ -339,6 +339,40 @@ func TestFeedHandlerV2UsesSystemWhenGitPushActorCannotBeResolved(t *testing.T) {
 	require.Contains(t, resp.Items[0].Summary, "Fallback actor")
 }
 
+func TestFeedHandlerV2NormalizesUnknownActorToSystem(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	orgID := insertFeedOrganization(t, db, "feed-git-push-unknown")
+	insertFeedActivity(
+		t,
+		db,
+		orgID,
+		"git.push",
+		json.RawMessage(`{"pusher_name":"Unknown","branch":"main","commit_message":"Placeholder actor"}`),
+		time.Date(2026, 2, 8, 11, 30, 0, 0, time.UTC),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID, nil)
+	rec := httptest.NewRecorder()
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp PaginatedFeedResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Items, 1)
+	require.NotNil(t, resp.Items[0].AgentName)
+	require.Equal(t, "System", *resp.Items[0].AgentName)
+	require.Contains(t, resp.Items[0].Summary, "Placeholder actor")
+}
+
 func TestFeedHandlerV2FilterByDateRange(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)

@@ -166,6 +166,14 @@ function formatTimeAgo(dateStr: string): string {
   return `${diffDays}d ago`;
 }
 
+function normalizeActivityActorName(value?: string): string {
+  const candidate = (value || "").trim();
+  if (!candidate || candidate.toLowerCase() === "unknown") {
+    return "System";
+  }
+  return candidate;
+}
+
 function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
   const priorityClasses: Record<string, string> = {
     P0: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
@@ -381,7 +389,7 @@ export default function ProjectDetailPage() {
             metadata?: unknown;
             created_at?: string;
           }) => {
-            const agentName = item.agent_name?.trim() || "System";
+            const agentName = normalizeActivityActorName(item.agent_name);
             const type = item.type?.trim() || "activity";
             const highlight = getActivityDescription({
               type,

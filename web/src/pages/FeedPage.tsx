@@ -134,8 +134,7 @@ export default function FeedPage() {
         const payload = (await response.json()) as FeedFallbackResponse;
         const items = (payload.items || [])
           .map(mapFallbackItem)
-          .filter((item): item is AgentActivityEvent => item !== null)
-          .filter((item) => item.trigger.startsWith("task") || item.trigger.startsWith("agent"));
+          .filter((item): item is AgentActivityEvent => item !== null);
         setFallbackEvents(items);
       })
       .catch((err: unknown) => {
