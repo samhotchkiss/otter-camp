@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useWS } from "../../contexts/WebSocketContext";
+import { API_URL } from "../../lib/api";
 import WebSocketIssueSubscriber from "../WebSocketIssueSubscriber";
 import { DocumentWorkspace } from "../content-review";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const COMMENTS_PAGE_SIZE = 20;
 type IssueApprovalState = "draft" | "ready_for_review" | "needs_changes" | "approved";

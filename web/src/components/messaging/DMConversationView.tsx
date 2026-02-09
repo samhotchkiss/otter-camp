@@ -8,12 +8,11 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useWS } from "../../contexts/WebSocketContext";
+import { API_URL } from "../../lib/api";
 import MessageHistory from "./MessageHistory";
 import AgentStatusIndicator from "./AgentStatusIndicator";
 import type { Agent, DMMessage, PaginationInfo } from "./types";
 import { getInitials } from "./utils";
-
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 
 export type DMConversationViewProps = {
   agent: Agent;

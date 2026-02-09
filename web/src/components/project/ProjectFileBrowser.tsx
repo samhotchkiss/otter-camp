@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useNavigate } from "react-router-dom";
+import { API_URL } from "../../lib/api";
 import MarkdownPreview from "../content-review/MarkdownPreview";
 import { resolveEditorForPath } from "../content-review/editorModeResolver";
 import ProjectCommitBrowser from "./ProjectCommitBrowser";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const NO_REPO_CONFIGURED_MESSAGE = "No repository configured for this project";
 const EMPTY_REPO_TREE_MESSAGE = "No files found in this repository yet.";

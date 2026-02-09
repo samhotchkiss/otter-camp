@@ -9,8 +9,8 @@ import {
 } from "react";
 import { useWS } from "./WebSocketContext";
 import type { Agent } from "../components/messaging/types";
+import { API_URL } from "../lib/api";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const STORAGE_KEY = "otter-camp-global-chat:v1";
 const SYSTEM_SESSION_AUTHOR = "__otter_session__";

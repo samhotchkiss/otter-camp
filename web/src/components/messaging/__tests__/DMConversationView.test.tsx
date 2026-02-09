@@ -56,7 +56,7 @@ describe("DMConversationView", () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const url = String(mockFetch.mock.calls[0]?.[0] ?? "");
-    expect(url).toMatch(/^https:\/\/api\.otter\.camp\/api\/messages\?/);
+    expect(url).toContain(`${window.location.origin}/api/messages?`);
     expect(url).toContain("/api/messages?");
     expect(url).toContain("thread_id=dm_agent-1");
     expect(screen.getByText(/1 message/i)).toBeInTheDocument();

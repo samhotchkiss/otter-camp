@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useGlobalChat } from "../../contexts/GlobalChatContext";
+import { API_URL } from "../../lib/api";
 import GlobalChatSurface from "./GlobalChatSurface";
 import { getInitials } from "../messaging/utils";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
 
 function conversationTypeLabel(type: "dm" | "project" | "issue"): string {

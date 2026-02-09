@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { API_URL } from "../../lib/api";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 
 type IssueFilterState = "all" | "open" | "closed";

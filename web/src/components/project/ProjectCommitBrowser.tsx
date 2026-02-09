@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
+import { API_URL } from "../../lib/api";
 import ReviewDiffUnified from "../review/ReviewDiffUnified";
 import type { DiffFile, DiffFileStatus, DiffHunk, DiffLine } from "../review/types";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const EMPTY_BODY_FALLBACK = "No detailed description provided in commit body.";
 

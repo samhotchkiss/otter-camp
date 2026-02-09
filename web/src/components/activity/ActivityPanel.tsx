@@ -4,8 +4,7 @@ import LoadingSpinner from "../LoadingSpinner";
 import ActivityItemRow from "./ActivityItemRow";
 import { formatRelativeTime, getTypeConfig, normalizeMetadata } from "./activityFormat";
 import { SAMPLE_ACTIVITY_ITEMS, type ActivityFeedItem } from "./sampleActivity";
-
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
+import { API_URL } from "../../lib/api";
 
 type FeedApiItem = {
   id: string;
