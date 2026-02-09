@@ -50,6 +50,20 @@ describe("PipelineSettings", () => {
     expect(screen.getAllByRole("option", { name: "Manual (no agent)" }).length).toBeGreaterThan(0);
   });
 
+  it("shows error when initial load fails", async () => {
+    fetchMock.mockResolvedValueOnce(mockJSONResponse({ error: "pipeline load failed" }, false));
+
+    render(
+      <PipelineSettings
+        projectId="project-1"
+        agents={[]}
+        initialRequireHumanReview={false}
+      />,
+    );
+
+    expect(await screen.findByText("pipeline load failed")).toBeInTheDocument();
+  });
+
   it("submits role updates and human review toggle", async () => {
     const user = userEvent.setup();
     fetchMock
@@ -110,6 +124,49 @@ describe("PipelineSettings", () => {
     expect(JSON.parse(String(patchCall[1]?.body))).toEqual({ require_human_review: true });
 
     expect(await screen.findByText("Pipeline settings saved.")).toBeInTheDocument();
+  });
+
+  it("calls onRequireHumanReviewSaved after successful save", async () => {
+    const user = userEvent.setup();
+    const onRequireHumanReviewSaved = vi.fn();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          planner: { agentId: null },
+          worker: { agentId: null },
+          reviewer: { agentId: null },
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          planner: { agentId: null },
+          worker: { agentId: null },
+          reviewer: { agentId: null },
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          require_human_review: true,
+        }),
+      );
+
+    render(
+      <PipelineSettings
+        projectId="project-1"
+        agents={[]}
+        initialRequireHumanReview={false}
+        onRequireHumanReviewSaved={onRequireHumanReviewSaved}
+      />,
+    );
+
+    await screen.findByLabelText("Planner role");
+    await user.click(screen.getByRole("checkbox", { name: /require human approval before merge/i }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline settings" }));
+
+    await waitFor(() => {
+      expect(onRequireHumanReviewSaved).toHaveBeenCalledWith(true);
+    });
   });
 
   it("shows API error when save fails", async () => {

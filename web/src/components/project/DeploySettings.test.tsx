@@ -40,6 +40,14 @@ describe("DeploySettings", () => {
     expect(screen.getByLabelText("GitHub branch")).toHaveValue("release");
   });
 
+  it("shows error when initial load fails", async () => {
+    fetchMock.mockResolvedValueOnce(mockJSONResponse({ error: "deploy load failed" }, false));
+
+    render(<DeploySettings projectId="project-1" />);
+
+    expect(await screen.findByText("deploy load failed")).toBeInTheDocument();
+  });
+
   it("submits github push payload with default branch", async () => {
     const user = userEvent.setup();
     fetchMock
