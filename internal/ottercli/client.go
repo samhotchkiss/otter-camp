@@ -521,7 +521,7 @@ type OnboardingBootstrapResponse struct {
 	OrgSlug     string `json:"org_slug"`
 	UserID      string `json:"user_id"`
 	Token       string `json:"token"`
-	ExpiresAt   string `json:"expires_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
 	ProjectID   string `json:"project_id"`
 	ProjectName string `json:"project_name"`
 	IssueID     string `json:"issue_id"`
