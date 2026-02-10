@@ -403,6 +403,7 @@ let previousSessionsByKey = new Map<string, OpenClawSession>();
 const previousCronLastRunByID = new Map<string, string>();
 const lastPatchedWorkflowConfigByCronID = new Map<string, string>();
 let cronRunDetectionInitialized = false;
+let workflowSyncInProgress = false;
 const queuedActivityEventsByOrg = new Map<string, BridgeAgentActivityEvent[]>();
 const queuedActivityEventIDs = new Set<string>();
 const deliveredActivityEventIDs = new Set<string>();
@@ -3387,69 +3388,79 @@ async function syncWorkflowProjectsFromCronJobs(cronJobs: OpenClawCronJobSnapsho
     return;
   }
 
-  let workflowProjects = await fetchWorkflowProjectsSnapshot();
-  const wasInitialized = cronRunDetectionInitialized;
-
-  for (const job of cronJobs) {
-    const jobID = getTrimmedString(job.id);
-    if (!jobID) {
-      continue;
-    }
-
-    let project = workflowProjects.find((candidate) => projectMatchesCronJob(candidate, job));
-    if (!project) {
-      try {
-        project = await createWorkflowProjectFromCron(job);
-        workflowProjects.push(project);
-        console.log(`[bridge] created workflow project ${project.id} for cron job ${jobID}`);
-      } catch (err) {
-        console.error(`[bridge] failed to create workflow project for cron ${jobID}:`, err);
-      }
-    }
-
-    if (project) {
-      const patchPayload = {
-        workflow_enabled: job.enabled,
-        workflow_schedule: cronJobToWorkflowSchedule(job),
-      };
-      const patchFingerprint = JSON.stringify(patchPayload);
-      const previousPatchFingerprint = lastPatchedWorkflowConfigByCronID.get(jobID) || '';
-
-      try {
-        if (patchFingerprint !== previousPatchFingerprint) {
-          await patchWorkflowProjectFromCron(project.id, job, patchPayload);
-          lastPatchedWorkflowConfigByCronID.set(jobID, patchFingerprint);
-        }
-      } catch (err) {
-        console.error(`[bridge] failed to patch workflow project ${project.id} from cron ${jobID}:`, err);
-      }
-    }
-
-    const currentLastRun = getTrimmedString(job.last_run_at);
-    const previousLastRun = previousCronLastRunByID.get(jobID) || '';
-    let shouldUpdateLastRun = true;
-
-    if (wasInitialized && project && currentLastRun && currentLastRun !== previousLastRun) {
-      const dedupeRunID = `cron:${jobID}:${currentLastRun}`;
-      if (!deliveredRunIDs.has(dedupeRunID)) {
-        try {
-          await triggerWorkflowRun(project.id, job);
-          markRunIDDelivered(dedupeRunID);
-          console.log(`[bridge] triggered workflow run for cron ${jobID} via project ${project.id}`);
-        } catch (err) {
-          shouldUpdateLastRun = false;
-          console.error(`[bridge] failed to trigger workflow run for cron ${jobID}:`, err);
-        }
-      }
-    }
-
-    if (shouldUpdateLastRun) {
-      previousCronLastRunByID.set(jobID, currentLastRun);
-    }
+  if (workflowSyncInProgress) {
+    console.log('[bridge] workflow sync already in progress; skipping overlapping run');
+    return;
   }
 
-  if (!cronRunDetectionInitialized) {
-    cronRunDetectionInitialized = true;
+  workflowSyncInProgress = true;
+  try {
+    let workflowProjects = await fetchWorkflowProjectsSnapshot();
+    const wasInitialized = cronRunDetectionInitialized;
+
+    for (const job of cronJobs) {
+      const jobID = getTrimmedString(job.id);
+      if (!jobID) {
+        continue;
+      }
+
+      let project = workflowProjects.find((candidate) => projectMatchesCronJob(candidate, job));
+      if (!project) {
+        try {
+          project = await createWorkflowProjectFromCron(job);
+          workflowProjects.push(project);
+          console.log(`[bridge] created workflow project ${project.id} for cron job ${jobID}`);
+        } catch (err) {
+          console.error(`[bridge] failed to create workflow project for cron ${jobID}:`, err);
+        }
+      }
+
+      if (project) {
+        const patchPayload = {
+          workflow_enabled: job.enabled,
+          workflow_schedule: cronJobToWorkflowSchedule(job),
+        };
+        const patchFingerprint = JSON.stringify(patchPayload);
+        const previousPatchFingerprint = lastPatchedWorkflowConfigByCronID.get(jobID) || '';
+
+        try {
+          if (patchFingerprint !== previousPatchFingerprint) {
+            await patchWorkflowProjectFromCron(project.id, job, patchPayload);
+            lastPatchedWorkflowConfigByCronID.set(jobID, patchFingerprint);
+          }
+        } catch (err) {
+          console.error(`[bridge] failed to patch workflow project ${project.id} from cron ${jobID}:`, err);
+        }
+      }
+
+      const currentLastRun = getTrimmedString(job.last_run_at);
+      const previousLastRun = previousCronLastRunByID.get(jobID) || '';
+      let shouldUpdateLastRun = true;
+
+      if (wasInitialized && project && currentLastRun && currentLastRun !== previousLastRun) {
+        const dedupeRunID = `cron:${jobID}:${currentLastRun}`;
+        if (!deliveredRunIDs.has(dedupeRunID)) {
+          try {
+            await triggerWorkflowRun(project.id, job);
+            markRunIDDelivered(dedupeRunID);
+            console.log(`[bridge] triggered workflow run for cron ${jobID} via project ${project.id}`);
+          } catch (err) {
+            shouldUpdateLastRun = false;
+            console.error(`[bridge] failed to trigger workflow run for cron ${jobID}:`, err);
+          }
+        }
+      }
+
+      if (shouldUpdateLastRun) {
+        previousCronLastRunByID.set(jobID, currentLastRun);
+      }
+    }
+
+    if (!cronRunDetectionInitialized) {
+      cronRunDetectionInitialized = true;
+    }
+  } finally {
+    workflowSyncInProgress = false;
   }
 }
 
@@ -3463,6 +3474,7 @@ export function resetWorkflowSyncStateForTest(): void {
   previousCronLastRunByID.clear();
   lastPatchedWorkflowConfigByCronID.clear();
   cronRunDetectionInitialized = false;
+  workflowSyncInProgress = false;
   deliveredRunIDs.clear();
   deliveredRunIDOrder.length = 0;
 }

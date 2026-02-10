@@ -364,4 +364,150 @@ describe('syncWorkflowProjectsFromCronJobsForTest', () => {
       resetWorkflowSyncStateForTest();
     }
   });
+
+  it('skips overlapping sync invocations while one run is in progress', async () => {
+    resetWorkflowSyncStateForTest();
+    const originalFetch = globalThis.fetch;
+    let releaseFirstList: (() => void) | null = null;
+    const firstListBlocked = new Promise<void>((resolve) => {
+      releaseFirstList = resolve;
+    });
+    const calls: Array<{ method: string; url: string }> = [];
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = requestURL(input);
+        const method = requestMethod(input, init);
+        calls.push({ method, url });
+        if (method === 'GET' && url.includes('/api/projects?workflow=true')) {
+          if (calls.filter((call) => call.method === 'GET').length === 1) {
+            await firstListBlocked;
+          }
+          return jsonResponse({ projects: [] });
+        }
+        if (method === 'POST' && url.endsWith('/api/projects')) {
+          return jsonResponse({
+            id: 'project-1',
+            name: 'Morning Briefing',
+            workflow_schedule: { kind: 'every', everyMs: 900000, cron_id: 'job-1' },
+          }, 201);
+        }
+        if (method === 'PATCH' && url.includes('/api/projects/project-1')) {
+          return jsonResponse({}, 200);
+        }
+        if (method === 'POST' && url.includes('/runs/trigger')) {
+          return jsonResponse({}, 201);
+        }
+        throw new Error(`unexpected request ${method} ${url}`);
+      }) as typeof fetch;
+
+      const firstSync = syncWorkflowProjectsFromCronJobsForTest([
+        {
+          id: 'job-1',
+          name: 'Morning Briefing',
+          schedule: '15m',
+          enabled: true,
+        },
+      ]);
+
+      const secondSync = syncWorkflowProjectsFromCronJobsForTest([
+        {
+          id: 'job-1',
+          name: 'Morning Briefing',
+          schedule: '15m',
+          enabled: true,
+        },
+      ]);
+      await secondSync;
+
+      const listCallsWhileBlocked = calls.filter(
+        (call) => call.method === 'GET' && call.url.includes('/api/projects?workflow=true'),
+      );
+      assert.equal(listCallsWhileBlocked.length, 1);
+
+      if (releaseFirstList) {
+        releaseFirstList();
+      }
+      await firstSync;
+
+      const createCalls = calls.filter(
+        (call) => call.method === 'POST' && call.url.endsWith('/api/projects'),
+      );
+      assert.equal(createCalls.length, 1);
+    } finally {
+      if (releaseFirstList) {
+        releaseFirstList();
+      }
+      globalThis.fetch = originalFetch;
+      resetWorkflowSyncStateForTest();
+    }
+  });
+
+  it('resets sync concurrency guard after failed sync run', async () => {
+    resetWorkflowSyncStateForTest();
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ method: string; url: string }> = [];
+    let firstSyncShouldFail = true;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = requestURL(input);
+        const method = requestMethod(input, init);
+        calls.push({ method, url });
+        if (method === 'GET' && url.includes('/api/projects?workflow=true')) {
+          if (firstSyncShouldFail) {
+            return new Response('failed', { status: 500, statusText: 'Server Error' });
+          }
+          return jsonResponse({ projects: [] });
+        }
+        if (method === 'POST' && url.endsWith('/api/projects')) {
+          return jsonResponse({
+            id: 'project-1',
+            name: 'Morning Briefing',
+            workflow_schedule: { kind: 'every', everyMs: 900000, cron_id: 'job-1' },
+          }, 201);
+        }
+        if (method === 'PATCH' && url.includes('/api/projects/project-1')) {
+          return jsonResponse({}, 200);
+        }
+        if (method === 'POST' && url.includes('/runs/trigger')) {
+          return jsonResponse({}, 201);
+        }
+        throw new Error(`unexpected request ${method} ${url}`);
+      }) as typeof fetch;
+
+      await assert.rejects(() => syncWorkflowProjectsFromCronJobsForTest([
+        {
+          id: 'job-1',
+          name: 'Morning Briefing',
+          schedule: '15m',
+          enabled: true,
+        },
+      ]));
+      const listCallsAfterFailure = calls.filter(
+        (call) => call.method === 'GET' && call.url.includes('/api/projects?workflow=true'),
+      ).length;
+
+      firstSyncShouldFail = false;
+      await syncWorkflowProjectsFromCronJobsForTest([
+        {
+          id: 'job-1',
+          name: 'Morning Briefing',
+          schedule: '15m',
+          enabled: true,
+        },
+      ]);
+
+      const listCallsAfterRecovery = calls.filter(
+        (call) => call.method === 'GET' && call.url.includes('/api/projects?workflow=true'),
+      ).length;
+      const createCalls = calls.filter(
+        (call) => call.method === 'POST' && call.url.endsWith('/api/projects'),
+      );
+      assert.equal(listCallsAfterFailure > 0, true);
+      assert.equal(listCallsAfterRecovery > listCallsAfterFailure, true);
+      assert.equal(createCalls.length, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetWorkflowSyncStateForTest();
+    }
+  });
 });
