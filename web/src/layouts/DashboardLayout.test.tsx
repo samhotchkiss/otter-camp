@@ -127,7 +127,12 @@ describe("DashboardLayout", () => {
 
   it("renders degraded bridge indicator and delayed-message banner", async () => {
     adminConnectionsMock.mockResolvedValue({
-      bridge: { connected: true, sync_healthy: false, status: "degraded" },
+      bridge: {
+        connected: true,
+        sync_healthy: false,
+        status: "degraded",
+        last_sync_age_seconds: 185,
+      },
     });
 
     render(
@@ -140,13 +145,19 @@ describe("DashboardLayout", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText("Bridge delayed")).toBeInTheDocument();
-    expect(await screen.findByText("Messages may be delayed - bridge reconnecting")).toBeInTheDocument();
+    expect(await screen.findByText("Bridge connected, OpenClaw unreachable")).toBeInTheDocument();
+    expect(await screen.findByText("Bridge connected but OpenClaw unreachable")).toBeInTheDocument();
+    expect(await screen.findByText("Last successful sync 3m ago")).toBeInTheDocument();
   });
 
   it("renders unhealthy bridge indicator and delayed-message banner", async () => {
     adminConnectionsMock.mockResolvedValue({
-      bridge: { connected: false, sync_healthy: false, status: "unhealthy" },
+      bridge: {
+        connected: false,
+        sync_healthy: false,
+        status: "unhealthy",
+        last_sync_age_seconds: 5400,
+      },
     });
 
     render(
@@ -160,6 +171,7 @@ describe("DashboardLayout", () => {
     );
 
     expect(await screen.findByText("Bridge offline")).toBeInTheDocument();
-    expect(await screen.findByText("Messages may be delayed - bridge reconnecting")).toBeInTheDocument();
+    expect(await screen.findByText("Bridge offline - reconnecting")).toBeInTheDocument();
+    expect(await screen.findByText("Last successful sync 1h ago")).toBeInTheDocument();
   });
 });

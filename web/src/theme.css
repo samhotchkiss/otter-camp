@@ -746,6 +746,14 @@ textarea::placeholder {
   border-bottom: 1px solid transparent;
 }
 
+.bridge-delay-banner .bridge-delay-detail {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
 .bridge-delay-banner.degraded {
   background: rgba(200, 121, 65, 0.2);
   color: var(--orange);

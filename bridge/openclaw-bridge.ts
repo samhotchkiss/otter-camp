@@ -63,7 +63,10 @@ const ACTIVITY_EVENTS_BATCH_SIZE = 200;
 const MAX_TRACKED_ACTIVITY_EVENT_IDS = 5000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const RECONNECT_JITTER_SPREAD = 0.2;
-const RECONNECT_FAILURE_EXIT_THRESHOLD = 5;
+const RECONNECT_WARNING_THRESHOLD = 5;
+const RECONNECT_ALERT_THRESHOLD = 30;
+const RECONNECT_RESTART_THRESHOLD = 60;
+const RESTART_FAILURE_EXIT_THRESHOLD = 2;
 const HEARTBEAT_INTERVAL_MS = 10000;
 const HEARTBEAT_PONG_TIMEOUT_MS = 5000;
 const HEARTBEAT_MISS_THRESHOLD = 2;
@@ -95,6 +98,7 @@ const SAFE_FALLBACK_AGENT_ID_PATTERN =
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
+let otterCampOrgIDForTestOverride: string | null = null;
 const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
 const IDENTITY_BLOCK_MAX_CHARS = 1200;
 const SESSION_TASK_SUMMARY_MAX_CHARS = 96;
@@ -367,7 +371,12 @@ type BridgeSocketRole = 'openclaw' | 'ottercamp';
 type SocketReconnectController = {
   timer: ReturnType<typeof setTimeout> | null;
   consecutiveFailures: number;
+  totalReconnectAttempts: number;
   firstMessageReceived: boolean;
+  lastConnectedAt: number;
+  disconnectedSince: number;
+  alertEmittedForOutage: boolean;
+  restartFailures: number;
 };
 
 type SocketHeartbeatController = {
@@ -390,33 +399,41 @@ type DispatchReplayQueueItem = {
 export type BridgeConnectionHealthInput = {
   uptimeSeconds: number;
   queueDepth: number;
+  lastSuccessfulSyncAtMs: number;
   openclaw: {
     connected: boolean;
-    state: BridgeConnectionState;
-    lastMessageAtMs: number;
-    reconnects: number;
+    lastConnectedAtMs: number;
+    disconnectedSinceMs: number;
+    consecutiveFailures: number;
+    totalReconnectAttempts: number;
   };
   ottercamp: {
     connected: boolean;
-    state: BridgeConnectionState;
-    lastMessageAtMs: number;
-    reconnects: number;
+    lastConnectedAtMs: number;
+    disconnectedSinceMs: number;
+    consecutiveFailures: number;
+    totalReconnectAttempts: number;
   };
 };
 
 type BridgeHealthPayload = {
-  status: 'healthy' | 'degraded' | 'unhealthy';
+  status: 'healthy' | 'degraded' | 'disconnected';
   openclaw: {
     connected: boolean;
-    lastMessage: string | null;
-    reconnects: number;
+    lastConnectedAt: string | null;
+    disconnectedSince: string | null;
+    consecutiveFailures: number;
+    totalReconnectAttempts: number;
   };
   ottercamp: {
     connected: boolean;
-    lastMessage: string | null;
-    reconnects: number;
+    lastConnectedAt: string | null;
+    disconnectedSince: string | null;
+    consecutiveFailures: number;
+    totalReconnectAttempts: number;
   };
-  uptime: number;
+  uptime: string;
+  lastSuccessfulSync: string | null;
   queueDepth: number;
 };
 
@@ -426,8 +443,26 @@ let healthServer: http.Server | null = null;
 let continuousModeEnabled = false;
 const processStartedAtMs = Date.now();
 const reconnectByRole: Record<BridgeSocketRole, SocketReconnectController> = {
-  openclaw: { timer: null, consecutiveFailures: 0, firstMessageReceived: false },
-  ottercamp: { timer: null, consecutiveFailures: 0, firstMessageReceived: false },
+  openclaw: {
+    timer: null,
+    consecutiveFailures: 0,
+    totalReconnectAttempts: 0,
+    firstMessageReceived: false,
+    lastConnectedAt: 0,
+    disconnectedSince: 0,
+    alertEmittedForOutage: false,
+    restartFailures: 0,
+  },
+  ottercamp: {
+    timer: null,
+    consecutiveFailures: 0,
+    totalReconnectAttempts: 0,
+    firstMessageReceived: false,
+    lastConnectedAt: 0,
+    disconnectedSince: 0,
+    alertEmittedForOutage: false,
+    restartFailures: 0,
+  },
 };
 const heartbeatByRole: Record<BridgeSocketRole, SocketHeartbeatController> = {
   openclaw: {
@@ -479,6 +514,7 @@ const deliveredDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDOrder: string[] = [];
 let dispatchReplayQueueBytes = 0;
 const recentCompactionRecoveryByKey = new Map<string, number>();
+let lastSuccessfulSyncAtMs = 0;
 let gitCompletionDefaultsResolved = false;
 let gitCompletionBranch = '';
 let gitCompletionRemote = '';
@@ -486,6 +522,8 @@ let gitCompletionRemote = '';
 const genId = () => `req-${++requestId}`;
 const defaultExecFileAsync = promisify(execFile);
 let execFileAsync = defaultExecFileAsync;
+const defaultProcessExit = (code: number): never => process.exit(code);
+let processExitFn: (code: number) => never = defaultProcessExit;
 
 export function setExecFileForTest(
   fn: ((file: string, args: readonly string[], options: { timeout?: number; maxBuffer?: number }, callback: (error: Error | null, stdout?: string, stderr?: string) => void) => void) | null,
@@ -497,6 +535,25 @@ export function setExecFileForTest(
   execFileAsync = promisify(fn);
 }
 
+export function setProcessExitForTest(fn: ((code: number) => never) | null): void {
+  processExitFn = fn || defaultProcessExit;
+}
+
+function resolveConfiguredOtterCampOrgID(): string {
+  if (otterCampOrgIDForTestOverride !== null) {
+    return otterCampOrgIDForTestOverride;
+  }
+  return OTTERCAMP_ORG_ID;
+}
+
+export function setOtterCampOrgIDForTest(orgID: string | null): void {
+  if (orgID === null) {
+    otterCampOrgIDForTestOverride = null;
+    return;
+  }
+  otterCampOrgIDForTestOverride = getTrimmedString(orgID);
+}
+
 export function computeReconnectDelayMs(attempt: number, randomFn: () => number = Math.random): number {
   const safeAttempt = Number.isFinite(attempt) && attempt >= 0 ? Math.floor(attempt) : 0;
   const baseDelay = Math.min(RECONNECT_MAX_DELAY_MS, 1000 * Math.pow(2, safeAttempt));
@@ -505,8 +562,26 @@ export function computeReconnectDelayMs(attempt: number, randomFn: () => number 
   return Math.min(RECONNECT_MAX_DELAY_MS, Math.max(100, Math.round(baseDelay * jitterMultiplier)));
 }
 
+export type ReconnectEscalationTier = 'none' | 'warn' | 'alert' | 'restart';
+
+export function reconnectEscalationTierForFailures(consecutiveFailures: number): ReconnectEscalationTier {
+  const safeFailures = Number.isFinite(consecutiveFailures) && consecutiveFailures > 0
+    ? Math.floor(consecutiveFailures)
+    : 0;
+  if (safeFailures >= RECONNECT_RESTART_THRESHOLD) {
+    return 'restart';
+  }
+  if (safeFailures >= RECONNECT_ALERT_THRESHOLD) {
+    return 'alert';
+  }
+  if (safeFailures >= RECONNECT_WARNING_THRESHOLD) {
+    return 'warn';
+  }
+  return 'none';
+}
+
 export function shouldExitAfterReconnectFailures(consecutiveFailures: number): boolean {
-  return Number.isFinite(consecutiveFailures) && consecutiveFailures >= RECONNECT_FAILURE_EXIT_THRESHOLD;
+  return reconnectEscalationTierForFailures(consecutiveFailures) === 'restart';
 }
 
 export function nextMissedPongCount(currentMissedPongs: number, receivedPong: boolean): number {
@@ -530,15 +605,30 @@ function toOptionalISO(timestampMs: number): string | null {
   return new Date(timestampMs).toISOString();
 }
 
-function classifyBridgeHealthStatus(input: BridgeConnectionHealthInput): 'healthy' | 'degraded' | 'unhealthy' {
-  const socketStates = [input.openclaw, input.ottercamp];
-  if (socketStates.some((socket) => !socket.connected || socket.state === 'disconnected' || socket.state === 'reconnecting')) {
-    return 'unhealthy';
+function formatUptime(uptimeSeconds: number): string {
+  const safeSeconds = Number.isFinite(uptimeSeconds) && uptimeSeconds > 0
+    ? Math.floor(uptimeSeconds)
+    : 0;
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`;
   }
-  if (socketStates.some((socket) => socket.state === 'degraded' || socket.state === 'connecting')) {
+  if (minutes > 0) {
+    return seconds > 0 ? `${minutes}m${seconds}s` : `${minutes}m`;
+  }
+  return `${seconds}s`;
+}
+
+function classifyBridgeHealthStatus(input: BridgeConnectionHealthInput): 'healthy' | 'degraded' | 'disconnected' {
+  if (input.openclaw.connected && input.ottercamp.connected) {
+    return 'healthy';
+  }
+  if (input.openclaw.connected || input.ottercamp.connected) {
     return 'degraded';
   }
-  return 'healthy';
+  return 'disconnected';
 }
 
 export function buildHealthPayload(input: BridgeConnectionHealthInput): BridgeHealthPayload {
@@ -546,15 +636,20 @@ export function buildHealthPayload(input: BridgeConnectionHealthInput): BridgeHe
     status: classifyBridgeHealthStatus(input),
     openclaw: {
       connected: input.openclaw.connected,
-      lastMessage: toOptionalISO(input.openclaw.lastMessageAtMs),
-      reconnects: input.openclaw.reconnects,
+      lastConnectedAt: toOptionalISO(input.openclaw.lastConnectedAtMs),
+      disconnectedSince: toOptionalISO(input.openclaw.disconnectedSinceMs),
+      consecutiveFailures: input.openclaw.consecutiveFailures,
+      totalReconnectAttempts: input.openclaw.totalReconnectAttempts,
     },
     ottercamp: {
       connected: input.ottercamp.connected,
-      lastMessage: toOptionalISO(input.ottercamp.lastMessageAtMs),
-      reconnects: input.ottercamp.reconnects,
+      lastConnectedAt: toOptionalISO(input.ottercamp.lastConnectedAtMs),
+      disconnectedSince: toOptionalISO(input.ottercamp.disconnectedSinceMs),
+      consecutiveFailures: input.ottercamp.consecutiveFailures,
+      totalReconnectAttempts: input.ottercamp.totalReconnectAttempts,
     },
-    uptime: input.uptimeSeconds,
+    uptime: formatUptime(input.uptimeSeconds),
+    lastSuccessfulSync: toOptionalISO(input.lastSuccessfulSyncAtMs),
     queueDepth: input.queueDepth,
   };
 }
@@ -563,23 +658,30 @@ function getDispatchQueueDepthForHealth(): number {
   return dispatchReplayQueue.length;
 }
 
+function isConnectedState(state: BridgeConnectionState): boolean {
+  return state === 'connected' || state === 'degraded';
+}
+
 function buildRuntimeHealthInput(): BridgeConnectionHealthInput {
   const openclawState = connectionStateByRole.openclaw;
   const ottercampState = connectionStateByRole.ottercamp;
   return {
     uptimeSeconds: Math.max(0, Math.floor((Date.now() - processStartedAtMs) / 1000)),
     queueDepth: getDispatchQueueDepthForHealth(),
+    lastSuccessfulSyncAtMs,
     openclaw: {
-      connected: openclawState === 'connected' || openclawState === 'degraded',
-      state: openclawState,
-      lastMessageAtMs: heartbeatByRole.openclaw.lastMessageAt || heartbeatByRole.openclaw.lastPongAt,
-      reconnects: reconnectByRole.openclaw.consecutiveFailures,
+      connected: isConnectedState(openclawState),
+      lastConnectedAtMs: reconnectByRole.openclaw.lastConnectedAt,
+      disconnectedSinceMs: reconnectByRole.openclaw.disconnectedSince,
+      consecutiveFailures: reconnectByRole.openclaw.consecutiveFailures,
+      totalReconnectAttempts: reconnectByRole.openclaw.totalReconnectAttempts,
     },
     ottercamp: {
-      connected: ottercampState === 'connected' || ottercampState === 'degraded',
-      state: ottercampState,
-      lastMessageAtMs: heartbeatByRole.ottercamp.lastMessageAt || heartbeatByRole.ottercamp.lastPongAt,
-      reconnects: reconnectByRole.ottercamp.consecutiveFailures,
+      connected: isConnectedState(ottercampState),
+      lastConnectedAtMs: reconnectByRole.ottercamp.lastConnectedAt,
+      disconnectedSinceMs: reconnectByRole.ottercamp.disconnectedSince,
+      consecutiveFailures: reconnectByRole.ottercamp.consecutiveFailures,
+      totalReconnectAttempts: reconnectByRole.ottercamp.totalReconnectAttempts,
     },
   };
 }
@@ -640,6 +742,15 @@ function applyConnectionTransition(
   const previous = connectionStateByRole[role];
   const next = transitionConnectionState(previous, trigger);
   connectionStateByRole[role] = next;
+  if (!isConnectedState(previous) && isConnectedState(next)) {
+    reconnectByRole[role].lastConnectedAt = Date.now();
+    reconnectByRole[role].disconnectedSince = 0;
+  }
+  if (isConnectedState(previous) && !isConnectedState(next)) {
+    if (!Number.isFinite(reconnectByRole[role].disconnectedSince) || reconnectByRole[role].disconnectedSince <= 0) {
+      reconnectByRole[role].disconnectedSince = Date.now();
+    }
+  }
   if (previous === next) {
     return;
   }
@@ -660,12 +771,42 @@ function clearReconnectTimer(role: BridgeSocketRole): void {
 export function resetReconnectStateForTest(role: BridgeSocketRole): void {
   clearReconnectTimer(role);
   reconnectByRole[role].consecutiveFailures = 0;
+  reconnectByRole[role].totalReconnectAttempts = 0;
   reconnectByRole[role].firstMessageReceived = false;
+  reconnectByRole[role].lastConnectedAt = 0;
+  reconnectByRole[role].disconnectedSince = 0;
+  reconnectByRole[role].alertEmittedForOutage = false;
+  reconnectByRole[role].restartFailures = 0;
+}
+
+export function setConnectionStateForTest(role: BridgeSocketRole, state: BridgeConnectionState): void {
+  connectionStateByRole[role] = state;
+}
+
+export function getReconnectStateForTest(role: BridgeSocketRole): {
+  consecutiveFailures: number;
+  totalReconnectAttempts: number;
+  disconnectedSince: number;
+  alertEmittedForOutage: boolean;
+  restartFailures: number;
+  hasReconnectTimer: boolean;
+} {
+  const controller = reconnectByRole[role];
+  return {
+    consecutiveFailures: controller.consecutiveFailures,
+    totalReconnectAttempts: controller.totalReconnectAttempts,
+    disconnectedSince: controller.disconnectedSince,
+    alertEmittedForOutage: controller.alertEmittedForOutage,
+    restartFailures: controller.restartFailures,
+    hasReconnectTimer: controller.timer !== null,
+  };
 }
 
 function resetReconnectBackoffAfterFirstMessage(role: BridgeSocketRole): void {
   const controller = reconnectByRole[role];
   controller.consecutiveFailures = 0;
+  controller.alertEmittedForOutage = false;
+  controller.restartFailures = 0;
 }
 
 function markSocketConnectAttempt(role: BridgeSocketRole): void {
@@ -688,15 +829,93 @@ function markSocketMessage(role: BridgeSocketRole): void {
   }
 }
 
+function queueReconnectEscalationAlert(role: BridgeSocketRole, controller: SocketReconnectController): void {
+  if (controller.alertEmittedForOutage) {
+    return;
+  }
+  const orgID = getTrimmedString(resolveConfiguredOtterCampOrgID());
+  if (!orgID) {
+    console.warn(`[bridge] ${role} reconnect alert skipped: OTTERCAMP_ORG_ID is not configured`);
+    return;
+  }
+  if (!isConnectedState(connectionStateByRole.ottercamp)) {
+    console.warn(`[bridge] ${role} reconnect alert skipped: OtterCamp connection is unavailable`);
+    return;
+  }
+
+  const nowISO = new Date().toISOString();
+  const disconnectedForSeconds = controller.disconnectedSince > 0
+    ? Math.max(0, Math.floor((Date.now() - controller.disconnectedSince) / 1000))
+    : 0;
+  const event: BridgeAgentActivityEvent = {
+    id: `bridge_reconnect_alert_${role}_${controller.disconnectedSince || Date.now()}`,
+    agent_id: 'bridge',
+    session_key: `bridge:${role}:reconnect`,
+    trigger: 'bridge.reconnect.alert',
+    channel: 'system',
+    summary: `Bridge reconnect alert: ${role} disconnected`,
+    detail: `${role} reconnect has failed ${controller.consecutiveFailures} times (${disconnectedForSeconds}s disconnected).`,
+    tokens_used: 0,
+    duration_ms: disconnectedForSeconds * 1000,
+    status: 'failed',
+    started_at: nowISO,
+    completed_at: nowISO,
+  };
+  const queued = queueActivityEventsForOrg(orgID, [event]);
+  if (queued <= 0) {
+    return;
+  }
+  controller.alertEmittedForOutage = true;
+  void flushBufferedActivityEvents('reconnect-escalation-alert').catch((err) => {
+    console.error('[bridge] reconnect escalation alert flush failed:', err);
+  });
+}
+
+function requestSupervisorRestart(role: BridgeSocketRole, controller: SocketReconnectController): boolean {
+  const disconnectedForSeconds = controller.disconnectedSince > 0
+    ? Math.max(0, Math.floor((Date.now() - controller.disconnectedSince) / 1000))
+    : 0;
+  const reason =
+    `${role} reconnect failed ${controller.consecutiveFailures} times (${disconnectedForSeconds}s disconnected); requesting supervisor restart`;
+  console.error(`[bridge] ${reason}`);
+  try {
+    processExitFn(1);
+    return true;
+  } catch (err) {
+    controller.restartFailures += 1;
+    console.error(
+      `[bridge] supervisor restart request failed (${controller.restartFailures}/${RESTART_FAILURE_EXIT_THRESHOLD}):`,
+      err,
+    );
+    if (controller.restartFailures >= RESTART_FAILURE_EXIT_THRESHOLD) {
+      console.error('[bridge] restart request failed twice; forcing process exit');
+      process.exit(1);
+    }
+    return false;
+  }
+}
+
 function scheduleReconnect(role: BridgeSocketRole, reconnectFn: () => void): void {
   const controller = reconnectByRole[role];
   controller.consecutiveFailures += 1;
-  if (shouldExitAfterReconnectFailures(controller.consecutiveFailures)) {
-    console.error(
-      `[bridge] ${role} reconnect failed ${controller.consecutiveFailures} times; exiting for supervisor restart`,
+  controller.totalReconnectAttempts += 1;
+  const escalationTier = reconnectEscalationTierForFailures(controller.consecutiveFailures);
+  if (controller.consecutiveFailures === RECONNECT_WARNING_THRESHOLD) {
+    console.warn(
+      `[bridge] ${role} reconnect warning: ${controller.consecutiveFailures} consecutive failures`,
     );
-    process.exit(1);
-    return;
+  }
+  if (
+    controller.consecutiveFailures >= RECONNECT_ALERT_THRESHOLD &&
+    escalationTier === 'alert'
+  ) {
+    queueReconnectEscalationAlert(role, controller);
+  }
+  if (escalationTier === 'restart') {
+    const restartRequested = requestSupervisorRestart(role, controller);
+    if (restartRequested || controller.restartFailures >= RESTART_FAILURE_EXIT_THRESHOLD) {
+      return;
+    }
   }
 
   const delayMs = computeReconnectDelayMs(controller.consecutiveFailures - 1);
@@ -750,6 +969,32 @@ export function triggerOpenClawCloseForTest(
   reconnectFn: () => void,
 ): void {
   handleOpenClawSocketClosed(code, reason, () => {}, reconnectFn);
+}
+
+function handleOtterCampSocketClosed(
+  code: number,
+  reason: string,
+  reconnectFn: () => void,
+): void {
+  console.warn(`[bridge] OtterCamp websocket closed (${code}) ${reason}`);
+  applyConnectionTransition('ottercamp', 'socket_closed', { code, reason });
+  clearHeartbeatTimers('ottercamp');
+  otterCampWS = null;
+  if (continuousModeEnabled) {
+    scheduleReconnect('ottercamp', reconnectFn);
+  }
+}
+
+export function triggerOtterCampCloseForTest(
+  code: number,
+  reason: string,
+  reconnectFn: () => void,
+): void {
+  handleOtterCampSocketClosed(code, reason, reconnectFn);
+}
+
+export function triggerSocketMessageForTest(role: BridgeSocketRole): void {
+  markSocketMessage(role);
 }
 
 export function setContinuousModeEnabledForTest(enabled: boolean): void {
@@ -2375,7 +2620,7 @@ function resolveActivityOrgID(sessionKey: string): string {
   if (fromContext) {
     return fromContext;
   }
-  return OTTERCAMP_ORG_ID;
+  return resolveConfiguredOtterCampOrgID();
 }
 
 export function queueActivityEventsForOrg(orgID: string, events: BridgeAgentActivityEvent[]): number {
@@ -3809,6 +4054,7 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   if (!response.ok) {
     throw new Error(`sync push failed: ${response.status} ${response.statusText}`);
   }
+  lastSuccessfulSyncAtMs = Date.now();
 
   try {
     await syncWorkflowProjectsFromCronJobs(cronJobs);
@@ -4909,15 +5155,9 @@ function connectOtterCampDispatchSocket(): void {
   });
 
   otterCampWS.on('close', (code, reason) => {
-    console.warn(`[bridge] OtterCamp websocket closed (${code}) ${reason.toString()}`);
-    applyConnectionTransition('ottercamp', 'socket_closed', { code, reason: reason.toString() });
-    clearHeartbeatTimers('ottercamp');
-    otterCampWS = null;
-    if (continuousModeEnabled) {
-      scheduleReconnect('ottercamp', () => {
-        connectOtterCampDispatchSocket();
-      });
-    }
+    handleOtterCampSocketClosed(code, reason.toString(), () => {
+      connectOtterCampDispatchSocket();
+    });
   });
 
   otterCampWS.on('error', (err) => {
