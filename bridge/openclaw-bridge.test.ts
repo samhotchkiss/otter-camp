@@ -23,7 +23,9 @@ import {
   resetBufferedActivityEventsForTest,
   resolveExecutionMode,
   resolveProjectWorktreeRoot,
+  resetPeriodicSyncGuardForTest,
   resetSessionContextsForTest,
+  runSerializedSyncOperationForTest,
   sanitizeWebSocketURLForLog,
   setSessionContextForTest,
   type QuestionnairePayload,
@@ -345,6 +347,39 @@ describe("bridge websocket URL helpers", () => {
     assert.equal(redacted.includes("token="), false);
     assert.equal(redacted.includes("super-secret-token"), false);
     assert.ok(redacted.endsWith("/ws/openclaw"));
+  });
+});
+
+describe("bridge periodic sync guard", () => {
+  beforeEach(() => {
+    resetPeriodicSyncGuardForTest();
+  });
+
+  it("serializes overlapping sync invocations", async () => {
+    let started = 0;
+    let releaseFirst: (() => void) | null = null;
+    const firstDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = runSerializedSyncOperationForTest(async () => {
+      started += 1;
+      await firstDone;
+    });
+
+    const secondExecuted = await runSerializedSyncOperationForTest(async () => {
+      started += 1;
+    });
+    assert.equal(secondExecuted, false);
+
+    releaseFirst?.();
+    assert.equal(await first, true);
+
+    const thirdExecuted = await runSerializedSyncOperationForTest(async () => {
+      started += 1;
+    });
+    assert.equal(thirdExecuted, true);
+    assert.equal(started, 2);
   });
 });
 
