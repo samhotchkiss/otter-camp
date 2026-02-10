@@ -1,6 +1,6 @@
 # Dockerfile - Combined Frontend + Backend Build
 # Build: docker build -t otter-camp .
-# Run: docker run -p 8080:8080 --env-file .env otter-camp
+# Run: docker run -p 4200:4200 --env-file .env otter-camp
 
 # =============================================================================
 # Stage 1: Build Frontend
@@ -79,11 +79,11 @@ RUN chown -R otter:otter /app
 USER otter
 
 # Expose port
-EXPOSE 8080
+EXPOSE 4200
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:4200/health || exit 1
 
 # Run the server
 CMD ["/app/server"]
