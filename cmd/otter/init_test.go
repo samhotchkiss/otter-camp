@@ -403,6 +403,43 @@ func TestInitSkipsOpenClawAgentConfigUpdateWhenAlreadyPresent(t *testing.T) {
 	}
 }
 
+func TestInitHandlesEnsureOpenClawAgentsError(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir:    "/Users/sam/.openclaw",
+		ConfigPath: "/Users/sam/.openclaw/openclaw.json",
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.ensureErr = errors.New("write denied")
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader("n\nn\n"),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "WARNING: OpenClaw config update failed: write denied") {
+		t.Fatalf("expected warning message, got %q", output)
+	}
+	if !strings.Contains(output, "Bridge config written: /repo/bridge/.env") {
+		t.Fatalf("expected init flow to continue and write bridge config, got %q", output)
+	}
+}
+
 type initStubState struct {
 	gotAPIBase string
 	savedCfg   ottercli.Config
