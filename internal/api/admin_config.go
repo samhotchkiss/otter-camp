@@ -440,7 +440,7 @@ func (h *AdminConfigHandler) Cutover(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 
-	if dispatchCapture.status == http.StatusOK && h.DB != nil {
+	if (dispatchCapture.status == http.StatusOK || dispatchCapture.status == http.StatusAccepted) && h.DB != nil {
 		if err := upsertSyncMetadataJSON(r.Context(), h.DB, syncMetadataOpenClawCutoverKey, checkpoint, time.Now().UTC()); err != nil {
 			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to persist cutover checkpoint"})
 			return

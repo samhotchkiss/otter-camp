@@ -384,7 +384,7 @@ func TestAdminConfigCutoverBlockedWhenReleaseGateFails(t *testing.T) {
 	require.Len(t, dispatcher.calls, 0)
 }
 
-func TestAdminConfigCutoverDoesNotPersistCheckpointWhenDispatchNotDelivered(t *testing.T) {
+func TestAdminConfigCutoverPersistsCheckpointWhenDispatchQueued(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-config-cutover-dispatch-not-delivered")
 	dispatcher := &fakeOpenClawConnectionStatus{connected: false}
@@ -432,7 +432,7 @@ func TestAdminConfigCutoverDoesNotPersistCheckpointWhenDispatchNotDelivered(t *t
 		`SELECT COUNT(*) FROM sync_metadata WHERE key = $1`,
 		syncMetadataOpenClawCutoverKey,
 	).Scan(&checkpointCount))
-	require.Equal(t, 0, checkpointCount)
+	require.Equal(t, 1, checkpointCount)
 }
 
 func TestAdminConfigReleaseGatePassesAndCutoverDispatches(t *testing.T) {
