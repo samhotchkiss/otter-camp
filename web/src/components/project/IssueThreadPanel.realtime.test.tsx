@@ -172,12 +172,16 @@ describe("IssueThreadPanel realtime integration", () => {
     const { rerender } = render(<IssueThreadPanel issueID="issue-1" />);
     await screen.findByText("#1 Realtime review issue");
 
-    expect(
-      fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/issues/issue-1/review/history?")),
-    ).toHaveLength(1);
-    expect(
-      fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/issues/issue-1/review/changes?")),
-    ).toHaveLength(1);
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/issues/issue-1/review/history?")),
+      ).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.filter(([input]) => String(input).includes("/api/issues/issue-1/review/changes?")),
+      ).toHaveLength(1);
+    });
 
     wsState = {
       ...wsState,
