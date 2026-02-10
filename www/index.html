@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Otter Camp — Multi-Agent Teams That Actually Work</title>
-  <meta name="description" content="Running one AI agent is easy. Running a team of them that actually gets stuff done is really hard. Otter Camp makes it work.">
+  <title>Otter Camp</title>
+  <meta name="description" content="Open source work management for AI agent teams. We're building it in production with 13 agents. It's messy. It works.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -27,9 +27,8 @@
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       background: var(--bg);
       color: var(--text);
-      line-height: 1.6;
+      line-height: 1.7;
     }
-    .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
 
     /* NAV */
     nav {
@@ -39,280 +38,189 @@
       border-bottom: 1px solid var(--border);
       z-index: 100; padding: 16px 0;
     }
-    .nav-inner { display: flex; align-items: center; justify-content: space-between; }
+    .nav-inner { max-width: 720px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; }
     .nav-logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 20px; color: var(--accent); text-decoration: none; }
     .nav-logo span { font-size: 28px; }
-    .nav-links { display: flex; align-items: center; gap: 32px; }
-    .nav-links a { color: var(--text-muted); text-decoration: none; font-size: 15px; font-weight: 500; transition: color 0.2s; }
+    .nav-links { display: flex; align-items: center; gap: 24px; }
+    .nav-links a { color: var(--text-muted); text-decoration: none; font-size: 14px; font-weight: 500; }
     .nav-links a:hover { color: var(--accent); }
-    .nav-cta { background: var(--accent) !important; color: var(--bg) !important; padding: 10px 20px; border-radius: 10px; font-weight: 600; }
-    .nav-cta:hover { background: var(--accent-hover) !important; }
 
-    /* HERO */
-    .hero { padding: 160px 0 80px; text-align: center; }
-    .hero-badge {
-      display: inline-flex; align-items: center; gap: 8px;
-      background: var(--surface); border: 2px solid var(--border);
-      border-radius: 100px; padding: 8px 20px;
-      font-size: 14px; font-weight: 600; color: var(--accent); margin-bottom: 32px;
+    /* ESSAY */
+    .essay { max-width: 720px; margin: 0 auto; padding: 140px 24px 80px; }
+    .essay h1 {
+      font-size: clamp(36px, 6vw, 56px); font-weight: 900; line-height: 1.15;
+      color: var(--accent); margin-bottom: 48px; letter-spacing: -1.5px;
     }
-    .hero h1 {
-      font-size: clamp(42px, 7vw, 72px); font-weight: 900; line-height: 1.1;
-      color: var(--accent); margin-bottom: 24px; letter-spacing: -2px;
+    .essay p { font-size: 18px; margin-bottom: 24px; }
+    .essay p.muted { color: var(--text-muted); }
+    .essay p.small { font-size: 15px; color: var(--text-muted); }
+    .essay a { color: var(--accent); font-weight: 600; }
+    .essay hr { border: none; height: 3px; width: 60px; background: var(--border); margin: 48px 0; }
+    .essay h2 { font-size: 28px; font-weight: 800; color: var(--accent); margin: 48px 0 24px; letter-spacing: -0.5px; }
+    .essay strong { color: var(--accent); }
+
+    /* SIGNUP */
+    .signup-box {
+      background: var(--surface); border: 2px solid var(--border); border-radius: 16px;
+      padding: 36px; margin: 48px 0; text-align: center;
     }
-    .hero h1 span { color: var(--orange); }
-    .hero-sub {
-      font-size: 20px; color: var(--text-muted); max-width: 540px;
-      margin: 0 auto 48px; line-height: 1.6;
+    .signup-box h3 { font-size: 22px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
+    .signup-box .sub { font-size: 15px; color: var(--text-muted); margin-bottom: 20px; }
+    .signup-form { display: flex; gap: 10px; max-width: 400px; margin: 0 auto; }
+    .signup-form input {
+      flex: 1; padding: 12px 16px; font-size: 15px; border: 2px solid var(--border);
+      border-radius: 10px; background: var(--bg); color: var(--text); font-family: inherit;
     }
-    .btn {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 16px 32px; border-radius: 12px; font-size: 17px; font-weight: 600;
-      text-decoration: none; transition: all 0.2s; border: none; cursor: pointer; font-family: inherit;
+    .signup-form input:focus { outline: none; border-color: var(--accent); }
+    .signup-form button {
+      padding: 12px 24px; border-radius: 10px; font-size: 15px; font-weight: 600;
+      background: var(--accent); color: var(--bg); border: none; cursor: pointer; font-family: inherit;
+      white-space: nowrap; transition: background 0.2s;
     }
-    .btn-primary { background: var(--accent); color: var(--bg); }
-    .btn-primary:hover { background: var(--accent-hover); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(92,74,61,0.25); }
-    .btn-secondary { background: var(--surface); color: var(--accent); border: 2px solid var(--border); }
-    .btn-secondary:hover { border-color: var(--accent); transform: translateY(-2px); }
-    .btn-small { padding: 10px 20px; font-size: 15px; }
-    .hero-cta { margin-bottom: 16px; }
-    .hero-secondary { font-size: 14px; color: var(--text-muted); }
-    .hero-secondary a { color: var(--accent); text-decoration: none; font-weight: 600; }
-    .hero-secondary a:hover { text-decoration: underline; }
-    .hero-img { text-align: center; margin-top: 64px; }
-    .hero-img img { max-width: 900px; width: 100%; border-radius: 16px; border: 2px solid var(--border); box-shadow: 0 24px 64px rgba(92,74,61,0.12); }
-
-    /* PROBLEM */
-    .problem { padding: 100px 0; max-width: 720px; margin: 0 auto; }
-    .problem p { font-size: 18px; color: var(--text); line-height: 1.8; margin-bottom: 20px; }
-    .problem p.muted { color: var(--text-muted); font-style: italic; }
-
-    /* FEATURES */
-    .features { padding: 100px 0; background: var(--surface-alt); }
-    .features-header { text-align: center; margin-bottom: 64px; }
-    .section-label { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--orange); margin-bottom: 16px; }
-    .section-title { font-size: clamp(32px, 5vw, 48px); font-weight: 800; color: var(--accent); letter-spacing: -1px; line-height: 1.15; }
-    .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 32px; }
-    .feature-card {
-      background: var(--surface); border: 2px solid var(--border); border-radius: 16px; padding: 36px;
-    }
-    .feature-icon { font-size: 36px; margin-bottom: 16px; }
-    .feature-card h3 { font-size: 22px; font-weight: 700; color: var(--accent); margin-bottom: 12px; }
-    .feature-card p { font-size: 16px; color: var(--text-muted); line-height: 1.6; }
-
-    /* HOW IT WORKS */
-    .how-it-works { padding: 100px 0; }
-    .how-it-works-header { text-align: center; margin-bottom: 64px; }
-    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; max-width: 960px; margin: 0 auto; }
-    .step { text-align: center; }
-    .step-number { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: var(--bg); font-size: 24px; font-weight: 800; margin-bottom: 20px; }
-    .step h3 { font-size: 20px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
-    .step p { font-size: 15px; color: var(--text-muted); line-height: 1.5; }
-
-    /* SOCIAL PROOF */
-    .proof { padding: 80px 0; background: var(--surface-alt); text-align: center; }
-    .proof-stat { font-size: 20px; color: var(--text); font-weight: 600; margin-bottom: 8px; }
-    .proof-detail { font-size: 15px; color: var(--text-muted); max-width: 600px; margin: 0 auto; }
-
-    /* CTA */
-    .cta { padding: 120px 0; text-align: center; }
-    .cta h2 { font-size: clamp(32px, 5vw, 52px); font-weight: 800; color: var(--accent); margin-bottom: 24px; letter-spacing: -1px; }
-    .cta > .container > p { font-size: 19px; color: var(--text-muted); margin-bottom: 48px; }
-    .cta-box { background: var(--surface); border: 2px solid var(--accent); border-radius: 20px; padding: 48px 32px; max-width: 480px; margin: 0 auto; box-shadow: 0 8px 32px rgba(92,74,61,0.12); }
-    .cta-box h3 { font-size: 24px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
-    .cta-box .subtitle { font-size: 15px; color: var(--text-muted); margin-bottom: 24px; }
-    .signup-form-inline { display: flex; flex-direction: column; gap: 12px; }
-    .email-input-small { padding: 14px 18px; font-size: 15px; border: 2px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font-family: inherit; text-align: center; }
-    .email-input-small:focus { outline: none; border-color: var(--accent); }
-    .objections { display: flex; justify-content: center; gap: 24px; margin-top: 16px; flex-wrap: wrap; }
-    .objections span { font-size: 13px; color: var(--text-muted); }
-    #form-message { font-size: 15px; margin-top: 16px; }
-    .self-host-alt { margin-top: 32px; font-size: 15px; color: var(--text-muted); }
-    .self-host-alt a { color: var(--accent); font-weight: 600; text-decoration: none; }
-    .self-host-alt a:hover { text-decoration: underline; }
+    .signup-form button:hover { background: var(--accent-hover); }
+    .objections { display: flex; justify-content: center; gap: 20px; margin-top: 12px; flex-wrap: wrap; }
+    .objections span { font-size: 12px; color: var(--text-muted); }
+    #form-message { font-size: 15px; margin-top: 12px; }
 
     /* FOOTER */
-    footer { background: var(--surface-alt); border-top: 1px solid var(--border); padding: 60px 0 40px; }
-    .footer-inner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 24px; }
-    .footer-brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 18px; color: var(--accent); }
-    .footer-brand span { font-size: 24px; }
-    .footer-links { display: flex; gap: 24px; }
+    footer { max-width: 720px; margin: 0 auto; padding: 48px 24px; border-top: 1px solid var(--border); }
+    .footer-inner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; }
+    .footer-brand { font-weight: 800; color: var(--accent); }
+    .footer-links { display: flex; gap: 20px; }
     .footer-links a { font-size: 14px; color: var(--text-muted); text-decoration: none; }
     .footer-links a:hover { color: var(--accent); }
-    .footer-bottom { text-align: center; margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-muted); }
 
     /* CONFETTI */
     .confetti-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; z-index: 1000; }
     .confetti { position: absolute; font-size: 32px; animation: fall linear forwards; }
     @keyframes fall { 0% { transform: translateY(-100px) rotate(0deg); opacity: 1; } 100% { transform: translateY(100vh) rotate(720deg); opacity: 0; } }
-    .btn.success { background: var(--green); animation: celebrate 0.6s ease; }
+    .signup-form button.success { background: var(--green); animation: celebrate 0.6s ease; }
     @keyframes celebrate { 0%,100% { transform: scale(1); } 50% { transform: scale(1.15); } }
 
-    @media (max-width: 900px) {
-      .steps { grid-template-columns: 1fr; gap: 32px; }
-      .feature-grid { grid-template-columns: 1fr; }
-      .nav-links a:not(.nav-cta) { display: none; }
-    }
     @media (max-width: 600px) {
-      .hero { padding: 120px 0 60px; }
-      .objections { flex-direction: column; gap: 8px; }
+      .essay { padding-top: 110px; }
+      .signup-form { flex-direction: column; }
+      .objections { flex-direction: column; gap: 6px; align-items: center; }
     }
   </style>
 </head>
 <body>
 
   <nav>
-    <div class="container nav-inner">
+    <div class="nav-inner">
       <a href="#" class="nav-logo"><span>🦦</span> otter.camp</a>
       <div class="nav-links">
-        <a href="#how">How It Works</a>
-        <a href="#signup" class="nav-cta">Get Early Access</a>
+        <a href="https://github.com/samhotchkiss/otter-camp" target="_blank">GitHub</a>
+        <a href="https://discord.gg/clawd" target="_blank">Discord</a>
       </div>
     </div>
   </nav>
 
-  <!-- HERO: Transformation headline, one primary CTA -->
-  <section class="hero">
-    <div class="container">
-      <div class="hero-badge"><span>🦦</span> Open Source — MIT License</div>
-      <h1>Multi-agent teams<br>that actually <span>work</span></h1>
-      <p class="hero-sub">
-        Running one AI agent is easy. Running a team that ships? That's the hard part. Otter Camp makes it work.
-      </p>
-      <div class="hero-cta">
-        <a href="#signup" class="btn btn-primary">Get Early Access →</a>
+  <article class="essay">
+    <h1>🦦 What Is Otter Camp?</h1>
+
+    <p>I have 13 AI agents. They do my engineering, write my content, manage my email, watch markets while I sleep, help me plan meals, keep track of my kids' schedules. It's how I work now.</p>
+
+    <p>I keep a paper notepad next to my desk. Things I need to tell my agents. Because if a thought hits me while I'm mid-conversation with one of them, it gets distracted, I lose the thread, and I've wrecked two things. So I write it down and wait for the right moment. In 2026. I have a fucking fleet of AI agents and I'm using a paper notepad so I don't confuse them.</p>
+
+    <p>My engineering lead made an architecture decision on Monday. Compacted overnight. Wednesday it makes the same mistake because it has no idea Monday happened. My content writer contradicts a post from last week — doesn't remember writing it. My personal assistant forgot what day my fat ass is supposed to take my Ozempic. Knew it Tuesday. Compacted. Gone.</p>
+
+    <p>Three of my agents are blocked on me right now. I didn't know until I went looking. Their questions are in different chat windows, nothing flagged them. I'm the bottleneck and I can't even tell. Two more have died midstream, and I have to figure out how to restart them.</p>
+
+    <p class="muted">Everyone posts about how many agents they're running. How much cool shit they're building. Nobody posts about this part.</p>
+
+    <hr>
+
+    <p>We (me and my gang of clankers) are building Otter Camp. Open source, runs on your machine, adds actual method to the madness.</p>
+
+    <p>It layers on top of <a href="https://github.com/openclaw/openclaw">OpenClaw</a> — the runtime that handles LLMs, file system, skills, message routing. Claw runs agents. Otter runs the team. Install it, it pulls in your existing agents, manages everything from there. Two new agents get created: Chameleon and Elephant.</p>
+
+    <hr>
+
+    <h2>Chameleon</h2>
+
+    <p>Adding an agent to my current setup is 30 minutes of config editing. System prompt, personality, workspace, tools, channels.</p>
+
+    <p>Chameleon stores identities in a database. New engineer? Social media person? Someone to manage your family calendar? Create them in the UI, pick a profile, customize. Thirty seconds. Done with one? One click. Fired.</p>
+
+    <p>Identities are just data, so you can clone them. Need to parallelize? Five copies of your writer, five blog posts at once. Nine women can't make a baby in one month, but they can make nine babies in nine months. Only bottleneck is what depends on what, not who's available.</p>
+
+    <p>Otter tracks what each agent ships, what gets rejected, how they handle feedback. You can run actual performance reviews and tune them.</p>
+
+    <hr>
+
+    <h2>Projects</h2>
+
+    <p>Code, blog posts, books, tweets, trading strategies, meal plans — everything lives in a project, everything in Git. Issues go plan → build → review → ship. Same flow for a feature and a grocery list.</p>
+
+    <p>Everything is version controlled because progress should be non-destructive. Agents can try stuff and you don't have to be afraid. Designer ships something bad at 2am, roll it back. Writer nukes a good draft, it's still there. You can always undo.</p>
+
+    <hr>
+
+    <h2>Scoped conversations</h2>
+
+    <p>Discussions live where they belong — within an issue, a project, or org-wide. Your feedback on the blog draft stays with the blog draft. Doesn't bleed into unrelated context that's about to compact.</p>
+
+    <p>Thought pops into your head? Drop it on otter, it'll get filed as an issue within the right project, ready to flesh out when you are. Don't interrupt what you're working on. ADHD brain's best friend.</p>
+
+    <hr>
+
+    <h2>Review loops</h2>
+
+    <p>Nothing ships unchecked. Code, content, designs — reviewed before merge. Agents review each other, or you can choose to add human checkpoints. Every decision has a trail.</p>
+
+    <hr>
+
+    <h2>Elephant</h2>
+
+    <p>The memory agent. (They never forget.)</p>
+
+    <p>Every five minutes, scans everything — conversations, commits, decisions, all of it. Three jobs:</p>
+
+    <p><strong>Remembering.</strong> You told your assistant about the peanut allergy last Tuesday. Elephant caught it, stored it. Agent compacts and restarts, gets the memory back. Every agent gets persistent memory automatically.</p>
+
+    <p><strong>Sharing.</strong> Your engineer finds a bad API pattern — the designer needs to know, the docs agent needs to know. You mention you're training for a marathon — your meal planner needs that. Elephant figures out who needs what and puts it in front of them. Targeted, not broadcast.</p>
+
+    <p><strong>Enforcing.</strong> Elephant makes sure your agents follow through on what they say they're going to do. When a commitment is made it's captured and tracked to completion.</p>
+
+    <hr>
+
+    <p>Otter runs on your machine. Data stays local. Open source. Your agents touch your files, calendar, messages, and you have control over that. If you want it hosted, that's an option, too.</p>
+
+    <p>We ship curated agent profiles so you don't have to build from scratch. Engineering, content, design, research, personal ops. Pick one, tweak it, go.</p>
+
+    <hr>
+
+    <p>I'm running this in production. The Otter Camp codebase was built by the agents it manages — 700+ commits and 150k lines of code in 9 days.</p>
+
+    <p>Alpha will be ready this week for those out there who are fucking masochists. Should be good enough for your Gramma by the end of the month.</p>
+
+    <div class="signup-box">
+      <h3>Get early access</h3>
+      <p class="sub">We'll email you when hosted is ready. Self-host is free <a href="https://github.com/samhotchkiss/otter-camp">on GitHub</a> right now.</p>
+      <form class="signup-form" id="waitlist-form">
+        <input type="email" id="email-input" placeholder="you@email.com" required>
+        <button type="submit" id="notify-btn">Join</button>
+      </form>
+      <div class="objections">
+        <span>✓ Free while in alpha</span>
+        <span>✓ No credit card</span>
+        <span>✓ Open source</span>
       </div>
-      <p class="hero-secondary">Free &amp; open source · <a href="https://github.com/samhotchkiss/otter-camp">View on GitHub</a></p>
-      <div class="hero-img">
-        <img src="branding/illustrations/clean/otters-sailing-clean.png" alt="Otter Camp — manage your AI agent team">
-      </div>
+      <p id="form-message" style="display: none;"></p>
     </div>
-  </section>
 
-  <!-- PROBLEM: Use their words, build connection -->
-  <section class="problem">
-    <div class="container">
-      <p>You set up your first AI agent and it's magic. So you add a second one, then a third. Suddenly you're managing config files, juggling chat windows, restarting dead sessions, and writing things on a notepad because you can't interrupt the agent you're talking to.</p>
-      <p>They forget what they learned yesterday. They're blocked on you and you don't know. They ship work nobody reviewed. The more agents you add, the more time you spend managing them instead of doing the thing they were supposed to help with.</p>
-      <p class="muted">Everyone posts about how many agents they're running. Nobody talks about making them productive.</p>
-    </div>
-  </section>
-
-  <!-- FEATURES: Outcome-focused, "so what?" answered -->
-  <section class="features" id="features">
-    <div class="container">
-      <div class="features-header">
-        <div class="section-label">What You Get</div>
-        <h2 class="section-title">Everything it takes to go<br>from agents to a team</h2>
-      </div>
-
-      <div class="feature-grid">
-        <div class="feature-card">
-          <div class="feature-icon">🧠</div>
-          <h3>Nothing gets forgotten</h3>
-          <p>What your assistant learned Tuesday is still there Friday. Context survives compaction automatically.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">⚡</div>
-          <h3>Hire and fire in seconds</h3>
-          <p>New agent from the UI in 30 seconds. Need five writers? Clone one. Done with an agent? One click.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">📋</div>
-          <h3>One pipeline for everything</h3>
-          <p>Code, blog posts, meal plans — same flow. Version controlled, so you can always undo.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">🔄</div>
-          <h3>Nothing ships unchecked</h3>
-          <p>Agents review each other's work before it goes live. Add human checkpoints where it matters.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">💬</div>
-          <h3>Context stays where it belongs</h3>
-          <p>Feedback on the blog stays with the blog. No more losing important decisions to context bleed.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">🔒</div>
-          <h3>Your data, your machine</h3>
-          <p>Open source, runs locally. Your agents touch your files and calendar — that infrastructure should be yours.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- HOW IT WORKS: 3 steps, action verbs, effortless -->
-  <section class="how-it-works" id="how">
-    <div class="container">
-      <div class="how-it-works-header">
-        <div class="section-label">Get Started</div>
-        <h2 class="section-title">Three steps. Five minutes.</h2>
-      </div>
-
-      <div class="steps">
-        <div class="step">
-          <div class="step-number">1</div>
-          <h3>Install Otter Camp</h3>
-          <p>Clone the repo, run <code>make setup</code>. Postgres, CLI, and auth token — handled.</p>
-        </div>
-        <div class="step">
-          <div class="step-number">2</div>
-          <h3>Connect your agents</h3>
-          <p>Bridge connects to your OpenClaw instance. Existing agents appear automatically.</p>
-        </div>
-        <div class="step">
-          <div class="step-number">3</div>
-          <h3>Start managing</h3>
-          <p>Create projects, assign work, review output. Your agents remember everything from here on.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- SOCIAL PROOF: One strong signal -->
-  <section class="proof">
-    <div class="container">
-      <p class="proof-stat">Built in production by the agents it manages.</p>
-      <p class="proof-detail">13 agents, running daily. The Otter Camp codebase itself was written by the team it coordinates.</p>
-    </div>
-  </section>
-
-  <!-- CTA: Single action, objections removed -->
-  <section class="cta" id="signup">
-    <div class="container">
-      <h2>Try it this week</h2>
-      <p>Alpha is live. Get early access.</p>
-
-      <div class="cta-box">
-        <h3>☁️ Hosted Early Access</h3>
-        <p class="subtitle">We run it, you use it.</p>
-        <form class="signup-form-inline" id="waitlist-form">
-          <input type="email" class="email-input-small" id="email-input" placeholder="you@email.com" required>
-          <button type="submit" class="btn btn-primary" id="notify-btn" style="width:100%; justify-content:center;">Get Early Access</button>
-        </form>
-        <div class="objections">
-          <span>✓ Free while in alpha</span>
-          <span>✓ No credit card</span>
-          <span>✓ Cancel anytime</span>
-        </div>
-        <p id="form-message" style="display: none;"></p>
-      </div>
-
-      <p class="self-host-alt">Prefer to self-host? <a href="https://github.com/samhotchkiss/otter-camp">Clone from GitHub</a> — free forever.</p>
-    </div>
-  </section>
+    <p class="small">Thanks to: <a href="https://x.com/steve_yegge">@steve_yegge</a> <a href="https://x.com/steipete">@steipete</a> <a href="https://x.com/alexfinn">@alexfinn</a> <a href="https://x.com/delba_oliveira">@delba_oliveira</a> <a href="https://x.com/m_0_r_g_a_n_">@m_0_r_g_a_n_</a> <a href="https://x.com/techNmak">@techNmak</a> <a href="https://x.com/leonabboud">@leonabboud</a> <a href="https://x.com/ericosiu">@ericosiu</a></p>
+  </article>
 
   <footer>
-    <div class="container">
-      <div class="footer-inner">
-        <div class="footer-brand"><span>🦦</span> otter.camp</div>
-        <div class="footer-links">
-          <a href="https://github.com/samhotchkiss/otter-camp" target="_blank">GitHub</a>
-          <a href="https://discord.gg/clawd" target="_blank">Discord</a>
-          <a href="https://github.com/openclaw/openclaw" target="_blank">OpenClaw</a>
-        </div>
+    <div class="footer-inner">
+      <div class="footer-brand">🦦 otter.camp</div>
+      <div class="footer-links">
+        <a href="https://github.com/samhotchkiss/otter-camp" target="_blank">GitHub</a>
+        <a href="https://discord.gg/clawd" target="_blank">Discord</a>
+        <a href="https://github.com/openclaw/openclaw" target="_blank">OpenClaw</a>
       </div>
-      <div class="footer-bottom">Made in Santa Fe · © 2026 otter.camp</div>
     </div>
   </footer>
 
@@ -347,7 +255,7 @@
       const email = emailInput.value.trim();
       if (!email) return;
       notifyBtn.disabled = true;
-      notifyBtn.textContent = 'Joining...';
+      notifyBtn.textContent = '...';
       try {
         const res = await fetch('https://api.otter.camp/api/waitlist', {
           method: 'POST',
@@ -357,24 +265,24 @@
         const data = await res.json();
         message.style.display = 'block';
         if (data.success) {
-          message.innerHTML = '🎉 <strong>You\'re in.</strong> We\'ll be in touch.';
+          message.innerHTML = '🎉 <strong>You\'re in.</strong>';
           message.style.color = 'var(--green)';
           emailInput.style.display = 'none';
-          notifyBtn.textContent = '🦦 Done!';
+          notifyBtn.textContent = '🦦';
           notifyBtn.classList.add('success');
           launchConfetti();
         } else {
-          message.textContent = data.message || 'Something went wrong. Try again?';
+          message.textContent = data.message || 'Something went wrong.';
           message.style.color = 'var(--orange)';
           notifyBtn.disabled = false;
-          notifyBtn.textContent = 'Get Early Access';
+          notifyBtn.textContent = 'Join';
         }
       } catch (err) {
         message.style.display = 'block';
         message.textContent = 'Network error. Try again?';
         message.style.color = 'var(--orange)';
         notifyBtn.disabled = false;
-        notifyBtn.textContent = 'Get Early Access';
+        notifyBtn.textContent = 'Join';
       }
     });
   </script>
