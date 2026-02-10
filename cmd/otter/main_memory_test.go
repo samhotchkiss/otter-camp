@@ -144,3 +144,60 @@ func TestHandleKnowledge(t *testing.T) {
 	require.Len(t, entries, 1)
 	mu.Unlock()
 }
+
+func TestHandleMemoryWriteRead(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	var mu sync.Mutex
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]any
+
+	agentID := "00000000-0000-0000-0000-000000000111"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		gotBody = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/agents/"+agentID+"/memory":
+			_, _ = w.Write([]byte(`{"id":"m1","agent_id":"` + agentID + `"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/"+agentID+"/memory":
+			_, _ = w.Write([]byte(`{"agent_id":"` + agentID + `","daily":[{"id":"m1"}],"long_term":[]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	require.NoError(t, ottercli.SaveConfig(ottercli.Config{
+		APIBaseURL: srv.URL,
+		Token:      "token-1",
+		DefaultOrg: "org-1",
+	}))
+
+	handleMemory([]string{"write", "--agent", agentID, "--daily", "--date", "2026-02-10", "--json", "Daily note"})
+	mu.Lock()
+	require.Equal(t, http.MethodPost, gotMethod)
+	require.Equal(t, "/api/agents/"+agentID+"/memory", gotPath)
+	require.Equal(t, "daily", gotBody["kind"])
+	require.Equal(t, "Daily note", gotBody["content"])
+	require.Equal(t, "2026-02-10", gotBody["date"])
+	mu.Unlock()
+
+	handleMemory([]string{"read", "--agent", agentID, "--days", "3", "--include-long-term=false", "--json"})
+	mu.Lock()
+	require.Equal(t, http.MethodGet, gotMethod)
+	require.True(t, strings.HasPrefix(gotPath, "/api/agents/"+agentID+"/memory?"))
+	require.Contains(t, gotPath, "days=3")
+	require.NotContains(t, gotPath, "include_long_term=true")
+	mu.Unlock()
+}

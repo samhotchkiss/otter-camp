@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 import {
   detectCompactionSignalForTest,
+  fetchCompactionRecoveryContextForTest,
   resetCompactionRecoveryStateForTest,
   runCompactionRecoveryForTest,
   type CompactionSignal,
@@ -129,5 +130,40 @@ describe("bridge compaction detection + recovery", () => {
     assert.equal(first, true);
     assert.equal(second, false);
     assert.equal(sendCount, 1);
+  });
+
+  it("passes quality gates and truncates recovery context fetch response", async () => {
+    const signal: CompactionSignal = {
+      sessionKey: "agent:main:dm",
+      orgID: "org-1",
+      agentID: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      summaryText: "Compacted summary text",
+      reason: "explicit",
+    };
+
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          context: "x".repeat(6000),
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+
+    try {
+      const context = await fetchCompactionRecoveryContextForTest(signal);
+      assert.ok(calls.length >= 1);
+      assert.match(calls[0] ?? "", /min_relevance=/);
+      assert.match(calls[0] ?? "", /max_chars=/);
+      assert.equal(context.length, 2000);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

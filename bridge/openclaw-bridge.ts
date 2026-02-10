@@ -3187,6 +3187,8 @@ async function fetchCompactionRecoveryContext(signal: CompactionSignal): Promise
   url.searchParams.set('agent_id', signal.agentID);
   url.searchParams.set('q', recallQuery);
   url.searchParams.set('max_results', '3');
+  url.searchParams.set('min_relevance', String(AUTO_RECALL_MIN_RELEVANCE));
+  url.searchParams.set('max_chars', String(AUTO_RECALL_MAX_CHARS));
 
   const response = await fetchWithRetry(url.toString(), {
     method: 'GET',
@@ -3202,7 +3204,7 @@ async function fetchCompactionRecoveryContext(signal: CompactionSignal): Promise
 
   const payload = asRecord(await response.json().catch(() => null));
   const contextText = getTrimmedString(payload?.context);
-  return contextText;
+  return contextText.slice(0, AUTO_RECALL_MAX_CHARS);
 }
 
 async function sendCompactionRecoveryMessage(
@@ -3345,6 +3347,10 @@ export async function runCompactionRecoveryForTest(
   deps: Partial<CompactionRecoveryDeps>,
 ): Promise<boolean> {
   return runCompactionRecovery(signal, deps);
+}
+
+export async function fetchCompactionRecoveryContextForTest(signal: CompactionSignal): Promise<string> {
+  return fetchCompactionRecoveryContext(signal);
 }
 
 export function resetCompactionRecoveryStateForTest(): void {
