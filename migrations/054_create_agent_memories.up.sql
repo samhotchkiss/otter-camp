@@ -14,3 +14,10 @@ CREATE INDEX IF NOT EXISTS agent_memories_org_agent_idx
 
 CREATE INDEX IF NOT EXISTS agent_memories_agent_kind_idx
     ON agent_memories (agent_id, kind, date DESC, created_at DESC);
+
+ALTER TABLE agent_memories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_memories FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY agent_memories_org_isolation ON agent_memories
+    USING (org_id = current_org_id())
+    WITH CHECK (org_id = current_org_id());

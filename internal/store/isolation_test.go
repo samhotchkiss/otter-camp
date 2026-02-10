@@ -255,6 +255,7 @@ func TestRLSEnabled(t *testing.T) {
 		"tasks",
 		"agents",
 		"projects",
+		"agent_memories",
 		"activity_log",
 		"tags",
 		"project_chat_messages",
@@ -280,6 +281,54 @@ func TestRLSEnabled(t *testing.T) {
 		require.NoError(t, err, "failed to check RLS for table %s", table)
 		assert.True(t, rlsEnabled, "RLS should be enabled on table %s", table)
 	}
+}
+
+func TestAgentMemoriesRLSBlocksCrossOrgReadAndWrite(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgA := createTestOrganization(t, db, "agent-mem-rls-a")
+	orgB := createTestOrganization(t, db, "agent-mem-rls-b")
+
+	var agentAID string
+	err := db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'agent-mem-rls-a', 'Agent Memory A', 'active')
+		 RETURNING id`,
+		orgA,
+	).Scan(&agentAID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO agent_memories (org_id, agent_id, kind, date, content)
+		 VALUES ($1, $2, 'daily', CURRENT_DATE, 'Org A memory')`,
+		orgA,
+		agentAID,
+	)
+	require.NoError(t, err)
+
+	ctxB := ctxWithWorkspace(orgB)
+	connB, err := WithWorkspace(ctxB, db)
+	require.NoError(t, err)
+	defer connB.Close()
+
+	var count int
+	err = connB.QueryRowContext(
+		ctxB,
+		`SELECT COUNT(*) FROM agent_memories WHERE agent_id = $1`,
+		agentAID,
+	).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "org B must not be able to read org A memories")
+
+	_, err = connB.ExecContext(
+		ctxB,
+		`INSERT INTO agent_memories (org_id, agent_id, kind, date, content)
+		 VALUES ($1, $2, 'daily', CURRENT_DATE, 'cross-org write attempt')`,
+		orgA,
+		agentAID,
+	)
+	require.Error(t, err, "cross-org write should be blocked by RLS")
 }
 
 // TestRLSBypass verifies that superusers can bypass RLS (admin operations)
