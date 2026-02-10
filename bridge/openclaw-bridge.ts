@@ -2546,8 +2546,12 @@ export function buildOtterCampWSURL(secret: string = OTTERCAMP_WS_SECRET): strin
 }
 
 export function sanitizeWebSocketURLForLog(rawURL: string): string {
-  const parsed = new URL(rawURL);
-  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  try {
+    const parsed = new URL(rawURL);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return "[invalid-url]";
+  }
 }
 
 async function connectToOpenClaw(): Promise<void> {

@@ -72,8 +72,8 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
+    const controller = new AbortController();
+    const load = async (signal: AbortSignal) => {
       if (!agentID) {
         setFiles([]);
         setAgentFilesProjectID("");
@@ -83,8 +83,10 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
       setIsLoadingFiles(true);
       setError(null);
       try {
-        const payload = await apiFetch<AgentFilesResponse>(`/api/admin/agents/${encodeURIComponent(agentID)}/files`);
-        if (cancelled) {
+        const payload = await apiFetch<AgentFilesResponse>(`/api/admin/agents/${encodeURIComponent(agentID)}/files`, {
+          signal,
+        });
+        if (signal.aborted) {
           return;
         }
         const identityFiles = (payload.entries || [])
@@ -96,29 +98,30 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
         const preferred = identityFiles.find((entry) => entry.path.toUpperCase() === "SOUL.MD");
         setSelectedPath(preferred?.path || identityFiles[0]?.path || "");
       } catch (loadError) {
-        if (!cancelled) {
-          const message = loadError instanceof Error ? loadError.message : "Failed to load identity files";
-          setError(message);
-          setFiles([]);
-          setAgentFilesProjectID("");
-          setSelectedPath("");
+        if (signal.aborted || (loadError instanceof Error && loadError.name === "AbortError")) {
+          return;
         }
+        const message = loadError instanceof Error ? loadError.message : "Failed to load identity files";
+        setError(message);
+        setFiles([]);
+        setAgentFilesProjectID("");
+        setSelectedPath("");
       } finally {
-        if (!cancelled) {
+        if (!signal.aborted) {
           setIsLoadingFiles(false);
         }
       }
     };
 
-    void load();
+    void load(controller.signal);
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [agentID]);
 
   useEffect(() => {
-    let cancelled = false;
-    const loadBlob = async () => {
+    const controller = new AbortController();
+    const loadBlob = async (signal: AbortSignal) => {
       if (!agentID || !selectedPath) {
         setBlob(null);
         return;
@@ -129,25 +132,28 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
         const encodedPath = encodePathForURL(selectedPath);
         const payload = await apiFetch<AgentBlobResponse>(
           `/api/admin/agents/${encodeURIComponent(agentID)}/files/${encodedPath}`,
+          { signal },
         );
-        if (!cancelled) {
-          setBlob(payload);
+        if (signal.aborted) {
+          return;
         }
+        setBlob(payload);
       } catch (loadError) {
-        if (!cancelled) {
-          const message = loadError instanceof Error ? loadError.message : "Failed to load identity file";
-          setError(message);
-          setBlob(null);
+        if (signal.aborted || (loadError instanceof Error && loadError.name === "AbortError")) {
+          return;
         }
+        const message = loadError instanceof Error ? loadError.message : "Failed to load identity file";
+        setError(message);
+        setBlob(null);
       } finally {
-        if (!cancelled) {
+        if (!signal.aborted) {
           setIsLoadingBlob(false);
         }
       }
     };
-    void loadBlob();
+    void loadBlob(controller.signal);
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [agentID, selectedPath]);
 

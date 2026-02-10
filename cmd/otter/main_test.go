@@ -55,6 +55,15 @@ func TestResolveIssueIDUUIDBypassesLookup(t *testing.T) {
 	}
 }
 
+func TestIssueUUIDPatternRequiresCanonicalShape(t *testing.T) {
+	if !issueUUIDPattern.MatchString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") {
+		t.Fatalf("expected canonical UUID shape to match")
+	}
+	if issueUUIDPattern.MatchString("------------------------------------") {
+		t.Fatalf("expected non-UUID hyphen-only string to be rejected")
+	}
+}
+
 func TestResolveIssueIDUsesIssueNumberQueryFilter(t *testing.T) {
 	var requestedIssueNumber string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

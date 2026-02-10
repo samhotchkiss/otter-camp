@@ -352,6 +352,10 @@ describe("bridge websocket URL helpers", () => {
     assert.equal(redacted.includes("super-secret-token"), false);
     assert.ok(redacted.endsWith("/ws/openclaw"));
   });
+
+  it("returns a safe fallback for malformed websocket URLs", () => {
+    assert.equal(sanitizeWebSocketURLForLog("://not-a-valid-url"), "[invalid-url]");
+  });
 });
 
 describe("bridge websocket secret env resolution", () => {

@@ -342,4 +342,26 @@ describe("AgentIdentityEditor", () => {
       expect(screen.getByText(/Failed to load identity files/)).toBeInTheDocument();
     });
   });
+
+  it("aborts in-flight identity requests on unmount", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedSignal = init?.signal as AbortSignal | undefined;
+      return new Promise<Response>(() => {
+        // Keep request pending so unmount can trigger cancellation.
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const { unmount } = render(<AgentIdentityEditor agentID="main" />);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    unmount();
+    expect(capturedSignal?.aborted).toBe(true);
+  });
 });

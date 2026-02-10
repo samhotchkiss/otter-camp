@@ -19,7 +19,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/ottercli"
 )
 
-var issueUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
+var issueUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 var chameleonSessionKeyPattern = regexp.MustCompile(
 	`^agent:chameleon:oc:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
 )
