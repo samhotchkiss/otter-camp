@@ -2,10 +2,12 @@ package api
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -745,6 +747,47 @@ func TestAgentActivityRoutesRegistered(t *testing.T) {
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	require.NotEqual(t, http.StatusNotFound, rec.Code)
+}
+
+func TestAgentActivityResolveStoreConcurrent(t *testing.T) {
+	handler := &AgentActivityHandler{DB: &sql.DB{}}
+
+	const workers = 64
+	var (
+		wg     sync.WaitGroup
+		start  = make(chan struct{})
+		stores = make(chan *store.AgentActivityEventStore, workers)
+		errs   = make(chan error, workers)
+	)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			resolvedStore, err := handler.resolveStore()
+			stores <- resolvedStore
+			errs <- err
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(stores)
+	close(errs)
+
+	var firstStore *store.AgentActivityEventStore
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	for resolvedStore := range stores {
+		require.NotNil(t, resolvedStore)
+		if firstStore == nil {
+			firstStore = resolvedStore
+			continue
+		}
+		require.Same(t, firstStore, resolvedStore)
+	}
 }
 
 func seedAgentActivityEvents(

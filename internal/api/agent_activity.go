@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -48,6 +49,9 @@ type AgentActivityHandler struct {
 	DB    *sql.DB
 	Store *store.AgentActivityEventStore
 	Hub   *ws.Hub
+
+	storeOnce sync.Once
+	storeErr  error
 }
 
 type ingestAgentActivityEventsRequest struct {
@@ -601,17 +605,24 @@ func buildListAgentActivityResponse(items []store.AgentActivityEvent, limit int)
 }
 
 func (h *AgentActivityHandler) resolveStore() (*store.AgentActivityEventStore, error) {
-	if h.Store != nil {
-		return h.Store, nil
-	}
-	db := h.DB
-	if db == nil {
-		var err error
-		db, err = store.DB()
-		if err != nil {
-			return nil, err
+	h.storeOnce.Do(func() {
+		if h.Store != nil {
+			return
 		}
+		db := h.DB
+		if db == nil {
+			db, h.storeErr = store.DB()
+			if h.storeErr != nil {
+				return
+			}
+		}
+		h.Store = store.NewAgentActivityEventStore(db)
+	})
+	if h.storeErr != nil {
+		return nil, h.storeErr
 	}
-	h.Store = store.NewAgentActivityEventStore(db)
+	if h.Store == nil {
+		return nil, fmt.Errorf("activity store unavailable")
+	}
 	return h.Store, nil
 }
