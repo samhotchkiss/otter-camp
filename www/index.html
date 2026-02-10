@@ -60,9 +60,11 @@
     }
     .hero h1 em { font-style: normal; color: var(--orange); }
     .hero-sub {
-      font-size: 21px; color: var(--text-muted); max-width: 580px;
+      font-size: 19px; color: var(--text-muted); max-width: 580px;
       margin: 0 auto 40px; line-height: 1.65;
     }
+    .hero-sub a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; }
+    .hero-sub a:hover { text-decoration-color: var(--accent); }
     .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
     .btn {
       display: inline-flex; align-items: center; gap: 8px;
@@ -177,7 +179,7 @@
     <div class="hero-inner">
       <h1>Running AI agents is easy.<br>Running a <em>team</em> of them is not.</h1>
       <p class="hero-sub">
-        Open source layer on top of <a href="https://github.com/openclaw/openclaw">OpenClaw</a> that adds memory, identity, projects, and review to your agents. Claw runs them. Otter manages them.
+        We're building the management layer on top of <a href="https://github.com/openclaw/openclaw">OpenClaw</a>. Agents that remember, work that gets reviewed, and a setup that doesn't fall apart at 3am. Open source.
       </p>
       <div class="hero-cta">
         <a href="#signup" class="btn btn-primary">Get Early Access</a>
