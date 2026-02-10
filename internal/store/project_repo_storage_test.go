@@ -106,3 +106,17 @@ func TestProjectStore_ProjectRepoIsolation(t *testing.T) {
 
 	require.Error(t, store.ArchiveProjectRepo(ctxB, projectID))
 }
+
+func TestGitRepoRoot_Default(t *testing.T) {
+	t.Setenv("GIT_REPO_ROOT", "")
+
+	root := gitRepoRoot()
+	require.Equal(t, filepath.Clean("./data/repos"), root)
+}
+
+func TestGitRepoRoot_UsesEnvOverride(t *testing.T) {
+	t.Setenv("GIT_REPO_ROOT", " ./tmp/test-repos ")
+
+	root := gitRepoRoot()
+	require.Equal(t, filepath.Clean("./tmp/test-repos"), root)
+}

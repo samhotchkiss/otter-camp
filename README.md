@@ -109,41 +109,54 @@ This isn't a demo. We run Otter Camp in production with **13 AI agents** coordin
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.24+
 - Node.js 20+
-- PostgreSQL 15+ (with pgvector extension)
-- An [OpenClaw](https://github.com/openclaw/openclaw) instance
+- Docker (or local PostgreSQL 15+)
+- Git
 
-### Development
+### Setup
 
 ```bash
-# Clone
 git clone https://github.com/samhotchkiss/otter-camp.git
 cd otter-camp
+make setup
+```
 
-# Start Postgres
-docker-compose up -d
+`make setup` will:
+- Check prerequisites
+- Create `.env` with generated secrets
+- Start PostgreSQL (Docker, when available)
+- Run database migrations
+- Create your workspace and local admin session
+- Configure the CLI token
+- Create `bridge/.env` if missing
 
-# Run migrations
-make migrate-up
+### Run
 
-# Start dev servers (API + frontend)
+```bash
 make dev
 ```
 
-### Bridge Setup
+Open http://localhost:5173 in your browser.
 
-The bridge syncs your local OpenClaw instance with Otter Camp:
+### Connect OpenClaw
+
+1. Edit `bridge/.env` and set `OPENCLAW_TOKEN` to your OpenClaw gateway token.
+2. Run the bridge:
 
 ```bash
-# Configure
-export OPENCLAW_TOKEN="your-gateway-token"
-export OTTERCAMP_URL="https://api.otter.camp"  # or localhost
-export OTTERCAMP_TOKEN="your-sync-token"
-
-# Run (continuous sync)
 npx tsx bridge/openclaw-bridge.ts --continuous
 ```
+
+Your agents should appear in Otter Camp shortly after bridge sync starts.
+
+### Single-Port Mode (Production-Like)
+
+```bash
+make prod-local
+```
+
+This builds the frontend and serves everything from the Go server at http://localhost:8080.
 
 ### Docker (Self-hosted)
 

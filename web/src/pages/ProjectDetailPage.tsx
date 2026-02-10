@@ -9,8 +9,7 @@ import PipelineMiniProgress from "../components/issues/PipelineMiniProgress";
 import ProjectSettingsPage from "./project/ProjectSettingsPage";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
-
-const API_URL = import.meta.env.VITE_API_URL || 'https://api.otter.camp';
+import { API_URL } from "../lib/api";
 
 // Agent color mappings
 const agentColors: Record<string, string> = {

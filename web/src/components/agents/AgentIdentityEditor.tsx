@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { API_URL } from "../../lib/api";
 import DocumentWorkspace from "../content-review/DocumentWorkspace";
-
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 
 type AgentIdentityEditorProps = {
   agentID: string;

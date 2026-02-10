@@ -8,6 +8,7 @@ import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { useAgentActivity } from "../hooks/useAgentActivity";
 import { isDemoMode } from "../lib/demo";
 import useEmissions from "../hooks/useEmissions";
+import { API_URL } from "../lib/api";
 
 /**
  * Status filter options including "all".
@@ -110,7 +111,6 @@ const GAP = 16;
  * - Click card to open AgentDM modal
  * - Real-time status updates via WebSocket
  */
-const API_URL = import.meta.env.VITE_API_URL || "https://api.otter.camp";
 const SLACK_THREAD_GROUP_HINTS: Record<string, string> = {
   "g-c0abhd38u05": "essie",
 };

@@ -7,6 +7,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { isDemoMode } from "../lib/demo";
+import { API_URL } from "../lib/api";
 
 // --- Types ---
 
@@ -47,7 +48,6 @@ type GlobalSearchProps = {
 const STORAGE_KEY = "ottercamp.globalSearch.recent";
 const MAX_RECENT_SEARCHES = 5;
 const DEBOUNCE_MS = 200;
-const API_BASE = import.meta.env.VITE_API_URL || "";
 
 const TYPE_CONFIG: Record<SearchResultType, { label: string; icon: string }> = {
   task: { label: "Tasks", icon: "✅" },
@@ -182,7 +182,7 @@ const fetchSearchResults = async (
   query: string,
   orgId?: string
 ): Promise<SearchResult[]> => {
-  const url = new URL(`${API_BASE}/api/search`, window.location.origin);
+  const url = new URL(`${API_URL}/api/search`, window.location.origin);
   url.searchParams.set("q", query);
   
   // Use demo mode only on demo subdomain

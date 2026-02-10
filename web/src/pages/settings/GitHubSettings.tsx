@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { API_URL } from "../../lib/api";
 
 type GitHubConnection = {
   installationId: number;
@@ -107,8 +108,6 @@ type SettingsListPayload = {
     github_pr_enabled?: boolean;
   }>;
 };
-
-const API_URL = import.meta.env.VITE_API_URL || "";
 
 const DEFAULT_PROJECT_SETTINGS: ProjectSyncSettings = {
   enabled: false,

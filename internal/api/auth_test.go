@@ -112,3 +112,14 @@ func TestAllowInsecureMagicTokenValidationEnvAliases(t *testing.T) {
 	t.Setenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION", "")
 	require.False(t, allowInsecureMagicTokenValidation())
 }
+
+func TestShouldBypassDBTokenValidation(t *testing.T) {
+	t.Setenv("OTTERCAMP_ALLOW_INSECURE_MAGIC_AUTH", "true")
+	t.Setenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION", "")
+	require.True(t, shouldBypassDBTokenValidation("oc_magic_abc123"))
+	require.False(t, shouldBypassDBTokenValidation("oc_local_abc123"))
+
+	t.Setenv("OTTERCAMP_ALLOW_INSECURE_MAGIC_AUTH", "false")
+	t.Setenv("ALLOW_INSECURE_MAGIC_TOKEN_VALIDATION", "")
+	require.False(t, shouldBypassDBTokenValidation("oc_magic_abc123"))
+}

@@ -204,6 +204,9 @@ func isWebSocketOriginAllowed(r *http.Request) bool {
 	if origin == "" {
 		return true
 	}
+	if isDevelopmentOriginMode() {
+		return true
+	}
 
 	originURL, err := url.Parse(origin)
 	if err != nil {
@@ -226,6 +229,11 @@ func isWebSocketOriginAllowed(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+func isDevelopmentOriginMode() bool {
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	return env == "" || env == "development" || env == "dev" || env == "local"
 }
 
 func normalizeOriginHost(host string) string {

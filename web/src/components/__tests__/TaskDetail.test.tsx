@@ -110,6 +110,16 @@ describe("TaskDetail", () => {
     expect(screen.getByTestId("task-thread")).toHaveTextContent("task-123");
   });
 
+  it("uses local origin for the default task API endpoint", async () => {
+    mockFetchTask();
+
+    render(<TaskDetail taskId="task-123" isOpen={true} onClose={mockOnClose} />);
+
+    await screen.findByText("Test Task");
+
+    expect(mockFetch).toHaveBeenCalledWith(`${window.location.origin}/api/tasks/task-123`);
+  });
+
   it("closes when close button is clicked", async () => {
     mockFetchTask();
     const user = userEvent.setup();
