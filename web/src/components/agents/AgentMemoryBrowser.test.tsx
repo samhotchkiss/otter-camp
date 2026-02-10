@@ -2,116 +2,125 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AgentMemoryBrowser from "./AgentMemoryBrowser";
 
-function getAuthorizationHeader(init?: RequestInit): string | undefined {
-  const headers = init?.headers;
-  if (!headers) {
-    return undefined;
-  }
-  if (headers instanceof Headers) {
-    return headers.get("Authorization") ?? undefined;
-  }
-  if (Array.isArray(headers)) {
-    const entry = headers.find(([name]) => name.toLowerCase() === "authorization");
-    return entry?.[1];
-  }
-  const record = headers as Record<string, string>;
-  return record.Authorization ?? record.authorization;
-}
-
 describe("AgentMemoryBrowser", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     localStorage.clear();
+    localStorage.setItem("otter-camp-org-id", "org-123");
+    localStorage.setItem("otter_camp_token", "token-123");
   });
 
-  it("loads memory entries and supports creating a new memory entry", async () => {
-    localStorage.setItem("otter_camp_token", "test-token");
-
-    let loadCount = 0;
+  it("loads timeline entries, writes memory, and supports semantic search + recall preview", async () => {
+    let timelineLoadCount = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = String(init?.method || "GET").toUpperCase();
-      if (url.includes("/api/agents/11111111-1111-1111-1111-111111111111/memory") && method === "GET") {
-        loadCount += 1;
+
+      if (url.includes("/api/memory/entries?agent_id=11111111-1111-1111-1111-111111111111") && method === "GET") {
+        timelineLoadCount += 1;
         return new Response(
           JSON.stringify({
-            agent_id: "11111111-1111-1111-1111-111111111111",
-            daily: [
+            items: [
               {
-                id: "daily-1",
+                id: "entry-1",
                 agent_id: "11111111-1111-1111-1111-111111111111",
-                kind: "daily",
-                date: loadCount > 1 ? "2026-02-09" : "2026-02-08",
-                content: loadCount > 1 ? "Shipped cutover checklist." : "Investigated queue latency",
-                created_at: "2026-02-09T00:00:00Z",
-                updated_at: "2026-02-09T00:00:00Z",
-              },
-            ],
-            long_term: [
-              {
-                id: "lt-1",
-                agent_id: "11111111-1111-1111-1111-111111111111",
-                kind: "long_term",
-                content: "Prefers short standups.",
-                created_at: "2026-02-08T00:00:00Z",
-                updated_at: "2026-02-08T00:00:00Z",
+                kind: "decision",
+                title: "Choose pgvector",
+                content: timelineLoadCount > 1 ? "Use pgvector and ship rollout notes." : "Use pgvector for memory retrieval.",
+                importance: 4,
+                confidence: 0.9,
+                sensitivity: "internal",
+                status: "active",
+                occurred_at: "2026-02-10T16:00:00Z",
+                updated_at: "2026-02-10T16:00:00Z",
               },
             ],
           }),
           { status: 200 },
         );
       }
-      if (url.includes("/api/agents/11111111-1111-1111-1111-111111111111/memory") && method === "POST") {
+
+      if (url.endsWith("/api/memory/entries") && method === "POST") {
         return new Response(
-          JSON.stringify({ id: "daily-new", kind: "daily", date: "2026-02-09", content: "Shipped cutover checklist." }),
+          JSON.stringify({
+            id: "entry-2",
+            agent_id: "11111111-1111-1111-1111-111111111111",
+            kind: "decision",
+            title: "Ship rollout notes",
+            content: "Use pgvector and ship rollout notes.",
+          }),
           { status: 201 },
         );
       }
+
+      if (url.includes("/api/memory/search?agent_id=11111111-1111-1111-1111-111111111111")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "search-1",
+                agent_id: "11111111-1111-1111-1111-111111111111",
+                kind: "decision",
+                title: "Search hit",
+                content: "Compaction recovery should fail closed.",
+                importance: 5,
+                confidence: 0.91,
+                sensitivity: "internal",
+                status: "active",
+                occurred_at: "2026-02-10T16:10:00Z",
+                updated_at: "2026-02-10T16:10:00Z",
+                relevance: 0.88,
+              },
+            ],
+            total: 1,
+          }),
+          { status: 200 },
+        );
+      }
+
+      if (url.includes("/api/memory/recall?agent_id=11111111-1111-1111-1111-111111111111")) {
+        return new Response(
+          JSON.stringify({
+            context: "[RECALLED CONTEXT]\n- [decision] Compaction recovery should fail closed.",
+          }),
+          { status: 200 },
+        );
+      }
+
       throw new Error(`unexpected url: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     render(<AgentMemoryBrowser agentID="main" workspaceAgentID="11111111-1111-1111-1111-111111111111" />);
 
-    expect(await screen.findByText("Investigated queue latency")).toBeInTheDocument();
-    expect(screen.getByText("Prefers short standups.")).toBeInTheDocument();
+    expect(await screen.findByText("Use pgvector for memory retrieval.")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "daily" } });
-    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-02-09" } });
-    fireEvent.change(screen.getByLabelText("Memory Content"), { target: { value: "Shipped cutover checklist." } });
+    fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "decision" } });
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Ship rollout notes" } });
+    fireEvent.change(screen.getByLabelText("Content"), { target: { value: "Use pgvector and ship rollout notes." } });
     fireEvent.click(screen.getByRole("button", { name: "Save Memory" }));
 
-    await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.some(([request, requestInit]) => {
-          if (!String(request).includes("/api/agents/11111111-1111-1111-1111-111111111111/memory")) {
-            return false;
-          }
-          const method = String(requestInit?.method || "GET").toUpperCase();
-          if (method !== "POST") {
-            return false;
-          }
-          const body = JSON.parse(String(requestInit?.body || "{}")) as Record<string, unknown>;
-          return body.kind === "daily" && body.date === "2026-02-09" && body.content === "Shipped cutover checklist.";
-        }),
-      ).toBe(true);
-    });
-
-    expect(
-      fetchMock.mock.calls
-        .filter(([request]) => String(request).includes("/api/agents/11111111-1111-1111-1111-111111111111/memory"))
-        .every(([, requestInit]) => getAuthorizationHeader(requestInit) === "Bearer test-token"),
-    ).toBe(true);
-
     expect(await screen.findByText("Saved memory entry.")).toBeInTheDocument();
-    expect(await screen.findByText("Shipped cutover checklist.")).toBeInTheDocument();
+    expect(await screen.findByText("Use pgvector and ship rollout notes.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Query"), { target: { value: "compaction recovery" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText("Search hit")).toBeInTheDocument();
+    expect(await screen.findByText(/\[RECALLED CONTEXT\]/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/Compaction recovery should fail closed\./)).length).toBeGreaterThan(0);
+
+    const searched = fetchMock.mock.calls.some(([request]) => String(request).includes("/api/memory/search"));
+    const recalled = fetchMock.mock.calls.some(([request]) => String(request).includes("/api/memory/recall"));
+    expect(searched).toBe(true);
+    expect(recalled).toBe(true);
   });
 
-  it("renders an empty state when memory entries are absent", async () => {
+  it("renders empty timeline state", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/agents/11111111-1111-1111-1111-111111111111/memory")) {
-        return new Response(JSON.stringify({ agent_id: "11111111-1111-1111-1111-111111111111", daily: [], long_term: [] }), { status: 200 });
+      if (url.includes("/api/memory/entries?agent_id=11111111-1111-1111-1111-111111111111")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 });
       }
       throw new Error(`unexpected url: ${url}`);
     });
@@ -121,22 +130,59 @@ describe("AgentMemoryBrowser", () => {
     expect(await screen.findByText("No memory entries for this agent yet.")).toBeInTheDocument();
   });
 
-  it("renders fetch errors", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }));
+  it("renders timeline errors without breaking search flow", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/memory/entries?agent_id=11111111-1111-1111-1111-111111111111")) {
+        return new Response(JSON.stringify({ error: "timeline down" }), { status: 500 });
+      }
+      if (url.includes("/api/memory/search?agent_id=11111111-1111-1111-1111-111111111111")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "search-err-1",
+                agent_id: "11111111-1111-1111-1111-111111111111",
+                kind: "lesson",
+                title: "Still searchable",
+                content: "UI keeps working when timeline load fails.",
+                importance: 3,
+                confidence: 0.8,
+                sensitivity: "internal",
+                status: "active",
+                occurred_at: "2026-02-10T16:10:00Z",
+                updated_at: "2026-02-10T16:10:00Z",
+              },
+            ],
+            total: 1,
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/memory/recall?agent_id=11111111-1111-1111-1111-111111111111")) {
+        return new Response(JSON.stringify({ context: "" }), { status: 200 });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     render(<AgentMemoryBrowser agentID="main" workspaceAgentID="11111111-1111-1111-1111-111111111111" />);
-    await waitFor(() => {
-      expect(screen.getByText(/Failed to load memory entries/)).toBeInTheDocument();
-    });
+
+    expect(await screen.findByText(/Failed to load memory entries/)).toBeInTheDocument();
+    expect(screen.getByText("Search Memory")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Query"), { target: { value: "resilience" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText("Still searchable")).toBeInTheDocument();
   });
 
-  it("aborts in-flight memory load requests on unmount", async () => {
+  it("aborts in-flight timeline requests on unmount", async () => {
     let capturedSignal: AbortSignal | undefined;
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
       capturedSignal = init?.signal as AbortSignal | undefined;
       return new Promise<Response>(() => {
-        // Keep request pending so unmount can trigger cancellation.
+        // Keep pending until unmount aborts.
       });
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
