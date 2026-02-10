@@ -956,6 +956,9 @@ func (h *AdminConnectionsHandler) GetEvents(w http.ResponseWriter, r *http.Reque
 		}
 		limit = parsed
 	}
+	if limit > 200 {
+		limit = 200
+	}
 
 	events, err := h.EventStore.List(r.Context(), limit)
 	if err != nil {

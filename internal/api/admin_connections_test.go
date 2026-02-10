@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -353,6 +354,36 @@ func TestAdminConnectionsGetEventsReturnsWorkspaceScopedRows(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.Len(t, payload.Events, 1)
 	require.Equal(t, "org A connected", payload.Events[0].Message)
+}
+
+func TestAdminConnectionsGetEventsClampsLimitTo200(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-events-limit-clamp")
+
+	eventStore := store.NewConnectionEventStore(db)
+	for i := 0; i < 220; i++ {
+		_, err := eventStore.Create(testCtxWithWorkspace(orgID), store.CreateConnectionEventInput{
+			EventType: "bridge.connected",
+			Message:   fmt.Sprintf("event-%03d", i),
+		})
+		require.NoError(t, err)
+	}
+
+	handler := &AdminConnectionsHandler{
+		DB:         db,
+		EventStore: eventStore,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/events?limit=999", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.GetEvents(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminConnectionEventsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Len(t, payload.Events, 200)
+	require.Equal(t, 200, payload.Total)
 }
 
 func TestAgentSyncStateSchemaIncludesOrgScopeAndRLS(t *testing.T) {
