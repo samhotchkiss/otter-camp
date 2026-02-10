@@ -49,6 +49,7 @@ var (
 	ErrMemoryInvalidConfidence = errors.New("memory confidence must be between 0 and 1")
 	ErrMemoryQueryMissing      = errors.New("memory search query is required")
 	ErrMemoryInvalidRelevance  = errors.New("memory min relevance must be between 0 and 1")
+	ErrDuplicateMemory         = errors.New("duplicate memory entry")
 )
 
 var memoryKinds = map[string]struct{}{
@@ -230,6 +231,9 @@ func (s *MemoryStore) Create(ctx context.Context, input CreateMemoryEntryInput) 
 		sourceIssue,
 	))
 	if err != nil {
+		if isMemoryDedupConstraintViolation(err) {
+			return nil, ErrDuplicateMemory
+		}
 		return nil, fmt.Errorf("failed to create memory entry: %w", err)
 	}
 	return &entry, nil
@@ -640,6 +644,17 @@ func nullableTime(value *time.Time) interface{} {
 		return nil
 	}
 	return value.UTC()
+}
+
+func isMemoryDedupConstraintViolation(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	if pqErr.Code != "23505" {
+		return false
+	}
+	return pqErr.Constraint == "idx_memory_entries_dedup_active" || pqErr.Constraint == "idx_memory_entries_dedup"
 }
 
 func scanMemoryEntry(scanner interface{ Scan(...any) error }) (MemoryEntry, error) {

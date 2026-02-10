@@ -292,6 +292,8 @@ func handleMemoryStoreError(w http.ResponseWriter, err error) {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
 	case errors.Is(err, store.ErrNotFound):
 		sendJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
+	case errors.Is(err, store.ErrDuplicateMemory):
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "duplicate memory entry"})
 	case errors.Is(err, store.ErrMemoryInvalidAgentID),
 		errors.Is(err, store.ErrMemoryInvalidEntryID),
 		errors.Is(err, store.ErrMemoryInvalidKind),

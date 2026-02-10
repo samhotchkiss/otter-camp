@@ -202,6 +202,39 @@ func TestMemoryStoreValidation(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestMemoryStoreCreateDuplicateReturnsErrDuplicateMemory(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "memory-store-dedup")
+
+	var agentID string
+	err := db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'memory-store-dedup-agent', 'Memory Store Dedup Agent', 'active')
+		 RETURNING id`,
+		orgID,
+	).Scan(&agentID)
+	require.NoError(t, err)
+
+	store := NewMemoryStore(db)
+	ctx := ctxWithWorkspace(orgID)
+	input := CreateMemoryEntryInput{
+		AgentID:     agentID,
+		Kind:        MemoryKindFact,
+		Title:       "dedup-test-title",
+		Content:     "dedup-test-content",
+		Importance:  3,
+		Confidence:  0.8,
+		Sensitivity: MemorySensitivityInternal,
+	}
+
+	_, err = store.Create(ctx, input)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, input)
+	require.ErrorIs(t, err, ErrDuplicateMemory)
+}
+
 func memoryStringPtr(value string) *string {
 	return &value
 }
