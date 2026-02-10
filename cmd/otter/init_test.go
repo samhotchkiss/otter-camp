@@ -1,0 +1,413 @@
+package main
+
+import (
+	"bytes"
+	"errors"
+	"io"
+	"strings"
+	"testing"
+
+	importer "github.com/samhotchkiss/otter-camp/internal/import"
+	"github.com/samhotchkiss/otter-camp/internal/ottercli"
+)
+
+type fakeInitClient struct {
+	gotBootstrapRequest ottercli.OnboardingBootstrapRequest
+	bootstrapResponse   ottercli.OnboardingBootstrapResponse
+	bootstrapErr        error
+
+	createAgentInputs   []map[string]any
+	createAgentErr      error
+	createProjectInputs []map[string]interface{}
+	createProjectErr    error
+	createIssueCalls    []fakeIssueCreateCall
+	createIssueErr      error
+}
+
+type fakeIssueCreateCall struct {
+	ProjectID string
+	Input     map[string]interface{}
+}
+
+func (f *fakeInitClient) OnboardingBootstrap(input ottercli.OnboardingBootstrapRequest) (ottercli.OnboardingBootstrapResponse, error) {
+	f.gotBootstrapRequest = input
+	if f.bootstrapErr != nil {
+		return ottercli.OnboardingBootstrapResponse{}, f.bootstrapErr
+	}
+	return f.bootstrapResponse, nil
+}
+
+func (f *fakeInitClient) CreateAgent(input map[string]any) (map[string]any, error) {
+	f.createAgentInputs = append(f.createAgentInputs, input)
+	if f.createAgentErr != nil {
+		return nil, f.createAgentErr
+	}
+	return map[string]any{"id": "agent-1"}, nil
+}
+
+func (f *fakeInitClient) CreateProject(input map[string]interface{}) (ottercli.Project, error) {
+	f.createProjectInputs = append(f.createProjectInputs, input)
+	if f.createProjectErr != nil {
+		return ottercli.Project{}, f.createProjectErr
+	}
+	return ottercli.Project{
+		ID:   "project-1",
+		Name: "Imported Project",
+	}, nil
+}
+
+func (f *fakeInitClient) CreateIssue(projectID string, input map[string]interface{}) (ottercli.Issue, error) {
+	f.createIssueCalls = append(f.createIssueCalls, fakeIssueCreateCall{
+		ProjectID: projectID,
+		Input:     input,
+	})
+	if f.createIssueErr != nil {
+		return ottercli.Issue{}, f.createIssueErr
+	}
+	return ottercli.Issue{
+		ID:          "issue-1",
+		Title:       toString(input["title"]),
+		IssueNumber: 1,
+	}, nil
+}
+
+func TestHandleInitHostedModeFlagPrintsHandoff(t *testing.T) {
+	var out bytes.Buffer
+	err := runInitCommand([]string{"--mode", "hosted"}, strings.NewReader(""), &out)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "Visit otter.camp/setup to get started.") {
+		t.Fatalf("expected hosted handoff message, got %q", out.String())
+	}
+}
+
+func TestHandleInitPromptRoutesHostedSelection(t *testing.T) {
+	var out bytes.Buffer
+	err := runInitCommand(nil, strings.NewReader("2\n"), &out)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "Welcome to Otter Camp!") {
+		t.Fatalf("expected welcome prompt, got %q", output)
+	}
+	if !strings.Contains(output, "[2] Hosted") {
+		t.Fatalf("expected hosted option in prompt, got %q", output)
+	}
+	if !strings.Contains(output, "Visit otter.camp/setup to get started.") {
+		t.Fatalf("expected hosted handoff message, got %q", output)
+	}
+}
+
+func TestHandleInitPromptDefaultsToLocalSelection(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-local",
+			Token: "oc_sess_local",
+		},
+	}
+	stubInitDeps(t, ottercli.Config{}, client, nil)
+
+	var out bytes.Buffer
+	err := runInitCommand(nil, strings.NewReader("1\nSam\nsam@example.com\nMy Team\n"), &out)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "Account setup complete.") {
+		t.Fatalf("expected local bootstrap completion message, got %q", out.String())
+	}
+}
+
+func TestHandleInitRejectsInvalidModeFlag(t *testing.T) {
+	err := runInitCommand([]string{"--mode", "cloud"}, strings.NewReader(""), &bytes.Buffer{})
+	if err == nil {
+		t.Fatalf("expected invalid mode error")
+	}
+	if !strings.Contains(err.Error(), "--mode must be local or hosted") {
+		t.Fatalf("expected mode validation error, got %v", err)
+	}
+}
+
+func TestInitBootstrapLocalSuccessPersistsConfig(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader(""),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+
+	if client.gotBootstrapRequest.Name != "Sam" || client.gotBootstrapRequest.Email != "sam@example.com" || client.gotBootstrapRequest.OrganizationName != "My Team" {
+		t.Fatalf("bootstrap request = %#v", client.gotBootstrapRequest)
+	}
+	if state.gotAPIBase != "http://localhost:4200" {
+		t.Fatalf("api base = %q, want http://localhost:4200", state.gotAPIBase)
+	}
+	if !state.saveCalled {
+		t.Fatalf("expected save config to be called")
+	}
+	if state.savedCfg.APIBaseURL != "http://localhost:4200" {
+		t.Fatalf("saved api base = %q, want http://localhost:4200", state.savedCfg.APIBaseURL)
+	}
+	if state.savedCfg.Token != "oc_sess_bootstrap" {
+		t.Fatalf("saved token = %q, want oc_sess_bootstrap", state.savedCfg.Token)
+	}
+	if state.savedCfg.DefaultOrg != "org-bootstrap" {
+		t.Fatalf("saved org = %q, want org-bootstrap", state.savedCfg.DefaultOrg)
+	}
+
+	output := out.String()
+	if strings.Count(output, "oc_sess_bootstrap") != 1 {
+		t.Fatalf("expected token to appear once in output, got %q", output)
+	}
+	if !strings.Contains(output, "Next step: otter whoami") {
+		t.Fatalf("expected follow-up instruction, got %q", output)
+	}
+}
+
+func TestInitBootstrapLocalAPIFailureSkipsConfigSave(t *testing.T) {
+	client := &fakeInitClient{bootstrapErr: errors.New("bootstrap failed")}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader(""),
+		&bytes.Buffer{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "bootstrap failed") {
+		t.Fatalf("expected bootstrap error, got %v", err)
+	}
+	if state.saveCalled {
+		t.Fatalf("save config should not be called when bootstrap fails")
+	}
+}
+
+func TestInitBootstrapLocalConfigSaveFailureReturnsError(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	stubInitDeps(t, ottercli.Config{}, client, errors.New("save failed"))
+
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader(""),
+		&bytes.Buffer{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "save failed") {
+		t.Fatalf("expected save failure error, got %v", err)
+	}
+}
+
+func TestInitImportAndBridgeApprovedFlowImportsAndStartsBridge(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir: "/Users/sam/.openclaw",
+		Gateway: importer.OpenClawGatewayConfig{
+			Host:  "127.0.0.1",
+			Port:  18791,
+			Token: "openclaw-token",
+		},
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", Name: "Frank", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.identities = []importer.ImportedAgentIdentity{
+		{ID: "main", Name: "Frank", Soul: "Chief of Staff"},
+	}
+	state.projects = []importer.OpenClawProjectCandidate{
+		{
+			Key:      "otter-camp",
+			Name:     "Otter Camp",
+			RepoPath: "/Users/sam/dev/otter-camp",
+			Issues: []importer.OpenClawIssueCandidate{
+				{Title: "Review imported context"},
+			},
+		},
+	}
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader("y\ny\n"),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+
+	if len(client.createAgentInputs) != 1 {
+		t.Fatalf("expected one imported agent call, got %d", len(client.createAgentInputs))
+	}
+	if len(client.createProjectInputs) != 1 {
+		t.Fatalf("expected one imported project call, got %d", len(client.createProjectInputs))
+	}
+	if len(client.createIssueCalls) != 1 {
+		t.Fatalf("expected one imported issue call, got %d", len(client.createIssueCalls))
+	}
+	if !state.bridgeWriteCalled {
+		t.Fatalf("expected bridge env write call")
+	}
+	if state.bridgeValues["OPENCLAW_TOKEN"] != "openclaw-token" {
+		t.Fatalf("bridge token = %q", state.bridgeValues["OPENCLAW_TOKEN"])
+	}
+	if state.bridgeValues["OTTERCAMP_TOKEN"] != "oc_sess_bootstrap" {
+		t.Fatalf("bridge otter token = %q", state.bridgeValues["OTTERCAMP_TOKEN"])
+	}
+	if !state.bridgeStarted {
+		t.Fatalf("expected bridge start call")
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "Imported 1 agents, 1 projects, 1 issues") {
+		t.Fatalf("expected import summary, got %q", output)
+	}
+	if !strings.Contains(output, "Bridge config written: /repo/bridge/.env") {
+		t.Fatalf("expected bridge config output, got %q", output)
+	}
+}
+
+func TestInitImportAndBridgeSkipsWhenOpenClawMissing(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.detectErr = importer.ErrOpenClawNotFound
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader(""),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	if state.bridgeWriteCalled {
+		t.Fatalf("bridge config should not be written when OpenClaw is missing")
+	}
+	if state.bridgeStarted {
+		t.Fatalf("bridge should not start when OpenClaw is missing")
+	}
+	if !strings.Contains(out.String(), "OpenClaw installation not detected") {
+		t.Fatalf("expected missing-openclaw message, got %q", out.String())
+	}
+}
+
+type initStubState struct {
+	gotAPIBase string
+	savedCfg   ottercli.Config
+	saveCalled bool
+
+	detectInstall *importer.OpenClawInstallation
+	detectErr     error
+	identities    []importer.ImportedAgentIdentity
+	projects      []importer.OpenClawProjectCandidate
+	repoRoot      string
+
+	bridgeWriteCalled bool
+	bridgeValues      map[string]string
+	bridgePath        string
+	bridgeWriteErr    error
+
+	bridgeStarted  bool
+	bridgeStartErr error
+}
+
+func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient, saveErr error) *initStubState {
+	t.Helper()
+
+	state := &initStubState{
+		detectErr:  importer.ErrOpenClawNotFound,
+		repoRoot:   "/repo",
+		bridgePath: "/repo/bridge/.env",
+	}
+
+	origLoad := loadInitConfig
+	origSave := saveInitConfig
+	origNewClient := newInitClient
+	origDetect := detectInitOpenClaw
+	origImport := importInitOpenClawIdentities
+	origInfer := inferInitOpenClawProjects
+	origRepoRoot := resolveInitRepoRoot
+	origWriteBridge := writeInitBridgeEnv
+	origStartBridge := startInitBridge
+
+	loadInitConfig = func() (ottercli.Config, error) {
+		return loadCfg, nil
+	}
+	saveInitConfig = func(cfg ottercli.Config) error {
+		state.saveCalled = true
+		state.savedCfg = cfg
+		return saveErr
+	}
+	newInitClient = func(apiBase string) (initBootstrapClient, error) {
+		state.gotAPIBase = apiBase
+		return client, nil
+	}
+	detectInitOpenClaw = func() (*importer.OpenClawInstallation, error) {
+		if state.detectErr != nil {
+			return nil, state.detectErr
+		}
+		return state.detectInstall, nil
+	}
+	importInitOpenClawIdentities = func(install *importer.OpenClawInstallation) ([]importer.ImportedAgentIdentity, error) {
+		return state.identities, nil
+	}
+	inferInitOpenClawProjects = func(input importer.OpenClawProjectImportInput) []importer.OpenClawProjectCandidate {
+		return state.projects
+	}
+	resolveInitRepoRoot = func() (string, error) {
+		return state.repoRoot, nil
+	}
+	writeInitBridgeEnv = func(repoRoot string, values map[string]string) (string, error) {
+		state.bridgeWriteCalled = true
+		state.bridgeValues = values
+		if state.bridgeWriteErr != nil {
+			return "", state.bridgeWriteErr
+		}
+		return state.bridgePath, nil
+	}
+	startInitBridge = func(repoRoot string, out io.Writer) error {
+		state.bridgeStarted = true
+		return state.bridgeStartErr
+	}
+
+	t.Cleanup(func() {
+		loadInitConfig = origLoad
+		saveInitConfig = origSave
+		newInitClient = origNewClient
+		detectInitOpenClaw = origDetect
+		importInitOpenClawIdentities = origImport
+		inferInitOpenClawProjects = origInfer
+		resolveInitRepoRoot = origRepoRoot
+		writeInitBridgeEnv = origWriteBridge
+		startInitBridge = origStartBridge
+	})
+
+	return state
+}

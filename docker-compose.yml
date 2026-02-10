@@ -8,7 +8,7 @@ services:
   # Infrastructure
   # ==========================================================================
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: otter-camp-db
     environment:
       POSTGRES_USER: otter
@@ -33,9 +33,9 @@ services:
       dockerfile: Dockerfile
     container_name: otter-camp-api
     ports:
-      - "8080:8080"
+      - "4200:4200"
     environment:
-      PORT: 8080
+      PORT: 4200
       DATABASE_URL: postgres://otter:camp@postgres:5432/ottercamp?sslmode=disable
     depends_on:
       postgres:
@@ -48,7 +48,7 @@ services:
       context: .
       dockerfile: Dockerfile.web
       args:
-        VITE_API_URL: http://localhost:8080
+        VITE_API_URL: ""
     container_name: otter-camp-web
     ports:
       - "3000:80"

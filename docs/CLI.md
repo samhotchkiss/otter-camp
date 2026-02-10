@@ -69,7 +69,7 @@ otter auth login
 otter auth login --token oc_sess_abc123 --org 550e8400-e29b-41d4-a716-446655440000
 
 # Custom API endpoint (e.g., local dev)
-otter auth login --token oc_sess_abc123 --org my-org-id --api http://localhost:8080
+otter auth login --token oc_sess_abc123 --org my-org-id --api http://localhost:4200
 ```
 
 | Flag | Description |
@@ -79,6 +79,23 @@ otter auth login --token oc_sess_abc123 --org my-org-id --api http://localhost:8
 | `--api <url>` | API base URL override |
 
 If `--token` or `--org` are omitted, the CLI prompts interactively.
+
+### `otter init`
+
+Run first-time onboarding.
+
+```bash
+# Interactive mode selector + local bootstrap prompts
+otter init
+
+# Explicit hosted handoff
+otter init --mode hosted
+
+# Local bootstrap with flags
+otter init --mode local --name "Sam" --email "sam@example.com" --org-name "My Team"
+```
+
+Local mode calls the onboarding bootstrap API, saves CLI auth config, optionally imports OpenClaw data, and can generate `bridge/.env`.
 
 ### `otter whoami`
 
