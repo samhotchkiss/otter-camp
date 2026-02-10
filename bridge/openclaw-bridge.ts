@@ -420,6 +420,7 @@ const connectionStateByRole: Record<BridgeSocketRole, BridgeConnectionState> = {
 };
 let isDispatchQueuePolling = false;
 let isDispatchReplayFlushing = false;
+let isPeriodicSyncRunning = false;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
 const sessionContexts = new Map<string, SessionContext>();
@@ -3543,6 +3544,27 @@ async function flushDispatchReplayQueue(reason: string): Promise<number> {
   return flushed;
 }
 
+async function runSerializedPeriodicSync(operation: () => Promise<void>): Promise<boolean> {
+  if (isPeriodicSyncRunning) {
+    return false;
+  }
+  isPeriodicSyncRunning = true;
+  try {
+    await operation();
+    return true;
+  } finally {
+    isPeriodicSyncRunning = false;
+  }
+}
+
+export async function runSerializedSyncOperationForTest(operation: () => Promise<void>): Promise<boolean> {
+  return runSerializedPeriodicSync(operation);
+}
+
+export function resetPeriodicSyncGuardForTest(): void {
+  isPeriodicSyncRunning = false;
+}
+
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
   const sessionKey = (event.data?.session_key || '').trim();
   const content = (event.data?.content || '').trim();
@@ -4496,20 +4518,25 @@ async function runContinuous(): Promise<void> {
   await flushBufferedActivityEvents('initial-dispatch');
 
   setInterval(async () => {
-    try {
-      const sessions = await fetchSessions();
-      const activityEvents = collectSessionDeltaActivityEvents(sessions);
-      queueSessionDeltaActivityEvents(activityEvents);
-      await pushToOtterCamp(sessions);
-      const flushedCount = await flushBufferedActivityEvents('periodic-sync');
-      if (activityEvents.length > 0 || flushedCount > 0) {
-        console.log(
-          `[bridge] generated ${activityEvents.length} activity event(s) from session deltas; pushed ${flushedCount}`,
-        );
+    const executed = await runSerializedPeriodicSync(async () => {
+      try {
+        const sessions = await fetchSessions();
+        const activityEvents = collectSessionDeltaActivityEvents(sessions);
+        queueSessionDeltaActivityEvents(activityEvents);
+        await pushToOtterCamp(sessions);
+        const flushedCount = await flushBufferedActivityEvents('periodic-sync');
+        if (activityEvents.length > 0 || flushedCount > 0) {
+          console.log(
+            `[bridge] generated ${activityEvents.length} activity event(s) from session deltas; pushed ${flushedCount}`,
+          );
+        }
+        console.log(`[bridge] periodic sync complete (${sessions.length} sessions)`);
+      } catch (err) {
+        console.error('[bridge] periodic sync failed:', err);
       }
-      console.log(`[bridge] periodic sync complete (${sessions.length} sessions)`);
-    } catch (err) {
-      console.error('[bridge] periodic sync failed:', err);
+    });
+    if (!executed) {
+      console.warn('[bridge] periodic sync skipped because previous run is still active');
     }
   }, SYNC_INTERVAL_MS);
 
