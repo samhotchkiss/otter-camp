@@ -3444,6 +3444,19 @@ async function syncWorkflowProjectsFromCronJobs(cronJobs: OpenClawCronJobSnapsho
   }
 }
 
+export async function syncWorkflowProjectsFromCronJobsForTest(
+  cronJobs: OpenClawCronJobSnapshot[],
+): Promise<void> {
+  await syncWorkflowProjectsFromCronJobs(cronJobs);
+}
+
+export function resetWorkflowSyncStateForTest(): void {
+  previousCronLastRunByID.clear();
+  cronRunDetectionInitialized = false;
+  deliveredRunIDs.clear();
+  deliveredRunIDOrder.length = 0;
+}
+
 export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatchEvent): Promise<void> {
   const action = getTrimmedString(event.data?.action);
   const commandID = getTrimmedString(event.data?.command_id) || 'n/a';
