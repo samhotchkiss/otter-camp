@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -141,6 +144,119 @@ func TestCapWhoAmITextIsRuneSafe(t *testing.T) {
 	got = capWhoAmIText("海豚营地", 3)
 	require.Equal(t, "海豚营", got)
 	require.True(t, utf8.ValidString(got))
+}
+
+func TestScanWhoAmIActiveTasksReturnsScanError(t *testing.T) {
+	rows := &fakeWhoAmIActiveTaskRows{
+		records: []fakeWhoAmIActiveTaskRecord{
+			{project: "Alpha", number: sql.NullInt64{Int64: 42, Valid: true}, title: "Ship fix", status: "in_progress"},
+		},
+		scanErr: errors.New("scan failed"),
+	}
+
+	pointers, err := scanWhoAmIActiveTasks(rows)
+	require.Error(t, err)
+	require.Nil(t, pointers)
+	require.Contains(t, err.Error(), "scan active task row")
+}
+
+func TestScanWhoAmIActiveTasksReturnsRowsErr(t *testing.T) {
+	rows := &fakeWhoAmIActiveTaskRows{
+		rowErr: errors.New("row iteration failed"),
+	}
+
+	pointers, err := scanWhoAmIActiveTasks(rows)
+	require.Error(t, err)
+	require.Nil(t, pointers)
+	require.Contains(t, err.Error(), "iterate active tasks rows")
+}
+
+func TestListWhoAmIActiveTasksLogsQueryError(t *testing.T) {
+	db, err := sql.Open("postgres", "not a valid postgres dsn")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	handler := &AgentsHandler{DB: db}
+	req := httptest.NewRequest(http.MethodGet, "/api/agents/test/whoami", nil)
+
+	var logBuf bytes.Buffer
+	prevOutput := log.Writer()
+	prevFlags := log.Flags()
+	prevPrefix := log.Prefix()
+	log.SetOutput(&logBuf)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(prevOutput)
+		log.SetFlags(prevFlags)
+		log.SetPrefix(prevPrefix)
+	})
+
+	pointers := handler.listWhoAmIActiveTasks(
+		req,
+		"11111111-1111-1111-1111-111111111111",
+		"22222222-2222-2222-2222-222222222222",
+	)
+	require.Nil(t, pointers)
+	require.Contains(t, logBuf.String(), "listWhoAmIActiveTasks query failed")
+}
+
+type fakeWhoAmIActiveTaskRecord struct {
+	project string
+	number  sql.NullInt64
+	title   string
+	status  string
+}
+
+type fakeWhoAmIActiveTaskRows struct {
+	records []fakeWhoAmIActiveTaskRecord
+	scanErr error
+	rowErr  error
+	index   int
+}
+
+func (f *fakeWhoAmIActiveTaskRows) Next() bool {
+	return f.index < len(f.records)
+}
+
+func (f *fakeWhoAmIActiveTaskRows) Scan(dest ...interface{}) error {
+	if f.scanErr != nil {
+		return f.scanErr
+	}
+	if f.index >= len(f.records) {
+		return errors.New("scan called without next row")
+	}
+	record := f.records[f.index]
+	f.index++
+
+	project, ok := dest[0].(*string)
+	if !ok {
+		return errors.New("dest[0] not *string")
+	}
+	number, ok := dest[1].(*sql.NullInt64)
+	if !ok {
+		return errors.New("dest[1] not *sql.NullInt64")
+	}
+	title, ok := dest[2].(*string)
+	if !ok {
+		return errors.New("dest[2] not *string")
+	}
+	status, ok := dest[3].(*string)
+	if !ok {
+		return errors.New("dest[3] not *string")
+	}
+
+	*project = record.project
+	*number = record.number
+	*title = record.title
+	*status = record.status
+	return nil
+}
+
+func (f *fakeWhoAmIActiveTaskRows) Err() error {
+	return f.rowErr
 }
 
 func insertWhoAmITestAgent(t *testing.T, db *sql.DB, orgID, slug, displayName string) string {

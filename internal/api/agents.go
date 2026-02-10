@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -482,7 +483,17 @@ func (h *AgentsHandler) loadWhoAmIIdentityFields(r *http.Request, workspaceID, a
 	return identity, nil
 }
 
+type whoAmIActiveTaskRows interface {
+	Next() bool
+	Scan(dest ...interface{}) error
+	Err() error
+}
+
 func (h *AgentsHandler) listWhoAmIActiveTasks(r *http.Request, workspaceID, agentID string) []agentWhoAmITaskPointer {
+	if h.DB == nil {
+		return nil
+	}
+
 	rows, err := h.DB.QueryContext(
 		r.Context(),
 		`SELECT
@@ -502,10 +513,21 @@ func (h *AgentsHandler) listWhoAmIActiveTasks(r *http.Request, workspaceID, agen
 		whoAmIMaxActiveTasks,
 	)
 	if err != nil {
+		log.Printf("listWhoAmIActiveTasks query failed: workspace=%s agent=%s err=%v", workspaceID, agentID, err)
 		return nil
 	}
 	defer rows.Close()
 
+	pointers, scanErr := scanWhoAmIActiveTasks(rows)
+	if scanErr != nil {
+		log.Printf("listWhoAmIActiveTasks scan failed: workspace=%s agent=%s err=%v", workspaceID, agentID, scanErr)
+		return nil
+	}
+
+	return pointers
+}
+
+func scanWhoAmIActiveTasks(rows whoAmIActiveTaskRows) ([]agentWhoAmITaskPointer, error) {
 	pointers := make([]agentWhoAmITaskPointer, 0)
 	for rows.Next() {
 		var (
@@ -514,8 +536,8 @@ func (h *AgentsHandler) listWhoAmIActiveTasks(r *http.Request, workspaceID, agen
 			title   string
 			status  string
 		)
-		if scanErr := rows.Scan(&project, &number, &title, &status); scanErr != nil {
-			continue
+		if err := rows.Scan(&project, &number, &title, &status); err != nil {
+			return nil, fmt.Errorf("scan active task row: %w", err)
 		}
 		pointer := agentWhoAmITaskPointer{
 			Project: strings.TrimSpace(project),
@@ -527,10 +549,13 @@ func (h *AgentsHandler) listWhoAmIActiveTasks(r *http.Request, workspaceID, agen
 		}
 		pointers = append(pointers, pointer)
 	}
-	if len(pointers) == 0 {
-		return nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active tasks rows: %w", err)
 	}
-	return pointers
+	if len(pointers) == 0 {
+		return nil, nil
+	}
+	return pointers, nil
 }
 
 func parseMemoryDaysParam(rawDays string) (int, error) {
