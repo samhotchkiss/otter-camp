@@ -3,6 +3,7 @@ package store
 import (
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -81,6 +82,16 @@ func TestMemoryStoreCreateListSearchRecallDelete(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, postDelete, 0)
+}
+
+func TestGetRecallContextTruncatesUTF8Safely(t *testing.T) {
+	recall := "[RECALLED CONTEXT]\n- [fact] emoji: prefix🙂suffix"
+	// Split in the middle of the emoji rune.
+	maxChars := len("[RECALLED CONTEXT]\n- [fact] emoji: prefix") + 1
+	truncated := truncateRecallText(recall, maxChars)
+
+	require.True(t, utf8.ValidString(truncated))
+	require.Equal(t, "[RECALLED CONTEXT]\n- [fact] emoji: prefix", truncated)
 }
 
 func TestMemoryStoreOrgIsolation(t *testing.T) {

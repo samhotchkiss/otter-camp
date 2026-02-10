@@ -9,6 +9,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lib/pq"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
@@ -478,10 +479,22 @@ func (s *MemoryStore) GetRecallContext(
 	}
 
 	recall := strings.TrimSpace(builder.String())
-	if config.MaxChars > 0 && len(recall) > config.MaxChars {
-		recall = recall[:config.MaxChars]
-	}
+	recall = truncateRecallText(recall, config.MaxChars)
 	return recall, nil
+}
+
+func truncateRecallText(recall string, maxChars int) string {
+	if maxChars <= 0 || len(recall) <= maxChars {
+		return recall
+	}
+	cut := maxChars
+	for cut > 0 && !utf8.RuneStart(recall[cut]) {
+		cut -= 1
+	}
+	if cut <= 0 {
+		return ""
+	}
+	return recall[:cut]
 }
 
 func (s *MemoryStore) Delete(ctx context.Context, id string) error {
