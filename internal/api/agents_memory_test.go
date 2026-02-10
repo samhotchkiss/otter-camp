@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -285,4 +287,37 @@ func TestParseMemorySearchLimitParamClampsLargeValues(t *testing.T) {
 	limit, err := parseMemorySearchLimitParam("200")
 	require.NoError(t, err)
 	require.Equal(t, 100, limit)
+}
+
+func TestValidateMemorySearchQueryRejectsOverLimit(t *testing.T) {
+	_, err := validateMemorySearchQuery(strings.Repeat("a", memorySearchMaxQueryChars+1))
+	require.EqualError(t, err, "q must be 500 characters or fewer")
+}
+
+func TestValidateMemorySearchQueryAcceptsLimitBoundary(t *testing.T) {
+	query := strings.Repeat("a", memorySearchMaxQueryChars)
+	validated, err := validateMemorySearchQuery(query)
+	require.NoError(t, err)
+	require.Equal(t, query, validated)
+}
+
+func TestAgentMemorySearchRejectsQueryOver500Chars(t *testing.T) {
+	handler := &AgentsHandler{}
+	agentID := "00000000-0000-0000-0000-000000000111"
+	orgID := "00000000-0000-0000-0000-000000000222"
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/agents/%s/memory/search?org_id=%s&q=%s", agentID, orgID, strings.Repeat("a", memorySearchMaxQueryChars+1)),
+		nil,
+	)
+	req = addWhoAmIRouteParam(req, "id", agentID)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.SearchMemory(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "q must be 500 characters or fewer", payload.Error)
 }

@@ -108,6 +108,7 @@ const (
 	memoryDaysMaxLimit              = 30
 	memorySearchDefaultLimit        = 20
 	memorySearchMaxLimit            = 100
+	memorySearchMaxQueryChars       = 500
 	createMemoryMaxBodyBytes        = 1 << 20
 )
 
@@ -276,6 +277,7 @@ func (h *AgentsHandler) CreateMemory(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
 		return
 	}
+
 	if h.Store == nil || h.MemoryStore == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
 		return
@@ -361,6 +363,7 @@ func (h *AgentsHandler) GetMemory(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
 		return
 	}
+
 	if h.Store == nil || h.MemoryStore == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
 		return
@@ -415,6 +418,18 @@ func (h *AgentsHandler) SearchMemory(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
 		return
 	}
+
+	query, err := validateMemorySearchQuery(strings.TrimSpace(r.URL.Query().Get("q")))
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	limit, err := parseMemorySearchLimitParam(strings.TrimSpace(r.URL.Query().Get("limit")))
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
 	if h.Store == nil || h.MemoryStore == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
 		return
@@ -426,17 +441,6 @@ func (h *AgentsHandler) SearchMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ok := h.ensureAgentWorkspaceAccess(r, workspaceID, agentID, w); !ok {
-		return
-	}
-
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	if query == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "q is required"})
-		return
-	}
-	limit, err := parseMemorySearchLimitParam(strings.TrimSpace(r.URL.Query().Get("limit")))
-	if err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 		return
 	}
 
@@ -584,6 +588,17 @@ func parseMemorySearchLimitParam(rawLimit string) (int, error) {
 		parsed = memorySearchMaxLimit
 	}
 	return parsed, nil
+}
+
+func validateMemorySearchQuery(query string) (string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", fmt.Errorf("q is required")
+	}
+	if len([]rune(query)) > memorySearchMaxQueryChars {
+		return "", fmt.Errorf("q must be %d characters or fewer", memorySearchMaxQueryChars)
+	}
+	return query, nil
 }
 
 func summarizeWhoAmIText(value string, limit int) string {
