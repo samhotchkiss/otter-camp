@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
+	"unicode/utf8"
 )
 
 type Provider string
@@ -26,6 +28,12 @@ var (
 	ErrEmbedderAPIKeyRequired      = errors.New("openai api key is required")
 )
 
+const (
+	defaultEmbedderTimeout       = 30 * time.Second
+	defaultEmbedderRetryAttempts = 3
+	defaultEmbedderRetryBackoff  = 200 * time.Millisecond
+)
+
 type EmbedderConfig struct {
 	Provider      Provider
 	Model         string
@@ -33,6 +41,9 @@ type EmbedderConfig struct {
 	OllamaURL     string
 	OpenAIBaseURL string
 	OpenAIAPIKey  string
+	Timeout       time.Duration
+	RetryAttempts int
+	RetryBackoff  time.Duration
 }
 
 type Embedder interface {
@@ -48,9 +59,13 @@ func NewEmbedder(cfg EmbedderConfig, client *http.Client) (Embedder, error) {
 	if cfg.Dimension <= 0 {
 		cfg.Dimension = 768
 	}
-	if client == nil {
-		client = http.DefaultClient
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = defaultEmbedderTimeout
 	}
+	client = ensureHTTPClientTimeout(client, timeout)
+	retryAttempts := normalizeRetryAttempts(cfg.RetryAttempts)
+	retryBackoff := normalizeRetryBackoff(cfg.RetryBackoff)
 
 	switch cfg.Provider {
 	case ProviderOllama:
@@ -59,10 +74,12 @@ func NewEmbedder(cfg EmbedderConfig, client *http.Client) (Embedder, error) {
 			url = "http://localhost:11434"
 		}
 		return &ollamaEmbedder{
-			model:     model,
-			baseURL:   strings.TrimRight(url, "/"),
-			dimension: cfg.Dimension,
-			client:    client,
+			model:         model,
+			baseURL:       strings.TrimRight(url, "/"),
+			dimension:     cfg.Dimension,
+			client:        client,
+			retryAttempts: retryAttempts,
+			retryBackoff:  retryBackoff,
 		}, nil
 	case ProviderOpenAI:
 		url := strings.TrimSpace(cfg.OpenAIBaseURL)
@@ -74,11 +91,13 @@ func NewEmbedder(cfg EmbedderConfig, client *http.Client) (Embedder, error) {
 			return nil, ErrEmbedderAPIKeyRequired
 		}
 		return &openAIEmbedder{
-			model:     model,
-			baseURL:   strings.TrimRight(url, "/"),
-			apiKey:    apiKey,
-			dimension: cfg.Dimension,
-			client:    client,
+			model:         model,
+			baseURL:       strings.TrimRight(url, "/"),
+			apiKey:        apiKey,
+			dimension:     cfg.Dimension,
+			client:        client,
+			retryAttempts: retryAttempts,
+			retryBackoff:  retryBackoff,
 		}, nil
 	default:
 		return nil, ErrEmbedderProviderUnsupported
@@ -99,9 +118,10 @@ func ChunkTextForEmbedding(text string, maxChars, overlapChars int) []string {
 		overlapChars = maxChars / 5
 	}
 
-	if len(text) <= maxChars {
+	if utf8.RuneCountInString(text) <= maxChars {
 		return []string{text}
 	}
+	runes := []rune(text)
 
 	step := maxChars - overlapChars
 	if step <= 0 {
@@ -109,22 +129,24 @@ func ChunkTextForEmbedding(text string, maxChars, overlapChars int) []string {
 	}
 
 	chunks := make([]string, 0)
-	for start := 0; start < len(text); start += step {
+	for start := 0; start < len(runes); start += step {
 		end := start + maxChars
-		if end >= len(text) {
-			chunks = append(chunks, text[start:])
+		if end >= len(runes) {
+			chunks = append(chunks, string(runes[start:]))
 			break
 		}
-		chunks = append(chunks, text[start:end])
+		chunks = append(chunks, string(runes[start:end]))
 	}
 	return chunks
 }
 
 type ollamaEmbedder struct {
-	model     string
-	baseURL   string
-	dimension int
-	client    *http.Client
+	model         string
+	baseURL       string
+	dimension     int
+	client        *http.Client
+	retryAttempts int
+	retryBackoff  time.Duration
 }
 
 func (e *ollamaEmbedder) Dimension() int {
@@ -151,50 +173,68 @@ func (e *ollamaEmbedder) embedOne(ctx context.Context, input string) ([]float64,
 	if strings.TrimSpace(input) == "" {
 		return nil, ErrEmbedderInputRequired
 	}
+	for attempt := 1; attempt <= e.retryAttempts; attempt += 1 {
+		vector, retry, err := e.embedOneAttempt(ctx, input)
+		if err == nil {
+			return vector, nil
+		}
+		if !retry || attempt == e.retryAttempts {
+			return nil, err
+		}
+		if err := sleepWithContext(ctx, retryDelay(e.retryBackoff, attempt)); err != nil {
+			return nil, fmt.Errorf("ollama retry canceled: %w", err)
+		}
+	}
+	return nil, errors.New("ollama request failed")
+}
 
+func (e *ollamaEmbedder) embedOneAttempt(ctx context.Context, input string) ([]float64, bool, error) {
 	body, err := json.Marshal(map[string]any{
 		"model":  e.model,
 		"prompt": input,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal ollama payload: %w", err)
+		return nil, false, fmt.Errorf("marshal ollama payload: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/api/embeddings", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("build ollama request: %w", err)
+		return nil, false, fmt.Errorf("build ollama request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("ollama request failed: %w", err)
+		return nil, true, fmt.Errorf("ollama request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("ollama request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		retry := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError
+		return nil, retry, fmt.Errorf("ollama request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 
 	var payload struct {
 		Embedding []float64 `json:"embedding"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode ollama response: %w", err)
+		return nil, false, fmt.Errorf("decode ollama response: %w", err)
 	}
 	if len(payload.Embedding) != e.dimension {
-		return nil, fmt.Errorf("%w: expected %d got %d", ErrEmbedderDimensionMismatch, e.dimension, len(payload.Embedding))
+		return nil, false, fmt.Errorf("%w: expected %d got %d", ErrEmbedderDimensionMismatch, e.dimension, len(payload.Embedding))
 	}
-	return payload.Embedding, nil
+	return payload.Embedding, false, nil
 }
 
 type openAIEmbedder struct {
-	model     string
-	baseURL   string
-	apiKey    string
-	dimension int
-	client    *http.Client
+	model         string
+	baseURL       string
+	apiKey        string
+	dimension     int
+	client        *http.Client
+	retryAttempts int
+	retryBackoff  time.Duration
 }
 
 func (e *openAIEmbedder) Dimension() int {
@@ -211,33 +251,53 @@ func (e *openAIEmbedder) Embed(ctx context.Context, inputs []string) ([][]float6
 		if trimmed == "" {
 			return nil, ErrEmbedderInputRequired
 		}
-		normalized = append(normalized, input)
+		normalized = append(normalized, trimmed)
 	}
+	return e.embedBatchWithRetry(ctx, normalized)
+}
 
+func (e *openAIEmbedder) embedBatchWithRetry(ctx context.Context, inputs []string) ([][]float64, error) {
+	for attempt := 1; attempt <= e.retryAttempts; attempt += 1 {
+		vectors, retry, err := e.embedBatchAttempt(ctx, inputs)
+		if err == nil {
+			return vectors, nil
+		}
+		if !retry || attempt == e.retryAttempts {
+			return nil, err
+		}
+		if err := sleepWithContext(ctx, retryDelay(e.retryBackoff, attempt)); err != nil {
+			return nil, fmt.Errorf("openai retry canceled: %w", err)
+		}
+	}
+	return nil, errors.New("openai request failed")
+}
+
+func (e *openAIEmbedder) embedBatchAttempt(ctx context.Context, inputs []string) ([][]float64, bool, error) {
 	body, err := json.Marshal(map[string]any{
 		"model": e.model,
-		"input": normalized,
+		"input": inputs,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal openai payload: %w", err)
+		return nil, false, fmt.Errorf("marshal openai payload: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/v1/embeddings", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("build openai request: %w", err)
+		return nil, false, fmt.Errorf("build openai request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+e.apiKey)
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai request failed: %w", err)
+		return nil, true, fmt.Errorf("openai request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("openai request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		retry := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError
+		return nil, retry, fmt.Errorf("openai request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 
 	var payload struct {
@@ -246,18 +306,65 @@ func (e *openAIEmbedder) Embed(ctx context.Context, inputs []string) ([][]float6
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode openai response: %w", err)
+		return nil, false, fmt.Errorf("decode openai response: %w", err)
 	}
 	if len(payload.Data) != len(inputs) {
-		return nil, fmt.Errorf("openai response vector count mismatch: expected %d got %d", len(inputs), len(payload.Data))
+		return nil, false, fmt.Errorf("openai response vector count mismatch: expected %d got %d", len(inputs), len(payload.Data))
 	}
 
 	vectors := make([][]float64, 0, len(payload.Data))
 	for _, row := range payload.Data {
 		if len(row.Embedding) != e.dimension {
-			return nil, fmt.Errorf("%w: expected %d got %d", ErrEmbedderDimensionMismatch, e.dimension, len(row.Embedding))
+			return nil, false, fmt.Errorf("%w: expected %d got %d", ErrEmbedderDimensionMismatch, e.dimension, len(row.Embedding))
 		}
 		vectors = append(vectors, row.Embedding)
 	}
-	return vectors, nil
+	return vectors, false, nil
+}
+
+func ensureHTTPClientTimeout(client *http.Client, timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = defaultEmbedderTimeout
+	}
+	if client == nil {
+		return &http.Client{Timeout: timeout}
+	}
+	if client.Timeout > 0 {
+		return client
+	}
+	clone := *client
+	clone.Timeout = timeout
+	return &clone
+}
+
+func normalizeRetryAttempts(value int) int {
+	if value <= 0 {
+		return defaultEmbedderRetryAttempts
+	}
+	return value
+}
+
+func normalizeRetryBackoff(value time.Duration) time.Duration {
+	if value <= 0 {
+		return defaultEmbedderRetryBackoff
+	}
+	return value
+}
+
+func retryDelay(base time.Duration, attempt int) time.Duration {
+	if attempt <= 0 {
+		attempt = 1
+	}
+	return base * time.Duration(attempt)
+}
+
+func sleepWithContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
