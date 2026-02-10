@@ -94,3 +94,76 @@ func TestMemoryClientMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 		t.Fatalf("SearchAgentMemory query missing expected params: %s", gotPath)
 	}
 }
+
+func TestMemoryClientMethodsErrorPaths(t *testing.T) {
+	t.Run("require auth", func(t *testing.T) {
+		client := &Client{
+			BaseURL: "https://api.example.com",
+			HTTP:    &http.Client{},
+		}
+
+		_, err := client.WriteAgentMemory("a1", map[string]any{"kind": "daily", "content": "x"})
+		if err == nil || !strings.Contains(err.Error(), "missing auth token") {
+			t.Fatalf("WriteAgentMemory() error = %v, want missing auth token", err)
+		}
+
+		_, err = client.ReadAgentMemory("a1", 1, true)
+		if err == nil || !strings.Contains(err.Error(), "missing auth token") {
+			t.Fatalf("ReadAgentMemory() error = %v, want missing auth token", err)
+		}
+
+		_, err = client.SearchAgentMemory("a1", "q", 1)
+		if err == nil || !strings.Contains(err.Error(), "missing auth token") {
+			t.Fatalf("SearchAgentMemory() error = %v, want missing auth token", err)
+		}
+	})
+
+	t.Run("bad input validation", func(t *testing.T) {
+		client := &Client{
+			BaseURL: "https://api.example.com",
+			Token:   "token-1",
+			OrgID:   "org-1",
+			HTTP:    &http.Client{},
+		}
+
+		_, err := client.WriteAgentMemory("", map[string]any{"kind": "daily", "content": "x"})
+		if err == nil || !strings.Contains(err.Error(), "agent id is required") {
+			t.Fatalf("WriteAgentMemory() error = %v, want agent id error", err)
+		}
+
+		_, err = client.SearchAgentMemory("a1", "", 5)
+		if err == nil || !strings.Contains(err.Error(), "query is required") {
+			t.Fatalf("SearchAgentMemory() error = %v, want query error", err)
+		}
+	})
+
+	t.Run("server 500 surfaces request failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"boom"}`))
+		}))
+		defer srv.Close()
+
+		client := &Client{
+			BaseURL: srv.URL,
+			Token:   "token-1",
+			OrgID:   "org-1",
+			HTTP:    srv.Client(),
+		}
+
+		_, err := client.WriteAgentMemory("a1", map[string]any{"kind": "daily", "content": "x"})
+		if err == nil || !strings.Contains(err.Error(), "request failed (500)") {
+			t.Fatalf("WriteAgentMemory() error = %v, want request failed (500)", err)
+		}
+
+		_, err = client.ReadAgentMemory("a1", 2, true)
+		if err == nil || !strings.Contains(err.Error(), "request failed (500)") {
+			t.Fatalf("ReadAgentMemory() error = %v, want request failed (500)", err)
+		}
+
+		_, err = client.SearchAgentMemory("a1", "q", 2)
+		if err == nil || !strings.Contains(err.Error(), "request failed (500)") {
+			t.Fatalf("SearchAgentMemory() error = %v, want request failed (500)", err)
+		}
+	})
+}

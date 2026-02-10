@@ -92,10 +92,14 @@ func (h *KnowledgeHandler) Import(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req knowledgeImportRequest
-	decoder := json.NewDecoder(r.Body)
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+		return
+	}
+	if len(req.Entries) == 0 {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "at least one entry required"})
 		return
 	}
 
@@ -125,6 +129,6 @@ func handleKnowledgeStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrForbidden):
 		sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
 	default:
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "knowledge operation failed"})
 	}
 }

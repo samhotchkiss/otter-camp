@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -16,8 +18,8 @@ import (
 
 func newKnowledgeTestRouter(handler *KnowledgeHandler) http.Handler {
 	r := chi.NewRouter()
-	r.With(middleware.OptionalWorkspace).Get("/api/knowledge", handler.List)
-	r.With(middleware.OptionalWorkspace).Post("/api/knowledge/import", handler.Import)
+	r.With(middleware.RequireWorkspace).Get("/api/knowledge", handler.List)
+	r.With(middleware.RequireWorkspace).Post("/api/knowledge/import", handler.Import)
 	return r
 }
 
@@ -125,4 +127,82 @@ func TestKnowledgeHandlerRequiresWorkspace(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestKnowledgeImportRejectsBodyOverLimit(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "knowledge-api-body-limit-org")
+	handler := &KnowledgeHandler{Store: store.NewKnowledgeEntryStore(db)}
+	router := newKnowledgeTestRouter(handler)
+
+	oversizedContent := strings.Repeat("a", (1<<20)+128)
+	payload := []byte(`{"entries":[{"title":"too-big","content":"` + oversizedContent + `","created_by":"sam"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge/import?org_id="+orgID, bytes.NewReader(payload))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Contains(t, []int{http.StatusBadRequest, http.StatusRequestEntityTooLarge}, rec.Code)
+}
+
+func TestKnowledgeImportUnknownStoreErrorReturnsGeneric500(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handleKnowledgeStoreError(rec, errors.New("dial tcp 10.0.0.12:5432: i/o timeout"))
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "knowledge operation failed", payload.Error)
+	require.NotContains(t, payload.Error, "10.0.0.12")
+}
+
+func TestKnowledgeRoutesRequireWorkspace(t *testing.T) {
+	router := newKnowledgeTestRouter(&KnowledgeHandler{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/knowledge", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestKnowledgeImportRejectsEmptyEntries(t *testing.T) {
+	handler := &KnowledgeHandler{Store: store.NewKnowledgeEntryStore(nil)}
+	router := newKnowledgeTestRouter(handler)
+
+	emptyReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/knowledge/import?org_id=00000000-0000-0000-0000-000000000001",
+		bytes.NewReader([]byte(`{"entries":[]}`)),
+	)
+	emptyRec := httptest.NewRecorder()
+	router.ServeHTTP(emptyRec, emptyReq)
+	require.Equal(t, http.StatusBadRequest, emptyRec.Code)
+}
+
+func TestKnowledgeHandlerOrgIsolation(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgA := insertMessageTestOrganization(t, db, "knowledge-api-org-a")
+	orgB := insertMessageTestOrganization(t, db, "knowledge-api-org-b")
+	handler := &KnowledgeHandler{Store: store.NewKnowledgeEntryStore(db)}
+	router := newKnowledgeTestRouter(handler)
+
+	importReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/knowledge/import?org_id="+orgA,
+		bytes.NewReader([]byte(`{"entries":[{"title":"org-a-only","content":"secret","created_by":"sam"}]}`)),
+	)
+	importRec := httptest.NewRecorder()
+	router.ServeHTTP(importRec, importReq)
+	require.Equal(t, http.StatusCreated, importRec.Code)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/knowledge?org_id="+orgB, nil)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+
+	var listResp knowledgeListResponse
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	require.Equal(t, 0, listResp.Total)
+	require.Empty(t, listResp.Items)
 }

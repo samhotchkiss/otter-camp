@@ -20,6 +20,7 @@ const InboxPage = lazy(() => lazyWithChunkRetry(() => import("./pages/InboxPage"
 const ProjectDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ProjectDetailPage")));
 const WorkflowsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/WorkflowsPage")));
 const KnowledgePage = lazy(() => lazyWithChunkRetry(() => import("./pages/KnowledgePage")));
+const MemoryEvaluationPage = lazy(() => lazyWithChunkRetry(() => import("./pages/MemoryEvaluationPage")));
 const ConnectionsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ConnectionsPage")));
 
 /**
@@ -110,6 +111,10 @@ export const router = createBrowserRouter([
       {
         path: "knowledge",
         element: <KnowledgePage />,
+      },
+      {
+        path: "knowledge/evaluation",
+        element: <MemoryEvaluationPage />,
       },
       {
         path: "connections",

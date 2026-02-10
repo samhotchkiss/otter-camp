@@ -38,6 +38,9 @@ export function resolveOtterCampWSSecret(env: NodeJS.ProcessEnv = process.env): 
 const OTTERCAMP_WS_SECRET = resolveOtterCampWSSecret(process.env);
 const OTTER_PROGRESS_LOG_PATH = (process.env.OTTER_PROGRESS_LOG_PATH || '').trim();
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
+const COMPACTION_RECOVERY_RETRY_DELAYS_MS = [200, 600, 1500];
+const COMPACTION_RECOVERY_DEDUP_WINDOW_MS = 5 * 60 * 1000;
+const MAX_TRACKED_COMPACTION_RECOVERY_KEYS = 500;
 const MAX_TRACKED_RUN_IDS = 2000;
 const MAX_TRACKED_PROGRESS_LOG_HASHES = 4000;
 const SYNC_INTERVAL_MS = (() => {
@@ -95,6 +98,27 @@ const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
 const IDENTITY_BLOCK_MAX_CHARS = 1200;
 const SESSION_TASK_SUMMARY_MAX_CHARS = 96;
+const AUTO_RECALL_MAX_RESULTS = (() => {
+  const raw = Number.parseInt((process.env.OTTER_MEMORY_RECALL_MAX_RESULTS || '').trim(), 10);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 3;
+  }
+  return Math.min(raw, 10);
+})();
+const AUTO_RECALL_MIN_RELEVANCE = (() => {
+  const raw = Number.parseFloat((process.env.OTTER_MEMORY_RECALL_MIN_RELEVANCE || '').trim());
+  if (!Number.isFinite(raw) || raw < 0 || raw > 1) {
+    return 0.7;
+  }
+  return raw;
+})();
+const AUTO_RECALL_MAX_CHARS = (() => {
+  const raw = Number.parseInt((process.env.OTTER_MEMORY_RECALL_MAX_CHARS || '').trim(), 10);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 2000;
+  }
+  return Math.min(raw, 8000);
+})();
 
 export interface OpenClawSession {
   key: string;
@@ -454,6 +478,7 @@ const queuedDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDOrder: string[] = [];
 let dispatchReplayQueueBytes = 0;
+const recentCompactionRecoveryByKey = new Map<string, number>();
 let gitCompletionDefaultsResolved = false;
 let gitCompletionBranch = '';
 let gitCompletionRemote = '';
@@ -1839,6 +1864,68 @@ async function resolveSessionIdentityMetadata(
   };
 }
 
+async function withAutoRecallContext(sessionKey: string, rawContent: string): Promise<string> {
+  const content = rawContent.trim();
+  if (!content) {
+    return '';
+  }
+  if (content.includes('[OTTERCAMP_COMPACTION_RECOVERY]') || content.includes('[OTTERCAMP_AUTO_RECALL]')) {
+    return content;
+  }
+
+  const context = sessionContexts.get(sessionKey);
+  if (!context) {
+    return content;
+  }
+
+  const orgID = getTrimmedString(context.orgID) || OTTERCAMP_ORG_ID;
+  const agentID =
+    getTrimmedString(context.agentID) ||
+    getTrimmedString(context.responderAgentID) ||
+    parseAgentIDFromSessionKey(sessionKey);
+  if (!orgID || !agentID) {
+    return content;
+  }
+
+  try {
+    const url = new URL('/api/memory/recall', OTTERCAMP_URL);
+    url.searchParams.set('org_id', orgID);
+    url.searchParams.set('agent_id', agentID);
+    url.searchParams.set('q', content.slice(0, 1500));
+    url.searchParams.set('max_results', String(AUTO_RECALL_MAX_RESULTS));
+    url.searchParams.set('min_relevance', String(AUTO_RECALL_MIN_RELEVANCE));
+    url.searchParams.set('max_chars', String(AUTO_RECALL_MAX_CHARS));
+
+    const response = await fetchWithRetry(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+      },
+    }, 'fetch auto recall context');
+    if (!response.ok) {
+      const snippet = (await response.text().catch(() => '')).slice(0, 300);
+      throw new Error(`auto recall request failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+    }
+
+    const payload = asRecord(await response.json().catch(() => null));
+    const recallContext = getTrimmedString(payload?.context);
+    if (!recallContext) {
+      return content;
+    }
+    return [
+      '[OTTERCAMP_AUTO_RECALL]',
+      recallContext.slice(0, AUTO_RECALL_MAX_CHARS),
+      '[/OTTERCAMP_AUTO_RECALL]',
+      '',
+      content,
+    ].join('\n');
+  } catch (err) {
+    console.warn(`[bridge] auto recall fetch failed for ${sessionKey}; continuing without recall:`, err);
+    return content;
+  }
+}
+
 async function withSessionContext(sessionKey: string, rawContent: string): Promise<string> {
   const content = rawContent.trim();
   if (!content) {
@@ -1894,6 +1981,13 @@ export async function formatSessionContextMessageForTest(
   rawContent: string,
 ): Promise<string> {
   return withSessionContext(sessionKey, rawContent);
+}
+
+export async function formatAutoRecallMessageForTest(
+  sessionKey: string,
+  rawContent: string,
+): Promise<string> {
+  return withAutoRecallContext(sessionKey, rawContent);
 }
 
 function extractMessageContent(value: unknown): string {
@@ -2784,7 +2878,8 @@ async function sendMessageToSession(
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const isFirstDispatchForSession = !contextPrimedSessions.has(sessionKey);
-  const contextualContent = await withSessionContext(sessionKey, content);
+  const recallAwareContent = await withAutoRecallContext(sessionKey, content);
+  const contextualContent = await withSessionContext(sessionKey, recallAwareContent);
   if (!contextualContent) {
     return;
   }
@@ -2981,10 +3076,324 @@ async function persistAssistantReplyToOtterCamp(params: {
   );
 }
 
+export type CompactionSignal = {
+  sessionKey: string;
+  orgID?: string;
+  agentID?: string;
+  summaryText: string;
+  preTokens?: number;
+  postTokens?: number;
+  reason: 'explicit' | 'heuristic';
+};
+
+type CompactionRecoveryDeps = {
+  fetchRecoveryContext: (signal: CompactionSignal) => Promise<string>;
+  sendRecoveryMessage: (signal: CompactionSignal, contextText: string, idempotencyKey: string) => Promise<void>;
+  recordCompaction: (signal: CompactionSignal) => Promise<void>;
+  sleepFn: (ms: number) => Promise<void>;
+  nowMs: () => number;
+};
+
+function toFiniteNumber(value: unknown): number | undefined {
+  const numeric = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+  if (!Number.isFinite(numeric)) {
+    return undefined;
+  }
+  return numeric;
+}
+
+function compactionRecoveryKey(signal: CompactionSignal): string {
+  const signature = [
+    signal.sessionKey,
+    signal.summaryText,
+    String(signal.preTokens ?? ''),
+    String(signal.postTokens ?? ''),
+  ].join('|');
+  const hash = crypto.createHash('sha1').update(signature).digest('hex').slice(0, 16);
+  return `${signal.sessionKey}:${hash}`;
+}
+
+function shouldSkipCompactionRecovery(signal: CompactionSignal, nowMs: number): boolean {
+  const key = compactionRecoveryKey(signal);
+  const previous = recentCompactionRecoveryByKey.get(key);
+  if (!previous) {
+    return false;
+  }
+  return nowMs - previous < COMPACTION_RECOVERY_DEDUP_WINDOW_MS;
+}
+
+function rememberCompactionRecovery(signal: CompactionSignal, nowMs: number): void {
+  const key = compactionRecoveryKey(signal);
+  recentCompactionRecoveryByKey.set(key, nowMs);
+  for (const [existingKey, existingAt] of recentCompactionRecoveryByKey.entries()) {
+    if (nowMs - existingAt > COMPACTION_RECOVERY_DEDUP_WINDOW_MS) {
+      recentCompactionRecoveryByKey.delete(existingKey);
+    }
+  }
+  while (recentCompactionRecoveryByKey.size > MAX_TRACKED_COMPACTION_RECOVERY_KEYS) {
+    const oldestKey = recentCompactionRecoveryByKey.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    recentCompactionRecoveryByKey.delete(oldestKey);
+  }
+}
+
+function buildCompactionRecoveryMessage(contextText: string): string {
+  const trimmed = contextText.trim();
+  if (!trimmed) {
+    return '';
+  }
+  return [
+    '[OTTERCAMP_COMPACTION_RECOVERY]',
+    trimmed,
+    '[/OTTERCAMP_COMPACTION_RECOVERY]',
+  ].join('\n');
+}
+
+async function recordCompactionMemory(signal: CompactionSignal): Promise<void> {
+  if (!signal.orgID || !signal.agentID) {
+    return;
+  }
+  const url = `${OTTERCAMP_URL}/api/memory/entries?org_id=${encodeURIComponent(signal.orgID)}`;
+  const body = {
+    agent_id: signal.agentID,
+    kind: 'summary',
+    title: 'Compaction detected',
+    content: signal.summaryText || 'Compaction detected by bridge.',
+    importance: 4,
+    confidence: 0.8,
+    sensitivity: 'internal',
+    source_session: signal.sessionKey,
+    metadata: {
+      compaction_reason: signal.reason,
+      pre_tokens: signal.preTokens ?? null,
+      post_tokens: signal.postTokens ?? null,
+    },
+  };
+  const response = await fetchWithRetry(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    },
+    body: JSON.stringify(body),
+  }, 'record compaction memory');
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    throw new Error(`record compaction memory failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+  }
+}
+
+async function fetchCompactionRecoveryContext(signal: CompactionSignal): Promise<string> {
+  if (!signal.orgID || !signal.agentID) {
+    return '';
+  }
+  const recallQuery = signal.summaryText || 'recent compaction context';
+  const url = new URL('/api/memory/recall', OTTERCAMP_URL);
+  url.searchParams.set('org_id', signal.orgID);
+  url.searchParams.set('agent_id', signal.agentID);
+  url.searchParams.set('q', recallQuery);
+  url.searchParams.set('max_results', '3');
+  url.searchParams.set('min_relevance', String(AUTO_RECALL_MIN_RELEVANCE));
+  url.searchParams.set('max_chars', String(AUTO_RECALL_MAX_CHARS));
+
+  const response = await fetchWithRetry(url.toString(), {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    },
+  }, 'fetch compaction recovery context');
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    throw new Error(`fetch compaction recovery failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+  }
+
+  const payload = asRecord(await response.json().catch(() => null));
+  const contextText = getTrimmedString(payload?.context);
+  return contextText.slice(0, AUTO_RECALL_MAX_CHARS);
+}
+
+async function sendCompactionRecoveryMessage(
+  signal: CompactionSignal,
+  contextText: string,
+  idempotencyKey: string,
+): Promise<void> {
+  const message = buildCompactionRecoveryMessage(contextText);
+  if (!message) {
+    return;
+  }
+  await sendRequest('chat.send', {
+    idempotencyKey,
+    sessionKey: signal.sessionKey,
+    message,
+  });
+}
+
+async function runCompactionRecovery(
+  signal: CompactionSignal,
+  deps?: Partial<CompactionRecoveryDeps>,
+): Promise<boolean> {
+  const fullDeps: CompactionRecoveryDeps = {
+    fetchRecoveryContext: deps?.fetchRecoveryContext ?? fetchCompactionRecoveryContext,
+    sendRecoveryMessage: deps?.sendRecoveryMessage ?? sendCompactionRecoveryMessage,
+    recordCompaction: deps?.recordCompaction ?? recordCompactionMemory,
+    sleepFn: deps?.sleepFn ?? sleep,
+    nowMs: deps?.nowMs ?? (() => Date.now()),
+  };
+
+  const now = fullDeps.nowMs();
+  if (shouldSkipCompactionRecovery(signal, now)) {
+    return false;
+  }
+
+  try {
+    await fullDeps.recordCompaction(signal);
+  } catch (err) {
+    console.warn(`[bridge] failed to record compaction event for ${signal.sessionKey}:`, err);
+  }
+
+  const idempotencyKey = `compaction:${compactionRecoveryKey(signal)}`;
+  for (let attempt = 0; attempt <= COMPACTION_RECOVERY_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const recoveryContext = await fullDeps.fetchRecoveryContext(signal);
+      if (!recoveryContext) {
+        return false;
+      }
+      await fullDeps.sendRecoveryMessage(signal, recoveryContext, idempotencyKey);
+      rememberCompactionRecovery(signal, fullDeps.nowMs());
+      return true;
+    } catch (err) {
+      if (attempt >= COMPACTION_RECOVERY_RETRY_DELAYS_MS.length) {
+        console.warn(`[bridge] compaction recovery failed for ${signal.sessionKey}:`, err);
+        return false;
+      }
+      const delay = COMPACTION_RECOVERY_RETRY_DELAYS_MS[attempt];
+      await fullDeps.sleepFn(delay);
+    }
+  }
+
+  return false;
+}
+
+function extractCompactionSignal(eventName: string, payload: Record<string, unknown>): CompactionSignal | null {
+  const normalizedEvent = getTrimmedString(eventName).toLowerCase();
+  const nested = asRecord(payload.compaction);
+  const sessionKey =
+    getTrimmedString(payload.sessionKey) ||
+    getTrimmedString(payload.session_key) ||
+    getTrimmedString(nested?.session_key);
+  if (!sessionKey) {
+    return null;
+  }
+
+  const summaryFromProvider =
+    getTrimmedString(payload.summary) ||
+    getTrimmedString(payload.summary_text) ||
+    getTrimmedString(payload.compaction_summary) ||
+    getTrimmedString(nested?.summary_text) ||
+    getTrimmedString(nested?.summary);
+  const hasSummaryFromProvider = Boolean(summaryFromProvider);
+  const summaryText = summaryFromProvider || 'Compaction detected; restore critical context.';
+  const preTokens =
+    toFiniteNumber(payload.pre_compaction_tokens) ??
+    toFiniteNumber(payload.preTokens) ??
+    toFiniteNumber(nested?.pre_compaction_tokens);
+  const postTokens =
+    toFiniteNumber(payload.post_compaction_tokens) ??
+    toFiniteNumber(payload.postTokens) ??
+    toFiniteNumber(nested?.post_compaction_tokens);
+
+  const explicitSignal =
+    normalizedEvent.includes('compaction') ||
+    normalizedEvent.includes('compact') ||
+    payload.compaction_detected === true ||
+    Boolean(nested);
+  if (explicitSignal) {
+    return {
+      sessionKey,
+      orgID: getTrimmedString(payload.org_id) || undefined,
+      agentID: getTrimmedString(payload.agent_id) || undefined,
+      summaryText,
+      preTokens,
+      postTokens,
+      reason: 'explicit',
+    };
+  }
+
+  const heuristicSignal =
+    typeof preTokens === 'number' &&
+    typeof postTokens === 'number' &&
+    preTokens > 0 &&
+    postTokens >= 0 &&
+    postTokens < preTokens * 0.65 &&
+    hasSummaryFromProvider;
+  if (!heuristicSignal) {
+    return null;
+  }
+
+  return {
+    sessionKey,
+    orgID: getTrimmedString(payload.org_id) || undefined,
+    agentID: getTrimmedString(payload.agent_id) || undefined,
+    summaryText,
+    preTokens,
+    postTokens,
+    reason: 'heuristic',
+  };
+}
+
+export function detectCompactionSignalForTest(
+  eventName: string,
+  payload: Record<string, unknown>,
+): CompactionSignal | null {
+  return extractCompactionSignal(eventName, payload);
+}
+
+export async function runCompactionRecoveryForTest(
+  signal: CompactionSignal,
+  deps: Partial<CompactionRecoveryDeps>,
+): Promise<boolean> {
+  return runCompactionRecovery(signal, deps);
+}
+
+export async function fetchCompactionRecoveryContextForTest(signal: CompactionSignal): Promise<string> {
+  return fetchCompactionRecoveryContext(signal);
+}
+
+export function resetCompactionRecoveryStateForTest(): void {
+  recentCompactionRecoveryByKey.clear();
+}
+
 async function handleOpenClawEvent(message: Record<string, unknown>): Promise<void> {
   const eventName = getTrimmedString(message.event).toLowerCase();
   const payload = asRecord(message.payload) || asRecord(message.data);
   if (!payload) {
+    return;
+  }
+
+  const compactionSignal = extractCompactionSignal(eventName, payload);
+  if (compactionSignal) {
+    const sessionContext = sessionContexts.get(compactionSignal.sessionKey);
+    if (sessionContext) {
+      if (!compactionSignal.orgID) {
+        compactionSignal.orgID = getTrimmedString(sessionContext.orgID) || undefined;
+      }
+      if (!compactionSignal.agentID) {
+        compactionSignal.agentID =
+          getTrimmedString(sessionContext.agentID) ||
+          getTrimmedString(sessionContext.responderAgentID) ||
+          parseAgentIDFromSessionKey(compactionSignal.sessionKey) ||
+          undefined;
+      }
+    } else if (!compactionSignal.agentID) {
+      compactionSignal.agentID = parseAgentIDFromSessionKey(compactionSignal.sessionKey) || undefined;
+    }
+
+    await runCompactionRecovery(compactionSignal).catch((err) => {
+      console.warn(`[bridge] compaction recovery failed for ${compactionSignal.sessionKey}:`, err);
+    });
     return;
   }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,6 +39,34 @@ func TestProjectSlug(t *testing.T) {
 	withoutServerSlug := Project{Name: "My Cool Project"}
 	if got := withoutServerSlug.Slug(); got != "my-cool-project" {
 		t.Errorf("Slug() fallback = %q, want %q", got, "my-cool-project")
+	}
+}
+
+func TestDoJSONRequestCapsSuccessResponseBody(t *testing.T) {
+	oversizedValue := strings.Repeat("a", maxClientResponseBodyBytes+128)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":"` + oversizedValue + `"}`))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
+	req, err := client.newRequest(http.MethodGet, "/api/oversized", nil)
+	if err != nil {
+		t.Fatalf("newRequest() error = %v", err)
+	}
+
+	var response struct {
+		Value string `json:"value"`
+	}
+	err = client.do(req, &response)
+	if err == nil {
+		t.Fatalf("expected decode error for oversized success response")
 	}
 }
 

@@ -99,6 +99,8 @@ func NewRouter() http.Handler {
 	projectCommitsHandler := &ProjectCommitsHandler{}
 	projectTreeHandler := &ProjectTreeHandler{}
 	knowledgeHandler := &KnowledgeHandler{}
+	memoryHandler := &MemoryHandler{}
+	memoryEventsHandler := &MemoryEventsHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
 	adminAgentsHandler := &AdminAgentsHandler{DB: db, OpenClawHandler: openClawWSHandler}
@@ -157,6 +159,8 @@ func NewRouter() http.Handler {
 		projectIssueSyncHandler.SyncJobs = githubSyncJobStore
 		projectIssueSyncHandler.IssueStore = issuesHandler.IssueStore
 		knowledgeHandler.Store = store.NewKnowledgeEntryStore(db)
+		memoryHandler.Store = store.NewMemoryStore(db)
+		memoryEventsHandler.Store = store.NewMemoryEventsStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	workflowsHandler.ProjectStore = projectStore
@@ -257,8 +261,14 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/commits/{sha}/diff", projectCommitsHandler.Diff)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/tree", projectTreeHandler.GetTree)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/blob", projectTreeHandler.GetBlob)
-		r.With(middleware.OptionalWorkspace).Get("/knowledge", knowledgeHandler.List)
-		r.With(middleware.OptionalWorkspace).Post("/knowledge/import", knowledgeHandler.Import)
+		r.With(middleware.RequireWorkspace).Get("/knowledge", knowledgeHandler.List)
+		r.With(middleware.RequireWorkspace).Post("/knowledge/import", knowledgeHandler.Import)
+		r.With(middleware.RequireWorkspace).Post("/memory/entries", memoryHandler.Create)
+		r.With(middleware.RequireWorkspace).Get("/memory/entries", memoryHandler.List)
+		r.With(middleware.RequireWorkspace).Delete("/memory/entries/{id}", memoryHandler.Delete)
+		r.With(middleware.RequireWorkspace).Get("/memory/search", memoryHandler.Search)
+		r.With(middleware.RequireWorkspace).Get("/memory/recall", memoryHandler.Recall)
+		r.With(middleware.OptionalWorkspace).Get("/memory/events", memoryEventsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)

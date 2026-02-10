@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,6 +28,7 @@ var chameleonSessionKeyPattern = regexp.MustCompile(
 const (
 	authSetupCommand = "otter auth login --token <your-token> --org <org-id>"
 	authTokenHelpURL = "https://otter.camp/settings"
+	knowledgeImportMaxFileBytes int64 = 10 << 20
 )
 
 func main() {
@@ -51,6 +53,8 @@ func main() {
 		handleAgent(os.Args[2:])
 	case "memory":
 		handleMemory(os.Args[2:])
+	case "knowledge":
+		handleKnowledge(os.Args[2:])
 	case "clone":
 		handleClone(os.Args[2:])
 	case "remote":
@@ -82,6 +86,7 @@ Commands:
   project          Manage projects
   agent            Manage agents
   memory           Manage agent memory
+  knowledge        Manage shared knowledge
   clone            Clone a project repo
   remote add       Add origin remote for project
   repo info        Show repo URL for project
@@ -408,13 +413,98 @@ func handleAgent(args []string) {
 }
 
 func handleMemory(args []string) {
-	const usageText = "usage: otter memory <write|read|search> ..."
+	const usageText = "usage: otter memory <create|list|search|recall|delete|write|read> ..."
 	if len(args) == 0 {
 		fmt.Println(usageText)
 		os.Exit(1)
 	}
 
 	switch args[0] {
+	case "create":
+		flags := flag.NewFlagSet("memory create", flag.ExitOnError)
+		agentID := flags.String("agent", "", "agent UUID")
+		kind := flags.String("kind", "context", "memory kind")
+		title := flags.String("title", "", "memory title")
+		importance := flags.Int("importance", 3, "importance (1-5)")
+		confidence := flags.Float64("confidence", 0.5, "confidence (0-1)")
+		sensitivity := flags.String("sensitivity", "internal", "sensitivity (public|internal|restricted)")
+		sourceIssue := flags.String("source-issue", "", "source issue identifier")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		content := strings.TrimSpace(strings.Join(flags.Args(), " "))
+		if content == "" {
+			die("usage: otter memory create --agent <uuid> --title <title> [--kind <kind>] [--importance N] [--confidence F] [--sensitivity <scope>] [--source-issue <id>] \"content\"")
+		}
+		normalizedAgentID := strings.TrimSpace(*agentID)
+		if err := validateAgentUUID(normalizedAgentID); err != nil {
+			die(err.Error())
+		}
+		normalizedTitle := strings.TrimSpace(*title)
+		if normalizedTitle == "" {
+			die("--title is required")
+		}
+		if err := validateMemoryCreateFlags(*importance, *confidence, *sensitivity); err != nil {
+			die(err.Error())
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		payload := map[string]any{
+			"agent_id":    normalizedAgentID,
+			"kind":        strings.TrimSpace(*kind),
+			"title":       normalizedTitle,
+			"content":     content,
+			"importance":  *importance,
+			"confidence":  *confidence,
+			"sensitivity": strings.TrimSpace(*sensitivity),
+		}
+		if trimmedSourceIssue := strings.TrimSpace(*sourceIssue); trimmedSourceIssue != "" {
+			payload["source_issue"] = trimmedSourceIssue
+		}
+		response, err := client.CreateMemoryEntry(payload)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Created memory entry for agent %s\n", normalizedAgentID)
+	case "list":
+		flags := flag.NewFlagSet("memory list", flag.ExitOnError)
+		agentID := flags.String("agent", "", "agent UUID")
+		kind := flags.String("kind", "", "optional memory kind filter")
+		limit := flags.Int("limit", 20, "max results")
+		offset := flags.Int("offset", 0, "result offset")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		normalizedAgentID := strings.TrimSpace(*agentID)
+		if err := validateAgentUUID(normalizedAgentID); err != nil {
+			die(err.Error())
+		}
+		if *limit <= 0 {
+			die("--limit must be positive")
+		}
+		if *offset < 0 {
+			die("--offset must be non-negative")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.ListMemoryEntries(normalizedAgentID, strings.TrimSpace(*kind), *limit, *offset)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Memory entries for %s\n", normalizedAgentID)
+		printJSON(response)
 	case "write":
 		flags := flag.NewFlagSet("memory write", flag.ExitOnError)
 		agentID := flags.String("agent", "", "agent UUID")
@@ -514,7 +604,7 @@ func handleMemory(args []string) {
 		cfg, err := ottercli.LoadConfig()
 		dieIf(err)
 		client, _ := ottercli.NewClient(cfg, *org)
-		response, err := client.SearchAgentMemory(normalizedAgentID, query, *limit)
+		response, err := client.SearchMemoryEntries(normalizedAgentID, query, *limit)
 		dieIf(err)
 
 		if *jsonOut {
@@ -522,6 +612,155 @@ func handleMemory(args []string) {
 			return
 		}
 		fmt.Printf("Memory search results for %s\n", normalizedAgentID)
+		printJSON(response)
+	case "recall":
+		flags := flag.NewFlagSet("memory recall", flag.ExitOnError)
+		agentID := flags.String("agent", "", "agent UUID")
+		maxResults := flags.Int("max-results", 5, "max recall items")
+		minRelevance := flags.Float64("min-relevance", 0, "minimum recall relevance (0-1)")
+		maxChars := flags.Int("max-chars", 2000, "max recall context chars")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		if len(flags.Args()) == 0 {
+			die("usage: otter memory recall --agent <uuid> [--max-results N] [--min-relevance 0-1] [--max-chars N] \"query\"")
+		}
+		normalizedAgentID := strings.TrimSpace(*agentID)
+		if err := validateAgentUUID(normalizedAgentID); err != nil {
+			die(err.Error())
+		}
+		query := strings.TrimSpace(strings.Join(flags.Args(), " "))
+		if query == "" {
+			die("query is required")
+		}
+		if *maxResults <= 0 {
+			die("--max-results must be positive")
+		}
+		if err := validateMemoryRecallQualityFlags(*minRelevance, *maxChars); err != nil {
+			die(err.Error())
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.RecallMemoryWithQuality(
+			normalizedAgentID,
+			query,
+			*maxResults,
+			*minRelevance,
+			*maxChars,
+		)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Recall context for %s\n", normalizedAgentID)
+		printJSON(response)
+	case "delete":
+		flags := flag.NewFlagSet("memory delete", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter memory delete <memory-id>")
+		}
+		memoryID := strings.TrimSpace(flags.Args()[0])
+		if memoryID == "" {
+			die("memory id is required")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		dieIf(client.DeleteMemoryEntry(memoryID))
+
+		if *jsonOut {
+			printJSON(map[string]any{"ok": true, "id": memoryID})
+			return
+		}
+		fmt.Printf("Deleted memory entry %s\n", memoryID)
+	default:
+		fmt.Println(usageText)
+		os.Exit(1)
+	}
+}
+
+func handleKnowledge(args []string) {
+	const usageText = "usage: otter knowledge <list|import> ..."
+	if len(args) == 0 {
+		fmt.Println(usageText)
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "list":
+		flags := flag.NewFlagSet("knowledge list", flag.ExitOnError)
+		limit := flags.Int("limit", 200, "max results")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		if *limit <= 0 {
+			die("--limit must be positive")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.ListKnowledge(*limit)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Println("Knowledge entries")
+		printJSON(response)
+	case "import":
+		flags := flag.NewFlagSet("knowledge import", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		if len(flags.Args()) == 0 {
+			die("usage: otter knowledge import <file.json>")
+		}
+		path := strings.TrimSpace(flags.Args()[0])
+		if path == "" {
+			die("import file path is required")
+		}
+		if err := validateKnowledgeImportFileSize(path, knowledgeImportMaxFileBytes); err != nil {
+			die(err.Error())
+		}
+
+		raw, err := os.ReadFile(path)
+		dieIf(err)
+
+		var entries []map[string]any
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			var wrapped struct {
+				Entries []map[string]any `json:"entries"`
+			}
+			if unwrapErr := json.Unmarshal(raw, &wrapped); unwrapErr != nil {
+				die("knowledge import file must be JSON array or {\"entries\":[...]}")
+			}
+			entries = wrapped.Entries
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.ImportKnowledge(entries)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Println("Knowledge import complete")
 		printJSON(response)
 	default:
 		fmt.Println(usageText)
@@ -1716,6 +1955,45 @@ func resolveMemoryWriteKind(daily bool, explicitKind string) (string, error) {
 	default:
 		return "", errors.New("--kind must be one of: daily, long_term, note")
 	}
+}
+
+func validateMemoryRecallQualityFlags(minRelevance float64, maxChars int) error {
+	if minRelevance < 0 || minRelevance > 1 {
+		return errors.New("--min-relevance must be between 0 and 1")
+	}
+	if maxChars <= 0 {
+		return errors.New("--max-chars must be positive")
+	}
+	return nil
+}
+
+func validateMemoryCreateFlags(importance int, confidence float64, sensitivity string) error {
+	if importance < 1 || importance > 5 {
+		return errors.New("--importance must be between 1 and 5")
+	}
+	if math.IsNaN(confidence) || confidence < 0 || confidence > 1 {
+		return errors.New("--confidence must be between 0 and 1")
+	}
+	switch strings.TrimSpace(strings.ToLower(sensitivity)) {
+	case "public", "internal", "restricted":
+		return nil
+	default:
+		return errors.New("--sensitivity must be one of public|internal|restricted")
+	}
+}
+
+func validateKnowledgeImportFileSize(path string, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.Size() > maxBytes {
+		return fmt.Errorf("knowledge import file exceeds %d bytes", maxBytes)
+	}
+	return nil
 }
 
 func slugifyAgentName(name string) string {
