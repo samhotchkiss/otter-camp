@@ -439,7 +439,7 @@ func TestProjectStore_Create_WithWorkflowFields(t *testing.T) {
 
 	var agentID string
 	require.NoError(t, db.QueryRow(
-		"INSERT INTO agents (org_id, name, role, model, status) VALUES ($1, 'Workflow Agent', 'assistant', 'gpt-5', 'active') RETURNING id",
+		"INSERT INTO agents (org_id, slug, display_name, status) VALUES ($1, 'workflow-agent', 'Workflow Agent', 'active') RETURNING id",
 		orgID,
 	).Scan(&agentID))
 
@@ -487,7 +487,7 @@ func TestProjectStore_Update_WithWorkflowFields(t *testing.T) {
 
 	var agentID string
 	require.NoError(t, db.QueryRow(
-		"INSERT INTO agents (org_id, name, role, model, status) VALUES ($1, 'Workflow Agent', 'assistant', 'gpt-5', 'active') RETURNING id",
+		"INSERT INTO agents (org_id, slug, display_name, status) VALUES ($1, 'workflow-agent', 'Workflow Agent', 'active') RETURNING id",
 		orgID,
 	).Scan(&agentID))
 
