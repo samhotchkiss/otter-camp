@@ -609,12 +609,14 @@ func handleMemory(args []string) {
 		flags := flag.NewFlagSet("memory recall", flag.ExitOnError)
 		agentID := flags.String("agent", "", "agent UUID")
 		maxResults := flags.Int("max-results", 5, "max recall items")
+		minRelevance := flags.Float64("min-relevance", 0, "minimum recall relevance (0-1)")
+		maxChars := flags.Int("max-chars", 2000, "max recall context chars")
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
 		_ = flags.Parse(args[1:])
 
 		if len(flags.Args()) == 0 {
-			die("usage: otter memory recall --agent <uuid> [--max-results N] \"query\"")
+			die("usage: otter memory recall --agent <uuid> [--max-results N] [--min-relevance 0-1] [--max-chars N] \"query\"")
 		}
 		normalizedAgentID := strings.TrimSpace(*agentID)
 		if err := validateAgentUUID(normalizedAgentID); err != nil {
@@ -627,11 +629,20 @@ func handleMemory(args []string) {
 		if *maxResults <= 0 {
 			die("--max-results must be positive")
 		}
+		if err := validateMemoryRecallQualityFlags(*minRelevance, *maxChars); err != nil {
+			die(err.Error())
+		}
 
 		cfg, err := ottercli.LoadConfig()
 		dieIf(err)
 		client, _ := ottercli.NewClient(cfg, *org)
-		response, err := client.RecallMemory(normalizedAgentID, query, *maxResults)
+		response, err := client.RecallMemoryWithQuality(
+			normalizedAgentID,
+			query,
+			*maxResults,
+			*minRelevance,
+			*maxChars,
+		)
 		dieIf(err)
 
 		if *jsonOut {
@@ -1933,6 +1944,16 @@ func resolveMemoryWriteKind(daily bool, explicitKind string) (string, error) {
 	default:
 		return "", errors.New("--kind must be one of: daily, long_term, note")
 	}
+}
+
+func validateMemoryRecallQualityFlags(minRelevance float64, maxChars int) error {
+	if minRelevance < 0 || minRelevance > 1 {
+		return errors.New("--min-relevance must be between 0 and 1")
+	}
+	if maxChars <= 0 {
+		return errors.New("--max-chars must be positive")
+	}
+	return nil
 }
 
 func slugifyAgentName(name string) string {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -84,19 +85,19 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 }
 
 type Project struct {
-	ID               string         `json:"id"`
-	OrgID            string         `json:"org_id"`
-	Name             string         `json:"name"`
-	URLSlug          string         `json:"slug"`
-	Description      string         `json:"description"`
-	RepoURL          string         `json:"repo_url"`
-	Status           string         `json:"status"`
-	RequireHumanReview bool         `json:"require_human_review"`
-	WorkflowEnabled  bool           `json:"workflow_enabled"`
-	WorkflowSchedule map[string]any `json:"workflow_schedule,omitempty"`
-	WorkflowTemplate map[string]any `json:"workflow_template,omitempty"`
-	WorkflowAgentID  *string        `json:"workflow_agent_id,omitempty"`
-	WorkflowRunCount int            `json:"workflow_run_count"`
+	ID                 string         `json:"id"`
+	OrgID              string         `json:"org_id"`
+	Name               string         `json:"name"`
+	URLSlug            string         `json:"slug"`
+	Description        string         `json:"description"`
+	RepoURL            string         `json:"repo_url"`
+	Status             string         `json:"status"`
+	RequireHumanReview bool           `json:"require_human_review"`
+	WorkflowEnabled    bool           `json:"workflow_enabled"`
+	WorkflowSchedule   map[string]any `json:"workflow_schedule,omitempty"`
+	WorkflowTemplate   map[string]any `json:"workflow_template,omitempty"`
+	WorkflowAgentID    *string        `json:"workflow_agent_id,omitempty"`
+	WorkflowRunCount   int            `json:"workflow_run_count"`
 }
 
 type projectListResponse struct {
@@ -805,6 +806,15 @@ func (c *Client) SearchMemoryEntries(agentID, query string, limit int) (map[stri
 }
 
 func (c *Client) RecallMemory(agentID, query string, maxResults int) (map[string]any, error) {
+	return c.RecallMemoryWithQuality(agentID, query, maxResults, 0, 2000)
+}
+
+func (c *Client) RecallMemoryWithQuality(
+	agentID, query string,
+	maxResults int,
+	minRelevance float64,
+	maxChars int,
+) (map[string]any, error) {
 	if err := c.requireAuth(); err != nil {
 		return nil, err
 	}
@@ -819,11 +829,19 @@ func (c *Client) RecallMemory(agentID, query string, maxResults int) (map[string
 	if maxResults <= 0 {
 		maxResults = 5
 	}
+	if minRelevance < 0 || minRelevance > 1 {
+		return nil, errors.New("min relevance must be between 0 and 1")
+	}
+	if maxChars <= 0 {
+		maxChars = 2000
+	}
 
 	q := url.Values{}
 	q.Set("agent_id", agentID)
 	q.Set("q", query)
 	q.Set("max_results", fmt.Sprintf("%d", maxResults))
+	q.Set("min_relevance", strconv.FormatFloat(minRelevance, 'f', -1, 64))
+	q.Set("max_chars", fmt.Sprintf("%d", maxChars))
 
 	req, err := c.newRequest(http.MethodGet, "/api/memory/recall?"+q.Encode(), nil)
 	if err != nil {

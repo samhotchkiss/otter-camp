@@ -201,3 +201,61 @@ func TestHandleMemoryWriteRead(t *testing.T) {
 	require.NotContains(t, gotPath, "include_long_term=true")
 	mu.Unlock()
 }
+
+func TestHandleMemoryRecallFlags(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	var mu sync.Mutex
+	var gotMethod string
+	var gotPath string
+	agentID := "00000000-0000-0000-0000-000000000111"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/memory/recall":
+			_, _ = w.Write([]byte(`{"context":"[RECALLED CONTEXT]"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	require.NoError(t, ottercli.SaveConfig(ottercli.Config{
+		APIBaseURL: srv.URL,
+		Token:      "token-1",
+		DefaultOrg: "org-1",
+	}))
+
+	handleMemory([]string{
+		"recall",
+		"--agent", agentID,
+		"--max-results", "4",
+		"--min-relevance", "0.83",
+		"--max-chars", "1234",
+		"--json",
+		"recall quality query",
+	})
+
+	mu.Lock()
+	require.Equal(t, http.MethodGet, gotMethod)
+	require.True(t, strings.HasPrefix(gotPath, "/api/memory/recall?"))
+	require.Contains(t, gotPath, "max_results=4")
+	require.Contains(t, gotPath, "min_relevance=0.83")
+	require.Contains(t, gotPath, "max_chars=1234")
+	mu.Unlock()
+
+	err := validateMemoryRecallQualityFlags(-0.01, 100)
+	require.ErrorContains(t, err, "--min-relevance must be between 0 and 1")
+	err = validateMemoryRecallQualityFlags(1.01, 100)
+	require.ErrorContains(t, err, "--min-relevance must be between 0 and 1")
+	err = validateMemoryRecallQualityFlags(0.5, 0)
+	require.ErrorContains(t, err, "--max-chars must be positive")
+}

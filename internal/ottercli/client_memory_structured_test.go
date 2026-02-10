@@ -100,6 +100,20 @@ func TestStructuredMemoryAndKnowledgeClientMethodsUseExpectedPaths(t *testing.T)
 		t.Fatalf("RecallMemory path = %s", gotPath)
 	}
 
+	recall, err = client.RecallMemoryWithQuality("a1", "decision", 6, 0.81, 1234)
+	if err != nil {
+		t.Fatalf("RecallMemoryWithQuality() error = %v", err)
+	}
+	if recall["context"] == nil {
+		t.Fatalf("RecallMemoryWithQuality() context missing")
+	}
+	if !strings.HasPrefix(gotPath, "/api/memory/recall?") ||
+		!strings.Contains(gotPath, "max_results=6") ||
+		!strings.Contains(gotPath, "min_relevance=0.81") ||
+		!strings.Contains(gotPath, "max_chars=1234") {
+		t.Fatalf("RecallMemoryWithQuality path = %s", gotPath)
+	}
+
 	if err := client.DeleteMemoryEntry("me-1"); err != nil {
 		t.Fatalf("DeleteMemoryEntry() error = %v", err)
 	}
