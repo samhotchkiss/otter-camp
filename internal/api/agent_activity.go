@@ -417,6 +417,10 @@ func (h *AgentActivityHandler) ListByAgent(w http.ResponseWriter, r *http.Reques
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id is required"})
 		return
 	}
+	if !uuidRegex.MatchString(agentID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id must be a UUID"})
+		return
+	}
 	opts, err := parseAgentActivityListOptions(r.URL.Query())
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})

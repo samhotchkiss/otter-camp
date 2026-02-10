@@ -582,6 +582,22 @@ func TestAgentActivityListByAgentHandler(t *testing.T) {
 	require.Contains(t, invalidProjectRec.Body.String(), "project_id must be a UUID")
 }
 
+func TestAgentActivityListByAgentRejectsNonUUIDAgentID(t *testing.T) {
+	handler := &AgentActivityHandler{}
+	router := newAgentActivityTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/agents/not-a-uuid/activity?org_id=00000000-0000-0000-0000-000000000123",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "agent id must be a UUID")
+}
+
 func TestAgentTimelineEvents(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "activity-timeline-events-org")
