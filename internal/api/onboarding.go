@@ -15,6 +15,7 @@ const (
 	onboardingDefaultIssueTitle  = "Welcome to Otter Camp"
 	onboardingDefaultIssueBody   = "Welcome to Otter Camp.\n\nStart by creating your first project issue, inviting agents, and connecting your workflows."
 	onboardingUserIssuer         = "otter.local"
+	onboardingMaxBodyBytes       = 32 * 1024
 )
 
 type OnboardingBootstrapRequest struct {
@@ -44,8 +45,29 @@ func HandleOnboardingBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	db, err := getAuthDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database unavailable"})
+		return
+	}
+	locked, err := onboardingSetupLocked(r.Context(), db)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to evaluate onboarding state"})
+		return
+	}
+	if locked {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "onboarding already completed"})
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, onboardingMaxBodyBytes)
 	var req OnboardingBootstrapRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			sendJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "request body too large"})
+			return
+		}
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
 		return
 	}
@@ -81,12 +103,6 @@ func HandleOnboardingBootstrap(w http.ResponseWriter, r *http.Request) {
 	orgSlug := slugifyOrg(orgName)
 	if orgSlug == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "organization_name must contain letters or numbers"})
-		return
-	}
-
-	db, err := getAuthDB()
-	if err != nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
 		return
 	}
 
@@ -180,7 +196,6 @@ func upsertOnboardingUser(ctx context.Context, tx *sql.Tx, orgID, name, email st
 		 DO UPDATE SET
 			display_name = EXCLUDED.display_name,
 			email = EXCLUDED.email,
-			role = 'owner',
 			updated_at = NOW()
 		 RETURNING id`,
 		orgID,
@@ -298,6 +313,12 @@ func ensureOnboardingIssue(ctx context.Context, tx *sql.Tx, orgID, projectID str
 		return "", 0, err
 	}
 	return issueID, issueNumber, nil
+}
+
+func onboardingSetupLocked(ctx context.Context, db *sql.DB) (bool, error) {
+	var exists bool
+	err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM organizations LIMIT 1)`).Scan(&exists)
+	return exists, err
 }
 
 func looksLikeEmail(value string) bool {
