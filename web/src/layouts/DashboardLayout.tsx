@@ -54,6 +54,8 @@ type AdminConnectionsBridgePayload = {
   connected?: boolean;
   sync_healthy?: boolean;
   status?: string;
+  last_sync?: string;
+  last_sync_age_seconds?: number;
 };
 
 type AdminConnectionsPayload = {
@@ -85,9 +87,50 @@ function getBridgeStatusLabel(status: BridgeStatus): string {
     return "Bridge healthy";
   }
   if (status === "degraded") {
-    return "Bridge delayed";
+    return "Bridge connected, OpenClaw unreachable";
   }
   return "Bridge offline";
+}
+
+function getBridgeDelayBannerMessage(status: BridgeStatus): string {
+  if (status === "degraded") {
+    return "Bridge connected but OpenClaw unreachable";
+  }
+  return "Bridge offline - reconnecting";
+}
+
+function normalizeLastSyncAgeSeconds(bridge: AdminConnectionsBridgePayload | undefined): number | null {
+  if (typeof bridge?.last_sync_age_seconds === "number" && Number.isFinite(bridge.last_sync_age_seconds) && bridge.last_sync_age_seconds >= 0) {
+    return Math.floor(bridge.last_sync_age_seconds);
+  }
+  const lastSyncISO = (bridge?.last_sync || "").trim();
+  if (!lastSyncISO) {
+    return null;
+  }
+  const parsed = Date.parse(lastSyncISO);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(0, Math.floor((Date.now() - parsed) / 1000));
+}
+
+function formatLastSyncLabel(ageSeconds: number | null): string | null {
+  if (!Number.isFinite(ageSeconds) || ageSeconds === null || ageSeconds < 0) {
+    return null;
+  }
+  if (ageSeconds < 60) {
+    return `Last successful sync ${ageSeconds}s ago`;
+  }
+  const minutes = Math.floor(ageSeconds / 60);
+  if (minutes < 60) {
+    return `Last successful sync ${minutes}m ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `Last successful sync ${hours}h ago`;
+  }
+  const days = Math.floor(hours / 24);
+  return `Last successful sync ${days}d ago`;
 }
 
 function logOut() {
@@ -111,6 +154,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   // In demo mode, always show as connected for better UX
   const connected = isDemoMode() || wsConnected;
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(connected ? "healthy" : "unhealthy");
+  const [bridgeLastSyncAgeSeconds, setBridgeLastSyncAgeSeconds] = useState<number | null>(null);
   
   const {
     openCommandPalette,
@@ -282,6 +326,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           return;
         }
         setBridgeStatus(normalizeBridgeStatus(payload.bridge, connected));
+        setBridgeLastSyncAgeSeconds(normalizeLastSyncAgeSeconds(payload.bridge));
       } catch {
         if (!cancelled) {
           setBridgeStatus((previous) => previous || (connected ? "healthy" : "unhealthy"));
@@ -314,6 +359,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       ? "status-degraded"
       : "status-offline";
   const showBridgeDelayBanner = bridgeStatus !== "healthy";
+  const bridgeDelayBannerMessage = getBridgeDelayBannerMessage(bridgeStatus);
+  const bridgeLastSyncLabel = formatLastSyncLabel(bridgeLastSyncAgeSeconds);
 
   return (
     <div className="app">
@@ -427,7 +474,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
       {showBridgeDelayBanner && (
         <div className={`bridge-delay-banner ${bridgeStatus}`} role="status" aria-live="polite">
-          Messages may be delayed - bridge reconnecting
+          <span>{bridgeDelayBannerMessage}</span>
+          {bridgeLastSyncLabel && (
+            <span className="bridge-delay-detail">{bridgeLastSyncLabel}</span>
+          )}
         </div>
       )}
 
