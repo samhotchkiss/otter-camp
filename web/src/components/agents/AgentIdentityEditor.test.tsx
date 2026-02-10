@@ -2,9 +2,26 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AgentIdentityEditor from "./AgentIdentityEditor";
 
+function getAuthorizationHeader(init?: RequestInit): string | undefined {
+  const headers = init?.headers;
+  if (!headers) {
+    return undefined;
+  }
+  if (headers instanceof Headers) {
+    return headers.get("Authorization") ?? undefined;
+  }
+  if (Array.isArray(headers)) {
+    const entry = headers.find(([name]) => name.toLowerCase() === "authorization");
+    return entry?.[1];
+  }
+  const record = headers as Record<string, string>;
+  return record.Authorization ?? record.authorization;
+}
+
 describe("AgentIdentityEditor", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it("loads identity files and previews selected content", async () => {
@@ -69,6 +86,8 @@ describe("AgentIdentityEditor", () => {
   });
 
   it("saves edited identity content through project commit endpoint", async () => {
+    localStorage.setItem("otter_camp_token", "test-token");
+
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/api/projects") && (init?.method || "GET") === "GET") {
@@ -153,6 +172,12 @@ describe("AgentIdentityEditor", () => {
         }),
       ).toBe(true);
     });
+
+    expect(
+      fetchMock.mock.calls
+        .filter(([request]) => String(request).includes("/api/"))
+        .every(([, requestInit]) => getAuthorizationHeader(requestInit) === "Bearer test-token"),
+    ).toBe(true);
 
     expect(await screen.findByText("Saved identity file.")).toBeInTheDocument();
   });

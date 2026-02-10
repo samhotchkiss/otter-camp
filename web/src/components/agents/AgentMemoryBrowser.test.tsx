@@ -2,12 +2,31 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AgentMemoryBrowser from "./AgentMemoryBrowser";
 
+function getAuthorizationHeader(init?: RequestInit): string | undefined {
+  const headers = init?.headers;
+  if (!headers) {
+    return undefined;
+  }
+  if (headers instanceof Headers) {
+    return headers.get("Authorization") ?? undefined;
+  }
+  if (Array.isArray(headers)) {
+    const entry = headers.find(([name]) => name.toLowerCase() === "authorization");
+    return entry?.[1];
+  }
+  const record = headers as Record<string, string>;
+  return record.Authorization ?? record.authorization;
+}
+
 describe("AgentMemoryBrowser", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it("loads memory entries and supports creating a new memory entry", async () => {
+    localStorage.setItem("otter_camp_token", "test-token");
+
     let loadCount = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -77,6 +96,12 @@ describe("AgentMemoryBrowser", () => {
         }),
       ).toBe(true);
     });
+
+    expect(
+      fetchMock.mock.calls
+        .filter(([request]) => String(request).includes("/api/agents/11111111-1111-1111-1111-111111111111/memory"))
+        .every(([, requestInit]) => getAuthorizationHeader(requestInit) === "Bearer test-token"),
+    ).toBe(true);
 
     expect(await screen.findByText("Saved memory entry.")).toBeInTheDocument();
     expect(await screen.findByText("Shipped cutover checklist.")).toBeInTheDocument();

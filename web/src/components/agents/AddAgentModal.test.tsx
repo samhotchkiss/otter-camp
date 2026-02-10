@@ -2,12 +2,31 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddAgentModal from "./AddAgentModal";
 
+function getAuthorizationHeader(init?: RequestInit): string | undefined {
+  const headers = init?.headers;
+  if (!headers) {
+    return undefined;
+  }
+  if (headers instanceof Headers) {
+    return headers.get("Authorization") ?? undefined;
+  }
+  if (Array.isArray(headers)) {
+    const entry = headers.find(([name]) => name.toLowerCase() === "authorization");
+    return entry?.[1];
+  }
+  const record = headers as Record<string, string>;
+  return record.Authorization ?? record.authorization;
+}
+
 describe("AddAgentModal", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it("submits create request and closes on success", async () => {
+    localStorage.setItem("otter_camp_token", "test-token");
+
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
@@ -27,6 +46,7 @@ describe("AddAgentModal", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
     expect(fetchMock.mock.calls[0]?.[0]).toContain("/api/admin/agents");
+    expect(getAuthorizationHeader(fetchMock.mock.calls[0]?.[1])).toBe("Bearer test-token");
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body || "{}"))).toMatchObject({
       slot: "research",
       display_name: "Riley",
@@ -40,7 +60,13 @@ describe("AddAgentModal", () => {
   });
 
   it("renders API errors", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: "boom" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     render(<AddAgentModal isOpen onClose={vi.fn()} onCreated={vi.fn()} />);
