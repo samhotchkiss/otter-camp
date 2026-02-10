@@ -250,13 +250,59 @@ install_dependency() {
       ;;
     docker)
       if [[ "$platform" == "macos" ]]; then
-        run_cmd brew install --cask docker
+        run_cmd brew install --cask docker-desktop
+        # Docker Desktop needs to be launched before docker/compose commands work
+        if ! docker info >/dev/null 2>&1; then
+          echo
+          echo "Docker Desktop needs to start before we can continue."
+          echo "Opening Docker Desktop now..."
+          open -a Docker
+          echo -n "⏳ Waiting for Docker to be ready"
+          local docker_wait=0
+          while ! docker info >/dev/null 2>&1; do
+            echo -n "."
+            sleep 3
+            docker_wait=$((docker_wait + 3))
+            if [[ "$docker_wait" -ge 120 ]]; then
+              echo
+              log_error "Docker Desktop didn't start within 2 minutes."
+              echo "Please start Docker Desktop manually, then run 'make setup' again."
+              exit 1
+            fi
+          done
+          echo
+          log_success "Docker Desktop is ready."
+        fi
       else
         run_linux_install docker.io
       fi
       ;;
     compose)
       if [[ "$platform" == "macos" ]]; then
+        # Docker Desktop includes Compose — just verify Docker is running
+        if docker compose version >/dev/null 2>&1; then
+          log_success "Docker Desktop includes Docker Compose."
+          return 0
+        fi
+        # Docker might not be started yet
+        if ! docker info >/dev/null 2>&1; then
+          echo "Opening Docker Desktop..."
+          open -a Docker
+          echo -n "⏳ Waiting for Docker to be ready"
+          local compose_wait=0
+          while ! docker compose version >/dev/null 2>&1; do
+            echo -n "."
+            sleep 3
+            compose_wait=$((compose_wait + 3))
+            if [[ "$compose_wait" -ge 120 ]]; then
+              echo
+              log_error "Docker Compose not available after 2 minutes."
+              echo "Please start Docker Desktop manually, then run 'make setup' again."
+              exit 1
+            fi
+          done
+          echo
+        fi
         log_success "Docker Desktop includes Docker Compose."
         return 0
       fi
@@ -265,6 +311,24 @@ install_dependency() {
     ollama)
       if [[ "$platform" == "macos" ]]; then
         run_cmd brew install ollama
+        # Start Ollama service
+        echo "Starting Ollama service..."
+        brew services start ollama 2>/dev/null || true
+        # Wait for it to be ready
+        echo -n "⏳ Waiting for Ollama"
+        local ollama_wait=0
+        while ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; do
+          echo -n "."
+          sleep 2
+          ollama_wait=$((ollama_wait + 2))
+          if [[ "$ollama_wait" -ge 30 ]]; then
+            echo
+            log_warn "Ollama didn't start within 30s — you can start it later with: brew services start ollama"
+            break
+          fi
+        done
+        echo
+        log_success "Ollama is running."
       else
         if command -v curl >/dev/null 2>&1; then
           run_cmd bash -lc "curl -fsSL https://ollama.com/install.sh | sh"
