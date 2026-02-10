@@ -127,6 +127,20 @@ func TestOnboardingBootstrapValidationFailures(t *testing.T) {
 	}
 }
 
+func TestOnboardingBootstrapCanonicalOrganizationFieldOnly(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+	resetOnboardingAuthDB(t)
+
+	rec := postOnboardingBootstrap(t, `{"name":"Sam","email":"sam@example.com","organization":"My Team"}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "organization_name is required", payload.Error)
+}
+
 func TestOnboardingBootstrapRouteIsRegistered(t *testing.T) {
 	router := NewRouter()
 	req := httptest.NewRequest(http.MethodPost, "/api/onboarding/bootstrap", bytes.NewBufferString(`{"name":"Sam"}`))
