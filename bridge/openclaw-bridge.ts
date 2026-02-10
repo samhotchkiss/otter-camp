@@ -3114,6 +3114,11 @@ export function projectMatchesCronJob(project: BridgeWorkflowProjectSnapshot, jo
   if (cronID && scheduleCronID && cronID === scheduleCronID) {
     return true;
   }
+  const isWorkflowProject = project.workflow_enabled === true
+    || (project.workflow_schedule !== null && project.workflow_schedule !== undefined);
+  if (!isWorkflowProject) {
+    return false;
+  }
   const projectName = normalizeWorkflowProjectName(project.name);
   const jobName = normalizeWorkflowProjectName(getTrimmedString(job.name) || getTrimmedString(job.id));
   return projectName !== '' && projectName === jobName;

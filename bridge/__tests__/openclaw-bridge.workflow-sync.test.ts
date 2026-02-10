@@ -125,6 +125,40 @@ describe('projectMatchesCronJob', () => {
     );
     assert.equal(match, true);
   });
+
+  it('does not fallback match non-workflow projects by name', () => {
+    const match = projectMatchesCronJob(
+      {
+        id: 'project-3',
+        name: 'Morning Briefing',
+        workflow_enabled: false,
+        workflow_schedule: null,
+      },
+      {
+        id: 'job-789',
+        name: 'Morning Briefing',
+        enabled: true,
+      },
+    );
+    assert.equal(match, false);
+  });
+
+  it('allows fallback name matching for workflow-enabled projects', () => {
+    const match = projectMatchesCronJob(
+      {
+        id: 'project-4',
+        name: 'Morning Briefing',
+        workflow_enabled: true,
+        workflow_schedule: null,
+      },
+      {
+        id: 'job-790',
+        name: 'Morning Briefing',
+        enabled: true,
+      },
+    );
+    assert.equal(match, true);
+  });
 });
 
 describe('shouldTreatAsSystemWorkflow', () => {
