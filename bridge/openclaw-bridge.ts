@@ -63,7 +63,10 @@ const ACTIVITY_EVENTS_BATCH_SIZE = 200;
 const MAX_TRACKED_ACTIVITY_EVENT_IDS = 5000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const RECONNECT_JITTER_SPREAD = 0.2;
-const RECONNECT_FAILURE_EXIT_THRESHOLD = 5;
+const RECONNECT_WARNING_THRESHOLD = 5;
+const RECONNECT_ALERT_THRESHOLD = 30;
+const RECONNECT_RESTART_THRESHOLD = 60;
+const RESTART_FAILURE_EXIT_THRESHOLD = 2;
 const HEARTBEAT_INTERVAL_MS = 10000;
 const HEARTBEAT_PONG_TIMEOUT_MS = 5000;
 const HEARTBEAT_MISS_THRESHOLD = 2;
@@ -371,6 +374,8 @@ type SocketReconnectController = {
   firstMessageReceived: boolean;
   lastConnectedAt: number;
   disconnectedSince: number;
+  alertEmittedForOutage: boolean;
+  restartFailures: number;
 };
 
 type SocketHeartbeatController = {
@@ -444,6 +449,8 @@ const reconnectByRole: Record<BridgeSocketRole, SocketReconnectController> = {
     firstMessageReceived: false,
     lastConnectedAt: 0,
     disconnectedSince: processStartedAtMs,
+    alertEmittedForOutage: false,
+    restartFailures: 0,
   },
   ottercamp: {
     timer: null,
@@ -452,6 +459,8 @@ const reconnectByRole: Record<BridgeSocketRole, SocketReconnectController> = {
     firstMessageReceived: false,
     lastConnectedAt: 0,
     disconnectedSince: processStartedAtMs,
+    alertEmittedForOutage: false,
+    restartFailures: 0,
   },
 };
 const heartbeatByRole: Record<BridgeSocketRole, SocketHeartbeatController> = {
@@ -511,6 +520,8 @@ let gitCompletionRemote = '';
 const genId = () => `req-${++requestId}`;
 const defaultExecFileAsync = promisify(execFile);
 let execFileAsync = defaultExecFileAsync;
+const defaultProcessExit = (code: number): never => process.exit(code);
+let processExitFn: (code: number) => never = defaultProcessExit;
 
 export function setExecFileForTest(
   fn: ((file: string, args: readonly string[], options: { timeout?: number; maxBuffer?: number }, callback: (error: Error | null, stdout?: string, stderr?: string) => void) => void) | null,
@@ -522,6 +533,10 @@ export function setExecFileForTest(
   execFileAsync = promisify(fn);
 }
 
+export function setProcessExitForTest(fn: ((code: number) => never) | null): void {
+  processExitFn = fn || defaultProcessExit;
+}
+
 export function computeReconnectDelayMs(attempt: number, randomFn: () => number = Math.random): number {
   const safeAttempt = Number.isFinite(attempt) && attempt >= 0 ? Math.floor(attempt) : 0;
   const baseDelay = Math.min(RECONNECT_MAX_DELAY_MS, 1000 * Math.pow(2, safeAttempt));
@@ -530,8 +545,26 @@ export function computeReconnectDelayMs(attempt: number, randomFn: () => number 
   return Math.min(RECONNECT_MAX_DELAY_MS, Math.max(100, Math.round(baseDelay * jitterMultiplier)));
 }
 
+export type ReconnectEscalationTier = 'none' | 'warn' | 'alert' | 'restart';
+
+export function reconnectEscalationTierForFailures(consecutiveFailures: number): ReconnectEscalationTier {
+  const safeFailures = Number.isFinite(consecutiveFailures) && consecutiveFailures > 0
+    ? Math.floor(consecutiveFailures)
+    : 0;
+  if (safeFailures >= RECONNECT_RESTART_THRESHOLD) {
+    return 'restart';
+  }
+  if (safeFailures >= RECONNECT_ALERT_THRESHOLD) {
+    return 'alert';
+  }
+  if (safeFailures >= RECONNECT_WARNING_THRESHOLD) {
+    return 'warn';
+  }
+  return 'none';
+}
+
 export function shouldExitAfterReconnectFailures(consecutiveFailures: number): boolean {
-  return Number.isFinite(consecutiveFailures) && consecutiveFailures >= RECONNECT_FAILURE_EXIT_THRESHOLD;
+  return reconnectEscalationTierForFailures(consecutiveFailures) === 'restart';
 }
 
 export function nextMissedPongCount(currentMissedPongs: number, receivedPong: boolean): number {
@@ -725,11 +758,15 @@ export function resetReconnectStateForTest(role: BridgeSocketRole): void {
   reconnectByRole[role].firstMessageReceived = false;
   reconnectByRole[role].lastConnectedAt = 0;
   reconnectByRole[role].disconnectedSince = processStartedAtMs;
+  reconnectByRole[role].alertEmittedForOutage = false;
+  reconnectByRole[role].restartFailures = 0;
 }
 
 function resetReconnectBackoffAfterFirstMessage(role: BridgeSocketRole): void {
   const controller = reconnectByRole[role];
   controller.consecutiveFailures = 0;
+  controller.alertEmittedForOutage = false;
+  controller.restartFailures = 0;
 }
 
 function markSocketConnectAttempt(role: BridgeSocketRole): void {
@@ -752,15 +789,85 @@ function markSocketMessage(role: BridgeSocketRole): void {
   }
 }
 
+function queueReconnectEscalationAlert(role: BridgeSocketRole, controller: SocketReconnectController): void {
+  if (controller.alertEmittedForOutage) {
+    return;
+  }
+  const orgID = getTrimmedString(OTTERCAMP_ORG_ID);
+  if (!orgID) {
+    console.warn(`[bridge] ${role} reconnect alert skipped: OTTERCAMP_ORG_ID is not configured`);
+    return;
+  }
+  if (!isConnectedState(connectionStateByRole.ottercamp)) {
+    console.warn(`[bridge] ${role} reconnect alert skipped: OtterCamp connection is unavailable`);
+    return;
+  }
+
+  const nowISO = new Date().toISOString();
+  const disconnectedForSeconds = controller.disconnectedSince > 0
+    ? Math.max(0, Math.floor((Date.now() - controller.disconnectedSince) / 1000))
+    : 0;
+  const event: BridgeAgentActivityEvent = {
+    id: `bridge_reconnect_alert_${role}_${controller.disconnectedSince || Date.now()}`,
+    agent_id: 'bridge',
+    session_key: `bridge:${role}:reconnect`,
+    trigger: 'bridge.reconnect.alert',
+    channel: 'system',
+    summary: `Bridge reconnect alert: ${role} disconnected`,
+    detail: `${role} reconnect has failed ${controller.consecutiveFailures} times (${disconnectedForSeconds}s disconnected).`,
+    tokens_used: 0,
+    duration_ms: disconnectedForSeconds * 1000,
+    status: 'failed',
+    started_at: nowISO,
+    completed_at: nowISO,
+  };
+  const queued = queueActivityEventsForOrg(orgID, [event]);
+  if (queued <= 0) {
+    return;
+  }
+  controller.alertEmittedForOutage = true;
+  void flushBufferedActivityEvents('reconnect-escalation-alert').catch((err) => {
+    console.error('[bridge] reconnect escalation alert flush failed:', err);
+  });
+}
+
+function requestSupervisorRestart(role: BridgeSocketRole, controller: SocketReconnectController): void {
+  const disconnectedForSeconds = controller.disconnectedSince > 0
+    ? Math.max(0, Math.floor((Date.now() - controller.disconnectedSince) / 1000))
+    : 0;
+  const reason =
+    `${role} reconnect failed ${controller.consecutiveFailures} times (${disconnectedForSeconds}s disconnected); requesting supervisor restart`;
+  console.error(`[bridge] ${reason}`);
+  try {
+    processExitFn(1);
+  } catch (err) {
+    controller.restartFailures += 1;
+    console.error(
+      `[bridge] supervisor restart request failed (${controller.restartFailures}/${RESTART_FAILURE_EXIT_THRESHOLD}):`,
+      err,
+    );
+    if (controller.restartFailures >= RESTART_FAILURE_EXIT_THRESHOLD) {
+      console.error('[bridge] restart request failed twice; forcing process exit');
+      process.exit(1);
+    }
+  }
+}
+
 function scheduleReconnect(role: BridgeSocketRole, reconnectFn: () => void): void {
   const controller = reconnectByRole[role];
   controller.consecutiveFailures += 1;
   controller.totalReconnectAttempts += 1;
-  if (shouldExitAfterReconnectFailures(controller.consecutiveFailures)) {
-    console.error(
-      `[bridge] ${role} reconnect failed ${controller.consecutiveFailures} times; exiting for supervisor restart`,
+  const escalationTier = reconnectEscalationTierForFailures(controller.consecutiveFailures);
+  if (controller.consecutiveFailures === RECONNECT_WARNING_THRESHOLD) {
+    console.warn(
+      `[bridge] ${role} reconnect warning: ${controller.consecutiveFailures} consecutive failures`,
     );
-    process.exit(1);
+  }
+  if (controller.consecutiveFailures === RECONNECT_ALERT_THRESHOLD) {
+    queueReconnectEscalationAlert(role, controller);
+  }
+  if (escalationTier === 'restart') {
+    requestSupervisorRestart(role, controller);
     return;
   }
 
