@@ -628,7 +628,19 @@ run_bootstrap_steps() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "↪ go run ./cmd/migrate up"
   else
-    go run ./cmd/migrate up
+    if ! go run ./cmd/migrate up 2>&1; then
+      # Check if it's a dirty state error and auto-fix
+      local dirty_ver
+      dirty_ver=$(go run ./cmd/migrate up 2>&1 | grep -oP 'Dirty database version \K[0-9]+' || true)
+      if [[ -n "$dirty_ver" ]]; then
+        log_warn "Database migration $dirty_ver was dirty — auto-fixing..."
+        go run ./scripts/migrate/migrate.go force "$dirty_ver"
+        go run ./cmd/migrate up
+      else
+        log_error "Migration failed. Check the error above."
+        exit 1
+      fi
+    fi
   fi
   log_success "Migrations complete."
 
