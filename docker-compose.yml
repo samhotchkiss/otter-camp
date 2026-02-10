@@ -48,7 +48,7 @@ services:
       context: .
       dockerfile: Dockerfile.web
       args:
-        VITE_API_URL: http://localhost:4200
+        VITE_API_URL: ""
     container_name: otter-camp-web
     ports:
       - "3000:80"

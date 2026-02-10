@@ -93,6 +93,7 @@ func TestLocalRuntimeDefaults(t *testing.T) {
 		"image: pgvector/pgvector:pg16",
 		"\"4200:4200\"",
 		"PORT: 4200",
+		"VITE_API_URL: \"\"",
 	} {
 		if !strings.Contains(compose, snippet) {
 			t.Fatalf("expected docker-compose.yml to contain %q", snippet)
@@ -116,7 +117,7 @@ func TestLocalRuntimeDefaults(t *testing.T) {
 	for _, snippet := range []string{
 		"PORT=4200",
 		"OTTERCAMP_URL=http://localhost:4200",
-		"API: http://localhost:4200",
+		"Dashboard: http://localhost:4200",
 	} {
 		if !strings.Contains(setup, snippet) {
 			t.Fatalf("expected scripts/setup.sh to contain %q", snippet)
