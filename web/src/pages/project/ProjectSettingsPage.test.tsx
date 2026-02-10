@@ -46,7 +46,7 @@ describe("ProjectSettingsPage", () => {
     fireEvent.change(screen.getByLabelText("Primary Agent"), { target: { value: "agent-2" } });
     expect(onPrimaryAgentChange).toHaveBeenCalledWith("agent-2");
 
-    fireEvent.click(screen.getByRole("button", { name: "Save general settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
     expect(onSaveGeneralSettings).toHaveBeenCalledTimes(1);
   });
 

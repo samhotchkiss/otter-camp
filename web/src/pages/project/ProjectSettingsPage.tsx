@@ -71,7 +71,7 @@ export default function ProjectSettingsPage({
           onClick={onSaveGeneralSettings}
           className="mt-4 rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#B8975B] disabled:cursor-not-allowed disabled:opacity-70"
         >
-          {isSavingGeneralSettings ? "Saving..." : "Save general settings"}
+          {isSavingGeneralSettings ? "Saving..." : "Save settings"}
         </button>
       </section>
 
