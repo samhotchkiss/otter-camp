@@ -25,6 +25,7 @@ import {
   resolveProjectWorktreeRoot,
   resetPeriodicSyncGuardForTest,
   resetReconnectStateForTest,
+  resolveOtterCampWSSecret,
   resetSessionContextsForTest,
   runSerializedSyncOperationForTest,
   setContinuousModeEnabledForTest,
@@ -350,6 +351,25 @@ describe("bridge websocket URL helpers", () => {
     assert.equal(redacted.includes("token="), false);
     assert.equal(redacted.includes("super-secret-token"), false);
     assert.ok(redacted.endsWith("/ws/openclaw"));
+  });
+});
+
+describe("bridge websocket secret env resolution", () => {
+  it("prefers OPENCLAW_WS_SECRET and falls back to OTTERCAMP_WS_SECRET", () => {
+    assert.equal(
+      resolveOtterCampWSSecret({
+        OPENCLAW_WS_SECRET: "openclaw-secret",
+        OTTERCAMP_WS_SECRET: "legacy-secret",
+      }),
+      "openclaw-secret",
+    );
+    assert.equal(
+      resolveOtterCampWSSecret({
+        OTTERCAMP_WS_SECRET: "legacy-secret",
+      }),
+      "legacy-secret",
+    );
+    assert.equal(resolveOtterCampWSSecret({}), "");
   });
 });
 
