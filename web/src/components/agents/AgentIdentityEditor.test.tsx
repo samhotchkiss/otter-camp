@@ -90,16 +90,6 @@ describe("AgentIdentityEditor", () => {
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/api/projects") && (init?.method || "GET") === "GET") {
-        return new Response(
-          JSON.stringify({
-            projects: [
-              { id: "project-agent-files", name: "Agent Files" },
-            ],
-          }),
-          { status: 200 },
-        );
-      }
       if (url.includes("/api/projects/project-agent-files/commits") && (init?.method || "GET") === "POST") {
         return new Response(
           JSON.stringify({
@@ -151,6 +141,7 @@ describe("AgentIdentityEditor", () => {
       if (url.includes("/api/admin/agents/main/files")) {
         return new Response(
           JSON.stringify({
+            project_id: "project-agent-files",
             ref: "HEAD",
             path: "/",
             entries: [
@@ -206,14 +197,6 @@ describe("AgentIdentityEditor", () => {
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/api/projects") && (init?.method || "GET") === "GET") {
-        return new Response(
-          JSON.stringify({
-            projects: [{ id: "project-agent-files", name: "Agent Files" }],
-          }),
-          { status: 200 },
-        );
-      }
       if (url.includes("/api/projects/project-agent-files/commits") && (init?.method || "GET") === "POST") {
         return new Response(
           JSON.stringify({
@@ -237,6 +220,7 @@ describe("AgentIdentityEditor", () => {
       if (url.includes("/api/admin/agents/main/files")) {
         return new Response(
           JSON.stringify({
+            project_id: "project-agent-files",
             ref: "HEAD",
             path: "/",
             entries: [{ name: "SOUL.md", type: "file", path: "SOUL.md" }],
@@ -282,6 +266,50 @@ describe("AgentIdentityEditor", () => {
     expect(querySelectorSpy).not.toHaveBeenCalledWith('[data-testid="source-textarea"]');
 
     querySelectorSpy.mockRestore();
+  });
+
+  it("shows a save error when agent files project id is missing", async () => {
+    localStorage.setItem("otter_camp_token", "test-token");
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/projects/") && (init?.method || "GET") === "POST") {
+        return new Response(JSON.stringify({ commit: { sha: "abc123" } }), { status: 201 });
+      }
+      if (url.includes("/api/admin/agents/main/files/SOUL.md")) {
+        return new Response(
+          JSON.stringify({
+            ref: "HEAD",
+            path: "/SOUL.md",
+            content: "# SOUL\nSteady and practical.",
+            encoding: "utf-8",
+            size: 28,
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/admin/agents/main/files")) {
+        return new Response(
+          JSON.stringify({
+            ref: "HEAD",
+            path: "/",
+            entries: [{ name: "SOUL.md", type: "file", path: "SOUL.md" }],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<AgentIdentityEditor agentID="main" />);
+    expect(await screen.findByRole("button", { name: "SOUL.md" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save Identity File" }));
+
+    expect(await screen.findByText("Agent Files project is not configured")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([request]) => String(request).includes("/api/projects/") && String(request).includes("/commits")),
+    ).toBe(false);
   });
 
   it("renders an empty state when no identity files are present", async () => {

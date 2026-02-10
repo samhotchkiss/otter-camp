@@ -64,6 +64,7 @@ type adminAgentDetailResponse struct {
 }
 
 type adminAgentFilesListResponse struct {
+	ProjectID string             `json:"project_id,omitempty"`
 	Ref     string             `json:"ref"`
 	Path    string             `json:"path"`
 	Entries []projectTreeEntry `json:"entries"`
@@ -236,7 +237,7 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repoPath, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	repoPath, _, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
 	if err != nil {
 		h.writeAgentFilesResolveError(w, err)
 		return
@@ -292,7 +293,7 @@ func (h *AdminAgentsHandler) Retire(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repoPath, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	repoPath, _, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
 	if err != nil {
 		h.writeAgentFilesResolveError(w, err)
 		return
@@ -323,7 +324,7 @@ func (h *AdminAgentsHandler) Reactivate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	repoPath, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	repoPath, _, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
 	if err != nil {
 		h.writeAgentFilesResolveError(w, err)
 		return
@@ -367,7 +368,7 @@ func (h *AdminAgentsHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
 
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
 	refProvided := ref != ""
-	repoPath, repoMode, defaultRef, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	repoPath, projectID, repoMode, defaultRef, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
 	if err != nil {
 		h.writeAgentFilesResolveError(w, err)
 		return
@@ -397,9 +398,10 @@ func (h *AdminAgentsHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
 		responsePath = "/" + relativePath
 	}
 	sendJSON(w, http.StatusOK, adminAgentFilesListResponse{
-		Ref:     resolvedRef,
-		Path:    responsePath,
-		Entries: entries,
+		ProjectID: projectID,
+		Ref:       resolvedRef,
+		Path:      responsePath,
+		Entries:   entries,
 	})
 }
 
@@ -422,7 +424,7 @@ func (h *AdminAgentsHandler) GetFile(w http.ResponseWriter, r *http.Request) {
 
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
 	refProvided := ref != ""
-	repoPath, repoMode, defaultRef, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	repoPath, _, repoMode, defaultRef, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
 	if err != nil {
 		h.writeAgentFilesResolveError(w, err)
 		return
@@ -468,7 +470,7 @@ func (h *AdminAgentsHandler) ListMemoryFiles(w http.ResponseWriter, r *http.Requ
 
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
 	refProvided := ref != ""
-	repoPath, repoMode, defaultRef, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	repoPath, _, repoMode, defaultRef, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
 	if err != nil {
 		h.writeAgentFilesResolveError(w, err)
 		return
@@ -521,7 +523,7 @@ func (h *AdminAgentsHandler) GetMemoryFileByDate(w http.ResponseWriter, r *http.
 
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
 	refProvided := ref != ""
-	repoPath, repoMode, defaultRef, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	repoPath, _, repoMode, defaultRef, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
 	if err != nil {
 		h.writeAgentFilesResolveError(w, err)
 		return
@@ -649,23 +651,23 @@ func (h *AdminAgentsHandler) getRow(ctx context.Context, workspaceID, identifier
 func (h *AdminAgentsHandler) resolveAgentFilesRepository(
 	ctx context.Context,
 	workspaceID string,
-) (string, gitRepoMode, string, error) {
+) (string, string, gitRepoMode, string, error) {
 	if h.ProjectStore == nil || h.ProjectRepos == nil {
-		return "", "", "", errAgentFilesProjectNotConfigured
+		return "", "", "", "", errAgentFilesProjectNotConfigured
 	}
 
 	agentFilesProject, err := h.ProjectStore.GetByName(ctx, agentFilesProjectName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return "", "", "", errAgentFilesProjectNotConfigured
+			return "", "", "", "", errAgentFilesProjectNotConfigured
 		}
 		if errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNoWorkspace) {
-			return "", "", "", errAdminAgentForbidden
+			return "", "", "", "", errAdminAgentForbidden
 		}
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	if strings.TrimSpace(agentFilesProject.OrgID) != strings.TrimSpace(workspaceID) {
-		return "", "", "", errAdminAgentForbidden
+		return "", "", "", "", errAdminAgentForbidden
 	}
 
 	treeHandler := &ProjectTreeHandler{
@@ -675,11 +677,11 @@ func (h *AdminAgentsHandler) resolveAgentFilesRepository(
 	repoPath, repoMode, defaultRef, err := treeHandler.resolveBrowseRepository(ctx, agentFilesProject.ID)
 	if err != nil {
 		if errors.Is(err, errProjectRepoNotConfigured) {
-			return "", "", "", errAgentFilesProjectNotConfigured
+			return "", "", "", "", errAgentFilesProjectNotConfigured
 		}
-		return "", "", "", err
+		return "", "", "", "", err
 	}
-	return repoPath, repoMode, defaultRef, nil
+	return repoPath, strings.TrimSpace(agentFilesProject.ID), repoMode, defaultRef, nil
 }
 
 func trimAgentRootEntries(entries []projectTreeEntry, root string) []projectTreeEntry {
