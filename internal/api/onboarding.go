@@ -22,8 +22,6 @@ type OnboardingBootstrapRequest struct {
 	Name             string `json:"name"`
 	Email            string `json:"email"`
 	OrganizationName string `json:"organization_name"`
-	Organization     string `json:"organization"`
-	OrgName          string `json:"org_name"`
 }
 
 type OnboardingBootstrapResponse struct {
@@ -89,12 +87,6 @@ func HandleOnboardingBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orgName := strings.TrimSpace(req.OrganizationName)
-	if orgName == "" {
-		orgName = strings.TrimSpace(req.Organization)
-	}
-	if orgName == "" {
-		orgName = strings.TrimSpace(req.OrgName)
-	}
 	if orgName == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "organization_name is required"})
 		return
