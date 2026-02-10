@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeReconnectDelayMs,
+  reconnectEscalationTierForFailures,
   shouldExitAfterReconnectFailures,
   transitionConnectionState,
   type BridgeConnectionState,
@@ -17,11 +18,21 @@ describe("bridge connection state + reconnect policy", () => {
     expect(computeReconnectDelayMs(8, () => 0.5)).toBe(30000);
   });
 
-  it("marks process-exit threshold after five consecutive reconnect failures", () => {
+  it("marks process-exit threshold after sixty consecutive reconnect failures", () => {
     expect(shouldExitAfterReconnectFailures(0)).toBe(false);
-    expect(shouldExitAfterReconnectFailures(4)).toBe(false);
-    expect(shouldExitAfterReconnectFailures(5)).toBe(true);
-    expect(shouldExitAfterReconnectFailures(6)).toBe(true);
+    expect(shouldExitAfterReconnectFailures(59)).toBe(false);
+    expect(shouldExitAfterReconnectFailures(60)).toBe(true);
+    expect(shouldExitAfterReconnectFailures(61)).toBe(true);
+  });
+
+  it("classifies reconnect escalation tiers at warning/alert/restart thresholds", () => {
+    expect(reconnectEscalationTierForFailures(0)).toBe("none");
+    expect(reconnectEscalationTierForFailures(4)).toBe("none");
+    expect(reconnectEscalationTierForFailures(5)).toBe("warn");
+    expect(reconnectEscalationTierForFailures(29)).toBe("warn");
+    expect(reconnectEscalationTierForFailures(30)).toBe("alert");
+    expect(reconnectEscalationTierForFailures(59)).toBe("alert");
+    expect(reconnectEscalationTierForFailures(60)).toBe("restart");
   });
 
   it("transitions across connecting/connected/degraded/disconnected/reconnecting states", () => {
