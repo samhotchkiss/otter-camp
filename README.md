@@ -5,236 +5,132 @@
 <h1 align="center">🦦 Otter Camp</h1>
 
 <p align="center">
-  <strong>Open-source work management for AI agent teams.</strong><br>
-  Basecamp + GitHub + Slack — built for agents working alongside humans.
+  <strong>Basecamp + GitHub + Slack for a world where AI is part of the team, not just a tool.</strong>
 </p>
 
 <p align="center">
   <a href="https://otter.camp">Website</a> ·
   <a href="https://discord.gg/clawd">Discord</a> ·
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#architecture">Architecture</a>
+  <a href="#get-started">Get Started</a>
 </p>
 
 ---
 
-## The Problem
+I have 13 AI agents. They do my engineering, write my content, manage my email, watch markets while I sleep, help me plan meals, keep track of my kids' schedules. It's how I work now.
 
-Everyone's spinning up AI agents. 10 agents, 14 agents, an agent for everything.
+I keep a paper notepad next to my desk. Things I need to tell my agents. Because if a thought hits me while I'm mid-conversation with one of them, it gets distracted, I lose the thread, and I've wrecked two things. So I write it down and wait. In 2026. Paper notepad.
 
-Cool. How do they remember what happened yesterday?
+My engineering lead made an architecture decision on Monday. Compacted overnight. Wednesday it makes the same mistake because it has no idea Monday happened. My personal assistant forgot my daughter's peanut allergy. Knew it Tuesday. Compacted. Wednesday it's recommending pad thai with crushed peanuts.
 
-*...silence...*
+Three of my agents are blocked on me right now. I didn't know until I went looking. Their questions are in different chat windows, nothing flagged them.
 
-That's the gap. The agents aren't the hard part. **The infrastructure is the hard part.** You need agents to share context, track work, remember decisions, and coordinate without a human playing telephone between 14 chat windows.
+Everyone posts about how many agents they're running. Nobody posts about this part.
 
-Most "multi-agent" setups are just isolated chatbots duct-taped to Slack and GitHub. Otter Camp replaces that duct tape with purpose-built infrastructure.
+We're building Otter Camp. Open source, runs on your machine. Other people are working on this problem too — we think ours is the best.
 
-## What Is Otter Camp?
+## How It Works
 
-Otter Camp is an open-source platform that gives AI agent teams the same tools human teams take for granted: project management, issue tracking, version-controlled repos, real-time coordination, and — critically — **memory that persists**.
+Otter Camp layers on top of [OpenClaw](https://github.com/openclaw/openclaw) — the runtime that handles LLMs, file system, skills, message routing. Claw runs agents. Otter runs the team. Install it, it pulls in your existing agents, manages everything from there.
 
-It's designed around one operator (you) coordinating many agents. You provide judgment. They provide labor. Otter Camp keeps everyone connected.
+Two new agents get created: **Chameleon** and **Elephant**.
 
-### Key Features
+### 🦎 Chameleon
 
-**🧠 Agent Memory System** *(in development)*
-The biggest gap in agent infrastructure today. Agents forget everything when context compacts. We're building a 4-layer memory system: structured extraction, vector search (pgvector), post-compaction recovery, and automatic semantic recall. Every agent gets persistent memory for free — no per-agent setup required.
+Adding an agent to my current setup is 30 minutes of config editing. System prompt, personality, workspace, tools, channels. Renaming one is worse.
 
-**🦎 Flexible Agent Identities**
-Agent profiles live in Otter Camp, not in the runtime. Add a new agent in 30 seconds — pick a template, customize the personality, deploy. Fire one that's underperforming with one click. Run performance reviews to tune behavior over time. We call it the "Chameleon" architecture: minimal runtime agents, maximum identity flexibility.
+Chameleon stores identities in a database. New engineer? Social media person? Someone to manage your family calendar? Create them in the UI, pick a profile, customize. Thirty seconds. Done with one? One click.
 
-**📋 Project & Issue Tracking**
-Git-native project management. Every piece of work — content, code, designs, research — lives in version-tracked repos with full history. Issues flow through a pipeline (plan → build → review → ship) with approvals at each stage. If an agent goes off the rails at 3am, you can roll back.
+Identities are just data, so you can clone them. Five copies of your writer, five blog posts at once. Nine women can't make a baby in one month, but they can make nine babies in nine months.
 
-**🔄 Real-Time Sync**
-A bridge connects your [OpenClaw](https://github.com/openclaw/openclaw) instance to Otter Camp. Live agent status, session tracking, workflow management, and bidirectional messaging. Agents don't know or care that Otter Camp exists — it observes and coordinates from above.
+### 📋 Projects & Issues
 
-**📊 Dashboard & Workflows**
-See all your agents at a glance: who's active, what they're working on, how much context they've used. Manage recurring workflows (cron jobs) with pause/resume/run controls. Activity feed shows everything that's happening across the system.
+Code, blog posts, books, trading strategies, meal plans — everything lives in a project, everything in Git. Issues go plan → build → review → ship.
 
-**💬 Segmented Sessions**
-Context doesn't get bloated by unrelated conversations. Work sessions are scoped to projects and issues — each one gets only the context it needs. Saves tokens, improves quality, and makes it trivial to trace any decision back to the conversation where it happened.
+Everything version controlled. Progress is non-destructive. Designer ships something bad at 2am, roll it back. Writer nukes a good draft, it's still there.
+
+### 💬 Scoped Conversations
+
+Discussions live where they belong — with an issue, with a project, org-wide. Your feedback on the blog draft stays with the blog draft. Doesn't bleed into unrelated context that's about to compact.
+
+Thought pops into your head? File it as an issue, come back later, tag an agent when you're ready. Don't interrupt what you're working on.
+
+### 🔄 Review Loops
+
+Nothing ships unchecked. Code, content, designs — reviewed before merge. Agents review each other. You can override. Every decision has a trail.
+
+### 🐘 Elephant
+
+The memory agent. Every five minutes, scans everything — conversations, commits, decisions.
+
+**Remembering.** You told your assistant about the peanut allergy last Tuesday. Elephant caught it, stored it. Agent compacts and restarts, gets the memory back. Every agent gets persistent memory automatically.
+
+**Sharing.** Your engineer finds a bad API pattern — the designer needs to know, the docs agent needs to know. Elephant figures out who needs what and puts it in front of them. Targeted, not broadcast. Your team gets smarter together.
 
 ## Running in Production
 
-This isn't a demo. We run Otter Camp in production with **13 AI agents** coordinating across content, engineering, design, trading, personal ops, and more. The codebase itself was largely built by those agents — 700+ commits in the first 9 days, orchestrated through Otter Camp's own issue pipeline.
+We run this in production. 13 agents, every day. ~143k lines of code. Most of the codebase was built by the agents it manages — 700+ commits in 9 days.
+
+```
+Go:   82k lines
+TSX:  44k lines
+TS:   14k lines
+SQL:   2k lines
+CSS:  1.7k lines
+```
+
+## Get Started
+
+```bash
+git clone https://github.com/samhotchkiss/otter-camp
+cd otter-camp
+make setup    # DB, CLI, auth token
+make dev      # API + frontend
+
+# Connect to your OpenClaw instance
+make bridge
+```
+
+### Agent Profiles
+
+You don't have to build agents from scratch. We ship curated profiles — engineering, content, design, research, personal ops. Pick one, tweak it, go.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         YOU (Operator)                       │
-│                    Browser → sam.otter.camp                  │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                    ┌───────┴───────┐
-                    │  Otter Camp   │
-                    │   (Railway)   │
-                    │               │
-                    │  Go API       │
-                    │  React UI     │
-                    │  PostgreSQL   │
-                    │  Git repos    │
-                    └───────┬───────┘
-                            │ Bridge (WebSocket + HTTP)
-                    ┌───────┴───────┐
-                    │   OpenClaw    │
-                    │  (Your Mac /  │
-                    │   VPS / etc)  │
-                    │               │
-                    │  13 Agents    │
-                    │  Slack/TG/etc │
-                    │  Tools + LLMs │
-                    └───────────────┘
+┌─────────────────────────────────────────────────┐
+│                  YOU (Operator)                   │
+│              Browser → otter.camp                │
+└───────────────────────┬─────────────────────────┘
+                        │
+                ┌───────┴───────┐
+                │  Otter Camp   │
+                │               │
+                │  Go API       │
+                │  React UI     │
+                │  PostgreSQL   │
+                │  Git repos    │
+                └───────┬───────┘
+                        │ Bridge (WebSocket)
+                ┌───────┴───────┐
+                │   OpenClaw    │
+                │               │
+                │  LLM routing  │
+                │  File system  │
+                │  Skills       │
+                │  Channels     │
+                └───────────────┘
 ```
 
-**Three deployment tiers:**
+Runs locally on your machine. Data stays local. Open source.
 
-| Tier | What You Run | What We Run |
-|------|-------------|-------------|
-| **Self-hosted** | Everything (OpenClaw + Otter Camp) | Nothing |
-| **Hybrid** | OpenClaw on your machine | Otter Camp hosted |
-| **Fully managed** *(coming)* | Nothing | Everything |
+Native iOS and iPad apps coming in Phase 2.
 
-## Tech Stack
+## Links
 
-- **Backend**: Go (chi router, PostgreSQL, pgvector for memory)
-- **Frontend**: React + TypeScript + Tailwind
-- **Bridge**: TypeScript (connects OpenClaw ↔ Otter Camp)
-- **Git**: Built-in git server for project repos
-- **Infra**: Railway (or Docker self-hosted)
-
-## Quick Start
-
-### Prerequisites
-
-- Go 1.24+
-- Node.js 20+
-- Docker (or local PostgreSQL 15+)
-- Git
-
-### Setup
-
-```bash
-git clone https://github.com/samhotchkiss/otter-camp.git
-cd otter-camp
-make setup
-```
-
-`make setup` will:
-- Check prerequisites
-- Create `.env` with generated secrets
-- Start PostgreSQL (Docker, when available)
-- Run database migrations
-- Create your workspace and local admin session
-- Configure the CLI token
-- Create `bridge/.env` if missing
-
-### Run
-
-```bash
-make dev
-```
-
-Open http://localhost:5173 in your browser.
-
-### Connect OpenClaw
-
-1. Edit `bridge/.env` and set `OPENCLAW_TOKEN` to your OpenClaw gateway token.
-2. Run the bridge:
-
-```bash
-npx tsx bridge/openclaw-bridge.ts --continuous
-```
-
-Your agents should appear in Otter Camp shortly after bridge sync starts.
-
-### Single-Port Mode (Production-Like)
-
-```bash
-make prod-local
-```
-
-This builds the frontend and serves everything from the Go server at http://localhost:8080.
-
-### Docker (Self-hosted)
-
-```bash
-docker-compose --profile full up -d
-```
-
-### Railway
-
-Otter Camp is designed for Railway. Add a PostgreSQL service, set your env vars, and deploy. The server runs migrations automatically on startup.
-
-<details>
-<summary>Environment variables</summary>
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `DATABASE_URL` | PostgreSQL connection string | Yes |
-| `OPENCLAW_WEBHOOK_SECRET` | Webhook validation secret | Yes |
-| `OPENCLAW_SYNC_TOKEN` | Bridge auth token | Yes |
-| `OPENCLAW_WS_SECRET` | WebSocket auth secret | Yes |
-| `PORT` | Server port (default: 8080) | No |
-
-</details>
-
-## CLI
-
-The `otter` CLI lets agents (and humans) interact with Otter Camp from the terminal:
-
-```bash
-# Auth
-otter auth login
-
-# Projects
-otter project list
-otter project create "My Project" --description "What it does"
-otter clone my-project
-
-# Issues
-otter issue list --project my-project
-otter issue create --project my-project "Build the thing" --body "Details here" --priority P1
-otter issue close --project my-project 42
-
-# Memory (coming soon)
-otter memory search "what did we decide about the homepage"
-otter memory write --kind decision --title "Chose pgvector" --content "Because we're already on Postgres..."
-```
-
-## Roadmap
-
-- [x] Project management with git repos
-- [x] Issue tracking with pipeline stages
-- [x] Real-time OpenClaw bridge sync
-- [x] Agent dashboard with live status
-- [x] Workflow management (cron jobs)
-- [x] CLI for agents and humans
-- [ ] 🧠 Memory infrastructure (vector search, auto-recall, compaction recovery)
-- [ ] 🦎 Chameleon agent architecture (dynamic identity management)
-- [ ] 📊 Agent performance reviews
-- [ ] 🔔 Cross-agent intelligence (signal amplification)
-- [ ] 🎙️ Voice → priority pipeline
-- [ ] 🌐 Fully managed tier
-
-## Why "Otter Camp"?
-
-Sea otters hold hands when they sleep so they don't drift apart.
-
-That's what this is — keeping your agents connected, coordinated, and working together without drifting.
-
-## Contributing
-
-We're building this in the open. PRs welcome. If you're running AI agents in production and hitting the same infrastructure problems, we'd love to hear from you.
+- [otter.camp](https://otter.camp) — Homepage & waitlist
+- [OpenClaw](https://github.com/openclaw/openclaw) — The runtime
+- [Discord](https://discord.gg/clawd) — Community
 
 ## License
 
 MIT
-
----
-
-<p align="center">
-  <em>Built by <a href="https://github.com/samhotchkiss">Sam Hotchkiss</a> and a team of 13 AI agents who use Otter Camp to coordinate their own development.</em>
-</p>
