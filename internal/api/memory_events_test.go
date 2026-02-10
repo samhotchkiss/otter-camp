@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -72,4 +73,36 @@ func TestMemoryEventsHandler(t *testing.T) {
 	missingWorkspaceRec := httptest.NewRecorder()
 	router.ServeHTTP(missingWorkspaceRec, missingWorkspaceReq)
 	require.Equal(t, http.StatusUnauthorized, missingWorkspaceRec.Code)
+}
+
+func TestMemoryEventsHandlerCapsLimit(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "memory-events-handler-limit-cap")
+
+	eventsStore := store.NewMemoryEventsStore(db)
+	publishCtx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	for i := 0; i < 1105; i += 1 {
+		_, err := eventsStore.Publish(publishCtx, store.PublishMemoryEventInput{
+			EventType: store.MemoryEventTypeMemoryCreated,
+			Payload:   []byte(fmt.Sprintf(`{"memory_id":"id-%d"}`, i)),
+		})
+		require.NoError(t, err)
+	}
+
+	handler := &MemoryEventsHandler{Store: eventsStore}
+	router := newMemoryEventsTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/memory/events?org_id="+orgID+"&limit=999999",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp memoryEventsListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Items, 1000)
+	require.Equal(t, 1000, resp.Total)
 }

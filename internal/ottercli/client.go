@@ -21,6 +21,8 @@ type Client struct {
 	HTTP    *http.Client
 }
 
+const maxClientResponseBodyBytes = 1 << 20
+
 func NewClient(cfg Config, orgOverride string) (*Client, error) {
 	org := strings.TrimSpace(orgOverride)
 	if org == "" {
@@ -74,7 +76,7 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		payload, _ := io.ReadAll(resp.Body)
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, maxClientResponseBodyBytes))
 		return fmt.Errorf("request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(payload)))
 	}
 
@@ -946,7 +948,7 @@ func (c *Client) RunReleaseGate() (map[string]any, int, error) {
 	defer resp.Body.Close()
 
 	payload := map[string]any{}
-	bodyBytes, readErr := io.ReadAll(resp.Body)
+	bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxClientResponseBodyBytes))
 	if readErr != nil {
 		return nil, resp.StatusCode, readErr
 	}

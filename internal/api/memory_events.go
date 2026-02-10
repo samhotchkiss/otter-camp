@@ -42,6 +42,9 @@ func (h *MemoryEventsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
+	if limit > 1000 {
+		limit = 1000
+	}
 
 	var sincePtr *time.Time
 	if rawSince := strings.TrimSpace(r.URL.Query().Get("since")); rawSince != "" {
