@@ -762,6 +762,23 @@ export function resetReconnectStateForTest(role: BridgeSocketRole): void {
   reconnectByRole[role].restartFailures = 0;
 }
 
+export function getReconnectStateForTest(role: BridgeSocketRole): {
+  consecutiveFailures: number;
+  totalReconnectAttempts: number;
+  disconnectedSince: number;
+  alertEmittedForOutage: boolean;
+  restartFailures: number;
+} {
+  const controller = reconnectByRole[role];
+  return {
+    consecutiveFailures: controller.consecutiveFailures,
+    totalReconnectAttempts: controller.totalReconnectAttempts,
+    disconnectedSince: controller.disconnectedSince,
+    alertEmittedForOutage: controller.alertEmittedForOutage,
+    restartFailures: controller.restartFailures,
+  };
+}
+
 function resetReconnectBackoffAfterFirstMessage(role: BridgeSocketRole): void {
   const controller = reconnectByRole[role];
   controller.consecutiveFailures = 0;
