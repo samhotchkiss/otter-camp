@@ -92,7 +92,7 @@ func (h *KnowledgeHandler) Import(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req knowledgeImportRequest
-	decoder := json.NewDecoder(r.Body)
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})

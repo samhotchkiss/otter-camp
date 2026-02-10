@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -125,4 +126,19 @@ func TestKnowledgeHandlerRequiresWorkspace(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestKnowledgeImportRejectsBodyOverLimit(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "knowledge-api-body-limit-org")
+	handler := &KnowledgeHandler{Store: store.NewKnowledgeEntryStore(db)}
+	router := newKnowledgeTestRouter(handler)
+
+	oversizedContent := strings.Repeat("a", (1<<20)+128)
+	payload := []byte(`{"entries":[{"title":"too-big","content":"` + oversizedContent + `","created_by":"sam"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge/import?org_id="+orgID, bytes.NewReader(payload))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Contains(t, []int{http.StatusBadRequest, http.StatusRequestEntityTooLarge}, rec.Code)
 }
