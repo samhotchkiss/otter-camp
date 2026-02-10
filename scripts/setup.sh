@@ -626,8 +626,24 @@ parse_args() {
 main() {
   parse_args "$@"
 
-  echo -e "${bold}Otter Camp local setup${reset}"
+  echo -e "${bold}🦦 Otter Camp local setup${reset}"
   echo
+
+  # OpenClaw is required — check first before anything else
+  if ! command -v openclaw >/dev/null 2>&1; then
+    log_error "OpenClaw not found."
+    echo
+    echo "Otter Camp requires OpenClaw to manage your agents."
+    echo "Install it first:"
+    echo
+    echo "  npm install -g openclaw"
+    echo
+    echo "Or visit: https://docs.openclaw.ai/install"
+    echo
+    echo "Then run this setup again."
+    exit 1
+  fi
+  log_success "OpenClaw detected"
 
   local platform
   platform="$(detect_platform)"
