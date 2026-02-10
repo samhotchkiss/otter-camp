@@ -133,13 +133,27 @@ export function AuthProvider({ children }: AuthProviderProps) {
       })
         .then(res => res.json())
         .then(data => {
-          if (data?.url) {
-            // Magic link URL contains ?auth=<token> — extract and apply directly
-            const authParam = new URL(data.url, window.location.origin).searchParams.get('auth');
-            if (authParam) {
-              window.location.href = data.url;
-              return;
-            }
+          const authToken = data?.token;
+          if (authToken) {
+            // Apply token directly — don't redirect (avoids port mismatch in dev)
+            // Validate the token to get user info
+            return fetch(`${API_URL}/api/auth/validate?token=${encodeURIComponent(authToken)}`)
+              .then(vRes => vRes.ok ? vRes.json() : Promise.reject('invalid'))
+              .then(vData => {
+                const autoUser: User = {
+                  id: vData.user_id || vData.user?.id || 'local-admin',
+                  email: vData.email || vData.user?.email || 'admin@localhost',
+                  name: vData.name || vData.user?.name || 'Admin',
+                };
+                const orgId = vData.org_id || '';
+                const expiresAt = vData.expires_at || '';
+                localStorage.setItem(TOKEN_KEY, authToken);
+                localStorage.setItem(USER_KEY, JSON.stringify(autoUser));
+                if (orgId) localStorage.setItem('otter-camp-org-id', orgId);
+                if (expiresAt) localStorage.setItem(TOKEN_EXP_KEY, expiresAt);
+                setUser(autoUser);
+                setIsLoading(false);
+              });
           }
           setIsLoading(false);
         })
