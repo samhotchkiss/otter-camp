@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { API_URL } from "../../lib/api";
 import DocumentWorkspace from "../content-review/DocumentWorkspace";
+import { apiFetch } from "../../lib/api";
 
 type AgentIdentityEditorProps = {
   agentID: string;
@@ -87,11 +87,7 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
       setIsLoadingFiles(true);
       setError(null);
       try {
-        const response = await fetch(`${API_URL}/api/admin/agents/${encodeURIComponent(agentID)}/files`);
-        if (!response.ok) {
-          throw new Error(`Failed to load identity files (${response.status})`);
-        }
-        const payload = (await response.json()) as AgentFilesResponse;
+        const payload = await apiFetch<AgentFilesResponse>(`/api/admin/agents/${encodeURIComponent(agentID)}/files`);
         if (cancelled) {
           return;
         }
@@ -133,13 +129,9 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
       setError(null);
       try {
         const encodedPath = encodePathForURL(selectedPath);
-        const response = await fetch(
-          `${API_URL}/api/admin/agents/${encodeURIComponent(agentID)}/files/${encodedPath}`,
+        const payload = await apiFetch<AgentBlobResponse>(
+          `/api/admin/agents/${encodeURIComponent(agentID)}/files/${encodedPath}`,
         );
-        if (!response.ok) {
-          throw new Error(`Failed to load identity file (${response.status})`);
-        }
-        const payload = (await response.json()) as AgentBlobResponse;
         if (!cancelled) {
           setBlob(payload);
         }
@@ -186,11 +178,7 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
     const nextContent = getEditorContent();
 
     try {
-      const projectsResponse = await fetch(`${API_URL}/api/projects`);
-      if (!projectsResponse.ok) {
-        throw new Error(`Failed to load projects (${projectsResponse.status})`);
-      }
-      const projectsPayload = (await projectsResponse.json()) as ProjectsResponse;
+      const projectsPayload = await apiFetch<ProjectsResponse>("/api/projects");
       const projects = Array.isArray(projectsPayload.projects) ? projectsPayload.projects : [];
       const agentFilesProject = projects.find(
         (project) => String(project.name || "").trim().toLowerCase() === "agent files",
@@ -200,23 +188,18 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
         throw new Error("Agent Files project is not configured");
       }
 
-      const commitResponse = await fetch(`${API_URL}/api/projects/${encodeURIComponent(projectID)}/commits`, {
+      const commitPayload = await apiFetch<ProjectCommitCreateResponse>(
+        `/api/projects/${encodeURIComponent(projectID)}/commits`,
+        {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({
           path: `/agents/${agentID}/${selectedPath}`,
           content: nextContent,
           commit_subject: "Update agent identity file",
           commit_type: "system",
         }),
-      });
-      if (!commitResponse.ok) {
-        const payload = (await commitResponse.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error || `Failed to save identity file (${commitResponse.status})`);
-      }
-      const commitPayload = (await commitResponse.json()) as ProjectCommitCreateResponse;
+      },
+      );
       const nextRef = String(commitPayload.commit?.sha || "").trim();
       if (nextRef) {
         setFilesRef(nextRef);

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { API_URL } from "../../lib/api";
+import { apiFetch } from "../../lib/api";
 
 type AgentMemoryBrowserProps = {
   agentID: string;
@@ -78,13 +78,9 @@ export default function AgentMemoryBrowser({ agentID, workspaceAgentID }: AgentM
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(
-        `${API_URL}/api/agents/${encodeURIComponent(workspaceAgentID)}/memory?days=14&include_long_term=true`,
+      const payload = await apiFetch<AgentMemoryListResponse>(
+        `/api/agents/${encodeURIComponent(workspaceAgentID)}/memory?days=14&include_long_term=true`,
       );
-      if (!response.ok) {
-        throw new Error(`Failed to load memory entries (${response.status})`);
-      }
-      const payload = (await response.json()) as AgentMemoryListResponse;
       setDailyEntries(normalizeRecords(payload.daily, "daily"));
       setLongTermEntries(normalizeRecords(payload.long_term, "long_term"));
     } catch (loadError) {
@@ -117,17 +113,10 @@ export default function AgentMemoryBrowser({ agentID, workspaceAgentID }: AgentM
       if (kind === "daily") {
         payload.date = date.trim();
       }
-      const response = await fetch(`${API_URL}/api/agents/${encodeURIComponent(workspaceAgentID)}/memory`, {
+      await apiFetch<{ id?: string }>(`/api/agents/${encodeURIComponent(workspaceAgentID)}/memory`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify(payload),
       });
-      if (!response.ok) {
-        const errorPayload = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(errorPayload.error || `Failed to save memory entry (${response.status})`);
-      }
       setContent("");
       if (kind !== "daily") {
         setDate(todayDateISO());
