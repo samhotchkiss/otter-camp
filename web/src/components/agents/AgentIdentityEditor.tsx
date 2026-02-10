@@ -157,16 +157,9 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
 
   useEffect(() => {
     setDraftContent(content);
+    setSaveMessage(null);
     setSaveError(null);
   }, [content, selectedPath]);
-
-  const getEditorContent = (): string => {
-    const source = document.querySelector('[data-testid="source-textarea"]');
-    if (source instanceof HTMLTextAreaElement) {
-      return source.value;
-    }
-    return draftContent;
-  };
 
   const handleSave = async () => {
     if (!agentID || !selectedPath) {
@@ -175,7 +168,7 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
     setIsSaving(true);
     setSaveError(null);
     setSaveMessage(null);
-    const nextContent = getEditorContent();
+    const nextContent = draftContent;
 
     try {
       const projectsPayload = await apiFetch<ProjectsResponse>("/api/projects");
