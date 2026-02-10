@@ -2,10 +2,12 @@ package api
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ func TestOnboardingBootstrapCreatesLocalRecords(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)
 	t.Setenv("DATABASE_URL", connStr)
+	resetOnboardingAuthDB(t)
 
 	db := openFeedDatabase(t, connStr)
 
@@ -63,53 +66,27 @@ func TestOnboardingBootstrapCreatesLocalRecords(t *testing.T) {
 	require.Equal(t, "local", issueOrigin)
 }
 
-func TestOnboardingBootstrapHandlesDuplicates(t *testing.T) {
+func TestOnboardingBootstrapRejectsSecondSetup(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)
 	t.Setenv("DATABASE_URL", connStr)
-
-	db := openFeedDatabase(t, connStr)
+	resetOnboardingAuthDB(t)
 
 	first := postOnboardingBootstrap(t, `{"name":"Sam","email":"sam@example.com","organization_name":"My Team"}`)
 	require.Equal(t, http.StatusOK, first.Code)
-	var firstResp OnboardingBootstrapResponse
-	require.NoError(t, json.NewDecoder(first.Body).Decode(&firstResp))
 
 	second := postOnboardingBootstrap(t, `{"name":"Sam","email":"sam@example.com","organization_name":"My Team"}`)
-	require.Equal(t, http.StatusOK, second.Code)
-	var secondResp OnboardingBootstrapResponse
-	require.NoError(t, json.NewDecoder(second.Body).Decode(&secondResp))
-
-	require.Equal(t, firstResp.OrgID, secondResp.OrgID)
-	require.Equal(t, firstResp.ProjectID, secondResp.ProjectID)
-	require.Equal(t, firstResp.IssueID, secondResp.IssueID)
-	require.NotEqual(t, firstResp.Token, secondResp.Token)
-
-	var orgCount int
-	err := db.QueryRow("SELECT COUNT(*) FROM organizations WHERE slug = 'my-team'").Scan(&orgCount)
-	require.NoError(t, err)
-	require.Equal(t, 1, orgCount)
-
-	var userCount int
-	err = db.QueryRow("SELECT COUNT(*) FROM users WHERE org_id = $1", firstResp.OrgID).Scan(&userCount)
-	require.NoError(t, err)
-	require.Equal(t, 1, userCount)
-
-	var projectCount int
-	err = db.QueryRow("SELECT COUNT(*) FROM projects WHERE org_id = $1 AND name = 'Getting Started'", firstResp.OrgID).Scan(&projectCount)
-	require.NoError(t, err)
-	require.Equal(t, 1, projectCount)
-
-	var issueCount int
-	err = db.QueryRow("SELECT COUNT(*) FROM project_issues WHERE project_id = $1", firstResp.ProjectID).Scan(&issueCount)
-	require.NoError(t, err)
-	require.Equal(t, 1, issueCount)
+	require.Equal(t, http.StatusConflict, second.Code)
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(second.Body).Decode(&payload))
+	require.Equal(t, "onboarding already completed", payload.Error)
 }
 
 func TestOnboardingBootstrapValidationFailures(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)
 	t.Setenv("DATABASE_URL", connStr)
+	resetOnboardingAuthDB(t)
 
 	cases := []struct {
 		name       string
@@ -159,6 +136,103 @@ func TestOnboardingBootstrapRouteIsRegistered(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.NotEqual(t, http.StatusNotFound, rec.Code)
+}
+
+func TestOnboardingBootstrapExistingUserRoleUnchanged(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+
+	db := openFeedDatabase(t, connStr)
+	orgID := insertOnboardingTestOrg(t, db, "Role Test Org", "role-test-org")
+	userID := insertOnboardingTestUser(t, db, orgID, "sam@example.com", RoleMember)
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	returnedUserID, err := upsertOnboardingUser(t.Context(), tx, orgID, "Sam Updated", "sam@example.com")
+	require.NoError(t, err)
+	require.Equal(t, userID, returnedUserID)
+	require.NoError(t, tx.Commit())
+
+	var role string
+	err = db.QueryRow("SELECT role FROM users WHERE id = $1", userID).Scan(&role)
+	require.NoError(t, err)
+	require.Equal(t, RoleMember, role)
+}
+
+func TestOnboardingBootstrapOversizedPayload(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+	resetOnboardingAuthDB(t)
+
+	largeName := strings.Repeat("A", onboardingMaxBodyBytes)
+	body := `{"name":"` + largeName + `","email":"sam@example.com","organization_name":"My Team"}`
+	rec := postOnboardingBootstrap(t, body)
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "request body too large", payload.Error)
+}
+
+func TestOnboardingBootstrapDatabaseUnavailableDoesNotLeakDetails(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+	resetOnboardingAuthDB(t)
+
+	rec := postOnboardingBootstrap(t, `{"name":"Sam","email":"sam@example.com","organization_name":"My Team"}`)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "database unavailable", payload.Error)
+}
+
+func insertOnboardingTestOrg(t *testing.T, db *sql.DB, name, slug string) string {
+	t.Helper()
+
+	var orgID string
+	err := db.QueryRow(
+		`INSERT INTO organizations (name, slug)
+		 VALUES ($1, $2)
+		 RETURNING id`,
+		name,
+		slug,
+	).Scan(&orgID)
+	require.NoError(t, err)
+	return orgID
+}
+
+func insertOnboardingTestUser(t *testing.T, db *sql.DB, orgID, email, role string) string {
+	t.Helper()
+
+	subject := "local:" + strings.ToLower(strings.TrimSpace(email))
+	var userID string
+	err := db.QueryRow(
+		`INSERT INTO users (org_id, subject, issuer, display_name, email, role)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 RETURNING id`,
+		orgID,
+		subject,
+		onboardingUserIssuer,
+		"Existing User",
+		email,
+		role,
+	).Scan(&userID)
+	require.NoError(t, err)
+	return userID
+}
+
+func resetOnboardingAuthDB(t *testing.T) {
+	t.Helper()
+
+	if authDB != nil {
+		_ = authDB.Close()
+	}
+	authDB = nil
+	authDBErr = nil
+	authDBOnce = sync.Once{}
 }
 
 func postOnboardingBootstrap(t *testing.T, body string) *httptest.ResponseRecorder {
