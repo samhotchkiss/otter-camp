@@ -65,7 +65,7 @@ func TestAgentMemoryStoreRejectsInvalidAgentID(t *testing.T) {
 		Kind:    AgentMemoryKindDaily,
 		Content: "bad",
 	})
-	require.ErrorContains(t, err, "invalid agent_id")
+	require.ErrorIs(t, err, ErrAgentMemoryInvalidAgentID)
 }
 
 func TestAgentMemoryStoreRejectsDuplicateDailyEntryForSameDate(t *testing.T) {

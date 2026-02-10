@@ -309,18 +309,23 @@ func (h *AgentsHandler) CreateMemory(w http.ResponseWriter, r *http.Request) {
 		Content: req.Content,
 	})
 	if err != nil {
-		switch {
-		case strings.Contains(err.Error(), "kind must be"),
-			strings.Contains(err.Error(), "content is required"),
-			strings.Contains(err.Error(), "invalid agent_id"):
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-		default:
-			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create memory"})
-		}
+		status, message := mapCreateMemoryError(err)
+		sendJSON(w, status, errorResponse{Error: message})
 		return
 	}
 
 	sendJSON(w, http.StatusCreated, toAgentMemoryPayload(*created))
+}
+
+func mapCreateMemoryError(err error) (int, string) {
+	switch {
+	case errors.Is(err, store.ErrAgentMemoryInvalidKind),
+		errors.Is(err, store.ErrAgentMemoryContentMissing),
+		errors.Is(err, store.ErrAgentMemoryInvalidAgentID):
+		return http.StatusBadRequest, err.Error()
+	default:
+		return http.StatusInternalServerError, "failed to create memory"
+	}
 }
 
 // GetMemory lists recent daily memory and optional long-term memory.

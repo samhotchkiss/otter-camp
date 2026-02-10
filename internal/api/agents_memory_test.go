@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	stderrors "errors"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -154,4 +155,54 @@ func TestAgentMemoryCrossOrgDenied(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.GetMemory(rec, req)
 	require.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestAgentMemoryCreateUsesTypedValidationErrors(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "agents-memory-typed-errors")
+	agentID := insertWhoAmITestAgent(t, db, orgID, "typed-memory-agent", "Typed Memory Agent")
+
+	handler := &AgentsHandler{
+		Store:       store.NewAgentStore(db),
+		MemoryStore: store.NewAgentMemoryStore(db),
+		DB:          db,
+	}
+
+	invalidKindBody := []byte(`{"kind":"bad_kind","content":"some memory"}`)
+	invalidKindReq := httptest.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("/api/agents/%s/memory?org_id=%s", agentID, orgID),
+		bytes.NewReader(invalidKindBody),
+	)
+	invalidKindReq = addWhoAmIRouteParam(invalidKindReq, "id", agentID)
+	invalidKindRec := httptest.NewRecorder()
+	handler.CreateMemory(invalidKindRec, invalidKindReq)
+	require.Equal(t, http.StatusBadRequest, invalidKindRec.Code)
+	require.Contains(t, invalidKindRec.Body.String(), "unsupported memory kind")
+
+	missingContentBody := []byte(`{"kind":"note","content":"  "}`)
+	missingContentReq := httptest.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("/api/agents/%s/memory?org_id=%s", agentID, orgID),
+		bytes.NewReader(missingContentBody),
+	)
+	missingContentReq = addWhoAmIRouteParam(missingContentReq, "id", agentID)
+	missingContentRec := httptest.NewRecorder()
+	handler.CreateMemory(missingContentRec, missingContentReq)
+	require.Equal(t, http.StatusBadRequest, missingContentRec.Code)
+	require.Contains(t, missingContentRec.Body.String(), "memory content is required")
+}
+
+func TestMapCreateMemoryErrorUsesTypedErrors(t *testing.T) {
+	status, message := mapCreateMemoryError(fmt.Errorf("changed wording: %w", store.ErrAgentMemoryInvalidKind))
+	require.Equal(t, http.StatusBadRequest, status)
+	require.Contains(t, message, "changed wording")
+
+	status, message = mapCreateMemoryError(fmt.Errorf("still wrapped: %w", store.ErrAgentMemoryContentMissing))
+	require.Equal(t, http.StatusBadRequest, status)
+	require.Contains(t, message, "still wrapped")
+
+	status, message = mapCreateMemoryError(stderrors.New("unexpected store failure"))
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.Equal(t, "failed to create memory", message)
 }
