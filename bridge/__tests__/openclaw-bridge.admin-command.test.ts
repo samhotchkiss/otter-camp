@@ -117,6 +117,42 @@ describe('admin.command config patch/cutover/rollback', () => {
     assert.equal(execCalls.length, 0);
   });
 
+  it('preserves original config when atomic rename fails', async () => {
+    const originalConfig = {
+      gateway: { port: 18791 },
+      agents: { main: { model: { primary: 'claude-opus-4-6' } } },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(originalConfig, null, 2));
+
+    const originalRenameSync = fs.renameSync;
+    (fs as unknown as { renameSync: typeof fs.renameSync }).renameSync = ((_oldPath: fs.PathLike, _newPath: fs.PathLike) => {
+      throw new Error('rename failed');
+    }) as typeof fs.renameSync;
+
+    try {
+      await assert.rejects(
+        handleAdminCommandDispatchEvent({
+          type: 'admin.command',
+          data: {
+            command_id: 'cmd-atomic-fail',
+            action: 'config.patch',
+            confirm: true,
+            config_patch: {
+              gateway: { port: 18888 },
+            },
+          },
+        }),
+        /rename failed/,
+      );
+    } finally {
+      (fs as unknown as { renameSync: typeof fs.renameSync }).renameSync = originalRenameSync;
+    }
+
+    const current = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual(current, originalConfig);
+    assert.equal(execCalls.length, 0);
+  });
+
   it('applies full config cutover payloads and restarts gateway', async () => {
     fs.writeFileSync(
       configPath,
