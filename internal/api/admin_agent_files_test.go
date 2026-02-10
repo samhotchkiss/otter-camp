@@ -64,7 +64,7 @@ func TestAdminAgentFilesListIdentityFiles(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_ = seedAdminAgentFilesProjectFixture(t, db, orgID, "main")
+	projectID := seedAdminAgentFilesProjectFixture(t, db, orgID, "main")
 
 	handler := &AdminAgentsHandler{
 		DB:           db,
@@ -83,6 +83,7 @@ func TestAdminAgentFilesListIdentityFiles(t *testing.T) {
 
 	var payload adminAgentFilesListResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, projectID, payload.ProjectID)
 	require.Equal(t, "/", payload.Path)
 	require.Equal(t, "HEAD", payload.Ref)
 	require.NotEmpty(t, payload.Entries)

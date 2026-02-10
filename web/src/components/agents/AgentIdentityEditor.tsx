@@ -13,6 +13,7 @@ type AgentTreeEntry = {
 };
 
 type AgentFilesResponse = {
+  project_id?: string;
   ref?: string;
   entries?: AgentTreeEntry[];
 };
@@ -23,13 +24,6 @@ type AgentBlobResponse = {
   content?: string;
   encoding?: string;
   size?: number;
-};
-
-type ProjectsResponse = {
-  projects?: Array<{
-    id?: string;
-    name?: string;
-  }>;
 };
 
 type ProjectCommitCreateResponse = {
@@ -65,6 +59,7 @@ function decodeBlobContent(blob: AgentBlobResponse | null): string {
 
 export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProps) {
   const [files, setFiles] = useState<AgentTreeEntry[]>([]);
+  const [agentFilesProjectID, setAgentFilesProjectID] = useState<string>("");
   const [filesRef, setFilesRef] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [blob, setBlob] = useState<AgentBlobResponse | null>(null);
@@ -81,6 +76,7 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
     const load = async () => {
       if (!agentID) {
         setFiles([]);
+        setAgentFilesProjectID("");
         setIsLoadingFiles(false);
         return;
       }
@@ -95,6 +91,7 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
           .filter((entry) => entry.type === "file" && !entry.path.startsWith("memory/"))
           .sort((a, b) => a.path.localeCompare(b.path));
         setFiles(identityFiles);
+        setAgentFilesProjectID(String(payload.project_id || "").trim());
         setFilesRef(payload.ref || "");
         const preferred = identityFiles.find((entry) => entry.path.toUpperCase() === "SOUL.MD");
         setSelectedPath(preferred?.path || identityFiles[0]?.path || "");
@@ -103,6 +100,7 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
           const message = loadError instanceof Error ? loadError.message : "Failed to load identity files";
           setError(message);
           setFiles([]);
+          setAgentFilesProjectID("");
           setSelectedPath("");
         }
       } finally {
@@ -171,12 +169,7 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
     const nextContent = draftContent;
 
     try {
-      const projectsPayload = await apiFetch<ProjectsResponse>("/api/projects");
-      const projects = Array.isArray(projectsPayload.projects) ? projectsPayload.projects : [];
-      const agentFilesProject = projects.find(
-        (project) => String(project.name || "").trim().toLowerCase() === "agent files",
-      );
-      const projectID = String(agentFilesProject?.id || "").trim();
+      const projectID = agentFilesProjectID;
       if (!projectID) {
         throw new Error("Agent Files project is not configured");
       }
