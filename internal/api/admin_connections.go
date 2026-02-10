@@ -262,7 +262,7 @@ func scanAdminConnectionSessions(rows adminConnectionSessionRows) ([]adminConnec
 	return out, nil
 }
 
-func (h *AdminConnectionsHandler) loadSessions(_ context.Context) ([]adminConnectionsSession, error) {
+func (h *AdminConnectionsHandler) loadSessions(ctx context.Context) ([]adminConnectionsSession, error) {
 	if h.DB == nil {
 		agentStates := memoryAgentStatesSnapshot()
 		sessions := make([]adminConnectionsSession, 0, len(agentStates))
@@ -288,11 +288,17 @@ func (h *AdminConnectionsHandler) loadSessions(_ context.Context) ([]adminConnec
 		return sessions, nil
 	}
 
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(ctx))
+	if workspaceID == "" {
+		return []adminConnectionsSession{}, nil
+	}
+
 	rows, err := h.DB.Query(`
 		SELECT id, name, status, model, context_tokens, total_tokens, channel, session_key, last_seen, updated_at
 		FROM agent_sync_state
+		WHERE org_id = $1
 		ORDER BY name
-	`)
+	`, workspaceID)
 	if err != nil {
 		return nil, err
 	}

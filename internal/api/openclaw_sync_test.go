@@ -301,7 +301,7 @@ func TestOpenClawSyncMemoryFallbackConcurrentReadWrite(t *testing.T) {
 		require.NoError(t, err)
 		req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
 		req.Header.Set("X-OpenClaw-Token", "sync-secret")
-		req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, "org-123"))
+		req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, "550e8400-e29b-41d4-a716-446655440000"))
 		return req
 	}
 
@@ -342,7 +342,7 @@ func TestOpenClawSyncMemoryFallbackConcurrentReadWrite(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			req := httptest.NewRequest(http.MethodGet, "/api/admin/config/openclaw/current", nil)
-			req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, "org-123"))
+			req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, "550e8400-e29b-41d4-a716-446655440000"))
 			rec := httptest.NewRecorder()
 			adminConfigHandler.GetCurrent(rec, req)
 			if rec.Code != http.StatusOK {
@@ -1146,6 +1146,7 @@ func TestAgentStatusConsistency(t *testing.T) {
 
 	db := setupMessageTestDB(t)
 	syncHandler := &OpenClawSyncHandler{DB: db}
+	workspaceID := "550e8400-e29b-41d4-a716-446655440001"
 	now := time.Now().UTC()
 
 	payload := SyncPayload{
@@ -1184,6 +1185,7 @@ func TestAgentStatusConsistency(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
 	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	req.Header.Set("X-Workspace-ID", workspaceID)
 	rec := httptest.NewRecorder()
 	syncHandler.Handle(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -1208,6 +1210,7 @@ func TestAgentStatusConsistency(t *testing.T) {
 
 	adminHandler := &AdminConnectionsHandler{DB: db}
 	adminReq := httptest.NewRequest(http.MethodGet, "/api/admin/connections", nil)
+	adminReq = adminReq.WithContext(context.WithValue(adminReq.Context(), middleware.WorkspaceIDKey, workspaceID))
 	adminRec := httptest.NewRecorder()
 	adminHandler.Get(adminRec, adminReq)
 	require.Equal(t, http.StatusOK, adminRec.Code)

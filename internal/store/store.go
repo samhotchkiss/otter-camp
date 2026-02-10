@@ -83,6 +83,7 @@ func DB() (*sql.DB, error) {
 func runSyncStateMigrations(db *sql.DB) {
 	migrations := []string{
 		`CREATE TABLE IF NOT EXISTS agent_sync_state (
+			org_id UUID NOT NULL,
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			role TEXT,
@@ -97,12 +98,21 @@ func runSyncStateMigrations(db *sql.DB) {
 			session_key TEXT,
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE agent_sync_state ADD COLUMN IF NOT EXISTS org_id UUID`,
+		`UPDATE agent_sync_state
+		   SET org_id = '00000000-0000-0000-0000-000000000000'::uuid
+		 WHERE org_id IS NULL`,
+		`ALTER TABLE agent_sync_state ALTER COLUMN org_id SET NOT NULL`,
+		`ALTER TABLE agent_sync_state DROP CONSTRAINT IF EXISTS agent_sync_state_pkey`,
+		`ALTER TABLE agent_sync_state ADD CONSTRAINT agent_sync_state_pkey PRIMARY KEY (org_id, id)`,
 		`CREATE TABLE IF NOT EXISTS sync_metadata (
 			key TEXT PRIMARY KEY,
 			value TEXT,
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_sync_state_status ON agent_sync_state(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_sync_state_org_id ON agent_sync_state(org_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_sync_state_org_status ON agent_sync_state(org_id, status)`,
 	}
 
 	for _, m := range migrations {

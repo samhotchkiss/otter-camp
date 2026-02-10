@@ -483,13 +483,13 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		processedCount++
 
 		// Also persist to database if available
-		if db != nil {
+		if db != nil && workspaceID != "" {
 			_, err := db.Exec(`
 				INSERT INTO agent_sync_state 
-					(id, name, role, status, avatar, current_task, last_seen, model, 
+					(org_id, id, name, role, status, avatar, current_task, last_seen, model, 
 					 total_tokens, context_tokens, channel, session_key, updated_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-				ON CONFLICT (id) DO UPDATE SET
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+				ON CONFLICT (org_id, id) DO UPDATE SET
 					name = EXCLUDED.name,
 					role = EXCLUDED.role,
 					status = EXCLUDED.status,
@@ -503,7 +503,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 					session_key = EXCLUDED.session_key,
 					updated_at = EXCLUDED.updated_at
 				WHERE agent_sync_state.updated_at < EXCLUDED.updated_at
-			`, agentID, name, role, status, avatar, currentTask, lastSeen,
+			`, workspaceID, agentID, name, role, status, avatar, currentTask, lastSeen,
 				session.Model, session.TotalTokens, session.ContextTokens,
 				session.Channel, session.Key, updatedAt)
 

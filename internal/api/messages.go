@@ -184,7 +184,7 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dispatchTarget, shouldDispatch, dispatchWarning, statusCode, dispatchErr := h.resolveDMDispatchTarget(r.Context(), db, req)
+	dispatchTarget, shouldDispatch, dispatchWarning, statusCode, dispatchErr := h.resolveDMDispatchTarget(r.Context(), db, orgID, req)
 	if dispatchErr != nil {
 		sendJSON(w, statusCode, errorResponse{Error: dispatchErr.Error()})
 		return
@@ -828,6 +828,7 @@ func parseDMThreadAgentID(threadID string) string {
 func (h *MessageHandler) resolveDMDispatchTarget(
 	ctx context.Context,
 	db *sql.DB,
+	orgID string,
 	req createMessageRequest,
 ) (dmDispatchTarget, bool, string, int, error) {
 	if req.ThreadID == nil {
@@ -846,7 +847,8 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 	var target dmDispatchTarget
 	err := db.QueryRowContext(
 		ctx,
-		`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE id = $1`,
+		`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
+		orgID,
 		agentID,
 	).Scan(&target.AgentID, &target.SessionKey)
 	if err != nil {

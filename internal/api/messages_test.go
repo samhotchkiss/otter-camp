@@ -299,8 +299,9 @@ func TestCreateMessageDMBridgeOfflinePersistsMessageWithDeliveryWarning(t *testi
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-offline-org")
 	_, err := db.Exec(
-		`INSERT INTO agent_sync_state (id, name, status, session_key, updated_at)
-		 VALUES ($1, $2, $3, $4, NOW())`,
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		orgID,
 		"itsalive",
 		"Ivy",
 		"online",
@@ -352,8 +353,9 @@ func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
 	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-success-org")
 
 	_, err := db.Exec(
-		`INSERT INTO agent_sync_state (id, name, status, session_key, updated_at)
-		 VALUES ($1, $2, $3, $4, NOW())`,
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		orgID,
 		"itsalive",
 		"Ivy",
 		"online",
@@ -404,8 +406,9 @@ func TestCreateMessageDMDispatchFailurePersistsMessageWithDeliveryWarning(t *tes
 	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-failure-org")
 
 	_, err := db.Exec(
-		`INSERT INTO agent_sync_state (id, name, status, session_key, updated_at)
-		 VALUES ($1, $2, $3, $4, NOW())`,
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		orgID,
 		"itsalive",
 		"Ivy",
 		"online",

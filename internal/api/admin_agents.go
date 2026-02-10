@@ -65,9 +65,9 @@ type adminAgentDetailResponse struct {
 
 type adminAgentFilesListResponse struct {
 	ProjectID string             `json:"project_id,omitempty"`
-	Ref     string             `json:"ref"`
-	Path    string             `json:"path"`
-	Entries []projectTreeEntry `json:"entries"`
+	Ref       string             `json:"ref"`
+	Path      string             `json:"path"`
+	Entries   []projectTreeEntry `json:"entries"`
 }
 
 type adminAgentCreateRequest struct {
@@ -579,7 +579,7 @@ func (h *AdminAgentsHandler) listRows(ctx context.Context, workspaceID string) (
 			s.total_tokens
 		FROM agents a
 		LEFT JOIN openclaw_agent_configs c ON c.id = a.slug
-		LEFT JOIN agent_sync_state s ON s.id = a.slug
+		LEFT JOIN agent_sync_state s ON s.id = a.slug AND s.org_id = a.org_id
 		WHERE a.org_id = $1
 		ORDER BY LOWER(COALESCE(NULLIF(s.name, ''), NULLIF(a.display_name, ''), a.slug)) ASC, a.slug ASC`
 	rows, err := h.DB.QueryContext(ctx, query, workspaceID)
@@ -622,7 +622,7 @@ func (h *AdminAgentsHandler) getRow(ctx context.Context, workspaceID, identifier
 			s.total_tokens
 		FROM agents a
 		LEFT JOIN openclaw_agent_configs c ON c.id = a.slug
-		LEFT JOIN agent_sync_state s ON s.id = a.slug
+		LEFT JOIN agent_sync_state s ON s.id = a.slug AND s.org_id = a.org_id
 		WHERE a.org_id = $1
 		  AND (a.id::text = $2 OR a.slug = $2)
 		LIMIT 1`
