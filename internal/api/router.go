@@ -5,13 +5,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
+	"github.com/samhotchkiss/otter-camp/internal/automigrate"
 	"github.com/samhotchkiss/otter-camp/internal/gitserver"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -21,10 +24,12 @@ import (
 var startTime = time.Now()
 
 type HealthResponse struct {
-	Status    string `json:"status"`
-	Uptime    string `json:"uptime"`
-	Version   string `json:"version"`
-	Timestamp string `json:"timestamp"`
+	Status     string `json:"status"`
+	Uptime     string `json:"uptime"`
+	Version    string `json:"version"`
+	Timestamp  string `json:"timestamp"`
+	DBVersion  *int   `json:"db_version,omitempty"`
+	DBPending  *int   `json:"db_pending,omitempty"`
 }
 
 func NewRouter() http.Handler {
@@ -67,7 +72,7 @@ func NewRouter() http.Handler {
 		})
 	})
 
-	r.Get("/health", handleHealth)
+	r.Get("/health", handleHealthWithDB(db))
 	r.Get("/api/feed", FeedHandlerV2)
 
 	webhookHandler := &WebhookHandler{Hub: hub}
@@ -341,6 +346,7 @@ func NewRouter() http.Handler {
 
 		// Admin endpoints
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/init-repos", HandleAdminInitRepos(db))
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/migrate", handleAdminMigrate(db))
 		r.With(middleware.OptionalWorkspace).Get("/admin/connections", adminConnectionsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/admin/events", adminConnectionsHandler.GetEvents)
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)
@@ -381,16 +387,79 @@ func NewRouter() http.Handler {
 	return r
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	resp := HealthResponse{
-		Status:    "ok",
-		Uptime:    time.Since(startTime).Round(time.Second).String(),
-		Version:   getVersion(),
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-	}
+func handleHealthWithDB(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp := HealthResponse{
+			Status:    "ok",
+			Uptime:    time.Since(startTime).Round(time.Second).String(),
+			Version:   getVersion(),
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}
 
-	_ = json.NewEncoder(w).Encode(resp)
+		if db != nil {
+			var dbVer int
+			if err := db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&dbVer); err == nil {
+				resp.DBVersion = &dbVer
+			}
+			// Count pending migrations by reading the migrations directory
+			if entries, err := os.ReadDir("migrations"); err == nil {
+				applied := 0
+				total := 0
+				if rows, err := db.Query("SELECT version FROM schema_migrations"); err == nil {
+					appliedSet := make(map[int]bool)
+					for rows.Next() {
+						var v int
+						rows.Scan(&v)
+						appliedSet[v] = true
+						applied++
+					}
+					rows.Close()
+					for _, e := range entries {
+						if strings.HasSuffix(e.Name(), ".up.sql") {
+							total++
+						}
+					}
+					pending := total - applied
+					if pending < 0 {
+						pending = 0
+					}
+					resp.DBPending = &pending
+				}
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(resp)
+	}
 }
+
+func handleAdminMigrate(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if db == nil {
+			sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+			return
+		}
+
+		log.Printf("🔧 Admin-triggered migration run")
+
+		// Import and run automigrate
+		if err := automigrate.Run(db, "migrations"); err != nil {
+			log.Printf("❌ Admin migration failed: %v", err)
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: fmt.Sprintf("migration failed: %v", err)})
+			return
+		}
+
+		// Get new version
+		var dbVer int
+		db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&dbVer)
+
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"status":     "ok",
+			"db_version": dbVer,
+			"message":    "migrations applied successfully",
+		})
+	}
+}
+
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
 	// Check if we should serve the frontend
