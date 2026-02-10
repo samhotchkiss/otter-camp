@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -153,4 +154,56 @@ func TestAgentMemoryStoreSearchEscapesLikeWildcards(t *testing.T) {
 func TestEscapeLikePattern(t *testing.T) {
 	got := escapeLikePattern(`100%_ready\set`)
 	require.Equal(t, `100\%\_ready\\set`, got)
+}
+
+func TestAgentMemoryStoreUpdateAdvancesUpdatedAt(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "agent-memory-updated-at")
+
+	var agentID string
+	err := db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'memory-agent-updated', 'Memory Agent Updated', 'active')
+		 RETURNING id`,
+		orgID,
+	).Scan(&agentID)
+	require.NoError(t, err)
+
+	store := NewAgentMemoryStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	created, err := store.Create(ctx, CreateAgentMemoryInput{
+		AgentID: agentID,
+		Kind:    AgentMemoryKindLongTerm,
+		Content: "Version 1",
+	})
+	require.NoError(t, err)
+
+	time.Sleep(10 * time.Millisecond)
+
+	conn, err := WithWorkspace(ctx, db)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_, err = conn.ExecContext(
+		context.Background(),
+		`UPDATE agent_memories
+		 SET content = $1
+		 WHERE id = $2`,
+		"Version 2",
+		created.ID,
+	)
+	require.NoError(t, err)
+
+	var updatedAt time.Time
+	err = conn.QueryRowContext(
+		context.Background(),
+		`SELECT updated_at
+		 FROM agent_memories
+		 WHERE id = $1`,
+		created.ID,
+	).Scan(&updatedAt)
+	require.NoError(t, err)
+	require.True(t, updatedAt.After(created.UpdatedAt), "updated_at should advance after UPDATE")
 }

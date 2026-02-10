@@ -21,3 +21,8 @@ ALTER TABLE agent_memories FORCE ROW LEVEL SECURITY;
 CREATE POLICY agent_memories_org_isolation ON agent_memories
     USING (org_id = current_org_id())
     WITH CHECK (org_id = current_org_id());
+
+CREATE TRIGGER update_agent_memories_updated_at
+    BEFORE UPDATE ON agent_memories
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
