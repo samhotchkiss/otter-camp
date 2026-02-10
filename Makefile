@@ -47,28 +47,28 @@ install:
 build-web:
 	cd web && npm run build
 
-# Database - using scripts/migrate for enhanced migration support
+# Database migrations
 migrate: migrate-up
 
 migrate-up:
 	@echo "Running migrations up..."
-	go run ./scripts/migrate/migrate.go up
+	go run ./cmd/migrate up
 
 migrate-down:
 	@echo "Rolling back migrations..."
-	go run ./scripts/migrate/migrate.go down 1
+	go run ./cmd/migrate down 1
 
 migrate-status:
 	@echo "Checking migration status..."
-	go run ./scripts/migrate/migrate.go status
+	go run ./cmd/migrate status
 
 migrate-version:
 	@echo "Current migration version..."
-	go run ./scripts/migrate/migrate.go version
+	go run ./cmd/migrate version
 
 migrate-dry-run:
 	@echo "Dry run - showing pending migrations..."
-	go run ./scripts/migrate/migrate.go -dry-run up
+	go run ./cmd/migrate -dry-run up
 
 migrate-create:
 	@echo "Creating migration files..."
