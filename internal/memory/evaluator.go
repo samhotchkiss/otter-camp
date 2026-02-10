@@ -17,8 +17,11 @@ type EvaluatorCase struct {
 	RelevantIDs       []string `json:"relevant_ids"`
 	ShouldInject      bool     `json:"should_inject"`
 	Injected          bool     `json:"injected"`
+	InjectedTokens    int      `json:"injected_tokens"`
 	RecoveryExpected  bool     `json:"recovery_expected"`
 	RecoverySucceeded bool     `json:"recovery_succeeded"`
+	SharedPromoted    bool     `json:"shared_promoted"`
+	SharedCorrect     bool     `json:"shared_correct"`
 	LatencyMs         float64  `json:"latency_ms"`
 }
 
@@ -31,11 +34,13 @@ type EvaluatorConfig struct {
 }
 
 type EvaluatorMetrics struct {
-	PrecisionAtK        float64 `json:"precision_at_k"`
-	FalseInjectionRate  float64 `json:"false_injection_rate"`
-	RecoverySuccessRate float64 `json:"recovery_success_rate"`
-	P95LatencyMs        float64 `json:"p95_latency_ms"`
-	CaseCount           int     `json:"case_count"`
+	PrecisionAtK             float64 `json:"recall_precision_at_k"`
+	FalseInjectionRate       float64 `json:"false_injection_rate"`
+	RecoverySuccessRate      float64 `json:"compaction_recovery_success_rate"`
+	P95LatencyMs             float64 `json:"p95_recall_latency_ms"`
+	AvgInjectedTokens        float64 `json:"avg_injected_tokens"`
+	SharedPromotionPrecision float64 `json:"shared_promotion_precision"`
+	CaseCount                int     `json:"case_count"`
 }
 
 type EvaluatorGateResult struct {
@@ -68,16 +73,18 @@ func (e Evaluator) RunFromJSONL(path string) (EvaluatorResult, error) {
 func (e Evaluator) Run(cases []EvaluatorCase) EvaluatorResult {
 	cfg := e.Config.normalized()
 	metrics := EvaluatorMetrics{
-		PrecisionAtK:        computePrecisionAtK(cases, cfg.K),
-		FalseInjectionRate:  computeFalseInjectionRate(cases),
-		RecoverySuccessRate: computeRecoverySuccessRate(cases),
-		P95LatencyMs:        computeP95LatencyMs(cases),
-		CaseCount:           len(cases),
+		PrecisionAtK:             computePrecisionAtK(cases, cfg.K),
+		FalseInjectionRate:       computeFalseInjectionRate(cases),
+		RecoverySuccessRate:      computeRecoverySuccessRate(cases),
+		P95LatencyMs:             computeP95LatencyMs(cases),
+		AvgInjectedTokens:        computeAvgInjectedTokens(cases),
+		SharedPromotionPrecision: computeSharedPromotionPrecision(cases),
+		CaseCount:                len(cases),
 	}
 
 	gates := []EvaluatorGateResult{
 		{
-			Name:       "precision_at_k",
+			Name:       "recall_precision_at_k",
 			Comparator: ">=",
 			Actual:     metrics.PrecisionAtK,
 			Threshold:  cfg.MinPrecisionAtK,
@@ -91,14 +98,14 @@ func (e Evaluator) Run(cases []EvaluatorCase) EvaluatorResult {
 			Passed:     metrics.FalseInjectionRate <= cfg.MaxFalseInjectionRate,
 		},
 		{
-			Name:       "recovery_success_rate",
+			Name:       "compaction_recovery_success_rate",
 			Comparator: ">=",
 			Actual:     metrics.RecoverySuccessRate,
 			Threshold:  cfg.MinRecoverySuccessRate,
 			Passed:     metrics.RecoverySuccessRate >= cfg.MinRecoverySuccessRate,
 		},
 		{
-			Name:       "p95_latency_ms",
+			Name:       "p95_recall_latency_ms",
 			Comparator: "<=",
 			Actual:     metrics.P95LatencyMs,
 			Threshold:  cfg.MaxP95LatencyMs,
@@ -252,9 +259,46 @@ func computeRecoverySuccessRate(cases []EvaluatorCase) float64 {
 		}
 	}
 	if expectedCount == 0 {
-		return 1
+		return 0
 	}
 	return float64(successCount) / float64(expectedCount)
+}
+
+func computeAvgInjectedTokens(cases []EvaluatorCase) float64 {
+	totalTokens := 0
+	injectedCount := 0
+	for _, c := range cases {
+		if !c.Injected {
+			continue
+		}
+		if c.InjectedTokens < 0 {
+			continue
+		}
+		totalTokens += c.InjectedTokens
+		injectedCount += 1
+	}
+	if injectedCount == 0 {
+		return 0
+	}
+	return float64(totalTokens) / float64(injectedCount)
+}
+
+func computeSharedPromotionPrecision(cases []EvaluatorCase) float64 {
+	promotedCount := 0
+	correctCount := 0
+	for _, c := range cases {
+		if !c.SharedPromoted {
+			continue
+		}
+		promotedCount += 1
+		if c.SharedCorrect {
+			correctCount += 1
+		}
+	}
+	if promotedCount == 0 {
+		return 0
+	}
+	return float64(correctCount) / float64(promotedCount)
 }
 
 func computeP95LatencyMs(cases []EvaluatorCase) float64 {
