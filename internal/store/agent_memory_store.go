@@ -213,6 +213,7 @@ func (s *AgentMemoryStore) SearchByAgent(
 	if term == "" {
 		return nil, fmt.Errorf("query is required")
 	}
+	escapedTerm := escapeLikePattern(term)
 	if limit <= 0 {
 		limit = 20
 	}
@@ -232,12 +233,12 @@ func (s *AgentMemoryStore) SearchByAgent(
 		 FROM agent_memories
 		 WHERE org_id = $1
 		   AND agent_id = $2
-		   AND content ILIKE '%' || $3 || '%'
+		   AND content ILIKE '%' || $3 || '%' ESCAPE '\'
 		 ORDER BY updated_at DESC, created_at DESC
 		 LIMIT $4`,
 		workspaceID,
 		strings.TrimSpace(agentID),
-		term,
+		escapedTerm,
 		limit,
 	)
 	if err != nil {
@@ -258,6 +259,15 @@ func (s *AgentMemoryStore) SearchByAgent(
 	}
 
 	return results, nil
+}
+
+func escapeLikePattern(term string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	return replacer.Replace(term)
 }
 
 func normalizeAgentMemoryKind(value string) (string, error) {
