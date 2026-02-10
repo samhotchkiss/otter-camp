@@ -3,7 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -367,17 +369,56 @@ func TestLegacyTransitionEnsureFilesIdempotent(t *testing.T) {
 	require.NoError(t, os.WriteFile(agentsPath, []byte("# AGENTS\nOriginal instructions"), 0o644))
 
 	require.NoError(t, ensureLegacyTransitionFiles(workspace))
+	customTransition := "# LEGACY_TRANSITION.md\n\nOperator notes: keep this custom section."
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, legacyTransitionFilename), []byte(customTransition), 0o644))
 	require.NoError(t, ensureLegacyTransitionFiles(workspace))
 
 	transitionBytes, err := os.ReadFile(filepath.Join(workspace, legacyTransitionFilename))
 	require.NoError(t, err)
-	require.Contains(t, string(transitionBytes), "OtterCamp + Chameleon is now the active execution path")
+	require.Equal(t, customTransition, string(transitionBytes))
 
 	agentsBytes, err := os.ReadFile(agentsPath)
 	require.NoError(t, err)
 	agentsBody := string(agentsBytes)
 	require.Contains(t, agentsBody, "Original instructions")
 	require.Equal(t, 1, strings.Count(agentsBody, legacyTransitionMarker))
+}
+
+func TestOpenClawMigrationCommitFailureDoesNotGenerateTransitionFiles(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "openclaw-migration-commit-failure")
+
+	root := t.TempDir()
+	mainWorkspace := filepath.Join(root, "workspace-main")
+	legacyWorkspace := filepath.Join(root, "workspace-legacy")
+	require.NoError(t, os.MkdirAll(mainWorkspace, 0o755))
+	require.NoError(t, os.MkdirAll(legacyWorkspace, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(legacyWorkspace, "AGENTS.md"), []byte("# AGENTS\nLegacy instructions"), 0o644))
+
+	originalCommit := commitLegacyWorkspaceTx
+	commitLegacyWorkspaceTx = func(tx *sql.Tx) error {
+		return errors.New("forced commit failure")
+	}
+	t.Cleanup(func() {
+		commitLegacyWorkspaceTx = originalCommit
+	})
+
+	configData := map[string]any{
+		"agents": map[string]any{
+			"list": []map[string]any{
+				{"id": "main", "name": "Frank", "workspace": mainWorkspace, "default": true},
+				{"id": "writer", "name": "Writer", "workspace": legacyWorkspace},
+			},
+		},
+	}
+
+	report, err := importLegacyOpenClawWorkspaces(context.Background(), db, orgID, configData)
+	require.Error(t, err)
+	require.Nil(t, report)
+
+	_, statErr := os.Stat(filepath.Join(legacyWorkspace, legacyTransitionFilename))
+	require.Error(t, statErr)
+	require.True(t, os.IsNotExist(statErr))
 }
 
 func TestOpenClawSyncHandlePersistsDiagnosticsMetadata(t *testing.T) {

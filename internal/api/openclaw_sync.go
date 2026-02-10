@@ -211,6 +211,10 @@ const (
 		"5. Do not keep final work product in the legacy workspace.\n"
 )
 
+var commitLegacyWorkspaceTx = func(tx *sql.Tx) error {
+	return tx.Commit()
+}
+
 type openClawLegacyWorkspaceDescriptor struct {
 	ID        string
 	Name      string
@@ -1206,6 +1210,7 @@ func importLegacyOpenClawWorkspaces(
 
 	report := &openClawLegacyImportReport{}
 	primaryIdx := resolvePrimaryWorkspaceDescriptorIndex(descriptors)
+	retiredWorkspacePaths := make([]string, 0, len(descriptors))
 
 	tx, err := store.WithWorkspaceIDTx(ctx, db, workspaceID)
 	if err != nil {
@@ -1246,17 +1251,22 @@ func importLegacyOpenClawWorkspaces(
 		isRetired := idx != primaryIdx && !strings.EqualFold(strings.TrimSpace(descriptor.ID), "chameleon")
 		if isRetired {
 			report.ProcessedRetiredWorkspaces++
-			if transitionErr := ensureLegacyTransitionFiles(workspacePath); transitionErr != nil {
-				report.WorkspaceWarnings = append(report.WorkspaceWarnings, fmt.Sprintf("%s: %v", workspacePath, transitionErr))
-			} else {
-				report.TransitionFilesGenerated++
-			}
+			retiredWorkspacePaths = append(retiredWorkspacePaths, workspacePath)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := commitLegacyWorkspaceTx(tx); err != nil {
 		return nil, err
 	}
+
+	for _, workspacePath := range retiredWorkspacePaths {
+		if transitionErr := ensureLegacyTransitionFiles(workspacePath); transitionErr != nil {
+			report.WorkspaceWarnings = append(report.WorkspaceWarnings, fmt.Sprintf("%s: %v", workspacePath, transitionErr))
+		} else {
+			report.TransitionFilesGenerated++
+		}
+	}
+
 	return report, nil
 }
 
@@ -1632,8 +1642,13 @@ func ensureLegacyTransitionFiles(workspacePath string) error {
 	}
 
 	transitionPath := filepath.Join(workspacePath, legacyTransitionFilename)
-	if err := os.WriteFile(transitionPath, []byte(strings.TrimSpace(legacyTransitionChecklistTemplate)+"\n"), 0o644); err != nil {
-		return err
+	if _, err := os.Stat(transitionPath); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if writeErr := os.WriteFile(transitionPath, []byte(strings.TrimSpace(legacyTransitionChecklistTemplate)+"\n"), 0o644); writeErr != nil {
+			return writeErr
+		}
 	}
 
 	agentsPath := filepath.Join(workspacePath, "AGENTS.md")
