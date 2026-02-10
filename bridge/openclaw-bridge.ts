@@ -513,6 +513,7 @@ const queuedDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDOrder: string[] = [];
 let dispatchReplayQueueBytes = 0;
+const recentCompactionRecoveryByKey = new Map<string, number>();
 let lastSuccessfulSyncAtMs = 0;
 let gitCompletionDefaultsResolved = false;
 let gitCompletionBranch = '';
