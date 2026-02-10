@@ -206,3 +206,15 @@ func TestMapCreateMemoryErrorUsesTypedErrors(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, status)
 	require.Equal(t, "failed to create memory", message)
 }
+
+func TestParseMemoryDaysParamClampsLargeValues(t *testing.T) {
+	days, err := parseMemoryDaysParam("999")
+	require.NoError(t, err)
+	require.Equal(t, 365, days)
+}
+
+func TestParseMemorySearchLimitParamClampsLargeValues(t *testing.T) {
+	limit, err := parseMemorySearchLimitParam("9999")
+	require.NoError(t, err)
+	require.Equal(t, 500, limit)
+}
