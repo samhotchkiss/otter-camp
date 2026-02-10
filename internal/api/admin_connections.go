@@ -129,6 +129,8 @@ type openClawAdminCommandData struct {
 	ProcessID   string          `json:"process_id,omitempty"`
 	Enabled     *bool           `json:"enabled,omitempty"`
 	ConfigPatch json.RawMessage `json:"config_patch,omitempty"`
+	ConfigFull  json.RawMessage `json:"config_full,omitempty"`
+	ConfigHash  string          `json:"config_hash,omitempty"`
 	Confirm     bool            `json:"confirm,omitempty"`
 	DryRun      bool            `json:"dry_run,omitempty"`
 }
@@ -139,6 +141,8 @@ type adminCommandDispatchInput struct {
 	ProcessID   string
 	Enabled     *bool
 	ConfigPatch json.RawMessage
+	ConfigFull  json.RawMessage
+	ConfigHash  string
 	Confirm     bool
 	DryRun      bool
 }
@@ -160,12 +164,18 @@ const (
 	adminCommandActionCronDisable    = "cron.disable"
 	adminCommandActionProcessKill    = "process.kill"
 	adminCommandActionConfigPatch    = "config.patch"
+	adminCommandActionConfigCutover  = "config.cutover"
+	adminCommandActionConfigRollback = "config.rollback"
 )
 
 var sensitiveTokenPattern = regexp.MustCompile(`(?i)(oc_git_[a-z0-9]+|bearer\s+[a-z0-9._-]+)`)
 
 func (h *AdminConnectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	sessions := h.loadSessions(r.Context())
+	sessions, err := h.loadSessions(r.Context())
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load admin connection sessions"})
+		return
+	}
 	summary := summarizeSessions(sessions)
 	lastSync := h.loadLastSync(r.Context())
 	hostDiag := h.loadHostDiagnostics(r.Context())
@@ -194,41 +204,13 @@ func (h *AdminConnectionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *AdminConnectionsHandler) loadSessions(_ context.Context) []adminConnectionsSession {
-	if h.DB == nil {
-		sessions := make([]adminConnectionsSession, 0, len(memoryAgentStates))
-		for _, state := range memoryAgentStates {
-			derivedStatus := deriveAgentStatus(state.UpdatedAt, state.TotalTokens)
-			sessions = append(sessions, adminConnectionsSession{
-				ID:            state.ID,
-				Name:          state.Name,
-				Status:        derivedStatus,
-				Model:         state.Model,
-				ContextTokens: state.ContextTokens,
-				TotalTokens:   state.TotalTokens,
-				Channel:       deriveSessionChannel(state.Channel, state.SessionKey),
-				SessionKey:    state.SessionKey,
-				LastSeen:      state.LastSeen,
-				UpdatedAt:     state.UpdatedAt,
-				Stalled:       isSessionStalled(state.TotalTokens, state.UpdatedAt),
-			})
-		}
-		sort.Slice(sessions, func(i, j int) bool {
-			return sessions[i].Name < sessions[j].Name
-		})
-		return sessions
-	}
+type adminConnectionSessionRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
 
-	rows, err := h.DB.Query(`
-		SELECT id, name, status, model, context_tokens, total_tokens, channel, session_key, last_seen, updated_at
-		FROM agent_sync_state
-		ORDER BY name
-	`)
-	if err != nil {
-		return []adminConnectionsSession{}
-	}
-	defer rows.Close()
-
+func scanAdminConnectionSessions(rows adminConnectionSessionRows) ([]adminConnectionsSession, error) {
 	out := make([]adminConnectionsSession, 0, 32)
 	for rows.Next() {
 		var (
@@ -274,7 +256,54 @@ func (h *AdminConnectionsHandler) loadSessions(_ context.Context) []adminConnect
 		session.Stalled = isSessionStalled(session.TotalTokens, session.UpdatedAt)
 		out = append(out, session)
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (h *AdminConnectionsHandler) loadSessions(ctx context.Context) ([]adminConnectionsSession, error) {
+	if h.DB == nil {
+		agentStates := memoryAgentStatesSnapshot()
+		sessions := make([]adminConnectionsSession, 0, len(agentStates))
+		for _, state := range agentStates {
+			derivedStatus := deriveAgentStatus(state.UpdatedAt, state.TotalTokens)
+			sessions = append(sessions, adminConnectionsSession{
+				ID:            state.ID,
+				Name:          state.Name,
+				Status:        derivedStatus,
+				Model:         state.Model,
+				ContextTokens: state.ContextTokens,
+				TotalTokens:   state.TotalTokens,
+				Channel:       deriveSessionChannel(state.Channel, state.SessionKey),
+				SessionKey:    state.SessionKey,
+				LastSeen:      state.LastSeen,
+				UpdatedAt:     state.UpdatedAt,
+				Stalled:       isSessionStalled(state.TotalTokens, state.UpdatedAt),
+			})
+		}
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].Name < sessions[j].Name
+		})
+		return sessions, nil
+	}
+
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(ctx))
+	if workspaceID == "" {
+		return []adminConnectionsSession{}, nil
+	}
+
+	rows, err := h.DB.Query(`
+		SELECT id, name, status, model, context_tokens, total_tokens, channel, session_key, last_seen, updated_at
+		FROM agent_sync_state
+		WHERE org_id = $1
+		ORDER BY name
+	`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAdminConnectionSessions(rows)
 }
 
 func (h *AdminConnectionsHandler) loadLastSync(_ context.Context) *time.Time {
@@ -287,11 +316,7 @@ func (h *AdminConnectionsHandler) loadLastSync(_ context.Context) *time.Time {
 			}
 		}
 	}
-	if memoryLastSync.IsZero() {
-		return nil
-	}
-	last := memoryLastSync.UTC()
-	return &last
+	return memoryLastSyncSnapshot()
 }
 
 func (h *AdminConnectionsHandler) loadHostDiagnostics(_ context.Context) *OpenClawHostDiagnostics {
@@ -304,11 +329,7 @@ func (h *AdminConnectionsHandler) loadHostDiagnostics(_ context.Context) *OpenCl
 			}
 		}
 	}
-	if memoryHostDiag == nil {
-		return nil
-	}
-	host := *memoryHostDiag
-	return &host
+	return memoryHostDiagSnapshot()
 }
 
 func (h *AdminConnectionsHandler) loadBridgeDiagnostics(_ context.Context) *OpenClawBridgeDiagnostics {
@@ -321,11 +342,7 @@ func (h *AdminConnectionsHandler) loadBridgeDiagnostics(_ context.Context) *Open
 			}
 		}
 	}
-	if memoryBridgeDiag == nil {
-		return nil
-	}
-	bridge := *memoryBridgeDiag
-	return &bridge
+	return memoryBridgeDiagSnapshot()
 }
 
 func (h *AdminConnectionsHandler) loadCronJobs(_ context.Context) []OpenClawCronJobDiagnostics {
@@ -349,10 +366,10 @@ func (h *AdminConnectionsHandler) loadCronJobs(_ context.Context) []OpenClawCron
 			}
 		}
 	}
-	if len(memoryCronJobs) == 0 {
-		return []OpenClawCronJobDiagnostics{}
+	out := memoryCronJobsSnapshot()
+	if len(out) == 0 {
+		return out
 	}
-	out := append([]OpenClawCronJobDiagnostics(nil), memoryCronJobs...)
 	sort.Slice(out, func(i, j int) bool {
 		left := strings.TrimSpace(out[i].Name)
 		if left == "" {
@@ -382,10 +399,10 @@ func (h *AdminConnectionsHandler) loadProcesses(_ context.Context) []OpenClawPro
 			}
 		}
 	}
-	if len(memoryProcesses) == 0 {
-		return []OpenClawProcessDiagnostics{}
+	out := memoryProcessesSnapshot()
+	if len(out) == 0 {
+		return out
 	}
-	out := append([]OpenClawProcessDiagnostics(nil), memoryProcesses...)
 	sort.Slice(out, func(i, j int) bool {
 		left := strings.TrimSpace(out[i].ID)
 		right := strings.TrimSpace(out[j].ID)
@@ -565,6 +582,8 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 			ProcessID:   strings.TrimSpace(input.ProcessID),
 			Enabled:     input.Enabled,
 			ConfigPatch: append(json.RawMessage(nil), input.ConfigPatch...),
+			ConfigFull:  append(json.RawMessage(nil), input.ConfigFull...),
+			ConfigHash:  strings.TrimSpace(input.ConfigHash),
 			Confirm:     input.Confirm,
 			DryRun:      input.DryRun,
 		},
@@ -590,6 +609,12 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 	}
 	if len(event.Data.ConfigPatch) > 0 {
 		metadata["config_patch"] = true
+	}
+	if len(event.Data.ConfigFull) > 0 {
+		metadata["config_full"] = true
+	}
+	if event.Data.ConfigHash != "" {
+		metadata["config_hash"] = event.Data.ConfigHash
 	}
 	if event.Data.Confirm {
 		metadata["confirm"] = true
@@ -930,6 +955,9 @@ func (h *AdminConnectionsHandler) GetEvents(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		limit = parsed
+	}
+	if limit > 200 {
+		limit = 200
 	}
 
 	events, err := h.EventStore.List(r.Context(), limit)

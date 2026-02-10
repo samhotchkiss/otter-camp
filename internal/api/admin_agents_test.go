@@ -33,11 +33,11 @@ func TestAdminAgentsListReturnsMergedRoster(t *testing.T) {
 	now := time.Now().UTC()
 	_, err = db.Exec(
 		`INSERT INTO agent_sync_state
-		    (id, name, status, model, context_tokens, total_tokens, channel, session_key, last_seen, updated_at)
+		    (org_id, id, name, status, model, context_tokens, total_tokens, channel, session_key, last_seen, updated_at)
 		 VALUES
-		    ('main', 'Frank', 'online', 'gpt-5.2-codex', 2200, 10240, 'slack:#engineering', 'agent:main:main', 'just now', $1),
-		    ('hidden-agent', 'Hidden', 'online', 'gpt-5.2-codex', 100, 1000, 'slack:#secret', 'agent:hidden-agent:main', 'just now', $1)
-		 ON CONFLICT (id) DO UPDATE SET
+		    ($1, 'main', 'Frank', 'online', 'gpt-5.2-codex', 2200, 10240, 'slack:#engineering', 'agent:main:main', 'just now', $3),
+		    ($2, 'hidden-agent', 'Hidden', 'online', 'gpt-5.2-codex', 100, 1000, 'slack:#secret', 'agent:hidden-agent:main', 'just now', $3)
+		 ON CONFLICT (org_id, id) DO UPDATE SET
 		    name = EXCLUDED.name,
 		    status = EXCLUDED.status,
 		    model = EXCLUDED.model,
@@ -47,6 +47,8 @@ func TestAdminAgentsListReturnsMergedRoster(t *testing.T) {
 		    session_key = EXCLUDED.session_key,
 		    last_seen = EXCLUDED.last_seen,
 		    updated_at = EXCLUDED.updated_at`,
+		orgA,
+		orgB,
 		now,
 	)
 	require.NoError(t, err)
@@ -121,10 +123,10 @@ func TestAdminAgentsGetReturnsMergedDetail(t *testing.T) {
 	now := time.Now().UTC()
 	_, err = db.Exec(
 		`INSERT INTO agent_sync_state
-		    (id, name, status, model, context_tokens, total_tokens, channel, session_key, current_task, last_seen, updated_at)
+		    (org_id, id, name, status, model, context_tokens, total_tokens, channel, session_key, current_task, last_seen, updated_at)
 		 VALUES
-		    ('main', 'Frank', 'busy', 'claude-opus-4-6', 3400, 15120, 'slack:#ops', 'agent:main:main', 'Handling incident triage', '1m ago', $1)
-		 ON CONFLICT (id) DO UPDATE SET
+		    ($1, 'main', 'Frank', 'busy', 'claude-opus-4-6', 3400, 15120, 'slack:#ops', 'agent:main:main', 'Handling incident triage', '1m ago', $2)
+		 ON CONFLICT (org_id, id) DO UPDATE SET
 		    name = EXCLUDED.name,
 		    status = EXCLUDED.status,
 		    model = EXCLUDED.model,
@@ -135,6 +137,7 @@ func TestAdminAgentsGetReturnsMergedDetail(t *testing.T) {
 		    current_task = EXCLUDED.current_task,
 		    last_seen = EXCLUDED.last_seen,
 		    updated_at = EXCLUDED.updated_at`,
+		orgID,
 		now,
 	)
 	require.NoError(t, err)

@@ -14,6 +14,7 @@ const (
 	CapabilityGitHubConflictResolve  = "github.conflict.resolve"
 	CapabilityGitHubPublish          = "github.publish"
 	CapabilityGitHubIntegrationAdmin = "github.integration.manage"
+	CapabilityAdminConfigManage      = "admin.config.manage"
 )
 
 var roleCapabilityMatrix = map[string]map[string]struct{}{
@@ -22,6 +23,7 @@ var roleCapabilityMatrix = map[string]map[string]struct{}{
 		CapabilityGitHubConflictResolve:  {},
 		CapabilityGitHubPublish:          {},
 		CapabilityGitHubIntegrationAdmin: {},
+		CapabilityAdminConfigManage:      {},
 	},
 	RoleMaintainer: {
 		CapabilityGitHubManualSync:      {},

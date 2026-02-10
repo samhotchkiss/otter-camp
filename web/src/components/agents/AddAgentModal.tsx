@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { API_URL } from "../../lib/api";
+import { apiFetch } from "../../lib/api";
 
 type AddAgentModalProps = {
   isOpen: boolean;
@@ -51,11 +51,8 @@ export default function AddAgentModal({ isOpen, onClose, onCreated }: AddAgentMo
     setIsSubmitting(true);
     setError(null);
     try {
-      const response = await fetch(`${API_URL}/api/admin/agents`, {
+      await apiFetch<{ ok?: boolean }>("/api/admin/agents", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({
           slot: slot.trim(),
           display_name: displayName.trim(),
@@ -64,10 +61,6 @@ export default function AddAgentModal({ isOpen, onClose, onCreated }: AddAgentMo
           channel: channel.trim() || undefined,
         }),
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error || `Failed to create agent (${response.status})`);
-      }
 
       onCreated();
       handleClose();
@@ -100,6 +93,9 @@ export default function AddAgentModal({ isOpen, onClose, onCreated }: AddAgentMo
             Close
           </button>
         </div>
+        <p className="mb-4 text-xs text-[var(--text-muted)]">
+          Creates a managed OtterCamp identity + memory scaffold for chameleon routing.
+        </p>
 
         <form className="space-y-4" onSubmit={handleSubmit}>
           <label className="block text-sm text-[var(--text-muted)]" htmlFor="add-agent-slot">

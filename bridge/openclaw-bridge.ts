@@ -28,7 +28,14 @@ const OPENCLAW_PORT = process.env.OPENCLAW_PORT || '18791';
 const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || '';
 const OTTERCAMP_URL = process.env.OTTERCAMP_URL || 'https://api.otter.camp';
 const OTTERCAMP_TOKEN = process.env.OTTERCAMP_TOKEN || '';
-const OTTERCAMP_WS_SECRET = process.env.OPENCLAW_WS_SECRET || '';
+export function resolveOtterCampWSSecret(env: NodeJS.ProcessEnv = process.env): string {
+  const openClawSecret = (env.OPENCLAW_WS_SECRET || '').trim();
+  if (openClawSecret) {
+    return openClawSecret;
+  }
+  return (env.OTTERCAMP_WS_SECRET || '').trim();
+}
+const OTTERCAMP_WS_SECRET = resolveOtterCampWSSecret(process.env);
 const OTTER_PROGRESS_LOG_PATH = (process.env.OTTER_PROGRESS_LOG_PATH || '').trim();
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
 const MAX_TRACKED_RUN_IDS = 2000;
@@ -77,9 +84,17 @@ const MAX_TRACKED_SESSION_CONTEXTS = (() => {
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const PROJECT_ID_PATTERN = /(?:^|:)project:([0-9a-f-]{36})(?:$|:)/i;
 const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
+const COMPLETION_PROGRESS_LINE_PATTERN = /\bIssue\s+#(\d+)\s+\|\s+Commit\s+([0-9a-f]{7,40})\s+\|\s+([^|]+)\|/i;
+const CHAMELEON_SESSION_KEY_PATTERN =
+  /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const SAFE_FALLBACK_AGENT_ID_PATTERN =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9][a-z0-9_-]{0,63})$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
+const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
+const IDENTITY_BLOCK_MAX_CHARS = 1200;
+const SESSION_TASK_SUMMARY_MAX_CHARS = 96;
 
 export interface OpenClawSession {
   key: string;
@@ -118,6 +133,10 @@ export type BridgeAgentActivityEvent = {
   scope?: AgentActivityScope;
   tokens_used: number;
   model_used?: string;
+  commit_sha?: string;
+  commit_branch?: string;
+  commit_remote?: string;
+  push_status?: 'succeeded' | 'failed' | 'unknown';
   duration_ms: number;
   status: 'started' | 'completed' | 'failed' | 'timeout';
   started_at: string;
@@ -247,6 +266,8 @@ type AdminCommandDispatchEvent = {
     process_id?: string;
     enabled?: boolean;
     config_patch?: unknown;
+    config_full?: unknown;
+    config_hash?: string;
     confirm?: boolean;
     dry_run?: boolean;
   };
@@ -273,6 +294,25 @@ type SessionContext = {
   documentPath?: string;
   responderAgentID?: string;
   pendingQuestionnaire?: QuestionnairePayload;
+  identityMetadata?: SessionIdentityMetadata;
+  displayLabel?: string;
+  executionMode?: ExecutionMode;
+  projectRoot?: string;
+};
+
+type ExecutionMode = 'conversation' | 'project';
+
+type WhoAmITaskPointer = {
+  project?: string;
+  issue?: string;
+  title?: string;
+  status?: string;
+};
+
+type SessionIdentityMetadata = {
+  profile: 'compact' | 'full';
+  preamble: string;
+  displayLabel?: string;
 };
 
 type DeviceIdentity = {
@@ -389,6 +429,7 @@ const connectionStateByRole: Record<BridgeSocketRole, BridgeConnectionState> = {
 };
 let isDispatchQueuePolling = false;
 let isDispatchReplayFlushing = false;
+let isPeriodicSyncRunning = false;
 let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
 const sessionContexts = new Map<string, SessionContext>();
@@ -413,9 +454,23 @@ const queuedDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDs = new Set<string>();
 const deliveredDispatchReplayIDOrder: string[] = [];
 let dispatchReplayQueueBytes = 0;
+let gitCompletionDefaultsResolved = false;
+let gitCompletionBranch = '';
+let gitCompletionRemote = '';
 
 const genId = () => `req-${++requestId}`;
-const execFileAsync = promisify(execFile);
+const defaultExecFileAsync = promisify(execFile);
+let execFileAsync = defaultExecFileAsync;
+
+export function setExecFileForTest(
+  fn: ((file: string, args: readonly string[], options: { timeout?: number; maxBuffer?: number }, callback: (error: Error | null, stdout?: string, stderr?: string) => void) => void) | null,
+): void {
+  if (!fn) {
+    execFileAsync = defaultExecFileAsync;
+    return;
+  }
+  execFileAsync = promisify(fn);
+}
 
 export function computeReconnectDelayMs(attempt: number, randomFn: () => number = Math.random): number {
   const safeAttempt = Number.isFinite(attempt) && attempt >= 0 ? Math.floor(attempt) : 0;
@@ -577,6 +632,12 @@ function clearReconnectTimer(role: BridgeSocketRole): void {
   }
 }
 
+export function resetReconnectStateForTest(role: BridgeSocketRole): void {
+  clearReconnectTimer(role);
+  reconnectByRole[role].consecutiveFailures = 0;
+  reconnectByRole[role].firstMessageReceived = false;
+}
+
 function resetReconnectBackoffAfterFirstMessage(role: BridgeSocketRole): void {
   const controller = reconnectByRole[role];
   controller.consecutiveFailures = 0;
@@ -636,6 +697,38 @@ function clearHeartbeatTimers(role: BridgeSocketRole): void {
     clearTimeout(heartbeat.pongTimeoutTimer);
     heartbeat.pongTimeoutTimer = null;
   }
+}
+
+function handleOpenClawSocketClosed(
+  code: number,
+  reason: string,
+  onClose: (err: Error) => void,
+  reconnectFn: () => void,
+): void {
+  console.warn(`[bridge] OpenClaw socket closed (${code}) ${reason}`);
+  applyConnectionTransition('openclaw', 'socket_closed', { code, reason });
+  clearHeartbeatTimers('openclaw');
+  openClawWS = null;
+  for (const [pendingID, pending] of Array.from(pendingRequests.entries())) {
+    pendingRequests.delete(pendingID);
+    pending.reject(new Error('OpenClaw socket closed'));
+  }
+  onClose(new Error(`OpenClaw socket closed (${code})`));
+  if (continuousModeEnabled) {
+    scheduleReconnect('openclaw', reconnectFn);
+  }
+}
+
+export function triggerOpenClawCloseForTest(
+  code: number,
+  reason: string,
+  reconnectFn: () => void,
+): void {
+  handleOpenClawSocketClosed(code, reason, () => {}, reconnectFn);
+}
+
+export function setContinuousModeEnabledForTest(enabled: boolean): void {
+  continuousModeEnabled = enabled;
 }
 
 function markHeartbeatTraffic(role: BridgeSocketRole): void {
@@ -863,12 +956,36 @@ function setSessionContext(sessionKey: string, context: SessionContext): void {
   }
 }
 
+export function parseChameleonSessionKey(sessionKey: string): string | null {
+  const match = CHAMELEON_SESSION_KEY_PATTERN.exec(getTrimmedString(sessionKey));
+  if (!match || !match[1]) {
+    return null;
+  }
+  return match[1].toLowerCase();
+}
+
+export function isCanonicalChameleonSessionKey(sessionKey: string): boolean {
+  return parseChameleonSessionKey(sessionKey) !== null;
+}
+
 function parseAgentIDFromSessionKey(sessionKey: string): string {
+  const chameleonAgentID = parseChameleonSessionKey(sessionKey);
+  if (chameleonAgentID) {
+    return chameleonAgentID;
+  }
   const match = /^agent:([^:]+):/i.exec(sessionKey.trim());
   if (!match || !match[1]) {
     return '';
   }
-  return match[1].trim();
+  const candidate = match[1].trim();
+  if (!SAFE_FALLBACK_AGENT_ID_PATTERN.test(candidate)) {
+    return '';
+  }
+  return candidate.toLowerCase();
+}
+
+export function parseAgentIDFromSessionKeyForTest(sessionKey: string): string {
+  return parseAgentIDFromSessionKey(sessionKey);
 }
 
 function normalizeUpdatedAt(value: number): number {
@@ -1339,20 +1456,444 @@ function buildContextReminder(context: SessionContext): string {
   return `DM thread (${context.threadID || 'unknown thread'})`;
 }
 
-function withSessionContext(sessionKey: string, rawContent: string): string {
+function resolveProjectWorktreeBaseDir(): string {
+  const override = getTrimmedString(process.env.OTTER_PROJECT_WORKTREE_ROOT);
+  if (override) {
+    return override;
+  }
+  return path.join(os.homedir(), '.otter', 'projects');
+}
+
+function safeProjectPathSegment(projectID: string): string {
+  const normalized = getTrimmedString(projectID).toLowerCase();
+  if (/^[0-9a-f-]{8,64}$/.test(normalized)) {
+    return normalized;
+  }
+  return crypto.createHash('sha1').update(normalized || 'project').digest('hex').slice(0, 16);
+}
+
+function hashSessionKeyForWorktree(sessionKey: string): string {
+  return crypto.createHash('sha1').update(getTrimmedString(sessionKey)).digest('hex').slice(0, 16);
+}
+
+export function resolveProjectWorktreeRoot(projectID: string, sessionKey: string): string {
+  return path.join(
+    resolveProjectWorktreeBaseDir(),
+    safeProjectPathSegment(projectID),
+    'worktrees',
+    hashSessionKeyForWorktree(sessionKey),
+  );
+}
+
+async function pathHasSymlinkSegments(fromRoot: string, targetPath: string): Promise<boolean> {
+  // NOTE: This is a point-in-time check and is therefore vulnerable to TOCTOU swaps.
+  // TODO(spec-110-hardening): Re-check path segments at each file-write interception hook.
+  const root = path.resolve(fromRoot);
+  const target = path.resolve(targetPath);
+  const relative = path.relative(root, target);
+  if (!relative || relative === '.') {
+    return false;
+  }
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    return true;
+  }
+
+  const segments = relative.split(path.sep).filter(Boolean);
+  let cursor = root;
+  for (const segment of segments) {
+    cursor = path.join(cursor, segment);
+    try {
+      const stat = await fs.promises.lstat(cursor);
+      if (stat.isSymbolicLink()) {
+        return true;
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        continue;
+      }
+      throw err;
+    }
+  }
+  return false;
+}
+
+export async function isPathWithinProjectRoot(projectRoot: string, targetPath: string): Promise<boolean> {
+  const root = path.resolve(projectRoot);
+  try {
+    const rootStat = await fs.promises.lstat(root);
+    if (rootStat.isSymbolicLink()) {
+      return false;
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') {
+      throw err;
+    }
+  }
+  const candidate = path.resolve(root, targetPath);
+  const relative = path.relative(root, candidate);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    return false;
+  }
+  if (await pathHasSymlinkSegments(root, candidate)) {
+    return false;
+  }
+  return true;
+}
+
+export function resolveExecutionMode(context: SessionContext): ExecutionMode {
+  return getTrimmedString(context.projectID) ? 'project' : 'conversation';
+}
+
+async function resolveSessionExecutionContext(
+  sessionKey: string,
+  context: SessionContext,
+): Promise<{ mode: ExecutionMode; projectRoot?: string }> {
+  const mode = resolveExecutionMode(context);
+  if (mode !== 'project') {
+    return { mode: 'conversation' };
+  }
+
+  const projectID = getTrimmedString(context.projectID);
+  if (!projectID) {
+    return { mode: 'conversation' };
+  }
+  const projectRoot = resolveProjectWorktreeRoot(projectID, sessionKey);
+
+  try {
+    await fs.promises.mkdir(projectRoot, { recursive: true });
+    // NOTE: v1 enforcement is policy-level only. Without OpenClaw file-write interception
+    // hooks, we cannot mechanically enforce per-write path guard checks here.
+    // TODO(spec-110-hardening): Wire isPathWithinProjectRoot into write/edit/apply_patch hooks.
+    return {
+      mode: 'project',
+      projectRoot,
+    };
+  } catch (err) {
+    console.warn(`[bridge] unable to prepare project worktree for ${sessionKey}; forcing conversation mode`, err);
+    return { mode: 'conversation' };
+  }
+}
+
+function buildExecutionPolicyBlock(params: {
+  mode: ExecutionMode;
+  context: SessionContext;
+  projectRoot?: string;
+}): string {
+  const lines: string[] = ['[OTTERCAMP_EXECUTION_MODE]'];
+  if (params.mode === 'project' && params.projectRoot) {
+    lines.push('- mode: project');
+    if (params.context.projectID) {
+      lines.push(`- project_id: ${params.context.projectID}`);
+    }
+    lines.push(`- cwd: ${params.projectRoot}`);
+    lines.push(`- write_guard_root: ${params.projectRoot}`);
+    lines.push('- write policy: writes allowed only within write_guard_root');
+    lines.push('- enforcement: policy-level only (prompt contract, no write hooks in v1)');
+    lines.push('- TODO: enforce write/edit/apply_patch paths via OpenClaw file-write hooks');
+    lines.push('- security: path traversal and symlink escape SHOULD NOT be used');
+  } else {
+    lines.push('- mode: conversation');
+    lines.push('- project_id: none');
+    lines.push('- write policy: deny write/edit/apply_patch and any filesystem mutation');
+    lines.push('- enforcement: policy-level only (prompt contract, no write hooks in v1)');
+    lines.push('- TODO: enforce mutation denial via OpenClaw tool/write interception hooks');
+    lines.push('- workspaceAccess: none');
+  }
+  lines.push('[/OTTERCAMP_EXECUTION_MODE]');
+  return lines.join('\n');
+}
+
+function clampInlineText(raw: string, maxChars: number): string {
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '';
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars - 3).trimEnd()}...`;
+}
+
+function deriveTaskSummary(context: SessionContext, content: string): string {
+  const fromIssueTitle = getTrimmedString(context.issueTitle);
+  if (fromIssueTitle) {
+    return clampInlineText(fromIssueTitle, SESSION_TASK_SUMMARY_MAX_CHARS);
+  }
+  const firstLine = content.split(/\r?\n/).find((line) => line.trim().length > 0) || content;
+  return clampInlineText(firstLine, SESSION_TASK_SUMMARY_MAX_CHARS);
+}
+
+function normalizeWhoAmITasks(payload: Record<string, unknown>): WhoAmITaskPointer[] {
+  const raw = Array.isArray(payload.active_tasks) ? payload.active_tasks : [];
+  const tasks: WhoAmITaskPointer[] = [];
+  for (const entry of raw) {
+    const record = asRecord(entry);
+    if (!record) {
+      continue;
+    }
+    tasks.push({
+      project: getTrimmedString(record.project) || undefined,
+      issue: getTrimmedString(record.issue) || undefined,
+      title: getTrimmedString(record.title) || undefined,
+      status: getTrimmedString(record.status) || undefined,
+    });
+    if (tasks.length >= 4) {
+      break;
+    }
+  }
+  return tasks;
+}
+
+function renderTaskPointer(task: WhoAmITaskPointer): string {
+  const parts: string[] = [];
+  if (task.project) {
+    parts.push(task.project);
+  }
+  if (task.issue) {
+    parts.push(task.issue);
+  }
+  if (task.title) {
+    parts.push(task.title);
+  }
+  const label = parts.join(' / ') || 'Task';
+  if (task.status) {
+    return `${label} [${task.status}]`;
+  }
+  return label;
+}
+
+function readIdentityField(
+  payload: Record<string, unknown>,
+  profile: 'compact' | 'full',
+  compactKey: string,
+  fullKey: string,
+): string {
+  if (profile === 'full') {
+    const fullValue = getTrimmedString(payload[fullKey]);
+    if (fullValue) {
+      return clampInlineText(fullValue, IDENTITY_BLOCK_MAX_CHARS);
+    }
+  }
+  const compactValue = getTrimmedString(payload[compactKey]);
+  if (compactValue) {
+    return clampInlineText(compactValue, IDENTITY_BLOCK_MAX_CHARS);
+  }
+  const fullValue = getTrimmedString(payload[fullKey]);
+  if (fullValue) {
+    return clampInlineText(fullValue, IDENTITY_BLOCK_MAX_CHARS);
+  }
+  return '';
+}
+
+export function isCompactWhoAmIInsufficient(payload: Record<string, unknown>): boolean {
+  const profile = getTrimmedString(payload.profile).toLowerCase();
+  if (profile && profile !== 'compact') {
+    return false;
+  }
+  const agent = asRecord(payload.agent);
+  const agentName = getTrimmedString(agent?.name);
+  const soulSummary = getTrimmedString(payload.soul_summary);
+  const identitySummary = getTrimmedString(payload.identity_summary);
+  const instructionsSummary = getTrimmedString(payload.instructions_summary);
+  const segments = [soulSummary, identitySummary, instructionsSummary].filter(Boolean);
+  const totalChars = segments.reduce((sum, segment) => sum + segment.length, 0);
+  if (!agentName) {
+    return true;
+  }
+  if (segments.length < 2) {
+    return true;
+  }
+  return totalChars < COMPACT_WHOAMI_MIN_SUMMARY_CHARS;
+}
+
+export function formatSessionDisplayLabel(agentName: string, taskSummary: string): string {
+  const normalizedName = getTrimmedString(agentName);
+  const normalizedTask = getTrimmedString(taskSummary);
+  if (normalizedName && normalizedTask) {
+    return `${normalizedName} — ${normalizedTask}`;
+  }
+  return normalizedName || normalizedTask;
+}
+
+export function buildIdentityPreamble(params: {
+  payload: Record<string, unknown>;
+  profile: 'compact' | 'full';
+  taskSummary?: string;
+}): string {
+  const payload = params.payload;
+  const profile = params.profile;
+  const taskSummary = getTrimmedString(params.taskSummary);
+  const agent = asRecord(payload.agent);
+  const agentName = getTrimmedString(agent?.name) || 'Agent';
+  const agentRole = getTrimmedString(agent?.role);
+  const identityLine = agentRole ? `${agentName}, ${agentRole}` : agentName;
+  const personalitySummary = readIdentityField(payload, profile, 'soul_summary', 'soul');
+  const identitySummary = readIdentityField(payload, profile, 'identity_summary', 'identity');
+  const instructionsSummary = readIdentityField(payload, profile, 'instructions_summary', 'instructions');
+  const activeTasks = normalizeWhoAmITasks(payload).map(renderTaskPointer);
+
+  const lines: string[] = [
+    '[OtterCamp Identity Injection]',
+    `You are ${identityLine}.`,
+    '',
+    `Identity profile: ${profile}`,
+  ];
+  if (personalitySummary) {
+    lines.push(`Personality summary: ${personalitySummary}`);
+  }
+  if (identitySummary) {
+    lines.push(`Identity summary: ${identitySummary}`);
+  }
+  if (instructionsSummary) {
+    lines.push(`Instructions summary: ${instructionsSummary}`);
+  }
+  if (activeTasks.length > 0) {
+    lines.push(`Active tasks: ${activeTasks.join(' | ')}`);
+  }
+  if (taskSummary) {
+    lines.push(`Task: ${taskSummary}`);
+  }
+  lines.push('[/OtterCamp Identity Injection]');
+  return lines.join('\n');
+}
+
+async function fetchWhoAmIProfile(
+  agentID: string,
+  sessionKey: string,
+  orgID: string,
+  profile: 'compact' | 'full',
+): Promise<Record<string, unknown> | null> {
+  const url = new URL(`/api/agents/${encodeURIComponent(agentID)}/whoami`, OTTERCAMP_URL);
+  url.searchParams.set('session_key', sessionKey);
+  url.searchParams.set('profile', profile);
+  if (orgID) {
+    url.searchParams.set('org_id', orgID);
+  }
+
+  const response = await fetchWithRetry(url.toString(), {
+    method: 'GET',
+    headers: {
+      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    },
+  }, `fetch whoami (${profile})`);
+
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 220);
+    console.warn(
+      `[bridge] whoami ${profile} request failed (${response.status} ${response.statusText} ${snippet})`,
+    );
+    return null;
+  }
+
+  const payload = await response.json().catch(() => null);
+  return asRecord(payload);
+}
+
+async function resolveSessionIdentityMetadata(
+  sessionKey: string,
+  context: SessionContext,
+  content: string,
+): Promise<SessionIdentityMetadata | null> {
+  const chameleonAgentID = parseChameleonSessionKey(sessionKey);
+  if (!chameleonAgentID) {
+    return null;
+  }
+  const orgID = getTrimmedString(context.orgID) || OTTERCAMP_ORG_ID;
+  const taskSummary = deriveTaskSummary(context, content);
+
+  const compactPayload = await fetchWhoAmIProfile(chameleonAgentID, sessionKey, orgID, 'compact');
+  if (!compactPayload) {
+    return null;
+  }
+
+  let selectedProfile: 'compact' | 'full' = 'compact';
+  let selectedPayload = compactPayload;
+  if (isCompactWhoAmIInsufficient(compactPayload)) {
+    const fullPayload = await fetchWhoAmIProfile(chameleonAgentID, sessionKey, orgID, 'full');
+    const fullProfile = getTrimmedString(fullPayload?.profile).toLowerCase();
+    const hasFullIdentityFields =
+      Boolean(getTrimmedString(fullPayload?.soul)) ||
+      Boolean(getTrimmedString(fullPayload?.identity)) ||
+      Boolean(getTrimmedString(fullPayload?.instructions));
+    if (fullPayload && (fullProfile === 'full' || hasFullIdentityFields)) {
+      selectedProfile = 'full';
+      selectedPayload = fullPayload;
+    }
+  }
+
+  const agent = asRecord(selectedPayload.agent);
+  const displayLabel = formatSessionDisplayLabel(
+    getTrimmedString(agent?.name) || getTrimmedString(context.agentName) || getTrimmedString(context.agentID),
+    taskSummary,
+  );
+  return {
+    profile: selectedProfile,
+    preamble: buildIdentityPreamble({
+      payload: selectedPayload,
+      profile: selectedProfile,
+      taskSummary,
+    }),
+    displayLabel: displayLabel || undefined,
+  };
+}
+
+async function withSessionContext(sessionKey: string, rawContent: string): Promise<string> {
   const content = rawContent.trim();
   if (!content) {
     return '';
   }
-  const context = sessionContexts.get(sessionKey);
+  let context = sessionContexts.get(sessionKey);
   if (!context) {
     return content;
   }
   if (!contextPrimedSessions.has(sessionKey)) {
+    const execution = await resolveSessionExecutionContext(sessionKey, context);
+    context = {
+      ...context,
+      executionMode: execution.mode,
+      projectRoot: execution.projectRoot,
+    };
+
+    let identityMetadata = context.identityMetadata;
+    if (!identityMetadata) {
+      try {
+        identityMetadata = await resolveSessionIdentityMetadata(sessionKey, context, content) || undefined;
+      } catch (err) {
+        console.warn(`[bridge] failed to resolve identity for ${sessionKey}:`, err);
+      }
+      if (identityMetadata) {
+        context = {
+          ...context,
+          identityMetadata,
+          displayLabel: identityMetadata.displayLabel,
+        };
+      }
+    }
+    setSessionContext(sessionKey, context);
     contextPrimedSessions.add(sessionKey);
-    return `${buildContextEnvelope(context)}\n\n${content}`;
+    const sections: string[] = [];
+    if (identityMetadata?.preamble) {
+      sections.push(identityMetadata.preamble);
+    }
+    sections.push(buildExecutionPolicyBlock({
+      mode: execution.mode,
+      context,
+      projectRoot: execution.projectRoot,
+    }));
+    sections.push(buildContextEnvelope(context));
+    sections.push(content);
+    return sections.join('\n\n');
   }
   return `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]\n\n${content}`;
+}
+
+export async function formatSessionContextMessageForTest(
+  sessionKey: string,
+  rawContent: string,
+): Promise<string> {
+  return withSessionContext(sessionKey, rawContent);
 }
 
 function extractMessageContent(value: unknown): string {
@@ -1911,6 +2452,9 @@ export function resetBufferedActivityEventsForTest(): void {
   queuedActivityEventIDs.clear();
   deliveredActivityEventIDs.clear();
   deliveredActivityEventIDOrder.length = 0;
+  gitCompletionDefaultsResolved = false;
+  gitCompletionBranch = '';
+  gitCompletionRemote = '';
 }
 
 export function getBufferedActivityEventStateForTest(): {
@@ -1936,6 +2480,29 @@ export function getSessionContextStateForTest(): { count: number; keys: string[]
   return {
     count: sessionContexts.size,
     keys: Array.from(sessionContexts.keys()),
+  };
+}
+
+export function getSessionContextForTest(sessionKey: string): Record<string, unknown> | null {
+  const context = sessionContexts.get(getTrimmedString(sessionKey));
+  if (!context) {
+    return null;
+  }
+  return {
+    kind: context.kind,
+    orgID: context.orgID,
+    threadID: context.threadID,
+    agentID: context.agentID,
+    agentName: context.agentName,
+    projectID: context.projectID,
+    issueID: context.issueID,
+    issueNumber: context.issueNumber,
+    issueTitle: context.issueTitle,
+    documentPath: context.documentPath,
+    responderAgentID: context.responderAgentID,
+    displayLabel: context.displayLabel,
+    executionMode: context.executionMode,
+    projectRoot: context.projectRoot,
   };
 }
 
@@ -1978,14 +2545,23 @@ function normalizeModeArg(value: string | undefined): 'once' | 'continuous' {
   return normalized === 'continuous' ? 'continuous' : 'once';
 }
 
-function buildOtterCampWSURL(): string {
+export function buildOtterCampWSURL(secret: string = OTTERCAMP_WS_SECRET): string {
   const url = new URL(OTTERCAMP_URL);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.pathname = '/ws/openclaw';
-  if (OTTERCAMP_WS_SECRET) {
-    url.searchParams.set('token', OTTERCAMP_WS_SECRET);
+  if (secret) {
+    url.searchParams.set('token', secret);
   }
   return url.toString();
+}
+
+export function sanitizeWebSocketURLForLog(rawURL: string): string {
+  try {
+    const parsed = new URL(rawURL);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return "[invalid-url]";
+  }
 }
 
 async function connectToOpenClaw(): Promise<void> {
@@ -2153,22 +2729,16 @@ async function connectToOpenClaw(): Promise<void> {
     });
 
     openClawWS.on('close', (code, reason) => {
-      console.warn(`[bridge] OpenClaw socket closed (${code}) ${reason.toString()}`);
-      applyConnectionTransition('openclaw', 'socket_closed', { code, reason: reason.toString() });
-      clearHeartbeatTimers('openclaw');
-      openClawWS = null;
-      for (const [pendingID, pending] of Array.from(pendingRequests.entries())) {
-        pendingRequests.delete(pendingID);
-        pending.reject(new Error('OpenClaw socket closed'));
-      }
-      rejectOnce(new Error(`OpenClaw socket closed (${code})`));
-      if (continuousModeEnabled) {
-        scheduleReconnect('openclaw', () => {
+      handleOpenClawSocketClosed(
+        code,
+        reason.toString(),
+        rejectOnce,
+        () => {
           void connectToOpenClaw().catch((connectErr) => {
             console.error('[bridge] OpenClaw reconnect failed:', connectErr);
           });
-        });
-      }
+        },
+      );
     });
 
     setTimeout(() => {
@@ -2213,9 +2783,31 @@ async function sendMessageToSession(
 ): Promise<void> {
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const contextualContent = withSessionContext(sessionKey, content);
+  const isFirstDispatchForSession = !contextPrimedSessions.has(sessionKey);
+  const contextualContent = await withSessionContext(sessionKey, content);
   if (!contextualContent) {
     return;
+  }
+
+  if (isFirstDispatchForSession) {
+    const firstContext = sessionContexts.get(sessionKey);
+    const displayLabel = getTrimmedString(firstContext?.displayLabel);
+    const projectRoot = getTrimmedString(firstContext?.projectRoot);
+    const shouldSetCwd = getTrimmedString(firstContext?.executionMode) === 'project' && projectRoot;
+    if (displayLabel || shouldSetCwd) {
+      const updatePayload: Record<string, unknown> = { sessionKey };
+      if (displayLabel) {
+        updatePayload.displayName = displayLabel;
+      }
+      if (shouldSetCwd) {
+        updatePayload.cwd = projectRoot;
+      }
+      try {
+        await sendRequest('sessions.update', updatePayload);
+      } catch (err) {
+        console.warn(`[bridge] unable to set session metadata for ${sessionKey}:`, err);
+      }
+    }
   }
 
   await sendRequest('chat.send', {
@@ -2458,6 +3050,141 @@ async function fetchSessions(): Promise<OpenClawSession[]> {
   return response.sessions || [];
 }
 
+type ParsedCompletionProgressLine = {
+  issueNumber: number;
+  commitSHA: string;
+  action: string;
+  pushStatus: 'succeeded' | 'failed';
+};
+
+export function parseCompletionProgressLine(line: string): ParsedCompletionProgressLine | null {
+  const match = COMPLETION_PROGRESS_LINE_PATTERN.exec(getTrimmedString(line));
+  if (!match) {
+    return null;
+  }
+  const issueNumber = Number(match[1]);
+  const commitSHA = getTrimmedString(match[2]).toLowerCase();
+  const action = getTrimmedString(match[3]).toLowerCase();
+  if (!Number.isFinite(issueNumber) || issueNumber <= 0 || !commitSHA) {
+    return null;
+  }
+  let pushStatus: 'succeeded' | 'failed' | null = null;
+  if (action.includes('pushed')) {
+    pushStatus = 'succeeded';
+  } else if (action.includes('fail')) {
+    pushStatus = 'failed';
+  }
+  if (!pushStatus) {
+    return null;
+  }
+  return {
+    issueNumber,
+    commitSHA,
+    action,
+    pushStatus,
+  };
+}
+
+async function resolveGitCompletionDefaults(): Promise<{ branch: string; remote: string }> {
+  if (gitCompletionDefaultsResolved) {
+    return {
+      branch: gitCompletionBranch,
+      remote: gitCompletionRemote,
+    };
+  }
+  gitCompletionDefaultsResolved = true;
+
+  try {
+    const branchResult = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      timeout: 5000,
+      maxBuffer: 128 * 1024,
+    });
+    gitCompletionBranch = getTrimmedString(branchResult.stdout);
+  } catch {
+    gitCompletionBranch = '';
+  }
+
+  try {
+    const remoteResult = await execFileAsync('git', ['remote'], {
+      timeout: 5000,
+      maxBuffer: 128 * 1024,
+    });
+    const firstRemote = getTrimmedString(remoteResult.stdout).split(/\r?\n/).find((line) => line.trim().length > 0);
+    gitCompletionRemote = getTrimmedString(firstRemote) || 'origin';
+  } catch {
+    gitCompletionRemote = 'origin';
+  }
+
+  return {
+    branch: gitCompletionBranch,
+    remote: gitCompletionRemote,
+  };
+}
+
+async function buildCompletionActivityEventFromProgressLine(
+  orgID: string,
+  line: string,
+): Promise<BridgeAgentActivityEvent | null> {
+  const parsed = parseCompletionProgressLine(line);
+  if (!parsed) {
+    return null;
+  }
+
+  const defaults = await resolveGitCompletionDefaults();
+  const nowISO = new Date().toISOString();
+  const idSeed = [orgID, String(parsed.issueNumber), parsed.commitSHA, parsed.action].join('|');
+  const status: BridgeAgentActivityEvent['status'] =
+    parsed.pushStatus === 'failed' ? 'failed' : 'completed';
+
+  return {
+    id: `completion_${crypto.createHash('sha1').update(idSeed).digest('hex').slice(0, 24)}`,
+    agent_id: 'system',
+    session_key: `completion:issue:${parsed.issueNumber}`,
+    trigger: 'task.completion',
+    channel: 'system',
+    summary: `Captured completion metadata for issue #${parsed.issueNumber}`,
+    detail: line.trim(),
+    scope: {
+      issue_number: parsed.issueNumber,
+    },
+    tokens_used: 0,
+    model_used: undefined,
+    commit_sha: parsed.commitSHA,
+    commit_branch: defaults.branch || undefined,
+    commit_remote: defaults.remote || undefined,
+    push_status: parsed.pushStatus,
+    duration_ms: 0,
+    status,
+    started_at: nowISO,
+    completed_at: nowISO,
+  };
+}
+
+async function queueCompletionEventsFromProgressLines(orgID: string, lines: string[]): Promise<number> {
+  const normalizedOrgID = getTrimmedString(orgID);
+  if (!normalizedOrgID || lines.length === 0) {
+    return 0;
+  }
+  const events: BridgeAgentActivityEvent[] = [];
+  for (const line of lines) {
+    const event = await buildCompletionActivityEventFromProgressLine(normalizedOrgID, line);
+    if (event) {
+      events.push(event);
+    }
+  }
+  if (events.length === 0) {
+    return 0;
+  }
+  return queueActivityEventsForOrg(normalizedOrgID, events);
+}
+
+export async function buildCompletionActivityEventFromProgressLineForTest(
+  orgID: string,
+  line: string,
+): Promise<BridgeAgentActivityEvent | null> {
+  return buildCompletionActivityEventFromProgressLine(orgID, line);
+}
+
 function rememberProgressLogLine(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -2572,6 +3299,71 @@ function applyJSONMergePatch(target: unknown, patch: unknown): unknown {
   return targetRecord;
 }
 
+function canonicalizeJSONValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeJSONValue(item));
+  }
+  if (value && typeof value === 'object') {
+    const input = value as Record<string, unknown>;
+    const keys = Object.keys(input).sort();
+    const out: Record<string, unknown> = {};
+    for (const key of keys) {
+      out[key] = canonicalizeJSONValue(input[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function hashCanonicalJSON(value: unknown): string {
+  const canonical = canonicalizeJSONValue(value);
+  const serialized = JSON.stringify(canonical);
+  return crypto.createHash('sha256').update(serialized).digest('hex');
+}
+
+function readOpenClawConfigFile(configPath: string): unknown {
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    return parseJSONValue(raw);
+  } catch (err) {
+    const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
+    if (code === 'ENOENT') {
+      return {};
+    }
+    throw err;
+  }
+}
+
+function writeOpenClawConfigFile(configPath: string, configValue: unknown): void {
+  const backupPath = `${configPath}.bak.${Date.now()}`;
+  try {
+    if (fs.existsSync(configPath)) {
+      fs.copyFileSync(configPath, backupPath);
+    }
+  } catch (err) {
+    console.warn(`[bridge] failed to create config backup ${backupPath}:`, err);
+  }
+  const serialized = `${JSON.stringify(configValue, null, 2)}\n`;
+  const directory = path.dirname(configPath);
+  const tempPath = path.join(
+    directory,
+    `.${path.basename(configPath)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  try {
+    fs.writeFileSync(tempPath, serialized, 'utf8');
+    fs.renameSync(tempPath, configPath);
+  } catch (err) {
+    try {
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+    } catch (cleanupErr) {
+      console.warn(`[bridge] failed to remove temp config file ${tempPath}:`, cleanupErr);
+    }
+    throw err;
+  }
+}
+
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   const [cronJobs, processes, progressLogLines] = await Promise.all([
     fetchCronJobsSnapshot(),
@@ -2587,6 +3379,13 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
     processes,
     source: 'bridge',
   };
+
+  if (progressLogLines.length > 0 && OTTERCAMP_ORG_ID) {
+    const queuedCompletionEvents = await queueCompletionEventsFromProgressLines(OTTERCAMP_ORG_ID, progressLogLines);
+    if (queuedCompletionEvents > 0) {
+      console.log(`[bridge] queued ${queuedCompletionEvents} completion metadata event(s) from progress log`);
+    }
+  }
 
   const url = `${OTTERCAMP_URL}/api/sync/openclaw`;
   const response = await fetchWithRetry(url, {
@@ -2796,6 +3595,27 @@ async function flushDispatchReplayQueue(reason: string): Promise<number> {
     console.log(`[bridge] replayed ${flushed} queued dispatch event(s) (${reason})`);
   }
   return flushed;
+}
+
+async function runSerializedPeriodicSync(operation: () => Promise<void>): Promise<boolean> {
+  if (isPeriodicSyncRunning) {
+    return false;
+  }
+  isPeriodicSyncRunning = true;
+  try {
+    await operation();
+    return true;
+  } finally {
+    isPeriodicSyncRunning = false;
+  }
+}
+
+export async function runSerializedSyncOperationForTest(operation: () => Promise<void>): Promise<boolean> {
+  return runSerializedPeriodicSync(operation);
+}
+
+export function resetPeriodicSyncGuardForTest(): void {
+  isPeriodicSyncRunning = false;
 }
 
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
@@ -3491,6 +4311,8 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
   const jobID = getTrimmedString(event.data?.job_id);
   const processID = getTrimmedString(event.data?.process_id);
   const configPatch = event.data?.config_patch;
+  const configFull = event.data?.config_full;
+  const configHash = getTrimmedString(event.data?.config_hash);
   const confirm = event.data?.confirm === true;
   const dryRun = event.data?.dry_run === true;
   const sessionKey = getTrimmedString(event.data?.session_key) || (agentID ? `agent:${agentID}:main` : '');
@@ -3524,6 +4346,15 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
     } catch (err) {
       console.warn(`[bridge] targeted reset failed for ${sessionKey}; falling back to gateway restart:`, err);
       await runOpenClawCommand(['gateway', 'restart']);
+    }
+    contextPrimedSessions.delete(sessionKey);
+    const existingContext = sessionContexts.get(sessionKey);
+    if (existingContext) {
+      setSessionContext(sessionKey, {
+        ...existingContext,
+        identityMetadata: undefined,
+        displayLabel: undefined,
+      });
     }
     console.log(`[bridge] executed admin.command agent.reset for ${sessionKey} (${commandID})`);
     return;
@@ -3583,29 +4414,43 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
     }
 
     const configPath = resolveOpenClawConfigPath();
-    let currentConfig: unknown = {};
-    try {
-      const raw = fs.readFileSync(configPath, 'utf8');
-      currentConfig = parseJSONValue(raw);
-    } catch (err) {
-      const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
-      if (code !== 'ENOENT') {
-        throw err;
+    const currentConfig = readOpenClawConfigFile(configPath);
+
+    const mergedConfig = applyJSONMergePatch(currentConfig, patchObject);
+    writeOpenClawConfigFile(configPath, mergedConfig);
+    await runOpenClawCommand(['gateway', 'restart']);
+    console.log(`[bridge] executed admin.command config.patch (${commandID})`);
+    return;
+  }
+
+  if (action === 'config.cutover' || action === 'config.rollback') {
+    if (!confirm) {
+      throw new Error(`${action} requires confirm=true`);
+    }
+    const fullConfigObject = asRecord(configFull);
+    if (!fullConfigObject) {
+      throw new Error(`${action} missing config_full object`);
+    }
+    if (dryRun) {
+      console.log(`[bridge] validated admin.command ${action} dry-run (${commandID})`);
+      return;
+    }
+
+    const configPath = resolveOpenClawConfigPath();
+    const currentConfig = readOpenClawConfigFile(configPath);
+    if (action === 'config.rollback') {
+      if (!configHash) {
+        throw new Error('config.rollback requires config_hash for integrity validation');
+      }
+      const currentHash = hashCanonicalJSON(currentConfig);
+      if (currentHash !== configHash) {
+        throw new Error(`config.rollback hash mismatch: expected ${configHash}, got ${currentHash}`);
       }
     }
 
-    const mergedConfig = applyJSONMergePatch(currentConfig, patchObject);
-    const backupPath = `${configPath}.bak.${Date.now()}`;
-    try {
-      if (fs.existsSync(configPath)) {
-        fs.copyFileSync(configPath, backupPath);
-      }
-    } catch (err) {
-      console.warn(`[bridge] failed to create config backup ${backupPath}:`, err);
-    }
-    fs.writeFileSync(configPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, 'utf8');
+    writeOpenClawConfigFile(configPath, fullConfigObject);
     await runOpenClawCommand(['gateway', 'restart']);
-    console.log(`[bridge] executed admin.command config.patch (${commandID})`);
+    console.log(`[bridge] executed admin.command ${action} (${commandID})`);
     return;
   }
 
@@ -3614,7 +4459,7 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
 
 function connectOtterCampDispatchSocket(): void {
   if (!OTTERCAMP_WS_SECRET) {
-    console.warn('[bridge] OPENCLAW_WS_SECRET not set; dm.message dispatch disabled');
+    console.warn('[bridge] OPENCLAW_WS_SECRET (or OTTERCAMP_WS_SECRET) not set; dm.message dispatch disabled');
     return;
   }
 
@@ -3623,7 +4468,7 @@ function connectOtterCampDispatchSocket(): void {
   }
 
   const wsURL = buildOtterCampWSURL();
-  console.log(`[bridge] connecting to OtterCamp websocket ${wsURL}`);
+  console.log(`[bridge] connecting to OtterCamp websocket ${sanitizeWebSocketURLForLog(wsURL)}`);
   markSocketConnectAttempt('ottercamp');
 
   otterCampWS = new WebSocket(wsURL);
@@ -3729,20 +4574,25 @@ async function runContinuous(): Promise<void> {
   await flushBufferedActivityEvents('initial-dispatch');
 
   setInterval(async () => {
-    try {
-      const sessions = await fetchSessions();
-      const activityEvents = collectSessionDeltaActivityEvents(sessions);
-      queueSessionDeltaActivityEvents(activityEvents);
-      await pushToOtterCamp(sessions);
-      const flushedCount = await flushBufferedActivityEvents('periodic-sync');
-      if (activityEvents.length > 0 || flushedCount > 0) {
-        console.log(
-          `[bridge] generated ${activityEvents.length} activity event(s) from session deltas; pushed ${flushedCount}`,
-        );
+    const executed = await runSerializedPeriodicSync(async () => {
+      try {
+        const sessions = await fetchSessions();
+        const activityEvents = collectSessionDeltaActivityEvents(sessions);
+        queueSessionDeltaActivityEvents(activityEvents);
+        await pushToOtterCamp(sessions);
+        const flushedCount = await flushBufferedActivityEvents('periodic-sync');
+        if (activityEvents.length > 0 || flushedCount > 0) {
+          console.log(
+            `[bridge] generated ${activityEvents.length} activity event(s) from session deltas; pushed ${flushedCount}`,
+          );
+        }
+        console.log(`[bridge] periodic sync complete (${sessions.length} sessions)`);
+      } catch (err) {
+        console.error('[bridge] periodic sync failed:', err);
       }
-      console.log(`[bridge] periodic sync complete (${sessions.length} sessions)`);
-    } catch (err) {
-      console.error('[bridge] periodic sync failed:', err);
+    });
+    if (!executed) {
+      console.warn('[bridge] periodic sync skipped because previous run is still active');
     }
   }, SYNC_INTERVAL_MS);
 

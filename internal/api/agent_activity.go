@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -35,12 +37,22 @@ var activityStatusValues = map[string]struct{}{
 	"timeout":   {},
 }
 
-var activityUUIDRegex = regexp.MustCompile(`^[a-fA-F0-9-]{36}$`)
+var completionPushStatusValues = map[string]struct{}{
+	"succeeded": {},
+	"failed":    {},
+	"unknown":   {},
+}
+
+var activityUUIDRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var activityCommitSHARegex = regexp.MustCompile(`^[a-fA-F0-9]{7,64}$`)
 
 type AgentActivityHandler struct {
 	DB    *sql.DB
 	Store *store.AgentActivityEventStore
 	Hub   *ws.Hub
+
+	storeOnce sync.Once
+	storeErr  error
 }
 
 type ingestAgentActivityEventsRequest struct {
@@ -56,20 +68,24 @@ type ingestAgentActivityScope struct {
 }
 
 type ingestAgentActivityRecord struct {
-	ID          string                    `json:"id"`
-	AgentID     string                    `json:"agent_id"`
-	SessionKey  string                    `json:"session_key,omitempty"`
-	Trigger     string                    `json:"trigger"`
-	Channel     string                    `json:"channel,omitempty"`
-	Summary     string                    `json:"summary"`
-	Detail      string                    `json:"detail,omitempty"`
-	Scope       *ingestAgentActivityScope `json:"scope,omitempty"`
-	TokensUsed  int                       `json:"tokens_used"`
-	ModelUsed   string                    `json:"model_used,omitempty"`
-	DurationMs  int64                     `json:"duration_ms"`
-	Status      string                    `json:"status"`
-	StartedAt   time.Time                 `json:"started_at"`
-	CompletedAt *time.Time                `json:"completed_at,omitempty"`
+	ID           string                    `json:"id"`
+	AgentID      string                    `json:"agent_id"`
+	SessionKey   string                    `json:"session_key,omitempty"`
+	Trigger      string                    `json:"trigger"`
+	Channel      string                    `json:"channel,omitempty"`
+	Summary      string                    `json:"summary"`
+	Detail       string                    `json:"detail,omitempty"`
+	Scope        *ingestAgentActivityScope `json:"scope,omitempty"`
+	TokensUsed   int                       `json:"tokens_used"`
+	ModelUsed    string                    `json:"model_used,omitempty"`
+	CommitSHA    string                    `json:"commit_sha,omitempty"`
+	CommitBranch string                    `json:"commit_branch,omitempty"`
+	CommitRemote string                    `json:"commit_remote,omitempty"`
+	PushStatus   string                    `json:"push_status,omitempty"`
+	DurationMs   int64                     `json:"duration_ms"`
+	Status       string                    `json:"status"`
+	StartedAt    time.Time                 `json:"started_at"`
+	CompletedAt  *time.Time                `json:"completed_at,omitempty"`
 }
 
 type ingestAgentActivityEventsResponse struct {
@@ -150,11 +166,15 @@ func (h *AgentActivityHandler) IngestEvents(w http.ResponseWriter, r *http.Reque
 
 	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, req.OrgID)
 	if err := activityStore.CreateEvents(ctx, createInputs); err != nil {
-		if err == store.ErrNoWorkspace || err == store.ErrInvalidWorkspace {
+		if isActivityWorkspaceScopeError(err) {
 			sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 			return
 		}
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to persist activity events"})
+		return
+	}
+	if err := h.persistCompletionMetadataActivities(ctx, req.OrgID, createInputs); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to persist completion metadata"})
 		return
 	}
 
@@ -179,24 +199,28 @@ func (h *AgentActivityHandler) broadcastRealtimeActivityEvents(orgID string, eve
 
 	for _, event := range events {
 		payload := map[string]interface{}{
-			"id":           event.ID,
-			"org_id":       orgID,
-			"agent_id":     event.AgentID,
-			"session_key":  event.SessionKey,
-			"trigger":      event.Trigger,
-			"channel":      event.Channel,
-			"summary":      event.Summary,
-			"detail":       event.Detail,
-			"project_id":   event.ProjectID,
-			"issue_id":     event.IssueID,
-			"issue_number": event.IssueNumber,
-			"thread_id":    event.ThreadID,
-			"tokens_used":  event.TokensUsed,
-			"model_used":   event.ModelUsed,
-			"duration_ms":  event.DurationMs,
-			"status":       event.Status,
-			"started_at":   event.StartedAt.UTC(),
-			"created_at":   createdAt,
+			"id":            event.ID,
+			"org_id":        orgID,
+			"agent_id":      event.AgentID,
+			"session_key":   event.SessionKey,
+			"trigger":       event.Trigger,
+			"channel":       event.Channel,
+			"summary":       event.Summary,
+			"detail":        event.Detail,
+			"project_id":    event.ProjectID,
+			"issue_id":      event.IssueID,
+			"issue_number":  event.IssueNumber,
+			"thread_id":     event.ThreadID,
+			"tokens_used":   event.TokensUsed,
+			"model_used":    event.ModelUsed,
+			"commit_sha":    event.CommitSHA,
+			"commit_branch": event.CommitBranch,
+			"commit_remote": event.CommitRemote,
+			"push_status":   event.PushStatus,
+			"duration_ms":   event.DurationMs,
+			"status":        event.Status,
+			"started_at":    event.StartedAt.UTC(),
+			"created_at":    createdAt,
 		}
 		if event.CompletedAt != nil {
 			payload["completed_at"] = event.CompletedAt.UTC()
@@ -214,6 +238,74 @@ func (h *AgentActivityHandler) broadcastRealtimeActivityEvents(orgID string, eve
 		}
 		h.Hub.Broadcast(orgID, data)
 	}
+}
+
+func (h *AgentActivityHandler) persistCompletionMetadataActivities(
+	ctx context.Context,
+	orgID string,
+	events []store.CreateAgentActivityEventInput,
+) error {
+	if h == nil || h.DB == nil {
+		return nil
+	}
+	conn, err := store.WithWorkspace(ctx, h.DB)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	query := `
+		WITH updated AS (
+			UPDATE activity_log
+			SET metadata = $2::jsonb,
+			    created_at = NOW()
+			WHERE org_id = $1
+			  AND action = 'git.push'
+			  AND metadata->>'completion_event_id' = $3
+			RETURNING id
+		)
+		INSERT INTO activity_log (org_id, action, metadata)
+		SELECT $1, 'git.push', $2::jsonb
+		WHERE NOT EXISTS (SELECT 1 FROM updated)
+	`
+
+	for _, event := range events {
+		if strings.TrimSpace(event.CommitSHA) == "" {
+			continue
+		}
+		pushStatus := strings.TrimSpace(event.PushStatus)
+		if pushStatus == "" {
+			pushStatus = "unknown"
+		}
+		metadata := map[string]any{
+			"completion_event_id": event.ID,
+			"source":              "agent_activity_completion",
+			"commit_sha":          strings.TrimSpace(event.CommitSHA),
+			"branch":              strings.TrimSpace(event.CommitBranch),
+			"remote":              strings.TrimSpace(event.CommitRemote),
+			"push_status":         pushStatus,
+			"summary":             strings.TrimSpace(event.Summary),
+			"session_key":         strings.TrimSpace(event.SessionKey),
+		}
+		if strings.TrimSpace(event.ProjectID) != "" {
+			metadata["project_id"] = strings.TrimSpace(event.ProjectID)
+		}
+		if strings.TrimSpace(event.IssueID) != "" {
+			metadata["issue_id"] = strings.TrimSpace(event.IssueID)
+		}
+		if event.IssueNumber > 0 {
+			metadata["issue_number"] = event.IssueNumber
+		}
+
+		metadataJSON, err := json.Marshal(metadata)
+		if err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx, query, orgID, metadataJSON, event.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func normalizeActivityIngestRecord(event ingestAgentActivityRecord) (store.CreateAgentActivityEventInput, error) {
@@ -249,21 +341,40 @@ func normalizeActivityIngestRecord(event ingestAgentActivityRecord) (store.Creat
 	if event.DurationMs < 0 {
 		return store.CreateAgentActivityEventInput{}, fmt.Errorf("duration_ms must be >= 0")
 	}
+	commitSHA := strings.TrimSpace(event.CommitSHA)
+	if commitSHA != "" {
+		if !activityCommitSHARegex.MatchString(commitSHA) {
+			return store.CreateAgentActivityEventInput{}, fmt.Errorf("commit_sha must be a hex git SHA")
+		}
+	}
+	pushStatus := strings.ToLower(strings.TrimSpace(event.PushStatus))
+	if commitSHA != "" && pushStatus == "" {
+		pushStatus = "unknown"
+	}
+	if pushStatus != "" {
+		if _, ok := completionPushStatusValues[pushStatus]; !ok {
+			return store.CreateAgentActivityEventInput{}, fmt.Errorf("push_status is invalid")
+		}
+	}
 
 	input := store.CreateAgentActivityEventInput{
-		ID:          id,
-		AgentID:     agentID,
-		SessionKey:  strings.TrimSpace(event.SessionKey),
-		Trigger:     trigger,
-		Channel:     strings.TrimSpace(event.Channel),
-		Summary:     summary,
-		Detail:      strings.TrimSpace(event.Detail),
-		TokensUsed:  event.TokensUsed,
-		ModelUsed:   strings.TrimSpace(event.ModelUsed),
-		DurationMs:  event.DurationMs,
-		Status:      status,
-		StartedAt:   event.StartedAt.UTC(),
-		CompletedAt: event.CompletedAt,
+		ID:           id,
+		AgentID:      agentID,
+		SessionKey:   strings.TrimSpace(event.SessionKey),
+		Trigger:      trigger,
+		Channel:      strings.TrimSpace(event.Channel),
+		Summary:      summary,
+		Detail:       strings.TrimSpace(event.Detail),
+		TokensUsed:   event.TokensUsed,
+		ModelUsed:    strings.TrimSpace(event.ModelUsed),
+		CommitSHA:    commitSHA,
+		CommitBranch: strings.TrimSpace(event.CommitBranch),
+		CommitRemote: strings.TrimSpace(event.CommitRemote),
+		PushStatus:   pushStatus,
+		DurationMs:   event.DurationMs,
+		Status:       status,
+		StartedAt:    event.StartedAt.UTC(),
+		CompletedAt:  event.CompletedAt,
 	}
 
 	if event.Scope == nil {
@@ -304,6 +415,10 @@ func (h *AgentActivityHandler) ListByAgent(w http.ResponseWriter, r *http.Reques
 	agentID := strings.TrimSpace(chi.URLParam(r, "id"))
 	if agentID == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id is required"})
+		return
+	}
+	if !uuidRegex.MatchString(agentID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id must be a UUID"})
 		return
 	}
 	opts, err := parseAgentActivityListOptions(r.URL.Query())
@@ -495,17 +610,28 @@ func buildListAgentActivityResponse(items []store.AgentActivityEvent, limit int)
 }
 
 func (h *AgentActivityHandler) resolveStore() (*store.AgentActivityEventStore, error) {
-	if h.Store != nil {
-		return h.Store, nil
-	}
-	db := h.DB
-	if db == nil {
-		var err error
-		db, err = store.DB()
-		if err != nil {
-			return nil, err
+	h.storeOnce.Do(func() {
+		if h.Store != nil {
+			return
 		}
+		db := h.DB
+		if db == nil {
+			db, h.storeErr = store.DB()
+			if h.storeErr != nil {
+				return
+			}
+		}
+		h.Store = store.NewAgentActivityEventStore(db)
+	})
+	if h.storeErr != nil {
+		return nil, h.storeErr
 	}
-	h.Store = store.NewAgentActivityEventStore(db)
+	if h.Store == nil {
+		return nil, fmt.Errorf("activity store unavailable")
+	}
 	return h.Store, nil
+}
+
+func isActivityWorkspaceScopeError(err error) bool {
+	return errors.Is(err, store.ErrNoWorkspace) || errors.Is(err, store.ErrInvalidWorkspace)
 }

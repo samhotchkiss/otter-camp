@@ -389,6 +389,23 @@ func TestSchemaUniqueConstraints(t *testing.T) {
 	requirePQCode(t, err, "23505")
 }
 
+func TestSchemaAgentMemoriesDailyUniqueIndexIncludesOrgScope(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var indexDef string
+	err := db.QueryRow(
+		`SELECT indexdef
+		 FROM pg_indexes
+		 WHERE schemaname = 'public'
+		   AND indexname = 'idx_agent_memories_daily_unique'`,
+	).Scan(&indexDef)
+	require.NoError(t, err)
+	require.Contains(t, indexDef, "(org_id, agent_id, date)")
+	require.Contains(t, strings.ToLower(indexDef), "where")
+	require.Contains(t, indexDef, "kind")
+}
+
 func TestSchemaCascadeDeletes(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

@@ -24,6 +24,10 @@ export type AgentActivityEvent = {
   threadId?: string;
   tokensUsed: number;
   modelUsed?: string;
+  commitSha?: string;
+  commitBranch?: string;
+  commitRemote?: string;
+  pushStatus?: "succeeded" | "failed" | "unknown";
   durationMs: number;
   status: AgentActivityStatus;
   startedAt: Date;
@@ -59,6 +63,10 @@ type RawAgentActivityEvent = {
   thread_id?: unknown;
   tokens_used?: unknown;
   model_used?: unknown;
+  commit_sha?: unknown;
+  commit_branch?: unknown;
+  commit_remote?: unknown;
+  push_status?: unknown;
   duration_ms?: unknown;
   status?: unknown;
   started_at?: unknown;
@@ -155,6 +163,7 @@ export function parseAgentActivityEvent(raw: unknown): AgentActivityEvent | null
   const startedAt = normalizeDate(record.started_at);
   const completedAtRaw = normalizeString(record.completed_at);
   const createdAtRaw = normalizeString(record.created_at);
+  const pushStatus = normalizeString(record.push_status);
 
   return {
     id,
@@ -171,6 +180,13 @@ export function parseAgentActivityEvent(raw: unknown): AgentActivityEvent | null
     threadId: normalizeString(record.thread_id),
     tokensUsed: normalizeNumber(record.tokens_used, 0),
     modelUsed: normalizeString(record.model_used),
+    commitSha: normalizeString(record.commit_sha),
+    commitBranch: normalizeString(record.commit_branch),
+    commitRemote: normalizeString(record.commit_remote),
+    pushStatus:
+      pushStatus === "succeeded" || pushStatus === "failed" || pushStatus === "unknown"
+        ? pushStatus
+        : undefined,
     durationMs: normalizeNumber(record.duration_ms, 0),
     status: normalizeStatus(record.status),
     startedAt,

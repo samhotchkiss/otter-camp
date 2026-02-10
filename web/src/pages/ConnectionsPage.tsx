@@ -468,6 +468,13 @@ export default function ConnectionsPage() {
           Live bridge health, session state, and sync visibility for remote operations.
         </p>
       </header>
+      <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <h2 className="text-sm font-semibold text-[var(--text)]">Chameleon routing policy</h2>
+        <p className="mt-2 text-xs text-[var(--text-muted)]">Without project_id, chats stay read-only.</p>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">
+          Writable tasks must dispatch with project context and stay within that project root.
+        </p>
+      </article>
 
       {loading && (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 text-sm text-[var(--text-muted)]">

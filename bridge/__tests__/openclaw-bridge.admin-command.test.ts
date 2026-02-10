@@ -1,47 +1,56 @@
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
-const { execFileMock } = vi.hoisted(() => ({
-  execFileMock: vi.fn(
-    (
-      _cmd: string,
-      _args: string[],
-      optionsOrCallback: unknown,
-      maybeCallback?: (error: Error | null, stdout?: string, stderr?: string) => void,
-    ) => {
-      const callback =
-        typeof optionsOrCallback === 'function'
-          ? (optionsOrCallback as (error: Error | null, stdout?: string, stderr?: string) => void)
-          : maybeCallback;
-      if (callback) {
-        callback(null, '', '');
-      }
-    },
-  ),
-}));
+import { handleAdminCommandDispatchEvent, setExecFileForTest } from '../openclaw-bridge';
 
-vi.mock('node:child_process', () => ({
-  execFile: execFileMock,
-  default: { execFile: execFileMock },
-}));
+type ExecCall = {
+  cmd: string;
+  args: string[];
+};
 
-import { handleAdminCommandDispatchEvent } from '../openclaw-bridge';
+let execCalls: ExecCall[] = [];
 
-describe('admin.command config.patch', () => {
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalize(entry));
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort()) {
+      out[key] = canonicalize(record[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function hashCanonical(value: unknown): string {
+  return crypto.createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
+}
+
+describe('admin.command config patch/cutover/rollback', () => {
   let tempDir = '';
   let configPath = '';
   const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 
   beforeEach(() => {
-    execFileMock.mockClear();
+    execCalls = [];
+    setExecFileForTest((cmd, args, _options, callback) => {
+      execCalls.push({ cmd, args: [...args] });
+      callback(null, '', '');
+    });
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-bridge-config-'));
     configPath = path.join(tempDir, 'openclaw.json');
     process.env.OPENCLAW_CONFIG_PATH = configPath;
   });
 
   afterEach(() => {
+    setExecFileForTest(null);
     if (originalConfigPath === undefined) {
       delete process.env.OPENCLAW_CONFIG_PATH;
     } else {
@@ -79,12 +88,12 @@ describe('admin.command config.patch', () => {
     });
 
     const updated = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-    expect(updated.gateway).toEqual({ port: 18888, host: '127.0.0.1' });
-    expect(updated.agents).toEqual({
+    assert.deepEqual(updated.gateway, { port: 18888, host: '127.0.0.1' });
+    assert.deepEqual(updated.agents, {
       main: { enabled: true, model: { primary: 'gpt-5.2-codex' } },
     });
-    expect(execFileMock).toHaveBeenCalled();
-    expect(execFileMock.mock.calls[0]?.[1]).toEqual(['gateway', 'restart']);
+    assert.equal(execCalls.length, 1);
+    assert.deepEqual(execCalls[0]?.args, ['gateway', 'restart']);
   });
 
   it('supports dry-run validation without file mutation', async () => {
@@ -104,7 +113,175 @@ describe('admin.command config.patch', () => {
     });
 
     const current = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-    expect(current.gateway).toEqual({ port: 18791 });
-    expect(execFileMock).not.toHaveBeenCalled();
+    assert.deepEqual(current.gateway, { port: 18791 });
+    assert.equal(execCalls.length, 0);
+  });
+
+  it('preserves original config when atomic rename fails', async () => {
+    const originalConfig = {
+      gateway: { port: 18791 },
+      agents: { main: { model: { primary: 'claude-opus-4-6' } } },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(originalConfig, null, 2));
+
+    const originalRenameSync = fs.renameSync;
+    (fs as unknown as { renameSync: typeof fs.renameSync }).renameSync = ((_oldPath: fs.PathLike, _newPath: fs.PathLike) => {
+      throw new Error('rename failed');
+    }) as typeof fs.renameSync;
+
+    try {
+      await assert.rejects(
+        handleAdminCommandDispatchEvent({
+          type: 'admin.command',
+          data: {
+            command_id: 'cmd-atomic-fail',
+            action: 'config.patch',
+            confirm: true,
+            config_patch: {
+              gateway: { port: 18888 },
+            },
+          },
+        }),
+        /rename failed/,
+      );
+    } finally {
+      (fs as unknown as { renameSync: typeof fs.renameSync }).renameSync = originalRenameSync;
+    }
+
+    const current = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual(current, originalConfig);
+    assert.equal(execCalls.length, 0);
+  });
+
+  it('applies full config cutover payloads and restarts gateway', async () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          gateway: { port: 18791 },
+          agents: {
+            main: { model: { primary: 'claude-opus-4-6' } },
+            writer: { model: { primary: 'gpt-4.1' } },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const cutoverConfig = {
+      gateway: { port: 18791 },
+      agents: {
+        main: { model: { primary: 'claude-opus-4-6' } },
+        chameleon: { model: { primary: 'claude-opus-4-6' }, workspace: '~/.openclaw/workspace-chameleon' },
+      },
+    };
+
+    await handleAdminCommandDispatchEvent({
+      type: 'admin.command',
+      data: {
+        command_id: 'cmd-cutover',
+        action: 'config.cutover',
+        confirm: true,
+        config_full: cutoverConfig,
+      },
+    });
+
+    const updated = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual(updated, cutoverConfig);
+    assert.equal(execCalls.length, 1);
+    assert.deepEqual(execCalls[0]?.args, ['gateway', 'restart']);
+  });
+
+  it('validates rollback hash and restores full snapshot config', async () => {
+    const cutoverConfig = {
+      gateway: { port: 18791 },
+      agents: {
+        main: { model: { primary: 'claude-opus-4-6' } },
+        chameleon: { model: { primary: 'claude-opus-4-6' } },
+      },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(cutoverConfig, null, 2));
+
+    const rollbackConfig = {
+      gateway: { port: 18791 },
+      agents: {
+        main: { model: { primary: 'claude-opus-4-6' } },
+        writer: { model: { primary: 'gpt-4.1' } },
+      },
+    };
+
+    await handleAdminCommandDispatchEvent({
+      type: 'admin.command',
+      data: {
+        command_id: 'cmd-rollback',
+        action: 'config.rollback',
+        confirm: true,
+        config_hash: hashCanonical(cutoverConfig),
+        config_full: rollbackConfig,
+      },
+    });
+
+    const updated = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual(updated, rollbackConfig);
+    assert.equal(execCalls.length, 1);
+    assert.deepEqual(execCalls[0]?.args, ['gateway', 'restart']);
+  });
+
+  it('rejects rollback when current config hash does not match expected checkpoint', async () => {
+    const cutoverConfig = {
+      gateway: { port: 18791 },
+      agents: {
+        main: { model: { primary: 'claude-opus-4-6' } },
+        chameleon: { model: { primary: 'claude-opus-4-6' } },
+      },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(cutoverConfig, null, 2));
+
+    await assert.rejects(
+      handleAdminCommandDispatchEvent({
+        type: 'admin.command',
+        data: {
+          command_id: 'cmd-rollback-mismatch',
+          action: 'config.rollback',
+          confirm: true,
+          config_hash: 'deadbeef',
+          config_full: {
+            gateway: { port: 18791 },
+            agents: { main: { model: { primary: 'claude-opus-4-6' } } },
+          },
+        },
+      }),
+      /config\.rollback hash mismatch/,
+    );
+    assert.equal(execCalls.length, 0);
+  });
+
+  it('rejects rollback when config_hash is missing', async () => {
+    const cutoverConfig = {
+      gateway: { port: 18791 },
+      agents: {
+        main: { model: { primary: 'claude-opus-4-6' } },
+        chameleon: { model: { primary: 'claude-opus-4-6' } },
+      },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(cutoverConfig, null, 2));
+
+    await assert.rejects(
+      handleAdminCommandDispatchEvent({
+        type: 'admin.command',
+        data: {
+          command_id: 'cmd-rollback-no-hash',
+          action: 'config.rollback',
+          confirm: true,
+          config_full: {
+            gateway: { port: 18791 },
+            agents: { main: { model: { primary: 'claude-opus-4-6' } } },
+          },
+        },
+      }),
+      /config\.rollback requires config_hash for integrity validation/,
+    );
+    assert.equal(execCalls.length, 0);
   });
 });

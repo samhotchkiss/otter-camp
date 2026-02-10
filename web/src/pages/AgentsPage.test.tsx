@@ -99,10 +99,17 @@ describe("AgentsPage", () => {
     expect(await screen.findByText("Active in #engineering")).toBeInTheDocument();
     expect(await screen.findByText("Responded to Sam in #leadership")).toBeInTheDocument();
     expect(screen.getByText("Slack")).toBeInTheDocument();
+    expect(screen.getByText("Chats are routed through Chameleon identity injection.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View timeline" })).toHaveAttribute("href", "/agents/main");
 
     fireEvent.click(screen.getByText("Frank"));
     expect(openConversationMock).toHaveBeenCalledTimes(1);
+    expect(openConversationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextLabel: "Chameleon-routed chat",
+        subtitle: "Identity injected on open. Project required for writable tasks.",
+      }),
+    );
   });
 
   it("still renders cards when activity query fails", async () => {

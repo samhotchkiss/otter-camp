@@ -55,6 +55,15 @@ func TestResolveIssueIDUUIDBypassesLookup(t *testing.T) {
 	}
 }
 
+func TestIssueUUIDPatternRequiresCanonicalShape(t *testing.T) {
+	if !issueUUIDPattern.MatchString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") {
+		t.Fatalf("expected canonical UUID shape to match")
+	}
+	if issueUUIDPattern.MatchString("------------------------------------") {
+		t.Fatalf("expected non-UUID hyphen-only string to be rejected")
+	}
+}
+
 func TestResolveIssueIDUsesIssueNumberQueryFilter(t *testing.T) {
 	var requestedIssueNumber string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +334,163 @@ func TestBuildWorkflowSchedulePayload(t *testing.T) {
 		}
 		if tt.wantTZ != "" && payload["tz"] != tt.wantTZ {
 			t.Fatalf("%s: tz = %#v, want %q", tt.name, payload["tz"], tt.wantTZ)
+		}
+	}
+}
+
+func TestReleaseGatePayloadOK(t *testing.T) {
+	if releaseGatePayloadOK(nil) {
+		t.Fatalf("releaseGatePayloadOK(nil) = true, want false")
+	}
+	if releaseGatePayloadOK(map[string]interface{}{"ok": false}) {
+		t.Fatalf("releaseGatePayloadOK(false) = true, want false")
+	}
+	if !releaseGatePayloadOK(map[string]interface{}{"ok": true}) {
+		t.Fatalf("releaseGatePayloadOK(true) = false, want true")
+	}
+}
+
+func TestParseChameleonSessionAgentID(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "valid lowercase uuid",
+			input: "agent:chameleon:oc:a1b2c3d4-5678-90ab-cdef-1234567890ab",
+			want:  "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+		},
+		{
+			name:  "valid uppercase uuid normalized",
+			input: "agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB",
+			want:  "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+		},
+		{
+			name:    "invalid format",
+			input:   "agent:main:slack",
+			wantErr: true,
+		},
+		{
+			name:    "empty input",
+			input:   "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		got, err := parseChameleonSessionAgentID(tt.input)
+		if tt.wantErr {
+			if err == nil {
+				t.Fatalf("%s: expected error, got none", tt.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tt.name, err)
+		}
+		if got != tt.want {
+			t.Fatalf("%s: got %q want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestSlugifyAgentName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "Derek", want: "derek"},
+		{input: "Engineering Lead", want: "engineering-lead"},
+		{input: "  ", want: "agent"},
+		{input: "Nova!!!", want: "nova"},
+	}
+
+	for _, tt := range tests {
+		if got := slugifyAgentName(tt.input); got != tt.want {
+			t.Fatalf("slugifyAgentName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestBuildAgentCreatePayloadIncludesRoleWhenProvided(t *testing.T) {
+	payload := buildAgentCreatePayload("Riley", "riley", "gpt-5.2-codex", "Engineering Lead")
+
+	if payload["slot"] != "riley" {
+		t.Fatalf("slot = %v, want riley", payload["slot"])
+	}
+	if payload["display_name"] != "Riley" {
+		t.Fatalf("display_name = %v, want Riley", payload["display_name"])
+	}
+	if payload["model"] != "gpt-5.2-codex" {
+		t.Fatalf("model = %v, want gpt-5.2-codex", payload["model"])
+	}
+	if payload["role"] != "Engineering Lead" {
+		t.Fatalf("role = %v, want Engineering Lead", payload["role"])
+	}
+}
+
+func TestBuildAgentCreatePayloadOmitsRoleWhenEmpty(t *testing.T) {
+	payload := buildAgentCreatePayload("Riley", "riley", "gpt-5.2-codex", "   ")
+	if _, ok := payload["role"]; ok {
+		t.Fatalf("expected role key to be omitted when empty, got payload: %#v", payload)
+	}
+}
+
+func TestMemoryResolveMemoryWriteKind(t *testing.T) {
+	tests := []struct {
+		name         string
+		daily        bool
+		explicitKind string
+		want         string
+		wantErr      bool
+	}{
+		{name: "daily flag overrides", daily: true, explicitKind: "note", want: "daily"},
+		{name: "default to note", daily: false, explicitKind: "", want: "note"},
+		{name: "explicit long term", daily: false, explicitKind: "long_term", want: "long_term"},
+		{name: "invalid explicit kind", daily: false, explicitKind: "bad", wantErr: true},
+		{name: "explicit kind normalized", daily: false, explicitKind: " Long_Term ", want: "long_term"},
+	}
+
+	for _, tt := range tests {
+		got, err := resolveMemoryWriteKind(tt.daily, tt.explicitKind)
+		if tt.wantErr {
+			if err == nil {
+				t.Fatalf("%s: expected error, got none", tt.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tt.name, err)
+		}
+		if got != tt.want {
+			t.Fatalf("%s: got %q want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestMemoryValidateAgentUUID(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "valid uuid", input: "11111111-2222-3333-4444-555555555555"},
+		{name: "empty", input: "", wantErr: true},
+		{name: "invalid", input: "not-a-uuid", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		err := validateAgentUUID(tt.input)
+		if tt.wantErr {
+			if err == nil {
+				t.Fatalf("%s: expected error, got none", tt.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tt.name, err)
 		}
 	}
 }

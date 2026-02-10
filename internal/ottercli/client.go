@@ -105,9 +105,11 @@ type projectListResponse struct {
 }
 
 type Agent struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Slug string `json:"slug"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Slug  string `json:"slug"`
+	Role  string `json:"role,omitempty"`
+	Emoji string `json:"emoji,omitempty"`
 }
 
 type agentListResponse struct {
@@ -541,6 +543,222 @@ func (c *Client) ListAgents() ([]Agent, error) {
 		return nil, err
 	}
 	return resp.Agents, nil
+}
+
+func (c *Client) AgentWhoAmI(agentID, sessionKey, profile string) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	sessionKey = strings.TrimSpace(sessionKey)
+	profile = strings.TrimSpace(strings.ToLower(profile))
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	if sessionKey == "" {
+		return nil, errors.New("session key is required")
+	}
+	if profile == "" {
+		profile = "compact"
+	}
+
+	q := url.Values{}
+	q.Set("session_key", sessionKey)
+	q.Set("profile", profile)
+	req, err := c.newRequest(http.MethodGet, "/api/agents/"+url.PathEscape(agentID)+"/whoami?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := c.do(req, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (c *Client) CreateAgent(input map[string]any) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/admin/agents", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) UpdateAgent(agentID string, input map[string]any) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPatch, "/api/agents/"+url.PathEscape(agentID), bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ArchiveAgent(agentID string) error {
+	if err := c.requireAuth(); err != nil {
+		return err
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return errors.New("agent id is required")
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/admin/agents/"+url.PathEscape(agentID)+"/retire", nil)
+	if err != nil {
+		return err
+	}
+	return c.do(req, nil)
+}
+
+func (c *Client) WriteAgentMemory(agentID string, input map[string]any) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/agents/"+url.PathEscape(agentID)+"/memory", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ReadAgentMemory(agentID string, days int, includeLongTerm bool) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	if days <= 0 {
+		days = 2
+	}
+	q := url.Values{}
+	q.Set("days", fmt.Sprintf("%d", days))
+	if includeLongTerm {
+		q.Set("include_long_term", "true")
+	}
+	req, err := c.newRequest(http.MethodGet, "/api/agents/"+url.PathEscape(agentID)+"/memory?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) SearchAgentMemory(agentID, query string, limit int) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	query = strings.TrimSpace(query)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	if query == "" {
+		return nil, errors.New("query is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	q := url.Values{}
+	q.Set("q", query)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	req, err := c.newRequest(http.MethodGet, "/api/agents/"+url.PathEscape(agentID)+"/memory/search?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) RunReleaseGate() (map[string]any, int, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, 0, err
+	}
+
+	requestBody, err := json.Marshal(map[string]bool{
+		"confirm": true,
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	req, err := c.newRequest(
+		http.MethodPost,
+		"/api/admin/config/release-gate",
+		bytes.NewReader(requestBody),
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	payload := map[string]any{}
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, resp.StatusCode, readErr
+	}
+	trimmedBody := strings.TrimSpace(string(bodyBytes))
+	if trimmedBody != "" {
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			return nil, resp.StatusCode, fmt.Errorf("invalid response (%d): %s", resp.StatusCode, trimmedBody)
+		}
+	}
+
+	if resp.StatusCode >= 400 {
+		return payload, resp.StatusCode, fmt.Errorf("request failed (%d)", resp.StatusCode)
+	}
+	return payload, resp.StatusCode, nil
 }
 
 func (c *Client) ResolveAgent(query string) (Agent, error) {

@@ -36,12 +36,14 @@ func NewRouter() http.Handler {
 	// Initialize database connection (graceful - demo mode if unavailable)
 	var db *sql.DB
 	var agentStore *store.AgentStore
+	var agentMemoryStore *store.AgentMemoryStore
 
 	if dbConn, err := store.DB(); err != nil {
 		log.Printf("⚠️  Database not available, using demo mode: %v", err)
 	} else {
 		db = dbConn
 		agentStore = store.NewAgentStore(db)
+		agentMemoryStore = store.NewAgentMemoryStore(db)
 		log.Printf("✅ Database connected, Postgres-backed stores ready")
 	}
 
@@ -77,7 +79,7 @@ func NewRouter() http.Handler {
 	emissionsHandler := &EmissionsHandler{Buffer: emissionBuffer, Hub: hub}
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
-	agentsHandler := &AgentsHandler{Store: agentStore, DB: db}
+	agentsHandler := &AgentsHandler{Store: agentStore, MemoryStore: agentMemoryStore, DB: db}
 	var workflowsHandler *WorkflowsHandler // initialized below after adminConnectionsHandler
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db, EmissionBuffer: emissionBuffer}
 	adminConnectionsHandler := &AdminConnectionsHandler{DB: db, OpenClawHandler: openClawWSHandler}
@@ -95,6 +97,7 @@ func NewRouter() http.Handler {
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
 	adminAgentsHandler := &AdminAgentsHandler{DB: db, OpenClawHandler: openClawWSHandler}
+	adminConfigHandler := &AdminConfigHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	labelsHandler := &LabelsHandler{}
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
 	// Settings uses standalone handler functions (no struct needed)
@@ -112,6 +115,7 @@ func NewRouter() http.Handler {
 		projectRepoStore = store.NewProjectRepoStore(db)
 		activityStore = store.NewActivityStore(db)
 		adminConnectionsHandler.EventStore = store.NewConnectionEventStore(db)
+		adminConfigHandler.EventStore = adminConnectionsHandler.EventStore
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
 		githubSyncHealthHandler.Store = githubSyncJobStore
 		githubPullRequestsHandler.Store = store.NewGitHubIssuePRStore(db)
@@ -210,6 +214,10 @@ func NewRouter() http.Handler {
 		r.Get("/tasks", taskHandler.ListTasks)
 		r.Post("/tasks", taskHandler.CreateTask)
 		r.With(middleware.OptionalWorkspace).Get("/agents", agentsHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/whoami", agentsHandler.WhoAmI)
+		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/memory", agentsHandler.GetMemory)
+		r.With(middleware.OptionalWorkspace).Post("/agents/{id}/memory", agentsHandler.CreateMemory)
+		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/memory/search", agentsHandler.SearchMemory)
 		r.With(middleware.OptionalWorkspace).Get("/workflows", workflowsHandler.List)
 		r.With(middleware.OptionalWorkspace).Patch("/workflows/{id}", workflowsHandler.Toggle)
 		r.With(middleware.OptionalWorkspace).Post("/workflows/{id}/run", workflowsHandler.Run)
@@ -299,6 +307,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Put("/settings/workspace", HandleSettingsWorkspacePut)
 		r.With(middleware.OptionalWorkspace).Get("/settings/integrations", HandleSettingsIntegrationsGet)
 		r.With(middleware.OptionalWorkspace).Put("/settings/integrations", HandleSettingsIntegrationsPut)
+		r.With(middleware.OptionalWorkspace).Post("/settings/integrations/api-keys", HandleSettingsAPIKeyCreate)
+		r.With(middleware.OptionalWorkspace).Delete("/settings/integrations/api-keys/{id}", HandleSettingsAPIKeyDelete)
 
 		r.With(middleware.OptionalWorkspace).Get("/github/integration/status", githubIntegrationHandler.IntegrationStatus)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/github/integration/repos", githubIntegrationHandler.ListRepos)
@@ -329,40 +339,35 @@ func NewRouter() http.Handler {
 		r.Post("/import", HandleImport)
 		r.Post("/import/validate", HandleImportValidate)
 
-		r.Get("/settings/profile", HandleSettingsProfileGet)
-		r.Put("/settings/profile", HandleSettingsProfilePut)
-		r.Get("/settings/notifications", HandleSettingsNotificationsGet)
-		r.Put("/settings/notifications", HandleSettingsNotificationsPut)
-		r.Get("/settings/workspace", HandleSettingsWorkspaceGet)
-		r.Put("/settings/workspace", HandleSettingsWorkspacePut)
-		r.Get("/settings/integrations", HandleSettingsIntegrationsGet)
-		r.Put("/settings/integrations", HandleSettingsIntegrationsPut)
-		r.Post("/settings/integrations/api-keys", HandleSettingsAPIKeyCreate)
-		r.Delete("/settings/integrations/api-keys/{id}", HandleSettingsAPIKeyDelete)
-
 		// Admin endpoints
-		r.With(middleware.OptionalWorkspace).Post("/admin/init-repos", HandleAdminInitRepos(db))
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/init-repos", HandleAdminInitRepos(db))
 		r.With(middleware.OptionalWorkspace).Get("/admin/connections", adminConnectionsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/admin/events", adminConnectionsHandler.GetEvents)
-		r.With(middleware.OptionalWorkspace).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)
-		r.With(middleware.OptionalWorkspace).Post("/admin/agents", adminAgentsHandler.Create)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents", adminAgentsHandler.Create)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents", adminAgentsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}", adminAgentsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files", adminAgentsHandler.ListFiles)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/files/{path:.*}", adminAgentsHandler.GetFile)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory", adminAgentsHandler.ListMemoryFiles)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory/{date}", adminAgentsHandler.GetMemoryFileByDate)
-		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/retire", adminAgentsHandler.Retire)
-		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reactivate", adminAgentsHandler.Reactivate)
-		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)
-		r.With(middleware.OptionalWorkspace).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)
-		r.With(middleware.OptionalWorkspace).Post("/admin/diagnostics", adminConnectionsHandler.RunDiagnostics)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/retire", adminAgentsHandler.Retire)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/reactivate", adminAgentsHandler.Reactivate)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/diagnostics", adminConnectionsHandler.RunDiagnostics)
 		r.With(middleware.OptionalWorkspace).Get("/admin/logs", adminConnectionsHandler.GetLogs)
 		r.With(middleware.OptionalWorkspace).Get("/admin/cron/jobs", adminConnectionsHandler.GetCronJobs)
-		r.With(middleware.OptionalWorkspace).Post("/admin/cron/jobs/{id}/run", adminConnectionsHandler.RunCronJob)
-		r.With(middleware.OptionalWorkspace).Patch("/admin/cron/jobs/{id}", adminConnectionsHandler.ToggleCronJob)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/cron/jobs/{id}/run", adminConnectionsHandler.RunCronJob)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Patch("/admin/cron/jobs/{id}", adminConnectionsHandler.ToggleCronJob)
 		r.With(middleware.OptionalWorkspace).Get("/admin/processes", adminConnectionsHandler.GetProcesses)
-		r.With(middleware.OptionalWorkspace).Post("/admin/processes/{id}/kill", adminConnectionsHandler.KillProcess)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/processes/{id}/kill", adminConnectionsHandler.KillProcess)
+		r.With(middleware.OptionalWorkspace).Get("/admin/config", adminConfigHandler.GetCurrent)
+		r.With(middleware.OptionalWorkspace).Get("/admin/config/history", adminConfigHandler.ListHistory)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Patch("/admin/config", adminConfigHandler.Patch)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/release-gate", adminConfigHandler.ReleaseGate)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/cutover", adminConfigHandler.Cutover)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/rollback", adminConfigHandler.Rollback)
 	})
 
 	// WebSocket handlers

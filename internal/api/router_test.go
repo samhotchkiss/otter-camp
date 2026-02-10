@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func TestRouterSetup(t *testing.T) {
@@ -338,9 +340,88 @@ func TestWorkflowRoutesUseOptionalWorkspaceMiddleware(t *testing.T) {
 		`r.With(middleware.OptionalWorkspace).Patch("/workflows/{id}", workflowsHandler.Toggle)`,
 		`r.With(middleware.OptionalWorkspace).Post("/workflows/{id}/run", workflowsHandler.Run)`,
 	}
+		for _, line := range requiredLines {
+			if !strings.Contains(source, line) {
+				t.Fatalf("expected workflow route to include OptionalWorkspace middleware: %s", line)
+			}
+	}
+}
+
+func TestAdminMutationRoutesRequireCapability(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile(filepath.Join("router.go"))
+	if err != nil {
+		t.Fatalf("failed to read router.go: %v", err)
+	}
+
+	source := string(content)
+	requiredLines := []string{
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/init-repos", HandleAdminInitRepos(db))`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents", adminAgentsHandler.Create)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/retire", adminAgentsHandler.Retire)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/reactivate", adminAgentsHandler.Reactivate)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/diagnostics", adminConnectionsHandler.RunDiagnostics)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/cron/jobs/{id}/run", adminConnectionsHandler.RunCronJob)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Patch("/admin/cron/jobs/{id}", adminConnectionsHandler.ToggleCronJob)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/processes/{id}/kill", adminConnectionsHandler.KillProcess)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Patch("/admin/config", adminConfigHandler.Patch)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/release-gate", adminConfigHandler.ReleaseGate)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/cutover", adminConfigHandler.Cutover)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/rollback", adminConfigHandler.Rollback)`,
+	}
+
 	for _, line := range requiredLines {
 		if !strings.Contains(source, line) {
-			t.Fatalf("expected workflow route to include OptionalWorkspace middleware: %s", line)
+			t.Fatalf("expected admin mutation route to include capability middleware: %s", line)
+		}
+	}
+}
+
+func TestSettingsRoutesAreRegisteredExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	routes, ok := router.(chi.Routes)
+	if !ok {
+		t.Fatalf("router does not expose chi routes")
+	}
+	counts := make(map[string]int)
+	middlewareCounts := make(map[string]int)
+
+	err := chi.Walk(routes, func(method string, route string, _ http.Handler, middlewares ...func(http.Handler) http.Handler) error {
+		if strings.HasPrefix(route, "/api/settings/") {
+			key := method + " " + route
+			counts[key]++
+			middlewareCounts[key] = len(middlewares)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk router: %v", err)
+	}
+
+	expected := []string{
+		http.MethodGet + " /api/settings/profile",
+		http.MethodPut + " /api/settings/profile",
+		http.MethodGet + " /api/settings/notifications",
+		http.MethodPut + " /api/settings/notifications",
+		http.MethodGet + " /api/settings/workspace",
+		http.MethodPut + " /api/settings/workspace",
+		http.MethodGet + " /api/settings/integrations",
+		http.MethodPut + " /api/settings/integrations",
+		http.MethodPost + " /api/settings/integrations/api-keys",
+		http.MethodDelete + " /api/settings/integrations/api-keys/{id}",
+	}
+	for _, key := range expected {
+		if counts[key] != 1 {
+			t.Fatalf("expected %s to be registered exactly once, got %d", key, counts[key])
+		}
+		if middlewareCounts[key] == 0 {
+			t.Fatalf("expected %s to include route middleware (OptionalWorkspace), got none", key)
 		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -45,6 +46,7 @@ const (
 
 // In-memory fallback store (used when DB is unavailable)
 var (
+	memoryStateMu       sync.RWMutex
 	memoryAgentStates   = make(map[string]*AgentState)
 	memoryAgentConfigs  = make(map[string]*OpenClawAgentConfig)
 	memoryLastSync      time.Time
@@ -190,8 +192,59 @@ type openClawConfigSnapshotRecord struct {
 const (
 	syncMetadataOpenClawConfigSnapshotKey = "openclaw_config_snapshot"
 	syncMetadataOpenClawConfigHistoryKey  = "openclaw_config_history"
+	syncMetadataOpenClawLegacyImportKey   = "openclaw_legacy_workspace_import"
 	maxOpenClawConfigHistoryEntries       = 50
 )
+
+const (
+	legacyTransitionFilename          = "LEGACY_TRANSITION.md"
+	legacyTransitionMarker            = "OtterCamp Legacy Transition"
+	legacyTransitionAgentsPointer     = "## OtterCamp Legacy Transition\nThis workspace is legacy context. Read `LEGACY_TRANSITION.md` before doing work.\n"
+	legacyTransitionChecklistTemplate = "# LEGACY_TRANSITION.md\n\n" +
+		"OtterCamp + Chameleon is now the active execution path for this workspace.\n" +
+		"This workspace is retained as legacy context only.\n\n" +
+		"Required checklist:\n" +
+		"1. If task has no project, create one before writing deliverables (`otter project create ...`).\n" +
+		"2. Clone/open the project repo and do all file writes inside that repo.\n" +
+		"3. Commit with the required message format and push.\n" +
+		"4. Link commit(s) back to the OtterCamp task/issue.\n" +
+		"5. Do not keep final work product in the legacy workspace.\n"
+)
+
+var commitLegacyWorkspaceTx = func(tx *sql.Tx) error {
+	return tx.Commit()
+}
+
+var renameFileForAtomicWrite = os.Rename
+var removeFileForAtomicWrite = os.Remove
+var createTempFileForAtomicWrite = os.CreateTemp
+
+type openClawLegacyWorkspaceDescriptor struct {
+	ID        string
+	Name      string
+	Workspace string
+	IsDefault bool
+}
+
+type openClawLegacyWorkspaceFiles struct {
+	Soul      string
+	Identity  string
+	Tools     string
+	Agents    string
+	LongTerm  string
+	DailyByID map[string]string
+}
+
+type openClawLegacyImportReport struct {
+	ImportedAgents             int      `json:"imported_agents"`
+	ImportedLongTermMemories   int      `json:"imported_long_term_memories"`
+	ImportedDailyMemories      int      `json:"imported_daily_memories"`
+	TransitionFilesGenerated   int      `json:"transition_files_generated"`
+	SkippedWorkspaceCount      int      `json:"skipped_workspace_count"`
+	WorkspaceWarnings          []string `json:"workspace_warnings,omitempty"`
+	ProcessedWorkspaceCount    int      `json:"processed_workspace_count"`
+	ProcessedRetiredWorkspaces int      `json:"processed_retired_workspaces"`
+}
 
 // SyncPayload is the payload sent from OpenClaw bridge
 type SyncPayload struct {
@@ -330,7 +383,11 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 		return
 	}
-	workspaceID := resolveOpenClawSyncWorkspaceID(r)
+	workspaceID, err := resolveOpenClawSyncWorkspaceID(r)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
 
 	// Get database - use store's DB() for connection pooling
 	db := h.DB
@@ -418,19 +475,21 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 		// Always update in-memory store (fallback when DB unavailable)
 		// Only overwrite if this session is more recent than the stored one
+		memoryStateMu.Lock()
 		if existing, ok := memoryAgentStates[agentID]; !ok || updatedAt.After(existing.UpdatedAt) {
 			memoryAgentStates[agentID] = agentState
 		}
+		memoryStateMu.Unlock()
 		processedCount++
 
 		// Also persist to database if available
-		if db != nil {
+		if db != nil && workspaceID != "" {
 			_, err := db.Exec(`
 				INSERT INTO agent_sync_state 
-					(id, name, role, status, avatar, current_task, last_seen, model, 
+					(org_id, id, name, role, status, avatar, current_task, last_seen, model, 
 					 total_tokens, context_tokens, channel, session_key, updated_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-				ON CONFLICT (id) DO UPDATE SET
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+				ON CONFLICT (org_id, id) DO UPDATE SET
 					name = EXCLUDED.name,
 					role = EXCLUDED.role,
 					status = EXCLUDED.status,
@@ -444,7 +503,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 					session_key = EXCLUDED.session_key,
 					updated_at = EXCLUDED.updated_at
 				WHERE agent_sync_state.updated_at < EXCLUDED.updated_at
-			`, agentID, name, role, status, avatar, currentTask, lastSeen,
+			`, workspaceID, agentID, name, role, status, avatar, currentTask, lastSeen,
 				session.Model, session.TotalTokens, session.ContextTokens,
 				session.Channel, session.Key, updatedAt)
 
@@ -465,7 +524,9 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 				HeartbeatEvery: agent.Heartbeat.Every,
 				UpdatedAt:      now,
 			}
+			memoryStateMu.Lock()
 			memoryAgentConfigs[agent.ID] = config
+			memoryStateMu.Unlock()
 
 			if db != nil {
 				_, err := db.Exec(`
@@ -483,6 +544,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update sync metadata
+	memoryStateMu.Lock()
 	memoryLastSync = now // Always update memory
 	if payload.Host != nil {
 		host := *payload.Host
@@ -529,6 +591,17 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 				if err := persistOpenClawConfigSnapshot(r.Context(), db, *snapshot, now); err != nil {
 					log.Printf("Failed to persist OpenClaw config snapshot metadata: %v", err)
 				}
+			}
+		}
+	}
+	memoryStateMu.Unlock()
+	if payload.Config != nil && db != nil && workspaceID != "" {
+		report, err := importLegacyOpenClawWorkspaces(r.Context(), db, workspaceID, payload.Config.Data)
+		if err != nil {
+			log.Printf("Failed to import legacy OpenClaw workspaces: %v", err)
+		} else if report != nil {
+			if err := upsertSyncMetadataJSON(r.Context(), db, syncMetadataOpenClawLegacyImportKey, report, now); err != nil {
+				log.Printf("Failed to persist legacy workspace import metadata: %v", err)
 			}
 		}
 	}
@@ -714,20 +787,24 @@ func resolveOpenClawSyncSecret() string {
 	return strings.TrimSpace(os.Getenv("OPENCLAW_WEBHOOK_SECRET"))
 }
 
-func resolveOpenClawSyncWorkspaceID(r *http.Request) string {
-	if workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context())); workspaceID != "" {
-		return workspaceID
+func resolveOpenClawSyncWorkspaceID(r *http.Request) (string, error) {
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.Header.Get("X-Workspace-ID"))
 	}
-	if workspaceID := strings.TrimSpace(r.Header.Get("X-Workspace-ID")); workspaceID != "" {
-		return workspaceID
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.Header.Get("X-Org-ID"))
 	}
-	if workspaceID := strings.TrimSpace(r.Header.Get("X-Org-ID")); workspaceID != "" {
-		return workspaceID
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.URL.Query().Get("org_id"))
 	}
-	if workspaceID := strings.TrimSpace(r.URL.Query().Get("org_id")); workspaceID != "" {
-		return workspaceID
+	if workspaceID == "" {
+		return "", nil
 	}
-	return ""
+	if !uuidRegex.MatchString(workspaceID) {
+		return "", fmt.Errorf("workspace id must be a UUID")
+	}
+	return workspaceID, nil
 }
 
 func (h *OpenClawSyncHandler) resolveEmissionBroadcaster() emissionBroadcaster {
@@ -772,9 +849,8 @@ func (h *OpenClawSyncHandler) GetAgents(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	// Fall back to memory if DB didn't have data
-	if lastSync == nil && !memoryLastSync.IsZero() {
-		last := memoryLastSync.UTC()
-		lastSync = &last
+	if lastSync == nil {
+		lastSync = memoryLastSyncSnapshot()
 	}
 	freshness := deriveBridgeFreshness(lastSync, time.Now().UTC(), false, false)
 
@@ -797,11 +873,7 @@ func (h *OpenClawSyncHandler) GetAgents(w http.ResponseWriter, r *http.Request) 
 func (h *OpenClawSyncHandler) getAgentsFromDB(db *sql.DB) ([]AgentState, error) {
 	// If no database, return from in-memory store
 	if db == nil {
-		agents := make([]AgentState, 0, len(memoryAgentStates))
-		for _, state := range memoryAgentStates {
-			agents = append(agents, *state)
-		}
-		return agents, nil
+		return memoryAgentStatesSnapshot(), nil
 	}
 
 	rows, err := db.Query(`
@@ -862,18 +934,95 @@ func (h *OpenClawSyncHandler) getAgentsFromDB(db *sql.DB) ([]AgentState, error) 
 	return agents, rows.Err()
 }
 
-func extractAgentID(sessionKey string) string {
-	// Session keys look like: "agent:main:slack:channel:..." or "agent:2b:main"
-	if len(sessionKey) < 7 || sessionKey[:6] != "agent:" {
-		return ""
+func memoryLastSyncSnapshot() *time.Time {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if memoryLastSync.IsZero() {
+		return nil
 	}
-	rest := sessionKey[6:]
-	for i, c := range rest {
-		if c == ':' {
-			return rest[:i]
+	last := memoryLastSync.UTC()
+	return &last
+}
+
+func memoryAgentStatesSnapshot() []AgentState {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	agents := make([]AgentState, 0, len(memoryAgentStates))
+	for _, state := range memoryAgentStates {
+		if state == nil {
+			continue
 		}
+		agents = append(agents, *state)
 	}
-	return rest
+	return agents
+}
+
+func memoryHostDiagSnapshot() *OpenClawHostDiagnostics {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if memoryHostDiag == nil {
+		return nil
+	}
+	host := *memoryHostDiag
+	return &host
+}
+
+func memoryBridgeDiagSnapshot() *OpenClawBridgeDiagnostics {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if memoryBridgeDiag == nil {
+		return nil
+	}
+	bridge := *memoryBridgeDiag
+	return &bridge
+}
+
+func memoryCronJobsSnapshot() []OpenClawCronJobDiagnostics {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if len(memoryCronJobs) == 0 {
+		return []OpenClawCronJobDiagnostics{}
+	}
+	return append([]OpenClawCronJobDiagnostics(nil), memoryCronJobs...)
+}
+
+func memoryProcessesSnapshot() []OpenClawProcessDiagnostics {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if len(memoryProcesses) == 0 {
+		return []OpenClawProcessDiagnostics{}
+	}
+	return append([]OpenClawProcessDiagnostics(nil), memoryProcesses...)
+}
+
+func memoryConfigSnapshot() *openClawConfigSnapshotRecord {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if memoryConfig == nil {
+		return nil
+	}
+	cloned := *memoryConfig
+	cloned.Data = append(json.RawMessage(nil), memoryConfig.Data...)
+	return &cloned
+}
+
+func memoryConfigHistorySnapshot() []openClawConfigSnapshotRecord {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if len(memoryConfigHistory) == 0 {
+		return nil
+	}
+	history := make([]openClawConfigSnapshotRecord, 0, len(memoryConfigHistory))
+	for _, snapshot := range memoryConfigHistory {
+		cloned := snapshot
+		cloned.Data = append(json.RawMessage(nil), snapshot.Data...)
+		history = append(history, cloned)
+	}
+	return history
+}
+
+func extractAgentID(sessionKey string) string {
+	return ExtractSessionAgentIdentity(sessionKey)
 }
 
 func formatTimeSince(t time.Time) string {
@@ -1050,6 +1199,647 @@ func persistOpenClawConfigSnapshot(
 	}
 	history = appendConfigHistorySnapshot(history, snapshot)
 	return upsertSyncMetadataJSON(ctx, db, syncMetadataOpenClawConfigHistoryKey, history, now)
+}
+
+func importLegacyOpenClawWorkspaces(
+	ctx context.Context,
+	db *sql.DB,
+	workspaceID string,
+	configData interface{},
+) (*openClawLegacyImportReport, error) {
+	if db == nil {
+		return nil, nil
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil, nil
+	}
+
+	descriptors := extractOpenClawConfigWorkspaceDescriptors(configData)
+	if len(descriptors) == 0 {
+		return nil, nil
+	}
+
+	report := &openClawLegacyImportReport{}
+	primaryIdx := resolvePrimaryWorkspaceDescriptorIndex(descriptors)
+	retiredWorkspacePaths := make([]string, 0, len(descriptors))
+
+	tx, err := store.WithWorkspaceIDTx(ctx, db, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	for idx, descriptor := range descriptors {
+		report.ProcessedWorkspaceCount++
+		workspacePathRaw := strings.TrimSpace(descriptor.Workspace)
+		if workspacePathRaw == "" {
+			report.SkippedWorkspaceCount++
+			continue
+		}
+		workspacePath, pathErr := sanitizeLegacyWorkspacePath(workspacePathRaw)
+		if pathErr != nil {
+			report.SkippedWorkspaceCount++
+			report.WorkspaceWarnings = append(report.WorkspaceWarnings, fmt.Sprintf("%s: %v", workspacePathRaw, pathErr))
+			continue
+		}
+
+		files, readErr := loadLegacyWorkspaceFiles(workspacePath)
+		if readErr != nil {
+			report.SkippedWorkspaceCount++
+			report.WorkspaceWarnings = append(report.WorkspaceWarnings, fmt.Sprintf("%s: %v", workspacePath, readErr))
+			continue
+		}
+
+		agentID, upsertErr := upsertLegacyWorkspaceAgent(ctx, tx, workspaceID, descriptor, files)
+		if upsertErr != nil {
+			report.SkippedWorkspaceCount++
+			report.WorkspaceWarnings = append(report.WorkspaceWarnings, fmt.Sprintf("%s: %v", workspacePath, upsertErr))
+			continue
+		}
+		report.ImportedAgents++
+
+		longTermCount, dailyCount, memoryErr := upsertLegacyWorkspaceMemories(ctx, tx, workspaceID, agentID, files)
+		if memoryErr != nil {
+			report.WorkspaceWarnings = append(report.WorkspaceWarnings, fmt.Sprintf("%s: %v", workspacePath, memoryErr))
+		}
+		report.ImportedLongTermMemories += longTermCount
+		report.ImportedDailyMemories += dailyCount
+
+		isRetired := idx != primaryIdx && !strings.EqualFold(strings.TrimSpace(descriptor.ID), "chameleon")
+		if isRetired {
+			report.ProcessedRetiredWorkspaces++
+			retiredWorkspacePaths = append(retiredWorkspacePaths, workspacePath)
+		}
+	}
+
+	if err := commitLegacyWorkspaceTx(tx); err != nil {
+		return nil, err
+	}
+
+	for _, workspacePath := range retiredWorkspacePaths {
+		if transitionErr := ensureLegacyTransitionFiles(workspacePath); transitionErr != nil {
+			report.WorkspaceWarnings = append(report.WorkspaceWarnings, fmt.Sprintf("%s: %v", workspacePath, transitionErr))
+		} else {
+			report.TransitionFilesGenerated++
+		}
+	}
+
+	return report, nil
+}
+
+func extractOpenClawConfigWorkspaceDescriptors(configData interface{}) []openClawLegacyWorkspaceDescriptor {
+	rootMap, ok := configData.(map[string]interface{})
+	if !ok || rootMap == nil {
+		return nil
+	}
+
+	agentsNode, ok := rootMap["agents"]
+	if !ok {
+		return nil
+	}
+	descriptors := parseWorkspaceDescriptorsFromAgentsNode(agentsNode)
+	if len(descriptors) == 0 {
+		return nil
+	}
+	return descriptors
+}
+
+func parseWorkspaceDescriptorsFromAgentsNode(node interface{}) []openClawLegacyWorkspaceDescriptor {
+	switch typed := node.(type) {
+	case []interface{}:
+		return parseWorkspaceDescriptorsFromAgentList(typed)
+	case map[string]interface{}:
+		if listNode, ok := typed["list"]; ok {
+			if entries, ok := listNode.([]interface{}); ok {
+				return parseWorkspaceDescriptorsFromAgentList(entries)
+			}
+		}
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		out := make([]openClawLegacyWorkspaceDescriptor, 0, len(keys))
+		for _, key := range keys {
+			entryMap, ok := typed[key].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			descriptor, ok := parseWorkspaceDescriptor(entryMap, key)
+			if !ok {
+				continue
+			}
+			out = append(out, descriptor)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func parseWorkspaceDescriptorsFromAgentList(list []interface{}) []openClawLegacyWorkspaceDescriptor {
+	out := make([]openClawLegacyWorkspaceDescriptor, 0, len(list))
+	for _, item := range list {
+		entryMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		descriptor, ok := parseWorkspaceDescriptor(entryMap, "")
+		if !ok {
+			continue
+		}
+		out = append(out, descriptor)
+	}
+	return out
+}
+
+func parseWorkspaceDescriptor(entry map[string]interface{}, fallbackID string) (openClawLegacyWorkspaceDescriptor, bool) {
+	id := strings.TrimSpace(toString(entry["id"]))
+	if id == "" {
+		id = strings.TrimSpace(fallbackID)
+	}
+	workspace := strings.TrimSpace(toString(entry["workspace"]))
+	if workspace == "" {
+		workspace = strings.TrimSpace(toString(entry["workspace_path"]))
+	}
+	if workspace == "" {
+		return openClawLegacyWorkspaceDescriptor{}, false
+	}
+
+	name := strings.TrimSpace(toString(entry["name"]))
+	isDefault, _ := entry["default"].(bool)
+	return openClawLegacyWorkspaceDescriptor{
+		ID:        id,
+		Name:      name,
+		Workspace: workspace,
+		IsDefault: isDefault,
+	}, true
+}
+
+func resolvePrimaryWorkspaceDescriptorIndex(descriptors []openClawLegacyWorkspaceDescriptor) int {
+	for idx, descriptor := range descriptors {
+		if descriptor.IsDefault {
+			return idx
+		}
+	}
+	if len(descriptors) == 0 {
+		return -1
+	}
+	return 0
+}
+
+func loadLegacyWorkspaceFiles(workspacePath string) (openClawLegacyWorkspaceFiles, error) {
+	workspacePath, err := sanitizeLegacyWorkspacePath(workspacePath)
+	if err != nil {
+		return openClawLegacyWorkspaceFiles{}, err
+	}
+	info, err := os.Stat(workspacePath)
+	if err != nil {
+		return openClawLegacyWorkspaceFiles{}, err
+	}
+	if !info.IsDir() {
+		return openClawLegacyWorkspaceFiles{}, fmt.Errorf("workspace path is not a directory")
+	}
+
+	soul, err := readOptionalWorkspaceFile(filepath.Join(workspacePath, "SOUL.md"))
+	if err != nil {
+		return openClawLegacyWorkspaceFiles{}, err
+	}
+	identity, err := readOptionalWorkspaceFile(filepath.Join(workspacePath, "IDENTITY.md"))
+	if err != nil {
+		return openClawLegacyWorkspaceFiles{}, err
+	}
+	tools, err := readOptionalWorkspaceFile(filepath.Join(workspacePath, "TOOLS.md"))
+	if err != nil {
+		return openClawLegacyWorkspaceFiles{}, err
+	}
+	agents, err := readOptionalWorkspaceFile(filepath.Join(workspacePath, "AGENTS.md"))
+	if err != nil {
+		return openClawLegacyWorkspaceFiles{}, err
+	}
+	longTerm, err := readOptionalWorkspaceFile(filepath.Join(workspacePath, "MEMORY.md"))
+	if err != nil {
+		return openClawLegacyWorkspaceFiles{}, err
+	}
+	daily, err := readLegacyWorkspaceDailyMemories(filepath.Join(workspacePath, "memory"))
+	if err != nil {
+		return openClawLegacyWorkspaceFiles{}, err
+	}
+
+	return openClawLegacyWorkspaceFiles{
+		Soul:      soul,
+		Identity:  identity,
+		Tools:     tools,
+		Agents:    agents,
+		LongTerm:  longTerm,
+		DailyByID: daily,
+	}, nil
+}
+
+func sanitizeLegacyWorkspacePath(workspacePath string) (string, error) {
+	workspacePath = strings.TrimSpace(workspacePath)
+	if workspacePath == "" {
+		return "", fmt.Errorf("workspace path is empty")
+	}
+	if containsParentTraversalSegment(workspacePath) {
+		return "", fmt.Errorf("workspace path must not contain '..' traversal segments")
+	}
+
+	cleaned := filepath.Clean(workspacePath)
+	absPath, err := filepath.Abs(cleaned)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(absPath)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("workspace path must not be a symlink")
+	}
+
+	resolvedPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return "", err
+	}
+	return resolvedPath, nil
+}
+
+func containsParentTraversalSegment(workspacePath string) bool {
+	normalized := strings.ReplaceAll(workspacePath, `\`, `/`)
+	for _, segment := range strings.Split(normalized, "/") {
+		if strings.TrimSpace(segment) == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func readOptionalWorkspaceFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+func readLegacyWorkspaceDailyMemories(memoryDir string) (map[string]string, error) {
+	entries, err := os.ReadDir(memoryDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]string)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		datePart := strings.TrimSuffix(name, ".md")
+		if _, err := time.Parse("2006-01-02", datePart); err != nil {
+			continue
+		}
+		content, err := readOptionalWorkspaceFile(filepath.Join(memoryDir, name))
+		if err != nil {
+			return nil, err
+		}
+		if content == "" {
+			continue
+		}
+		out[datePart] = content
+	}
+	return out, nil
+}
+
+func upsertLegacyWorkspaceAgent(
+	ctx context.Context,
+	tx *sql.Tx,
+	workspaceID string,
+	descriptor openClawLegacyWorkspaceDescriptor,
+	files openClawLegacyWorkspaceFiles,
+) (string, error) {
+	slug := normalizeLegacyWorkspaceSlug(descriptor.ID)
+	if slug == "" {
+		base := strings.TrimPrefix(filepath.Base(strings.TrimSpace(descriptor.Workspace)), "workspace-")
+		slug = normalizeLegacyWorkspaceSlug(base)
+	}
+	if slug == "" {
+		return "", fmt.Errorf("unable to resolve agent slug from workspace")
+	}
+
+	displayName := strings.TrimSpace(descriptor.Name)
+	if displayName == "" {
+		displayName = humanizeLegacyWorkspaceSlug(slug)
+	}
+	instructions := buildLegacyWorkspaceInstructions(files.Agents, files.Tools)
+
+	var agentID string
+	err := tx.QueryRowContext(
+		ctx,
+		`INSERT INTO agents (
+			org_id, slug, display_name, status, soul_md, identity_md, instructions_md
+		) VALUES (
+			$1, $2, $3, 'active', $4, $5, $6
+		)
+		ON CONFLICT (org_id, slug) DO UPDATE SET
+			display_name = EXCLUDED.display_name,
+			status = 'active',
+			soul_md = COALESCE(EXCLUDED.soul_md, agents.soul_md),
+			identity_md = COALESCE(EXCLUDED.identity_md, agents.identity_md),
+			instructions_md = COALESCE(EXCLUDED.instructions_md, agents.instructions_md),
+			updated_at = NOW()
+		RETURNING id::text`,
+		workspaceID,
+		slug,
+		displayName,
+		nullableImportText(files.Soul),
+		nullableImportText(files.Identity),
+		nullableImportText(instructions),
+	).Scan(&agentID)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(agentID), nil
+}
+
+func upsertLegacyWorkspaceMemories(
+	ctx context.Context,
+	tx *sql.Tx,
+	workspaceID string,
+	agentID string,
+	files openClawLegacyWorkspaceFiles,
+) (int, int, error) {
+	longTermCount := 0
+	dailyCount := 0
+
+	if strings.TrimSpace(files.LongTerm) != "" {
+		if err := upsertLegacyWorkspaceMemory(ctx, tx, workspaceID, agentID, "long_term", nil, files.LongTerm); err != nil {
+			return longTermCount, dailyCount, err
+		}
+		longTermCount = 1
+	}
+
+	dates := make([]string, 0, len(files.DailyByID))
+	for day := range files.DailyByID {
+		dates = append(dates, day)
+	}
+	sort.Strings(dates)
+	for _, day := range dates {
+		content := strings.TrimSpace(files.DailyByID[day])
+		if content == "" {
+			continue
+		}
+		dateValue, err := time.Parse("2006-01-02", day)
+		if err != nil {
+			continue
+		}
+		if err := upsertLegacyWorkspaceMemory(ctx, tx, workspaceID, agentID, "daily", &dateValue, content); err != nil {
+			return longTermCount, dailyCount, err
+		}
+		dailyCount++
+	}
+
+	return longTermCount, dailyCount, nil
+}
+
+func upsertLegacyWorkspaceMemory(
+	ctx context.Context,
+	tx *sql.Tx,
+	workspaceID string,
+	agentID string,
+	kind string,
+	dateValue *time.Time,
+	content string,
+) error {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+
+	var (
+		updateQuery string
+		updateArgs  []interface{}
+		insertArgs  []interface{}
+	)
+	if dateValue == nil {
+		updateQuery = `
+			UPDATE agent_memories
+			SET content = $3, updated_at = NOW()
+			WHERE org_id = $1
+			  AND agent_id = $2
+			  AND kind = $4
+			  AND date IS NULL`
+		updateArgs = []interface{}{workspaceID, agentID, content, kind}
+		insertArgs = []interface{}{workspaceID, agentID, kind, content}
+	} else {
+		dateUTC := dateValue.UTC().Format("2006-01-02")
+		updateQuery = `
+			UPDATE agent_memories
+			SET content = $3, updated_at = NOW()
+			WHERE org_id = $1
+			  AND agent_id = $2
+			  AND kind = $4
+			  AND date = $5`
+		updateArgs = []interface{}{workspaceID, agentID, content, kind, dateUTC}
+		insertArgs = []interface{}{workspaceID, agentID, kind, dateUTC, content}
+	}
+
+	result, err := tx.ExecContext(ctx, updateQuery, updateArgs...)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows > 0 {
+		return nil
+	}
+
+	if dateValue == nil {
+		_, err = tx.ExecContext(
+			ctx,
+			`INSERT INTO agent_memories (org_id, agent_id, kind, content)
+			 VALUES ($1, $2, $3, $4)`,
+			insertArgs...,
+		)
+		return err
+	}
+
+	_, err = tx.ExecContext(
+		ctx,
+		`INSERT INTO agent_memories (org_id, agent_id, kind, date, content)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		insertArgs...,
+	)
+	return err
+}
+
+func ensureLegacyTransitionFiles(workspacePath string) error {
+	workspacePath, err := sanitizeLegacyWorkspacePath(workspacePath)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(workspacePath)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("workspace path is not a directory")
+	}
+
+	transitionPath := filepath.Join(workspacePath, legacyTransitionFilename)
+	if _, err := os.Stat(transitionPath); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if writeErr := writeFileAtomically(transitionPath, []byte(strings.TrimSpace(legacyTransitionChecklistTemplate)+"\n"), 0o644); writeErr != nil {
+			return writeErr
+		}
+	}
+
+	agentsPath := filepath.Join(workspacePath, "AGENTS.md")
+	agentsBody, err := os.ReadFile(agentsPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	current := string(agentsBody)
+	if strings.Contains(current, legacyTransitionMarker) {
+		return nil
+	}
+
+	var merged string
+	current = strings.TrimSpace(current)
+	if current == "" {
+		merged = legacyTransitionAgentsPointer
+	} else {
+		merged = strings.TrimSpace(legacyTransitionAgentsPointer) + "\n\n" + current + "\n"
+	}
+	return writeFileAtomically(agentsPath, []byte(merged), 0o644)
+}
+
+func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tempFile, err := createTempFileForAtomicWrite(dir, "."+base+".tmp-*")
+	if err != nil {
+		return err
+	}
+
+	tempPath := tempFile.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = removeFileForAtomicWrite(tempPath)
+		}
+	}()
+
+	if _, err := tempFile.Write(data); err != nil {
+		_ = tempFile.Close()
+		return err
+	}
+	if err := tempFile.Chmod(perm); err != nil {
+		_ = tempFile.Close()
+		return err
+	}
+	if err := tempFile.Sync(); err != nil {
+		_ = tempFile.Close()
+		return err
+	}
+	if err := tempFile.Close(); err != nil {
+		return err
+	}
+	if err := renameFileForAtomicWrite(tempPath, path); err != nil {
+		return err
+	}
+
+	cleanup = false
+	return nil
+}
+
+func buildLegacyWorkspaceInstructions(agentsContent, toolsContent string) string {
+	parts := make([]string, 0, 2)
+	if trimmed := strings.TrimSpace(agentsContent); trimmed != "" {
+		parts = append(parts, trimmed)
+	}
+	if trimmed := strings.TrimSpace(toolsContent); trimmed != "" {
+		parts = append(parts, trimmed)
+	}
+	return strings.Join(parts, "\n\n---\n\n")
+}
+
+func nullableImportText(value string) interface{} {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
+}
+
+func normalizeLegacyWorkspaceSlug(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return ""
+	}
+	var builder strings.Builder
+	lastDash := false
+	for _, ch := range raw {
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
+			builder.WriteRune(ch)
+			lastDash = false
+			continue
+		}
+		if lastDash {
+			continue
+		}
+		builder.WriteRune('-')
+		lastDash = true
+	}
+	slug := strings.Trim(builder.String(), "-")
+	return slug
+}
+
+func humanizeLegacyWorkspaceSlug(slug string) string {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return "Agent"
+	}
+	parts := strings.Split(slug, "-")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if len(part) == 1 {
+			out = append(out, strings.ToUpper(part))
+			continue
+		}
+		out = append(out, strings.ToUpper(part[:1])+part[1:])
+	}
+	if len(out) == 0 {
+		return "Agent"
+	}
+	return strings.Join(out, " ")
+}
+
+func toString(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	default:
+		return ""
+	}
 }
 
 func progressLogLineToEmission(rawLine string) (Emission, bool) {

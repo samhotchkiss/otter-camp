@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { API_URL } from "../../lib/api";
 import DocumentWorkspace from "../content-review/DocumentWorkspace";
+import { apiFetch } from "../../lib/api";
 
 type AgentIdentityEditorProps = {
   agentID: string;
@@ -13,6 +13,7 @@ type AgentTreeEntry = {
 };
 
 type AgentFilesResponse = {
+  project_id?: string;
   ref?: string;
   entries?: AgentTreeEntry[];
 };
@@ -23,6 +24,12 @@ type AgentBlobResponse = {
   content?: string;
   encoding?: string;
   size?: number;
+};
+
+type ProjectCommitCreateResponse = {
+  commit?: {
+    sha?: string;
+  };
 };
 
 function encodePathForURL(path: string): string {
@@ -52,62 +59,69 @@ function decodeBlobContent(blob: AgentBlobResponse | null): string {
 
 export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProps) {
   const [files, setFiles] = useState<AgentTreeEntry[]>([]);
+  const [agentFilesProjectID, setAgentFilesProjectID] = useState<string>("");
   const [filesRef, setFilesRef] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [blob, setBlob] = useState<AgentBlobResponse | null>(null);
+  const [draftContent, setDraftContent] = useState<string>("");
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [isLoadingBlob, setIsLoadingBlob] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
+    const controller = new AbortController();
+    const load = async (signal: AbortSignal) => {
       if (!agentID) {
         setFiles([]);
+        setAgentFilesProjectID("");
         setIsLoadingFiles(false);
         return;
       }
       setIsLoadingFiles(true);
       setError(null);
       try {
-        const response = await fetch(`${API_URL}/api/admin/agents/${encodeURIComponent(agentID)}/files`);
-        if (!response.ok) {
-          throw new Error(`Failed to load identity files (${response.status})`);
-        }
-        const payload = (await response.json()) as AgentFilesResponse;
-        if (cancelled) {
+        const payload = await apiFetch<AgentFilesResponse>(`/api/admin/agents/${encodeURIComponent(agentID)}/files`, {
+          signal,
+        });
+        if (signal.aborted) {
           return;
         }
         const identityFiles = (payload.entries || [])
           .filter((entry) => entry.type === "file" && !entry.path.startsWith("memory/"))
           .sort((a, b) => a.path.localeCompare(b.path));
         setFiles(identityFiles);
+        setAgentFilesProjectID(String(payload.project_id || "").trim());
         setFilesRef(payload.ref || "");
         const preferred = identityFiles.find((entry) => entry.path.toUpperCase() === "SOUL.MD");
         setSelectedPath(preferred?.path || identityFiles[0]?.path || "");
       } catch (loadError) {
-        if (!cancelled) {
-          const message = loadError instanceof Error ? loadError.message : "Failed to load identity files";
-          setError(message);
-          setFiles([]);
-          setSelectedPath("");
+        if (signal.aborted || (loadError instanceof Error && loadError.name === "AbortError")) {
+          return;
         }
+        const message = loadError instanceof Error ? loadError.message : "Failed to load identity files";
+        setError(message);
+        setFiles([]);
+        setAgentFilesProjectID("");
+        setSelectedPath("");
       } finally {
-        if (!cancelled) {
+        if (!signal.aborted) {
           setIsLoadingFiles(false);
         }
       }
     };
 
-    void load();
+    void load(controller.signal);
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [agentID]);
 
   useEffect(() => {
-    let cancelled = false;
-    const loadBlob = async () => {
+    const controller = new AbortController();
+    const loadBlob = async (signal: AbortSignal) => {
       if (!agentID || !selectedPath) {
         setBlob(null);
         return;
@@ -116,35 +130,87 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
       setError(null);
       try {
         const encodedPath = encodePathForURL(selectedPath);
-        const response = await fetch(
-          `${API_URL}/api/admin/agents/${encodeURIComponent(agentID)}/files/${encodedPath}`,
+        const payload = await apiFetch<AgentBlobResponse>(
+          `/api/admin/agents/${encodeURIComponent(agentID)}/files/${encodedPath}`,
+          { signal },
         );
-        if (!response.ok) {
-          throw new Error(`Failed to load identity file (${response.status})`);
+        if (signal.aborted) {
+          return;
         }
-        const payload = (await response.json()) as AgentBlobResponse;
-        if (!cancelled) {
-          setBlob(payload);
-        }
+        setBlob(payload);
       } catch (loadError) {
-        if (!cancelled) {
-          const message = loadError instanceof Error ? loadError.message : "Failed to load identity file";
-          setError(message);
-          setBlob(null);
+        if (signal.aborted || (loadError instanceof Error && loadError.name === "AbortError")) {
+          return;
         }
+        const message = loadError instanceof Error ? loadError.message : "Failed to load identity file";
+        setError(message);
+        setBlob(null);
       } finally {
-        if (!cancelled) {
+        if (!signal.aborted) {
           setIsLoadingBlob(false);
         }
       }
     };
-    void loadBlob();
+    void loadBlob(controller.signal);
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [agentID, selectedPath]);
 
   const content = useMemo(() => decodeBlobContent(blob), [blob]);
+
+  useEffect(() => {
+    setDraftContent(content);
+    setSaveMessage(null);
+    setSaveError(null);
+  }, [content, selectedPath]);
+
+  const handleSave = async () => {
+    if (!agentID || !selectedPath) {
+      return;
+    }
+    setIsSaving(true);
+    setSaveError(null);
+    setSaveMessage(null);
+    const nextContent = draftContent;
+
+    try {
+      const projectID = agentFilesProjectID;
+      if (!projectID) {
+        throw new Error("Agent Files project is not configured");
+      }
+
+      const commitPayload = await apiFetch<ProjectCommitCreateResponse>(
+        `/api/projects/${encodeURIComponent(projectID)}/commits`,
+        {
+        method: "POST",
+        body: JSON.stringify({
+          path: `/agents/${agentID}/${selectedPath}`,
+          content: nextContent,
+          commit_subject: "Update agent identity file",
+          commit_type: "system",
+        }),
+      },
+      );
+      const nextRef = String(commitPayload.commit?.sha || "").trim();
+      if (nextRef) {
+        setFilesRef(nextRef);
+      }
+      setBlob((previous) => ({
+        ...(previous || {}),
+        ref: nextRef || previous?.ref || filesRef,
+        content: nextContent,
+        encoding: "utf-8",
+        size: new Blob([nextContent]).size,
+      }));
+      setDraftContent(nextContent);
+      setSaveMessage("Saved identity file.");
+    } catch (saveErr) {
+      setSaveError(saveErr instanceof Error ? saveErr.message : "Failed to save identity file");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   if (isLoadingFiles) {
     return (
@@ -197,12 +263,29 @@ export default function AgentIdentityEditor({ agentID }: AgentIdentityEditorProp
           <span className="mx-2">•</span>
           <span>Size: {blob?.size ?? 0} bytes</span>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={!selectedPath || isLoadingBlob || isSaving}
+            className="rounded-lg border border-[#C9A86C] bg-[#C9A86C]/20 px-3 py-1.5 text-xs font-medium text-[#C9A86C] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSaving ? "Saving..." : "Save Identity File"}
+          </button>
+          {saveMessage && <p className="text-xs text-emerald-600">{saveMessage}</p>}
+          {saveError && <p className="text-xs text-rose-500">{saveError}</p>}
+        </div>
         {isLoadingBlob ? (
           <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--text-muted)]">
             Loading file...
           </div>
         ) : (
-          <DocumentWorkspace path={selectedPath} content={content} readOnly />
+          <DocumentWorkspace
+            path={selectedPath}
+            content={draftContent}
+            readOnly={false}
+            onContentChange={setDraftContent}
+          />
         )}
       </div>
     </section>

@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,15 +40,20 @@ func (f *fakeOpenClawConnectionStatus) SendToOpenClaw(event interface{}) error {
 
 func TestAdminConnectionsGetReturnsDiagnosticsAndSessionSummary(t *testing.T) {
 	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-connections-summary-org")
+	otherOrgID := insertMessageTestOrganization(t, db, "admin-connections-summary-other")
 	now := time.Now().UTC()
 
 	_, err := db.Exec(
 		`INSERT INTO agent_sync_state
-			(id, name, status, model, context_tokens, total_tokens, channel, session_key, last_seen, updated_at)
+			(org_id, id, name, status, model, context_tokens, total_tokens, channel, session_key, last_seen, updated_at)
 		 VALUES
-		    ('main', 'Frank', 'online', 'claude-opus-4-6', 160000, 400000, 'slack', 'agent:main:slack', 'just now', $1),
-		    ('2b', 'Derek', 'busy', 'gpt-5.2-codex', 40000, 120000, 'slack', 'agent:2b:slack', '2m ago', $2),
-		    ('three-stones', 'Stone', 'offline', 'claude-opus-4-6', 25000, 90000, 'slack', 'agent:three-stones:slack', '3h ago', $3)`,
+		    ($1, 'main', 'Frank', 'online', 'claude-opus-4-6', 160000, 400000, 'slack', 'agent:main:slack', 'just now', $3),
+		    ($1, '2b', 'Derek', 'busy', 'gpt-5.2-codex', 40000, 120000, 'slack', 'agent:2b:slack', '2m ago', $4),
+		    ($1, 'three-stones', 'Stone', 'offline', 'claude-opus-4-6', 25000, 90000, 'slack', 'agent:three-stones:slack', '3h ago', $5),
+		    ($2, 'main', 'Other Frank', 'online', 'gpt-5.2-codex', 100, 200, 'webchat', 'agent:main:webchat', 'just now', $3)`,
+		orgID,
+		otherOrgID,
 		now,
 		now.Add(-10*time.Minute),
 		now.Add(-3*time.Hour),
@@ -72,6 +79,7 @@ func TestAdminConnectionsGetReturnsDiagnosticsAndSessionSummary(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/connections", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
 	handler.Get(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -96,12 +104,14 @@ func TestAdminConnectionsGetReturnsDiagnosticsAndSessionSummary(t *testing.T) {
 
 func TestAdminConnectionsGetHandlesMissingDiagnosticsMetadata(t *testing.T) {
 	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-connections-metadata-org")
 	handler := &AdminConnectionsHandler{
 		DB:              db,
 		OpenClawHandler: &fakeOpenClawConnectionStatus{connected: false},
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/connections", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
 	handler.Get(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -344,6 +354,64 @@ func TestAdminConnectionsGetEventsReturnsWorkspaceScopedRows(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.Len(t, payload.Events, 1)
 	require.Equal(t, "org A connected", payload.Events[0].Message)
+}
+
+func TestAdminConnectionsGetEventsClampsLimitTo200(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-events-limit-clamp")
+
+	eventStore := store.NewConnectionEventStore(db)
+	for i := 0; i < 220; i++ {
+		_, err := eventStore.Create(testCtxWithWorkspace(orgID), store.CreateConnectionEventInput{
+			EventType: "bridge.connected",
+			Message:   fmt.Sprintf("event-%03d", i),
+		})
+		require.NoError(t, err)
+	}
+
+	handler := &AdminConnectionsHandler{
+		DB:         db,
+		EventStore: eventStore,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/events?limit=999", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.GetEvents(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminConnectionEventsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Len(t, payload.Events, 200)
+	require.Equal(t, 200, payload.Total)
+}
+
+func TestAgentSyncStateSchemaIncludesOrgScopeAndRLS(t *testing.T) {
+	db := setupMessageTestDB(t)
+
+	var (
+		rlsEnabled bool
+		rlsForced  bool
+	)
+	err := db.QueryRow(
+		`SELECT relrowsecurity, relforcerowsecurity
+		   FROM pg_class
+		  WHERE oid = 'agent_sync_state'::regclass`,
+	).Scan(&rlsEnabled, &rlsForced)
+	require.NoError(t, err)
+	require.True(t, rlsEnabled)
+	require.True(t, rlsForced)
+
+	var policyCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM pg_policies
+		  WHERE schemaname = 'public'
+		    AND tablename = 'agent_sync_state'
+		    AND policyname = 'agent_sync_state_org_isolation'`,
+	).Scan(&policyCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, policyCount)
 }
 
 func TestAdminConnectionsRestartGatewayDispatchesCommand(t *testing.T) {
@@ -643,4 +711,29 @@ func TestAdminConnectionsKillProcessDispatchesCommand(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, adminCommandActionProcessKill, dispatched.Data.Action)
 	require.Equal(t, "proc-1", dispatched.Data.ProcessID)
+}
+
+type fakeAdminConnectionSessionRows struct {
+	err error
+}
+
+func (f *fakeAdminConnectionSessionRows) Next() bool {
+	return false
+}
+
+func (f *fakeAdminConnectionSessionRows) Scan(_ ...any) error {
+	return nil
+}
+
+func (f *fakeAdminConnectionSessionRows) Err() error {
+	return f.err
+}
+
+func TestScanAdminConnectionSessionsReturnsRowsErr(t *testing.T) {
+	expected := errors.New("rows iteration failed")
+	rows := &fakeAdminConnectionSessionRows{err: expected}
+
+	sessions, err := scanAdminConnectionSessions(rows)
+	require.Nil(t, sessions)
+	require.ErrorIs(t, err, expected)
 }
