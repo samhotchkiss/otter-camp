@@ -302,4 +302,66 @@ describe('syncWorkflowProjectsFromCronJobsForTest', () => {
       resetWorkflowSyncStateForTest();
     }
   });
+
+  it('skips PATCH when workflow schedule and enabled state are unchanged', async () => {
+    resetWorkflowSyncStateForTest();
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ method: string; url: string }> = [];
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = requestURL(input);
+        const method = requestMethod(input, init);
+        calls.push({ method, url });
+        if (method === 'GET' && url.includes('/api/projects?workflow=true')) {
+          return jsonResponse({
+            projects: [
+              {
+                id: 'project-1',
+                name: 'Morning Briefing',
+                workflow_schedule: { kind: 'every', everyMs: 900000, cron_id: 'job-1' },
+              },
+            ],
+          });
+        }
+        if (method === 'PATCH' && url.includes('/api/projects/project-1')) {
+          return jsonResponse({}, 200);
+        }
+        if (method === 'POST' && url.includes('/runs/trigger')) {
+          return jsonResponse({}, 201);
+        }
+        throw new Error(`unexpected request ${method} ${url}`);
+      }) as typeof fetch;
+
+      await syncWorkflowProjectsFromCronJobsForTest([
+        {
+          id: 'job-1',
+          name: 'Morning Briefing',
+          schedule: '15m',
+          enabled: true,
+        },
+      ]);
+      await syncWorkflowProjectsFromCronJobsForTest([
+        {
+          id: 'job-1',
+          name: 'Morning Briefing',
+          schedule: '15m',
+          enabled: true,
+        },
+      ]);
+      await syncWorkflowProjectsFromCronJobsForTest([
+        {
+          id: 'job-1',
+          name: 'Morning Briefing',
+          schedule: '30m',
+          enabled: true,
+        },
+      ]);
+
+      const patchCalls = calls.filter((call) => call.method === 'PATCH' && call.url.includes('/api/projects/project-1'));
+      assert.equal(patchCalls.length, 2);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetWorkflowSyncStateForTest();
+    }
+  });
 });

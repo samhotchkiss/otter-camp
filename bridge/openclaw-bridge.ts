@@ -401,6 +401,7 @@ let progressLogByteOffset = 0;
 let progressLogOffsetInitialized = false;
 let previousSessionsByKey = new Map<string, OpenClawSession>();
 const previousCronLastRunByID = new Map<string, string>();
+const lastPatchedWorkflowConfigByCronID = new Map<string, string>();
 let cronRunDetectionInitialized = false;
 const queuedActivityEventsByOrg = new Map<string, BridgeAgentActivityEvent[]>();
 const queuedActivityEventIDs = new Set<string>();
@@ -3349,16 +3350,14 @@ async function createWorkflowProjectFromCron(job: OpenClawCronJobSnapshot): Prom
 async function patchWorkflowProjectFromCron(
   projectID: string,
   job: OpenClawCronJobSnapshot,
+  patchPayload: Record<string, unknown>,
 ): Promise<void> {
   const response = await fetchWithRetry(
     `${OTTERCAMP_URL}/api/projects/${encodeURIComponent(projectID)}`,
     {
       method: 'PATCH',
       headers: buildOtterCampAuthHeaders(true),
-      body: JSON.stringify({
-        workflow_enabled: job.enabled,
-        workflow_schedule: cronJobToWorkflowSchedule(job),
-      }),
+      body: JSON.stringify(patchPayload),
     },
     `patch workflow project ${projectID} from cron ${job.id}`,
   );
@@ -3409,8 +3408,18 @@ async function syncWorkflowProjectsFromCronJobs(cronJobs: OpenClawCronJobSnapsho
     }
 
     if (project) {
+      const patchPayload = {
+        workflow_enabled: job.enabled,
+        workflow_schedule: cronJobToWorkflowSchedule(job),
+      };
+      const patchFingerprint = JSON.stringify(patchPayload);
+      const previousPatchFingerprint = lastPatchedWorkflowConfigByCronID.get(jobID) || '';
+
       try {
-        await patchWorkflowProjectFromCron(project.id, job);
+        if (patchFingerprint !== previousPatchFingerprint) {
+          await patchWorkflowProjectFromCron(project.id, job, patchPayload);
+          lastPatchedWorkflowConfigByCronID.set(jobID, patchFingerprint);
+        }
       } catch (err) {
         console.error(`[bridge] failed to patch workflow project ${project.id} from cron ${jobID}:`, err);
       }
@@ -3452,6 +3461,7 @@ export async function syncWorkflowProjectsFromCronJobsForTest(
 
 export function resetWorkflowSyncStateForTest(): void {
   previousCronLastRunByID.clear();
+  lastPatchedWorkflowConfigByCronID.clear();
   cronRunDetectionInitialized = false;
   deliveredRunIDs.clear();
   deliveredRunIDOrder.length = 0;
