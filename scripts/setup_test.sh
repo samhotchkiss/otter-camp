@@ -4,6 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/setup.sh"
 
+setup_main() {
+  main "$@"
+}
+
 assert_equals() {
   local got="$1"
   local want="$2"
@@ -143,14 +147,36 @@ test_run_bootstrap_steps_dry_run_lists_core_commands() {
   }
 }
 
-main() {
+test_main_completion_mentions_init_and_dashboard() {
+  local output
+  output="$(
+    detect_platform() { echo "linux"; }
+    ensure_dependencies() { return 0; }
+    write_env_if_missing() { return 0; }
+    load_env() { return 0; }
+    run_bootstrap_steps() { return 0; }
+    setup_main --dry-run --yes 2>&1 || true
+  )"
+
+  [[ "$output" == *"Run: otter init"* ]] || {
+    echo "expected setup completion to mention otter init" >&2
+    exit 1
+  }
+  [[ "$output" == *"Dashboard: http://localhost:4200"* ]] || {
+    echo "expected setup completion to mention localhost:4200 dashboard" >&2
+    exit 1
+  }
+}
+
+run_tests() {
   test_ensure_dependency_skips_install_when_already_present
   test_ensure_dependency_installs_when_missing_and_confirmed
   test_ensure_dependency_fails_when_user_declines_install
   test_write_env_if_missing_sets_4200_defaults
   test_write_bridge_env_if_missing_targets_4200
   test_run_bootstrap_steps_dry_run_lists_core_commands
+  test_main_completion_mentions_init_and_dashboard
   echo "setup.sh tests passed"
 }
 
-main "$@"
+run_tests "$@"
