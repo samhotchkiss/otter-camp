@@ -383,7 +383,11 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON: " + err.Error()})
 		return
 	}
-	workspaceID := resolveOpenClawSyncWorkspaceID(r)
+	workspaceID, err := resolveOpenClawSyncWorkspaceID(r)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
 
 	// Get database - use store's DB() for connection pooling
 	db := h.DB
@@ -783,20 +787,24 @@ func resolveOpenClawSyncSecret() string {
 	return strings.TrimSpace(os.Getenv("OPENCLAW_WEBHOOK_SECRET"))
 }
 
-func resolveOpenClawSyncWorkspaceID(r *http.Request) string {
-	if workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context())); workspaceID != "" {
-		return workspaceID
+func resolveOpenClawSyncWorkspaceID(r *http.Request) (string, error) {
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.Header.Get("X-Workspace-ID"))
 	}
-	if workspaceID := strings.TrimSpace(r.Header.Get("X-Workspace-ID")); workspaceID != "" {
-		return workspaceID
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.Header.Get("X-Org-ID"))
 	}
-	if workspaceID := strings.TrimSpace(r.Header.Get("X-Org-ID")); workspaceID != "" {
-		return workspaceID
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(r.URL.Query().Get("org_id"))
 	}
-	if workspaceID := strings.TrimSpace(r.URL.Query().Get("org_id")); workspaceID != "" {
-		return workspaceID
+	if workspaceID == "" {
+		return "", nil
 	}
-	return ""
+	if !uuidRegex.MatchString(workspaceID) {
+		return "", fmt.Errorf("workspace id must be a UUID")
+	}
+	return workspaceID, nil
 }
 
 func (h *OpenClawSyncHandler) resolveEmissionBroadcaster() emissionBroadcaster {

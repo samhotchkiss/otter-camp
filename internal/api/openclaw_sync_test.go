@@ -102,6 +102,25 @@ func TestRequireOpenClawSyncAuth_BackwardCompatibleTokenVariable(t *testing.T) {
 	}
 }
 
+func TestOpenClawSyncRejectsNonUUIDWorkspaceIDFallback(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	handler := &OpenClawSyncHandler{}
+	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", strings.NewReader(`{"type":"heartbeat"}`))
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	req.Header.Set("X-Org-ID", "not-a-uuid")
+	rec := httptest.NewRecorder()
+
+	handler.Handle(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "workspace id must be a UUID", payload.Error)
+}
+
 func TestOpenClawSyncHandlerHealthEndpoint(t *testing.T) {
 	handler := &OpenClawSyncHandler{}
 
