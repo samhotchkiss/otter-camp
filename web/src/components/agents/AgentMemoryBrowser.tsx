@@ -66,7 +66,7 @@ export default function AgentMemoryBrowser({ agentID, workspaceAgentID }: AgentM
     return true;
   }, [workspaceAgentID, isSaving, content, kind, date]);
 
-  const loadEntries = async () => {
+  const loadEntries = async (signal?: AbortSignal) => {
     if (!workspaceAgentID) {
       setDailyEntries([]);
       setLongTermEntries([]);
@@ -80,21 +80,34 @@ export default function AgentMemoryBrowser({ agentID, workspaceAgentID }: AgentM
     try {
       const payload = await apiFetch<AgentMemoryListResponse>(
         `/api/agents/${encodeURIComponent(workspaceAgentID)}/memory?days=14&include_long_term=true`,
+        { signal },
       );
+      if (signal?.aborted) {
+        return;
+      }
       setDailyEntries(normalizeRecords(payload.daily, "daily"));
       setLongTermEntries(normalizeRecords(payload.long_term, "long_term"));
     } catch (loadError) {
+      if (signal?.aborted || (loadError instanceof Error && loadError.name === "AbortError")) {
+        return;
+      }
       const message = loadError instanceof Error ? loadError.message : "Failed to load memory entries";
       setError(message);
       setDailyEntries([]);
       setLongTermEntries([]);
     } finally {
-      setIsLoading(false);
+      if (!signal?.aborted) {
+        setIsLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    void loadEntries();
+    const controller = new AbortController();
+    void loadEntries(controller.signal);
+    return () => {
+      controller.abort();
+    };
   }, [workspaceAgentID]);
 
   const handleSave = async (event: FormEvent<HTMLFormElement>) => {
