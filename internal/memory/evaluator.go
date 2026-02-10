@@ -220,7 +220,7 @@ func computePrecisionAtK(cases []EvaluatorCase, k int) float64 {
 				hits += 1
 			}
 		}
-		total += float64(hits) / float64(limit)
+		total += float64(hits) / float64(k)
 	}
 	if denominator == 0 {
 		return 0

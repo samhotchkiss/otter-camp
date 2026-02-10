@@ -125,3 +125,24 @@ func TestLoadEvaluatorCasesJSONL(t *testing.T) {
 	require.Equal(t, "recall-hit-1", cases[0].ID)
 	require.Greater(t, cases[0].InjectedTokens, 0)
 }
+
+func TestEvaluatorPrecisionAtKUsesConfiguredKDenominator(t *testing.T) {
+	evaluator := Evaluator{Config: EvaluatorConfig{K: 5}}
+
+	result := evaluator.Run([]EvaluatorCase{
+		{
+			ID:           "short-list-one",
+			RetrievedIDs: []string{"mem-1"},
+			RelevantIDs:  []string{"mem-1", "mem-2"},
+			ShouldInject: true,
+		},
+		{
+			ID:           "short-list-two",
+			RetrievedIDs: []string{"mem-3", "noise-1"},
+			RelevantIDs:  []string{"mem-3"},
+			ShouldInject: true,
+		},
+	})
+
+	require.InDelta(t, 0.2, result.Metrics.PrecisionAtK, 0.0001)
+}
