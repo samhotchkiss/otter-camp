@@ -22,4 +22,5 @@ DROP TABLE IF EXISTS shared_knowledge;
 DROP TABLE IF EXISTS memory_entry_embeddings;
 DROP TABLE IF EXISTS memory_entries;
 
+-- pgcrypto is shared by earlier migrations; do not drop it here.
 DROP EXTENSION IF EXISTS vector;

@@ -150,6 +150,7 @@ func TestMigration058MemoryInfrastructureFilesExistAndContainCoreDDL(t *testing.
 	require.NoError(t, err)
 	upContent := strings.ToLower(string(upRaw))
 	require.Contains(t, upContent, "create extension if not exists vector")
+	require.Contains(t, upContent, "create extension if not exists pgcrypto")
 	require.Contains(t, upContent, "create table if not exists memory_entries")
 	require.Contains(t, upContent, "create table if not exists memory_entry_embeddings")
 	require.Contains(t, upContent, "create table if not exists shared_knowledge")
