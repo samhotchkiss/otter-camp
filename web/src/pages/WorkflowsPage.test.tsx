@@ -166,4 +166,70 @@ describe("WorkflowsPage", () => {
       ),
     ).toBe(true);
   });
+
+  it("shows error banner when workflow toggle fails", async () => {
+    const user = userEvent.setup();
+    const project: MockWorkflowProject = {
+      id: "project-1",
+      name: "Morning Briefing",
+      workflow_enabled: true,
+      workflow_schedule: { kind: "cron", expr: "0 6 * * *", tz: "America/Denver" },
+      workflow_run_count: 2,
+    };
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || "GET";
+      if (url.includes("/api/projects?workflow=true")) {
+        return jsonResponse({ projects: [project] });
+      }
+      if (url.includes("/runs/latest")) {
+        return jsonResponse({ title: "Latest run" });
+      }
+      if (url.includes(`/api/projects/${project.id}`) && method === "PATCH") {
+        return jsonResponse({ error: "failed" }, 500);
+      }
+      throw new Error(`Unexpected request: ${url} ${method}`);
+    });
+
+    render(<WorkflowsPage />);
+    expect(await screen.findByText("Morning Briefing")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+
+    expect(await screen.findByText("Failed to update workflow state")).toBeInTheDocument();
+  });
+
+  it("shows error banner when manual trigger fails", async () => {
+    const user = userEvent.setup();
+    const project: MockWorkflowProject = {
+      id: "project-1",
+      name: "Morning Briefing",
+      workflow_enabled: true,
+      workflow_schedule: { kind: "every", everyMs: 900000 },
+      workflow_run_count: 2,
+    };
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || "GET";
+      if (url.includes("/api/projects?workflow=true")) {
+        return jsonResponse({ projects: [project] });
+      }
+      if (url.includes("/runs/latest")) {
+        return jsonResponse({ title: "Latest run" });
+      }
+      if (url.includes(`/api/projects/${project.id}/runs/trigger`) && method === "POST") {
+        return jsonResponse({ error: "failed" }, 500);
+      }
+      throw new Error(`Unexpected request: ${url} ${method}`);
+    });
+
+    render(<WorkflowsPage />);
+    expect(await screen.findByText("Morning Briefing")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Run now" }));
+
+    expect(await screen.findByText("Failed to trigger workflow run")).toBeInTheDocument();
+  });
 });

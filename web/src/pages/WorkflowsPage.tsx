@@ -167,12 +167,18 @@ export default function WorkflowsPage() {
   const toggleWorkflow = useCallback(async (project: WorkflowProject) => {
     setActionPending(project.id);
     try {
-      await fetch(`${API_URL}/api/projects/${encodeURIComponent(project.id)}`, {
+      const response = await fetch(`${API_URL}/api/projects/${encodeURIComponent(project.id)}`, {
         method: "PATCH",
         headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({ workflow_enabled: !project.workflow_enabled }),
       });
+      if (!response.ok) {
+        throw new Error("Failed to update workflow state");
+      }
       await refresh();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update workflow state");
     } finally {
       setActionPending(null);
     }
@@ -181,11 +187,17 @@ export default function WorkflowsPage() {
   const triggerRun = useCallback(async (projectID: string) => {
     setActionPending(projectID);
     try {
-      await fetch(`${API_URL}/api/projects/${encodeURIComponent(projectID)}/runs/trigger`, {
+      const response = await fetch(`${API_URL}/api/projects/${encodeURIComponent(projectID)}/runs/trigger`, {
         method: "POST",
         headers: getAuthHeaders(),
       });
+      if (!response.ok) {
+        throw new Error("Failed to trigger workflow run");
+      }
       await refresh();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to trigger workflow run");
     } finally {
       setActionPending(null);
     }
