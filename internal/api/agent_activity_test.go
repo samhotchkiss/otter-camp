@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -90,6 +91,14 @@ func TestActivityUUIDRegexRequiresCanonicalShape(t *testing.T) {
 	require.True(t, activityUUIDRegex.MatchString("123e4567-e89b-12d3-a456-426614174000"))
 	require.False(t, activityUUIDRegex.MatchString("1234567890123-1234-1234-1234567890ab"))
 	require.False(t, activityUUIDRegex.MatchString("1234567890abcdef1234567890abcdef1234"))
+}
+
+func TestActivityEventsIngestUsesErrorsIsForWorkspaceErrors(t *testing.T) {
+	require.True(t, isActivityWorkspaceScopeError(store.ErrNoWorkspace))
+	require.True(t, isActivityWorkspaceScopeError(store.ErrInvalidWorkspace))
+	require.True(t, isActivityWorkspaceScopeError(fmt.Errorf("wrapped: %w", store.ErrNoWorkspace)))
+	require.True(t, isActivityWorkspaceScopeError(fmt.Errorf("wrapped: %w", store.ErrInvalidWorkspace)))
+	require.False(t, isActivityWorkspaceScopeError(errors.New("different error")))
 }
 
 func TestActivityEventsIngestCompletionMetadataUpsert(t *testing.T) {

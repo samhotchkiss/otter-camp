@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -165,7 +166,7 @@ func (h *AgentActivityHandler) IngestEvents(w http.ResponseWriter, r *http.Reque
 
 	ctx := context.WithValue(r.Context(), middleware.WorkspaceIDKey, req.OrgID)
 	if err := activityStore.CreateEvents(ctx, createInputs); err != nil {
-		if err == store.ErrNoWorkspace || err == store.ErrInvalidWorkspace {
+		if isActivityWorkspaceScopeError(err) {
 			sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 			return
 		}
@@ -625,4 +626,8 @@ func (h *AgentActivityHandler) resolveStore() (*store.AgentActivityEventStore, e
 		return nil, fmt.Errorf("activity store unavailable")
 	}
 	return h.Store, nil
+}
+
+func isActivityWorkspaceScopeError(err error) bool {
+	return errors.Is(err, store.ErrNoWorkspace) || errors.Is(err, store.ErrInvalidWorkspace)
 }
