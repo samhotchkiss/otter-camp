@@ -33,6 +33,8 @@ type IssuesHandler struct {
 	OpenClawDispatcher openClawMessageDispatcher
 }
 
+var errIssueHandlerDatabaseUnavailable = errors.New("database not available")
+
 type issueSummaryPayload struct {
 	ID                       string  `json:"id"`
 	ProjectID                string  `json:"project_id"`
@@ -599,6 +601,10 @@ func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
 		return
 	}
+	if h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
 
 	issueID := strings.TrimSpace(chi.URLParam(r, "id"))
 	if issueID == "" {
@@ -611,7 +617,22 @@ func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
-	updated, err := h.IssueStore.TransitionApprovalState(r.Context(), issueID, store.IssueApprovalStateApproved)
+	requireHumanReview, err := h.projectRequiresHumanReview(r.Context(), before.ProjectID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+	targetApprovalState, statusCode, message := resolveApproveTargetApprovalState(
+		before.ApprovalState,
+		requireHumanReview,
+		middleware.UserFromContext(r.Context()),
+	)
+	if statusCode != 0 {
+		sendJSON(w, statusCode, errorResponse{Error: message})
+		return
+	}
+
+	updated, err := h.IssueStore.TransitionApprovalState(r.Context(), issueID, targetApprovalState)
 	if err != nil {
 		handleIssueStoreError(w, err)
 		return
@@ -629,9 +650,30 @@ func (h *IssuesHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logIssueApprovalTransition(r.Context(), *before, *updated)
-	h.logIssueApproved(r.Context(), *before, *updated)
+	if strings.TrimSpace(strings.ToLower(updated.ApprovalState)) == store.IssueApprovalStateApproved {
+		h.logIssueApproved(r.Context(), *before, *updated)
+	}
 
 	sendJSON(w, http.StatusOK, toIssueSummaryPayload(*updated, participants, findIssueLink(linksByIssueID, issueID)))
+}
+
+func resolveApproveTargetApprovalState(currentApprovalState string, requireHumanReview bool, actorID string) (string, int, string) {
+	if !requireHumanReview {
+		return store.IssueApprovalStateApproved, 0, ""
+	}
+
+	normalizedState := strings.TrimSpace(strings.ToLower(currentApprovalState))
+	switch normalizedState {
+	case store.IssueApprovalStateReadyForReview:
+		return store.IssueApprovalStateApprovedByReviewer, 0, ""
+	case store.IssueApprovalStateApprovedByReviewer:
+		if strings.TrimSpace(actorID) == "" {
+			return "", http.StatusForbidden, "human approval required"
+		}
+		return store.IssueApprovalStateApproved, 0, ""
+	default:
+		return "", http.StatusConflict, "issue must be ready_for_review for reviewer approval"
+	}
 }
 
 func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
@@ -1126,6 +1168,32 @@ func (h *IssuesHandler) logIssueApprovalTransition(
 	})
 }
 
+func (h *IssuesHandler) projectRequiresHumanReview(ctx context.Context, projectID string) (bool, error) {
+	if h.DB == nil {
+		return false, errIssueHandlerDatabaseUnavailable
+	}
+
+	conn, err := store.WithWorkspace(ctx, h.DB)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+
+	var requireHumanReview bool
+	err = conn.QueryRowContext(
+		ctx,
+		`SELECT require_human_review FROM projects WHERE id = $1`,
+		projectID,
+	).Scan(&requireHumanReview)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, store.ErrNotFound
+		}
+		return false, err
+	}
+	return requireHumanReview, nil
+}
+
 func (h *IssuesHandler) logIssueApproved(
 	ctx context.Context,
 	before store.ProjectIssue,
@@ -1175,7 +1243,11 @@ func handleIssueStoreError(w http.ResponseWriter, err error) {
 		sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
 	case errors.Is(err, store.ErrNotFound):
 		sendJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
+	case errors.Is(err, store.ErrValidation):
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request"})
+	case errors.Is(err, store.ErrConflict):
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "invalid state transition"})
 	default:
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
 	}
 }

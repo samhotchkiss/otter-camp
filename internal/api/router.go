@@ -98,6 +98,8 @@ func NewRouter() http.Handler {
 	labelsHandler := &LabelsHandler{}
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
 	// Settings uses standalone handler functions (no struct needed)
+	pipelineRolesHandler := &PipelineRolesHandler{}
+	deployConfigHandler := &DeployConfigHandler{}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -135,6 +137,8 @@ func NewRouter() http.Handler {
 		labelsHandler.Store = store.NewLabelStore(db)
 		labelsHandler.DB = db
 		agentActivityHandler.Store = store.NewAgentActivityEventStore(db)
+		pipelineRolesHandler.Store = store.NewPipelineRoleStore(db)
+		deployConfigHandler.Store = store.NewDeployConfigStore(db)
 		adminAgentsHandler.Store = agentStore
 		adminAgentsHandler.ProjectStore = projectStore
 		adminAgentsHandler.ProjectRepos = projectRepoStore
@@ -212,6 +216,10 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}", projectsHandler.Patch)
 		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}", projectsHandler.Delete)
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/settings", projectsHandler.UpdateSettings)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-roles", pipelineRolesHandler.Get)
+		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-roles", pipelineRolesHandler.Put)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/deploy-config", deployConfigHandler.Get)
+		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/deploy-config", deployConfigHandler.Put)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat", projectChatHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/chat/search", projectChatHandler.Search)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/chat/messages", projectChatHandler.Create)

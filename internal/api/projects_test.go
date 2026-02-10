@@ -335,7 +335,7 @@ func TestProjectsHandlerPatchUpdatesProjectFields(t *testing.T) {
 		DB:    db,
 		Store: store.NewProjectStore(db),
 	}
-	body := []byte(`{"status":"archived","repo_url":"https://example.com/repo.git"}`)
+	body := []byte(`{"status":"archived","repo_url":"https://example.com/repo.git","require_human_review":true}`)
 	req := httptest.NewRequest(http.MethodPatch, "/api/projects/"+projectID+"?org_id="+orgID, bytes.NewReader(body))
 	req = addRouteParam(req, "id", projectID)
 	rec := httptest.NewRecorder()
@@ -344,14 +344,82 @@ func TestProjectsHandlerPatchUpdatesProjectFields(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var resp struct {
-		ID      string `json:"id"`
-		Status  string `json:"status"`
-		RepoURL string `json:"repo_url"`
+		ID                 string `json:"id"`
+		Status             string `json:"status"`
+		RepoURL            string `json:"repo_url"`
+		RequireHumanReview bool   `json:"require_human_review"`
 	}
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, projectID, resp.ID)
 	require.Equal(t, "archived", resp.Status)
 	require.Equal(t, "https://example.com/repo.git", resp.RepoURL)
+	require.True(t, resp.RequireHumanReview)
+}
+
+func TestProjectsHandlerPatchRequireHumanReviewJSONCasing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-patch-casing-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Patch Casing")
+
+	handler := &ProjectsHandler{
+		DB:    db,
+		Store: store.NewProjectStore(db),
+	}
+
+	camelBody := []byte(`{"requireHumanReview":true}`)
+	camelReq := httptest.NewRequest(http.MethodPatch, "/api/projects/"+projectID+"?org_id="+orgID, bytes.NewReader(camelBody))
+	camelReq = addRouteParam(camelReq, "id", projectID)
+	camelRec := httptest.NewRecorder()
+	handler.Patch(camelRec, camelReq)
+	require.Equal(t, http.StatusOK, camelRec.Code)
+
+	snakeBody := []byte(`{"require_human_review":false}`)
+	snakeReq := httptest.NewRequest(http.MethodPatch, "/api/projects/"+projectID+"?org_id="+orgID, bytes.NewReader(snakeBody))
+	snakeReq = addRouteParam(snakeReq, "id", projectID)
+	snakeRec := httptest.NewRecorder()
+	handler.Patch(snakeRec, snakeReq)
+	require.Equal(t, http.StatusOK, snakeRec.Code)
+
+	var resp struct {
+		RequireHumanReview bool `json:"require_human_review"`
+	}
+	require.NoError(t, json.NewDecoder(snakeRec.Body).Decode(&resp))
+	require.False(t, resp.RequireHumanReview)
+
+	conflictBody := []byte(`{"require_human_review":true,"requireHumanReview":false}`)
+	conflictReq := httptest.NewRequest(http.MethodPatch, "/api/projects/"+projectID+"?org_id="+orgID, bytes.NewReader(conflictBody))
+	conflictReq = addRouteParam(conflictReq, "id", projectID)
+	conflictRec := httptest.NewRecorder()
+	handler.Patch(conflictRec, conflictReq)
+	require.Equal(t, http.StatusBadRequest, conflictRec.Code)
+}
+
+func TestResolveRequireHumanReviewPatch(t *testing.T) {
+	one := true
+	zero := false
+
+	v, err := resolveRequireHumanReviewPatch(nil, nil)
+	require.NoError(t, err)
+	require.Nil(t, v)
+
+	v, err = resolveRequireHumanReviewPatch(&one, nil)
+	require.NoError(t, err)
+	require.NotNil(t, v)
+	require.True(t, *v)
+
+	v, err = resolveRequireHumanReviewPatch(nil, &zero)
+	require.NoError(t, err)
+	require.NotNil(t, v)
+	require.False(t, *v)
+
+	v, err = resolveRequireHumanReviewPatch(&one, &one)
+	require.NoError(t, err)
+	require.NotNil(t, v)
+	require.True(t, *v)
+
+	v, err = resolveRequireHumanReviewPatch(&one, &zero)
+	require.Error(t, err)
+	require.Nil(t, v)
 }
 
 func TestProjectsHandlerDeleteRemovesProject(t *testing.T) {

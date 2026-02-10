@@ -229,10 +229,11 @@ func NewProjectIssueStore(db *sql.DB) *ProjectIssueStore {
 }
 
 const (
-	IssueApprovalStateDraft          = "draft"
-	IssueApprovalStateReadyForReview = "ready_for_review"
-	IssueApprovalStateNeedsChanges   = "needs_changes"
-	IssueApprovalStateApproved       = "approved"
+	IssueApprovalStateDraft              = "draft"
+	IssueApprovalStateReadyForReview     = "ready_for_review"
+	IssueApprovalStateNeedsChanges       = "needs_changes"
+	IssueApprovalStateApprovedByReviewer = "approved_by_reviewer"
+	IssueApprovalStateApproved           = "approved"
 
 	IssueWorkStatusQueued     = "queued"
 	IssueWorkStatusInProgress = "in_progress"
@@ -256,7 +257,7 @@ func normalizeIssueApprovalState(state string) string {
 
 func isValidIssueApprovalState(state string) bool {
 	switch normalizeIssueApprovalState(state) {
-	case IssueApprovalStateDraft, IssueApprovalStateReadyForReview, IssueApprovalStateNeedsChanges, IssueApprovalStateApproved:
+	case IssueApprovalStateDraft, IssueApprovalStateReadyForReview, IssueApprovalStateNeedsChanges, IssueApprovalStateApprovedByReviewer, IssueApprovalStateApproved:
 		return true
 	default:
 		return false
@@ -274,9 +275,11 @@ func canTransitionIssueApprovalState(currentState, nextState string) bool {
 	case IssueApprovalStateDraft:
 		return next == IssueApprovalStateReadyForReview
 	case IssueApprovalStateReadyForReview:
-		return next == IssueApprovalStateNeedsChanges || next == IssueApprovalStateApproved
+		return next == IssueApprovalStateNeedsChanges || next == IssueApprovalStateApprovedByReviewer || next == IssueApprovalStateApproved
 	case IssueApprovalStateNeedsChanges:
 		return next == IssueApprovalStateReadyForReview
+	case IssueApprovalStateApprovedByReviewer:
+		return next == IssueApprovalStateApproved || next == IssueApprovalStateNeedsChanges
 	case IssueApprovalStateApproved:
 		return false
 	default:
@@ -557,12 +560,12 @@ func (s *ProjectIssueStore) TransitionApprovalState(
 
 	issueID = strings.TrimSpace(issueID)
 	if !uuidRegex.MatchString(issueID) {
-		return nil, fmt.Errorf("invalid issue_id")
+		return nil, fmt.Errorf("%w: invalid issue_id", ErrValidation)
 	}
 
 	normalizedNext := normalizeIssueApprovalState(nextState)
 	if !isValidIssueApprovalState(normalizedNext) {
-		return nil, fmt.Errorf("invalid approval_state")
+		return nil, fmt.Errorf("%w: invalid approval_state", ErrValidation)
 	}
 
 	tx, err := WithWorkspaceTx(ctx, s.db)
@@ -594,7 +597,7 @@ func (s *ProjectIssueStore) TransitionApprovalState(
 		currentState = defaultApprovalStateForLegacyState(current.State)
 	}
 	if !canTransitionIssueApprovalState(currentState, normalizedNext) {
-		return nil, fmt.Errorf("invalid approval_state transition")
+		return nil, fmt.Errorf("%w: invalid approval_state transition", ErrConflict)
 	}
 
 	updated := current
@@ -642,12 +645,12 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 
 	issueID = strings.TrimSpace(issueID)
 	if !uuidRegex.MatchString(issueID) {
-		return nil, fmt.Errorf("invalid issue_id")
+		return nil, fmt.Errorf("%w: invalid issue_id", ErrValidation)
 	}
 
 	normalizedNext := normalizeIssueWorkStatus(nextStatus)
 	if !isValidIssueWorkStatus(normalizedNext) {
-		return nil, fmt.Errorf("invalid work_status")
+		return nil, fmt.Errorf("%w: invalid work_status", ErrValidation)
 	}
 
 	tx, err := WithWorkspaceTx(ctx, s.db)
@@ -679,7 +682,7 @@ func (s *ProjectIssueStore) TransitionWorkStatus(
 		currentStatus = defaultIssueWorkStatusForState(current.State)
 	}
 	if !canTransitionIssueWorkStatus(currentStatus, normalizedNext) {
-		return nil, fmt.Errorf("invalid work_status transition")
+		return nil, fmt.Errorf("%w: invalid work_status transition", ErrConflict)
 	}
 
 	nextIssueState := current.State
@@ -953,8 +956,8 @@ func (s *ProjectIssueStore) UpsertIssueFromGitHub(
 					origin = 'github',
 					approval_state = $5,
 					work_status = CASE
-						WHEN $4 = 'closed' THEN '` + IssueWorkStatusDone + `'
-						WHEN work_status = '` + IssueWorkStatusDone + `' THEN '` + IssueWorkStatusQueued + `'
+						WHEN $4 = 'closed' THEN '`+IssueWorkStatusDone+`'
+						WHEN work_status = '`+IssueWorkStatusDone+`' THEN '`+IssueWorkStatusQueued+`'
 						ELSE work_status
 					END,
 					closed_at = $6

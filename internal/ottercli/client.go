@@ -84,13 +84,14 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 }
 
 type Project struct {
-	ID          string `json:"id"`
-	OrgID       string `json:"org_id"`
-	Name        string `json:"name"`
-	URLSlug     string `json:"slug"`
-	Description string `json:"description"`
-	RepoURL     string `json:"repo_url"`
-	Status      string `json:"status"`
+	ID                 string `json:"id"`
+	OrgID              string `json:"org_id"`
+	Name               string `json:"name"`
+	URLSlug            string `json:"slug"`
+	Description        string `json:"description"`
+	RepoURL            string `json:"repo_url"`
+	Status             string `json:"status"`
+	RequireHumanReview bool   `json:"require_human_review"`
 }
 
 type projectListResponse struct {
@@ -166,6 +167,23 @@ type issueListResponse struct {
 
 type issueDetailResponse struct {
 	Issue Issue `json:"issue"`
+}
+
+type PipelineRoleAssignment struct {
+	AgentID *string `json:"agentId"`
+}
+
+type PipelineRoles struct {
+	Planner  PipelineRoleAssignment `json:"planner"`
+	Worker   PipelineRoleAssignment `json:"worker"`
+	Reviewer PipelineRoleAssignment `json:"reviewer"`
+}
+
+type DeployConfig struct {
+	DeployMethod  string  `json:"deployMethod"`
+	GitHubRepoURL *string `json:"githubRepoUrl,omitempty"`
+	GitHubBranch  string  `json:"githubBranch"`
+	CLICommand    *string `json:"cliCommand,omitempty"`
 }
 
 func (c *Client) ListProjects() ([]Project, error) {
@@ -244,6 +262,105 @@ func (c *Client) PatchProject(projectID string, input map[string]interface{}) (P
 		return Project{}, err
 	}
 	return project, nil
+}
+
+func (c *Client) SetProjectRequireHumanReview(projectID string, requireHumanReview bool) (Project, error) {
+	return c.PatchProject(projectID, map[string]interface{}{
+		"requireHumanReview": requireHumanReview,
+	})
+}
+
+func (c *Client) GetPipelineRoles(projectID string) (PipelineRoles, error) {
+	if err := c.requireAuth(); err != nil {
+		return PipelineRoles{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return PipelineRoles{}, errors.New("project id is required")
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/projects/"+url.PathEscape(projectID)+"/pipeline-roles", nil)
+	if err != nil {
+		return PipelineRoles{}, err
+	}
+
+	var roles PipelineRoles
+	if err := c.do(req, &roles); err != nil {
+		return PipelineRoles{}, err
+	}
+	return roles, nil
+}
+
+func (c *Client) SetPipelineRoles(projectID string, roles PipelineRoles) (PipelineRoles, error) {
+	if err := c.requireAuth(); err != nil {
+		return PipelineRoles{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return PipelineRoles{}, errors.New("project id is required")
+	}
+
+	payload, err := json.Marshal(roles)
+	if err != nil {
+		return PipelineRoles{}, err
+	}
+	req, err := c.newRequest(http.MethodPut, "/api/projects/"+url.PathEscape(projectID)+"/pipeline-roles", bytes.NewReader(payload))
+	if err != nil {
+		return PipelineRoles{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var updated PipelineRoles
+	if err := c.do(req, &updated); err != nil {
+		return PipelineRoles{}, err
+	}
+	return updated, nil
+}
+
+func (c *Client) GetDeployConfig(projectID string) (DeployConfig, error) {
+	if err := c.requireAuth(); err != nil {
+		return DeployConfig{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return DeployConfig{}, errors.New("project id is required")
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/projects/"+url.PathEscape(projectID)+"/deploy-config", nil)
+	if err != nil {
+		return DeployConfig{}, err
+	}
+	var cfg DeployConfig
+	if err := c.do(req, &cfg); err != nil {
+		return DeployConfig{}, err
+	}
+	return cfg, nil
+}
+
+func (c *Client) SetDeployConfig(projectID string, cfg DeployConfig) (DeployConfig, error) {
+	if err := c.requireAuth(); err != nil {
+		return DeployConfig{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return DeployConfig{}, errors.New("project id is required")
+	}
+
+	payload, err := json.Marshal(cfg)
+	if err != nil {
+		return DeployConfig{}, err
+	}
+	req, err := c.newRequest(http.MethodPut, "/api/projects/"+url.PathEscape(projectID)+"/deploy-config", bytes.NewReader(payload))
+	if err != nil {
+		return DeployConfig{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var updated DeployConfig
+	if err := c.do(req, &updated); err != nil {
+		return DeployConfig{}, err
+	}
+	return updated, nil
 }
 
 func (c *Client) DeleteProject(projectID string) error {
