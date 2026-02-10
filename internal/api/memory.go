@@ -133,6 +133,7 @@ func (h *MemoryHandler) List(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "limit and offset must be non-negative integers"})
 		return
 	}
+	limit = clampMemoryListLimit(limit)
 
 	entries, err := h.Store.ListByAgent(r.Context(), agentID, kind, limit, offset)
 	if err != nil {
@@ -170,6 +171,7 @@ func (h *MemoryHandler) Search(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "limit must be positive"})
 		return
 	}
+	limit = clampMemorySearchLimit(limit)
 	minImportance := parseIntOrDefault(r.URL.Query().Get("min_importance"), 1)
 	minRelevance, err := parseFloatOrDefault(r.URL.Query().Get("min_relevance"), 0)
 	if err != nil {
@@ -344,6 +346,26 @@ func parseIntOrDefault(raw string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func clampMemoryListLimit(limit int) int {
+	if limit <= 0 {
+		return 20
+	}
+	if limit > 200 {
+		return 200
+	}
+	return limit
+}
+
+func clampMemorySearchLimit(limit int) int {
+	if limit <= 0 {
+		return 20
+	}
+	if limit > 100 {
+		return 100
+	}
+	return limit
 }
 
 func parseFloatOrDefault(raw string, fallback float64) (float64, error) {

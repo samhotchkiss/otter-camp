@@ -172,3 +172,10 @@ func TestMemoryRoutesRequireWorkspace(t *testing.T) {
 
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
+
+func TestMemoryHandlerCapsListAndSearchLimit(t *testing.T) {
+	require.Equal(t, 200, clampMemoryListLimit(999999))
+	require.Equal(t, 100, clampMemorySearchLimit(999999))
+	require.Equal(t, 20, clampMemoryListLimit(0))
+	require.Equal(t, 20, clampMemorySearchLimit(0))
+}
