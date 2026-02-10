@@ -232,4 +232,35 @@ describe("WorkflowsPage", () => {
 
     expect(await screen.findByText("Failed to trigger workflow run")).toBeInTheDocument();
   });
+
+  it("shows list error banner when loading workflows fails", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/projects?workflow=true")) {
+        return jsonResponse({ error: "failed" }, 500);
+      }
+      throw new Error(`Unexpected request: ${url} ${init?.method || "GET"}`);
+    });
+
+    render(<WorkflowsPage />);
+
+    expect(await screen.findByText("Failed to fetch workflow projects")).toBeInTheDocument();
+  });
+
+  it("shows empty state when workflow project list is empty", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/projects?workflow=true")) {
+        return jsonResponse({ projects: [] });
+      }
+      throw new Error(`Unexpected request: ${url} ${init?.method || "GET"}`);
+    });
+
+    render(<WorkflowsPage />);
+
+    expect(await screen.findByText("No workflow projects yet")).toBeInTheDocument();
+    expect(
+      screen.getByText("Enable workflow fields on a project to schedule recurring issue creation."),
+    ).toBeInTheDocument();
+  });
 });
