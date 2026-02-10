@@ -125,6 +125,6 @@ func handleKnowledgeStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrForbidden):
 		sendJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
 	default:
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "knowledge operation failed"})
 	}
 }

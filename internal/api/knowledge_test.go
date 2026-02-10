@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -141,4 +142,16 @@ func TestKnowledgeImportRejectsBodyOverLimit(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Contains(t, []int{http.StatusBadRequest, http.StatusRequestEntityTooLarge}, rec.Code)
+}
+
+func TestKnowledgeImportUnknownStoreErrorReturnsGeneric500(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handleKnowledgeStoreError(rec, errors.New("dial tcp 10.0.0.12:5432: i/o timeout"))
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "knowledge operation failed", payload.Error)
+	require.NotContains(t, payload.Error, "10.0.0.12")
 }
