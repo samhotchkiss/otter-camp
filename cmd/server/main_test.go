@@ -123,4 +123,48 @@ func TestLocalRuntimeDefaults(t *testing.T) {
 			t.Fatalf("expected scripts/setup.sh to contain %q", snippet)
 		}
 	}
+
+	viteBytes, err := os.ReadFile("../../web/vite.config.ts")
+	if err != nil {
+		t.Fatalf("failed to read web/vite.config.ts: %v", err)
+	}
+	vite := string(viteBytes)
+	for _, snippet := range []string{
+		`target: "http://localhost:4200"`,
+		`target: "ws://localhost:4200"`,
+	} {
+		if !strings.Contains(vite, snippet) {
+			t.Fatalf("expected web/vite.config.ts to contain %q", snippet)
+		}
+	}
+
+	e2eBytes, err := os.ReadFile("../../web/e2e/app.spec.ts")
+	if err != nil {
+		t.Fatalf("failed to read web/e2e/app.spec.ts: %v", err)
+	}
+	if !strings.Contains(string(e2eBytes), "http://localhost:4200/health") {
+		t.Fatalf("expected web/e2e/app.spec.ts to contain health check on port 4200")
+	}
+
+	bridgeEnvBytes, err := os.ReadFile("../../bridge/.env.example")
+	if err != nil {
+		t.Fatalf("failed to read bridge/.env.example: %v", err)
+	}
+	if !strings.Contains(string(bridgeEnvBytes), "OTTERCAMP_URL=http://localhost:4200") {
+		t.Fatalf("expected bridge/.env.example to set OTTERCAMP_URL to localhost:4200")
+	}
+
+	docsBytes, err := os.ReadFile("../../docs/INFRASTRUCTURE.md")
+	if err != nil {
+		t.Fatalf("failed to read docs/INFRASTRUCTURE.md: %v", err)
+	}
+	docs := string(docsBytes)
+	for _, snippet := range []string{
+		"# → http://localhost:4200",
+		"VITE_API_URL=http://localhost:4200 npm run dev",
+	} {
+		if !strings.Contains(docs, snippet) {
+			t.Fatalf("expected docs/INFRASTRUCTURE.md to contain %q", snippet)
+		}
+	}
 }

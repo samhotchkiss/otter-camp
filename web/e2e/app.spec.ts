@@ -16,7 +16,7 @@ test.describe('Otter Camp E2E Tests', () => {
   });
 
   test('API health check', async ({ request }) => {
-    const response = await request.get('http://localhost:8080/health');
+    const response = await request.get('http://localhost:4200/health');
     expect(response.ok()).toBeTruthy();
   });
 });
