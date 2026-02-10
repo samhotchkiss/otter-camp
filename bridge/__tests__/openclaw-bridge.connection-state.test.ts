@@ -2,10 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   computeReconnectDelayMs,
+  getBufferedActivityEventStateForTest,
   getReconnectStateForTest,
   reconnectEscalationTierForFailures,
+  resetBufferedActivityEventsForTest,
   resetReconnectStateForTest,
+  setConnectionStateForTest,
   setContinuousModeEnabledForTest,
+  setOtterCampOrgIDForTest,
   setProcessExitForTest,
   shouldExitAfterReconnectFailures,
   triggerOpenClawCloseForTest,
@@ -21,12 +25,17 @@ describe("bridge connection state + reconnect policy", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     resetReconnectStateForTest("openclaw");
     resetReconnectStateForTest("ottercamp");
+    resetBufferedActivityEventsForTest();
     setContinuousModeEnabledForTest(true);
     setProcessExitForTest(null);
+    setConnectionStateForTest("ottercamp", "disconnected");
+    setOtterCampOrgIDForTest(null);
   });
 
   afterEach(() => {
     setProcessExitForTest(null);
+    setConnectionStateForTest("ottercamp", "disconnected");
+    setOtterCampOrgIDForTest(null);
     vi.restoreAllMocks();
   });
 
@@ -104,5 +113,41 @@ describe("bridge connection state + reconnect policy", () => {
     expect(getReconnectStateForTest("openclaw").restartFailures).toBe(2);
     expect(hardExit).toHaveBeenCalledTimes(1);
     expect(hardExit).toHaveBeenCalledWith(1);
+  });
+
+  it("queues reconnect escalation alert once at alert tier when ottercamp is connected", async () => {
+    const reconnectFn = vi.fn();
+    setOtterCampOrgIDForTest("org-test");
+    setConnectionStateForTest("ottercamp", "connected");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503, statusText: "Unavailable", text: async () => "fail" })),
+    );
+
+    for (let attempt = 0; attempt < 35; attempt += 1) {
+      triggerOpenClawCloseForTest(1006, "test-close", reconnectFn);
+    }
+    await Promise.resolve();
+
+    const queued = getBufferedActivityEventStateForTest();
+    expect(queued.queuedEventIDCount).toBe(1);
+  });
+
+  it("skips reconnect escalation alerts when ottercamp is disconnected", async () => {
+    const reconnectFn = vi.fn();
+    setOtterCampOrgIDForTest("org-test");
+    setConnectionStateForTest("ottercamp", "disconnected");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503, statusText: "Unavailable", text: async () => "fail" })),
+    );
+
+    for (let attempt = 0; attempt < 35; attempt += 1) {
+      triggerOpenClawCloseForTest(1006, "test-close", reconnectFn);
+    }
+    await Promise.resolve();
+
+    const queued = getBufferedActivityEventStateForTest();
+    expect(queued.queuedEventIDCount).toBe(0);
   });
 });

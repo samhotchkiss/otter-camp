@@ -98,6 +98,7 @@ const SAFE_FALLBACK_AGENT_ID_PATTERN =
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
+let otterCampOrgIDForTestOverride: string | null = null;
 const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
 const IDENTITY_BLOCK_MAX_CHARS = 1200;
 const SESSION_TASK_SUMMARY_MAX_CHARS = 96;
@@ -537,6 +538,21 @@ export function setProcessExitForTest(fn: ((code: number) => never) | null): voi
   processExitFn = fn || defaultProcessExit;
 }
 
+function resolveConfiguredOtterCampOrgID(): string {
+  if (otterCampOrgIDForTestOverride !== null) {
+    return otterCampOrgIDForTestOverride;
+  }
+  return OTTERCAMP_ORG_ID;
+}
+
+export function setOtterCampOrgIDForTest(orgID: string | null): void {
+  if (orgID === null) {
+    otterCampOrgIDForTestOverride = null;
+    return;
+  }
+  otterCampOrgIDForTestOverride = getTrimmedString(orgID);
+}
+
 export function computeReconnectDelayMs(attempt: number, randomFn: () => number = Math.random): number {
   const safeAttempt = Number.isFinite(attempt) && attempt >= 0 ? Math.floor(attempt) : 0;
   const baseDelay = Math.min(RECONNECT_MAX_DELAY_MS, 1000 * Math.pow(2, safeAttempt));
@@ -762,6 +778,10 @@ export function resetReconnectStateForTest(role: BridgeSocketRole): void {
   reconnectByRole[role].restartFailures = 0;
 }
 
+export function setConnectionStateForTest(role: BridgeSocketRole, state: BridgeConnectionState): void {
+  connectionStateByRole[role] = state;
+}
+
 export function getReconnectStateForTest(role: BridgeSocketRole): {
   consecutiveFailures: number;
   totalReconnectAttempts: number;
@@ -810,7 +830,7 @@ function queueReconnectEscalationAlert(role: BridgeSocketRole, controller: Socke
   if (controller.alertEmittedForOutage) {
     return;
   }
-  const orgID = getTrimmedString(OTTERCAMP_ORG_ID);
+  const orgID = getTrimmedString(resolveConfiguredOtterCampOrgID());
   if (!orgID) {
     console.warn(`[bridge] ${role} reconnect alert skipped: OTTERCAMP_ORG_ID is not configured`);
     return;
@@ -2564,7 +2584,7 @@ function resolveActivityOrgID(sessionKey: string): string {
   if (fromContext) {
     return fromContext;
   }
-  return OTTERCAMP_ORG_ID;
+  return resolveConfiguredOtterCampOrgID();
 }
 
 export function queueActivityEventsForOrg(orgID: string, events: BridgeAgentActivityEvent[]): number {
