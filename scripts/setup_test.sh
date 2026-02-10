@@ -72,10 +72,84 @@ test_ensure_dependency_fails_when_user_declines_install() {
   fi
 }
 
+test_write_env_if_missing_sets_4200_defaults() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  (
+    cd "$tmp"
+    write_env_if_missing
+    [[ -f .env ]] || {
+      echo "expected .env to be created" >&2
+      exit 1
+    }
+    grep -q "^PORT=4200$" .env || {
+      echo "expected PORT=4200 in .env" >&2
+      exit 1
+    }
+    grep -q "^VITE_API_URL=$" .env || {
+      echo "expected empty VITE_API_URL in .env" >&2
+      exit 1
+    }
+  )
+}
+
+test_write_bridge_env_if_missing_targets_4200() {
+  local tmp
+  tmp="$(mktemp -d)"
+
+  (
+    cd "$tmp"
+    OPENCLAW_SYNC_SECRET="sync-test"
+    OPENCLAW_WS_SECRET="ws-test"
+    write_bridge_env_if_missing
+    [[ -f bridge/.env ]] || {
+      echo "expected bridge/.env to be created" >&2
+      exit 1
+    }
+    grep -q "^OTTERCAMP_URL=http://localhost:4200$" bridge/.env || {
+      echo "expected OTTERCAMP_URL=http://localhost:4200 in bridge/.env" >&2
+      exit 1
+    }
+  )
+}
+
+test_run_bootstrap_steps_dry_run_lists_core_commands() {
+  local output
+  output="$(
+    DRY_RUN=1
+    start_postgres_if_needed() { return 0; }
+    write_cli_config() { return 0; }
+    write_bridge_env_if_missing() { return 0; }
+    pull_ollama_model() { return 0; }
+    run_bootstrap_steps 2>&1
+  )"
+
+  [[ "$output" == *"go run ./cmd/migrate up"* ]] || {
+    echo "expected dry-run migration command output" >&2
+    exit 1
+  }
+  [[ "$output" == *"npm ci"* ]] || {
+    echo "expected dry-run npm install command output" >&2
+    exit 1
+  }
+  [[ "$output" == *"go run ./scripts/seed/seed.go"* ]] || {
+    echo "expected dry-run seed command output" >&2
+    exit 1
+  }
+  [[ "$output" == *"make prod-local"* ]] || {
+    echo "expected dry-run build command output" >&2
+    exit 1
+  }
+}
+
 main() {
   test_ensure_dependency_skips_install_when_already_present
   test_ensure_dependency_installs_when_missing_and_confirmed
   test_ensure_dependency_fails_when_user_declines_install
+  test_write_env_if_missing_sets_4200_defaults
+  test_write_bridge_env_if_missing_targets_4200
+  test_run_bootstrap_steps_dry_run_lists_core_commands
   echo "setup.sh tests passed"
 }
 
