@@ -1,36 +1,61 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { API_URL } from "../lib/api";
 
-interface WorkflowTrigger {
-  type: string;
-  every?: string;
-  cron?: string;
-  event?: string;
-  label?: string;
-}
+type WorkflowSchedule = {
+  kind?: string;
+  expr?: string;
+  tz?: string;
+  everyMs?: number;
+  at?: string;
+  cron_id?: string;
+};
 
-interface Workflow {
+type WorkflowProject = {
   id: string;
   name: string;
   description?: string;
-  trigger: WorkflowTrigger;
-  status: string;
-  enabled: boolean;
-  last_run?: string;
-  next_run?: string;
-  last_status?: string;
-  agent_id?: string;
-  agent_name?: string;
-  source?: string;
-}
+  workflow_enabled?: boolean;
+  workflow_schedule?: WorkflowSchedule | null;
+  workflow_agent_id?: string | null;
+  workflow_last_run_at?: string | null;
+  workflow_next_run_at?: string | null;
+  workflow_run_count?: number;
+};
+
+type WorkflowLatestRun = {
+  issue_number?: number;
+  title?: string;
+  state?: string;
+  work_status?: string;
+  created_at?: string;
+  closed_at?: string;
+};
 
 function getAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
   try {
-    const stored = localStorage.getItem("otter_auth");
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (parsed.token) headers.Authorization = `Bearer ${parsed.token}`;
+    const legacy = localStorage.getItem("otter_auth");
+    if (legacy) {
+      const parsed = JSON.parse(legacy);
+      if (parsed?.token) {
+        headers.Authorization = `Bearer ${parsed.token}`;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    const token = (localStorage.getItem("otter_camp_token") || "").trim();
+    if (token !== "") {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    const orgID = (localStorage.getItem("otter-camp-org-id") || "").trim();
+    if (orgID !== "") {
+      headers["X-Org-ID"] = orgID;
     }
   } catch {
     // ignore
@@ -38,168 +63,163 @@ function getAuthHeaders(): Record<string, string> {
   return headers;
 }
 
-function timeAgo(dateString: string): string {
+function timeAgo(dateString?: string | null): string {
+  if (!dateString) return "Never";
   const date = new Date(dateString);
-  if (isNaN(date.getTime())) return "Unknown";
+  if (Number.isNaN(date.getTime())) return "Unknown";
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
-  if (diffMs < 0) return "Just now";
-  const diffSecs = Math.floor(diffMs / 1000);
-  if (diffSecs < 60) return "Just now";
-  const diffMins = Math.floor(diffSecs / 60);
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d ago`;
+  if (diffMs < 60_000) return "Just now";
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
-function timeUntil(dateString: string): string {
+function timeUntil(dateString?: string | null): string {
+  if (!dateString) return "n/a";
   const date = new Date(dateString);
-  if (isNaN(date.getTime())) return "";
+  if (Number.isNaN(date.getTime())) return "n/a";
   const now = new Date();
   const diffMs = date.getTime() - now.getTime();
-  if (diffMs < 0) return "Overdue";
-  const diffSecs = Math.floor(diffMs / 1000);
-  if (diffSecs < 60) return "< 1m";
-  const diffMins = Math.floor(diffSecs / 60);
-  if (diffMins < 60) return `${diffMins}m`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h`;
-  const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d`;
+  if (diffMs <= 0) return "Overdue";
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
 }
 
-function triggerIcon(trigger?: WorkflowTrigger): string {
-  if (!trigger) return "⚙️";
-  switch (trigger.type) {
-    case "cron":
-      return "🕐";
-    case "interval":
-      return "🔄";
-    case "event":
-      return "⚡";
-    case "manual":
-      return "👆";
-    default:
-      return "⚙️";
+function humanizeSchedule(schedule?: WorkflowSchedule | null): string {
+  if (!schedule || !schedule.kind) return "Manual";
+  if (schedule.kind === "cron" && schedule.expr) {
+    return schedule.tz ? `${schedule.expr} (${schedule.tz})` : schedule.expr;
   }
-}
-
-function statusColor(status: string): string {
-  switch (status) {
-    case "active":
-      return "var(--color-green, #22c55e)";
-    case "paused":
-      return "var(--color-amber, #f59e0b)";
-    default:
-      return "var(--text-muted, #64748b)";
+  if (schedule.kind === "every" && typeof schedule.everyMs === "number" && schedule.everyMs > 0) {
+    if (schedule.everyMs % 3_600_000 === 0) return `Every ${schedule.everyMs / 3_600_000}h`;
+    if (schedule.everyMs % 60_000 === 0) return `Every ${schedule.everyMs / 60_000}m`;
+    return `Every ${Math.floor(schedule.everyMs / 1000)}s`;
   }
-}
-
-function lastStatusBadge(status: string): { label: string; color: string } {
-  switch (status) {
-    case "ok":
-      return { label: "✓ OK", color: "var(--color-green, #22c55e)" };
-    case "error":
-    case "failed":
-      return { label: "✗ Failed", color: "var(--color-red, #ef4444)" };
-    case "timeout":
-      return { label: "⏱ Timeout", color: "var(--color-amber, #f59e0b)" };
-    default:
-      return { label: status || "—", color: "var(--text-muted, #64748b)" };
-  }
+  if (schedule.kind === "at" && schedule.at) return `At ${schedule.at}`;
+  return "Manual";
 }
 
 export default function WorkflowsPage() {
-  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [projects, setProjects] = useState<WorkflowProject[]>([]);
+  const [latestRuns, setLatestRuns] = useState<Record<string, WorkflowLatestRun>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState<string | null>(null);
 
-  const fetchWorkflows = useCallback(async () => {
+  const fetchWorkflowProjects = useCallback(async () => {
+    const response = await fetch(`${API_URL}/api/projects?workflow=true`, {
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      throw new Error("Failed to fetch workflow projects");
+    }
+    const payload = await response.json();
+    return (payload.projects || []) as WorkflowProject[];
+  }, []);
+
+  const fetchLatestRun = useCallback(async (projectID: string) => {
+    const response = await fetch(`${API_URL}/api/projects/${encodeURIComponent(projectID)}/runs/latest`, {
+      headers: getAuthHeaders(),
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) return null;
+    return (await response.json()) as WorkflowLatestRun;
+  }, []);
+
+  const refresh = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/workflows`, {
-        headers: getAuthHeaders(),
-      });
-      if (!res.ok) throw new Error("Failed to fetch workflows");
-      const data = await res.json();
-      setWorkflows(Array.isArray(data) ? data : []);
+      const nextProjects = await fetchWorkflowProjects();
+      setProjects(nextProjects);
+      const runEntries = await Promise.all(
+        nextProjects.map(async (project) => [project.id, await fetchLatestRun(project.id)] as const),
+      );
+      const latest: Record<string, WorkflowLatestRun> = {};
+      for (const [projectID, run] of runEntries) {
+        if (run) {
+          latest[projectID] = run;
+        }
+      }
+      setLatestRuns(latest);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load");
+      setError(err instanceof Error ? err.message : "Failed to load workflows");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchLatestRun, fetchWorkflowProjects]);
 
   useEffect(() => {
-    fetchWorkflows();
-    const interval = setInterval(fetchWorkflows, 30000); // refresh every 30s
+    void refresh();
+    const interval = setInterval(() => {
+      void refresh();
+    }, 30_000);
     return () => clearInterval(interval);
-  }, [fetchWorkflows]);
+  }, [refresh]);
 
-  const toggleWorkflow = async (id: string, currentEnabled: boolean) => {
-    setActionPending(id);
+  const toggleWorkflow = useCallback(async (project: WorkflowProject) => {
+    setActionPending(project.id);
     try {
-      await fetch(`${API_URL}/api/workflows/${encodeURIComponent(id)}`, {
+      const response = await fetch(`${API_URL}/api/projects/${encodeURIComponent(project.id)}`, {
         method: "PATCH",
         headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: !currentEnabled }),
+        body: JSON.stringify({ workflow_enabled: !project.workflow_enabled }),
       });
-      // Optimistic update
-      setWorkflows((prev) =>
-        prev.map((w) =>
-          w.id === id
-            ? { ...w, enabled: !currentEnabled, status: !currentEnabled ? "active" : "paused" }
-            : w
-        )
-      );
-    } catch {
-      // Will refresh on next interval
+      if (!response.ok) {
+        throw new Error("Failed to update workflow state");
+      }
+      await refresh();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update workflow state");
     } finally {
       setActionPending(null);
     }
-  };
+  }, [refresh]);
 
-  const runWorkflow = async (id: string) => {
-    setActionPending(id);
+  const triggerRun = useCallback(async (projectID: string) => {
+    setActionPending(projectID);
     try {
-      await fetch(`${API_URL}/api/workflows/${encodeURIComponent(id)}/run`, {
+      const response = await fetch(`${API_URL}/api/projects/${encodeURIComponent(projectID)}/runs/trigger`, {
         method: "POST",
         headers: getAuthHeaders(),
       });
-      // Refresh after a short delay to pick up the run
-      setTimeout(fetchWorkflows, 2000);
-    } catch {
-      // ignore
+      if (!response.ok) {
+        throw new Error("Failed to trigger workflow run");
+      }
+      await refresh();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to trigger workflow run");
     } finally {
       setActionPending(null);
     }
-  };
+  }, [refresh]);
 
-  const activeCount = workflows.filter((w) => w.enabled).length;
-  const pausedCount = workflows.filter((w) => !w.enabled).length;
+  const activeCount = useMemo(
+    () => projects.filter((project) => project.workflow_enabled).length,
+    [projects],
+  );
+  const pausedCount = projects.length - activeCount;
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto", padding: "24px 16px" }}>
-      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
         <div>
-          <h1
-            style={{
-              fontSize: 24,
-              fontWeight: 700,
-              color: "var(--text-primary, #e2e8f0)",
-              margin: 0,
-            }}
-          >
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: "var(--text-primary, #e2e8f0)", margin: 0 }}>
             Workflows
           </h1>
           <p style={{ color: "var(--text-muted, #64748b)", margin: "4px 0 0", fontSize: 14 }}>
             {loading
               ? "Loading..."
-              : `${workflows.length} recurring workflows · ${activeCount} active · ${pausedCount} paused`}
+              : `${projects.length} workflow projects · ${activeCount} active · ${pausedCount} paused`}
           </p>
         </div>
       </div>
@@ -220,148 +240,90 @@ export default function WorkflowsPage() {
         </div>
       )}
 
-      {!loading && workflows.length === 0 && !error && (
-        <div
-          style={{
-            textAlign: "center",
-            padding: "60px 20px",
-            color: "var(--text-muted, #64748b)",
-          }}
-        >
-          <div style={{ fontSize: 48, marginBottom: 16 }}>🔄</div>
-          <h3 style={{ color: "var(--text-primary, #e2e8f0)", margin: "0 0 8px" }}>
-            No workflows configured
-          </h3>
-          <p style={{ maxWidth: 400, margin: "0 auto" }}>
-            Connect OpenClaw to see your recurring cron jobs, heartbeats, and automations here.
+      {!loading && projects.length === 0 && !error && (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: "var(--text-muted, #64748b)" }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>🔁</div>
+          <h3 style={{ color: "var(--text-primary, #e2e8f0)", margin: "0 0 8px" }}>No workflow projects yet</h3>
+          <p style={{ maxWidth: 420, margin: "0 auto" }}>
+            Enable workflow fields on a project to schedule recurring issue creation.
           </p>
         </div>
       )}
 
-      {/* Workflow list */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {workflows.map((workflow) => {
-          const isPending = actionPending === workflow.id;
-          const badge = lastStatusBadge(workflow.last_status || "");
-
+        {projects.map((project) => {
+          const isPending = actionPending === project.id;
+          const latest = latestRuns[project.id];
           return (
             <div
-              key={workflow.id}
+              key={project.id}
               style={{
                 background: "var(--bg-card, #1e293b)",
                 border: "1px solid var(--border, #334155)",
                 borderRadius: 10,
                 padding: "16px 20px",
                 opacity: isPending ? 0.6 : 1,
-                transition: "opacity 0.2s, border-color 0.2s",
               }}
             >
-              {/* Top row: icon, name, status dot, toggle */}
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span style={{ fontSize: 20, lineHeight: 1 }}>{triggerIcon(workflow.trigger)}</span>
+                <span style={{ fontSize: 18 }}>{project.workflow_enabled ? "🟢" : "🟡"}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span
-                      style={{
-                        fontWeight: 600,
-                        fontSize: 15,
-                        color: "var(--text-primary, #e2e8f0)",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {workflow.name}
-                    </span>
-                    <span
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        background: statusColor(workflow.status),
-                        flexShrink: 0,
-                      }}
-                    />
+                  <div style={{ fontWeight: 600, fontSize: 15, color: "var(--text-primary, #e2e8f0)" }}>
+                    {project.name}
                   </div>
-                  {workflow.description && (
-                    <div
-                      style={{
-                        fontSize: 13,
-                        color: "var(--text-muted, #64748b)",
-                        marginTop: 2,
-                      }}
-                    >
-                      {workflow.description}
-                    </div>
+                  {project.description && (
+                    <div style={{ fontSize: 13, color: "var(--text-muted, #64748b)" }}>{project.description}</div>
                   )}
                 </div>
-
-                {/* Actions */}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                   <button
-                    onClick={() => runWorkflow(workflow.id)}
-                    disabled={isPending || !workflow.enabled}
-                    title="Run now"
+                    onClick={() => void triggerRun(project.id)}
+                    disabled={isPending || !project.workflow_enabled}
                     style={{
                       background: "transparent",
                       border: "1px solid var(--border, #334155)",
                       borderRadius: 6,
                       padding: "4px 10px",
                       fontSize: 12,
-                      color: workflow.enabled
-                        ? "var(--text-primary, #e2e8f0)"
-                        : "var(--text-muted, #64748b)",
-                      cursor: workflow.enabled ? "pointer" : "not-allowed",
+                      color: project.workflow_enabled ? "var(--text-primary, #e2e8f0)" : "var(--text-muted, #64748b)",
+                      cursor: project.workflow_enabled ? "pointer" : "not-allowed",
                     }}
                   >
-                    ▶ Run
+                    Run now
                   </button>
                   <button
-                    onClick={() => toggleWorkflow(workflow.id, workflow.enabled)}
+                    onClick={() => void toggleWorkflow(project)}
                     disabled={isPending}
                     style={{
-                      background: workflow.enabled
-                        ? "rgba(239,68,68,0.1)"
-                        : "rgba(34,197,94,0.1)",
-                      border: "1px solid " + (workflow.enabled ? "rgba(239,68,68,0.3)" : "rgba(34,197,94,0.3)"),
                       borderRadius: 6,
                       padding: "4px 10px",
                       fontSize: 12,
-                      color: workflow.enabled ? "#fca5a5" : "#86efac",
+                      border: "1px solid " + (project.workflow_enabled ? "rgba(239,68,68,0.3)" : "rgba(34,197,94,0.3)"),
+                      background: project.workflow_enabled ? "rgba(239,68,68,0.1)" : "rgba(34,197,94,0.1)",
+                      color: project.workflow_enabled ? "#fca5a5" : "#86efac",
                       cursor: "pointer",
                     }}
                   >
-                    {workflow.enabled ? "⏸ Pause" : "▶ Resume"}
+                    {project.workflow_enabled ? "Pause" : "Resume"}
                   </button>
                 </div>
               </div>
 
-              {/* Bottom row: metadata chips */}
               <div
                 style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 12,
-                  marginTop: 10,
+                  marginTop: 12,
                   fontSize: 12,
                   color: "var(--text-muted, #64748b)",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 14,
                 }}
               >
-                <span title="Schedule">{workflow.trigger.label || workflow.trigger.type}</span>
-                {workflow.agent_name && <span title="Agent">👤 {workflow.agent_name}</span>}
-                {workflow.last_run && (
-                  <span title={`Last run: ${new Date(workflow.last_run).toLocaleString()}`}>
-                    Last: {timeAgo(workflow.last_run)}
-                  </span>
-                )}
-                {workflow.last_status && (
-                  <span style={{ color: badge.color }}>{badge.label}</span>
-                )}
-                {workflow.next_run && workflow.enabled && (
-                  <span title={`Next run: ${new Date(workflow.next_run).toLocaleString()}`}>
-                    Next: {timeUntil(workflow.next_run)}
-                  </span>
-                )}
+                <span>Schedule: {humanizeSchedule(project.workflow_schedule)}</span>
+                <span>Runs: {project.workflow_run_count || 0}</span>
+                <span>Last run: {timeAgo(project.workflow_last_run_at)}</span>
+                <span>Next run: {timeUntil(project.workflow_next_run_at)}</span>
+                {latest?.title && <span>Latest issue: {latest.title}</span>}
               </div>
             </div>
           );

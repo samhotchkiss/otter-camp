@@ -29,9 +29,14 @@ func TestSlugify(t *testing.T) {
 }
 
 func TestProjectSlug(t *testing.T) {
-	p := Project{Name: "My Cool Project"}
-	if got := p.Slug(); got != "my-cool-project" {
-		t.Errorf("Slug() = %q, want %q", got, "my-cool-project")
+	withServerSlug := Project{Name: "My Cool Project", URLSlug: "server-slug"}
+	if got := withServerSlug.Slug(); got != "server-slug" {
+		t.Errorf("Slug() with URLSlug = %q, want %q", got, "server-slug")
+	}
+
+	withoutServerSlug := Project{Name: "My Cool Project"}
+	if got := withoutServerSlug.Slug(); got != "my-cool-project" {
+		t.Errorf("Slug() fallback = %q, want %q", got, "my-cool-project")
 	}
 }
 
@@ -351,3 +356,65 @@ func TestClientProjectMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 	}
 }
 
+func TestClientWorkflowProjectMethodsUseExpectedPaths(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.String() == "/api/projects?workflow=true":
+			_, _ = w.Write([]byte(`{"projects":[{"id":"project-123","name":"Workflow Project","status":"active","workflow_enabled":true}],"total":1}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/projects/project-123/runs/trigger":
+			_, _ = w.Write([]byte(`{"run":{"id":"issue-1","project_id":"project-123","issue_number":11,"title":"Run 11","state":"open","work_status":"queued","priority":"P2","created_at":"2026-02-09T00:00:00Z"},"run_number":11}`))
+		case r.Method == http.MethodGet && r.URL.String() == "/api/projects/project-123/runs?limit=5":
+			_, _ = w.Write([]byte(`{"runs":[{"id":"issue-1","project_id":"project-123","issue_number":11,"title":"Run 11","state":"open","work_status":"queued","priority":"P2","created_at":"2026-02-09T00:00:00Z"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "org-1",
+		HTTP:    srv.Client(),
+	}
+
+	projects, err := client.ListProjectsWithWorkflow(true)
+	if err != nil {
+		t.Fatalf("ListProjectsWithWorkflow(true) error = %v", err)
+	}
+	if len(projects) != 1 || !projects[0].WorkflowEnabled {
+		t.Fatalf("ListProjectsWithWorkflow(true) projects = %#v", projects)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/projects?workflow=true" {
+		t.Fatalf("ListProjectsWithWorkflow request = %s %s", gotMethod, gotPath)
+	}
+
+	triggered, err := client.TriggerProjectRun("project-123")
+	if err != nil {
+		t.Fatalf("TriggerProjectRun() error = %v", err)
+	}
+	if triggered.RunNumber != 11 || triggered.Run.ID != "issue-1" {
+		t.Fatalf("TriggerProjectRun() response = %#v", triggered)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/projects/project-123/runs/trigger" {
+		t.Fatalf("TriggerProjectRun request = %s %s", gotMethod, gotPath)
+	}
+
+	runs, err := client.ListProjectRuns("project-123", 5)
+	if err != nil {
+		t.Fatalf("ListProjectRuns() error = %v", err)
+	}
+	if len(runs) != 1 || runs[0].IssueNumber != 11 {
+		t.Fatalf("ListProjectRuns() runs = %#v", runs)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/projects/project-123/runs?limit=5" {
+		t.Fatalf("ListProjectRuns request = %s %s", gotMethod, gotPath)
+	}
+}

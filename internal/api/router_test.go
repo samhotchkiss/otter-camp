@@ -297,6 +297,54 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 	}
 }
 
+func TestWorkflowRoutesAreRegistered(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	orgID := "00000000-0000-0000-0000-000000000001"
+
+	reqList := httptest.NewRequest(http.MethodGet, "/api/workflows?org_id="+orgID, nil)
+	recList := httptest.NewRecorder()
+	router.ServeHTTP(recList, reqList)
+	if recList.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/workflows route to be registered, got status %d", recList.Code)
+	}
+
+	reqToggle := httptest.NewRequest(http.MethodPatch, "/api/workflows/"+orgID+"?org_id="+orgID, strings.NewReader(`{"enabled":false}`))
+	recToggle := httptest.NewRecorder()
+	router.ServeHTTP(recToggle, reqToggle)
+	if recToggle.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/workflows/{id} PATCH route to be registered, got status %d", recToggle.Code)
+	}
+
+	reqRun := httptest.NewRequest(http.MethodPost, "/api/workflows/"+orgID+"/run?org_id="+orgID, nil)
+	recRun := httptest.NewRecorder()
+	router.ServeHTTP(recRun, reqRun)
+	if recRun.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/workflows/{id}/run route to be registered, got status %d", recRun.Code)
+	}
+}
+
+func TestWorkflowRoutesUseOptionalWorkspaceMiddleware(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile(filepath.Join("router.go"))
+	if err != nil {
+		t.Fatalf("failed to read router.go: %v", err)
+	}
+	source := string(content)
+	requiredLines := []string{
+		`r.With(middleware.OptionalWorkspace).Get("/workflows", workflowsHandler.List)`,
+		`r.With(middleware.OptionalWorkspace).Patch("/workflows/{id}", workflowsHandler.Toggle)`,
+		`r.With(middleware.OptionalWorkspace).Post("/workflows/{id}/run", workflowsHandler.Run)`,
+	}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected workflow route to include OptionalWorkspace middleware: %s", line)
+		}
+	}
+}
+
 func TestSettingsRoutesAreRegistered(t *testing.T) {
 	t.Parallel()
 

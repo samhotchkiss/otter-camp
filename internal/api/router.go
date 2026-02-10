@@ -150,6 +150,8 @@ func NewRouter() http.Handler {
 		knowledgeHandler.Store = store.NewKnowledgeEntryStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
+	workflowsHandler.ProjectStore = projectStore
+	workflowsHandler.ProjectsHandler = projectsHandler
 	projectChatHandler.ProjectStore = projectStore
 	websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{IssueStore: issuesHandler.IssueStore}
 
@@ -208,13 +210,16 @@ func NewRouter() http.Handler {
 		r.Get("/tasks", taskHandler.ListTasks)
 		r.Post("/tasks", taskHandler.CreateTask)
 		r.With(middleware.OptionalWorkspace).Get("/agents", agentsHandler.List)
-		r.Get("/workflows", workflowsHandler.List)
-		r.Patch("/workflows/{id}", workflowsHandler.Toggle)
-		r.Post("/workflows/{id}/run", workflowsHandler.Run)
+		r.With(middleware.OptionalWorkspace).Get("/workflows", workflowsHandler.List)
+		r.With(middleware.OptionalWorkspace).Patch("/workflows/{id}", workflowsHandler.Toggle)
+		r.With(middleware.OptionalWorkspace).Post("/workflows/{id}/run", workflowsHandler.Run)
 		r.With(middleware.OptionalWorkspace).Get("/projects", projectsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}", projectsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}", projectsHandler.Patch)
 		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}", projectsHandler.Delete)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/runs", projectsHandler.ListRuns)
+		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/runs/latest", projectsHandler.GetLatestRun)
+		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/runs/trigger", projectsHandler.TriggerRun)
 		r.With(middleware.OptionalWorkspace).Patch("/projects/{id}/settings", projectsHandler.UpdateSettings)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pipeline-roles", pipelineRolesHandler.Get)
 		r.With(middleware.OptionalWorkspace).Put("/projects/{id}/pipeline-roles", pipelineRolesHandler.Put)

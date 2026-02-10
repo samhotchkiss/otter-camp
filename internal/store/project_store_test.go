@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -426,4 +428,113 @@ func TestProjectStoreListWithLabels(t *testing.T) {
 	foundProject, err := projectStore.GetByID(ctx, projectA.ID)
 	require.NoError(t, err)
 	require.Len(t, foundProject.Labels, 2)
+}
+
+func TestProjectStore_Create_WithWorkflowFields(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "project-test-workflow-create")
+	ctx := ctxWithWorkspace(orgID)
+
+	var agentID string
+	require.NoError(t, db.QueryRow(
+		"INSERT INTO agents (org_id, slug, display_name, status) VALUES ($1, 'workflow-agent', 'Workflow Agent', 'active') RETURNING id",
+		orgID,
+	).Scan(&agentID))
+
+	schedule := json.RawMessage(`{"kind":"cron","expr":"0 6 * * *","tz":"America/Denver"}`)
+	template := json.RawMessage(`{"title_pattern":"Morning Briefing — {{date}}","body":"Generate briefing.","pipeline":"auto_close"}`)
+	now := time.Now().UTC().Truncate(time.Second)
+	next := now.Add(24 * time.Hour)
+
+	projectStore := NewProjectStore(db)
+	project, err := projectStore.Create(ctx, CreateProjectInput{
+		Name:              "Workflow Project",
+		Status:            "active",
+		WorkflowEnabled:   true,
+		WorkflowSchedule:  schedule,
+		WorkflowTemplate:  template,
+		WorkflowAgentID:   &agentID,
+		WorkflowLastRunAt: &now,
+		WorkflowNextRunAt: &next,
+		WorkflowRunCount:  7,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, project)
+	require.NotNil(t, project.WorkflowSchedule)
+	require.NotNil(t, project.WorkflowTemplate)
+	require.NotNil(t, project.WorkflowAgentID)
+	require.NotNil(t, project.WorkflowLastRunAt)
+	require.NotNil(t, project.WorkflowNextRunAt)
+
+	assert.True(t, project.WorkflowEnabled)
+	assert.JSONEq(t, string(schedule), string(project.WorkflowSchedule))
+	assert.JSONEq(t, string(template), string(project.WorkflowTemplate))
+	assert.Equal(t, agentID, *project.WorkflowAgentID)
+	assert.Equal(t, 7, project.WorkflowRunCount)
+	assert.WithinDuration(t, now, *project.WorkflowLastRunAt, time.Second)
+	assert.WithinDuration(t, next, *project.WorkflowNextRunAt, time.Second)
+}
+
+func TestProjectStore_Update_WithWorkflowFields(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "project-test-workflow-update")
+	ctx := ctxWithWorkspace(orgID)
+	projectStore := NewProjectStore(db)
+
+	var agentID string
+	require.NoError(t, db.QueryRow(
+		"INSERT INTO agents (org_id, slug, display_name, status) VALUES ($1, 'workflow-agent', 'Workflow Agent', 'active') RETURNING id",
+		orgID,
+	).Scan(&agentID))
+
+	created, err := projectStore.Create(ctx, CreateProjectInput{
+		Name:   "Workflow Update Project",
+		Status: "active",
+	})
+	require.NoError(t, err)
+	assert.False(t, created.WorkflowEnabled)
+	assert.Equal(t, 0, created.WorkflowRunCount)
+	assert.Nil(t, created.WorkflowSchedule)
+	assert.Nil(t, created.WorkflowTemplate)
+	assert.Nil(t, created.WorkflowAgentID)
+	assert.Nil(t, created.WorkflowLastRunAt)
+	assert.Nil(t, created.WorkflowNextRunAt)
+
+	schedule := json.RawMessage(`{"kind":"every","everyMs":900000}`)
+	template := json.RawMessage(`{"title_pattern":"Ops Sweep — {{run_number}}","body":"Run ops sweep","pipeline":"none"}`)
+	now := time.Now().UTC().Truncate(time.Second)
+	next := now.Add(15 * time.Minute)
+
+	updated, err := projectStore.Update(ctx, created.ID, UpdateProjectInput{
+		Name:              created.Name,
+		Description:       created.Description,
+		Status:            created.Status,
+		RepoURL:           created.RepoURL,
+		WorkflowEnabled:   true,
+		WorkflowSchedule:  schedule,
+		WorkflowTemplate:  template,
+		WorkflowAgentID:   &agentID,
+		WorkflowLastRunAt: &now,
+		WorkflowNextRunAt: &next,
+		WorkflowRunCount:  3,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+
+	assert.True(t, updated.WorkflowEnabled)
+	require.NotNil(t, updated.WorkflowSchedule)
+	require.NotNil(t, updated.WorkflowTemplate)
+	require.NotNil(t, updated.WorkflowAgentID)
+	require.NotNil(t, updated.WorkflowLastRunAt)
+	require.NotNil(t, updated.WorkflowNextRunAt)
+	assert.Equal(t, 3, updated.WorkflowRunCount)
+	assert.JSONEq(t, string(schedule), string(updated.WorkflowSchedule))
+	assert.JSONEq(t, string(template), string(updated.WorkflowTemplate))
+	assert.Equal(t, agentID, *updated.WorkflowAgentID)
+	assert.WithinDuration(t, now, *updated.WorkflowLastRunAt, time.Second)
+	assert.WithinDuration(t, next, *updated.WorkflowNextRunAt, time.Second)
 }

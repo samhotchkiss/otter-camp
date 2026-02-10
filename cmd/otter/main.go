@@ -142,7 +142,7 @@ func handleWhoami(args []string) {
 }
 
 func handleProject(args []string) {
-	const projectUsage = "usage: otter project <list|create|view|archive|delete> ..."
+	const projectUsage = "usage: otter project <list|create|view|run|runs|archive|delete> ..."
 	if len(args) == 0 {
 		fmt.Println(projectUsage)
 		os.Exit(1)
@@ -153,13 +153,14 @@ func handleProject(args []string) {
 		flags := flag.NewFlagSet("project list", flag.ExitOnError)
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
+		workflowOnly := flags.Bool("workflow", false, "show workflow-enabled projects only")
 		_ = flags.Parse(args[1:])
 
 		cfg, err := ottercli.LoadConfig()
 		dieIf(err)
 		client, _ := ottercli.NewClient(cfg, *org)
 
-		projects, err := client.ListProjects()
+		projects, err := client.ListProjectsWithWorkflow(*workflowOnly)
 		dieIf(err)
 
 		if *jsonOut {
@@ -187,6 +188,13 @@ func handleProject(args []string) {
 		description := flags.String("description", "", "project description")
 		status := flags.String("status", "", "status (active|archived|completed)")
 		repoURL := flags.String("repo-url", "", "repo URL")
+		workflow := flags.Bool("workflow", false, "mark project as recurring workflow")
+		schedule := flags.String("schedule", "", "workflow schedule (cron expression or duration like 15m)")
+		tz := flags.String("tz", "", "workflow timezone for cron schedules")
+		agent := flags.String("agent", "", "workflow agent id/name/slug")
+		templateTitle := flags.String("template-title", "", "workflow issue title pattern")
+		templateBody := flags.String("template-body", "", "workflow issue body")
+		autoClose := flags.Bool("auto-close", false, "set workflow pipeline to auto_close")
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
 		flagArgs, nameArgs, err := splitProjectCreateArgs(args[1:])
@@ -218,6 +226,33 @@ func handleProject(args []string) {
 		}
 		if strings.TrimSpace(*repoURL) != "" {
 			payload["repo_url"] = *repoURL
+		}
+		if *workflow {
+			payload["workflow_enabled"] = true
+			payload["workflow_schedule"] = buildWorkflowSchedulePayload(*schedule, *tz)
+			labels := []string{"automated"}
+			title := strings.TrimSpace(*templateTitle)
+			if title == "" {
+				title = fmt.Sprintf("%s - {{datetime}}", name)
+			}
+			body := strings.TrimSpace(*templateBody)
+			pipeline := "none"
+			if *autoClose {
+				pipeline = "auto_close"
+			}
+			payload["workflow_template"] = map[string]any{
+				"title_pattern": title,
+				"body":          body,
+				"priority":      "P2",
+				"labels":        labels,
+				"auto_close":    *autoClose,
+				"pipeline":      pipeline,
+			}
+			if strings.TrimSpace(*agent) != "" {
+				resolvedAgent, resolveErr := client.ResolveAgent(*agent)
+				dieIf(resolveErr)
+				payload["workflow_agent_id"] = resolvedAgent.ID
+			}
 		}
 
 		project, err := client.CreateProject(payload)
@@ -265,6 +300,64 @@ func handleProject(args []string) {
 		}
 		if strings.TrimSpace(project.RepoURL) != "" {
 			fmt.Printf("Repo: %s\n", project.RepoURL)
+		}
+	case "run":
+		flags := flag.NewFlagSet("project run", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter project run <project-name-or-id>")
+		}
+		query := strings.Join(flags.Args(), " ")
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		project, err := client.FindProject(query)
+		dieIf(err)
+		runResult, err := client.TriggerProjectRun(project.ID)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(runResult)
+			return
+		}
+		fmt.Printf("Triggered workflow run #%d for %s (%s)\n", runResult.RunNumber, project.Name, project.ID)
+		if runResult.Run.ID != "" {
+			fmt.Printf("Issue: #%d %s\n", runResult.Run.IssueNumber, runResult.Run.Title)
+		}
+	case "runs":
+		flags := flag.NewFlagSet("project runs", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		limit := flags.Int("limit", 20, "maximum runs to list")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter project runs <project-name-or-id> [--limit <n>]")
+		}
+		query := strings.Join(flags.Args(), " ")
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		project, err := client.FindProject(query)
+		dieIf(err)
+		runs, err := client.ListProjectRuns(project.ID, *limit)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(runs)
+			return
+		}
+		if len(runs) == 0 {
+			fmt.Printf("No runs found for %s.\n", project.Name)
+			return
+		}
+		for _, run := range runs {
+			fmt.Printf("#%d  %-10s  %-12s  %s\n", run.IssueNumber, run.State, run.WorkStatus, run.Title)
 		}
 	case "archive":
 		flags := flag.NewFlagSet("project archive", flag.ExitOnError)
@@ -332,11 +425,16 @@ func handleProject(args []string) {
 
 func splitProjectCreateArgs(args []string) ([]string, []string, error) {
 	flagsWithValue := map[string]struct{}{
-		"--slug":        {},
-		"--description": {},
-		"--status":      {},
-		"--repo-url":    {},
-		"--org":         {},
+		"--slug":           {},
+		"--description":    {},
+		"--status":         {},
+		"--repo-url":       {},
+		"--schedule":       {},
+		"--tz":             {},
+		"--agent":          {},
+		"--template-title": {},
+		"--template-body":  {},
+		"--org":            {},
 	}
 	flagArgs := make([]string, 0, len(args))
 	nameArgs := make([]string, 0, len(args))
@@ -371,6 +469,48 @@ func splitProjectCreateArgs(args []string) ([]string, []string, error) {
 	}
 
 	return flagArgs, nameArgs, nil
+}
+
+func buildWorkflowSchedulePayload(schedule string, timezone string) map[string]any {
+	schedule = strings.TrimSpace(schedule)
+	timezone = strings.TrimSpace(timezone)
+	if schedule == "" {
+		if timezone == "" {
+			timezone = "America/Denver"
+		}
+		return map[string]any{
+			"kind": "cron",
+			"expr": "0 6 * * *",
+			"tz":   timezone,
+		}
+	}
+
+	durationMatch := regexp.MustCompile(`^(\d+)\s*([smh])$`).FindStringSubmatch(strings.ToLower(schedule))
+	if len(durationMatch) == 3 {
+		amount, err := strconv.Atoi(durationMatch[1])
+		if err == nil && amount > 0 {
+			everyMs := amount * 1000
+			switch durationMatch[2] {
+			case "m":
+				everyMs = amount * 60 * 1000
+			case "h":
+				everyMs = amount * 60 * 60 * 1000
+			}
+			return map[string]any{
+				"kind":    "every",
+				"everyMs": everyMs,
+			}
+		}
+	}
+
+	payload := map[string]any{
+		"kind": "cron",
+		"expr": schedule,
+	}
+	if timezone != "" {
+		payload["tz"] = timezone
+	}
+	return payload
 }
 
 func handleClone(args []string) {

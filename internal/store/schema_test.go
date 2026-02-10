@@ -3,7 +3,9 @@ package store
 import (
 	"database/sql"
 	"errors"
-
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -119,6 +121,52 @@ func TestSchemaMigrationsUpDown(t *testing.T) {
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		require.NoError(t, err)
 	}
+}
+
+func TestMigration049WorkflowAgentFKUsesOnDeleteSetNull(t *testing.T) {
+	path := filepath.Join(getMigrationsDir(t), "049_project_workflow_fields.up.sql")
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	require.Contains(
+		t,
+		strings.ToLower(string(content)),
+		"workflow_agent_id uuid references agents(id) on delete set null",
+	)
+}
+
+func TestSchemaWorkflowAgentDeleteSetsProjectFieldNull(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "workflow-agent-fk-org")
+	agentID := insertSchemaAgent(t, db, orgID, "workflow-fk-agent")
+	projectID := createTestProject(t, db, orgID, "workflow-fk-project")
+
+	_, err := db.Exec(
+		`UPDATE projects
+		 SET workflow_enabled = true,
+		     workflow_schedule = $1::jsonb,
+		     workflow_agent_id = $2
+		 WHERE id = $3 AND org_id = $4`,
+		`{"kind":"every","everyMs":600000}`,
+		agentID,
+		projectID,
+		orgID,
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec("DELETE FROM agents WHERE id = $1 AND org_id = $2", agentID, orgID)
+	require.NoError(t, err)
+
+	var workflowAgentID sql.NullString
+	err = db.QueryRow(
+		"SELECT workflow_agent_id FROM projects WHERE id = $1 AND org_id = $2",
+		projectID,
+		orgID,
+	).Scan(&workflowAgentID)
+	require.NoError(t, err)
+	require.False(t, workflowAgentID.Valid)
 }
 
 func TestSchemaNativeIssueTablesCreateAndRollback(t *testing.T) {
