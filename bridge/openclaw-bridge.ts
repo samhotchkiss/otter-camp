@@ -3289,7 +3289,25 @@ function writeOpenClawConfigFile(configPath: string, configValue: unknown): void
   } catch (err) {
     console.warn(`[bridge] failed to create config backup ${backupPath}:`, err);
   }
-  fs.writeFileSync(configPath, `${JSON.stringify(configValue, null, 2)}\n`, 'utf8');
+  const serialized = `${JSON.stringify(configValue, null, 2)}\n`;
+  const directory = path.dirname(configPath);
+  const tempPath = path.join(
+    directory,
+    `.${path.basename(configPath)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  try {
+    fs.writeFileSync(tempPath, serialized, 'utf8');
+    fs.renameSync(tempPath, configPath);
+  } catch (err) {
+    try {
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+    } catch (cleanupErr) {
+      console.warn(`[bridge] failed to remove temp config file ${tempPath}:`, cleanupErr);
+    }
+    throw err;
+  }
 }
 
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
