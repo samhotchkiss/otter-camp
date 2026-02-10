@@ -95,6 +95,7 @@ func NewRouter() http.Handler {
 	projectTreeHandler := &ProjectTreeHandler{}
 	knowledgeHandler := &KnowledgeHandler{}
 	memoryHandler := &MemoryHandler{}
+	memoryEventsHandler := &MemoryEventsHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
 	adminAgentsHandler := &AdminAgentsHandler{DB: db, OpenClawHandler: openClawWSHandler}
@@ -154,6 +155,7 @@ func NewRouter() http.Handler {
 		projectIssueSyncHandler.IssueStore = issuesHandler.IssueStore
 		knowledgeHandler.Store = store.NewKnowledgeEntryStore(db)
 		memoryHandler.Store = store.NewMemoryStore(db)
+		memoryEventsHandler.Store = store.NewMemoryEventsStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
 	workflowsHandler.ProjectStore = projectStore
@@ -260,6 +262,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Delete("/memory/entries/{id}", memoryHandler.Delete)
 		r.With(middleware.OptionalWorkspace).Get("/memory/search", memoryHandler.Search)
 		r.With(middleware.OptionalWorkspace).Get("/memory/recall", memoryHandler.Recall)
+		r.With(middleware.OptionalWorkspace).Get("/memory/events", memoryEventsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
 		r.With(middleware.OptionalWorkspace).Get("/issues", issuesHandler.List)
