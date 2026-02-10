@@ -1592,7 +1592,7 @@ function buildExecutionPolicyBlock(params: {
     lines.push('- write policy: writes allowed only within write_guard_root');
     lines.push('- enforcement: policy-level only (prompt contract, no write hooks in v1)');
     lines.push('- TODO: enforce write/edit/apply_patch paths via OpenClaw file-write hooks');
-    lines.push('- security: path traversal and symlink escape are denied');
+    lines.push('- security: path traversal and symlink escape SHOULD NOT be used');
   } else {
     lines.push('- mode: conversation');
     lines.push('- project_id: none');

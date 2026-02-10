@@ -322,6 +322,7 @@ describe("bridge execution mode + path guard helpers", () => {
       assert.ok(contextual.includes("- write policy: writes allowed only within write_guard_root"));
       assert.ok(contextual.includes("- enforcement: policy-level only (prompt contract, no write hooks in v1)"));
       assert.ok(contextual.includes("- TODO: enforce write/edit/apply_patch paths via OpenClaw file-write hooks"));
+      assert.ok(contextual.includes("- security: path traversal and symlink escape SHOULD NOT be used"));
 
       const updatedContext = getSessionContextForTest(sessionKey);
       assert.equal(updatedContext?.executionMode, "project");
