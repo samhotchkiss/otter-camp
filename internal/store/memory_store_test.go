@@ -26,14 +26,14 @@ func TestMemoryStoreCreateListSearchRecallDelete(t *testing.T) {
 	ctx := ctxWithWorkspace(orgID)
 
 	created, err := store.Create(ctx, CreateMemoryEntryInput{
-		AgentID:      agentID,
-		Kind:         MemoryKindDecision,
-		Title:        "Adopt pgvector for semantic recall",
-		Content:      "Use vector-backed search to improve recall quality.",
-		Importance:   5,
-		Confidence:   0.85,
-		Sensitivity:  MemorySensitivityInternal,
-		OccurredAt:   time.Now().UTC(),
+		AgentID:       agentID,
+		Kind:          MemoryKindDecision,
+		Title:         "Adopt pgvector for semantic recall",
+		Content:       "Use vector-backed search to improve recall quality.",
+		Importance:    5,
+		Confidence:    0.85,
+		Sensitivity:   MemorySensitivityInternal,
+		OccurredAt:    time.Now().UTC(),
 		SourceIssue:   memoryStringPtr("111-memory-infrastructure-overhaul"),
 		SourceSession: memoryStringPtr("session-123"),
 	})
@@ -233,6 +233,50 @@ func TestMemoryStoreCreateDuplicateReturnsErrDuplicateMemory(t *testing.T) {
 
 	_, err = store.Create(ctx, input)
 	require.ErrorIs(t, err, ErrDuplicateMemory)
+}
+
+func TestMemoryStoreUpdateStatus(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgA := createTestOrganization(t, db, "memory-store-status-a")
+	orgB := createTestOrganization(t, db, "memory-store-status-b")
+
+	var agentA string
+	err := db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'memory-status-agent-a', 'Memory Status Agent A', 'active')
+		 RETURNING id`,
+		orgA,
+	).Scan(&agentA)
+	require.NoError(t, err)
+
+	store := NewMemoryStore(db)
+	ctxA := ctxWithWorkspace(orgA)
+	ctxB := ctxWithWorkspace(orgB)
+
+	created, err := store.Create(ctxA, CreateMemoryEntryInput{
+		AgentID:    agentA,
+		Kind:       MemoryKindDecision,
+		Title:      "status transition seed",
+		Content:    "initial status should be active",
+		Importance: 3,
+		Confidence: 0.7,
+	})
+	require.NoError(t, err)
+	require.Equal(t, MemoryStatusActive, created.Status)
+
+	require.NoError(t, store.UpdateStatus(ctxA, created.ID, MemoryStatusWarm))
+	listed, err := store.ListByAgent(ctxA, agentA, "", 10, 0)
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.Equal(t, MemoryStatusWarm, listed[0].Status)
+
+	require.ErrorIs(t, store.UpdateStatus(ctxA, created.ID, MemoryStatusActive), ErrMemoryInvalidStatusTransition)
+	require.NoError(t, store.UpdateStatus(ctxA, created.ID, MemoryStatusArchived))
+	require.ErrorIs(t, store.UpdateStatus(ctxA, created.ID, MemoryStatusWarm), ErrMemoryInvalidStatusTransition)
+	require.ErrorIs(t, store.UpdateStatus(ctxA, created.ID, "invalid"), ErrMemoryInvalidStatus)
+
+	require.ErrorIs(t, store.UpdateStatus(ctxB, created.ID, MemoryStatusWarm), ErrNotFound)
 }
 
 func memoryStringPtr(value string) *string {

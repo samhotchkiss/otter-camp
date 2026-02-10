@@ -39,17 +39,19 @@ const (
 )
 
 var (
-	ErrMemoryInvalidAgentID    = errors.New("memory agent_id is invalid")
-	ErrMemoryInvalidEntryID    = errors.New("memory id is invalid")
-	ErrMemoryInvalidKind       = errors.New("memory kind is invalid")
-	ErrMemoryInvalidSensitivity = errors.New("memory sensitivity is invalid")
-	ErrMemoryTitleMissing      = errors.New("memory title is required")
-	ErrMemoryContentMissing    = errors.New("memory content is required")
-	ErrMemoryInvalidImportance = errors.New("memory importance must be between 1 and 5")
-	ErrMemoryInvalidConfidence = errors.New("memory confidence must be between 0 and 1")
-	ErrMemoryQueryMissing      = errors.New("memory search query is required")
-	ErrMemoryInvalidRelevance  = errors.New("memory min relevance must be between 0 and 1")
-	ErrDuplicateMemory         = errors.New("duplicate memory entry")
+	ErrMemoryInvalidAgentID          = errors.New("memory agent_id is invalid")
+	ErrMemoryInvalidEntryID          = errors.New("memory id is invalid")
+	ErrMemoryInvalidKind             = errors.New("memory kind is invalid")
+	ErrMemoryInvalidSensitivity      = errors.New("memory sensitivity is invalid")
+	ErrMemoryInvalidStatus           = errors.New("memory status is invalid")
+	ErrMemoryInvalidStatusTransition = errors.New("memory status transition is invalid")
+	ErrMemoryTitleMissing            = errors.New("memory title is required")
+	ErrMemoryContentMissing          = errors.New("memory content is required")
+	ErrMemoryInvalidImportance       = errors.New("memory importance must be between 1 and 5")
+	ErrMemoryInvalidConfidence       = errors.New("memory confidence must be between 0 and 1")
+	ErrMemoryQueryMissing            = errors.New("memory search query is required")
+	ErrMemoryInvalidRelevance        = errors.New("memory min relevance must be between 0 and 1")
+	ErrDuplicateMemory               = errors.New("duplicate memory entry")
 )
 
 var memoryKinds = map[string]struct{}{
@@ -310,6 +312,76 @@ func (s *MemoryStore) ListByAgent(ctx context.Context, agentID, kind string, lim
 	}
 
 	return entries, nil
+}
+
+func (s *MemoryStore) UpdateStatus(ctx context.Context, id, status string) error {
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return ErrNoWorkspace
+	}
+
+	entryID := strings.TrimSpace(id)
+	if !uuidRegex.MatchString(entryID) {
+		return ErrMemoryInvalidEntryID
+	}
+
+	targetStatus := strings.TrimSpace(strings.ToLower(status))
+	if targetStatus != MemoryStatusActive && targetStatus != MemoryStatusWarm && targetStatus != MemoryStatusArchived {
+		return ErrMemoryInvalidStatus
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	var currentStatus string
+	if err := conn.QueryRowContext(
+		ctx,
+		`SELECT status
+		   FROM memory_entries
+		  WHERE org_id = $1
+		    AND id = $2`,
+		workspaceID,
+		entryID,
+	).Scan(&currentStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("failed to load memory status: %w", err)
+	}
+
+	currentStatus = strings.TrimSpace(strings.ToLower(currentStatus))
+	if currentStatus == targetStatus {
+		return nil
+	}
+
+	if !isValidMemoryStatusTransition(currentStatus, targetStatus) {
+		return ErrMemoryInvalidStatusTransition
+	}
+
+	result, err := conn.ExecContext(
+		ctx,
+		`UPDATE memory_entries
+		    SET status = $1
+		  WHERE org_id = $2
+		    AND id = $3`,
+		targetStatus,
+		workspaceID,
+		entryID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update memory status: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read memory status update result: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *MemoryStore) Search(ctx context.Context, params MemorySearchParams) ([]MemoryEntry, error) {
@@ -655,6 +727,17 @@ func isMemoryDedupConstraintViolation(err error) bool {
 		return false
 	}
 	return pqErr.Constraint == "idx_memory_entries_dedup_active" || pqErr.Constraint == "idx_memory_entries_dedup"
+}
+
+func isValidMemoryStatusTransition(currentStatus, targetStatus string) bool {
+	switch currentStatus {
+	case MemoryStatusActive:
+		return targetStatus == MemoryStatusWarm
+	case MemoryStatusWarm:
+		return targetStatus == MemoryStatusArchived
+	default:
+		return false
+	}
 }
 
 func scanMemoryEntry(scanner interface{ Scan(...any) error }) (MemoryEntry, error) {
