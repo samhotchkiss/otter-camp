@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -615,6 +616,12 @@ func TestNormalizeWorkflowPatchJSONScheduleValidation(t *testing.T) {
 			require.Contains(t, err.Error(), tc.wantErrorLike)
 		})
 	}
+}
+
+func TestIncrementWorkflowRunCountQueryUsesAtomicUpdate(t *testing.T) {
+	normalized := strings.ToLower(strings.Join(strings.Fields(incrementWorkflowRunCountQuery), " "))
+	require.Contains(t, normalized, "workflow_run_count = workflow_run_count + 1")
+	require.Contains(t, normalized, "returning workflow_run_count")
 }
 
 func TestProjectsHandlerTriggerRunCreatesIssueAndIncrementsRunCount(t *testing.T) {

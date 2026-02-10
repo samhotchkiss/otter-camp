@@ -1035,7 +1035,13 @@ func (h *ProjectsHandler) TriggerRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runNumber := project.WorkflowRunCount + 1
+	now := time.Now().UTC()
+	runNumber, err := h.incrementWorkflowRunCount(ctx, project.ID, workspaceID, now)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update workflow run metadata"})
+		return
+	}
+
 	agentName := workflowAgentDisplayName(ctx, h.DB, project.WorkflowAgentID)
 	template := workflowTemplateForProject(project, runNumber, agentName)
 
@@ -1095,29 +1101,26 @@ func (h *ProjectsHandler) TriggerRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	now := time.Now().UTC()
-	updateInput := store.UpdateProjectInput{
-		Name:              project.Name,
-		Description:       project.Description,
-		Status:            project.Status,
-		RepoURL:           project.RepoURL,
-		WorkflowEnabled:   project.WorkflowEnabled,
-		WorkflowSchedule:  project.WorkflowSchedule,
-		WorkflowTemplate:  project.WorkflowTemplate,
-		WorkflowAgentID:   project.WorkflowAgentID,
-		WorkflowLastRunAt: &now,
-		WorkflowNextRunAt: project.WorkflowNextRunAt,
-		WorkflowRunCount:  runNumber,
-	}
-	if _, err := h.Store.Update(ctx, project.ID, updateInput); err != nil {
-		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update workflow run metadata"})
-		return
-	}
-
 	sendJSON(w, http.StatusCreated, map[string]any{
 		"run":        workflowRunFromIssue(*issue),
 		"run_number": runNumber,
 	})
+}
+
+const incrementWorkflowRunCountQuery = `
+	UPDATE projects
+	SET workflow_run_count = workflow_run_count + 1,
+		workflow_last_run_at = $1
+	WHERE id = $2 AND org_id = $3
+	RETURNING workflow_run_count
+`
+
+func (h *ProjectsHandler) incrementWorkflowRunCount(ctx context.Context, projectID, workspaceID string, lastRunAt time.Time) (int, error) {
+	var runCount int
+	if err := h.DB.QueryRowContext(ctx, incrementWorkflowRunCountQuery, lastRunAt, projectID, workspaceID).Scan(&runCount); err != nil {
+		return 0, err
+	}
+	return runCount, nil
 }
 
 func workflowTemplateForProject(project *store.Project, runNumber int, agentName string) projectWorkflowTemplate {
