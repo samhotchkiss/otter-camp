@@ -325,6 +325,26 @@ func TestWorkflowRoutesAreRegistered(t *testing.T) {
 	}
 }
 
+func TestWorkflowRoutesUseOptionalWorkspaceMiddleware(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile(filepath.Join("router.go"))
+	if err != nil {
+		t.Fatalf("failed to read router.go: %v", err)
+	}
+	source := string(content)
+	requiredLines := []string{
+		`r.With(middleware.OptionalWorkspace).Get("/workflows", workflowsHandler.List)`,
+		`r.With(middleware.OptionalWorkspace).Patch("/workflows/{id}", workflowsHandler.Toggle)`,
+		`r.With(middleware.OptionalWorkspace).Post("/workflows/{id}/run", workflowsHandler.Run)`,
+	}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected workflow route to include OptionalWorkspace middleware: %s", line)
+		}
+	}
+}
+
 func TestSettingsRoutesAreRegistered(t *testing.T) {
 	t.Parallel()
 
