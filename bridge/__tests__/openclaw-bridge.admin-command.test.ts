@@ -256,4 +256,32 @@ describe('admin.command config patch/cutover/rollback', () => {
     );
     assert.equal(execCalls.length, 0);
   });
+
+  it('rejects rollback when config_hash is missing', async () => {
+    const cutoverConfig = {
+      gateway: { port: 18791 },
+      agents: {
+        main: { model: { primary: 'claude-opus-4-6' } },
+        chameleon: { model: { primary: 'claude-opus-4-6' } },
+      },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(cutoverConfig, null, 2));
+
+    await assert.rejects(
+      handleAdminCommandDispatchEvent({
+        type: 'admin.command',
+        data: {
+          command_id: 'cmd-rollback-no-hash',
+          action: 'config.rollback',
+          confirm: true,
+          config_full: {
+            gateway: { port: 18791 },
+            agents: { main: { model: { primary: 'claude-opus-4-6' } } },
+          },
+        },
+      }),
+      /config\.rollback requires config_hash for integrity validation/,
+    );
+    assert.equal(execCalls.length, 0);
+  });
 });

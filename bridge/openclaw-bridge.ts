@@ -4428,7 +4428,10 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
 
     const configPath = resolveOpenClawConfigPath();
     const currentConfig = readOpenClawConfigFile(configPath);
-    if (action === 'config.rollback' && configHash) {
+    if (action === 'config.rollback') {
+      if (!configHash) {
+        throw new Error('config.rollback requires config_hash for integrity validation');
+      }
       const currentHash = hashCanonicalJSON(currentConfig);
       if (currentHash !== configHash) {
         throw new Error(`config.rollback hash mismatch: expected ${configHash}, got ${currentHash}`);
