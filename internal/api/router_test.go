@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func TestRouterSetup(t *testing.T) {
@@ -338,9 +340,54 @@ func TestWorkflowRoutesUseOptionalWorkspaceMiddleware(t *testing.T) {
 		`r.With(middleware.OptionalWorkspace).Patch("/workflows/{id}", workflowsHandler.Toggle)`,
 		`r.With(middleware.OptionalWorkspace).Post("/workflows/{id}/run", workflowsHandler.Run)`,
 	}
-	for _, line := range requiredLines {
-		if !strings.Contains(source, line) {
-			t.Fatalf("expected workflow route to include OptionalWorkspace middleware: %s", line)
+		for _, line := range requiredLines {
+			if !strings.Contains(source, line) {
+				t.Fatalf("expected workflow route to include OptionalWorkspace middleware: %s", line)
+			}
+		}
+}
+
+func TestSettingsRoutesAreRegisteredExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	routes, ok := router.(chi.Routes)
+	if !ok {
+		t.Fatalf("router does not expose chi routes")
+	}
+	counts := make(map[string]int)
+	middlewareCounts := make(map[string]int)
+
+	err := chi.Walk(routes, func(method string, route string, _ http.Handler, middlewares ...func(http.Handler) http.Handler) error {
+		if strings.HasPrefix(route, "/api/settings/") {
+			key := method + " " + route
+			counts[key]++
+			middlewareCounts[key] = len(middlewares)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk router: %v", err)
+	}
+
+	expected := []string{
+		http.MethodGet + " /api/settings/profile",
+		http.MethodPut + " /api/settings/profile",
+		http.MethodGet + " /api/settings/notifications",
+		http.MethodPut + " /api/settings/notifications",
+		http.MethodGet + " /api/settings/workspace",
+		http.MethodPut + " /api/settings/workspace",
+		http.MethodGet + " /api/settings/integrations",
+		http.MethodPut + " /api/settings/integrations",
+		http.MethodPost + " /api/settings/integrations/api-keys",
+		http.MethodDelete + " /api/settings/integrations/api-keys/{id}",
+	}
+	for _, key := range expected {
+		if counts[key] != 1 {
+			t.Fatalf("expected %s to be registered exactly once, got %d", key, counts[key])
+		}
+		if middlewareCounts[key] == 0 {
+			t.Fatalf("expected %s to include route middleware (OptionalWorkspace), got none", key)
 		}
 	}
 }

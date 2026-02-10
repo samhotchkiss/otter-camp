@@ -307,6 +307,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Put("/settings/workspace", HandleSettingsWorkspacePut)
 		r.With(middleware.OptionalWorkspace).Get("/settings/integrations", HandleSettingsIntegrationsGet)
 		r.With(middleware.OptionalWorkspace).Put("/settings/integrations", HandleSettingsIntegrationsPut)
+		r.With(middleware.OptionalWorkspace).Post("/settings/integrations/api-keys", HandleSettingsAPIKeyCreate)
+		r.With(middleware.OptionalWorkspace).Delete("/settings/integrations/api-keys/{id}", HandleSettingsAPIKeyDelete)
 
 		r.With(middleware.OptionalWorkspace).Get("/github/integration/status", githubIntegrationHandler.IntegrationStatus)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/github/integration/repos", githubIntegrationHandler.ListRepos)
@@ -336,17 +338,6 @@ func NewRouter() http.Handler {
 		r.Get("/export", HandleExport)
 		r.Post("/import", HandleImport)
 		r.Post("/import/validate", HandleImportValidate)
-
-		r.Get("/settings/profile", HandleSettingsProfileGet)
-		r.Put("/settings/profile", HandleSettingsProfilePut)
-		r.Get("/settings/notifications", HandleSettingsNotificationsGet)
-		r.Put("/settings/notifications", HandleSettingsNotificationsPut)
-		r.Get("/settings/workspace", HandleSettingsWorkspaceGet)
-		r.Put("/settings/workspace", HandleSettingsWorkspacePut)
-		r.Get("/settings/integrations", HandleSettingsIntegrationsGet)
-		r.Put("/settings/integrations", HandleSettingsIntegrationsPut)
-		r.Post("/settings/integrations/api-keys", HandleSettingsAPIKeyCreate)
-		r.Delete("/settings/integrations/api-keys/{id}", HandleSettingsAPIKeyDelete)
 
 		// Admin endpoints
 		r.With(middleware.OptionalWorkspace).Post("/admin/init-repos", HandleAdminInitRepos(db))
