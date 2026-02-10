@@ -49,7 +49,7 @@ describe('workflowTemplateForCronJob', () => {
       enabled: true,
     });
     assert.equal(template.pipeline, 'none');
-    assert.equal(template.auto_close, true);
+    assert.equal(template.auto_close, false);
     assert.deepEqual(template.labels, ['automated']);
   });
 
@@ -60,6 +60,7 @@ describe('workflowTemplateForCronJob', () => {
       enabled: true,
     });
     assert.equal(template.pipeline, 'auto_close');
+    assert.equal(template.auto_close, true);
   });
 });
 

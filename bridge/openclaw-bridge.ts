@@ -3075,7 +3075,7 @@ export function workflowTemplateForCronJob(job: OpenClawCronJobSnapshot): Record
     body: name,
     priority: 'P3',
     labels: ['automated'],
-    auto_close: pipeline !== 'standard',
+    auto_close: pipeline === 'auto_close',
     pipeline,
   };
 }
