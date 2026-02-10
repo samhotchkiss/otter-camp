@@ -136,3 +136,54 @@ func TestOpenClawAgentImportSkipsNonRegularIdentityFiles(t *testing.T) {
 	require.Len(t, identities, 1)
 	require.Equal(t, "", identities[0].Soul)
 }
+
+func TestIsWithinDir(t *testing.T) {
+	base := filepath.Join(string(os.PathSeparator), "tmp", "otter-base")
+
+	tests := []struct {
+		name   string
+		target string
+		want   bool
+	}{
+		{
+			name:   "same directory",
+			target: base,
+			want:   true,
+		},
+		{
+			name:   "child directory",
+			target: filepath.Join(base, "workspaces", "main"),
+			want:   true,
+		},
+		{
+			name:   "traversal outside",
+			target: filepath.Join(base, "..", "outside"),
+			want:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := isWithinDir(base, tc.target)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestReadIdentityFileRejectsSymlinks(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "source.md")
+	require.NoError(t, os.WriteFile(target, []byte("secret"), 0o644))
+
+	linkPath := filepath.Join(workspace, "SOUL.md")
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Skipf("symlink not supported in test environment: %v", err)
+	}
+
+	content, sourcePath, ok, err := readIdentityFile(workspace, "SOUL.md")
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, "", content)
+	require.Equal(t, "", sourcePath)
+}
