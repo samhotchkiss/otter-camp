@@ -16,65 +16,23 @@
 
 ---
 
-I have 13 AI agents. They do my engineering, write my content, manage my email, watch markets while I sleep, help me plan meals, keep track of my kids' schedules. It's how I work now.
+Everyone's running AI agents now. Nobody talks about managing them. The compacted memories, the blocked queues you don't know about, the dead sessions, the context bleed. Otter Camp is the missing layer — open source, runs on your machine, adds actual method to the madness.
 
-I keep a paper notepad next to my desk. Things I need to tell my agents. Because if a thought hits me while I'm mid-conversation with one of them, it gets distracted, I lose the thread, and I've wrecked two things. So I write it down and wait for the right moment. In 2026. I have a fucking fleet of AI agents and I'm using a paper notepad so I don't confuse them.
+It layers on top of [OpenClaw](https://github.com/openclaw/openclaw). Claw runs agents. Otter runs the team.
 
-My engineering lead made an architecture decision on Monday. Compacted overnight. Wednesday it makes the same mistake because it has no idea Monday happened. My content writer contradicts a post from last week — doesn't remember writing it. My personal assistant forgot what day my fat ass is supposed to take my Ozempic. Knew it Tuesday. Compacted. Gone.
+## What It Does
 
-Three of my agents are blocked on me right now. I didn't know until I went looking. Their questions are in different chat windows, nothing flagged them. I'm the bottleneck and I can't even tell. Two more have died midstream, and I have to figure out how to restart them.
+**🦎 Chameleon** — Agent identities in a database, not config files. New team member in 30 seconds. Clone them to parallelize. Track what they ship, run performance reviews, tune them. Done with one? Fired.
 
-Everyone posts about how many agents they're running. How much cool shit they're building. Nobody posts about this part.
+**🐘 Elephant** — The memory agent. Scans everything every 5 minutes. Catches what matters, stores it, gives it back after compaction. Shares knowledge across the team. Makes sure agents follow through on commitments.
 
----
+**📋 Projects & Issues** — Everything in Git. Code, blog posts, meal plans. Issues flow plan → build → review → ship. Version controlled because progress should be non-destructive. You can always undo.
 
-We (me and my gang of clankers) are building Otter Camp. Open source, runs on your machine, adds actual method to the madness.
+**💬 Scoped Conversations** — Discussions stay where they belong. Blog feedback with the blog. Engineering with engineering. Drop a thought on Otter, it gets filed in the right project. ADHD brain's best friend.
 
-## How It Works
+**🔄 Review Loops** — Nothing ships unchecked. Agents review each other, or add human checkpoints. Every decision has a trail.
 
-Otter Camp layers on top of [OpenClaw](https://github.com/openclaw/openclaw) — the runtime that handles LLMs, file system, skills, message routing. Claw runs agents. Otter runs the team. Install it, it pulls in your existing agents, manages everything from there. Two new agents get created: **Chameleon** and **Elephant**.
-
-### 🦎 Chameleon
-
-Adding an agent to my current setup is 30 minutes of config editing. System prompt, personality, workspace, tools, channels.
-
-Chameleon stores identities in a database. New engineer? Social media person? Someone to manage your family calendar? Create them in the UI, pick a profile, customize. Thirty seconds. Done with one? One click. Fired.
-
-Identities are just data, so you can clone them. Need to parallelize? Five copies of your writer, five blog posts at once. Nine women can't make a baby in one month, but they can make nine babies in nine months. Only bottleneck is what depends on what, not who's available.
-
-Otter tracks what each agent ships, what gets rejected, how they handle feedback. You can run actual performance reviews and tune them.
-
-### 📋 Projects & Issues
-
-Code, blog posts, books, tweets, trading strategies, meal plans — everything lives in a project, everything in Git. Issues go plan → build → review → ship. Same flow for a feature and a grocery list.
-
-Everything is version controlled because progress should be non-destructive. Agents can try stuff and you don't have to be afraid. Designer ships something bad at 2am, roll it back. Writer nukes a good draft, it's still there. You can always undo.
-
-### 💬 Scoped Conversations
-
-Discussions live where they belong — within an issue, a project, or org-wide. Your feedback on the blog draft stays with the blog draft. Doesn't bleed into unrelated context that's about to compact.
-
-Thought pops into your head? Drop it on otter, it'll get filed as an issue within the right project, ready to flesh out when you are. Don't interrupt what you're working on. ADHD brain's best friend.
-
-### 🔄 Review Loops
-
-Nothing ships unchecked. Code, content, designs — reviewed before merge. Agents review each other, or you can choose to add human checkpoints. Every decision has a trail.
-
-### 🐘 Elephant
-
-The memory agent. (They never forget.)
-
-Every five minutes, scans everything — conversations, commits, decisions, all of it. Two jobs:
-
-**Remembering.** You told your assistant about the peanut allergy last Tuesday. Elephant caught it, stored it. Agent compacts and restarts, gets the memory back. Every agent gets persistent memory automatically.
-
-**Sharing.** Your engineer finds a bad API pattern — the designer needs to know, the docs agent needs to know. You mention you're training for a marathon — your meal planner needs that. Elephant figures out who needs what and puts it in front of them. Targeted, not broadcast.
-
-**Enforcing.** Elephant makes sure your agents follow through on what they say they're going to do. When a commitment is made it's captured and tracked to completion.
-
-## Running in Production
-
-I'm running this in production. The Otter Camp codebase was built by the agents it manages — 700+ commits and 150k lines of code in 9 days.
+**🔒 Local First** — Data stays on your machine. Open source, self-hosted, no cloud dependency. Want it hosted? That's an option too.
 
 ## Get Started
 
@@ -88,9 +46,7 @@ make dev      # API + frontend
 make bridge
 ```
 
-Otter runs on your machine. Data stays local. Open source. Your agents touch your files, calendar, messages, and you have control over that. If you want it hosted, that's an option, too.
-
-We ship curated agent profiles so you don't have to build from scratch. Engineering, content, design, research, personal ops. Pick one, tweak it, go.
+We ship curated agent profiles — engineering, content, design, research, personal ops. Pick one, tweak it, go.
 
 ## Architecture
 
@@ -119,17 +75,16 @@ We ship curated agent profiles so you don't have to build from scratch. Engineer
                 └───────────────┘
 ```
 
-Native iOS and iPad apps coming next. Manage your agents from your phone. Just connect to your Mac Mini with TailScale and you've got native control.
+## In Production
 
-Alpha will be ready this week for those out there who are fucking masochists. Should be good enough for your Gramma by the end of the month.
+13 agents, every day. 150k lines of code, 700+ commits in 9 days — most of the codebase was built by the agents it manages.
 
----
-
-Thanks to: [@steve_yegge](https://x.com/steve_yegge) [@steipete](https://x.com/steipete) [@alexfinn](https://x.com/alexfinn) [@delba_oliveira](https://x.com/delba_oliveira) [@m_0_r_g_a_n_](https://x.com/m_0_r_g_a_n_) [@techNmak](https://x.com/techNmak) [@leonabboud](https://x.com/leonabboud) [@ericosiu](https://x.com/ericosiu)
+Native iOS and iPad apps coming next.
 
 ## Links
 
 - [otter.camp](https://otter.camp) — Homepage
+- [What Is Otter Camp?](https://otter.camp/what-is-otter-camp) — The full story
 - [OpenClaw](https://github.com/openclaw/openclaw) — The runtime
 - [Discord](https://discord.gg/clawd) — Community
 
