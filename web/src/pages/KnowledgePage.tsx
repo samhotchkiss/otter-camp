@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { apiFetch } from '../lib/api';
 
 interface KnowledgeEntry {
@@ -24,6 +25,19 @@ interface KnowledgeEntry {
 interface KnowledgeListResponse {
   items: KnowledgeEntry[];
   total: number;
+}
+
+interface MemoryEvaluationSummary {
+  id: string;
+  created_at: string;
+  passed: boolean;
+  failed_gates?: string[];
+  metrics?: {
+    precision_at_k?: number;
+    false_injection_rate?: number;
+    recovery_success_rate?: number;
+    p95_latency_ms?: number;
+  };
 }
 
 function timeAgo(dateString: string): string {
@@ -44,6 +58,9 @@ export default function KnowledgePage() {
   const [selectedEntry, setSelectedEntry] = useState<KnowledgeEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [evaluation, setEvaluation] = useState<MemoryEvaluationSummary | null>(null);
+  const [evaluationLoading, setEvaluationLoading] = useState(true);
+  const [evaluationError, setEvaluationError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -71,6 +88,32 @@ export default function KnowledgePage() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    setEvaluationLoading(true);
+    setEvaluationError(null);
+
+    void apiFetch<{ run?: MemoryEvaluationSummary }>('/api/memory/evaluations/latest')
+      .then((payload) => {
+        if (!active) return;
+        setEvaluation(payload?.run ?? null);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const message = error instanceof Error ? error.message : 'Failed to load memory evaluation summary';
+        setEvaluationError(message);
+        setEvaluation(null);
+      })
+      .finally(() => {
+        if (!active) return;
+        setEvaluationLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // Get all unique tags
   const allTags = Array.from(
     new Set(entries.flatMap((e) => e.tags))
@@ -91,6 +134,56 @@ export default function KnowledgePage() {
         </div>
         <button className="btn btn-primary">+ New Entry</button>
       </header>
+
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-[var(--text)]">Memory Evaluation</h2>
+          <Link to="/knowledge/evaluation" className="text-xs font-medium text-[#C9A86C] hover:underline">
+            View dashboard
+          </Link>
+        </div>
+        {evaluationLoading && <p className="mt-2 text-sm text-[var(--text-muted)]">Loading latest evaluation…</p>}
+        {!evaluationLoading && evaluationError && (
+          <p className="mt-2 text-sm text-rose-500">Evaluation unavailable: {evaluationError}</p>
+        )}
+        {!evaluationLoading && !evaluationError && !evaluation && (
+          <p className="mt-2 text-sm text-[var(--text-muted)]">No evaluation runs recorded yet.</p>
+        )}
+        {!evaluationLoading && !evaluationError && evaluation && (
+          <div className="mt-3 grid gap-2 sm:grid-cols-4">
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-2">
+              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Status</p>
+              <p className={`mt-1 text-sm font-medium ${evaluation.passed ? 'text-emerald-600' : 'text-rose-500'}`}>
+                {evaluation.passed ? 'pass' : 'fail'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-2">
+              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Precision@k</p>
+              <p className="mt-1 text-sm font-medium text-[var(--text)]">
+                {typeof evaluation.metrics?.precision_at_k === 'number'
+                  ? evaluation.metrics.precision_at_k.toFixed(2)
+                  : 'n/a'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-2">
+              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">False inject</p>
+              <p className="mt-1 text-sm font-medium text-[var(--text)]">
+                {typeof evaluation.metrics?.false_injection_rate === 'number'
+                  ? evaluation.metrics.false_injection_rate.toFixed(2)
+                  : 'n/a'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-2">
+              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Recovery</p>
+              <p className="mt-1 text-sm font-medium text-[var(--text)]">
+                {typeof evaluation.metrics?.recovery_success_rate === 'number'
+                  ? evaluation.metrics.recovery_success_rate.toFixed(2)
+                  : 'n/a'}
+              </p>
+            </div>
+          </div>
+        )}
+      </section>
 
       {/* Tag Filters (search handled by magic bar ⌘K) */}
       <div className="knowledge-controls">
