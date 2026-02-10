@@ -456,6 +456,9 @@ func (c *Client) DeleteProject(projectID string) error {
 
 // Slug returns a filesystem-safe slug derived from the project name.
 func (p Project) Slug() string {
+	if slug := strings.TrimSpace(p.URLSlug); slug != "" {
+		return slug
+	}
 	return slugify(p.Name)
 }
 

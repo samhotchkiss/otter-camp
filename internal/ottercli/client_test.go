@@ -29,9 +29,14 @@ func TestSlugify(t *testing.T) {
 }
 
 func TestProjectSlug(t *testing.T) {
-	p := Project{Name: "My Cool Project"}
-	if got := p.Slug(); got != "my-cool-project" {
-		t.Errorf("Slug() = %q, want %q", got, "my-cool-project")
+	withServerSlug := Project{Name: "My Cool Project", URLSlug: "server-slug"}
+	if got := withServerSlug.Slug(); got != "server-slug" {
+		t.Errorf("Slug() with URLSlug = %q, want %q", got, "server-slug")
+	}
+
+	withoutServerSlug := Project{Name: "My Cool Project"}
+	if got := withoutServerSlug.Slug(); got != "my-cool-project" {
+		t.Errorf("Slug() fallback = %q, want %q", got, "my-cool-project")
 	}
 }
 
