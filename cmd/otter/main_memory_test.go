@@ -282,3 +282,15 @@ func TestHandleMemoryCreateValidatesRanges(t *testing.T) {
 
 	require.NoError(t, validateMemoryCreateFlags(3, 0.5, "restricted"))
 }
+
+func TestHandleKnowledgeImportRejectsOversizeFile(t *testing.T) {
+	oversizedPath := filepath.Join(t.TempDir(), "oversized.json")
+	require.NoError(t, os.WriteFile(oversizedPath, make([]byte, knowledgeImportMaxFileBytes+1), 0o644))
+
+	err := validateKnowledgeImportFileSize(oversizedPath, knowledgeImportMaxFileBytes)
+	require.ErrorContains(t, err, "knowledge import file exceeds")
+
+	validPath := filepath.Join(t.TempDir(), "valid.json")
+	require.NoError(t, os.WriteFile(validPath, []byte(`[]`), 0o644))
+	require.NoError(t, validateKnowledgeImportFileSize(validPath, knowledgeImportMaxFileBytes))
+}

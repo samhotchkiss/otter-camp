@@ -28,6 +28,7 @@ var chameleonSessionKeyPattern = regexp.MustCompile(
 const (
 	authSetupCommand = "otter auth login --token <your-token> --org <org-id>"
 	authTokenHelpURL = "https://otter.camp/settings"
+	knowledgeImportMaxFileBytes int64 = 10 << 20
 )
 
 func main() {
@@ -727,6 +728,9 @@ func handleKnowledge(args []string) {
 		path := strings.TrimSpace(flags.Args()[0])
 		if path == "" {
 			die("import file path is required")
+		}
+		if err := validateKnowledgeImportFileSize(path, knowledgeImportMaxFileBytes); err != nil {
+			die(err.Error())
 		}
 
 		raw, err := os.ReadFile(path)
@@ -1973,6 +1977,20 @@ func validateMemoryCreateFlags(importance int, confidence float64, sensitivity s
 	default:
 		return errors.New("--sensitivity must be one of public|internal|restricted")
 	}
+}
+
+func validateKnowledgeImportFileSize(path string, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.Size() > maxBytes {
+		return fmt.Errorf("knowledge import file exceeds %d bytes", maxBytes)
+	}
+	return nil
 }
 
 func slugifyAgentName(name string) string {
