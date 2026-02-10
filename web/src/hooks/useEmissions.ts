@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useWS } from "../contexts/WebSocketContext";
+import { API_URL } from "../lib/api";
 
-const API_BASE = import.meta.env.VITE_API_URL || "";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const DEFAULT_LIMIT = 25;
 
@@ -223,7 +223,7 @@ export default function useEmissions(
     setLoading(true);
     setError(null);
     try {
-      const url = new URL(`${API_BASE}/api/emissions/recent`, window.location.origin);
+      const url = new URL(`${API_URL}/api/emissions/recent`, window.location.origin);
       url.searchParams.set("org_id", orgID);
       url.searchParams.set("limit", String(limit));
       if (projectID) {

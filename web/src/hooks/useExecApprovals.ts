@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useWS } from "../contexts/WebSocketContext";
-
-const API_BASE = import.meta.env.VITE_API_URL || "";
+import { API_URL } from "../lib/api";
 
 export type ExecApprovalDecision = "approve" | "deny";
 
@@ -112,7 +111,7 @@ export default function useExecApprovals(orgId?: string): UseExecApprovalsResult
     setError(null);
 
     try {
-      const url = new URL(`${API_BASE}/api/approvals/exec`, window.location.origin);
+      const url = new URL(`${API_URL}/api/approvals/exec`, window.location.origin);
       url.searchParams.set("org_id", org);
       url.searchParams.set("status", "pending");
       url.searchParams.set("limit", "200");
@@ -152,7 +151,7 @@ export default function useExecApprovals(orgId?: string): UseExecApprovalsResult
       }
 
       const url = new URL(
-        `${API_BASE}/api/approvals/exec/${encodeURIComponent(id)}/respond`,
+        `${API_URL}/api/approvals/exec/${encodeURIComponent(id)}/respond`,
         window.location.origin,
       );
       url.searchParams.set("org_id", org);
@@ -221,4 +220,3 @@ export default function useExecApprovals(orgId?: string): UseExecApprovalsResult
     respond,
   };
 }
-
