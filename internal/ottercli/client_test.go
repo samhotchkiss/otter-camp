@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestSlugify(t *testing.T) {
@@ -89,6 +90,42 @@ func TestClientOnboardingBootstrapUsesExpectedPathAndPayload(t *testing.T) {
 	}
 	if resp.OrgID != "org-1" || resp.Token != "oc_sess_abc" || resp.ProjectName != "Getting Started" {
 		t.Fatalf("OnboardingBootstrap response = %#v", resp)
+	}
+}
+
+func TestClientOnboardingBootstrapParsesExpiresAtTime(t *testing.T) {
+	const rawExpires = "2026-02-11T00:00:00Z"
+	var expected time.Time
+	var err error
+	expected, err = time.Parse(time.RFC3339, rawExpires)
+	if err != nil {
+		t.Fatalf("failed to parse expected time: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"org_id":"org-1","org_slug":"my-team","user_id":"user-1","token":"oc_sess_abc","expires_at":"2026-02-11T00:00:00Z","project_id":"project-1","project_name":"Getting Started","issue_id":"issue-1","issue_number":1,"issue_title":"Welcome to Otter Camp"}`))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		HTTP:    srv.Client(),
+	}
+
+	resp, err := client.OnboardingBootstrap(OnboardingBootstrapRequest{
+		Name:             "Sam",
+		Email:            "sam@example.com",
+		OrganizationName: "My Team",
+	})
+	if err != nil {
+		t.Fatalf("OnboardingBootstrap() error = %v", err)
+	}
+	if resp.ExpiresAt.IsZero() {
+		t.Fatalf("expected non-zero expires_at time")
+	}
+	if !resp.ExpiresAt.Equal(expected) {
+		t.Fatalf("expires_at = %s, want %s", resp.ExpiresAt.Format(time.RFC3339), expected.Format(time.RFC3339))
 	}
 }
 
