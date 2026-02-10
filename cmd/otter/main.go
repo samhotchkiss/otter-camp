@@ -39,6 +39,8 @@ func main() {
 	switch cmd {
 	case "auth":
 		handleAuth(os.Args[2:])
+	case "init":
+		handleInit(os.Args[2:])
 	case "whoami":
 		handleWhoami(os.Args[2:])
 	case "release-gate":
@@ -74,6 +76,7 @@ func usage() {
 
 Commands:
   auth login       Store API token + default org
+  init             Run onboarding setup wizard
   whoami           Validate token and show user
   release-gate     Run Spec 110 release gate checks
   project          Manage projects
