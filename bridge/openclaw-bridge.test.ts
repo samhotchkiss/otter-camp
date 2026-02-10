@@ -24,10 +24,13 @@ import {
   resolveExecutionMode,
   resolveProjectWorktreeRoot,
   resetPeriodicSyncGuardForTest,
+  resetReconnectStateForTest,
   resetSessionContextsForTest,
   runSerializedSyncOperationForTest,
+  setContinuousModeEnabledForTest,
   sanitizeWebSocketURLForLog,
   setSessionContextForTest,
+  triggerOpenClawCloseForTest,
   type QuestionnairePayload,
   type QuestionnaireQuestion,
 } from "./openclaw-bridge";
@@ -380,6 +383,25 @@ describe("bridge periodic sync guard", () => {
     });
     assert.equal(thirdExecuted, true);
     assert.equal(started, 2);
+  });
+});
+
+describe("bridge OpenClaw reconnect behavior", () => {
+  beforeEach(() => {
+    resetReconnectStateForTest("openclaw");
+    setContinuousModeEnabledForTest(false);
+  });
+
+  it("attempts reconnect after websocket close in continuous mode", async () => {
+    setContinuousModeEnabledForTest(true);
+    let reconnectAttempts = 0;
+
+    triggerOpenClawCloseForTest(1006, "test-close", () => {
+      reconnectAttempts += 1;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    assert.equal(reconnectAttempts > 0, true);
   });
 });
 
