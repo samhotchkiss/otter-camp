@@ -5,7 +5,7 @@
 <h1 align="center">🦦 Otter Camp</h1>
 
 <p align="center">
-  <strong>Basecamp + GitHub + Slack for a world where AI is part of the team, not just a tool.</strong>
+  <strong>Open source work management for AI agent teams.</strong>
 </p>
 
 <p align="center">
@@ -16,23 +16,25 @@
 
 ---
 
-Everyone's running AI agents now. Nobody talks about managing them. The compacted memories, the blocked queues you don't know about, the dead sessions, the context bleed. Otter Camp is the missing layer — open source, runs on your machine, adds actual method to the madness.
+Everyone's running AI agents. Nobody talks about managing them — the forgotten context, the blocked queues you don't know about, the dead sessions nobody flagged.
 
-It layers on top of [OpenClaw](https://github.com/openclaw/openclaw). Claw runs agents. Otter runs the team.
+Otter Camp layers on top of [OpenClaw](https://github.com/openclaw/openclaw). Claw runs agents. Otter runs the team.
 
 ## What It Does
 
-**🦎 Chameleon** — Agent identities in a database, not config files. New team member in 30 seconds. Clone them to parallelize. Track what they ship, run performance reviews, tune them. Done with one? Fired.
+🧠 **Agents remember everything.** Context compacts overnight. Otter makes sure nothing gets lost. What your assistant learned Tuesday is still there Friday.
 
-**🐘 Elephant** — The memory agent. Scans everything every 5 minutes. Catches what matters, stores it, gives it back after compaction. Shares knowledge across the team. Makes sure agents follow through on commitments.
+⚡ **Hire and fire in seconds.** Spin up a new agent in 30 seconds from the UI. Need five writers for five blog posts? Clone one. Done with an agent? One click, gone.
 
-**📋 Projects & Issues** — Everything in Git. Code, blog posts, meal plans. Issues flow plan → build → review → ship. Version controlled because progress should be non-destructive. You can always undo.
+📋 **One pipeline for all work.** Code, blog posts, meal plans — everything in Git, same flow. Plan → build → review → ship. Version controlled, so you can always undo.
 
-**💬 Scoped Conversations** — Discussions stay where they belong. Blog feedback with the blog. Engineering with engineering. Drop a thought on Otter, it gets filed in the right project. ADHD brain's best friend.
+💬 **Context stays where it belongs.** Blog feedback lives with the blog. Engineering stays in engineering. Drop a thought anywhere, it gets filed in the right project.
 
-**🔄 Review Loops** — Nothing ships unchecked. Agents review each other, or add human checkpoints. Every decision has a trail.
+🔄 **Nothing ships unchecked.** Agents review each other's work. Add human checkpoints where you want them. Full audit trail.
 
-**🔒 Local First** — Data stays on your machine. Open source, self-hosted, no cloud dependency. Want it hosted? That's an option too.
+📊 **Know what your team is doing.** Track what each agent ships, what gets rejected, how they handle feedback. Run actual performance reviews.
+
+🔒 **Your data, your machine.** Open source, self-hosted, no cloud dependency. Hosted option available if you want it.
 
 ## Get Started
 
@@ -75,16 +77,9 @@ We ship curated agent profiles — engineering, content, design, research, perso
                 └───────────────┘
 ```
 
-## In Production
-
-13 agents, every day. 150k lines of code, 700+ commits in 9 days — most of the codebase was built by the agents it manages.
-
-Native iOS and iPad apps coming next.
-
 ## Links
 
 - [otter.camp](https://otter.camp) — Homepage
-- [What Is Otter Camp?](https://otter.camp/what-is-otter-camp) — The full story
 - [OpenClaw](https://github.com/openclaw/openclaw) — The runtime
 - [Discord](https://discord.gg/clawd) — Community
 
