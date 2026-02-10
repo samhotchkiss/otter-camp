@@ -16,11 +16,11 @@ import (
 
 func newMemoryTestRouter(handler *MemoryHandler) http.Handler {
 	r := chi.NewRouter()
-	r.With(middleware.OptionalWorkspace).Post("/api/memory/entries", handler.Create)
-	r.With(middleware.OptionalWorkspace).Get("/api/memory/entries", handler.List)
-	r.With(middleware.OptionalWorkspace).Delete("/api/memory/entries/{id}", handler.Delete)
-	r.With(middleware.OptionalWorkspace).Get("/api/memory/search", handler.Search)
-	r.With(middleware.OptionalWorkspace).Get("/api/memory/recall", handler.Recall)
+	r.With(middleware.RequireWorkspace).Post("/api/memory/entries", handler.Create)
+	r.With(middleware.RequireWorkspace).Get("/api/memory/entries", handler.List)
+	r.With(middleware.RequireWorkspace).Delete("/api/memory/entries/{id}", handler.Delete)
+	r.With(middleware.RequireWorkspace).Get("/api/memory/search", handler.Search)
+	r.With(middleware.RequireWorkspace).Get("/api/memory/recall", handler.Recall)
 	return r
 }
 
@@ -161,4 +161,14 @@ func TestMemoryHandlerOrgIsolation(t *testing.T) {
 	noWorkspaceRec := httptest.NewRecorder()
 	router.ServeHTTP(noWorkspaceRec, noWorkspaceReq)
 	require.Equal(t, http.StatusUnauthorized, noWorkspaceRec.Code)
+}
+
+func TestMemoryRoutesRequireWorkspace(t *testing.T) {
+	router := newMemoryTestRouter(&MemoryHandler{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/memory/entries?agent_id=00000000-0000-0000-0000-000000000001", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }

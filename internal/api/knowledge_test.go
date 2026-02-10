@@ -18,8 +18,8 @@ import (
 
 func newKnowledgeTestRouter(handler *KnowledgeHandler) http.Handler {
 	r := chi.NewRouter()
-	r.With(middleware.OptionalWorkspace).Get("/api/knowledge", handler.List)
-	r.With(middleware.OptionalWorkspace).Post("/api/knowledge/import", handler.Import)
+	r.With(middleware.RequireWorkspace).Get("/api/knowledge", handler.List)
+	r.With(middleware.RequireWorkspace).Post("/api/knowledge/import", handler.Import)
 	return r
 }
 
@@ -154,4 +154,14 @@ func TestKnowledgeImportUnknownStoreErrorReturnsGeneric500(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.Equal(t, "knowledge operation failed", payload.Error)
 	require.NotContains(t, payload.Error, "10.0.0.12")
+}
+
+func TestKnowledgeRoutesRequireWorkspace(t *testing.T) {
+	router := newKnowledgeTestRouter(&KnowledgeHandler{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/knowledge", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
