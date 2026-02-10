@@ -2489,14 +2489,19 @@ function normalizeModeArg(value: string | undefined): 'once' | 'continuous' {
   return normalized === 'continuous' ? 'continuous' : 'once';
 }
 
-function buildOtterCampWSURL(): string {
+export function buildOtterCampWSURL(secret: string = OTTERCAMP_WS_SECRET): string {
   const url = new URL(OTTERCAMP_URL);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.pathname = '/ws/openclaw';
-  if (OTTERCAMP_WS_SECRET) {
-    url.searchParams.set('token', OTTERCAMP_WS_SECRET);
+  if (secret) {
+    url.searchParams.set('token', secret);
   }
   return url.toString();
+}
+
+export function sanitizeWebSocketURLForLog(rawURL: string): string {
+  const parsed = new URL(rawURL);
+  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
 }
 
 async function connectToOpenClaw(): Promise<void> {
@@ -4367,7 +4372,7 @@ function connectOtterCampDispatchSocket(): void {
   }
 
   const wsURL = buildOtterCampWSURL();
-  console.log(`[bridge] connecting to OtterCamp websocket ${wsURL}`);
+  console.log(`[bridge] connecting to OtterCamp websocket ${sanitizeWebSocketURLForLog(wsURL)}`);
   markSocketConnectAttempt('ottercamp');
 
   otterCampWS = new WebSocket(wsURL);
