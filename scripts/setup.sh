@@ -218,7 +218,7 @@ install_dependency() {
         log_error "Homebrew install is only supported on macOS in this script."
         return 1
       fi
-      run_cmd /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      run_cmd /bin/bash -lc "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | /bin/bash"
       ;;
     go)
       if [[ "$platform" == "macos" ]]; then
@@ -333,7 +333,14 @@ ensure_dependency() {
 
 generate_secret() {
   if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 24
+    local secret
+    if secret="$(openssl rand -hex 24 2>/dev/null)"; then
+      echo "$secret"
+      return
+    fi
+  fi
+  if command -v head >/dev/null 2>&1 && command -v xxd >/dev/null 2>&1; then
+    head -c 24 /dev/urandom | xxd -p
     return
   fi
   date +%s%N | shasum | awk '{print $1}'
@@ -412,10 +419,37 @@ EOF
 }
 
 load_env() {
-  # shellcheck disable=SC1091
-  set -a
-  source .env
-  set +a
+  if [[ ! -f .env ]]; then
+    log_error ".env is missing."
+    return 1
+  fi
+
+  local raw line key value
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    raw="${raw%$'\r'}"
+    line="${raw#"${raw%%[![:space:]]*}"}"
+    if [[ -z "$line" || "${line:0:1}" == "#" ]]; then
+      continue
+    fi
+    if [[ "$line" != *=* ]]; then
+      log_error "Invalid .env entry: $raw"
+      return 1
+    fi
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      log_error "Invalid .env key: $key"
+      return 1
+    fi
+
+    export "$key=$value"
+  done < .env
 }
 
 resolve_compose_cmd() {
