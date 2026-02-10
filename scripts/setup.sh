@@ -252,57 +252,59 @@ install_dependency() {
       if [[ "$platform" == "macos" ]]; then
         run_cmd brew install --cask docker-desktop
         # Docker Desktop needs to be launched before docker/compose commands work
+        # Ensure Docker Desktop is running and fully ready
         if ! docker info >/dev/null 2>&1; then
           echo
           echo "Docker Desktop needs to start before we can continue."
           echo "Opening Docker Desktop now..."
           open -a Docker
-          echo -n "⏳ Waiting for Docker to be ready"
-          local docker_wait=0
-          while ! docker info >/dev/null 2>&1; do
-            echo -n "."
-            sleep 3
-            docker_wait=$((docker_wait + 3))
-            if [[ "$docker_wait" -ge 120 ]]; then
-              echo
-              log_error "Docker Desktop didn't start within 2 minutes."
-              echo "Please start Docker Desktop manually, then run 'make setup' again."
-              exit 1
-            fi
-          done
-          echo
-          log_success "Docker Desktop is ready."
         fi
+        echo -n "⏳ Waiting for Docker to be fully ready"
+        local docker_wait=0
+        while true; do
+          # docker info succeeds early; test an actual pull to confirm engine is ready
+          if docker info >/dev/null 2>&1 && docker pull hello-world >/dev/null 2>&1; then
+            docker rmi hello-world >/dev/null 2>&1 || true
+            break
+          fi
+          echo -n "."
+          sleep 3
+          docker_wait=$((docker_wait + 3))
+          if [[ "$docker_wait" -ge 120 ]]; then
+            echo
+            log_error "Docker Desktop didn't become fully ready within 2 minutes."
+            echo "Please start Docker Desktop manually, then run 'make setup' again."
+            exit 1
+          fi
+        done
+        echo
+        log_success "Docker Desktop is ready."
       else
         run_linux_install docker.io
       fi
       ;;
     compose)
       if [[ "$platform" == "macos" ]]; then
-        # Docker Desktop includes Compose — just verify Docker is running
+        # Docker Desktop includes Compose — just verify it's available
         if docker compose version >/dev/null 2>&1; then
           log_success "Docker Desktop includes Docker Compose."
           return 0
         fi
-        # Docker might not be started yet
-        if ! docker info >/dev/null 2>&1; then
-          echo "Opening Docker Desktop..."
-          open -a Docker
-          echo -n "⏳ Waiting for Docker to be ready"
-          local compose_wait=0
-          while ! docker compose version >/dev/null 2>&1; do
-            echo -n "."
-            sleep 3
-            compose_wait=$((compose_wait + 3))
-            if [[ "$compose_wait" -ge 120 ]]; then
-              echo
-              log_error "Docker Compose not available after 2 minutes."
-              echo "Please start Docker Desktop manually, then run 'make setup' again."
-              exit 1
-            fi
-          done
-          echo
-        fi
+        # Docker not ready yet — the docker install step should have handled startup
+        # but if we got here, wait a bit more
+        echo -n "⏳ Waiting for Docker Compose"
+        local compose_wait=0
+        while ! docker compose version >/dev/null 2>&1; do
+          echo -n "."
+          sleep 3
+          compose_wait=$((compose_wait + 3))
+          if [[ "$compose_wait" -ge 60 ]]; then
+            echo
+            log_error "Docker Compose not available. Make sure Docker Desktop is running."
+            exit 1
+          fi
+        done
+        echo
         log_success "Docker Desktop includes Docker Compose."
         return 0
       fi
