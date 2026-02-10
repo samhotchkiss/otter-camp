@@ -715,6 +715,190 @@ func (c *Client) SearchAgentMemory(agentID, query string, limit int) (map[string
 	return response, nil
 }
 
+func (c *Client) CreateMemoryEntry(input map[string]any) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/memory/entries", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ListMemoryEntries(agentID, kind string, limit, offset int) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	q := url.Values{}
+	q.Set("agent_id", agentID)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	q.Set("offset", fmt.Sprintf("%d", offset))
+	if trimmedKind := strings.TrimSpace(kind); trimmedKind != "" {
+		q.Set("kind", trimmedKind)
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/memory/entries?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) SearchMemoryEntries(agentID, query string, limit int) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	query = strings.TrimSpace(query)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	if query == "" {
+		return nil, errors.New("query is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	q := url.Values{}
+	q.Set("agent_id", agentID)
+	q.Set("q", query)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+
+	req, err := c.newRequest(http.MethodGet, "/api/memory/search?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) RecallMemory(agentID, query string, maxResults int) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	query = strings.TrimSpace(query)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	if query == "" {
+		return nil, errors.New("query is required")
+	}
+	if maxResults <= 0 {
+		maxResults = 5
+	}
+
+	q := url.Values{}
+	q.Set("agent_id", agentID)
+	q.Set("q", query)
+	q.Set("max_results", fmt.Sprintf("%d", maxResults))
+
+	req, err := c.newRequest(http.MethodGet, "/api/memory/recall?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) DeleteMemoryEntry(id string) error {
+	if err := c.requireAuth(); err != nil {
+		return err
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("memory id is required")
+	}
+
+	req, err := c.newRequest(http.MethodDelete, "/api/memory/entries/"+url.PathEscape(id), nil)
+	if err != nil {
+		return err
+	}
+	return c.do(req, nil)
+}
+
+func (c *Client) ListKnowledge(limit int) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	q := url.Values{}
+	q.Set("limit", fmt.Sprintf("%d", limit))
+
+	req, err := c.newRequest(http.MethodGet, "/api/knowledge?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ImportKnowledge(entries []map[string]any) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"entries": entries,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := c.newRequest(http.MethodPost, "/api/knowledge/import", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 func (c *Client) RunReleaseGate() (map[string]any, int, error) {
 	if err := c.requireAuth(); err != nil {
 		return nil, 0, err
