@@ -135,6 +135,59 @@ func TestAdminConfigPatchValidatesPayload(t *testing.T) {
 	}
 }
 
+func TestAdminConfigMutationHandlersRejectOversizedBody(t *testing.T) {
+	handler := &AdminConfigHandler{}
+	workspaceID := "00000000-0000-0000-0000-000000000001"
+	oversizedBody := buildOversizedAdminConfigBody()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		handle func(*AdminConfigHandler, http.ResponseWriter, *http.Request)
+	}{
+		{
+			name:   "patch",
+			method: http.MethodPatch,
+			path:   "/api/admin/config",
+			handle: (*AdminConfigHandler).Patch,
+		},
+		{
+			name:   "release gate",
+			method: http.MethodPost,
+			path:   "/api/admin/config/release-gate",
+			handle: (*AdminConfigHandler).ReleaseGate,
+		},
+		{
+			name:   "cutover",
+			method: http.MethodPost,
+			path:   "/api/admin/config/cutover",
+			handle: (*AdminConfigHandler).Cutover,
+		},
+		{
+			name:   "rollback",
+			method: http.MethodPost,
+			path:   "/api/admin/config/rollback",
+			handle: (*AdminConfigHandler).Rollback,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(oversizedBody))
+			req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, workspaceID))
+			rec := httptest.NewRecorder()
+			tc.handle(handler, rec, req)
+
+			require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+			var payload errorResponse
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+			require.Equal(t, "request body too large", payload.Error)
+		})
+	}
+}
+
 func TestAdminConfigPatchQueuesWhenBridgeUnavailable(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-config-patch-queued")
@@ -528,4 +581,15 @@ func upsertSyncMetadataForAdminConfigGateTest(t *testing.T, db *sql.DB, key, val
 		value,
 	)
 	require.NoError(t, err)
+}
+
+func buildOversizedAdminConfigBody() string {
+	var body strings.Builder
+	body.Grow(maxAdminConfigBodyBytes + 256)
+	body.WriteString(`{"confirm":true`)
+	for body.Len() <= maxAdminConfigBodyBytes+32 {
+		body.WriteString(`,"confirm":true`)
+	}
+	body.WriteString("}")
+	return body.String()
 }

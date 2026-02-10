@@ -24,6 +24,7 @@ import (
 const (
 	defaultAdminConfigHistoryLimit = 20
 	maxAdminConfigHistoryLimit     = 100
+	maxAdminConfigBodyBytes        = 1 << 20 // 1 MB
 	syncMetadataOpenClawCutoverKey = "openclaw_config_cutover_checkpoint"
 )
 
@@ -250,10 +251,13 @@ func (h *AdminConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req adminConfigPatchRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+	status, err := decodeAdminConfigRequest(w, r, &req)
+	if err != nil {
+		if status == http.StatusRequestEntityTooLarge {
+			sendJSON(w, status, errorResponse{Error: "request body too large"})
+			return
+		}
+		sendJSON(w, status, errorResponse{Error: "invalid JSON"})
 		return
 	}
 	if !req.Confirm {
@@ -301,10 +305,13 @@ func (h *AdminConfigHandler) ReleaseGate(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req adminConfigReleaseGateRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+	status, err := decodeAdminConfigRequest(w, r, &req)
+	if err != nil {
+		if status == http.StatusRequestEntityTooLarge {
+			sendJSON(w, status, errorResponse{Error: "request body too large"})
+			return
+		}
+		sendJSON(w, status, errorResponse{Error: "invalid JSON"})
 		return
 	}
 	if !req.Confirm {
@@ -339,10 +346,13 @@ func (h *AdminConfigHandler) Cutover(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req adminConfigCutoverRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+	status, err := decodeAdminConfigRequest(w, r, &req)
+	if err != nil {
+		if status == http.StatusRequestEntityTooLarge {
+			sendJSON(w, status, errorResponse{Error: "request body too large"})
+			return
+		}
+		sendJSON(w, status, errorResponse{Error: "invalid JSON"})
 		return
 	}
 	if !req.Confirm {
@@ -448,10 +458,13 @@ func (h *AdminConfigHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req adminConfigCutoverRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+	status, err := decodeAdminConfigRequest(w, r, &req)
+	if err != nil {
+		if status == http.StatusRequestEntityTooLarge {
+			sendJSON(w, status, errorResponse{Error: "request body too large"})
+			return
+		}
+		sendJSON(w, status, errorResponse{Error: "invalid JSON"})
 		return
 	}
 	if !req.Confirm {
@@ -538,6 +551,19 @@ func (h *AdminConfigHandler) loadSnapshotWithMemoryFallback(r *http.Request) (*o
 		return snapshot, nil
 	}
 	return nil, nil
+}
+
+func decodeAdminConfigRequest(w http.ResponseWriter, r *http.Request, target interface{}) (int, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminConfigBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			return http.StatusRequestEntityTooLarge, err
+		}
+		return http.StatusBadRequest, err
+	}
+	return 0, nil
 }
 
 func (h *AdminConfigHandler) evaluateSpec110ReleaseGate(
