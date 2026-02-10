@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -523,6 +524,97 @@ func TestProjectsHandlerPatchWorkflowFields(t *testing.T) {
 	require.Equal(t, 4, resp.WorkflowRunCount)
 	require.JSONEq(t, `{"kind":"cron","expr":"0 6 * * *","tz":"America/Denver"}`, string(resp.WorkflowSchedule))
 	require.JSONEq(t, `{"title_pattern":"Morning Briefing — {{date}}","body":"Generate briefing","pipeline":"auto_close"}`, string(resp.WorkflowTemplate))
+}
+
+func TestProjectsHandlerPatchWorkflowScheduleValidation(t *testing.T) {
+	testCases := []struct {
+		name          string
+		scheduleJSON  string
+		wantErrorLike string
+	}{
+		{
+			name:          "invalid kind",
+			scheduleJSON:  `{"kind":"nonsense"}`,
+			wantErrorLike: "workflow_schedule.kind",
+		},
+		{
+			name:          "invalid cron expression",
+			scheduleJSON:  `{"kind":"cron","expr":"not-a-cron","tz":"America/Denver"}`,
+			wantErrorLike: "workflow_schedule.expr",
+		},
+		{
+			name:          "invalid timezone",
+			scheduleJSON:  `{"kind":"cron","expr":"0 6 * * *","tz":"Mars/Olympus"}`,
+			wantErrorLike: "workflow_schedule.tz",
+		},
+		{
+			name:          "negative everyMs",
+			scheduleJSON:  `{"kind":"every","everyMs":-1}`,
+			wantErrorLike: "workflow_schedule.everyMs",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupMessageTestDB(t)
+			orgID := insertMessageTestOrganization(t, db, "projects-workflow-schedule-validation-org")
+			projectID := insertProjectTestProject(t, db, orgID, "Workflow Validation Project")
+
+			handler := &ProjectsHandler{
+				DB:    db,
+				Store: store.NewProjectStore(db),
+			}
+
+			body := fmt.Sprintf(`{"workflow_schedule":%s}`, tc.scheduleJSON)
+			req := httptest.NewRequest(http.MethodPatch, "/api/projects/"+projectID+"?org_id="+orgID, bytes.NewReader([]byte(body)))
+			req = addRouteParam(req, "id", projectID)
+			rec := httptest.NewRecorder()
+
+			handler.Patch(rec, req)
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+
+			var resp errorResponse
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+			require.Contains(t, resp.Error, tc.wantErrorLike)
+		})
+	}
+}
+
+func TestNormalizeWorkflowPatchJSONScheduleValidation(t *testing.T) {
+	testCases := []struct {
+		name          string
+		raw           string
+		wantErrorLike string
+	}{
+		{
+			name:          "invalid kind",
+			raw:           `{"kind":"nonsense"}`,
+			wantErrorLike: "workflow_schedule.kind",
+		},
+		{
+			name:          "invalid cron",
+			raw:           `{"kind":"cron","expr":"not-a-cron","tz":"America/Denver"}`,
+			wantErrorLike: "workflow_schedule.expr",
+		},
+		{
+			name:          "invalid timezone",
+			raw:           `{"kind":"cron","expr":"0 6 * * *","tz":"Mars/Olympus"}`,
+			wantErrorLike: "workflow_schedule.tz",
+		},
+		{
+			name:          "negative everyMs",
+			raw:           `{"kind":"every","everyMs":-1}`,
+			wantErrorLike: "workflow_schedule.everyMs",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := normalizeWorkflowPatchJSON(json.RawMessage(tc.raw), "workflow_schedule")
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErrorLike)
+		})
+	}
 }
 
 func TestProjectsHandlerTriggerRunCreatesIssueAndIncrementsRunCount(t *testing.T) {

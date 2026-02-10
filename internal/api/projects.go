@@ -1422,7 +1422,79 @@ func normalizeWorkflowPatchJSON(value json.RawMessage, fieldName string) (json.R
 	if !json.Valid(raw) {
 		return nil, fmt.Errorf("%s must be valid JSON", fieldName)
 	}
+	if fieldName == "workflow_schedule" {
+		if err := validateWorkflowScheduleJSON(raw); err != nil {
+			return nil, err
+		}
+	}
 	return raw, nil
+}
+
+type workflowSchedulePayload struct {
+	Kind    string `json:"kind"`
+	Expr    string `json:"expr"`
+	TZ      string `json:"tz"`
+	EveryMS *int64 `json:"everyMs"`
+	At      string `json:"at"`
+}
+
+func validateWorkflowScheduleJSON(raw json.RawMessage) error {
+	var schedule workflowSchedulePayload
+	if err := json.Unmarshal(raw, &schedule); err != nil {
+		return fmt.Errorf("workflow_schedule must be an object")
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(schedule.Kind))
+	switch kind {
+	case "cron":
+		expr := strings.TrimSpace(schedule.Expr)
+		if expr == "" {
+			return fmt.Errorf("workflow_schedule.expr must be provided when kind=cron")
+		}
+		if !isValidCronExpression(expr) {
+			return fmt.Errorf("workflow_schedule.expr must be a valid cron expression")
+		}
+		if tz := strings.TrimSpace(schedule.TZ); tz != "" {
+			if _, err := time.LoadLocation(tz); err != nil {
+				return fmt.Errorf("workflow_schedule.tz must be a valid IANA timezone")
+			}
+		}
+	case "every":
+		if schedule.EveryMS == nil || *schedule.EveryMS <= 0 {
+			return fmt.Errorf("workflow_schedule.everyMs must be a positive integer")
+		}
+	case "at":
+		at := strings.TrimSpace(schedule.At)
+		if at == "" {
+			return fmt.Errorf("workflow_schedule.at must be provided when kind=at")
+		}
+		if _, err := time.Parse(time.RFC3339, at); err != nil {
+			return fmt.Errorf("workflow_schedule.at must be RFC3339 timestamp")
+		}
+	default:
+		return fmt.Errorf("workflow_schedule.kind must be one of cron, every, or at")
+	}
+
+	return nil
+}
+
+func isValidCronExpression(expr string) bool {
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		return false
+	}
+	for _, field := range fields {
+		if field == "" {
+			return false
+		}
+		for _, ch := range field {
+			isDigit := ch >= '0' && ch <= '9'
+			if !(isDigit || ch == '*' || ch == '/' || ch == ',' || ch == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func parseProjectOptionalRFC3339(value *string, fieldName string) (*time.Time, error) {
