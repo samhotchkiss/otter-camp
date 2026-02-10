@@ -6,15 +6,24 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+)
+
+const (
+	tunerHardMinRecallMinRelevance = 0.60
+	tunerDefaultApplyInterval      = 24 * time.Hour
 )
 
 type TunerConfig struct {
 	RecallMinRelevance float64 `json:"recall_min_relevance"`
 	RecallMaxResults   int     `json:"recall_max_results"`
 	RecallMaxChars     int     `json:"recall_max_chars"`
+	Sensitivity        string  `json:"sensitivity"`
+	Scope              string  `json:"scope"`
 }
 
 type TunerBounds struct {
@@ -90,18 +99,21 @@ func (s JSONLTuningAuditStore) Record(_ context.Context, attempt TuningAttempt) 
 }
 
 type Tuner struct {
-	Bounds    TunerBounds
-	Evaluator func(ctx context.Context, cfg TunerConfig) (EvaluatorResult, error)
-	Apply     func(ctx context.Context, cfg TunerConfig) error
-	Rollback  func(ctx context.Context, cfg TunerConfig) error
-	AuditSink TuningAuditSink
-	NowFn     func() time.Time
-	IDFn      func() string
+	Bounds           TunerBounds
+	Evaluator        func(ctx context.Context, cfg TunerConfig) (EvaluatorResult, error)
+	Apply            func(ctx context.Context, cfg TunerConfig) error
+	Rollback         func(ctx context.Context, cfg TunerConfig) error
+	AuditSink        TuningAuditSink
+	LastAppliedAtFn  func(ctx context.Context) (time.Time, bool, error)
+	MinApplyInterval time.Duration
+	MutationRandFn   func(n int) int
+	NowFn            func() time.Time
+	IDFn             func() string
 }
 
 func DefaultTunerBounds() TunerBounds {
 	return TunerBounds{
-		MinRelevance:  0.40,
+		MinRelevance:  tunerHardMinRecallMinRelevance,
 		MaxRelevance:  0.95,
 		RelevanceStep: 0.05,
 		MinResults:    1,
@@ -134,7 +146,16 @@ func (t Tuner) RunOnce(ctx context.Context, current TunerConfig) (TuningDecision
 
 	bounds := t.Bounds.normalized()
 	baseline := normalizeTunerConfig(current, bounds)
-	candidate := mutateTunerConfig(baseline, bounds)
+	randFn := t.MutationRandFn
+	if randFn == nil {
+		randFn = rand.Intn
+	}
+	candidate := mutateTunerConfig(
+		baseline,
+		bounds,
+		randFn(3),
+		directionFromChoice(randFn(2)),
+	)
 
 	attempt := TuningAttempt{
 		ID:              idFn(),
@@ -146,6 +167,12 @@ func (t Tuner) RunOnce(ctx context.Context, current TunerConfig) (TuningDecision
 		AttemptID:       attempt.ID,
 		BaselineConfig:  baseline,
 		CandidateConfig: candidate,
+	}
+	if err := t.enforceRateLimit(ctx, nowFn().UTC(), &attempt, &decision); err != nil {
+		return decision, err
+	}
+	if decision.Status == "skipped" && decision.Reason == "rate_limited" {
+		return decision, nil
 	}
 
 	baselineResult, err := t.Evaluator(ctx, baseline)
@@ -209,6 +236,40 @@ func (t Tuner) persistAttempt(ctx context.Context, attempt TuningAttempt) error 
 	return nil
 }
 
+func (t Tuner) enforceRateLimit(
+	ctx context.Context,
+	now time.Time,
+	attempt *TuningAttempt,
+	decision *TuningDecision,
+) error {
+	if t.LastAppliedAtFn == nil {
+		return nil
+	}
+	lastAppliedAt, ok, err := t.LastAppliedAtFn(ctx)
+	if err != nil {
+		return fmt.Errorf("get last applied time: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	interval := t.MinApplyInterval
+	if interval <= 0 {
+		interval = tunerDefaultApplyInterval
+	}
+	if now.Sub(lastAppliedAt.UTC()) >= interval {
+		return nil
+	}
+	decision.Status = "skipped"
+	decision.Reason = "rate_limited"
+	attempt.Status = decision.Status
+	attempt.Reason = decision.Reason
+	attempt.CompletedAt = now
+	if err := t.persistAttempt(ctx, *attempt); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (bounds TunerBounds) normalized() TunerBounds {
 	normalized := bounds
 	defaults := DefaultTunerBounds()
@@ -216,8 +277,14 @@ func (bounds TunerBounds) normalized() TunerBounds {
 	if !isFinitePositive(normalized.MinRelevance) {
 		normalized.MinRelevance = defaults.MinRelevance
 	}
+	if normalized.MinRelevance < tunerHardMinRecallMinRelevance {
+		normalized.MinRelevance = tunerHardMinRecallMinRelevance
+	}
 	if !isFinitePositive(normalized.MaxRelevance) {
 		normalized.MaxRelevance = defaults.MaxRelevance
+	}
+	if normalized.MaxRelevance < normalized.MinRelevance {
+		normalized.MaxRelevance = normalized.MinRelevance
 	}
 	if normalized.MinRelevance > normalized.MaxRelevance {
 		normalized.MinRelevance = defaults.MinRelevance
@@ -263,26 +330,72 @@ func normalizeTunerConfig(cfg TunerConfig, bounds TunerBounds) TunerConfig {
 	normalized.RecallMinRelevance = clampFloat(normalized.RecallMinRelevance, bounds.MinRelevance, bounds.MaxRelevance)
 	normalized.RecallMaxResults = clampInt(normalized.RecallMaxResults, bounds.MinResults, bounds.MaxResults)
 	normalized.RecallMaxChars = clampInt(normalized.RecallMaxChars, bounds.MinChars, bounds.MaxChars)
+	normalized.Sensitivity = normalizeSensitivity(normalized.Sensitivity)
+	normalized.Scope = normalizeScope(normalized.Scope)
 	return normalized
 }
 
-func mutateTunerConfig(current TunerConfig, bounds TunerBounds) TunerConfig {
-	return TunerConfig{
-		RecallMinRelevance: clampFloat(
-			current.RecallMinRelevance-bounds.RelevanceStep,
+func mutateTunerConfig(current TunerConfig, bounds TunerBounds, parameterIndex, direction int) TunerConfig {
+	candidate := current
+	switch normalizeParameterIndex(parameterIndex) {
+	case 0:
+		candidate.RecallMinRelevance = clampFloat(
+			current.RecallMinRelevance+bounds.RelevanceStep*float64(direction),
 			bounds.MinRelevance,
 			bounds.MaxRelevance,
-		),
-		RecallMaxResults: clampInt(
-			current.RecallMaxResults+bounds.ResultsStep,
+		)
+	case 1:
+		candidate.RecallMaxResults = clampInt(
+			current.RecallMaxResults+bounds.ResultsStep*direction,
 			bounds.MinResults,
 			bounds.MaxResults,
-		),
-		RecallMaxChars: clampInt(
-			current.RecallMaxChars+bounds.CharsStep,
+		)
+	default:
+		candidate.RecallMaxChars = clampInt(
+			current.RecallMaxChars+bounds.CharsStep*direction,
 			bounds.MinChars,
 			bounds.MaxChars,
-		),
+		)
+	}
+	// Never widen sensitivity/scope protections during autonomous tuning.
+	candidate.Sensitivity = current.Sensitivity
+	candidate.Scope = current.Scope
+	return candidate
+}
+
+func directionFromChoice(choice int) int {
+	if choice%2 == 0 {
+		return -1
+	}
+	return 1
+}
+
+func normalizeParameterIndex(value int) int {
+	if value < 0 {
+		return (-value) % 3
+	}
+	return value % 3
+}
+
+func normalizeSensitivity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "public":
+		return "public"
+	case "restricted":
+		return "restricted"
+	default:
+		return "internal"
+	}
+}
+
+func normalizeScope(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "agent":
+		return "agent"
+	case "team":
+		return "team"
+	default:
+		return "org"
 	}
 }
 

@@ -19,6 +19,38 @@ func (r *auditSinkRecorder) Record(_ context.Context, attempt TuningAttempt) err
 	return nil
 }
 
+func deterministicRand(values ...int) func(int) int {
+	index := 0
+	return func(n int) int {
+		if n <= 0 {
+			return 0
+		}
+		if len(values) == 0 {
+			return 0
+		}
+		value := values[index%len(values)]
+		index += 1
+		if value < 0 {
+			value = -value
+		}
+		return value % n
+	}
+}
+
+func changedParameterCount(left, right TunerConfig) int {
+	changed := 0
+	if left.RecallMinRelevance != right.RecallMinRelevance {
+		changed += 1
+	}
+	if left.RecallMaxResults != right.RecallMaxResults {
+		changed += 1
+	}
+	if left.RecallMaxChars != right.RecallMaxChars {
+		changed += 1
+	}
+	return changed
+}
+
 func TestTuner(t *testing.T) {
 	t.Run("applies candidate when evaluator gates improve", func(t *testing.T) {
 		audit := &auditSinkRecorder{}
@@ -57,7 +89,8 @@ func TestTuner(t *testing.T) {
 				rollbackCalled = true
 				return nil
 			},
-			AuditSink: audit,
+			AuditSink:      audit,
+			MutationRandFn: deterministicRand(0, 0),
 			IDFn: func() string {
 				return "attempt-1"
 			},
@@ -110,11 +143,9 @@ func TestTuner(t *testing.T) {
 					},
 				}, nil
 			},
-			Apply: func(_ context.Context, _ TunerConfig) error {
-				applied = true
-				return nil
-			},
-			AuditSink: audit,
+			Apply:          func(_ context.Context, _ TunerConfig) error { applied = true; return nil },
+			AuditSink:      audit,
+			MutationRandFn: deterministicRand(0, 0),
 		}
 
 		decision, err := tuner.RunOnce(context.Background(), TunerConfig{
@@ -170,7 +201,8 @@ func TestTuner(t *testing.T) {
 				require.Equal(t, 2000, cfg.RecallMaxChars)
 				return nil
 			},
-			AuditSink: audit,
+			AuditSink:      audit,
+			MutationRandFn: deterministicRand(0, 0),
 		}
 
 		decision, err := tuner.RunOnce(context.Background(), TunerConfig{
@@ -205,4 +237,87 @@ func TestTuner(t *testing.T) {
 		require.Contains(t, string(raw), "\"id\":\"attempt-jsonl\"")
 		require.Contains(t, string(raw), "\"status\":\"applied\"")
 	})
+}
+
+func TestTunerRateLimit(t *testing.T) {
+	now := time.Date(2026, 2, 10, 11, 0, 0, 0, time.UTC)
+	evalCalls := 0
+	applyCalls := 0
+	audit := &auditSinkRecorder{}
+
+	tuner := Tuner{
+		Bounds: DefaultTunerBounds(),
+		Evaluator: func(_ context.Context, _ TunerConfig) (EvaluatorResult, error) {
+			evalCalls += 1
+			return EvaluatorResult{
+				Passed: true,
+				Metrics: EvaluatorMetrics{
+					PrecisionAtK:        0.9,
+					FalseInjectionRate:  0.01,
+					RecoverySuccessRate: 0.9,
+					P95LatencyMs:        40,
+				},
+			}, nil
+		},
+		Apply: func(_ context.Context, _ TunerConfig) error {
+			applyCalls += 1
+			return nil
+		},
+		LastAppliedAtFn: func(context.Context) (time.Time, bool, error) {
+			return now.Add(-2 * time.Hour), true, nil
+		},
+		NowFn:     func() time.Time { return now },
+		AuditSink: audit,
+	}
+
+	decision, err := tuner.RunOnce(context.Background(), TunerConfig{
+		RecallMinRelevance: 0.70,
+		RecallMaxResults:   3,
+		RecallMaxChars:     2000,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "skipped", decision.Status)
+	require.Equal(t, "rate_limited", decision.Reason)
+	require.Zero(t, evalCalls)
+	require.Zero(t, applyCalls)
+	require.Len(t, audit.records, 1)
+	require.Equal(t, "rate_limited", audit.records[0].Reason)
+}
+
+func TestTunerNeverLowersSensitivity(t *testing.T) {
+	bounds := DefaultTunerBounds().normalized()
+	current := normalizeTunerConfig(TunerConfig{
+		RecallMinRelevance: bounds.MinRelevance,
+		RecallMaxResults:   5,
+		RecallMaxChars:     2500,
+		Sensitivity:        "restricted",
+		Scope:              "team",
+	}, bounds)
+
+	candidate := mutateTunerConfig(current, bounds, 0, -1)
+	require.Equal(t, current.Sensitivity, candidate.Sensitivity)
+	require.Equal(t, current.Scope, candidate.Scope)
+	require.GreaterOrEqual(t, candidate.RecallMinRelevance, tunerHardMinRecallMinRelevance)
+	require.InDelta(t, current.RecallMinRelevance, candidate.RecallMinRelevance, 0.0001)
+}
+
+func TestTunerBidirectional(t *testing.T) {
+	bounds := DefaultTunerBounds().normalized()
+	current := normalizeTunerConfig(TunerConfig{
+		RecallMinRelevance: 0.75,
+		RecallMaxResults:   4,
+		RecallMaxChars:     2400,
+		Sensitivity:        "internal",
+		Scope:              "team",
+	}, bounds)
+
+	decrease := mutateTunerConfig(current, bounds, 1, -1)
+	increase := mutateTunerConfig(current, bounds, 1, 1)
+
+	require.Equal(t, current.RecallMaxResults-bounds.ResultsStep, decrease.RecallMaxResults)
+	require.Equal(t, current.RecallMaxResults+bounds.ResultsStep, increase.RecallMaxResults)
+	require.Equal(t, 1, changedParameterCount(current, decrease))
+	require.Equal(t, 1, changedParameterCount(current, increase))
+	require.Equal(t, current.Sensitivity, decrease.Sensitivity)
+	require.Equal(t, current.Scope, decrease.Scope)
 }
