@@ -215,6 +215,10 @@ var commitLegacyWorkspaceTx = func(tx *sql.Tx) error {
 	return tx.Commit()
 }
 
+var renameFileForAtomicWrite = os.Rename
+var removeFileForAtomicWrite = os.Remove
+var createTempFileForAtomicWrite = os.CreateTemp
+
 type openClawLegacyWorkspaceDescriptor struct {
 	ID        string
 	Name      string
@@ -1691,7 +1695,7 @@ func ensureLegacyTransitionFiles(workspacePath string) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		if writeErr := os.WriteFile(transitionPath, []byte(strings.TrimSpace(legacyTransitionChecklistTemplate)+"\n"), 0o644); writeErr != nil {
+		if writeErr := writeFileAtomically(transitionPath, []byte(strings.TrimSpace(legacyTransitionChecklistTemplate)+"\n"), 0o644); writeErr != nil {
 			return writeErr
 		}
 	}
@@ -1713,7 +1717,46 @@ func ensureLegacyTransitionFiles(workspacePath string) error {
 	} else {
 		merged = strings.TrimSpace(legacyTransitionAgentsPointer) + "\n\n" + current + "\n"
 	}
-	return os.WriteFile(agentsPath, []byte(merged), 0o644)
+	return writeFileAtomically(agentsPath, []byte(merged), 0o644)
+}
+
+func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tempFile, err := createTempFileForAtomicWrite(dir, "."+base+".tmp-*")
+	if err != nil {
+		return err
+	}
+
+	tempPath := tempFile.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = removeFileForAtomicWrite(tempPath)
+		}
+	}()
+
+	if _, err := tempFile.Write(data); err != nil {
+		_ = tempFile.Close()
+		return err
+	}
+	if err := tempFile.Chmod(perm); err != nil {
+		_ = tempFile.Close()
+		return err
+	}
+	if err := tempFile.Sync(); err != nil {
+		_ = tempFile.Close()
+		return err
+	}
+	if err := tempFile.Close(); err != nil {
+		return err
+	}
+	if err := renameFileForAtomicWrite(tempPath, path); err != nil {
+		return err
+	}
+
+	cleanup = false
+	return nil
 }
 
 func buildLegacyWorkspaceInstructions(agentsContent, toolsContent string) string {

@@ -407,6 +407,39 @@ func TestLegacyWorkspacePathValidationRejectsTraversalAndSymlink(t *testing.T) {
 	require.ErrorContains(t, err, "must not be a symlink")
 }
 
+func TestEnsureLegacyTransitionFilesAtomicWritePreservesAgentsOnFailure(t *testing.T) {
+	workspace := t.TempDir()
+	agentsPath := filepath.Join(workspace, "AGENTS.md")
+	originalAgents := "# AGENTS\nExisting instructions"
+	require.NoError(t, os.WriteFile(agentsPath, []byte(originalAgents), 0o644))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(workspace, legacyTransitionFilename),
+			[]byte("# LEGACY_TRANSITION.md\n\nExisting transition notes"),
+			0o644,
+		),
+	)
+
+	originalRename := renameFileForAtomicWrite
+	renameFileForAtomicWrite = func(oldPath string, newPath string) error {
+		if filepath.Base(newPath) == "AGENTS.md" {
+			return errors.New("rename failed")
+		}
+		return originalRename(oldPath, newPath)
+	}
+	t.Cleanup(func() {
+		renameFileForAtomicWrite = originalRename
+	})
+
+	err := ensureLegacyTransitionFiles(workspace)
+	require.ErrorContains(t, err, "rename failed")
+
+	agentsBytes, readErr := os.ReadFile(agentsPath)
+	require.NoError(t, readErr)
+	require.Equal(t, originalAgents, string(agentsBytes))
+}
+
 func TestOpenClawMigrationCommitFailureDoesNotGenerateTransitionFiles(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "openclaw-migration-commit-failure")
