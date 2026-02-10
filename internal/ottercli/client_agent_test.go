@@ -66,6 +66,7 @@ func TestAgentClientMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 		"slot":         "derek",
 		"display_name": "Derek",
 		"model":        "gpt-5.2-codex",
+		"role":         "Engineering Lead",
 	})
 	if err != nil {
 		t.Fatalf("CreateAgent() error = %v", err)
@@ -78,6 +79,9 @@ func TestAgentClientMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 	}
 	if gotBody["slot"] != "derek" {
 		t.Fatalf("CreateAgent payload slot = %v", gotBody["slot"])
+	}
+	if gotBody["role"] != "Engineering Lead" {
+		t.Fatalf("CreateAgent payload role = %v", gotBody["role"])
 	}
 
 	updated, err := client.UpdateAgent("a1", map[string]any{"display_name": "Derek"})

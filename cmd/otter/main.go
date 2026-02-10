@@ -312,11 +312,7 @@ func handleAgent(args []string) {
 		cfg, err := ottercli.LoadConfig()
 		dieIf(err)
 		client, _ := ottercli.NewClient(cfg, *org)
-		payload := map[string]interface{}{
-			"slot":         normalizedSlot,
-			"display_name": displayName,
-			"model":        strings.TrimSpace(*model),
-		}
+		payload := buildAgentCreatePayload(displayName, normalizedSlot, strings.TrimSpace(*model), strings.TrimSpace(*role))
 		response, err := client.CreateAgent(payload)
 		dieIf(err)
 
@@ -1582,6 +1578,18 @@ func slugifyAgentName(name string) string {
 		return "agent"
 	}
 	return normalized
+}
+
+func buildAgentCreatePayload(displayName, slot, model, role string) map[string]interface{} {
+	payload := map[string]interface{}{
+		"slot":         slot,
+		"display_name": displayName,
+		"model":        model,
+	}
+	if trimmedRole := strings.TrimSpace(role); trimmedRole != "" {
+		payload["role"] = trimmedRole
+	}
+	return payload
 }
 
 func toString(value interface{}) string {
