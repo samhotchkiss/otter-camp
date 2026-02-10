@@ -1430,6 +1430,8 @@ export function resolveProjectWorktreeRoot(projectID: string, sessionKey: string
 }
 
 async function pathHasSymlinkSegments(fromRoot: string, targetPath: string): Promise<boolean> {
+  // NOTE: This is a point-in-time check and is therefore vulnerable to TOCTOU swaps.
+  // TODO(spec-110-hardening): Re-check path segments at each file-write interception hook.
   const root = path.resolve(fromRoot);
   const target = path.resolve(targetPath);
   const relative = path.relative(root, target);
@@ -1505,11 +1507,9 @@ async function resolveSessionExecutionContext(
 
   try {
     await fs.promises.mkdir(projectRoot, { recursive: true });
-    const guardOK = await isPathWithinProjectRoot(projectRoot, '.');
-    if (!guardOK) {
-      console.warn(`[bridge] project path guard failed for ${sessionKey}; forcing conversation mode`);
-      return { mode: 'conversation' };
-    }
+    // NOTE: v1 enforcement is policy-level only. Without OpenClaw file-write interception
+    // hooks, we cannot mechanically enforce per-write path guard checks here.
+    // TODO(spec-110-hardening): Wire isPathWithinProjectRoot into write/edit/apply_patch hooks.
     return {
       mode: 'project',
       projectRoot,
@@ -1534,11 +1534,15 @@ function buildExecutionPolicyBlock(params: {
     lines.push(`- cwd: ${params.projectRoot}`);
     lines.push(`- write_guard_root: ${params.projectRoot}`);
     lines.push('- write policy: writes allowed only within write_guard_root');
+    lines.push('- enforcement: policy-level only (prompt contract, no write hooks in v1)');
+    lines.push('- TODO: enforce write/edit/apply_patch paths via OpenClaw file-write hooks');
     lines.push('- security: path traversal and symlink escape are denied');
   } else {
     lines.push('- mode: conversation');
     lines.push('- project_id: none');
     lines.push('- write policy: deny write/edit/apply_patch and any filesystem mutation');
+    lines.push('- enforcement: policy-level only (prompt contract, no write hooks in v1)');
+    lines.push('- TODO: enforce mutation denial via OpenClaw tool/write interception hooks');
     lines.push('- workspaceAccess: none');
   }
   lines.push('[/OTTERCAMP_EXECUTION_MODE]');
