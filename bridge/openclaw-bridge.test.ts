@@ -15,6 +15,7 @@ import {
   isCompactWhoAmIInsufficient,
   isCanonicalChameleonSessionKey,
   normalizeQuestionnairePayload,
+  parseAgentIDFromSessionKeyForTest,
   parseChameleonSessionKey,
   parseCompletionProgressLine,
   parseNumberedAnswers,
@@ -107,6 +108,17 @@ describe("bridge chameleon session key helpers", () => {
     );
     assert.equal(parseChameleonSessionKey("agent:main:slack"), null);
     assert.equal(parseChameleonSessionKey("agent:chameleon:oc:not-a-uuid"), null);
+  });
+
+  it("sanitizes fallback agent id extraction from session keys", () => {
+    assert.equal(parseAgentIDFromSessionKeyForTest("agent:main:slack"), "main");
+    assert.equal(parseAgentIDFromSessionKeyForTest("agent:three-stones:webchat"), "three-stones");
+    assert.equal(
+      parseAgentIDFromSessionKeyForTest("agent:A1B2C3D4-5678-90AB-CDEF-1234567890AB:main"),
+      "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+    );
+    assert.equal(parseAgentIDFromSessionKeyForTest("agent:../../etc:main"), "");
+    assert.equal(parseAgentIDFromSessionKeyForTest("agent:foo/bar:main"), "");
   });
 });
 

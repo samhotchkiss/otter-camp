@@ -87,6 +87,8 @@ const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
 const COMPLETION_PROGRESS_LINE_PATTERN = /\bIssue\s+#(\d+)\s+\|\s+Commit\s+([0-9a-f]{7,40})\s+\|\s+([^|]+)\|/i;
 const CHAMELEON_SESSION_KEY_PATTERN =
   /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const SAFE_FALLBACK_AGENT_ID_PATTERN =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9][a-z0-9_-]{0,63})$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
@@ -975,7 +977,15 @@ function parseAgentIDFromSessionKey(sessionKey: string): string {
   if (!match || !match[1]) {
     return '';
   }
-  return match[1].trim();
+  const candidate = match[1].trim();
+  if (!SAFE_FALLBACK_AGENT_ID_PATTERN.test(candidate)) {
+    return '';
+  }
+  return candidate.toLowerCase();
+}
+
+export function parseAgentIDFromSessionKeyForTest(sessionKey: string): string {
+  return parseAgentIDFromSessionKey(sessionKey);
 }
 
 function normalizeUpdatedAt(value: number): number {
