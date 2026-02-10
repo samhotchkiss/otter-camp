@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSlugify(t *testing.T) {
@@ -66,6 +67,94 @@ func TestDoJSONRequestCapsSuccessResponseBody(t *testing.T) {
 	err = client.do(req, &response)
 	if err == nil {
 		t.Fatalf("expected decode error for oversized success response")
+	}
+}
+
+func TestClientOnboardingBootstrapUsesExpectedPathAndPayload(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]any
+	var gotAuth string
+	var gotOrg string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		gotAuth = r.Header.Get("Authorization")
+		gotOrg = r.Header.Get("X-Org-ID")
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"org_id":"org-1","org_slug":"my-team","user_id":"user-1","token":"oc_sess_abc","expires_at":"2026-02-11T00:00:00Z","project_id":"project-1","project_name":"Getting Started","issue_id":"issue-1","issue_number":1,"issue_title":"Welcome to Otter Camp"}`))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		HTTP:    srv.Client(),
+	}
+
+	resp, err := client.OnboardingBootstrap(OnboardingBootstrapRequest{
+		Name:             "Sam",
+		Email:            "sam@example.com",
+		OrganizationName: "My Team",
+	})
+	if err != nil {
+		t.Fatalf("OnboardingBootstrap() error = %v", err)
+	}
+
+	if gotMethod != http.MethodPost || gotPath != "/api/onboarding/bootstrap" {
+		t.Fatalf("OnboardingBootstrap request = %s %s", gotMethod, gotPath)
+	}
+	if gotAuth != "" {
+		t.Fatalf("expected no auth header for onboarding bootstrap, got %q", gotAuth)
+	}
+	if gotOrg != "" {
+		t.Fatalf("expected no org header for onboarding bootstrap, got %q", gotOrg)
+	}
+	if gotBody["name"] != "Sam" || gotBody["email"] != "sam@example.com" || gotBody["organization_name"] != "My Team" {
+		t.Fatalf("OnboardingBootstrap payload = %#v", gotBody)
+	}
+	if resp.OrgID != "org-1" || resp.Token != "oc_sess_abc" || resp.ProjectName != "Getting Started" {
+		t.Fatalf("OnboardingBootstrap response = %#v", resp)
+	}
+}
+
+func TestClientOnboardingBootstrapParsesExpiresAtTime(t *testing.T) {
+	const rawExpires = "2026-02-11T00:00:00Z"
+	var expected time.Time
+	var err error
+	expected, err = time.Parse(time.RFC3339, rawExpires)
+	if err != nil {
+		t.Fatalf("failed to parse expected time: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"org_id":"org-1","org_slug":"my-team","user_id":"user-1","token":"oc_sess_abc","expires_at":"2026-02-11T00:00:00Z","project_id":"project-1","project_name":"Getting Started","issue_id":"issue-1","issue_number":1,"issue_title":"Welcome to Otter Camp"}`))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		HTTP:    srv.Client(),
+	}
+
+	resp, err := client.OnboardingBootstrap(OnboardingBootstrapRequest{
+		Name:             "Sam",
+		Email:            "sam@example.com",
+		OrganizationName: "My Team",
+	})
+	if err != nil {
+		t.Fatalf("OnboardingBootstrap() error = %v", err)
+	}
+	if resp.ExpiresAt.IsZero() {
+		t.Fatalf("expected non-zero expires_at time")
+	}
+	if !resp.ExpiresAt.Equal(expected) {
+		t.Fatalf("expires_at = %s, want %s", resp.ExpiresAt.Format(time.RFC3339), expected.Format(time.RFC3339))
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -77,5 +78,123 @@ func TestRootEndpoint(t *testing.T) {
 	}
 	if payload["docs"] == "" || payload["health"] == "" {
 		t.Fatalf("expected docs and health to be set, got %#v", payload)
+	}
+}
+
+func TestLocalRuntimeDefaults(t *testing.T) {
+	t.Parallel()
+
+	composeBytes, err := os.ReadFile("../../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("failed to read docker-compose.yml: %v", err)
+	}
+	compose := string(composeBytes)
+	for _, snippet := range []string{
+		"image: pgvector/pgvector:pg16",
+		"\"4200:4200\"",
+		"PORT: 4200",
+		"VITE_API_URL: \"\"",
+	} {
+		if !strings.Contains(compose, snippet) {
+			t.Fatalf("expected docker-compose.yml to contain %q", snippet)
+		}
+	}
+
+	envBytes, err := os.ReadFile("../../.env.example")
+	if err != nil {
+		t.Fatalf("failed to read .env.example: %v", err)
+	}
+	env := string(envBytes)
+	if !strings.Contains(env, "PORT=4200") {
+		t.Fatalf("expected .env.example to set PORT=4200")
+	}
+
+	setupBytes, err := os.ReadFile("../../scripts/setup.sh")
+	if err != nil {
+		t.Fatalf("failed to read scripts/setup.sh: %v", err)
+	}
+	setup := string(setupBytes)
+	for _, snippet := range []string{
+		"PORT=4200",
+		"OTTERCAMP_URL=http://localhost:4200",
+		"Dashboard: http://localhost:4200",
+	} {
+		if !strings.Contains(setup, snippet) {
+			t.Fatalf("expected scripts/setup.sh to contain %q", snippet)
+		}
+	}
+
+	viteBytes, err := os.ReadFile("../../web/vite.config.ts")
+	if err != nil {
+		t.Fatalf("failed to read web/vite.config.ts: %v", err)
+	}
+	vite := string(viteBytes)
+	for _, snippet := range []string{
+		`target: "http://localhost:4200"`,
+		`target: "ws://localhost:4200"`,
+	} {
+		if !strings.Contains(vite, snippet) {
+			t.Fatalf("expected web/vite.config.ts to contain %q", snippet)
+		}
+	}
+
+	e2eBytes, err := os.ReadFile("../../web/e2e/app.spec.ts")
+	if err != nil {
+		t.Fatalf("failed to read web/e2e/app.spec.ts: %v", err)
+	}
+	if !strings.Contains(string(e2eBytes), "http://localhost:4200/health") {
+		t.Fatalf("expected web/e2e/app.spec.ts to contain health check on port 4200")
+	}
+
+	bridgeEnvBytes, err := os.ReadFile("../../bridge/.env.example")
+	if err != nil {
+		t.Fatalf("failed to read bridge/.env.example: %v", err)
+	}
+	if !strings.Contains(string(bridgeEnvBytes), "OTTERCAMP_URL=http://localhost:4200") {
+		t.Fatalf("expected bridge/.env.example to set OTTERCAMP_URL to localhost:4200")
+	}
+
+	docsBytes, err := os.ReadFile("../../docs/INFRASTRUCTURE.md")
+	if err != nil {
+		t.Fatalf("failed to read docs/INFRASTRUCTURE.md: %v", err)
+	}
+	docs := string(docsBytes)
+	for _, snippet := range []string{
+		"# → http://localhost:4200",
+		"VITE_API_URL=http://localhost:4200 npm run dev",
+	} {
+		if !strings.Contains(docs, snippet) {
+			t.Fatalf("expected docs/INFRASTRUCTURE.md to contain %q", snippet)
+		}
+	}
+
+	ciBytes, err := os.ReadFile("../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatalf("failed to read .github/workflows/ci.yml: %v", err)
+	}
+	ci := string(ciBytes)
+	for _, snippet := range []string{
+		"PORT: '4200'",
+		"VITE_API_URL: http://localhost:4200",
+		"curl -s http://localhost:4200/health",
+	} {
+		if !strings.Contains(ci, snippet) {
+			t.Fatalf("expected .github/workflows/ci.yml to contain %q", snippet)
+		}
+	}
+
+	dockerfileBytes, err := os.ReadFile("../../Dockerfile")
+	if err != nil {
+		t.Fatalf("failed to read Dockerfile: %v", err)
+	}
+	dockerfile := string(dockerfileBytes)
+	for _, snippet := range []string{
+		"docker run -p 4200:4200 --env-file .env otter-camp",
+		"EXPOSE 4200",
+		"http://localhost:4200/health",
+	} {
+		if !strings.Contains(dockerfile, snippet) {
+			t.Fatalf("expected Dockerfile to contain %q", snippet)
+		}
 	}
 }

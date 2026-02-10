@@ -112,19 +112,19 @@ jobs:
       - name: Start backend server
         run: ./bin/server &
         env:
-          PORT: '8080'
+          PORT: '4200'
           DATABASE_URL: postgres://otter:camp@localhost:5432/ottercamp?sslmode=disable
       
       - name: Start frontend dev server
         working-directory: web
         run: npm run dev &
         env:
-          VITE_API_URL: http://localhost:8080
+          VITE_API_URL: http://localhost:4200
       
       - name: Wait for servers
         run: |
           echo "Waiting for backend..."
-          timeout 60 bash -c 'until curl -s http://localhost:8080/health > /dev/null 2>&1; do sleep 1; done' || echo "Backend health check unavailable, continuing..."
+          timeout 60 bash -c 'until curl -s http://localhost:4200/health > /dev/null 2>&1; do sleep 1; done' || echo "Backend health check unavailable, continuing..."
           echo "Waiting for frontend..."
           timeout 60 bash -c 'until curl -s http://localhost:5173 > /dev/null 2>&1; do sleep 1; done'
           echo "Both servers ready!"

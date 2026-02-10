@@ -513,6 +513,25 @@ type whoamiResponse struct {
 	} `json:"user"`
 }
 
+type OnboardingBootstrapRequest struct {
+	Name             string `json:"name"`
+	Email            string `json:"email"`
+	OrganizationName string `json:"organization_name"`
+}
+
+type OnboardingBootstrapResponse struct {
+	OrgID       string `json:"org_id"`
+	OrgSlug     string `json:"org_slug"`
+	UserID      string `json:"user_id"`
+	Token       string `json:"token"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	ProjectID   string `json:"project_id"`
+	ProjectName string `json:"project_name"`
+	IssueID     string `json:"issue_id"`
+	IssueNumber int64  `json:"issue_number"`
+	IssueTitle  string `json:"issue_title"`
+}
+
 func (c *Client) WhoAmI() (whoamiResponse, error) {
 	if strings.TrimSpace(c.Token) == "" {
 		return whoamiResponse{}, errors.New("missing auth token")
@@ -531,6 +550,34 @@ func (c *Client) WhoAmI() (whoamiResponse, error) {
 		return whoamiResponse{}, err
 	}
 	return resp, nil
+}
+
+func (c *Client) OnboardingBootstrap(input OnboardingBootstrapRequest) (OnboardingBootstrapResponse, error) {
+	if strings.TrimSpace(input.Name) == "" {
+		return OnboardingBootstrapResponse{}, errors.New("name is required")
+	}
+	if strings.TrimSpace(input.Email) == "" {
+		return OnboardingBootstrapResponse{}, errors.New("email is required")
+	}
+	if strings.TrimSpace(input.OrganizationName) == "" {
+		return OnboardingBootstrapResponse{}, errors.New("organization_name is required")
+	}
+
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return OnboardingBootstrapResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/onboarding/bootstrap", bytes.NewReader(payload))
+	if err != nil {
+		return OnboardingBootstrapResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response OnboardingBootstrapResponse
+	if err := c.do(req, &response); err != nil {
+		return OnboardingBootstrapResponse{}, err
+	}
+	return response, nil
 }
 
 func (c *Client) ListAgents() ([]Agent, error) {
