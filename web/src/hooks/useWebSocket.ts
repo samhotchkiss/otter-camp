@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { API_URL } from "../lib/api";
 
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 30000;
@@ -85,19 +86,6 @@ function resolveMessageType(rawType: unknown): WebSocketMessageType | null {
   }
   return messageTypeByNormalizedToken.get(normalizeTypeToken(trimmed)) ?? null;
 }
-
-const resolveApiUrl = (): string => {
-  const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
-  if (configured) {
-    return configured;
-  }
-  if (typeof window !== "undefined" && window.location?.origin) {
-    return window.location.origin;
-  }
-  return "";
-};
-
-const API_URL = resolveApiUrl();
 
 const toWebSocketUrl = (path: string) => {
   if (typeof window === "undefined") {
