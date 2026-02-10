@@ -123,6 +123,30 @@ export function AuthProvider({ children }: AuthProviderProps) {
       localStorage.removeItem(TOKEN_EXP_KEY);
     }
 
+    // Auto-login in local mode (localhost) — no credentials needed
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (!localStorage.getItem(TOKEN_KEY) && isLocal) {
+      fetch(`${API_URL}/api/auth/magic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Admin', email: 'admin@localhost' }),
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data?.url) {
+            // Magic link URL contains ?auth=<token> — extract and apply directly
+            const authParam = new URL(data.url, window.location.origin).searchParams.get('auth');
+            if (authParam) {
+              window.location.href = data.url;
+              return;
+            }
+          }
+          setIsLoading(false);
+        })
+        .catch(() => setIsLoading(false));
+      return;
+    }
+
     setIsLoading(false);
   }, []);
 
