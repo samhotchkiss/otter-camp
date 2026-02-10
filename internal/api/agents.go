@@ -103,6 +103,10 @@ const (
 	whoAmICompactSummaryLimit       = 600
 	whoAmIFullPayloadFieldCharLimit = 12000
 	whoAmIMaxActiveTasks            = 8
+	memoryListDefaultDays           = 2
+	memoryDaysMaxLimit              = 365
+	memorySearchDefaultLimit        = 20
+	memorySearchMaxLimit            = 500
 )
 
 // List returns all agents (demo mode supported, Postgres when available)
@@ -353,14 +357,10 @@ func (h *AgentsHandler) GetMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	days := 2
-	if rawDays := strings.TrimSpace(r.URL.Query().Get("days")); rawDays != "" {
-		parsed, err := strconv.Atoi(rawDays)
-		if err != nil || parsed <= 0 {
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "days must be a positive integer"})
-			return
-		}
-		days = parsed
+	days, err := parseMemoryDaysParam(strings.TrimSpace(r.URL.Query().Get("days")))
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
 	}
 	includeLongTerm := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_long_term")), "true")
 
@@ -416,14 +416,10 @@ func (h *AgentsHandler) SearchMemory(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "q is required"})
 		return
 	}
-	limit := 20
-	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
-		parsed, err := strconv.Atoi(rawLimit)
-		if err != nil || parsed <= 0 {
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "limit must be a positive integer"})
-			return
-		}
-		limit = parsed
+	limit, err := parseMemorySearchLimitParam(strings.TrimSpace(r.URL.Query().Get("limit")))
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
 	}
 
 	results, err := h.MemoryStore.SearchByAgent(r.Context(), agentID, query, limit)
@@ -518,6 +514,34 @@ func (h *AgentsHandler) listWhoAmIActiveTasks(r *http.Request, workspaceID, agen
 		return nil
 	}
 	return pointers
+}
+
+func parseMemoryDaysParam(rawDays string) (int, error) {
+	if rawDays == "" {
+		return memoryListDefaultDays, nil
+	}
+	parsed, err := strconv.Atoi(rawDays)
+	if err != nil || parsed <= 0 {
+		return 0, errors.New("days must be a positive integer")
+	}
+	if parsed > memoryDaysMaxLimit {
+		parsed = memoryDaysMaxLimit
+	}
+	return parsed, nil
+}
+
+func parseMemorySearchLimitParam(rawLimit string) (int, error) {
+	if rawLimit == "" {
+		return memorySearchDefaultLimit, nil
+	}
+	parsed, err := strconv.Atoi(rawLimit)
+	if err != nil || parsed <= 0 {
+		return 0, errors.New("limit must be a positive integer")
+	}
+	if parsed > memorySearchMaxLimit {
+		parsed = memorySearchMaxLimit
+	}
+	return parsed, nil
 }
 
 func summarizeWhoAmIText(value string, limit int) string {
