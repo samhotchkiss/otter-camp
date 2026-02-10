@@ -67,3 +67,38 @@ func TestAgentMemoryStoreRejectsInvalidAgentID(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "invalid agent_id")
 }
+
+func TestAgentMemoryStoreRejectsDuplicateDailyEntryForSameDate(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "agent-memory-daily-unique")
+
+	var agentID string
+	err := db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'memory-agent-dupe', 'Memory Agent Dupe', 'active')
+		 RETURNING id`,
+		orgID,
+	).Scan(&agentID)
+	require.NoError(t, err)
+
+	store := NewAgentMemoryStore(db)
+	ctx := ctxWithWorkspace(orgID)
+	date := time.Date(2026, time.February, 9, 0, 0, 0, 0, time.UTC)
+
+	_, err = store.Create(ctx, CreateAgentMemoryInput{
+		AgentID: agentID,
+		Kind:    AgentMemoryKindDaily,
+		Date:    &date,
+		Content: "Daily note #1",
+	})
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, CreateAgentMemoryInput{
+		AgentID: agentID,
+		Kind:    AgentMemoryKindDaily,
+		Date:    &date,
+		Content: "Daily note #2 duplicate",
+	})
+	require.Error(t, err)
+}
