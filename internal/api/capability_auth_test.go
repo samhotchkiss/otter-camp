@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/stretchr/testify/require"
 )
@@ -133,4 +134,67 @@ func TestRequireCapabilityRejectsWorkspaceMismatch(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.Equal(t, "workspace mismatch", payload.Error)
 	require.Equal(t, CapabilityGitHubManualSync, payload.Capability)
+}
+
+func TestAdminConfigMutationRoutesRequireAuthenticationAndAdminCapability(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-config-authz-org")
+	ownerID := insertTestUserWithRole(t, db, orgID, "owner-admin-config", RoleOwner)
+	viewerID := insertTestUserWithRole(t, db, orgID, "viewer-admin-config", RoleViewer)
+
+	ownerToken := "oc_sess_admin_config_owner"
+	viewerToken := "oc_sess_admin_config_viewer"
+	insertTestSession(t, db, orgID, ownerID, ownerToken, time.Now().UTC().Add(time.Hour))
+	insertTestSession(t, db, orgID, viewerID, viewerToken, time.Now().UTC().Add(time.Hour))
+
+	router := chi.NewRouter()
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPatch, path: "/api/admin/config"},
+		{method: http.MethodPost, path: "/api/admin/config/release-gate"},
+		{method: http.MethodPost, path: "/api/admin/config/cutover"},
+		{method: http.MethodPost, path: "/api/admin/config/rollback"},
+	} {
+		router.With(middleware.OptionalWorkspace, RequireCapability(db, CapabilityAdminConfigManage)).MethodFunc(route.method, route.path, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
+
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPatch, path: "/api/admin/config"},
+		{method: http.MethodPost, path: "/api/admin/config/release-gate"},
+		{method: http.MethodPost, path: "/api/admin/config/cutover"},
+		{method: http.MethodPost, path: "/api/admin/config/rollback"},
+	} {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			noAuthReq := httptest.NewRequest(route.method, route.path, nil)
+			noAuthReq.Header.Set("X-Workspace-ID", orgID)
+			noAuthRec := httptest.NewRecorder()
+			router.ServeHTTP(noAuthRec, noAuthReq)
+			require.Equal(t, http.StatusUnauthorized, noAuthRec.Code)
+
+			viewerReq := httptest.NewRequest(route.method, route.path, nil)
+			viewerReq.Header.Set("Authorization", "Bearer "+viewerToken)
+			viewerReq.Header.Set("X-Workspace-ID", orgID)
+			viewerRec := httptest.NewRecorder()
+			router.ServeHTTP(viewerRec, viewerReq)
+			require.Equal(t, http.StatusForbidden, viewerRec.Code)
+
+			var forbiddenPayload forbiddenCapabilityResponse
+			require.NoError(t, json.NewDecoder(viewerRec.Body).Decode(&forbiddenPayload))
+			require.Equal(t, CapabilityAdminConfigManage, forbiddenPayload.Capability)
+
+			ownerReq := httptest.NewRequest(route.method, route.path, nil)
+			ownerReq.Header.Set("Authorization", "Bearer "+ownerToken)
+			ownerReq.Header.Set("X-Workspace-ID", orgID)
+			ownerRec := httptest.NewRecorder()
+			router.ServeHTTP(ownerRec, ownerReq)
+			require.Equal(t, http.StatusNoContent, ownerRec.Code)
+		})
+	}
 }

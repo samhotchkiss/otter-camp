@@ -344,7 +344,41 @@ func TestWorkflowRoutesUseOptionalWorkspaceMiddleware(t *testing.T) {
 			if !strings.Contains(source, line) {
 				t.Fatalf("expected workflow route to include OptionalWorkspace middleware: %s", line)
 			}
+	}
+}
+
+func TestAdminMutationRoutesRequireCapability(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile(filepath.Join("router.go"))
+	if err != nil {
+		t.Fatalf("failed to read router.go: %v", err)
+	}
+
+	source := string(content)
+	requiredLines := []string{
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/init-repos", HandleAdminInitRepos(db))`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents", adminAgentsHandler.Create)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/retire", adminAgentsHandler.Retire)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/reactivate", adminAgentsHandler.Reactivate)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/diagnostics", adminConnectionsHandler.RunDiagnostics)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/cron/jobs/{id}/run", adminConnectionsHandler.RunCronJob)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Patch("/admin/cron/jobs/{id}", adminConnectionsHandler.ToggleCronJob)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/processes/{id}/kill", adminConnectionsHandler.KillProcess)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Patch("/admin/config", adminConfigHandler.Patch)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/release-gate", adminConfigHandler.ReleaseGate)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/cutover", adminConfigHandler.Cutover)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/rollback", adminConfigHandler.Rollback)`,
+	}
+
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected admin mutation route to include capability middleware: %s", line)
 		}
+	}
 }
 
 func TestSettingsRoutesAreRegisteredExactlyOnce(t *testing.T) {
