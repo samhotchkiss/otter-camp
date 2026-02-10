@@ -13,7 +13,7 @@ func TestSaveLoadConfig(t *testing.T) {
 	defer os.Setenv("HOME", oldHome)
 
 	cfg := Config{
-		APIBaseURL: "http://localhost:8080",
+		APIBaseURL: "http://localhost:4200",
 		Token:      "oc_sess_test",
 		DefaultOrg: "00000000-0000-0000-0000-000000000000",
 	}

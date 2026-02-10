@@ -249,9 +249,9 @@ func TestIsWebSocketOriginAllowed_AllowListOverride(t *testing.T) {
 }
 
 func TestIsWebSocketOriginAllowed_LoopbackAliasAllowed(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/ws", nil)
-	req.Host = "127.0.0.1:8080"
-	req.Header.Set("Origin", "http://localhost:8080")
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4200/ws", nil)
+	req.Host = "127.0.0.1:4200"
+	req.Header.Set("Origin", "http://localhost:4200")
 
 	if !isWebSocketOriginAllowed(req) {
 		t.Fatalf("expected loopback alias origin to be allowed")
