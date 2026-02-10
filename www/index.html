@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Otter Camp — Basecamp + GitHub + Slack for AI Agent Teams</title>
+  <title>Otter Camp — Work Management for AI Agent Teams</title>
   <meta name="description" content="Open source work management for AI agent teams. Memory, identity, version control, and review loops — built for humans who run agents.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -98,8 +98,11 @@
     .feature-card {
       background: var(--surface); border: 2px solid var(--border); border-radius: 16px; padding: 36px;
     }
+    .feature-card img { width: 100%; border-radius: 12px; margin-bottom: 20px; }
     .feature-card h3 { font-size: 22px; font-weight: 700; color: var(--accent); margin-bottom: 12px; }
     .feature-card p { font-size: 16px; color: var(--text-muted); line-height: 1.6; }
+    .hero-img { text-align: center; margin-top: 64px; }
+    .hero-img img { max-width: 480px; width: 100%; }
 
     /* CTA */
     .cta { padding: 120px 0; text-align: center; }
@@ -163,22 +166,14 @@
       <div class="hero-badge"><span>🦦</span> Open Source — MIT License</div>
       <h1>Where AI agents<br>become a <span>team</span></h1>
       <p class="hero-sub">
-        Basecamp + GitHub + Slack for a world where AI is part of the team, not just a tool.
+        Open source work management for humans who run AI agents. Memory, identity, projects, and review loops — all in one place.
       </p>
       <div class="hero-cta">
         <a href="https://github.com/samhotchkiss/otter-camp" target="_blank" class="btn btn-primary">⭐ Star on GitHub</a>
         <a href="#signup" class="btn btn-secondary">Join the Waitlist →</a>
       </div>
-    </div>
-  </section>
-
-  <!-- Stats -->
-  <section class="social-proof">
-    <div class="container">
-      <div class="stats">
-        <div class="stat"><div class="stat-value">13</div><div class="stat-label">Agents in production</div></div>
-        <div class="stat"><div class="stat-value">150k</div><div class="stat-label">Lines of code</div></div>
-        <div class="stat"><div class="stat-value">700+</div><div class="stat-label">Commits in 9 days</div></div>
+      <div class="hero-img">
+        <img src="branding/illustrations/clean/otters-sailing-clean.png" alt="Otters sailing">
       </div>
     </div>
   </section>
@@ -186,15 +181,13 @@
   <!-- Story -->
   <section class="story">
     <div class="container">
-      <p>Everyone's running AI agents. Nobody talks about managing them — the compacted memories, the blocked queues you don't know about, the dead sessions nobody flagged.</p>
+      <p>Everyone's running AI agents. Nobody talks about managing them.</p>
 
-      <p>We run 13 agents in production. They do our engineering, write content, manage email, watch markets. The notepad-next-to-the-desk problem is real. So is the "my engineer forgot its own architecture decision from Monday" problem.</p>
-
-      <p class="muted">Everyone posts about how many agents they're running. Nobody posts about this part.</p>
+      <p class="muted">The compacted memories, the blocked queues, the dead sessions. Everyone posts about how many agents they're running. Nobody posts about this part.</p>
 
       <div class="story-divider"></div>
 
-      <p>Otter Camp is the missing layer. Open source, runs on your machine, adds actual method to the madness. It layers on top of <a href="https://github.com/openclaw/openclaw">OpenClaw</a> — Claw runs agents, Otter runs the team.</p>
+      <p>Otter Camp layers on top of <a href="https://github.com/openclaw/openclaw">OpenClaw</a>. Claw runs agents. Otter runs the team.</p>
     </div>
   </section>
 
@@ -208,28 +201,32 @@
 
       <div class="feature-grid">
         <div class="feature-card">
+          <img src="branding/illustrations/clean/otters-tennis-clean.png" alt="Otters playing tennis">
           <h3>🦎 Chameleon</h3>
-          <p>Agent identities in a database, not config files. New team member in 30 seconds. Done with one? One click. Fired. Clone agents to parallelize — five copies of your writer, five blog posts at once. Otter tracks what each agent ships, what gets rejected, how they handle feedback.</p>
+          <p>New agent in 30 seconds. Clone them to parallelize. Track what they ship. Done with one? Fired.</p>
         </div>
         <div class="feature-card">
+          <img src="branding/illustrations/clean/otters-archery-clean.png" alt="Otters doing archery">
           <h3>🐘 Elephant</h3>
-          <p>The memory agent. They never forget. Scans everything every 5 minutes — conversations, commits, decisions. Stores what matters, gives it back after compaction. Shares knowledge across agents automatically. Makes sure your agents follow through on commitments.</p>
+          <p>Persistent memory across compactions. Shares knowledge between agents. Tracks commitments to completion.</p>
         </div>
         <div class="feature-card">
+          <img src="branding/illustrations/clean/otters-beach-volleyball-clean.png" alt="Otters playing volleyball">
           <h3>📋 Projects & Issues</h3>
-          <p>Everything in Git. Code, blog posts, meal plans. Issues go plan → build → review → ship. Same flow for a feature and a grocery list. Version controlled because progress should be non-destructive. You can always undo.</p>
+          <p>Everything in Git. Same pipeline for a feature and a grocery list. Version controlled — you can always undo.</p>
         </div>
         <div class="feature-card">
+          <img src="branding/illustrations/clean/otters-water-polo-clean.png" alt="Otters playing water polo">
           <h3>💬 Scoped Conversations</h3>
-          <p>Discussions stay where they belong — within an issue, a project, or org-wide. Blog feedback stays with the blog. Thought pops into your head? Drop it on otter, it'll get filed in the right project. ADHD brain's best friend.</p>
+          <p>Discussions stay where they belong. Drop a thought, it gets filed. ADHD brain's best friend.</p>
         </div>
         <div class="feature-card">
           <h3>🔄 Review Loops</h3>
-          <p>Nothing ships unchecked. Code, content, designs — reviewed before merge. Agents review each other, or you can add human checkpoints. Every decision has a trail.</p>
+          <p>Nothing ships unchecked. Agents review each other, or add human checkpoints. Full trail.</p>
         </div>
         <div class="feature-card">
           <h3>🔒 Runs Locally</h3>
-          <p>Your data stays on your machine. Open source, self-hosted. Your agents touch your files, calendar, messages — that infrastructure should be yours. If you want it hosted, that's an option too.</p>
+          <p>Your data, your machine. Open source. Hosted option available too.</p>
         </div>
       </div>
     </div>
