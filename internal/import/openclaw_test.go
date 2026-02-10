@@ -274,3 +274,37 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.False(t, listHasAgentID(list, "chameleon"))
 	})
 }
+
+func TestWriteFileIfMissingDoesNotFollowSymlinks(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "symlink-target.txt")
+	link := filepath.Join(root, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	err := writeFileIfMissing(link, []byte("content"), 0o644)
+	require.Error(t, err)
+	_, statErr := os.Stat(target)
+	require.Error(t, statErr)
+	require.True(t, os.IsNotExist(statErr))
+}
+
+func TestEnsureMemoryAgentWorkspaceRejectsSymlink(t *testing.T) {
+	root := t.TempDir()
+	targetDir := t.TempDir()
+	link := filepath.Join(root, "workspace-memory-agent")
+	if err := os.Symlink(targetDir, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	_, err := ensureMemoryAgentWorkspace(root)
+	require.Error(t, err)
+
+	_, soulErr := os.Stat(filepath.Join(targetDir, "SOUL.md"))
+	require.Error(t, soulErr)
+	require.True(t, os.IsNotExist(soulErr))
+	_, stateErr := os.Stat(filepath.Join(targetDir, "memory-agent-state.json"))
+	require.Error(t, stateErr)
+	require.True(t, os.IsNotExist(stateErr))
+}

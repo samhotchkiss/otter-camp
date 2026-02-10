@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -270,6 +271,13 @@ func ensureMemoryAgentWorkspace(rootDir string) (string, error) {
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		return "", err
 	}
+	info, err := os.Lstat(workspaceDir)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("workspace path is not a real directory: %s", workspaceDir)
+	}
 
 	if err := writeFileIfMissing(filepath.Join(workspaceDir, "SOUL.md"), []byte(memoryAgentSOULTemplate+"\n"), 0o644); err != nil {
 		return "", err
@@ -288,10 +296,43 @@ func ensureMemoryAgentWorkspace(rootDir string) (string, error) {
 }
 
 func writeFileIfMissing(path string, content []byte, mode fs.FileMode) error {
-	if isFile(path) {
-		return nil
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil:
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write through symlink: %s", path)
+		}
+		if info.Mode().IsRegular() {
+			return nil
+		}
+		return fmt.Errorf("path already exists and is not a regular file: %s", path)
+	case !errors.Is(err, fs.ErrNotExist):
+		return err
 	}
-	return os.WriteFile(path, content, mode)
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		if !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		existing, statErr := os.Lstat(path)
+		if statErr != nil {
+			return err
+		}
+		if existing.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write through symlink: %s", path)
+		}
+		if existing.Mode().IsRegular() {
+			return nil
+		}
+		return fmt.Errorf("path already exists and is not a regular file: %s", path)
+	}
+	defer file.Close()
+
+	if _, err := file.Write(content); err != nil {
+		return err
+	}
+	return nil
 }
 
 func DetectOpenClawInstallation(opts DetectOpenClawOptions) (*OpenClawInstallation, error) {
