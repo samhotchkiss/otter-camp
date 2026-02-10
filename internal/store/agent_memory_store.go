@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,12 @@ const (
 	AgentMemoryKindDaily    = "daily"
 	AgentMemoryKindLongTerm = "long_term"
 	AgentMemoryKindNote     = "note"
+)
+
+var (
+	ErrAgentMemoryInvalidAgentID = errors.New("agent memory agent_id is invalid")
+	ErrAgentMemoryInvalidKind    = errors.New("unsupported memory kind")
+	ErrAgentMemoryContentMissing = errors.New("memory content is required")
 )
 
 type AgentMemory struct {
@@ -48,7 +55,7 @@ func (s *AgentMemoryStore) Create(ctx context.Context, input CreateAgentMemoryIn
 		return nil, ErrNoWorkspace
 	}
 	if !uuidRegex.MatchString(strings.TrimSpace(input.AgentID)) {
-		return nil, fmt.Errorf("invalid agent_id")
+		return nil, ErrAgentMemoryInvalidAgentID
 	}
 
 	kind, err := normalizeAgentMemoryKind(input.Kind)
@@ -57,7 +64,7 @@ func (s *AgentMemoryStore) Create(ctx context.Context, input CreateAgentMemoryIn
 	}
 	content := strings.TrimSpace(input.Content)
 	if content == "" {
-		return nil, fmt.Errorf("content is required")
+		return nil, ErrAgentMemoryContentMissing
 	}
 
 	var dateValue interface{}
@@ -259,7 +266,7 @@ func normalizeAgentMemoryKind(value string) (string, error) {
 	case AgentMemoryKindDaily, AgentMemoryKindLongTerm, AgentMemoryKindNote:
 		return kind, nil
 	default:
-		return "", fmt.Errorf("kind must be daily, long_term, or note")
+		return "", ErrAgentMemoryInvalidKind
 	}
 }
 
