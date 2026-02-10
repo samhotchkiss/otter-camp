@@ -28,7 +28,14 @@ const OPENCLAW_PORT = process.env.OPENCLAW_PORT || '18791';
 const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || '';
 const OTTERCAMP_URL = process.env.OTTERCAMP_URL || 'https://api.otter.camp';
 const OTTERCAMP_TOKEN = process.env.OTTERCAMP_TOKEN || '';
-const OTTERCAMP_WS_SECRET = process.env.OPENCLAW_WS_SECRET || '';
+export function resolveOtterCampWSSecret(env: NodeJS.ProcessEnv = process.env): string {
+  const openClawSecret = (env.OPENCLAW_WS_SECRET || '').trim();
+  if (openClawSecret) {
+    return openClawSecret;
+  }
+  return (env.OTTERCAMP_WS_SECRET || '').trim();
+}
+const OTTERCAMP_WS_SECRET = resolveOtterCampWSSecret(process.env);
 const OTTER_PROGRESS_LOG_PATH = (process.env.OTTER_PROGRESS_LOG_PATH || '').trim();
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
 const MAX_TRACKED_RUN_IDS = 2000;
@@ -4435,7 +4442,7 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
 
 function connectOtterCampDispatchSocket(): void {
   if (!OTTERCAMP_WS_SECRET) {
-    console.warn('[bridge] OPENCLAW_WS_SECRET not set; dm.message dispatch disabled');
+    console.warn('[bridge] OPENCLAW_WS_SECRET (or OTTERCAMP_WS_SECRET) not set; dm.message dispatch disabled');
     return;
   }
 
