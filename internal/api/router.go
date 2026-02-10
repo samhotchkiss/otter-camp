@@ -200,6 +200,7 @@ func NewRouter() http.Handler {
 		r.Get("/auth/exchange", HandleAuthExchange)
 		r.Post("/auth/magic", HandleMagicLink)
 		r.Get("/auth/validate", HandleValidateToken)
+		r.Post("/onboarding/bootstrap", HandleOnboardingBootstrap)
 		r.Get("/orgs", HandleOrgsList(db))
 		r.Get("/git/tokens", HandleGitTokensList)
 		r.Post("/git/tokens", HandleGitTokensCreate)
