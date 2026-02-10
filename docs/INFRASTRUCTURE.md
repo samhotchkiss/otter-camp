@@ -97,7 +97,7 @@ npm run dev
 ### API
 ```bash
 go run ./cmd/server
-# → http://localhost:8080
+# → http://localhost:4200
 ```
 
 ### Full Stack
@@ -107,7 +107,7 @@ go run ./cmd/server
 
 # Terminal 2: Frontend (pointing to local API)
 cd web
-VITE_API_URL=http://localhost:8080 npm run dev
+VITE_API_URL=http://localhost:4200 npm run dev
 ```
 
 ---
