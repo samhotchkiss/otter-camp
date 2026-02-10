@@ -1,11 +1,46 @@
 package config
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 )
+
+func init() {
+	// Auto-load .env file if present (don't override existing env vars)
+	loadDotEnv(".env")
+}
+
+func loadDotEnv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		// Remove surrounding quotes
+		if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
+			val = val[1 : len(val)-1]
+		}
+		// Don't override existing env vars
+		if os.Getenv(key) == "" {
+			os.Setenv(key, val)
+		}
+	}
+}
 
 const (
 	defaultPort               = "4200"
