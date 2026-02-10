@@ -78,6 +78,44 @@ type adminConfigReleaseGateResponse struct {
 	GeneratedAt time.Time                     `json:"generated_at"`
 }
 
+type bufferedResponseCapture struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (c *bufferedResponseCapture) Header() http.Header {
+	if c.header == nil {
+		c.header = make(http.Header)
+	}
+	return c.header
+}
+
+func (c *bufferedResponseCapture) Write(p []byte) (int, error) {
+	if c.status == 0 {
+		c.status = http.StatusOK
+	}
+	return c.body.Write(p)
+}
+
+func (c *bufferedResponseCapture) WriteHeader(status int) {
+	c.status = status
+}
+
+func (c *bufferedResponseCapture) FlushTo(w http.ResponseWriter) {
+	for key, values := range c.Header() {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	status := c.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(c.body.Bytes())
+}
+
 type openClawConfigCutoverCheckpoint struct {
 	SnapshotHash   string          `json:"snapshot_hash"`
 	CutoverHash    string          `json:"cutover_hash"`
@@ -375,20 +413,14 @@ func (h *AdminConfigHandler) Cutover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.DB != nil {
-		if err := upsertSyncMetadataJSON(r.Context(), h.DB, syncMetadataOpenClawCutoverKey, checkpoint, time.Now().UTC()); err != nil {
-			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to persist cutover checkpoint"})
-			return
-		}
-	}
-
 	dispatcher := &AdminConnectionsHandler{
 		DB:              h.DB,
 		OpenClawHandler: h.OpenClawHandler,
 		EventStore:      h.EventStore,
 	}
+	dispatchCapture := &bufferedResponseCapture{}
 	dispatcher.dispatchAdminCommand(
-		w,
+		dispatchCapture,
 		r,
 		adminCommandActionConfigCutover,
 		adminCommandDispatchInput{
@@ -397,6 +429,15 @@ func (h *AdminConfigHandler) Cutover(w http.ResponseWriter, r *http.Request) {
 			DryRun:     false,
 		},
 	)
+
+	if dispatchCapture.status == http.StatusOK && h.DB != nil {
+		if err := upsertSyncMetadataJSON(r.Context(), h.DB, syncMetadataOpenClawCutoverKey, checkpoint, time.Now().UTC()); err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to persist cutover checkpoint"})
+			return
+		}
+	}
+
+	dispatchCapture.FlushTo(w)
 }
 
 func (h *AdminConfigHandler) Rollback(w http.ResponseWriter, r *http.Request) {

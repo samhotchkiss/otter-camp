@@ -331,6 +331,57 @@ func TestAdminConfigCutoverBlockedWhenReleaseGateFails(t *testing.T) {
 	require.Len(t, dispatcher.calls, 0)
 }
 
+func TestAdminConfigCutoverDoesNotPersistCheckpointWhenDispatchNotDelivered(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-config-cutover-dispatch-not-delivered")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: false}
+	handler := &AdminConfigHandler{
+		DB:              db,
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	upsertSyncMetadataForAdminConfigGateTest(t, db, syncMetadataOpenClawConfigSnapshotKey, `{
+		"source":"bridge",
+		"captured_at":"2026-02-09T19:10:00Z",
+		"data":{
+			"gateway":{"port":18791},
+			"agents":{"list":[
+				{"id":"main","name":"Frank","default":true,"workspace":"~/.openclaw/workspace"},
+				{"id":"writer","name":"Writer","workspace":"~/.openclaw/workspace-writer"}
+			]}
+		}
+	}`)
+	upsertSyncMetadataForAdminConfigGateTest(t, db, syncMetadataOpenClawLegacyImportKey, `{
+		"imported_agents":2,
+		"imported_long_term_memories":1,
+		"imported_daily_memories":1,
+		"transition_files_generated":1,
+		"skipped_workspace_count":0,
+		"processed_workspace_count":2,
+		"processed_retired_workspaces":1
+	}`)
+	upsertSyncMetadataForAdminConfigGateTest(t, db, "openclaw_bridge_diagnostics", `{"dispatch_queue_depth":0,"errors_last_hour":0}`)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/config/cutover",
+		strings.NewReader(`{"confirm":true}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Cutover(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	var checkpointCount int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM sync_metadata WHERE key = $1`,
+		syncMetadataOpenClawCutoverKey,
+	).Scan(&checkpointCount))
+	require.Equal(t, 0, checkpointCount)
+}
+
 func TestAdminConfigReleaseGatePassesAndCutoverDispatches(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-config-cutover-gate-pass")
@@ -395,6 +446,13 @@ func TestAdminConfigReleaseGatePassesAndCutoverDispatches(t *testing.T) {
 	event, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
 	require.True(t, ok)
 	require.Equal(t, adminCommandActionConfigCutover, event.Data.Action)
+
+	var checkpointCount int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM sync_metadata WHERE key = $1`,
+		syncMetadataOpenClawCutoverKey,
+	).Scan(&checkpointCount))
+	require.Equal(t, 1, checkpointCount)
 }
 
 func TestSpec110GateFailsWithoutSnapshot(t *testing.T) {
