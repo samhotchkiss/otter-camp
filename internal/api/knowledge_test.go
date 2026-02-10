@@ -165,3 +165,17 @@ func TestKnowledgeRoutesRequireWorkspace(t *testing.T) {
 
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
+
+func TestKnowledgeImportRejectsEmptyEntries(t *testing.T) {
+	handler := &KnowledgeHandler{Store: store.NewKnowledgeEntryStore(nil)}
+	router := newKnowledgeTestRouter(handler)
+
+	emptyReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/knowledge/import?org_id=00000000-0000-0000-0000-000000000001",
+		bytes.NewReader([]byte(`{"entries":[]}`)),
+	)
+	emptyRec := httptest.NewRecorder()
+	router.ServeHTTP(emptyRec, emptyReq)
+	require.Equal(t, http.StatusBadRequest, emptyRec.Code)
+}

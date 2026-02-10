@@ -98,6 +98,10 @@ func (h *KnowledgeHandler) Import(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
 		return
 	}
+	if len(req.Entries) == 0 {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "at least one entry required"})
+		return
+	}
 
 	input := make([]store.ReplaceKnowledgeEntryInput, 0, len(req.Entries))
 	for _, entry := range req.Entries {
