@@ -83,7 +83,7 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.NewDecoder(io.LimitReader(resp.Body, maxClientResponseBodyBytes)).Decode(out)
 }
 
 type Project struct {
