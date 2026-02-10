@@ -1,0 +1,4 @@
+{"id":"recall-hit-1","query":"memory migration details","retrieved_ids":["m-1","m-2","m-3"],"relevant_ids":["m-1","m-9"],"should_inject":true,"injected":true,"recovery_expected":true,"recovery_succeeded":true,"latency_ms":140}
+{"id":"recall-hit-2","query":"compaction recovery policy","retrieved_ids":["m-4","m-5","m-6"],"relevant_ids":["m-4","m-8"],"should_inject":true,"injected":true,"recovery_expected":true,"recovery_succeeded":true,"latency_ms":200}
+{"id":"no-inject-1","query":"greeting","retrieved_ids":["m-10","m-11","m-12"],"relevant_ids":[],"should_inject":false,"injected":false,"recovery_expected":false,"recovery_succeeded":false,"latency_ms":90}
+{"id":"no-inject-2","query":"small talk","retrieved_ids":["m-13","m-14","m-15"],"relevant_ids":[],"should_inject":false,"injected":false,"recovery_expected":false,"recovery_succeeded":false,"latency_ms":160}
