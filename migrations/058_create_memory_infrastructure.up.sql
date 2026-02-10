@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS memory_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_events_type
-    ON memory_events (event_type, created_at DESC);
+    ON memory_events (org_id, event_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_events_org_created
     ON memory_events (org_id, created_at DESC);
 

@@ -160,6 +160,7 @@ func TestMigration058MemoryInfrastructureFilesExistAndContainCoreDDL(t *testing.
 	require.Contains(t, upContent, "create table if not exists agent_teams")
 	require.Contains(t, upContent, "create table if not exists working_memory")
 	require.Contains(t, upContent, "create table if not exists memory_events")
+	require.Contains(t, upContent, "on memory_events (org_id, event_type, created_at desc)")
 
 	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "058_create_memory_infrastructure.down.sql"))
 	require.NoError(t, err)
