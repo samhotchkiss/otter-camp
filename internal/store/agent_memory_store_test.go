@@ -102,3 +102,55 @@ func TestAgentMemoryStoreRejectsDuplicateDailyEntryForSameDate(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+func TestAgentMemoryStoreSearchEscapesLikeWildcards(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "agent-memory-search-wildcards")
+
+	var agentID string
+	err := db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'memory-agent-wildcard', 'Memory Agent Wildcard', 'active')
+		 RETURNING id`,
+		orgID,
+	).Scan(&agentID)
+	require.NoError(t, err)
+
+	store := NewAgentMemoryStore(db)
+	ctx := ctxWithWorkspace(orgID)
+
+	_, err = store.Create(ctx, CreateAgentMemoryInput{
+		AgentID: agentID,
+		Kind:    AgentMemoryKindNote,
+		Content: "Contains 100% certainty marker",
+	})
+	require.NoError(t, err)
+	_, err = store.Create(ctx, CreateAgentMemoryInput{
+		AgentID: agentID,
+		Kind:    AgentMemoryKindNote,
+		Content: "Contains underscore_token marker",
+	})
+	require.NoError(t, err)
+	_, err = store.Create(ctx, CreateAgentMemoryInput{
+		AgentID: agentID,
+		Kind:    AgentMemoryKindNote,
+		Content: "Ordinary note without wildcard tokens",
+	})
+	require.NoError(t, err)
+
+	percentResults, err := store.SearchByAgent(ctx, agentID, "%", 10)
+	require.NoError(t, err)
+	require.Len(t, percentResults, 1)
+	require.Contains(t, percentResults[0].Content, "100%")
+
+	underscoreResults, err := store.SearchByAgent(ctx, agentID, "_", 10)
+	require.NoError(t, err)
+	require.Len(t, underscoreResults, 1)
+	require.Contains(t, underscoreResults[0].Content, "underscore_token")
+}
+
+func TestEscapeLikePattern(t *testing.T) {
+	got := escapeLikePattern(`100%_ready\set`)
+	require.Equal(t, `100\%\_ready\\set`, got)
+}
