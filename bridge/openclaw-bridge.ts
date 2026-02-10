@@ -449,7 +449,7 @@ const reconnectByRole: Record<BridgeSocketRole, SocketReconnectController> = {
     totalReconnectAttempts: 0,
     firstMessageReceived: false,
     lastConnectedAt: 0,
-    disconnectedSince: processStartedAtMs,
+    disconnectedSince: 0,
     alertEmittedForOutage: false,
     restartFailures: 0,
   },
@@ -459,7 +459,7 @@ const reconnectByRole: Record<BridgeSocketRole, SocketReconnectController> = {
     totalReconnectAttempts: 0,
     firstMessageReceived: false,
     lastConnectedAt: 0,
-    disconnectedSince: processStartedAtMs,
+    disconnectedSince: 0,
     alertEmittedForOutage: false,
     restartFailures: 0,
   },
@@ -773,7 +773,7 @@ export function resetReconnectStateForTest(role: BridgeSocketRole): void {
   reconnectByRole[role].totalReconnectAttempts = 0;
   reconnectByRole[role].firstMessageReceived = false;
   reconnectByRole[role].lastConnectedAt = 0;
-  reconnectByRole[role].disconnectedSince = processStartedAtMs;
+  reconnectByRole[role].disconnectedSince = 0;
   reconnectByRole[role].alertEmittedForOutage = false;
   reconnectByRole[role].restartFailures = 0;
 }
@@ -788,6 +788,7 @@ export function getReconnectStateForTest(role: BridgeSocketRole): {
   disconnectedSince: number;
   alertEmittedForOutage: boolean;
   restartFailures: number;
+  hasReconnectTimer: boolean;
 } {
   const controller = reconnectByRole[role];
   return {
@@ -796,6 +797,7 @@ export function getReconnectStateForTest(role: BridgeSocketRole): {
     disconnectedSince: controller.disconnectedSince,
     alertEmittedForOutage: controller.alertEmittedForOutage,
     restartFailures: controller.restartFailures,
+    hasReconnectTimer: controller.timer !== null,
   };
 }
 
@@ -868,7 +870,7 @@ function queueReconnectEscalationAlert(role: BridgeSocketRole, controller: Socke
   });
 }
 
-function requestSupervisorRestart(role: BridgeSocketRole, controller: SocketReconnectController): void {
+function requestSupervisorRestart(role: BridgeSocketRole, controller: SocketReconnectController): boolean {
   const disconnectedForSeconds = controller.disconnectedSince > 0
     ? Math.max(0, Math.floor((Date.now() - controller.disconnectedSince) / 1000))
     : 0;
@@ -877,6 +879,7 @@ function requestSupervisorRestart(role: BridgeSocketRole, controller: SocketReco
   console.error(`[bridge] ${reason}`);
   try {
     processExitFn(1);
+    return true;
   } catch (err) {
     controller.restartFailures += 1;
     console.error(
@@ -887,6 +890,7 @@ function requestSupervisorRestart(role: BridgeSocketRole, controller: SocketReco
       console.error('[bridge] restart request failed twice; forcing process exit');
       process.exit(1);
     }
+    return false;
   }
 }
 
@@ -900,12 +904,17 @@ function scheduleReconnect(role: BridgeSocketRole, reconnectFn: () => void): voi
       `[bridge] ${role} reconnect warning: ${controller.consecutiveFailures} consecutive failures`,
     );
   }
-  if (controller.consecutiveFailures === RECONNECT_ALERT_THRESHOLD) {
+  if (
+    controller.consecutiveFailures >= RECONNECT_ALERT_THRESHOLD &&
+    escalationTier === 'alert'
+  ) {
     queueReconnectEscalationAlert(role, controller);
   }
   if (escalationTier === 'restart') {
-    requestSupervisorRestart(role, controller);
-    return;
+    const restartRequested = requestSupervisorRestart(role, controller);
+    if (restartRequested || controller.restartFailures >= RESTART_FAILURE_EXIT_THRESHOLD) {
+      return;
+    }
   }
 
   const delayMs = computeReconnectDelayMs(controller.consecutiveFailures - 1);
@@ -959,6 +968,32 @@ export function triggerOpenClawCloseForTest(
   reconnectFn: () => void,
 ): void {
   handleOpenClawSocketClosed(code, reason, () => {}, reconnectFn);
+}
+
+function handleOtterCampSocketClosed(
+  code: number,
+  reason: string,
+  reconnectFn: () => void,
+): void {
+  console.warn(`[bridge] OtterCamp websocket closed (${code}) ${reason}`);
+  applyConnectionTransition('ottercamp', 'socket_closed', { code, reason });
+  clearHeartbeatTimers('ottercamp');
+  otterCampWS = null;
+  if (continuousModeEnabled) {
+    scheduleReconnect('ottercamp', reconnectFn);
+  }
+}
+
+export function triggerOtterCampCloseForTest(
+  code: number,
+  reason: string,
+  reconnectFn: () => void,
+): void {
+  handleOtterCampSocketClosed(code, reason, reconnectFn);
+}
+
+export function triggerSocketMessageForTest(role: BridgeSocketRole): void {
+  markSocketMessage(role);
 }
 
 export function setContinuousModeEnabledForTest(enabled: boolean): void {
@@ -5119,15 +5154,9 @@ function connectOtterCampDispatchSocket(): void {
   });
 
   otterCampWS.on('close', (code, reason) => {
-    console.warn(`[bridge] OtterCamp websocket closed (${code}) ${reason.toString()}`);
-    applyConnectionTransition('ottercamp', 'socket_closed', { code, reason: reason.toString() });
-    clearHeartbeatTimers('ottercamp');
-    otterCampWS = null;
-    if (continuousModeEnabled) {
-      scheduleReconnect('ottercamp', () => {
-        connectOtterCampDispatchSocket();
-      });
-    }
+    handleOtterCampSocketClosed(code, reason.toString(), () => {
+      connectOtterCampDispatchSocket();
+    });
   });
 
   otterCampWS.on('error', (err) => {

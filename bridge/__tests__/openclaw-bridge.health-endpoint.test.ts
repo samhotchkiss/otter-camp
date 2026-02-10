@@ -55,6 +55,20 @@ describe("bridge health payload", () => {
     expect(payload.ottercamp.consecutiveFailures).toBe(7);
   });
 
+  it("renders null disconnectedSince when disconnectedSinceMs is zero", () => {
+    const payload = buildHealthPayload({
+      ...BASE_INPUT,
+      openclaw: {
+        ...BASE_INPUT.openclaw,
+        connected: false,
+        disconnectedSinceMs: 0,
+      },
+    });
+
+    expect(payload.status).toBe("degraded");
+    expect(payload.openclaw.disconnectedSince).toBeNull();
+  });
+
   it("returns disconnected when both sides are disconnected", () => {
     const payload = buildHealthPayload({
       ...BASE_INPUT,

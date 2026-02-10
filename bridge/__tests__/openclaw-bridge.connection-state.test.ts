@@ -13,6 +13,8 @@ import {
   setProcessExitForTest,
   shouldExitAfterReconnectFailures,
   triggerOpenClawCloseForTest,
+  triggerOtterCampCloseForTest,
+  triggerSocketMessageForTest,
   transitionConnectionState,
   type BridgeConnectionState,
   type BridgeConnectionTransitionTrigger,
@@ -115,6 +117,46 @@ describe("bridge connection state + reconnect policy", () => {
     expect(hardExit).toHaveBeenCalledWith(1);
   });
 
+  it("schedules reconnect after a single restart hook failure below exit threshold", () => {
+    vi.useFakeTimers();
+    const reconnectFn = vi.fn();
+    const restartHook = vi.fn<(code: number) => never>().mockImplementation(() => {
+      throw new Error("restart-failed-once");
+    });
+    setProcessExitForTest(restartHook);
+
+    for (let attempt = 0; attempt < 59; attempt += 1) {
+      triggerOpenClawCloseForTest(1006, "test-close", reconnectFn);
+      vi.advanceTimersToNextTimer();
+    }
+
+    expect(getReconnectStateForTest("openclaw").hasReconnectTimer).toBe(false);
+
+    triggerOpenClawCloseForTest(1006, "test-close", reconnectFn);
+
+    const reconnectState = getReconnectStateForTest("openclaw");
+    expect(restartHook).toHaveBeenCalledTimes(1);
+    expect(reconnectState.restartFailures).toBe(1);
+    expect(reconnectState.hasReconnectTimer).toBe(true);
+
+    vi.useRealTimers();
+  });
+
+  it("invokes restart escalation for prolonged ottercamp close failures", () => {
+    const reconnectFn = vi.fn();
+    const restartHook = vi.fn<(code: number) => never>().mockImplementation(() => {
+      throw new Error("restart-failed-once");
+    });
+    setProcessExitForTest(restartHook);
+
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      triggerOtterCampCloseForTest(1006, "test-close", reconnectFn);
+    }
+
+    expect(restartHook).toHaveBeenCalledTimes(1);
+    expect(getReconnectStateForTest("ottercamp").restartFailures).toBe(1);
+  });
+
   it("queues reconnect escalation alert once at alert tier when ottercamp is connected", async () => {
     const reconnectFn = vi.fn();
     setOtterCampOrgIDForTest("org-test");
@@ -149,5 +191,75 @@ describe("bridge connection state + reconnect policy", () => {
 
     const queued = getBufferedActivityEventStateForTest();
     expect(queued.queuedEventIDCount).toBe(0);
+  });
+
+  it("emits alert after threshold once ottercamp reconnects even if attempt 30 was skipped", async () => {
+    const reconnectFn = vi.fn();
+    setOtterCampOrgIDForTest("org-test");
+    setConnectionStateForTest("ottercamp", "disconnected");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503, statusText: "Unavailable", text: async () => "fail" })),
+    );
+
+    for (let attempt = 0; attempt < 35; attempt += 1) {
+      triggerOpenClawCloseForTest(1006, "test-close", reconnectFn);
+    }
+    await Promise.resolve();
+    expect(getBufferedActivityEventStateForTest().queuedEventIDCount).toBe(0);
+
+    setConnectionStateForTest("ottercamp", "connected");
+    triggerOpenClawCloseForTest(1006, "test-close", reconnectFn);
+    await Promise.resolve();
+
+    expect(getBufferedActivityEventStateForTest().queuedEventIDCount).toBe(1);
+  });
+
+  it("covers ottercamp close alert tier behavior when ottercamp connection is unavailable", async () => {
+    const reconnectFn = vi.fn();
+    setOtterCampOrgIDForTest("org-test");
+    setConnectionStateForTest("ottercamp", "connected");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503, statusText: "Unavailable", text: async () => "fail" })),
+    );
+
+    for (let attempt = 0; attempt < 35; attempt += 1) {
+      triggerOtterCampCloseForTest(1006, "test-close", reconnectFn);
+    }
+    await Promise.resolve();
+
+    expect(getBufferedActivityEventStateForTest().queuedEventIDCount).toBe(0);
+  });
+
+  it("resets alert dedupe after reconnect and emits again on the next outage", async () => {
+    vi.useFakeTimers();
+    const reconnectFn = vi.fn();
+    setOtterCampOrgIDForTest("org-test");
+    setConnectionStateForTest("ottercamp", "connected");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503, statusText: "Unavailable", text: async () => "fail" })),
+    );
+
+    vi.setSystemTime(new Date("2026-02-10T21:00:00.000Z"));
+    for (let attempt = 0; attempt < 35; attempt += 1) {
+      triggerOpenClawCloseForTest(1006, "first-outage", reconnectFn);
+    }
+    await Promise.resolve();
+    expect(getBufferedActivityEventStateForTest().queuedEventIDCount).toBe(1);
+
+    setConnectionStateForTest("openclaw", "connected");
+    triggerSocketMessageForTest("openclaw");
+    expect(getReconnectStateForTest("openclaw").alertEmittedForOutage).toBe(false);
+
+    vi.advanceTimersByTime(1000);
+    for (let attempt = 0; attempt < 35; attempt += 1) {
+      triggerOpenClawCloseForTest(1006, "second-outage", reconnectFn);
+    }
+    await Promise.resolve();
+
+    expect(getBufferedActivityEventStateForTest().queuedEventIDCount).toBe(2);
+    vi.useRealTimers();
   });
 });
