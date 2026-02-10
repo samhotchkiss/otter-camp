@@ -201,3 +201,10 @@ func TestEmbedderTrimming(t *testing.T) {
 	_, err = embedder.Embed(context.Background(), []string{" trim-me "})
 	require.NoError(t, err)
 }
+
+func TestNormalizeRetryAttemptsCapsUpperBound(t *testing.T) {
+	require.Equal(t, defaultEmbedderRetryAttempts, normalizeRetryAttempts(0))
+	require.Equal(t, maxEmbedderRetryAttempts, normalizeRetryAttempts(100))
+	require.Equal(t, maxEmbedderRetryDelay, normalizeRetryBackoff(45*time.Second))
+	require.Equal(t, maxEmbedderRetryDelay, retryDelay(20*time.Second, 3))
+}

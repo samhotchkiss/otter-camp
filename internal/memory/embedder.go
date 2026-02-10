@@ -32,6 +32,9 @@ const (
 	defaultEmbedderTimeout       = 30 * time.Second
 	defaultEmbedderRetryAttempts = 3
 	defaultEmbedderRetryBackoff  = 200 * time.Millisecond
+	maxEmbedderRetryAttempts     = 10
+	maxEmbedderRetryDelay        = 30 * time.Second
+	maxEmbedderSuccessBodyBytes  = 1 << 20
 )
 
 type EmbedderConfig struct {
@@ -218,7 +221,7 @@ func (e *ollamaEmbedder) embedOneAttempt(ctx context.Context, input string) ([]f
 	var payload struct {
 		Embedding []float64 `json:"embedding"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxEmbedderSuccessBodyBytes)).Decode(&payload); err != nil {
 		return nil, false, fmt.Errorf("decode ollama response: %w", err)
 	}
 	if len(payload.Embedding) != e.dimension {
@@ -305,7 +308,7 @@ func (e *openAIEmbedder) embedBatchAttempt(ctx context.Context, inputs []string)
 			Embedding []float64 `json:"embedding"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxEmbedderSuccessBodyBytes)).Decode(&payload); err != nil {
 		return nil, false, fmt.Errorf("decode openai response: %w", err)
 	}
 	if len(payload.Data) != len(inputs) {
@@ -341,12 +344,18 @@ func normalizeRetryAttempts(value int) int {
 	if value <= 0 {
 		return defaultEmbedderRetryAttempts
 	}
+	if value > maxEmbedderRetryAttempts {
+		return maxEmbedderRetryAttempts
+	}
 	return value
 }
 
 func normalizeRetryBackoff(value time.Duration) time.Duration {
 	if value <= 0 {
 		return defaultEmbedderRetryBackoff
+	}
+	if value > maxEmbedderRetryDelay {
+		return maxEmbedderRetryDelay
 	}
 	return value
 }
@@ -355,7 +364,11 @@ func retryDelay(base time.Duration, attempt int) time.Duration {
 	if attempt <= 0 {
 		attempt = 1
 	}
-	return base * time.Duration(attempt)
+	delay := base * time.Duration(attempt)
+	if delay > maxEmbedderRetryDelay {
+		return maxEmbedderRetryDelay
+	}
+	return delay
 }
 
 func sleepWithContext(ctx context.Context, duration time.Duration) error {
