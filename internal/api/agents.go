@@ -522,13 +522,17 @@ func summarizeWhoAmIText(value string, limit int) string {
 
 func capWhoAmIText(value string, limit int) string {
 	trimmed := strings.TrimSpace(value)
-	if limit <= 0 || len(trimmed) <= limit {
+	if limit <= 0 {
+		return trimmed
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= limit {
 		return trimmed
 	}
 	if limit <= 3 {
-		return trimmed[:limit]
+		return string(runes[:limit])
 	}
-	return trimmed[:limit-3] + "..."
+	return string(runes[:limit-3]) + "..."
 }
 
 func fallbackString(primary string, fallback string) string {

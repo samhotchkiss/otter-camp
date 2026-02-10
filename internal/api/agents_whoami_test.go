@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -130,6 +131,16 @@ func TestAgentWhoAmIRejectsMismatchedSessionAgent(t *testing.T) {
 	handler.WhoAmI(rec, req)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "session agent does not match")
+}
+
+func TestCapWhoAmITextIsRuneSafe(t *testing.T) {
+	got := capWhoAmIText("🙂🙂🙂🙂🙂🙂", 5)
+	require.Equal(t, "🙂🙂...", got)
+	require.True(t, utf8.ValidString(got))
+
+	got = capWhoAmIText("海豚营地", 3)
+	require.Equal(t, "海豚营", got)
+	require.True(t, utf8.ValidString(got))
 }
 
 func insertWhoAmITestAgent(t *testing.T, db *sql.DB, orgID, slug, displayName string) string {
