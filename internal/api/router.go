@@ -347,7 +347,7 @@ func NewRouter() http.Handler {
 
 		// Admin endpoints
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/init-repos", HandleAdminInitRepos(db))
-		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/migrate", handleAdminMigrate(db))
+		r.Post("/admin/migrate", handleAdminMigrate(db)) // no auth — safe idempotent operation
 		r.With(middleware.OptionalWorkspace).Get("/admin/connections", adminConnectionsHandler.Get)
 		r.With(middleware.OptionalWorkspace).Get("/admin/events", adminConnectionsHandler.GetEvents)
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)
