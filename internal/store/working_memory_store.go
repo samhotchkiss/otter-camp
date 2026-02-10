@@ -136,6 +136,7 @@ func (s *WorkingMemoryStore) ListBySession(
 		 WHERE org_id = $1
 		   AND agent_id = $2
 		   AND session_key = $3
+		   AND (expires_at IS NULL OR expires_at > NOW())
 		 ORDER BY created_at DESC
 		 LIMIT $4`,
 		workspaceID,

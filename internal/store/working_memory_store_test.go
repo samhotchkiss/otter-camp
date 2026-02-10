@@ -42,7 +42,8 @@ func TestWorkingMemoryStoreCreateListCleanup(t *testing.T) {
 
 	beforeCleanup, err := store.ListBySession(ctx, agentID, "session-cleanup", 10)
 	require.NoError(t, err)
-	require.Len(t, beforeCleanup, 2)
+	require.Len(t, beforeCleanup, 1)
+	require.Equal(t, "Active scratch note", beforeCleanup[0].Content)
 
 	deleted, err := store.CleanupExpired(ctx, time.Now().UTC())
 	require.NoError(t, err)
