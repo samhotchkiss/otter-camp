@@ -135,6 +135,40 @@ func TestMigration049WorkflowAgentFKUsesOnDeleteSetNull(t *testing.T) {
 	)
 }
 
+func TestMigration058MemoryInfrastructureFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"058_create_memory_infrastructure.up.sql",
+		"058_create_memory_infrastructure.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "058_create_memory_infrastructure.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create extension if not exists vector")
+	require.Contains(t, upContent, "create table if not exists memory_entries")
+	require.Contains(t, upContent, "create table if not exists memory_entry_embeddings")
+	require.Contains(t, upContent, "create table if not exists shared_knowledge")
+	require.Contains(t, upContent, "create table if not exists shared_knowledge_embeddings")
+	require.Contains(t, upContent, "create table if not exists agent_memory_config")
+	require.Contains(t, upContent, "create table if not exists compaction_events")
+	require.Contains(t, upContent, "create table if not exists agent_teams")
+	require.Contains(t, upContent, "create table if not exists working_memory")
+	require.Contains(t, upContent, "create table if not exists memory_events")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "058_create_memory_infrastructure.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop table if exists memory_events")
+	require.Contains(t, downContent, "drop table if exists working_memory")
+	require.Contains(t, downContent, "drop table if exists memory_entries")
+	require.Contains(t, downContent, "drop extension if exists vector")
+}
+
 func TestSchemaWorkflowAgentDeleteSetsProjectFieldNull(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
@@ -311,6 +345,110 @@ func TestSchemaConnectionEventsTableCreateAndRollback(t *testing.T) {
 	}
 
 	require.False(t, schemaTableExists(t, db, "connection_events"))
+}
+
+func TestSchemaMemoryInfrastructureTablesCreateAndRollback(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	var vectorExtension bool
+	err = db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')`,
+	).Scan(&vectorExtension)
+	require.NoError(t, err)
+	require.True(t, vectorExtension)
+
+	for _, table := range []string{
+		"memory_entries",
+		"memory_entry_embeddings",
+		"shared_knowledge",
+		"shared_knowledge_embeddings",
+		"agent_memory_config",
+		"compaction_events",
+		"agent_teams",
+		"working_memory",
+		"memory_events",
+	} {
+		require.True(t, schemaTableExists(t, db, table), table)
+	}
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"memory_entries",
+		"memory_entry_embeddings",
+		"shared_knowledge",
+		"shared_knowledge_embeddings",
+		"agent_memory_config",
+		"compaction_events",
+		"agent_teams",
+		"working_memory",
+		"memory_events",
+	} {
+		require.False(t, schemaTableExists(t, db, table), table)
+	}
+}
+
+func TestSchemaMemoryEntriesLifecycleColumnsAndDedupIndex(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var hasStatus bool
+	err := db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'memory_entries'
+			  AND column_name = 'status'
+		)`,
+	).Scan(&hasStatus)
+	require.NoError(t, err)
+	require.True(t, hasStatus)
+
+	var hasContentHash bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'memory_entries'
+			  AND column_name = 'content_hash'
+		)`,
+	).Scan(&hasContentHash)
+	require.NoError(t, err)
+	require.True(t, hasContentHash)
+
+	var dedupIndex sql.NullString
+	err = db.QueryRow(
+		`SELECT to_regclass('public.idx_memory_entries_dedup_active')::text`,
+	).Scan(&dedupIndex)
+	require.NoError(t, err)
+	require.True(t, dedupIndex.Valid)
 }
 
 func schemaTableExists(t *testing.T, db *sql.DB, name string) bool {
