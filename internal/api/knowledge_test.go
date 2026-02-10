@@ -179,3 +179,30 @@ func TestKnowledgeImportRejectsEmptyEntries(t *testing.T) {
 	router.ServeHTTP(emptyRec, emptyReq)
 	require.Equal(t, http.StatusBadRequest, emptyRec.Code)
 }
+
+func TestKnowledgeHandlerOrgIsolation(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgA := insertMessageTestOrganization(t, db, "knowledge-api-org-a")
+	orgB := insertMessageTestOrganization(t, db, "knowledge-api-org-b")
+	handler := &KnowledgeHandler{Store: store.NewKnowledgeEntryStore(db)}
+	router := newKnowledgeTestRouter(handler)
+
+	importReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/knowledge/import?org_id="+orgA,
+		bytes.NewReader([]byte(`{"entries":[{"title":"org-a-only","content":"secret","created_by":"sam"}]}`)),
+	)
+	importRec := httptest.NewRecorder()
+	router.ServeHTTP(importRec, importReq)
+	require.Equal(t, http.StatusCreated, importRec.Code)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/knowledge?org_id="+orgB, nil)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+
+	var listResp knowledgeListResponse
+	require.NoError(t, json.NewDecoder(listRec.Body).Decode(&listResp))
+	require.Equal(t, 0, listResp.Total)
+	require.Empty(t, listResp.Items)
+}
