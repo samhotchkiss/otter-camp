@@ -610,6 +610,12 @@ function clearReconnectTimer(role: BridgeSocketRole): void {
   }
 }
 
+export function resetReconnectStateForTest(role: BridgeSocketRole): void {
+  clearReconnectTimer(role);
+  reconnectByRole[role].consecutiveFailures = 0;
+  reconnectByRole[role].firstMessageReceived = false;
+}
+
 function resetReconnectBackoffAfterFirstMessage(role: BridgeSocketRole): void {
   const controller = reconnectByRole[role];
   controller.consecutiveFailures = 0;
@@ -669,6 +675,38 @@ function clearHeartbeatTimers(role: BridgeSocketRole): void {
     clearTimeout(heartbeat.pongTimeoutTimer);
     heartbeat.pongTimeoutTimer = null;
   }
+}
+
+function handleOpenClawSocketClosed(
+  code: number,
+  reason: string,
+  onClose: (err: Error) => void,
+  reconnectFn: () => void,
+): void {
+  console.warn(`[bridge] OpenClaw socket closed (${code}) ${reason}`);
+  applyConnectionTransition('openclaw', 'socket_closed', { code, reason });
+  clearHeartbeatTimers('openclaw');
+  openClawWS = null;
+  for (const [pendingID, pending] of Array.from(pendingRequests.entries())) {
+    pendingRequests.delete(pendingID);
+    pending.reject(new Error('OpenClaw socket closed'));
+  }
+  onClose(new Error(`OpenClaw socket closed (${code})`));
+  if (continuousModeEnabled) {
+    scheduleReconnect('openclaw', reconnectFn);
+  }
+}
+
+export function triggerOpenClawCloseForTest(
+  code: number,
+  reason: string,
+  reconnectFn: () => void,
+): void {
+  handleOpenClawSocketClosed(code, reason, () => {}, reconnectFn);
+}
+
+export function setContinuousModeEnabledForTest(enabled: boolean): void {
+  continuousModeEnabled = enabled;
 }
 
 function markHeartbeatTraffic(role: BridgeSocketRole): void {
@@ -2657,22 +2695,16 @@ async function connectToOpenClaw(): Promise<void> {
     });
 
     openClawWS.on('close', (code, reason) => {
-      console.warn(`[bridge] OpenClaw socket closed (${code}) ${reason.toString()}`);
-      applyConnectionTransition('openclaw', 'socket_closed', { code, reason: reason.toString() });
-      clearHeartbeatTimers('openclaw');
-      openClawWS = null;
-      for (const [pendingID, pending] of Array.from(pendingRequests.entries())) {
-        pendingRequests.delete(pendingID);
-        pending.reject(new Error('OpenClaw socket closed'));
-      }
-      rejectOnce(new Error(`OpenClaw socket closed (${code})`));
-      if (continuousModeEnabled) {
-        scheduleReconnect('openclaw', () => {
+      handleOpenClawSocketClosed(
+        code,
+        reason.toString(),
+        rejectOnce,
+        () => {
           void connectToOpenClaw().catch((connectErr) => {
             console.error('[bridge] OpenClaw reconnect failed:', connectErr);
           });
-        });
-      }
+        },
+      );
     });
 
     setTimeout(() => {
