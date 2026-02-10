@@ -846,4 +846,113 @@ describe("ProjectDetailPage files tab", () => {
     });
     expect(payload.workflow_agent_id).toBe(workflowAgentID);
   });
+
+  it("re-syncs project settings when workflow save fails after primary settings patch", async () => {
+    const user = userEvent.setup();
+    const requests: Array<{ url: string; method: string; body?: string }> = [];
+    const workflowAgentID = "550e8400-e29b-41d4-a716-446655440222";
+    let projectGetCount = 0;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || "GET";
+      const body = typeof init?.body === "string" ? init.body : undefined;
+      requests.push({ url, method, body });
+
+      if (url.includes("/api/projects/project-1") && method === "GET") {
+        projectGetCount += 1;
+        if (projectGetCount === 1) {
+          return mockJSONResponse({
+            id: "project-1",
+            name: "Technonymous",
+            status: "active",
+            primary_agent_id: workflowAgentID,
+            workflow_enabled: true,
+            workflow_schedule: { kind: "cron", expr: "0 6 * * *", tz: "America/Denver" },
+            workflow_template: {
+              title_pattern: "Morning Briefing — {{date}}",
+              body: "Generate briefing",
+              priority: "P2",
+              labels: ["automated"],
+              auto_close: true,
+              pipeline: "none",
+            },
+            workflow_agent_id: workflowAgentID,
+          });
+        }
+        return mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+          primary_agent_id: workflowAgentID,
+          workflow_enabled: true,
+          workflow_schedule: { kind: "cron", expr: "0 6 * * *", tz: "America/Denver" },
+          workflow_template: {
+            title_pattern: "Morning Briefing — {{date}}",
+            body: "Generate briefing",
+            priority: "P2",
+            labels: ["automated"],
+            auto_close: true,
+            pipeline: "none",
+          },
+          workflow_agent_id: workflowAgentID,
+        });
+      }
+      if (url.includes("/api/agents?") && method === "GET") {
+        return mockJSONResponse({
+          agents: [{ id: workflowAgentID, name: "Frank" }],
+        });
+      }
+      if (url.includes("/api/issues?") && method === "GET") {
+        return mockJSONResponse({ items: [] });
+      }
+      if (url.includes("/api/feed?") && method === "GET") {
+        return mockJSONResponse({ items: [] });
+      }
+      if (url.includes("/api/projects/project-1/settings") && method === "PATCH") {
+        return mockJSONResponse({
+          id: "project-1",
+          primary_agent_id: workflowAgentID,
+        });
+      }
+      if (url.includes("/api/projects/project-1?") && method === "PATCH") {
+        return {
+          ok: false,
+          json: async () => ({ error: "Failed to save workflow settings" }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected request: ${url} ${method}`);
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Settings" })[1]);
+
+    expect(screen.getByLabelText("Workflow schedule type")).toHaveValue("cron");
+    await user.selectOptions(screen.getByLabelText("Workflow schedule type"), "every");
+    expect(screen.getByLabelText("Workflow schedule type")).toHaveValue("every");
+    const projectGetCountBeforeSave = projectGetCount;
+
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(await screen.findByText("Failed to save workflow settings")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Workflow schedule type")).toHaveValue("cron");
+    });
+    expect(projectGetCount > projectGetCountBeforeSave).toBe(true);
+    expect(
+      requests.some((request) => request.method === "PATCH" && request.url.includes("/api/projects/project-1/settings")),
+    ).toBe(true);
+    expect(
+      requests.some((request) => request.method === "PATCH" && request.url.includes("/api/projects/project-1?")),
+    ).toBe(true);
+  });
 });

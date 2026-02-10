@@ -686,11 +686,27 @@ export default function ProjectDetailPage() {
         agentIdToNameRef.current[project.primary_agent_id]
       : undefined);
 
+  const refreshProjectConfiguration = async (projectID: string) => {
+    const orgId = localStorage.getItem("otter-camp-org-id");
+    const projectUrl = orgId
+      ? `${API_URL}/api/projects/${projectID}?org_id=${encodeURIComponent(orgId)}`
+      : `${API_URL}/api/projects/${projectID}`;
+    const projectResponse = await fetch(projectUrl);
+    if (!projectResponse.ok) {
+      throw new Error("Failed to reload project state");
+    }
+    const projectData = await projectResponse.json();
+    setProject(projectData);
+    setSelectedPrimaryAgentID(projectData.primary_agent_id || "");
+    setWorkflowConfig(workflowConfigFromProject(projectData));
+  };
+
   const handleSaveSettings = async () => {
     if (!id) return;
     setSettingsError(null);
     setSettingsSuccess(null);
     setIsSavingSettings(true);
+    let settingsPatched = false;
     try {
       const orgId = localStorage.getItem('otter-camp-org-id');
       const settingsUrl = orgId
@@ -710,6 +726,7 @@ export default function ProjectDetailPage() {
         );
       }
       const updatedSettingsProject = await response.json();
+      settingsPatched = true;
 
       const projectPatchUrl = orgId
         ? `${API_URL}/api/projects/${id}?org_id=${encodeURIComponent(orgId)}`
@@ -741,6 +758,13 @@ export default function ProjectDetailPage() {
       setWorkflowConfig(workflowConfigFromProject(mergedProject));
       setSettingsSuccess("Project settings saved.");
     } catch (err) {
+      if (settingsPatched) {
+        try {
+          await refreshProjectConfiguration(id);
+        } catch {
+          // Keep original save error as primary message.
+        }
+      }
       setSettingsError(err instanceof Error ? err.message : "Failed to save project settings");
     } finally {
       setIsSavingSettings(false);
