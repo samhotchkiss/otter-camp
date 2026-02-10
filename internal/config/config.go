@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	defaultPort               = "8080"
+	defaultPort               = "4200"
 	defaultEnvironment        = "development"
 	defaultGitHubRepoRoot     = "./data/repos"
 	defaultGitHubPollInterval = time.Hour
