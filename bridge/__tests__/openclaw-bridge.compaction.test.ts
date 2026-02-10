@@ -44,6 +44,17 @@ describe("bridge compaction detection + recovery", () => {
     assert.equal(signal?.sessionKey, "agent:main:dm");
   });
 
+  it("does not trigger heuristic detection without provider summary text", () => {
+    const signal = detectCompactionSignalForTest("chat", {
+      session_key: "agent:main:dm",
+      org_id: "org-1",
+      pre_compaction_tokens: 2400,
+      post_compaction_tokens: 600,
+    });
+
+    assert.equal(signal, null);
+  });
+
   it("injects recovery context and records compaction on success", async () => {
     const signal: CompactionSignal = {
       sessionKey: "agent:main:dm",

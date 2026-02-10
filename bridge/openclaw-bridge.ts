@@ -3280,13 +3280,14 @@ function extractCompactionSignal(eventName: string, payload: Record<string, unkn
     return null;
   }
 
-  const summaryText =
+  const summaryFromProvider =
     getTrimmedString(payload.summary) ||
     getTrimmedString(payload.summary_text) ||
     getTrimmedString(payload.compaction_summary) ||
     getTrimmedString(nested?.summary_text) ||
-    getTrimmedString(nested?.summary) ||
-    'Compaction detected; restore critical context.';
+    getTrimmedString(nested?.summary);
+  const hasSummaryFromProvider = Boolean(summaryFromProvider);
+  const summaryText = summaryFromProvider || 'Compaction detected; restore critical context.';
   const preTokens =
     toFiniteNumber(payload.pre_compaction_tokens) ??
     toFiniteNumber(payload.preTokens) ??
@@ -3319,7 +3320,7 @@ function extractCompactionSignal(eventName: string, payload: Record<string, unkn
     preTokens > 0 &&
     postTokens >= 0 &&
     postTokens < preTokens * 0.65 &&
-    Boolean(summaryText);
+    hasSummaryFromProvider;
   if (!heuristicSignal) {
     return null;
   }
