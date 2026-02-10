@@ -4,6 +4,27 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/setup.sh"
 
+TMP_DIRS=()
+
+track_tmp_dir() {
+  local tmp
+  tmp="$(mktemp -d)"
+  TMP_DIRS+=("$tmp")
+  echo "$tmp"
+}
+
+cleanup_tmp_dirs() {
+  local dir
+  for dir in "${TMP_DIRS[@]-}"; do
+    if [[ -n "$dir" ]]; then
+      rm -rf "$dir"
+    fi
+  done
+  return 0
+}
+
+trap cleanup_tmp_dirs EXIT
+
 setup_main() {
   main "$@"
 }
@@ -78,7 +99,7 @@ test_ensure_dependency_fails_when_user_declines_install() {
 
 test_write_env_if_missing_sets_4200_defaults() {
   local tmp
-  tmp="$(mktemp -d)"
+  tmp="$(track_tmp_dir)"
 
   (
     cd "$tmp"
@@ -100,7 +121,7 @@ test_write_env_if_missing_sets_4200_defaults() {
 
 test_write_bridge_env_if_missing_targets_4200() {
   local tmp
-  tmp="$(mktemp -d)"
+  tmp="$(track_tmp_dir)"
 
   (
     cd "$tmp"
@@ -115,6 +136,128 @@ test_write_bridge_env_if_missing_targets_4200() {
       echo "expected OTTERCAMP_URL=http://localhost:4200 in bridge/.env" >&2
       exit 1
     }
+  )
+}
+
+test_install_dependency_brew_dry_run_avoids_network_eval() {
+  local tmp marker
+  tmp="$(track_tmp_dir)"
+  marker="$tmp/curl-called"
+  cat > "$tmp/curl" <<'EOF'
+#!/usr/bin/env bash
+echo "curl invoked" >&2
+touch "${SETUP_TEST_CURL_MARKER}"
+printf 'echo install'
+EOF
+  chmod +x "$tmp/curl"
+
+  (
+    PATH="$tmp:$PATH"
+    DRY_RUN=1
+    export SETUP_TEST_CURL_MARKER="$marker"
+    install_dependency brew macos
+  )
+
+  [[ ! -f "$marker" ]] || {
+    echo "expected brew install dry-run not to invoke curl" >&2
+    exit 1
+  }
+}
+
+test_generate_secret_falls_back_without_openssl() {
+  local tmp counter secret1 secret2
+  tmp="$(track_tmp_dir)"
+  counter="$tmp/counter"
+  cat > "$tmp/openssl" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  cat > "$tmp/head" <<'EOF'
+#!/usr/bin/env bash
+count=0
+if [[ -f "${SETUP_TEST_SECRET_COUNTER}" ]]; then
+  read -r count < "${SETUP_TEST_SECRET_COUNTER}"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "${SETUP_TEST_SECRET_COUNTER}"
+printf 'fallback-secret-%02d' "$count"
+EOF
+  cat > "$tmp/xxd" <<'EOF'
+#!/usr/bin/env bash
+cat
+EOF
+  chmod +x "$tmp/openssl" "$tmp/head" "$tmp/xxd"
+
+  secret1="$(
+    PATH="$tmp:$PATH"
+    export SETUP_TEST_SECRET_COUNTER="$counter"
+    generate_secret
+  )"
+  secret2="$(
+    PATH="$tmp:$PATH"
+    export SETUP_TEST_SECRET_COUNTER="$counter"
+    generate_secret
+  )"
+
+  [[ -n "$secret1" && -n "$secret2" ]] || {
+    echo "expected generate_secret fallback to produce non-empty values" >&2
+    exit 1
+  }
+  [[ "$secret1" != "$secret2" ]] || {
+    echo "expected generate_secret fallback outputs to differ between calls" >&2
+    exit 1
+  }
+}
+
+test_load_env_treats_values_as_literals() {
+  local tmp marker_cmd marker_backtick
+  tmp="$(track_tmp_dir)"
+  marker_cmd="$tmp/cmd-subst-marker"
+  marker_backtick="$tmp/backtick-marker"
+
+  (
+    cd "$tmp"
+    {
+      echo "SAFE=value"
+      printf 'MALICIOUS=$(touch %s)\n' "$marker_cmd"
+      printf 'BACKTICK=`touch %s`\n' "$marker_backtick"
+    } > .env
+
+    load_env
+
+    [[ "$SAFE" == "value" ]] || {
+      echo "expected SAFE variable to load" >&2
+      exit 1
+    }
+    [[ "$MALICIOUS" == "\$(touch $marker_cmd)" ]] || {
+      echo "expected MALICIOUS value to be literal" >&2
+      exit 1
+    }
+    [[ "$BACKTICK" == "\`touch $marker_backtick\`" ]] || {
+      echo "expected BACKTICK value to be literal" >&2
+      exit 1
+    }
+    [[ ! -f "$marker_cmd" && ! -f "$marker_backtick" ]] || {
+      echo "expected load_env not to execute command substitutions" >&2
+      exit 1
+    }
+  )
+}
+
+test_load_env_rejects_invalid_entries() {
+  local tmp
+  tmp="$(track_tmp_dir)"
+
+  (
+    cd "$tmp"
+    cat > .env <<'EOF'
+VALID_KEY=value
+NOT A VALID LINE
+EOF
+    if load_env; then
+      echo "expected load_env to reject malformed entries" >&2
+      exit 1
+    fi
   )
 }
 
@@ -174,6 +317,10 @@ run_tests() {
   test_ensure_dependency_fails_when_user_declines_install
   test_write_env_if_missing_sets_4200_defaults
   test_write_bridge_env_if_missing_targets_4200
+  test_install_dependency_brew_dry_run_avoids_network_eval
+  test_generate_secret_falls_back_without_openssl
+  test_load_env_treats_values_as_literals
+  test_load_env_rejects_invalid_entries
   test_run_bootstrap_steps_dry_run_lists_core_commands
   test_main_completion_mentions_init_and_dashboard
   echo "setup.sh tests passed"
