@@ -405,6 +405,30 @@ func TestSlugifyAgentName(t *testing.T) {
 	}
 }
 
+func TestBuildAgentCreatePayloadIncludesRoleWhenProvided(t *testing.T) {
+	payload := buildAgentCreatePayload("Riley", "riley", "gpt-5.2-codex", "Engineering Lead")
+
+	if payload["slot"] != "riley" {
+		t.Fatalf("slot = %v, want riley", payload["slot"])
+	}
+	if payload["display_name"] != "Riley" {
+		t.Fatalf("display_name = %v, want Riley", payload["display_name"])
+	}
+	if payload["model"] != "gpt-5.2-codex" {
+		t.Fatalf("model = %v, want gpt-5.2-codex", payload["model"])
+	}
+	if payload["role"] != "Engineering Lead" {
+		t.Fatalf("role = %v, want Engineering Lead", payload["role"])
+	}
+}
+
+func TestBuildAgentCreatePayloadOmitsRoleWhenEmpty(t *testing.T) {
+	payload := buildAgentCreatePayload("Riley", "riley", "gpt-5.2-codex", "   ")
+	if _, ok := payload["role"]; ok {
+		t.Fatalf("expected role key to be omitted when empty, got payload: %#v", payload)
+	}
+}
+
 func TestMemoryResolveMemoryWriteKind(t *testing.T) {
 	tests := []struct {
 		name         string
