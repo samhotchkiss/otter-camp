@@ -44,11 +44,12 @@ var (
 	detectInitOpenClaw = func() (*importer.OpenClawInstallation, error) {
 		return importer.DetectOpenClawInstallation(importer.DetectOpenClawOptions{})
 	}
-	importInitOpenClawIdentities = importer.ImportOpenClawAgentIdentities
-	inferInitOpenClawProjects    = importer.InferOpenClawProjectCandidates
-	resolveInitRepoRoot          = gitRepoRoot
-	writeInitBridgeEnv           = writeBridgeEnvFile
-	startInitBridge              = startBridgeProcess
+	ensureInitOpenClawRequiredAgents = importer.EnsureOpenClawRequiredAgents
+	importInitOpenClawIdentities     = importer.ImportOpenClawAgentIdentities
+	inferInitOpenClawProjects        = importer.InferOpenClawProjectCandidates
+	resolveInitRepoRoot              = gitRepoRoot
+	writeInitBridgeEnv               = writeBridgeEnvFile
+	startInitBridge                  = startBridgeProcess
 )
 
 const (
@@ -249,6 +250,22 @@ func runInitImportAndBridge(reader *bufio.Reader, out io.Writer, client initBoot
 	}
 
 	fmt.Fprintf(out, "Found OpenClaw at %s with %d agent workspaces.\n", installation.RootDir, len(installation.Agents))
+	ensureResult, ensureErr := ensureInitOpenClawRequiredAgents(installation, importer.EnsureOpenClawRequiredAgentsOptions{
+		IncludeChameleon: true,
+	})
+	switch {
+	case ensureErr != nil:
+		fmt.Fprintf(out, "OpenClaw config update skipped: %v\n", ensureErr)
+	case ensureResult.Updated:
+		if ensureResult.AddedMemoryAgent {
+			fmt.Fprintln(out, "Added Memory Agent to OpenClaw config. Restart OpenClaw when ready to activate.")
+		}
+		if ensureResult.AddedChameleon {
+			fmt.Fprintln(out, "Added Chameleon to OpenClaw config. Restart OpenClaw when ready to activate.")
+		}
+	default:
+		fmt.Fprintln(out, "Required OpenClaw agents already present. No config changes made.")
+	}
 
 	if promptYesNo(reader, out, "Import agents and projects from OpenClaw? (Y/n): ", true) {
 		agentsImported, projectsImported, issuesImported := importOpenClawData(out, client, installation)
