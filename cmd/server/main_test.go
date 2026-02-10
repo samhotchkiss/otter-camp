@@ -167,4 +167,34 @@ func TestLocalRuntimeDefaults(t *testing.T) {
 			t.Fatalf("expected docs/INFRASTRUCTURE.md to contain %q", snippet)
 		}
 	}
+
+	ciBytes, err := os.ReadFile("../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatalf("failed to read .github/workflows/ci.yml: %v", err)
+	}
+	ci := string(ciBytes)
+	for _, snippet := range []string{
+		"PORT: '4200'",
+		"VITE_API_URL: http://localhost:4200",
+		"curl -s http://localhost:4200/health",
+	} {
+		if !strings.Contains(ci, snippet) {
+			t.Fatalf("expected .github/workflows/ci.yml to contain %q", snippet)
+		}
+	}
+
+	dockerfileBytes, err := os.ReadFile("../../Dockerfile")
+	if err != nil {
+		t.Fatalf("failed to read Dockerfile: %v", err)
+	}
+	dockerfile := string(dockerfileBytes)
+	for _, snippet := range []string{
+		"docker run -p 4200:4200 --env-file .env otter-camp",
+		"EXPOSE 4200",
+		"http://localhost:4200/health",
+	} {
+		if !strings.Contains(dockerfile, snippet) {
+			t.Fatalf("expected Dockerfile to contain %q", snippet)
+		}
+	}
 }
