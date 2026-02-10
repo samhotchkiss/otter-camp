@@ -111,4 +111,48 @@ describe("KnowledgePage", () => {
     expect(await screen.findByText("Still renders feed")).toBeInTheDocument();
     expect(await screen.findByText(/Evaluation unavailable/)).toBeInTheDocument();
   });
+
+  it("handles knowledge entries with null tags", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/knowledge")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "kb-null-tags",
+                title: "Null tags should not crash",
+                content: "Entry remains renderable even when tags are null.",
+                tags: null,
+                created_by: "Stone",
+                created_at: "2026-02-06T12:00:00Z",
+                updated_at: "2026-02-06T12:00:00Z",
+              },
+            ],
+            total: 1,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url.includes("/api/memory/evaluations/latest")) {
+        return new Response(JSON.stringify({ run: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    render(
+      <MemoryRouter>
+        <KnowledgePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Null tags should not crash")).toBeInTheDocument();
+    expect(await screen.findByText("1 entries")).toBeInTheDocument();
+  });
 });

@@ -70,7 +70,11 @@ export default function KnowledgePage() {
     void apiFetch<KnowledgeListResponse>('/api/knowledge')
       .then((payload) => {
         if (!active) return;
-        setEntries(payload.items ?? []);
+        const normalizedEntries = (payload.items ?? []).map((entry) => ({
+          ...entry,
+          tags: entry.tags ?? [],
+        }));
+        setEntries(normalizedEntries);
       })
       .catch((error: unknown) => {
         if (!active) return;

@@ -133,3 +133,53 @@ func TestSharedKnowledgeStoreScopeFiltering(t *testing.T) {
 	require.Len(t, contentVisible, 1)
 	require.Equal(t, "Org-wide fact", contentVisible[0].Title)
 }
+
+func TestSharedKnowledgeStoreOrgIsolation(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgA := createTestOrganization(t, db, "shared-knowledge-isolation-org-a")
+	orgB := createTestOrganization(t, db, "shared-knowledge-isolation-org-b")
+
+	var agentA string
+	err := db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'shared-knowledge-isolation-a', 'Shared Knowledge Isolation A', 'active')
+		 RETURNING id`,
+		orgA,
+	).Scan(&agentA)
+	require.NoError(t, err)
+
+	var agentB string
+	err = db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'shared-knowledge-isolation-b', 'Shared Knowledge Isolation B', 'active')
+		 RETURNING id`,
+		orgB,
+	).Scan(&agentB)
+	require.NoError(t, err)
+
+	store := NewSharedKnowledgeStore(db)
+	ctxA := ctxWithWorkspace(orgA)
+	ctxB := ctxWithWorkspace(orgB)
+
+	_, err = store.Create(ctxA, CreateSharedKnowledgeInput{
+		SourceAgentID: agentA,
+		Kind:          SharedKnowledgeKindFact,
+		Title:         "Org A only fact",
+		Content:       "This should never appear for org B.",
+		Scope:         SharedKnowledgeScopeOrg,
+		QualityScore:  0.9,
+	})
+	require.NoError(t, err)
+
+	listB, err := store.ListForAgent(ctxB, agentB, 10)
+	require.NoError(t, err)
+	require.Len(t, listB, 0)
+
+	searchB, err := store.Search(ctxB, SharedKnowledgeSearchParams{
+		Query: "fact",
+		Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, searchB, 0)
+}
