@@ -177,4 +177,40 @@ describe("bridge compaction detection + recovery", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("evicts oldest dedupe entries when compaction recovery key map exceeds max size", async () => {
+    const maxTrackedCompactionRecoveryKeys = 500;
+    const deps = {
+      fetchRecoveryContext: async () => "Recovered context block",
+      sendRecoveryMessage: async () => undefined,
+      recordCompaction: async () => undefined,
+      sleepFn: async () => undefined,
+      nowMs: () => 1000,
+    };
+
+    const signals: CompactionSignal[] = [];
+    for (let index = 0; index < maxTrackedCompactionRecoveryKeys + 1; index += 1) {
+      signals.push({
+        sessionKey: `agent:main:dm:${index}`,
+        orgID: "org-1",
+        agentID: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+        summaryText: `Compacted summary text ${index}`,
+        reason: "explicit",
+      });
+    }
+
+    for (const signal of signals) {
+      const ok = await runCompactionRecoveryForTest(signal, deps);
+      assert.equal(ok, true);
+    }
+
+    const oldestSignalReplayed = await runCompactionRecoveryForTest(signals[0]!, deps);
+    assert.equal(oldestSignalReplayed, true);
+
+    const newestSignalReplayed = await runCompactionRecoveryForTest(
+      signals[signals.length - 1]!,
+      deps,
+    );
+    assert.equal(newestSignalReplayed, false);
+  });
 });

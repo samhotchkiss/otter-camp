@@ -40,6 +40,7 @@ const OTTER_PROGRESS_LOG_PATH = (process.env.OTTER_PROGRESS_LOG_PATH || '').trim
 const FETCH_RETRY_DELAYS_MS = [300, 900, 2000];
 const COMPACTION_RECOVERY_RETRY_DELAYS_MS = [200, 600, 1500];
 const COMPACTION_RECOVERY_DEDUP_WINDOW_MS = 5 * 60 * 1000;
+const MAX_TRACKED_COMPACTION_RECOVERY_KEYS = 500;
 const MAX_TRACKED_RUN_IDS = 2000;
 const MAX_TRACKED_PROGRESS_LOG_HASHES = 4000;
 const SYNC_INTERVAL_MS = (() => {
@@ -3128,6 +3129,13 @@ function rememberCompactionRecovery(signal: CompactionSignal, nowMs: number): vo
     if (nowMs - existingAt > COMPACTION_RECOVERY_DEDUP_WINDOW_MS) {
       recentCompactionRecoveryByKey.delete(existingKey);
     }
+  }
+  while (recentCompactionRecoveryByKey.size > MAX_TRACKED_COMPACTION_RECOVERY_KEYS) {
+    const oldestKey = recentCompactionRecoveryByKey.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    recentCompactionRecoveryByKey.delete(oldestKey);
   }
 }
 
