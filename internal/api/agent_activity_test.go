@@ -84,6 +84,12 @@ func TestActivityEventsIngestHandler(t *testing.T) {
 	require.Equal(t, "chat.slack", trigger)
 }
 
+func TestActivityUUIDRegexRequiresCanonicalShape(t *testing.T) {
+	require.True(t, activityUUIDRegex.MatchString("123e4567-e89b-12d3-a456-426614174000"))
+	require.False(t, activityUUIDRegex.MatchString("1234567890123-1234-1234-1234567890ab"))
+	require.False(t, activityUUIDRegex.MatchString("1234567890abcdef1234567890abcdef1234"))
+}
+
 func TestActivityEventsIngestCompletionMetadataUpsert(t *testing.T) {
 	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
 	t.Setenv("OPENCLAW_SYNC_TOKEN", "")

@@ -41,7 +41,7 @@ var completionPushStatusValues = map[string]struct{}{
 	"unknown":   {},
 }
 
-var activityUUIDRegex = regexp.MustCompile(`^[a-fA-F0-9-]{36}$`)
+var activityUUIDRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 var activityCommitSHARegex = regexp.MustCompile(`^[a-fA-F0-9]{7,64}$`)
 
 type AgentActivityHandler struct {
