@@ -1220,9 +1220,15 @@ func importLegacyOpenClawWorkspaces(
 
 	for idx, descriptor := range descriptors {
 		report.ProcessedWorkspaceCount++
-		workspacePath := strings.TrimSpace(descriptor.Workspace)
-		if workspacePath == "" {
+		workspacePathRaw := strings.TrimSpace(descriptor.Workspace)
+		if workspacePathRaw == "" {
 			report.SkippedWorkspaceCount++
+			continue
+		}
+		workspacePath, pathErr := sanitizeLegacyWorkspacePath(workspacePathRaw)
+		if pathErr != nil {
+			report.SkippedWorkspaceCount++
+			report.WorkspaceWarnings = append(report.WorkspaceWarnings, fmt.Sprintf("%s: %v", workspacePathRaw, pathErr))
 			continue
 		}
 
@@ -1372,9 +1378,9 @@ func resolvePrimaryWorkspaceDescriptorIndex(descriptors []openClawLegacyWorkspac
 }
 
 func loadLegacyWorkspaceFiles(workspacePath string) (openClawLegacyWorkspaceFiles, error) {
-	workspacePath = strings.TrimSpace(workspacePath)
-	if workspacePath == "" {
-		return openClawLegacyWorkspaceFiles{}, fmt.Errorf("workspace path is empty")
+	workspacePath, err := sanitizeLegacyWorkspacePath(workspacePath)
+	if err != nil {
+		return openClawLegacyWorkspaceFiles{}, err
 	}
 	info, err := os.Stat(workspacePath)
 	if err != nil {
@@ -1417,6 +1423,45 @@ func loadLegacyWorkspaceFiles(workspacePath string) (openClawLegacyWorkspaceFile
 		LongTerm:  longTerm,
 		DailyByID: daily,
 	}, nil
+}
+
+func sanitizeLegacyWorkspacePath(workspacePath string) (string, error) {
+	workspacePath = strings.TrimSpace(workspacePath)
+	if workspacePath == "" {
+		return "", fmt.Errorf("workspace path is empty")
+	}
+	if containsParentTraversalSegment(workspacePath) {
+		return "", fmt.Errorf("workspace path must not contain '..' traversal segments")
+	}
+
+	cleaned := filepath.Clean(workspacePath)
+	absPath, err := filepath.Abs(cleaned)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(absPath)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("workspace path must not be a symlink")
+	}
+
+	resolvedPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return "", err
+	}
+	return resolvedPath, nil
+}
+
+func containsParentTraversalSegment(workspacePath string) bool {
+	normalized := strings.ReplaceAll(workspacePath, `\`, `/`)
+	for _, segment := range strings.Split(normalized, "/") {
+		if strings.TrimSpace(segment) == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func readOptionalWorkspaceFile(path string) (string, error) {
@@ -1629,9 +1674,9 @@ func upsertLegacyWorkspaceMemory(
 }
 
 func ensureLegacyTransitionFiles(workspacePath string) error {
-	workspacePath = strings.TrimSpace(workspacePath)
-	if workspacePath == "" {
-		return fmt.Errorf("workspace path is empty")
+	workspacePath, err := sanitizeLegacyWorkspacePath(workspacePath)
+	if err != nil {
+		return err
 	}
 	info, err := os.Stat(workspacePath)
 	if err != nil {

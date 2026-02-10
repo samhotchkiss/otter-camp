@@ -384,6 +384,29 @@ func TestLegacyTransitionEnsureFilesIdempotent(t *testing.T) {
 	require.Equal(t, 1, strings.Count(agentsBody, legacyTransitionMarker))
 }
 
+func TestLegacyWorkspacePathValidationRejectsTraversalAndSymlink(t *testing.T) {
+	root := t.TempDir()
+	targetWorkspace := filepath.Join(root, "workspace-target")
+	require.NoError(t, os.MkdirAll(targetWorkspace, 0o755))
+
+	symlinkWorkspace := filepath.Join(root, "workspace-link")
+	if err := os.Symlink(targetWorkspace, symlinkWorkspace); err != nil {
+		t.Skipf("symlink unsupported in test environment: %v", err)
+	}
+
+	traversalWorkspace := root + string(os.PathSeparator) + ".." + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "workspace-escape"
+
+	_, err := loadLegacyWorkspaceFiles(traversalWorkspace)
+	require.ErrorContains(t, err, "must not contain '..' traversal segments")
+	err = ensureLegacyTransitionFiles(traversalWorkspace)
+	require.ErrorContains(t, err, "must not contain '..' traversal segments")
+
+	_, err = loadLegacyWorkspaceFiles(symlinkWorkspace)
+	require.ErrorContains(t, err, "must not be a symlink")
+	err = ensureLegacyTransitionFiles(symlinkWorkspace)
+	require.ErrorContains(t, err, "must not be a symlink")
+}
+
 func TestOpenClawMigrationCommitFailureDoesNotGenerateTransitionFiles(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "openclaw-migration-commit-failure")
