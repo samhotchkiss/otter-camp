@@ -202,10 +202,13 @@ func (t Tuner) RunOnce(ctx context.Context, current TunerConfig) (TuningDecision
 		decision.Reason = "no_objective_improvement"
 	default:
 		if err := t.Apply(ctx, candidate); err != nil {
-			decision.Status = "rolled_back"
-			decision.Reason = fmt.Sprintf("apply_failed: %v", err)
-			decision.RolledBack = true
-			if t.Rollback != nil {
+			if t.Rollback == nil {
+				decision.Status = "apply_failed_no_rollback"
+				decision.Reason = fmt.Sprintf("apply_failed: %v", err)
+			} else {
+				decision.Status = "rolled_back"
+				decision.Reason = fmt.Sprintf("apply_failed: %v", err)
+				decision.RolledBack = true
 				if rollbackErr := t.Rollback(ctx, baseline); rollbackErr != nil {
 					decision.Status = "rollback_failed"
 					decision.Reason = fmt.Sprintf("apply_failed: %v; rollback_failed: %v", err, rollbackErr)

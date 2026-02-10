@@ -219,6 +219,105 @@ func TestTuner(t *testing.T) {
 		require.Equal(t, "rolled_back", audit.records[0].Status)
 	})
 
+	t.Run("marks apply failure without rollback callback distinctly", func(t *testing.T) {
+		audit := &auditSinkRecorder{}
+
+		tuner := Tuner{
+			Bounds: DefaultTunerBounds(),
+			Evaluator: func(_ context.Context, cfg TunerConfig) (EvaluatorResult, error) {
+				if cfg.RecallMinRelevance >= 0.70 {
+					return EvaluatorResult{
+						Passed: true,
+						Metrics: EvaluatorMetrics{
+							PrecisionAtK:        0.40,
+							FalseInjectionRate:  0.20,
+							RecoverySuccessRate: 0.70,
+							P95LatencyMs:        180,
+						},
+					}, nil
+				}
+				return EvaluatorResult{
+					Passed: true,
+					Metrics: EvaluatorMetrics{
+						PrecisionAtK:        0.60,
+						FalseInjectionRate:  0.08,
+						RecoverySuccessRate: 0.84,
+						P95LatencyMs:        120,
+					},
+				}, nil
+			},
+			Apply: func(_ context.Context, _ TunerConfig) error {
+				return os.ErrPermission
+			},
+			Rollback:       nil,
+			AuditSink:      audit,
+			MutationRandFn: deterministicRand(0, 0),
+		}
+
+		decision, err := tuner.RunOnce(context.Background(), TunerConfig{
+			RecallMinRelevance: 0.70,
+			RecallMaxResults:   3,
+			RecallMaxChars:     2000,
+		})
+		require.NoError(t, err)
+		require.False(t, decision.Applied)
+		require.False(t, decision.RolledBack)
+		require.Equal(t, "apply_failed_no_rollback", decision.Status)
+		require.NotEqual(t, "rolled_back", decision.Status)
+		require.Len(t, audit.records, 1)
+		require.Equal(t, "apply_failed_no_rollback", audit.records[0].Status)
+	})
+
+	t.Run("marks rollback_failed when apply and rollback both fail", func(t *testing.T) {
+		audit := &auditSinkRecorder{}
+
+		tuner := Tuner{
+			Bounds: DefaultTunerBounds(),
+			Evaluator: func(_ context.Context, cfg TunerConfig) (EvaluatorResult, error) {
+				if cfg.RecallMinRelevance >= 0.70 {
+					return EvaluatorResult{
+						Passed: true,
+						Metrics: EvaluatorMetrics{
+							PrecisionAtK:        0.40,
+							FalseInjectionRate:  0.20,
+							RecoverySuccessRate: 0.70,
+							P95LatencyMs:        180,
+						},
+					}, nil
+				}
+				return EvaluatorResult{
+					Passed: true,
+					Metrics: EvaluatorMetrics{
+						PrecisionAtK:        0.60,
+						FalseInjectionRate:  0.08,
+						RecoverySuccessRate: 0.84,
+						P95LatencyMs:        120,
+					},
+				}, nil
+			},
+			Apply: func(_ context.Context, _ TunerConfig) error {
+				return os.ErrPermission
+			},
+			Rollback: func(_ context.Context, _ TunerConfig) error {
+				return os.ErrInvalid
+			},
+			AuditSink:      audit,
+			MutationRandFn: deterministicRand(0, 0),
+		}
+
+		decision, err := tuner.RunOnce(context.Background(), TunerConfig{
+			RecallMinRelevance: 0.70,
+			RecallMaxResults:   3,
+			RecallMaxChars:     2000,
+		})
+		require.NoError(t, err)
+		require.False(t, decision.Applied)
+		require.True(t, decision.RolledBack)
+		require.Equal(t, "rollback_failed", decision.Status)
+		require.Len(t, audit.records, 1)
+		require.Equal(t, "rollback_failed", audit.records[0].Status)
+	})
+
 	t.Run("writes audit records to jsonl store", func(t *testing.T) {
 		tempDir := t.TempDir()
 		storePath := filepath.Join(tempDir, "audit", "tuning-attempts.jsonl")
