@@ -97,6 +97,27 @@ const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
 const IDENTITY_BLOCK_MAX_CHARS = 1200;
 const SESSION_TASK_SUMMARY_MAX_CHARS = 96;
+const AUTO_RECALL_MAX_RESULTS = (() => {
+  const raw = Number.parseInt((process.env.OTTER_MEMORY_RECALL_MAX_RESULTS || '').trim(), 10);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 3;
+  }
+  return Math.min(raw, 10);
+})();
+const AUTO_RECALL_MIN_RELEVANCE = (() => {
+  const raw = Number.parseFloat((process.env.OTTER_MEMORY_RECALL_MIN_RELEVANCE || '').trim());
+  if (!Number.isFinite(raw) || raw < 0 || raw > 1) {
+    return 0.7;
+  }
+  return raw;
+})();
+const AUTO_RECALL_MAX_CHARS = (() => {
+  const raw = Number.parseInt((process.env.OTTER_MEMORY_RECALL_MAX_CHARS || '').trim(), 10);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 2000;
+  }
+  return Math.min(raw, 8000);
+})();
 
 export interface OpenClawSession {
   key: string;
@@ -1842,6 +1863,68 @@ async function resolveSessionIdentityMetadata(
   };
 }
 
+async function withAutoRecallContext(sessionKey: string, rawContent: string): Promise<string> {
+  const content = rawContent.trim();
+  if (!content) {
+    return '';
+  }
+  if (content.includes('[OTTERCAMP_COMPACTION_RECOVERY]') || content.includes('[OTTERCAMP_AUTO_RECALL]')) {
+    return content;
+  }
+
+  const context = sessionContexts.get(sessionKey);
+  if (!context) {
+    return content;
+  }
+
+  const orgID = getTrimmedString(context.orgID) || OTTERCAMP_ORG_ID;
+  const agentID =
+    getTrimmedString(context.agentID) ||
+    getTrimmedString(context.responderAgentID) ||
+    parseAgentIDFromSessionKey(sessionKey);
+  if (!orgID || !agentID) {
+    return content;
+  }
+
+  try {
+    const url = new URL('/api/memory/recall', OTTERCAMP_URL);
+    url.searchParams.set('org_id', orgID);
+    url.searchParams.set('agent_id', agentID);
+    url.searchParams.set('q', content.slice(0, 1500));
+    url.searchParams.set('max_results', String(AUTO_RECALL_MAX_RESULTS));
+    url.searchParams.set('min_relevance', String(AUTO_RECALL_MIN_RELEVANCE));
+    url.searchParams.set('max_chars', String(AUTO_RECALL_MAX_CHARS));
+
+    const response = await fetchWithRetry(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+      },
+    }, 'fetch auto recall context');
+    if (!response.ok) {
+      const snippet = (await response.text().catch(() => '')).slice(0, 300);
+      throw new Error(`auto recall request failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+    }
+
+    const payload = asRecord(await response.json().catch(() => null));
+    const recallContext = getTrimmedString(payload?.context);
+    if (!recallContext) {
+      return content;
+    }
+    return [
+      '[OTTERCAMP_AUTO_RECALL]',
+      recallContext.slice(0, AUTO_RECALL_MAX_CHARS),
+      '[/OTTERCAMP_AUTO_RECALL]',
+      '',
+      content,
+    ].join('\n');
+  } catch (err) {
+    console.warn(`[bridge] auto recall fetch failed for ${sessionKey}; continuing without recall:`, err);
+    return content;
+  }
+}
+
 async function withSessionContext(sessionKey: string, rawContent: string): Promise<string> {
   const content = rawContent.trim();
   if (!content) {
@@ -1897,6 +1980,13 @@ export async function formatSessionContextMessageForTest(
   rawContent: string,
 ): Promise<string> {
   return withSessionContext(sessionKey, rawContent);
+}
+
+export async function formatAutoRecallMessageForTest(
+  sessionKey: string,
+  rawContent: string,
+): Promise<string> {
+  return withAutoRecallContext(sessionKey, rawContent);
 }
 
 function extractMessageContent(value: unknown): string {
@@ -2787,7 +2877,8 @@ async function sendMessageToSession(
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const isFirstDispatchForSession = !contextPrimedSessions.has(sessionKey);
-  const contextualContent = await withSessionContext(sessionKey, content);
+  const recallAwareContent = await withAutoRecallContext(sessionKey, content);
+  const contextualContent = await withSessionContext(sessionKey, recallAwareContent);
   if (!contextualContent) {
     return;
   }
