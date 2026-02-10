@@ -30,6 +30,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Port != defaultPort {
 		t.Fatalf("expected default port %q, got %q", defaultPort, cfg.Port)
 	}
+	if cfg.Port != "4200" {
+		t.Fatalf("expected local default port 4200, got %q", cfg.Port)
+	}
 
 	if cfg.Environment != defaultEnvironment {
 		t.Fatalf("expected default environment %q, got %q", defaultEnvironment, cfg.Environment)

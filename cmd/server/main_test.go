@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -77,5 +78,48 @@ func TestRootEndpoint(t *testing.T) {
 	}
 	if payload["docs"] == "" || payload["health"] == "" {
 		t.Fatalf("expected docs and health to be set, got %#v", payload)
+	}
+}
+
+func TestLocalRuntimeDefaults(t *testing.T) {
+	t.Parallel()
+
+	composeBytes, err := os.ReadFile("../../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("failed to read docker-compose.yml: %v", err)
+	}
+	compose := string(composeBytes)
+	for _, snippet := range []string{
+		"image: pgvector/pgvector:pg16",
+		"\"4200:4200\"",
+		"PORT: 4200",
+	} {
+		if !strings.Contains(compose, snippet) {
+			t.Fatalf("expected docker-compose.yml to contain %q", snippet)
+		}
+	}
+
+	envBytes, err := os.ReadFile("../../.env.example")
+	if err != nil {
+		t.Fatalf("failed to read .env.example: %v", err)
+	}
+	env := string(envBytes)
+	if !strings.Contains(env, "PORT=4200") {
+		t.Fatalf("expected .env.example to set PORT=4200")
+	}
+
+	setupBytes, err := os.ReadFile("../../scripts/setup.sh")
+	if err != nil {
+		t.Fatalf("failed to read scripts/setup.sh: %v", err)
+	}
+	setup := string(setupBytes)
+	for _, snippet := range []string{
+		"PORT=4200",
+		"OTTERCAMP_URL=http://localhost:4200",
+		"API: http://localhost:4200",
+	} {
+		if !strings.Contains(setup, snippet) {
+			t.Fatalf("expected scripts/setup.sh to contain %q", snippet)
+		}
 	}
 }

@@ -52,7 +52,7 @@ func main() {
 	}
 
 	log.Printf("🦦 Otter Camp starting on port %s", cfg.Port)
-	if err := http.ListenAndServe(":"+cfg.Port, router); err != nil {
+	if err := http.ListenAndServe("0.0.0.0:"+cfg.Port, router); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
