@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -643,4 +644,29 @@ func TestAdminConnectionsKillProcessDispatchesCommand(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, adminCommandActionProcessKill, dispatched.Data.Action)
 	require.Equal(t, "proc-1", dispatched.Data.ProcessID)
+}
+
+type fakeAdminConnectionSessionRows struct {
+	err error
+}
+
+func (f *fakeAdminConnectionSessionRows) Next() bool {
+	return false
+}
+
+func (f *fakeAdminConnectionSessionRows) Scan(_ ...any) error {
+	return nil
+}
+
+func (f *fakeAdminConnectionSessionRows) Err() error {
+	return f.err
+}
+
+func TestScanAdminConnectionSessionsReturnsRowsErr(t *testing.T) {
+	expected := errors.New("rows iteration failed")
+	rows := &fakeAdminConnectionSessionRows{err: expected}
+
+	sessions, err := scanAdminConnectionSessions(rows)
+	require.Nil(t, sessions)
+	require.ErrorIs(t, err, expected)
 }
