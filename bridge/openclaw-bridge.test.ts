@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, it } from "node:test";
 import {
+  buildOtterCampWSURL,
   buildCompletionActivityEventFromProgressLineForTest,
   buildIdentityPreamble,
   formatSessionContextMessageForTest,
@@ -23,6 +24,7 @@ import {
   resolveExecutionMode,
   resolveProjectWorktreeRoot,
   resetSessionContextsForTest,
+  sanitizeWebSocketURLForLog,
   setSessionContextForTest,
   type QuestionnairePayload,
   type QuestionnaireQuestion,
@@ -331,6 +333,18 @@ describe("bridge execution mode + path guard helpers", () => {
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("bridge websocket URL helpers", () => {
+  it("builds ws URL with token while redacting token in logs", () => {
+    const wsURL = buildOtterCampWSURL("super-secret-token");
+    assert.ok(wsURL.includes("token=super-secret-token"));
+
+    const redacted = sanitizeWebSocketURLForLog(wsURL);
+    assert.equal(redacted.includes("token="), false);
+    assert.equal(redacted.includes("super-secret-token"), false);
+    assert.ok(redacted.endsWith("/ws/openclaw"));
   });
 });
 
