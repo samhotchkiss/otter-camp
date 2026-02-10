@@ -107,6 +107,7 @@ const (
 	memoryDaysMaxLimit              = 365
 	memorySearchDefaultLimit        = 20
 	memorySearchMaxLimit            = 500
+	createMemoryMaxBodyBytes        = 1 << 20
 )
 
 // List returns all agents (demo mode supported, Postgres when available)
@@ -289,10 +290,13 @@ func (h *AgentsHandler) CreateMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createAgentMemoryRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid JSON"})
+	status, err := decodeCreateMemoryRequest(w, r, &req)
+	if err != nil {
+		if status == http.StatusRequestEntityTooLarge {
+			sendJSON(w, status, errorResponse{Error: "request body too large"})
+			return
+		}
+		sendJSON(w, status, errorResponse{Error: "invalid JSON"})
 		return
 	}
 
@@ -319,6 +323,19 @@ func (h *AgentsHandler) CreateMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusCreated, toAgentMemoryPayload(*created))
+}
+
+func decodeCreateMemoryRequest(w http.ResponseWriter, r *http.Request, req *createAgentMemoryRequest) (int, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, createMemoryMaxBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(req); err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			return http.StatusRequestEntityTooLarge, err
+		}
+		return http.StatusBadRequest, err
+	}
+	return 0, nil
 }
 
 func mapCreateMemoryError(err error) (int, string) {

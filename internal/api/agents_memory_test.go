@@ -2,11 +2,12 @@ package api
 
 import (
 	"bytes"
-	stderrors "errors"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -191,6 +192,73 @@ func TestAgentMemoryCreateUsesTypedValidationErrors(t *testing.T) {
 	handler.CreateMemory(missingContentRec, missingContentReq)
 	require.Equal(t, http.StatusBadRequest, missingContentRec.Code)
 	require.Contains(t, missingContentRec.Body.String(), "memory content is required")
+}
+
+func TestAgentMemoryCreateRejectsOversizedBody(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "agents-memory-oversized")
+	agentID := insertWhoAmITestAgent(t, db, orgID, "oversized-memory-agent", "Oversized Memory Agent")
+
+	handler := &AgentsHandler{
+		Store:       store.NewAgentStore(db),
+		MemoryStore: store.NewAgentMemoryStore(db),
+		DB:          db,
+	}
+
+	oversizedBody := fmt.Sprintf(`{"kind":"note","content":"%s"}`, strings.Repeat("a", (1<<20)+32))
+	oversizedReq := httptest.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("/api/agents/%s/memory?org_id=%s", agentID, orgID),
+		strings.NewReader(oversizedBody),
+	)
+	oversizedReq = addWhoAmIRouteParam(oversizedReq, "id", agentID)
+	oversizedRec := httptest.NewRecorder()
+	handler.CreateMemory(oversizedRec, oversizedReq)
+	require.Equal(t, http.StatusRequestEntityTooLarge, oversizedRec.Code)
+
+	normalBody := []byte(`{"kind":"note","content":"normal-sized memory entry"}`)
+	normalReq := httptest.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("/api/agents/%s/memory?org_id=%s", agentID, orgID),
+		bytes.NewReader(normalBody),
+	)
+	normalReq = addWhoAmIRouteParam(normalReq, "id", agentID)
+	normalRec := httptest.NewRecorder()
+	handler.CreateMemory(normalRec, normalReq)
+	require.Equal(t, http.StatusCreated, normalRec.Code)
+}
+
+func TestDecodeCreateMemoryRequestRejectsOversizedBody(t *testing.T) {
+	payload := map[string]string{
+		"kind":    "note",
+		"content": strings.Repeat("a", (1<<20)+32),
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/x/memory", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	var decoded createAgentMemoryRequest
+
+	status, decodeErr := decodeCreateMemoryRequest(rec, req, &decoded)
+	require.Error(t, decodeErr)
+	require.Equal(t, http.StatusRequestEntityTooLarge, status)
+}
+
+func TestDecodeCreateMemoryRequestAcceptsValidBody(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/agents/x/memory",
+		strings.NewReader(`{"kind":"note","content":"normal-sized memory entry"}`),
+	)
+	rec := httptest.NewRecorder()
+	var decoded createAgentMemoryRequest
+
+	status, decodeErr := decodeCreateMemoryRequest(rec, req, &decoded)
+	require.NoError(t, decodeErr)
+	require.Equal(t, 0, status)
+	require.Equal(t, "note", decoded.Kind)
+	require.Equal(t, "normal-sized memory entry", decoded.Content)
 }
 
 func TestMapCreateMemoryErrorUsesTypedErrors(t *testing.T) {
