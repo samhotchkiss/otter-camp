@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
+	importer "github.com/samhotchkiss/otter-camp/internal/import"
 	"github.com/samhotchkiss/otter-camp/internal/ottercli"
 )
 
@@ -22,6 +25,9 @@ type initOptions struct {
 
 type initBootstrapClient interface {
 	OnboardingBootstrap(input ottercli.OnboardingBootstrapRequest) (ottercli.OnboardingBootstrapResponse, error)
+	CreateAgent(input map[string]any) (map[string]any, error)
+	CreateProject(input map[string]interface{}) (ottercli.Project, error)
+	CreateIssue(projectID string, input map[string]interface{}) (ottercli.Issue, error)
 }
 
 var (
@@ -34,9 +40,23 @@ var (
 		}
 		return client, nil
 	}
+
+	detectInitOpenClaw = func() (*importer.OpenClawInstallation, error) {
+		return importer.DetectOpenClawInstallation(importer.DetectOpenClawOptions{})
+	}
+	importInitOpenClawIdentities = importer.ImportOpenClawAgentIdentities
+	inferInitOpenClawProjects    = importer.InferOpenClawProjectCandidates
+	resolveInitRepoRoot          = gitRepoRoot
+	writeInitBridgeEnv           = writeBridgeEnvFile
+	startInitBridge              = startBridgeProcess
 )
 
-const initLocalDefaultAPIBaseURL = "http://localhost:4200"
+const (
+	initLocalDefaultAPIBaseURL = "http://localhost:4200"
+	initDefaultAgentModel      = "gpt-5.2-codex"
+	initDefaultBridgeHost      = "127.0.0.1"
+	initDefaultBridgePort      = 18791
+)
 
 func handleInit(args []string) {
 	if err := runInitCommand(args, os.Stdin, os.Stdout); err != nil {
@@ -171,6 +191,10 @@ func runLocalInit(opts initOptions, reader *bufio.Reader, out io.Writer) error {
 	fmt.Fprintf(out, "Organization: %s\n", initFirstNonEmpty(req.OrganizationName, resp.OrgSlug, resp.OrgID))
 	fmt.Fprintf(out, "Dashboard: %s\n", initLocalDefaultAPIBaseURL)
 	fmt.Fprintln(out, "Next step: otter whoami")
+
+	if err := runInitImportAndBridge(reader, out, client, cfg); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -213,6 +237,182 @@ func collectLocalInitBootstrapInput(opts initOptions, reader *bufio.Reader, out 
 	}, nil
 }
 
+func runInitImportAndBridge(reader *bufio.Reader, out io.Writer, client initBootstrapClient, cfg ottercli.Config) error {
+	installation, err := detectInitOpenClaw()
+	if err != nil {
+		if errors.Is(err, importer.ErrOpenClawNotFound) {
+			fmt.Fprintln(out, "OpenClaw installation not detected. Skipping import and bridge setup.")
+			return nil
+		}
+		fmt.Fprintf(out, "OpenClaw detection failed: %v\n", err)
+		return nil
+	}
+
+	fmt.Fprintf(out, "Found OpenClaw at %s with %d agent workspaces.\n", installation.RootDir, len(installation.Agents))
+
+	if promptYesNo(reader, out, "Import agents and projects from OpenClaw? (Y/n): ", true) {
+		agentsImported, projectsImported, issuesImported := importOpenClawData(out, client, installation)
+		fmt.Fprintf(out, "Imported %d agents, %d projects, %d issues from OpenClaw.\n", agentsImported, projectsImported, issuesImported)
+	}
+
+	repoRoot, err := resolveInitRepoRoot()
+	if err != nil || strings.TrimSpace(repoRoot) == "" {
+		repoRoot, _ = os.Getwd()
+	}
+
+	bridgePath, err := writeInitBridgeEnv(repoRoot, buildBridgeEnvValues(installation, cfg))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Bridge config written: %s\n", bridgePath)
+
+	if promptYesNo(reader, out, "Start the bridge now? (y/N): ", false) {
+		if err := startInitBridge(repoRoot, out); err != nil {
+			fmt.Fprintf(out, "Unable to start bridge automatically: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+func importOpenClawData(out io.Writer, client initBootstrapClient, installation *importer.OpenClawInstallation) (int, int, int) {
+	identities, err := importInitOpenClawIdentities(installation)
+	if err != nil {
+		fmt.Fprintf(out, "OpenClaw identity import failed: %v\n", err)
+		return 0, 0, 0
+	}
+
+	agentsImported := 0
+	identitiesByID := make(map[string]importer.ImportedAgentIdentity, len(identities))
+	for _, identity := range identities {
+		identitiesByID[identity.ID] = identity
+		payload := map[string]any{
+			"slot":         normalizeInitAgentSlot(initFirstNonEmpty(identity.ID, identity.Name)),
+			"display_name": initFirstNonEmpty(identity.Name, identity.ID),
+			"model":        initDefaultAgentModel,
+		}
+		if role := extractInitRole(identity.Soul); role != "" {
+			payload["role"] = role
+		}
+		if _, err := client.CreateAgent(payload); err == nil {
+			agentsImported++
+		}
+	}
+
+	projectSignals := make([]importer.OpenClawWorkspaceSignal, 0, len(installation.Agents))
+	for _, agent := range installation.Agents {
+		repoPath := detectWorkspaceRepoRoot(agent.WorkspaceDir)
+		signal := importer.OpenClawWorkspaceSignal{
+			AgentID:      agent.ID,
+			WorkspaceDir: agent.WorkspaceDir,
+			RepoPath:     repoPath,
+		}
+		if identity, ok := identitiesByID[agent.ID]; ok {
+			signal.IssueHints = extractInitIssueHints(identity.Memory)
+		}
+		projectSignals = append(projectSignals, signal)
+	}
+	candidates := inferInitOpenClawProjects(importer.OpenClawProjectImportInput{
+		Workspaces: projectSignals,
+	})
+
+	projectsImported := 0
+	issuesImported := 0
+	for _, candidate := range candidates {
+		project, err := client.CreateProject(map[string]interface{}{
+			"name":        candidate.Name,
+			"description": "Imported from OpenClaw",
+			"status":      "active",
+		})
+		if err != nil {
+			continue
+		}
+		projectsImported++
+
+		if len(candidate.Issues) == 0 {
+			if _, err := client.CreateIssue(project.ID, map[string]interface{}{
+				"title": "Review imported OpenClaw context",
+				"body":  "Confirm imported context and create follow-up issues.",
+			}); err == nil {
+				issuesImported++
+			}
+			continue
+		}
+
+		for _, issue := range candidate.Issues {
+			if _, err := client.CreateIssue(project.ID, map[string]interface{}{
+				"title": issue.Title,
+			}); err == nil {
+				issuesImported++
+			}
+		}
+	}
+
+	return agentsImported, projectsImported, issuesImported
+}
+
+func buildBridgeEnvValues(installation *importer.OpenClawInstallation, cfg ottercli.Config) map[string]string {
+	host := initDefaultBridgeHost
+	port := initDefaultBridgePort
+	token := "your-openclaw-gateway-token"
+	if installation != nil {
+		host = initFirstNonEmpty(installation.Gateway.Host, host)
+		if installation.Gateway.Port > 0 {
+			port = installation.Gateway.Port
+		}
+		token = initFirstNonEmpty(installation.Gateway.Token, token)
+	}
+
+	return map[string]string{
+		"OPENCLAW_HOST":      host,
+		"OPENCLAW_PORT":      fmt.Sprintf("%d", port),
+		"OPENCLAW_TOKEN":     token,
+		"OTTERCAMP_URL":      initFirstNonEmpty(strings.TrimSpace(cfg.APIBaseURL), initLocalDefaultAPIBaseURL),
+		"OTTERCAMP_TOKEN":    strings.TrimSpace(cfg.Token),
+		"OPENCLAW_WS_SECRET": strings.TrimSpace(os.Getenv("OPENCLAW_WS_SECRET")),
+	}
+}
+
+func writeBridgeEnvFile(repoRoot string, values map[string]string) (string, error) {
+	repoRoot = strings.TrimSpace(repoRoot)
+	if repoRoot == "" {
+		repoRoot = "."
+	}
+
+	path := filepath.Join(repoRoot, "bridge", ".env")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+
+	content := strings.Join([]string{
+		"OPENCLAW_HOST=" + strings.TrimSpace(values["OPENCLAW_HOST"]),
+		"OPENCLAW_PORT=" + strings.TrimSpace(values["OPENCLAW_PORT"]),
+		"OPENCLAW_TOKEN=" + strings.TrimSpace(values["OPENCLAW_TOKEN"]),
+		"OTTERCAMP_URL=" + strings.TrimSpace(values["OTTERCAMP_URL"]),
+		"OTTERCAMP_TOKEN=" + strings.TrimSpace(values["OTTERCAMP_TOKEN"]),
+		"OPENCLAW_WS_SECRET=" + strings.TrimSpace(values["OPENCLAW_WS_SECRET"]),
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func startBridgeProcess(repoRoot string, out io.Writer) error {
+	cmd := exec.Command("npx", "tsx", "bridge/openclaw-bridge.ts", "--continuous")
+	cmd.Dir = repoRoot
+	cmd.Stdout = out
+	cmd.Stderr = out
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if out != nil {
+		fmt.Fprintf(out, "Bridge started in background (pid %d).\n", cmd.Process.Pid)
+	}
+	return nil
+}
+
 func promptRequiredField(reader *bufio.Reader, out io.Writer, label string) string {
 	for {
 		fmt.Fprint(out, label)
@@ -225,6 +425,31 @@ func promptRequiredField(reader *bufio.Reader, out io.Writer, label string) stri
 			return ""
 		}
 		fmt.Fprintln(out, "This field is required.")
+	}
+}
+
+func promptYesNo(reader *bufio.Reader, out io.Writer, label string, defaultYes bool) bool {
+	if reader == nil {
+		return defaultYes
+	}
+
+	for {
+		fmt.Fprint(out, label)
+		line, err := reader.ReadString('\n')
+		choice := strings.ToLower(strings.TrimSpace(line))
+		switch choice {
+		case "":
+			return defaultYes
+		case "y", "yes":
+			return true
+		case "n", "no":
+			return false
+		}
+
+		if errors.Is(err, io.EOF) {
+			return defaultYes
+		}
+		fmt.Fprintln(out, "Please answer y or n.")
 	}
 }
 
@@ -241,6 +466,61 @@ func resolveInitAPIBaseURL(existing, override string) string {
 	return strings.TrimRight(existing, "/")
 }
 
+func detectWorkspaceRepoRoot(startDir string) string {
+	current := strings.TrimSpace(startDir)
+	if current == "" {
+		return ""
+	}
+	current = filepath.Clean(current)
+	for {
+		gitPath := filepath.Join(current, ".git")
+		if _, err := os.Stat(gitPath); err == nil {
+			return current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return ""
+		}
+		current = parent
+	}
+}
+
+func extractInitRole(soul string) string {
+	for _, line := range strings.Split(soul, "\n") {
+		candidate := strings.TrimSpace(strings.TrimLeft(line, "#*- "))
+		if candidate == "" {
+			continue
+		}
+		if len(candidate) > 80 {
+			candidate = candidate[:80]
+		}
+		return candidate
+	}
+	return ""
+}
+
+func extractInitIssueHints(memory string) []string {
+	lines := strings.Split(memory, "\n")
+	hints := make([]string, 0, 3)
+	seen := map[string]struct{}{}
+	for _, line := range lines {
+		candidate := strings.TrimSpace(strings.TrimLeft(line, "-*# "))
+		if len(candidate) < 8 {
+			continue
+		}
+		key := strings.ToLower(candidate)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		hints = append(hints, candidate)
+		if len(hints) >= 3 {
+			break
+		}
+	}
+	return hints
+}
+
 func initFirstNonEmpty(values ...string) string {
 	for _, value := range values {
 		trimmed := strings.TrimSpace(value)
@@ -249,4 +529,35 @@ func initFirstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeInitAgentSlot(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return "agent"
+	}
+	replacer := strings.NewReplacer(" ", "-", "_", "-", ".", "-")
+	value = replacer.Replace(value)
+	var b strings.Builder
+	lastDash := false
+	for _, ch := range value {
+		isAlnum := (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')
+		if isAlnum {
+			b.WriteRune(ch)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteRune('-')
+			lastDash = true
+		}
+	}
+	normalized := strings.Trim(b.String(), "-")
+	if len(normalized) < 2 {
+		normalized = normalized + "x"
+	}
+	if len(normalized) > 63 {
+		normalized = normalized[:63]
+	}
+	return normalized
 }
