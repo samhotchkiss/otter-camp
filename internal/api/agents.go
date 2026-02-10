@@ -105,9 +105,9 @@ const (
 	whoAmIFullPayloadFieldCharLimit = 12000
 	whoAmIMaxActiveTasks            = 8
 	memoryListDefaultDays           = 2
-	memoryDaysMaxLimit              = 365
+	memoryDaysMaxLimit              = 30
 	memorySearchDefaultLimit        = 20
-	memorySearchMaxLimit            = 500
+	memorySearchMaxLimit            = 100
 	createMemoryMaxBodyBytes        = 1 << 20
 )
 

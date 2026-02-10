@@ -276,13 +276,13 @@ func TestMapCreateMemoryErrorUsesTypedErrors(t *testing.T) {
 }
 
 func TestParseMemoryDaysParamClampsLargeValues(t *testing.T) {
-	days, err := parseMemoryDaysParam("999")
+	days, err := parseMemoryDaysParam("60")
 	require.NoError(t, err)
-	require.Equal(t, 365, days)
+	require.Equal(t, 30, days)
 }
 
 func TestParseMemorySearchLimitParamClampsLargeValues(t *testing.T) {
-	limit, err := parseMemorySearchLimitParam("9999")
+	limit, err := parseMemorySearchLimitParam("200")
 	require.NoError(t, err)
-	require.Equal(t, 500, limit)
+	require.Equal(t, 100, limit)
 }
