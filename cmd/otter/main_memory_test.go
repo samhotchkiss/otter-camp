@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -258,4 +259,26 @@ func TestHandleMemoryRecallFlags(t *testing.T) {
 	require.ErrorContains(t, err, "--min-relevance must be between 0 and 1")
 	err = validateMemoryRecallQualityFlags(0.5, 0)
 	require.ErrorContains(t, err, "--max-chars must be positive")
+}
+
+func TestHandleMemoryCreateValidatesRanges(t *testing.T) {
+	err := validateMemoryCreateFlags(0, 0.5, "internal")
+	require.ErrorContains(t, err, "--importance must be between 1 and 5")
+
+	err = validateMemoryCreateFlags(6, 0.5, "internal")
+	require.ErrorContains(t, err, "--importance must be between 1 and 5")
+
+	err = validateMemoryCreateFlags(3, -0.1, "internal")
+	require.ErrorContains(t, err, "--confidence must be between 0 and 1")
+
+	err = validateMemoryCreateFlags(3, 1.1, "internal")
+	require.ErrorContains(t, err, "--confidence must be between 0 and 1")
+
+	err = validateMemoryCreateFlags(3, math.NaN(), "internal")
+	require.ErrorContains(t, err, "--confidence must be between 0 and 1")
+
+	err = validateMemoryCreateFlags(3, 0.5, "secret")
+	require.ErrorContains(t, err, "--sensitivity must be one of public|internal|restricted")
+
+	require.NoError(t, validateMemoryCreateFlags(3, 0.5, "restricted"))
 }

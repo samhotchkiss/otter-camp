@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -439,6 +440,9 @@ func handleMemory(args []string) {
 		normalizedTitle := strings.TrimSpace(*title)
 		if normalizedTitle == "" {
 			die("--title is required")
+		}
+		if err := validateMemoryCreateFlags(*importance, *confidence, *sensitivity); err != nil {
+			die(err.Error())
 		}
 
 		cfg, err := ottercli.LoadConfig()
@@ -1954,6 +1958,21 @@ func validateMemoryRecallQualityFlags(minRelevance float64, maxChars int) error 
 		return errors.New("--max-chars must be positive")
 	}
 	return nil
+}
+
+func validateMemoryCreateFlags(importance int, confidence float64, sensitivity string) error {
+	if importance < 1 || importance > 5 {
+		return errors.New("--importance must be between 1 and 5")
+	}
+	if math.IsNaN(confidence) || confidence < 0 || confidence > 1 {
+		return errors.New("--confidence must be between 0 and 1")
+	}
+	switch strings.TrimSpace(strings.ToLower(sensitivity)) {
+	case "public", "internal", "restricted":
+		return nil
+	default:
+		return errors.New("--sensitivity must be one of public|internal|restricted")
+	}
 }
 
 func slugifyAgentName(name string) string {
