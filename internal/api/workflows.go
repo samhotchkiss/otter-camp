@@ -354,8 +354,9 @@ func (h *WorkflowsHandler) loadCronJobs(ctx context.Context) []OpenClawCronJobDi
 	}
 
 	// Fallback: memory
-	if len(memoryCronJobs) > 0 {
-		return append([]OpenClawCronJobDiagnostics(nil), memoryCronJobs...)
+	memoryJobs := memoryCronJobsSnapshot()
+	if len(memoryJobs) > 0 {
+		return memoryJobs
 	}
 
 	return nil

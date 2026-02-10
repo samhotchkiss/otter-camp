@@ -46,6 +46,7 @@ const (
 
 // In-memory fallback store (used when DB is unavailable)
 var (
+	memoryStateMu       sync.RWMutex
 	memoryAgentStates   = make(map[string]*AgentState)
 	memoryAgentConfigs  = make(map[string]*OpenClawAgentConfig)
 	memoryLastSync      time.Time
@@ -462,9 +463,11 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 		// Always update in-memory store (fallback when DB unavailable)
 		// Only overwrite if this session is more recent than the stored one
+		memoryStateMu.Lock()
 		if existing, ok := memoryAgentStates[agentID]; !ok || updatedAt.After(existing.UpdatedAt) {
 			memoryAgentStates[agentID] = agentState
 		}
+		memoryStateMu.Unlock()
 		processedCount++
 
 		// Also persist to database if available
@@ -509,7 +512,9 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 				HeartbeatEvery: agent.Heartbeat.Every,
 				UpdatedAt:      now,
 			}
+			memoryStateMu.Lock()
 			memoryAgentConfigs[agent.ID] = config
+			memoryStateMu.Unlock()
 
 			if db != nil {
 				_, err := db.Exec(`
@@ -527,6 +532,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update sync metadata
+	memoryStateMu.Lock()
 	memoryLastSync = now // Always update memory
 	if payload.Host != nil {
 		host := *payload.Host
@@ -576,6 +582,7 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	memoryStateMu.Unlock()
 	if payload.Config != nil && db != nil && workspaceID != "" {
 		report, err := importLegacyOpenClawWorkspaces(r.Context(), db, workspaceID, payload.Config.Data)
 		if err != nil {
@@ -826,9 +833,8 @@ func (h *OpenClawSyncHandler) GetAgents(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	// Fall back to memory if DB didn't have data
-	if lastSync == nil && !memoryLastSync.IsZero() {
-		last := memoryLastSync.UTC()
-		lastSync = &last
+	if lastSync == nil {
+		lastSync = memoryLastSyncSnapshot()
 	}
 	freshness := deriveBridgeFreshness(lastSync, time.Now().UTC(), false, false)
 
@@ -851,11 +857,7 @@ func (h *OpenClawSyncHandler) GetAgents(w http.ResponseWriter, r *http.Request) 
 func (h *OpenClawSyncHandler) getAgentsFromDB(db *sql.DB) ([]AgentState, error) {
 	// If no database, return from in-memory store
 	if db == nil {
-		agents := make([]AgentState, 0, len(memoryAgentStates))
-		for _, state := range memoryAgentStates {
-			agents = append(agents, *state)
-		}
-		return agents, nil
+		return memoryAgentStatesSnapshot(), nil
 	}
 
 	rows, err := db.Query(`
@@ -914,6 +916,93 @@ func (h *OpenClawSyncHandler) getAgentsFromDB(db *sql.DB) ([]AgentState, error) 
 	}
 
 	return agents, rows.Err()
+}
+
+func memoryLastSyncSnapshot() *time.Time {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if memoryLastSync.IsZero() {
+		return nil
+	}
+	last := memoryLastSync.UTC()
+	return &last
+}
+
+func memoryAgentStatesSnapshot() []AgentState {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	agents := make([]AgentState, 0, len(memoryAgentStates))
+	for _, state := range memoryAgentStates {
+		if state == nil {
+			continue
+		}
+		agents = append(agents, *state)
+	}
+	return agents
+}
+
+func memoryHostDiagSnapshot() *OpenClawHostDiagnostics {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if memoryHostDiag == nil {
+		return nil
+	}
+	host := *memoryHostDiag
+	return &host
+}
+
+func memoryBridgeDiagSnapshot() *OpenClawBridgeDiagnostics {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if memoryBridgeDiag == nil {
+		return nil
+	}
+	bridge := *memoryBridgeDiag
+	return &bridge
+}
+
+func memoryCronJobsSnapshot() []OpenClawCronJobDiagnostics {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if len(memoryCronJobs) == 0 {
+		return []OpenClawCronJobDiagnostics{}
+	}
+	return append([]OpenClawCronJobDiagnostics(nil), memoryCronJobs...)
+}
+
+func memoryProcessesSnapshot() []OpenClawProcessDiagnostics {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if len(memoryProcesses) == 0 {
+		return []OpenClawProcessDiagnostics{}
+	}
+	return append([]OpenClawProcessDiagnostics(nil), memoryProcesses...)
+}
+
+func memoryConfigSnapshot() *openClawConfigSnapshotRecord {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if memoryConfig == nil {
+		return nil
+	}
+	cloned := *memoryConfig
+	cloned.Data = append(json.RawMessage(nil), memoryConfig.Data...)
+	return &cloned
+}
+
+func memoryConfigHistorySnapshot() []openClawConfigSnapshotRecord {
+	memoryStateMu.RLock()
+	defer memoryStateMu.RUnlock()
+	if len(memoryConfigHistory) == 0 {
+		return nil
+	}
+	history := make([]openClawConfigSnapshotRecord, 0, len(memoryConfigHistory))
+	for _, snapshot := range memoryConfigHistory {
+		cloned := snapshot
+		cloned.Data = append(json.RawMessage(nil), snapshot.Data...)
+		history = append(history, cloned)
+	}
+	return history
 }
 
 func extractAgentID(sessionKey string) string {

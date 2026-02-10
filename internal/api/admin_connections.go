@@ -264,8 +264,9 @@ func scanAdminConnectionSessions(rows adminConnectionSessionRows) ([]adminConnec
 
 func (h *AdminConnectionsHandler) loadSessions(_ context.Context) ([]adminConnectionsSession, error) {
 	if h.DB == nil {
-		sessions := make([]adminConnectionsSession, 0, len(memoryAgentStates))
-		for _, state := range memoryAgentStates {
+		agentStates := memoryAgentStatesSnapshot()
+		sessions := make([]adminConnectionsSession, 0, len(agentStates))
+		for _, state := range agentStates {
 			derivedStatus := deriveAgentStatus(state.UpdatedAt, state.TotalTokens)
 			sessions = append(sessions, adminConnectionsSession{
 				ID:            state.ID,
@@ -309,11 +310,7 @@ func (h *AdminConnectionsHandler) loadLastSync(_ context.Context) *time.Time {
 			}
 		}
 	}
-	if memoryLastSync.IsZero() {
-		return nil
-	}
-	last := memoryLastSync.UTC()
-	return &last
+	return memoryLastSyncSnapshot()
 }
 
 func (h *AdminConnectionsHandler) loadHostDiagnostics(_ context.Context) *OpenClawHostDiagnostics {
@@ -326,11 +323,7 @@ func (h *AdminConnectionsHandler) loadHostDiagnostics(_ context.Context) *OpenCl
 			}
 		}
 	}
-	if memoryHostDiag == nil {
-		return nil
-	}
-	host := *memoryHostDiag
-	return &host
+	return memoryHostDiagSnapshot()
 }
 
 func (h *AdminConnectionsHandler) loadBridgeDiagnostics(_ context.Context) *OpenClawBridgeDiagnostics {
@@ -343,11 +336,7 @@ func (h *AdminConnectionsHandler) loadBridgeDiagnostics(_ context.Context) *Open
 			}
 		}
 	}
-	if memoryBridgeDiag == nil {
-		return nil
-	}
-	bridge := *memoryBridgeDiag
-	return &bridge
+	return memoryBridgeDiagSnapshot()
 }
 
 func (h *AdminConnectionsHandler) loadCronJobs(_ context.Context) []OpenClawCronJobDiagnostics {
@@ -371,10 +360,10 @@ func (h *AdminConnectionsHandler) loadCronJobs(_ context.Context) []OpenClawCron
 			}
 		}
 	}
-	if len(memoryCronJobs) == 0 {
-		return []OpenClawCronJobDiagnostics{}
+	out := memoryCronJobsSnapshot()
+	if len(out) == 0 {
+		return out
 	}
-	out := append([]OpenClawCronJobDiagnostics(nil), memoryCronJobs...)
 	sort.Slice(out, func(i, j int) bool {
 		left := strings.TrimSpace(out[i].Name)
 		if left == "" {
@@ -404,10 +393,10 @@ func (h *AdminConnectionsHandler) loadProcesses(_ context.Context) []OpenClawPro
 			}
 		}
 	}
-	if len(memoryProcesses) == 0 {
-		return []OpenClawProcessDiagnostics{}
+	out := memoryProcessesSnapshot()
+	if len(out) == 0 {
+		return out
 	}
-	out := append([]OpenClawProcessDiagnostics(nil), memoryProcesses...)
 	sort.Slice(out, func(i, j int) bool {
 		left := strings.TrimSpace(out[i].ID)
 		right := strings.TrimSpace(out[j].ID)

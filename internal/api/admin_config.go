@@ -125,10 +125,10 @@ func (h *AdminConfigHandler) GetCurrent(w http.ResponseWriter, r *http.Request) 
 			updatedAt = ts
 		}
 	}
-	if snapshot == nil && memoryConfig != nil {
-		cloned := *memoryConfig
-		cloned.Data = append(json.RawMessage(nil), memoryConfig.Data...)
-		snapshot = &cloned
+	if snapshot == nil {
+		snapshot = memoryConfigSnapshot()
+	}
+	if snapshot != nil {
 		updatedAt = snapshot.CapturedAt
 	}
 
@@ -175,8 +175,8 @@ func (h *AdminConfigHandler) ListHistory(w http.ResponseWriter, r *http.Request)
 		}
 		history = dbHistory
 	}
-	if len(history) == 0 && len(memoryConfigHistory) > 0 {
-		history = append(history, memoryConfigHistory...)
+	if len(history) == 0 {
+		history = memoryConfigHistorySnapshot()
 	}
 
 	sort.SliceStable(history, func(i, j int) bool {
@@ -493,10 +493,8 @@ func (h *AdminConfigHandler) loadSnapshotWithMemoryFallback(r *http.Request) (*o
 	if found && snapshot != nil {
 		return snapshot, nil
 	}
-	if memoryConfig != nil {
-		cloned := *memoryConfig
-		cloned.Data = append(json.RawMessage(nil), memoryConfig.Data...)
-		return &cloned, nil
+	if snapshot := memoryConfigSnapshot(); snapshot != nil {
+		return snapshot, nil
 	}
 	return nil, nil
 }

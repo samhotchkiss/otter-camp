@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -180,6 +181,155 @@ func TestOpenClawSyncHandlerHealthEndpoint(t *testing.T) {
 		require.False(t, payload.SyncHealthy)
 		require.Nil(t, payload.LastSyncAgeSeconds)
 	})
+}
+
+func TestOpenClawSyncMemoryFallbackConcurrentReadWrite(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	memoryStateMu.Lock()
+	prevAgentStates := memoryAgentStates
+	prevAgentConfigs := memoryAgentConfigs
+	prevLastSync := memoryLastSync
+	prevHostDiag := memoryHostDiag
+	prevBridgeDiag := memoryBridgeDiag
+	prevCronJobs := memoryCronJobs
+	prevProcesses := memoryProcesses
+	prevConfig := memoryConfig
+	prevConfigHistory := memoryConfigHistory
+	memoryAgentStates = make(map[string]*AgentState)
+	memoryAgentConfigs = make(map[string]*OpenClawAgentConfig)
+	memoryLastSync = time.Time{}
+	memoryHostDiag = nil
+	memoryBridgeDiag = nil
+	memoryCronJobs = nil
+	memoryProcesses = nil
+	memoryConfig = nil
+	memoryConfigHistory = nil
+	memoryStateMu.Unlock()
+	t.Cleanup(func() {
+		memoryStateMu.Lock()
+		memoryAgentStates = prevAgentStates
+		memoryAgentConfigs = prevAgentConfigs
+		memoryLastSync = prevLastSync
+		memoryHostDiag = prevHostDiag
+		memoryBridgeDiag = prevBridgeDiag
+		memoryCronJobs = prevCronJobs
+		memoryProcesses = prevProcesses
+		memoryConfig = prevConfig
+		memoryConfigHistory = prevConfigHistory
+		memoryStateMu.Unlock()
+	})
+
+	syncHandler := &OpenClawSyncHandler{}
+	adminConnectionsHandler := &AdminConnectionsHandler{}
+	adminConfigHandler := &AdminConfigHandler{}
+
+	buildSyncRequest := func() *http.Request {
+		now := time.Now().UTC()
+		payload := SyncPayload{
+			Type:      "full",
+			Timestamp: now,
+			Source:    "bridge",
+			Agents: []OpenClawAgent{
+				{ID: "main"},
+			},
+			Sessions: []OpenClawSession{
+				{
+					Key:           "agent:main:webchat",
+					Channel:       "webchat",
+					DisplayName:   "Main Agent",
+					UpdatedAt:     now.UnixMilli(),
+					Model:         "gpt-5.2-codex",
+					ContextTokens: 100,
+					TotalTokens:   120,
+				},
+			},
+			Host: &OpenClawHostDiagnostics{
+				Hostname: "test-host",
+			},
+			Bridge: &OpenClawBridgeDiagnostics{
+				UptimeSeconds: 99,
+			},
+			CronJobs: []OpenClawCronJobDiagnostics{
+				{ID: "cron-1", Name: "Daily run", Enabled: true},
+			},
+			Processes: []OpenClawProcessDiagnostics{
+				{ID: "proc-1", Status: "running"},
+			},
+			Config: &OpenClawConfigSnapshot{
+				Path:       "/tmp/openclaw.config.json",
+				Source:     "bridge",
+				CapturedAt: now,
+				Data: map[string]interface{}{
+					"agents": map[string]interface{}{
+						"list": []interface{}{
+							map[string]interface{}{
+								"id":        "main",
+								"name":      "Main",
+								"workspace": "/tmp/workspace-main",
+								"default":   true,
+							},
+						},
+					},
+				},
+			},
+		}
+		body, err := json.Marshal(payload)
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", bytes.NewReader(body))
+		req.Header.Set("X-OpenClaw-Token", "sync-secret")
+		req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, "org-123"))
+		return req
+	}
+
+	const iterations = 40
+	var wg sync.WaitGroup
+	for i := 0; i < iterations; i++ {
+		wg.Add(4)
+
+		go func() {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			syncHandler.Handle(rec, buildSyncRequest())
+			if rec.Code != http.StatusOK {
+				t.Errorf("sync handle returned %d", rec.Code)
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/api/sync/agents", nil)
+			rec := httptest.NewRecorder()
+			syncHandler.GetAgents(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("get agents returned %d", rec.Code)
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/api/admin/connections", nil)
+			rec := httptest.NewRecorder()
+			adminConnectionsHandler.Get(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("admin connections returned %d", rec.Code)
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/api/admin/config/openclaw/current", nil)
+			req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, "org-123"))
+			rec := httptest.NewRecorder()
+			adminConfigHandler.GetCurrent(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("admin config current returned %d", rec.Code)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestOpenClawMigrationExtractWorkspaceDescriptors(t *testing.T) {
