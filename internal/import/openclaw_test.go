@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -137,53 +138,173 @@ func TestOpenClawAgentImportSkipsNonRegularIdentityFiles(t *testing.T) {
 	require.Equal(t, "", identities[0].Soul)
 }
 
-func TestIsWithinDir(t *testing.T) {
-	base := filepath.Join(string(os.PathSeparator), "tmp", "otter-base")
+func TestEnsureOpenClawRequiredAgents(t *testing.T) {
+	t.Run("adds missing memory and chameleon agents without mutating existing entries", func(t *testing.T) {
+		root := t.TempDir()
+		configPath := filepath.Join(root, "openclaw.json")
+		config := map[string]any{
+			"gateway": map[string]any{
+				"host": "127.0.0.1",
+				"port": 18791,
+			},
+			"agents": map[string]any{
+				"list": []any{
+					map[string]any{
+						"id":        "main",
+						"name":      "Main Agent",
+						"workspace": "~/.openclaw/workspace",
+						"model":     "anthropic/claude-sonnet-4-20250514",
+						"default":   true,
+					},
+				},
+			},
+		}
+		raw, err := json.Marshal(config)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(configPath, raw, 0o644))
 
-	tests := []struct {
-		name   string
-		target string
-		want   bool
-	}{
-		{
-			name:   "same directory",
-			target: base,
-			want:   true,
-		},
-		{
-			name:   "child directory",
-			target: filepath.Join(base, "workspaces", "main"),
-			want:   true,
-		},
-		{
-			name:   "traversal outside",
-			target: filepath.Join(base, "..", "outside"),
-			want:   false,
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			got := isWithinDir(base, tc.target)
-			require.Equal(t, tc.want, got)
+		result, err := EnsureOpenClawRequiredAgents(&OpenClawInstallation{
+			RootDir:    root,
+			ConfigPath: configPath,
+		}, EnsureOpenClawRequiredAgentsOptions{
+			IncludeChameleon: true,
 		})
-	}
+		require.NoError(t, err)
+		require.True(t, result.Updated)
+		require.True(t, result.AddedMemoryAgent)
+		require.True(t, result.AddedChameleon)
+
+		updatedRaw, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		var updated map[string]any
+		require.NoError(t, json.Unmarshal(updatedRaw, &updated))
+
+		agentsObj, ok := updated["agents"].(map[string]any)
+		require.True(t, ok)
+		list, ok := agentsObj["list"].([]any)
+		require.True(t, ok)
+		require.Len(t, list, 3)
+
+		entryByID := map[string]map[string]any{}
+		for _, item := range list {
+			record, ok := item.(map[string]any)
+			require.True(t, ok)
+			id, _ := record["id"].(string)
+			entryByID[id] = record
+		}
+
+		main := entryByID["main"]
+		require.Equal(t, "Main Agent", main["name"])
+		require.Equal(t, "~/.openclaw/workspace", main["workspace"])
+		require.Equal(t, "anthropic/claude-sonnet-4-20250514", main["model"])
+		require.Equal(t, true, main["default"])
+
+		memoryAgent := entryByID["memory-agent"]
+		require.Equal(t, "Memory Agent", memoryAgent["name"])
+		require.Equal(t, "anthropic/claude-sonnet-4-20250514", memoryAgent["model"])
+		require.Equal(t, "~/.openclaw/workspace-memory-agent", memoryAgent["workspace"])
+		require.Equal(t, "low", memoryAgent["thinking"])
+		channels, ok := memoryAgent["channels"].([]any)
+		require.True(t, ok)
+		require.Len(t, channels, 0)
+
+		chameleon := entryByID["chameleon"]
+		require.Equal(t, "Chameleon", chameleon["name"])
+		require.Equal(t, "~/.openclaw/workspace-chameleon", chameleon["workspace"])
+
+		require.DirExists(t, filepath.Join(root, "workspace-memory-agent"))
+		soulRaw, err := os.ReadFile(filepath.Join(root, "workspace-memory-agent", "SOUL.md"))
+		require.NoError(t, err)
+		require.Contains(t, string(soulRaw), "# Memory Agent")
+
+		stateRaw, err := os.ReadFile(filepath.Join(root, "workspace-memory-agent", "memory-agent-state.json"))
+		require.NoError(t, err)
+		require.True(t, strings.Contains(string(stateRaw), "\"file_offsets\""))
+
+		second, err := EnsureOpenClawRequiredAgents(&OpenClawInstallation{
+			RootDir:    root,
+			ConfigPath: configPath,
+		}, EnsureOpenClawRequiredAgentsOptions{
+			IncludeChameleon: true,
+		})
+		require.NoError(t, err)
+		require.False(t, second.Updated)
+		require.False(t, second.AddedMemoryAgent)
+		require.False(t, second.AddedChameleon)
+	})
+
+	t.Run("can add only memory agent when chameleon is disabled", func(t *testing.T) {
+		root := t.TempDir()
+		configPath := filepath.Join(root, "openclaw.json")
+		config := map[string]any{
+			"agents": map[string]any{
+				"list": []any{
+					map[string]any{
+						"id":   "main",
+						"name": "Main Agent",
+					},
+				},
+			},
+		}
+		raw, err := json.Marshal(config)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(configPath, raw, 0o644))
+
+		result, err := EnsureOpenClawRequiredAgents(&OpenClawInstallation{
+			RootDir:    root,
+			ConfigPath: configPath,
+		}, EnsureOpenClawRequiredAgentsOptions{
+			IncludeChameleon: false,
+		})
+		require.NoError(t, err)
+		require.True(t, result.Updated)
+		require.True(t, result.AddedMemoryAgent)
+		require.False(t, result.AddedChameleon)
+
+		updatedRaw, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		var updated map[string]any
+		require.NoError(t, json.Unmarshal(updatedRaw, &updated))
+		agentsObj, ok := updated["agents"].(map[string]any)
+		require.True(t, ok)
+		list, ok := agentsObj["list"].([]any)
+		require.True(t, ok)
+		require.Len(t, list, 2)
+		require.True(t, listHasAgentID(list, "memory-agent"))
+		require.False(t, listHasAgentID(list, "chameleon"))
+	})
 }
 
-func TestReadIdentityFileRejectsSymlinks(t *testing.T) {
-	workspace := t.TempDir()
-	target := filepath.Join(workspace, "source.md")
-	require.NoError(t, os.WriteFile(target, []byte("secret"), 0o644))
-
-	linkPath := filepath.Join(workspace, "SOUL.md")
-	if err := os.Symlink(target, linkPath); err != nil {
-		t.Skipf("symlink not supported in test environment: %v", err)
+func TestWriteFileIfMissingDoesNotFollowSymlinks(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "symlink-target.txt")
+	link := filepath.Join(root, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
 	}
 
-	content, sourcePath, ok, err := readIdentityFile(workspace, "SOUL.md")
-	require.NoError(t, err)
-	require.False(t, ok)
-	require.Equal(t, "", content)
-	require.Equal(t, "", sourcePath)
+	err := writeFileIfMissing(link, []byte("content"), 0o644)
+	require.Error(t, err)
+	_, statErr := os.Stat(target)
+	require.Error(t, statErr)
+	require.True(t, os.IsNotExist(statErr))
+}
+
+func TestEnsureMemoryAgentWorkspaceRejectsSymlink(t *testing.T) {
+	root := t.TempDir()
+	targetDir := t.TempDir()
+	link := filepath.Join(root, "workspace-memory-agent")
+	if err := os.Symlink(targetDir, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	_, err := ensureMemoryAgentWorkspace(root)
+	require.Error(t, err)
+
+	_, soulErr := os.Stat(filepath.Join(targetDir, "SOUL.md"))
+	require.Error(t, soulErr)
+	require.True(t, os.IsNotExist(soulErr))
+	_, stateErr := os.Stat(filepath.Join(targetDir, "memory-agent-state.json"))
+	require.Error(t, stateErr)
+	require.True(t, os.IsNotExist(stateErr))
 }

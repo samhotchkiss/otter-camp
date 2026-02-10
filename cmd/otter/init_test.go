@@ -318,6 +318,128 @@ func TestInitImportAndBridgeSkipsWhenOpenClawMissing(t *testing.T) {
 	}
 }
 
+func TestInitAddsRequiredOpenClawAgentsToConfig(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir:    "/Users/sam/.openclaw",
+		ConfigPath: "/Users/sam/.openclaw/openclaw.json",
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.ensureResult = importer.EnsureOpenClawRequiredAgentsResult{
+		Updated:          true,
+		AddedMemoryAgent: true,
+		AddedChameleon:   true,
+	}
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader("n\nn\n"),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+
+	if !state.ensureCalled {
+		t.Fatalf("expected OpenClaw required-agent ensure call")
+	}
+	if !state.ensureOpts.IncludeChameleon {
+		t.Fatalf("expected IncludeChameleon=true")
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "Added Memory Agent to OpenClaw config. Restart OpenClaw when ready to activate.") {
+		t.Fatalf("expected memory-agent added message, got %q", output)
+	}
+	if !strings.Contains(output, "Added Chameleon to OpenClaw config. Restart OpenClaw when ready to activate.") {
+		t.Fatalf("expected chameleon added message, got %q", output)
+	}
+}
+
+func TestInitSkipsOpenClawAgentConfigUpdateWhenAlreadyPresent(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir:    "/Users/sam/.openclaw",
+		ConfigPath: "/Users/sam/.openclaw/openclaw.json",
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.ensureResult = importer.EnsureOpenClawRequiredAgentsResult{
+		Updated: false,
+	}
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader("n\nn\n"),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	if !state.ensureCalled {
+		t.Fatalf("expected OpenClaw required-agent ensure call")
+	}
+	if !strings.Contains(out.String(), "Required OpenClaw agents already present. No config changes made.") {
+		t.Fatalf("expected no-op message, got %q", out.String())
+	}
+}
+
+func TestInitHandlesEnsureOpenClawAgentsError(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir:    "/Users/sam/.openclaw",
+		ConfigPath: "/Users/sam/.openclaw/openclaw.json",
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.ensureErr = errors.New("write denied")
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader("n\nn\n"),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "WARNING: OpenClaw config update failed: write denied") {
+		t.Fatalf("expected warning message, got %q", output)
+	}
+	if !strings.Contains(output, "Bridge config written: /repo/bridge/.env") {
+		t.Fatalf("expected init flow to continue and write bridge config, got %q", output)
+	}
+}
+
 type initStubState struct {
 	gotAPIBase string
 	savedCfg   ottercli.Config
@@ -325,6 +447,10 @@ type initStubState struct {
 
 	detectInstall *importer.OpenClawInstallation
 	detectErr     error
+	ensureCalled  bool
+	ensureOpts    importer.EnsureOpenClawRequiredAgentsOptions
+	ensureResult  importer.EnsureOpenClawRequiredAgentsResult
+	ensureErr     error
 	identities    []importer.ImportedAgentIdentity
 	projects      []importer.OpenClawProjectCandidate
 	repoRoot      string
@@ -351,6 +477,7 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 	origSave := saveInitConfig
 	origNewClient := newInitClient
 	origDetect := detectInitOpenClaw
+	origEnsure := ensureInitOpenClawRequiredAgents
 	origImport := importInitOpenClawIdentities
 	origInfer := inferInitOpenClawProjects
 	origRepoRoot := resolveInitRepoRoot
@@ -374,6 +501,17 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 			return nil, state.detectErr
 		}
 		return state.detectInstall, nil
+	}
+	ensureInitOpenClawRequiredAgents = func(
+		install *importer.OpenClawInstallation,
+		opts importer.EnsureOpenClawRequiredAgentsOptions,
+	) (importer.EnsureOpenClawRequiredAgentsResult, error) {
+		state.ensureCalled = true
+		state.ensureOpts = opts
+		if state.ensureErr != nil {
+			return importer.EnsureOpenClawRequiredAgentsResult{}, state.ensureErr
+		}
+		return state.ensureResult, nil
 	}
 	importInitOpenClawIdentities = func(install *importer.OpenClawInstallation) ([]importer.ImportedAgentIdentity, error) {
 		return state.identities, nil
@@ -402,6 +540,7 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 		saveInitConfig = origSave
 		newInitClient = origNewClient
 		detectInitOpenClaw = origDetect
+		ensureInitOpenClawRequiredAgents = origEnsure
 		importInitOpenClawIdentities = origImport
 		inferInitOpenClawProjects = origInfer
 		resolveInitRepoRoot = origRepoRoot
