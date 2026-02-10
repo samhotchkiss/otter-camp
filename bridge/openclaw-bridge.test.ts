@@ -267,6 +267,9 @@ describe("bridge execution mode + path guard helpers", () => {
     assert.ok(contextual.includes("[OTTERCAMP_EXECUTION_MODE]"));
     assert.ok(contextual.includes("- mode: conversation"));
     assert.ok(contextual.includes("deny write/edit/apply_patch"));
+    assert.ok(contextual.includes("- enforcement: policy-level only (prompt contract, no write hooks in v1)"));
+    assert.ok(contextual.includes("- TODO: enforce mutation denial via OpenClaw tool/write interception hooks"));
+    assert.ok(contextual.includes("- workspaceAccess: none"));
   });
 
   it("assigns deterministic project worktree roots and exposes cwd metadata", async () => {
@@ -295,6 +298,10 @@ describe("bridge execution mode + path guard helpers", () => {
       const contextual = await formatSessionContextMessageForTest(sessionKey, "Implement API handlers.");
       assert.ok(contextual.includes("- mode: project"));
       assert.ok(contextual.includes(`- cwd: ${expectedRoot}`));
+      assert.ok(contextual.includes(`- write_guard_root: ${expectedRoot}`));
+      assert.ok(contextual.includes("- write policy: writes allowed only within write_guard_root"));
+      assert.ok(contextual.includes("- enforcement: policy-level only (prompt contract, no write hooks in v1)"));
+      assert.ok(contextual.includes("- TODO: enforce write/edit/apply_patch paths via OpenClaw file-write hooks"));
 
       const updatedContext = getSessionContextForTest(sessionKey);
       assert.equal(updatedContext?.executionMode, "project");
