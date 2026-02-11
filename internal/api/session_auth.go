@@ -30,7 +30,7 @@ func requireSessionIdentity(ctx context.Context, db *sql.DB, r *http.Request) (s
 	}
 	var identity sessionIdentity
 	var err error
-	if strings.HasPrefix(token, "oc_sess_") || strings.HasPrefix(token, "oc_magic_") || strings.HasPrefix(token, "oc_local_") {
+	if isWellFormedSessionToken(token, "oc_sess_") || isWellFormedSessionToken(token, "oc_magic_") || isWellFormedSessionToken(token, "oc_local_") {
 		err = db.QueryRowContext(
 			ctx,
 			`SELECT s.org_id::text, s.user_id::text, COALESCE(u.role, 'owner')
@@ -49,6 +49,8 @@ func requireSessionIdentity(ctx context.Context, db *sql.DB, r *http.Request) (s
 			}
 			return sessionIdentity{}, errAuthentication
 		}
+	} else if strings.HasPrefix(token, "oc_sess_") || strings.HasPrefix(token, "oc_magic_") || strings.HasPrefix(token, "oc_local_") {
+		return sessionIdentity{}, errInvalidSessionToken
 	} else if strings.HasPrefix(token, "oc_git_") {
 		err = db.QueryRowContext(
 			ctx,
@@ -89,6 +91,23 @@ func requireSessionIdentity(ctx context.Context, db *sql.DB, r *http.Request) (s
 
 	identity.Role = normalizeRole(identity.Role)
 	return identity, nil
+}
+
+func isWellFormedSessionToken(token, prefix string) bool {
+	if !strings.HasPrefix(token, prefix) {
+		return false
+	}
+	suffix := token[len(prefix):]
+	if suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func extractSessionToken(r *http.Request) string {
