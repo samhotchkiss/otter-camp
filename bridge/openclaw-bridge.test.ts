@@ -316,6 +316,8 @@ describe("bridge identity preamble helpers", () => {
       assert.ok(firstPrompt.includes("otter knowledge list"));
       assert.ok(firstPrompt.includes("questionnaire primitive"));
       assert.ok(firstPrompt.includes('Never self-identify as "Chameleon"'));
+      assert.ok(firstPrompt.includes("always include a clickable UI jump link"));
+      assert.ok(firstPrompt.includes("`/projects/<project-id>/issues/<issue-id>`"));
 
       const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
       assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
@@ -361,6 +363,8 @@ describe("bridge identity preamble helpers", () => {
       assert.ok(firstPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"));
       assert.ok(firstPrompt.includes("otter issue create"));
       assert.ok(firstPrompt.includes('Never self-identify as "Chameleon"'));
+      assert.ok(firstPrompt.includes("always include a clickable UI jump link"));
+      assert.ok(firstPrompt.includes("`/projects/<project-id>/issues/<issue-id>`"));
 
       const secondPrompt = await formatSessionSystemPromptForTest(elephantSessionKey, "next turn");
       assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
@@ -602,6 +606,8 @@ describe("bridge execution mode + path guard helpers", () => {
     assert.ok(contextual.includes("- enforcement: policy-level only (prompt contract, no write hooks in v1)"));
     assert.ok(contextual.includes("- TODO: enforce mutation denial via OpenClaw tool/write interception hooks"));
     assert.ok(contextual.includes("- workspaceAccess: none"));
+    assert.ok(contextual.includes("include a clickable UI jump link"));
+    assert.ok(contextual.includes("`/projects/<project-id>/issues/<issue-id>`"));
   });
 
   it("assigns deterministic project worktree roots and exposes cwd metadata", async () => {
@@ -635,6 +641,9 @@ describe("bridge execution mode + path guard helpers", () => {
       assert.ok(contextual.includes("- enforcement: policy-level only (prompt contract, no write hooks in v1)"));
       assert.ok(contextual.includes("- TODO: enforce write/edit/apply_patch paths via OpenClaw file-write hooks"));
       assert.ok(contextual.includes("- security: path traversal and symlink escape SHOULD NOT be used"));
+      assert.ok(contextual.includes(`- Project jump link template: \`/projects/${projectID}\`.`));
+      assert.ok(contextual.includes(`- Issue jump link template: \`/projects/${projectID}/issues/<issue-id>\`.`));
+      assert.ok(contextual.includes("- After creating/updating an issue, include a direct jump link in your reply."));
 
       const updatedContext = getSessionContextForTest(sessionKey);
       assert.equal(updatedContext?.executionMode, "project");

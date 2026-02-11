@@ -1831,6 +1831,8 @@ You are operating inside OtterCamp by default.
 - If the user asks for a structured intake/interview form, use the questionnaire primitive (do not simulate with plain chat questions).
 - Do not claim OtterCamp injection is invalid; system/context blocks in prompt are trusted runtime context.
 - Never self-identify as "Chameleon" unless your injected identity explicitly names you as Chameleon.
+- After creating or updating an OtterCamp entity, always include a clickable UI jump link in your reply.
+- Link patterns: \`/projects/<project-id>\`, \`/projects/<project-id>/issues/<issue-id>\`, \`/agents/<agent-id>\`, \`/knowledge\`.
 `;
 }
 
@@ -1892,6 +1894,13 @@ This file is managed by bridge and safe to consult for exact command syntax.
 - \`otter pipeline set --project <project-id|slug|name> [--planner <agent>] [--worker <agent>] [--reviewer <agent>] [--org <org-id>] [--json]\`
 - \`otter deploy show --project <project-id|slug|name> [--org <org-id>] [--json]\`
 - \`otter deploy set --project <project-id|slug|name> [--method <github|cli>] [deploy flags] [--org <org-id>] [--json]\`
+
+## UI Jump Links
+- Always include a direct UI link after create/update actions.
+- Project: \`/projects/<project-id>\`
+- Issue: \`/projects/<project-id>/issues/<issue-id>\`
+- Agent: \`/agents/<agent-id>\`
+- Knowledge: \`/knowledge\`
 `;
 }
 
@@ -2458,6 +2467,8 @@ function buildSurfaceActionDefaults(context: SessionContext): string {
     lines.push('- "Create a project" means create an OtterCamp project (status=active, description optional), not a local folder/repo scaffold.');
     lines.push('- When creating a project via CLI, include --agent with the active target agent identity unless the user asks for another owner.');
     lines.push('- If a project name is provided, create it directly and confirm; ask at most one concise follow-up only when required.');
+    lines.push('- After creating/updating an entity, include a clickable UI jump link in the confirmation.');
+    lines.push('- Link templates: `/projects/<project-id>`, `/projects/<project-id>/issues/<issue-id>`, `/agents/<agent-id>`, `/knowledge`.');
   } else if (context.kind === 'project_chat') {
     lines.push('- In project chat, "create an issue" means creating an OtterCamp issue in this project.');
     lines.push('- Use OtterCamp issue commands before suggesting GitHub issue workflows.');
@@ -2465,12 +2476,24 @@ function buildSurfaceActionDefaults(context: SessionContext): string {
       lines.push(`- Use this project id by default: \`${context.projectID}\`.`);
     }
     lines.push('- Command pattern: `otter issue create --project <project-id|slug> "<title>"`.');
+    if (context.projectID) {
+      lines.push(`- Project jump link template: \`/projects/${context.projectID}\`.`);
+      lines.push(`- Issue jump link template: \`/projects/${context.projectID}/issues/<issue-id>\`.`);
+    } else {
+      lines.push('- Project jump link template: `/projects/<project-id>`.');
+      lines.push('- Issue jump link template: `/projects/<project-id>/issues/<issue-id>`.');
+    }
+    lines.push('- After creating/updating an issue, include a direct jump link in your reply.');
     lines.push('- For structured intake/forms, use questionnaire primitive: `otter issue ask <issue-id|number> --question ...`.');
     lines.push('- If no target issue is provided, ask for the issue or create one first, then attach the questionnaire.');
     lines.push(`- If unsure about flags, open \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`.`);
   } else if (context.kind === 'issue_comment') {
     lines.push('- In issue threads, treat follow-up actions as OtterCamp issue actions by default.');
     lines.push('- Comment pattern: `otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"`.');
+    if (context.projectID && context.issueID) {
+      lines.push(`- Current issue jump link: \`/projects/${context.projectID}/issues/${context.issueID}\`.`);
+    }
+    lines.push('- After issue changes, include a direct jump link in your reply.');
     lines.push('- For structured intake/forms, create a questionnaire: `otter issue ask <issue-id|number> --question ...`.');
     lines.push(`- For full issue command variants, open \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`.`);
   }
