@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -532,17 +533,57 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 
 	// Parse optional user info
 	var req struct {
-		Name  string `json:"name"`
-		Email string `json:"email"`
-		Org   string `json:"org"`
+		Name             string `json:"name"`
+		Email            string `json:"email"`
+		Org              string `json:"org"`
+		OrgName          string `json:"org_name"`
+		OrganizationName string `json:"organization_name"`
+		OrgSlug          string `json:"org_slug"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req) // Ignore errors, use defaults
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+		return
+	}
 
-	if req.Name == "" {
-		req.Name = "Sam"
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = "Sam"
 	}
-	if req.Email == "" {
-		req.Email = "sam@otter.camp"
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if email == "" {
+		email = "sam@otter.camp"
+	}
+	if !looksLikeEmail(email) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid email"})
+		return
+	}
+
+	orgNameInput := strings.TrimSpace(firstNonEmpty(req.OrganizationName, req.OrgName, req.Org))
+	orgSlugInput := strings.TrimSpace(req.OrgSlug)
+
+	orgName := orgNameInput
+	if orgName == "" {
+		orgName = strings.TrimSpace(name)
+	}
+	if orgName == "" {
+		orgName = "OtterCamp"
+	}
+
+	orgSlug := ""
+	if orgSlugInput != "" {
+		orgSlug = slugifyOrg(orgSlugInput)
+		if orgSlug == "" {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid org_slug"})
+			return
+		}
+	}
+	if orgSlug == "" {
+		orgSlug = slugifyOrg(orgName)
+	}
+	if orgSlug == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid organization_name"})
+		return
 	}
 
 	db, err := getAuthDB()
@@ -553,7 +594,7 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 
 	// In local development, prefer the shared LOCAL_AUTH_TOKEN session when available.
 	// This keeps the web app and otter CLI on the same workspace/org context.
-	if strings.TrimSpace(req.Org) == "" {
+	if orgNameInput == "" && orgSlugInput == "" {
 		if localToken := strings.TrimSpace(os.Getenv("LOCAL_AUTH_TOKEN")); localToken != "" {
 			if expiresAt, ok := lookupActiveSessionExpiry(r.Context(), db, localToken); ok {
 				baseURL := getPublicBaseURL(r)
@@ -580,19 +621,6 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	authToken := "oc_magic_" + token
 	expiresAt := time.Now().UTC().Add(sessionTTL())
 
-	// Create org (default to user's name if not provided)
-	orgName := strings.TrimSpace(req.Org)
-	if orgName == "" {
-		orgName = strings.TrimSpace(req.Name)
-	}
-	if orgName == "" {
-		orgName = "OtterCamp"
-	}
-	orgSlug := slugifyOrg(orgName)
-	if orgSlug == "" {
-		orgSlug = "ottercamp"
-	}
-
 	var orgID string
 	if err := db.QueryRowContext(
 		r.Context(),
@@ -608,15 +636,17 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 
 	// Create user
 	var userID string
+	subject := "magic:" + email
 	if err := db.QueryRowContext(
 		r.Context(),
 		`INSERT INTO users (org_id, display_name, email, subject, issuer) 
-		 VALUES ($1, $2, $3, 'magic', 'otter.camp')
+		 VALUES ($1, $2, $3, $4, 'otter.camp')
 		 ON CONFLICT (org_id, issuer, subject) DO UPDATE SET display_name = $2, email = $3
 		 RETURNING id`,
 		orgID,
-		req.Name,
-		req.Email,
+		name,
+		email,
+		subject,
 	).Scan(&userID); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create user"})
 		return
