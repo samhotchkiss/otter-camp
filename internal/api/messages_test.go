@@ -497,3 +497,58 @@ func TestCreateMessageDMTouchesChatThreadForAuthenticatedUser(t *testing.T) {
 	require.Equal(t, store.ChatThreadTypeDM, threadType)
 	require.Equal(t, "Thread touch DM message", preview)
 }
+
+func TestDMChatThreadTitleStabilityAcrossMultipleSenders(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "messages-dm-title-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "messages-dm-title-agent")
+	userID := insertTestUser(t, db, orgID, "messages-dm-title-user")
+	token := "oc_sess_messages_dm_title_user"
+	insertTestSession(t, db, orgID, userID, token, time.Now().UTC().Add(1*time.Hour))
+
+	handler := &MessageHandler{
+		ChatThreadStore: store.NewChatThreadStore(db),
+	}
+
+	send := func(payload map[string]any) {
+		payload["org_id"] = orgID
+		payload["thread_id"] = "dm_" + agentID
+
+		body, err := json.Marshal(payload)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.CreateMessage(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	send(map[string]any{
+		"content":     "first",
+		"sender_type": "user",
+	})
+
+	send(map[string]any{
+		"content":     "second",
+		"sender_type": "agent",
+		"sender_name": "Different Agent Name",
+	})
+
+	send(map[string]any{
+		"content":     "third",
+		"sender_type": "user",
+	})
+
+	var title string
+	err := db.QueryRow(
+		`SELECT title
+		 FROM chat_threads
+		 WHERE org_id = $1 AND user_id = $2 AND thread_key = $3`,
+		orgID,
+		userID,
+		"dm:dm_"+agentID,
+	).Scan(&title)
+	require.NoError(t, err)
+	require.Equal(t, "Agent messages-dm-title-agent", title)
+}

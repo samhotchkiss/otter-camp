@@ -999,12 +999,7 @@ func (h *MessageHandler) touchDMChatThreadBestEffort(
 	}
 
 	workspaceCtx := context.WithValue(ctx, middleware.WorkspaceIDKey, identity.OrgID)
-	title := "Direct message"
-	if req.SenderName != nil {
-		if senderName := strings.TrimSpace(*req.SenderName); senderName != "" {
-			title = senderName
-		}
-	}
+	title := resolveDMChatThreadTitle(ctx, db, identity.OrgID, agentID, req.SenderName)
 
 	if _, err := h.ChatThreadStore.TouchThread(workspaceCtx, store.TouchChatThreadInput{
 		UserID:             identity.UserID,
@@ -1017,6 +1012,38 @@ func (h *MessageHandler) touchDMChatThreadBestEffort(
 	}); err != nil {
 		log.Printf("messages: failed to touch DM chat thread for %s: %v", threadID, err)
 	}
+}
+
+func resolveDMChatThreadTitle(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+	agentID *string,
+	senderName *string,
+) string {
+	title := "Direct message"
+	if senderName != nil {
+		if trimmed := strings.TrimSpace(*senderName); trimmed != "" {
+			title = trimmed
+		}
+	}
+	if db == nil || agentID == nil {
+		return title
+	}
+
+	var displayName string
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT display_name FROM agents WHERE org_id = $1 AND id = $2`,
+		orgID,
+		*agentID,
+	).Scan(&displayName); err != nil {
+		return title
+	}
+	if trimmed := strings.TrimSpace(displayName); trimmed != "" {
+		return trimmed
+	}
+	return title
 }
 
 func loadMessageByID(ctx context.Context, db *sql.DB, messageID string) (Message, error) {
