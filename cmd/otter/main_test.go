@@ -259,6 +259,14 @@ func TestProjectCreateSplitArgsSupportsInterspersedFlags(t *testing.T) {
 			wantNames: []string{"Agent Avatars"},
 		},
 		{
+			name:  "workflow agent flag remains in flag args",
+			input: []string{"Agent Avatars", "--workflow-agent", "marcus"},
+			wantFlags: []string{
+				"--workflow-agent", "marcus",
+			},
+			wantNames: []string{"Agent Avatars"},
+		},
+		{
 			name:    "missing flag value",
 			input:   []string{"Agent Avatars", "--description"},
 			wantErr: true,
