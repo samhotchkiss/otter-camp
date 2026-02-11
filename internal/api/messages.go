@@ -852,17 +852,74 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 		agentID,
 	).Scan(&target.AgentID, &target.SessionKey)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return dmDispatchTarget{}, false, "agent session unavailable; message was saved but not delivered", 0, nil
+		if !errors.Is(err, sql.ErrNoRows) {
+			return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
 		}
+	} else if strings.TrimSpace(target.SessionKey) != "" {
+		return target, true, "", 0, nil
+	}
+
+	// Chameleon-routed fallback: allow DM dispatch even when sync state is empty
+	// by deriving the canonical chameleon session from the workspace agent UUID.
+	fallbackAgentID, fallbackErr := resolveDMThreadWorkspaceAgentID(ctx, db, orgID, agentID)
+	if fallbackErr != nil {
 		return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
 	}
-
-	if strings.TrimSpace(target.SessionKey) == "" {
-		return dmDispatchTarget{}, false, "agent session unavailable; message was saved but not delivered", 0, nil
+	if fallbackAgentID != "" {
+		return dmDispatchTarget{
+			AgentID:    fallbackAgentID,
+			SessionKey: canonicalChameleonSessionKey(fallbackAgentID),
+		}, true, "", 0, nil
 	}
 
-	return target, true, "", 0, nil
+	return dmDispatchTarget{}, false, "agent session unavailable; message was saved but not delivered", 0, nil
+}
+
+func resolveDMThreadWorkspaceAgentID(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+	threadAgentID string,
+) (string, error) {
+	candidate := strings.TrimSpace(threadAgentID)
+	if candidate == "" {
+		return "", nil
+	}
+
+	var resolved string
+	if uuidRegex.MatchString(candidate) {
+		err := db.QueryRowContext(
+			ctx,
+			`SELECT id FROM agents WHERE org_id = $1 AND id = $2`,
+			orgID,
+			candidate,
+		).Scan(&resolved)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", nil
+			}
+			return "", err
+		}
+		return strings.TrimSpace(resolved), nil
+	}
+
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT id FROM agents WHERE org_id = $1 AND slug = $2`,
+		orgID,
+		candidate,
+	).Scan(&resolved)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(resolved), nil
+}
+
+func canonicalChameleonSessionKey(agentID string) string {
+	return "agent:chameleon:oc:" + strings.ToLower(strings.TrimSpace(agentID))
 }
 
 func (h *MessageHandler) buildDMDispatchEvent(
