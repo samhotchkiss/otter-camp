@@ -564,6 +564,8 @@ type IntegrationsSectionProps = {
   onSave: () => Promise<void>;
   onGenerateApiKey: () => Promise<void>;
   onRevokeApiKey: (keyId: string) => Promise<void>;
+  tokenError: string | null;
+  generatedToken: string | null;
   saving: boolean;
 };
 
@@ -573,6 +575,8 @@ function IntegrationsSection({
   onSave,
   onGenerateApiKey,
   onRevokeApiKey,
+  tokenError,
+  generatedToken,
   saving,
 }: IntegrationsSectionProps) {
   const [generatingKey, setGeneratingKey] = useState(false);
@@ -609,6 +613,16 @@ function IntegrationsSection({
       icon="🔗"
     >
       <div className="space-y-6">
+        {generatedToken && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900">
+            <p className="text-sm font-medium">Copy this token now. It will only be shown once.</p>
+            <p className="mt-2 break-all font-mono text-sm">{generatedToken}</p>
+          </div>
+        )}
+        {tokenError && (
+          <p className="text-sm text-red-700">{tokenError}</p>
+        )}
+
         {/* OpenClaw Webhook URL */}
         <div>
           <Input
@@ -915,6 +929,8 @@ export default function SettingsPage() {
     openclawWebhookUrl: "",
     apiKeys: [],
   });
+  const [gitTokenError, setGitTokenError] = useState<string | null>(null);
+  const [generatedGitToken, setGeneratedGitToken] = useState<string | null>(null);
   const [savingIntegrations, setSavingIntegrations] = useState(false);
 
   // Labels state
@@ -1128,22 +1144,67 @@ export default function SettingsPage() {
   }, [integrations]);
 
   const handleGenerateApiKey = useCallback(async () => {
-    const response = await fetch("/api/settings/integrations/api-keys", {
+    setGitTokenError(null);
+    setGeneratedGitToken(null);
+
+    const projectsResponse = await fetch("/api/projects");
+    if (!projectsResponse.ok) {
+      const payload = await projectsResponse.json().catch(() => null);
+      setGitTokenError(payload?.error ?? "Failed to load projects for git token creation.");
+      return;
+    }
+
+    const projectsPayload = await projectsResponse.json().catch(() => ({})) as {
+      projects?: Array<{ id?: string }>;
+    };
+    const projectIDs = (projectsPayload.projects ?? [])
+      .map((project) => project.id ?? "")
+      .filter((id) => id !== "");
+
+    if (projectIDs.length === 0) {
+      setGitTokenError("Create a project before generating a git token.");
+      return;
+    }
+
+    const response = await fetch("/api/git/tokens", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: `API Key ${integrations.apiKeys.length + 1}` }),
+      body: JSON.stringify({
+        name: `Git Token ${integrations.apiKeys.length + 1}`,
+        projects: projectIDs.map((projectID) => ({
+          project_id: projectID,
+          permission: "write",
+        })),
+      }),
     });
 
-    if (response.ok) {
-      const newKey = await response.json();
-      setIntegrations((prev) => ({
-        ...prev,
-        apiKeys: [
-          ...prev.apiKeys,
-          { ...newKey, createdAt: new Date(newKey.createdAt) },
-        ],
-      }));
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      setGitTokenError(payload?.error ?? "Failed to create git token.");
+      return;
     }
+
+    const token = await response.json() as {
+      id: string;
+      name: string;
+      token_prefix: string;
+      token?: string;
+      created_at: string;
+    };
+
+    setIntegrations((prev) => ({
+      ...prev,
+      apiKeys: [
+        {
+          id: token.id,
+          name: token.name,
+          prefix: token.token_prefix,
+          createdAt: new Date(token.created_at),
+        },
+        ...prev.apiKeys,
+      ],
+    }));
+    setGeneratedGitToken(token.token ?? null);
   }, [integrations.apiKeys.length]);
 
   const handleRevokeApiKey = useCallback(async (keyId: string) => {
@@ -1321,6 +1382,8 @@ export default function SettingsPage() {
           onSave={handleSaveIntegrations}
           onGenerateApiKey={handleGenerateApiKey}
           onRevokeApiKey={handleRevokeApiKey}
+          tokenError={gitTokenError}
+          generatedToken={generatedGitToken}
           saving={savingIntegrations}
         />
 
