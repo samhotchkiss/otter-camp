@@ -2,46 +2,39 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRequireSessionIdentityAcceptsMagicToken(t *testing.T) {
-	connStr := feedTestDatabaseURL(t)
-	resetFeedDatabase(t, connStr)
-
-	db := openFeedDatabase(t, connStr)
-	orgID := insertFeedOrganization(t, db, "session-auth-magic")
-	userID := insertFeedUser(t, db, orgID, "magic-user", "Magic User")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
 
 	token := "oc_magic_validMagic123"
-	insertSessionIdentityToken(t, db, orgID, userID, token)
+	mock.ExpectQuery(`SELECT s.org_id::text, s.user_id::text, COALESCE\(u.role, 'owner'\)`).
+		WithArgs(token).
+		WillReturnRows(sqlmock.NewRows([]string{"org_id", "user_id", "role"}).AddRow("org-1", "user-1", "owner"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	identity, err := requireSessionIdentity(context.Background(), db, req)
 	require.NoError(t, err)
-	require.Equal(t, orgID, identity.OrgID)
-	require.Equal(t, userID, identity.UserID)
+	require.Equal(t, "org-1", identity.OrgID)
+	require.Equal(t, "user-1", identity.UserID)
 	require.Equal(t, "owner", identity.Role)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestRequireSessionIdentityRejectsMalformedMagicToken(t *testing.T) {
-	connStr := feedTestDatabaseURL(t)
-	resetFeedDatabase(t, connStr)
-
-	db := openFeedDatabase(t, connStr)
-	orgID := insertFeedOrganization(t, db, "session-auth-magic-malformed")
-	userID := insertFeedUser(t, db, orgID, "malformed-user", "Malformed User")
-
-	// Insert an intentionally malformed token to ensure runtime validation fails closed.
-	insertSessionIdentityToken(t, db, orgID, userID, "oc_magic_")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 	req.Header.Set("Authorization", "Bearer oc_magic_")
@@ -50,17 +43,5 @@ func TestRequireSessionIdentityRejectsMalformedMagicToken(t *testing.T) {
 	require.ErrorIs(t, err, errInvalidSessionToken)
 	require.Empty(t, identity.OrgID)
 	require.Empty(t, identity.UserID)
-}
-
-func insertSessionIdentityToken(t *testing.T, db *sql.DB, orgID, userID, token string) {
-	t.Helper()
-	_, err := db.Exec(
-		`INSERT INTO sessions (org_id, user_id, token, expires_at)
-		 VALUES ($1, $2, $3, $4)`,
-		orgID,
-		userID,
-		token,
-		time.Now().UTC().Add(24*time.Hour),
-	)
-	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

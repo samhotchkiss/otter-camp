@@ -524,7 +524,8 @@ type MagicLinkResponse struct {
 
 // HandleMagicLink generates a simple auth token for MVP testing.
 // This bypasses the full OpenClaw auth flow.
-// Usage: POST /api/auth/magic with optional {"name": "Sam", "email": "sam@example.com"}
+// Usage: POST /api/auth/magic with optional
+// {"name":"Sam","email":"sam@example.com","organization_name":"Acme","org_slug":"acme"}.
 func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
