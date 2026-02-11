@@ -93,6 +93,15 @@ const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
 const COMPLETION_PROGRESS_LINE_PATTERN = /\bIssue\s+#(\d+)\s+\|\s+Commit\s+([0-9a-f]{7,40})\s+\|\s+([^|]+)\|/i;
 const CHAMELEON_SESSION_KEY_PATTERN =
   /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const SUPPORTED_DISPATCH_EVENT_TYPES = new Set([
+  'dm.message',
+  'project.chat.message',
+  'issue.comment.message',
+  'admin.command',
+]);
+const IGNORED_OTTERCAMP_SOCKET_EVENT_TYPES = new Set([
+  'connected',
+]);
 const SAFE_FALLBACK_AGENT_ID_PATTERN =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9][a-z0-9_-]{0,63})$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
@@ -4168,29 +4177,36 @@ async function dispatchInboundEvent(
   if (!normalizedType || !record) {
     throw new Error('invalid dispatch payload');
   }
+  if (source === 'socket' && IGNORED_OTTERCAMP_SOCKET_EVENT_TYPES.has(normalizedType)) {
+    return;
+  }
 
-  const dispatch = async () => {
+  const dispatch = async (): Promise<boolean> => {
     if (normalizedType === 'dm.message') {
       await handleDMDispatchEvent(record as DMDispatchEvent);
-      return;
+      return true;
     }
     if (normalizedType === 'project.chat.message') {
       await handleProjectChatDispatchEvent(record as ProjectChatDispatchEvent);
-      return;
+      return true;
     }
     if (normalizedType === 'issue.comment.message') {
       await handleIssueCommentDispatchEvent(record as IssueCommentDispatchEvent);
-      return;
+      return true;
     }
     if (normalizedType === 'admin.command') {
       await handleAdminCommandDispatchEvent(record as AdminCommandDispatchEvent);
-      return;
+      return true;
     }
-    throw new Error(`unsupported event type: ${normalizedType}`);
+    return false;
   };
 
   try {
-    await dispatch();
+    const handled = await dispatch();
+    if (!handled) {
+      console.warn(`[bridge] ignoring unsupported ${source} event type: ${normalizedType}`);
+      return;
+    }
   } catch (err) {
     if (source === 'replay') {
       throw err;
@@ -4206,6 +4222,14 @@ async function dispatchInboundEvent(
     }
     throw err;
   }
+}
+
+export async function dispatchInboundEventForTest(
+  eventType: string,
+  payload: Record<string, unknown>,
+  source: 'socket' | 'replay' = 'socket',
+): Promise<void> {
+  await dispatchInboundEvent(eventType, payload, source);
 }
 
 async function flushDispatchReplayQueue(reason: string): Promise<number> {
