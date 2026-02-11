@@ -367,6 +367,7 @@ type OpenClawToolEvent = {
   sessionKey: string;
   tool: string;
   phase: string;
+  runID?: string;
   toolCallID?: string;
   args?: Record<string, unknown>;
 };
@@ -376,6 +377,22 @@ type MutationTargetValidationResult = {
   targets: string[];
   invalidTargets: string[];
   reason?: 'not_mutation_tool' | 'missing_target_paths' | 'outside_project_root';
+};
+
+type MutationEnforcementDecision = {
+  sessionKey: string;
+  tool: string;
+  phase: string;
+  mode: ExecutionMode;
+  blocked: boolean;
+  reason?: string;
+  invalidTargets?: string[];
+};
+
+type MutationAbortRequest = {
+  sessionKey: string;
+  runId?: string;
+  reason: string;
 };
 
 type WhoAmITaskPointer = {
@@ -570,6 +587,17 @@ let gitCompletionBranch = '';
 let gitCompletionRemote = '';
 let ingestedToolEventCountForTest = 0;
 let lastIngestedToolEventForTest: OpenClawToolEvent | null = null;
+const mutationEnforcementDecisionsForTest: MutationEnforcementDecision[] = [];
+const MAX_MUTATION_ENFORCEMENT_DECISIONS = 200;
+
+const defaultMutationAbortFn = async (request: MutationAbortRequest): Promise<void> => {
+  const payload: Record<string, unknown> = { sessionKey: request.sessionKey };
+  if (request.runId) {
+    payload.runId = request.runId;
+  }
+  await sendRequest('chat.abort', payload);
+};
+let mutationAbortFn: (request: MutationAbortRequest) => Promise<void> = defaultMutationAbortFn;
 
 const genId = () => `req-${++requestId}`;
 function buildGatewayConnectCaps(): string[] {
@@ -3849,6 +3877,34 @@ export function getIngestedToolEventsStateForTest(): {
   };
 }
 
+export function resetMutationEnforcementStateForTest(): void {
+  mutationEnforcementDecisionsForTest.length = 0;
+}
+
+export function getMutationEnforcementStateForTest(): {
+  count: number;
+  last: MutationEnforcementDecision | null;
+} {
+  const last = mutationEnforcementDecisionsForTest.length > 0
+    ? mutationEnforcementDecisionsForTest[mutationEnforcementDecisionsForTest.length - 1] || null
+    : null;
+  return {
+    count: mutationEnforcementDecisionsForTest.length,
+    last: last
+      ? {
+        ...last,
+        ...(last.invalidTargets ? { invalidTargets: [...last.invalidTargets] } : {}),
+      }
+      : null,
+  };
+}
+
+export function setMutationAbortForTest(
+  fn: ((request: MutationAbortRequest) => Promise<void>) | null,
+): void {
+  mutationAbortFn = fn || defaultMutationAbortFn;
+}
+
 export function setSessionContextForTest(sessionKey: string, context: SessionContext): void {
   setSessionContext(sessionKey, context);
 }
@@ -4695,15 +4751,113 @@ function extractOpenClawToolEvent(
   }
 
   const phase = getTrimmedString(payload.phase).toLowerCase() || 'unknown';
+  const runID = getTrimmedString(payload.runId) || getTrimmedString(payload.run_id);
   const toolCallID = getTrimmedString(payload.toolCallId) || getTrimmedString(payload.tool_call_id);
   const args = asRecord(payload.args) || asRecord(payload.input) || undefined;
   return {
     sessionKey,
     tool,
     phase,
+    ...(runID ? { runID } : {}),
     ...(toolCallID ? { toolCallID } : {}),
     ...(args ? { args } : {}),
   };
+}
+
+function recordMutationEnforcementDecision(decision: MutationEnforcementDecision): void {
+  mutationEnforcementDecisionsForTest.push(decision);
+  if (mutationEnforcementDecisionsForTest.length > MAX_MUTATION_ENFORCEMENT_DECISIONS) {
+    mutationEnforcementDecisionsForTest.splice(
+      0,
+      mutationEnforcementDecisionsForTest.length - MAX_MUTATION_ENFORCEMENT_DECISIONS,
+    );
+  }
+}
+
+async function abortMutationRun(event: OpenClawToolEvent, reason: string): Promise<void> {
+  await mutationAbortFn({
+    sessionKey: event.sessionKey,
+    ...(event.runID ? { runId: event.runID } : {}),
+    reason,
+  }).catch((err) => {
+    console.warn(`[bridge] failed to abort mutation run for ${event.sessionKey}:`, err);
+  });
+}
+
+function resolveMutationBlockReason(validation: MutationTargetValidationResult): string {
+  if (validation.reason === 'missing_target_paths') {
+    return 'mutation denied: missing target path(s) in tool args';
+  }
+  return 'mutation denied: target path escapes active project write_guard_root';
+}
+
+async function enforceMutationToolPolicy(event: OpenClawToolEvent): Promise<void> {
+  if (event.phase !== 'start') {
+    return;
+  }
+
+  const normalizedTool = getTrimmedString(event.tool).toLowerCase();
+  const context = sessionContexts.get(event.sessionKey);
+  const projectID = getTrimmedString(context?.projectID);
+  const mode: ExecutionMode = projectID ? 'project' : 'conversation';
+
+  if (!MUTATION_TOOL_NAMES.has(normalizedTool)) {
+    recordMutationEnforcementDecision({
+      sessionKey: event.sessionKey,
+      tool: normalizedTool,
+      phase: event.phase,
+      mode,
+      blocked: false,
+    });
+    return;
+  }
+
+  if (!projectID) {
+    const reason = 'mutation denied: conversation mode requires project_id context';
+    recordMutationEnforcementDecision({
+      sessionKey: event.sessionKey,
+      tool: normalizedTool,
+      phase: event.phase,
+      mode,
+      blocked: true,
+      reason,
+    });
+    console.warn(`[bridge] ${reason} (${event.sessionKey}, tool=${normalizedTool})`);
+    await abortMutationRun(event, reason);
+    return;
+  }
+
+  const projectRoot = getTrimmedString(context?.projectRoot) || resolveProjectWorktreeRoot(projectID, event.sessionKey);
+  const validation = await validateMutationToolTargetsWithinProjectRoot(
+    projectRoot,
+    normalizedTool,
+    event.args || {},
+  );
+  if (!validation.allowed) {
+    const reason = resolveMutationBlockReason(validation);
+    recordMutationEnforcementDecision({
+      sessionKey: event.sessionKey,
+      tool: normalizedTool,
+      phase: event.phase,
+      mode,
+      blocked: true,
+      reason,
+      ...(validation.invalidTargets.length > 0 ? { invalidTargets: [...validation.invalidTargets] } : {}),
+    });
+    console.warn(
+      `[bridge] ${reason} (${event.sessionKey}, tool=${normalizedTool}, invalid=${validation.invalidTargets.join(', ') || 'n/a'})`,
+    );
+    await abortMutationRun(event, reason);
+    return;
+  }
+
+  recordMutationEnforcementDecision({
+    sessionKey: event.sessionKey,
+    tool: normalizedTool,
+    phase: event.phase,
+    mode,
+    blocked: false,
+  });
 }
 
 async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> {
@@ -4712,6 +4866,7 @@ async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> 
     ...event,
     ...(event.args ? { args: { ...event.args } } : {}),
   };
+  await enforceMutationToolPolicy(event);
 }
 
 async function handleOpenClawEvent(message: Record<string, unknown>): Promise<void> {
