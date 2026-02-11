@@ -97,7 +97,7 @@ const GRID_COLUMNS = {
   xl: 4,
 };
 
-const CARD_HEIGHT = 220; // Estimated height of AgentCard
+const CARD_HEIGHT = 360; // Conservative estimate; rows are measured after render.
 const GAP = 16;
 
 /**
@@ -566,6 +566,12 @@ function AgentsPageComponent({
     overscan: 2,
   });
 
+  useEffect(() => {
+    if (typeof rowVirtualizer.measure === "function") {
+      rowVirtualizer.measure();
+    }
+  }, [columns, filteredAgents.length, rowVirtualizer]);
+
   // Handle card click - memoized
   const handleAgentClick = useCallback((agent: AgentCardData) => {
     openConversation({
@@ -803,15 +809,15 @@ function AgentsPageComponent({
               return (
                 <div
                   key={virtualRow.key}
+                  ref={typeof rowVirtualizer.measureElement === "function" ? rowVirtualizer.measureElement : undefined}
                   style={{
                     position: "absolute",
                     top: 0,
                     left: 0,
                     width: "100%",
-                    height: `${virtualRow.size}px`,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
-                  className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                  className="grid gap-4 pb-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
                 >
                   {rowAgents.map((agent) => (
                     <AgentCard
