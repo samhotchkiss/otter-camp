@@ -153,8 +153,8 @@ describe("Dashboard", () => {
 
     render(<Dashboard />);
 
-    expect(await screen.findByText("marcus")).toBeInTheDocument();
-    expect(screen.getByText(/Dispatched project chat for Testerooni/i)).toBeInTheDocument();
+    expect(await screen.findByText("Marcus")).toBeInTheDocument();
+    expect(screen.getByText(/dispatched project chat/i)).toBeInTheDocument();
     expect(api.feed).not.toHaveBeenCalled();
   });
 
@@ -185,7 +185,37 @@ describe("Dashboard", () => {
     };
     rerender(<Dashboard />);
 
-    expect(await screen.findByText("marcus")).toBeInTheDocument();
-    expect(screen.getByText(/Realtime dispatch from websocket/i)).toBeInTheDocument();
+    expect(await screen.findByText("Marcus")).toBeInTheDocument();
+    expect(screen.getByText(/dispatched project chat/i)).toBeInTheDocument();
+  });
+
+  it("replaces UUID-heavy activity summaries with mapped project labels", async () => {
+    const projectID = "72035dfa-a4b9-4046-b56d-7a5968104090";
+    vi.mocked(api.projects).mockResolvedValueOnce({
+      projects: [
+        { id: projectID, name: "Testerooni", status: "active" },
+      ],
+    } as Awaited<ReturnType<typeof api.projects>>);
+    vi.mocked(api.activityRecent).mockResolvedValueOnce({
+      items: [
+        {
+          id: "act-uuid-1",
+          org_id: "org-1",
+          agent_id: "marcus",
+          trigger: "system.event",
+          summary: `Session activity (agent:marcus:project:${projectID})`,
+          session_key: `agent:marcus:project:${projectID}`,
+          project_id: projectID,
+          created_at: "2026-02-10T12:00:00Z",
+        },
+      ],
+    } as Awaited<ReturnType<typeof api.activityRecent>>);
+
+    render(<Dashboard />);
+
+    expect(await screen.findByText("Marcus")).toBeInTheDocument();
+    expect(screen.getByText(/recorded session activity for Testerooni/i)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(projectID, "i"))).not.toBeInTheDocument();
+    expect(screen.queryByText(/agent:marcus:project:/i)).not.toBeInTheDocument();
   });
 });

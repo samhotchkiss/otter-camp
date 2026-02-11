@@ -124,6 +124,9 @@ const FEED_TYPE_CLASS_MAP: Record<string, string> = {
   assignment: "progress",
 };
 
+const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
+const UUID_TEST_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function hashString(value: string): number {
   let hash = 0;
   for (let i = 0; i < value.length; i += 1) {
@@ -149,6 +152,109 @@ function resolveFeedBadgeClass(type: string, priority?: string | null): string {
 function metadataActorCandidate(metadata: Record<string, unknown>, key: string): string {
   const value = metadata[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+function looksLikeUUID(value: string): boolean {
+  return UUID_TEST_PATTERN.test(value.trim());
+}
+
+function titleCaseFromSlug(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.includes(" ")) {
+    return trimmed;
+  }
+  return trimmed
+    .replace(/[._-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function parseSessionAgentAlias(sessionKey: string): string {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const match = /^agent:([^:]+):/i.exec(trimmed);
+  if (!match?.[1]) {
+    return "";
+  }
+  return match[1].trim();
+}
+
+function setAliasName(map: Map<string, string>, alias: string, name: string) {
+  const aliasTrimmed = alias.trim();
+  const nameTrimmed = name.trim();
+  if (!aliasTrimmed || !nameTrimmed) {
+    return;
+  }
+  map.set(aliasTrimmed, nameTrimmed);
+  map.set(aliasTrimmed.toLowerCase(), nameTrimmed);
+}
+
+type RecentFormattingContext = {
+  projectNamesByID: Map<string, string>;
+  agentNamesByAlias: Map<string, string>;
+};
+
+function buildProjectNameMap(projects: Project[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const project of projects) {
+    const id = (project.id || "").trim();
+    const name = (project.name || "").trim();
+    if (!id || !name) {
+      continue;
+    }
+    out.set(id, name);
+    out.set(id.toLowerCase(), name);
+  }
+  return out;
+}
+
+function buildAgentAliasNameMap(rawAgents: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  const agents =
+    Array.isArray(rawAgents)
+      ? rawAgents
+      : rawAgents && typeof rawAgents === "object" && Array.isArray((rawAgents as Record<string, unknown>).agents)
+        ? ((rawAgents as Record<string, unknown>).agents as unknown[])
+        : [];
+
+  for (const raw of agents) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const record = raw as Record<string, unknown>;
+    const name =
+      (typeof record.name === "string" ? record.name.trim() : "") ||
+      (typeof record.displayName === "string" ? record.displayName.trim() : "") ||
+      (typeof record.display_name === "string" ? record.display_name.trim() : "");
+    if (!name) {
+      continue;
+    }
+
+    const sessionKey =
+      (typeof record.sessionKey === "string" ? record.sessionKey.trim() : "") ||
+      (typeof record.session_key === "string" ? record.session_key.trim() : "");
+
+    const aliases = [
+      typeof record.id === "string" ? record.id : "",
+      typeof record.slug === "string" ? record.slug : "",
+      typeof record.slot === "string" ? record.slot : "",
+      typeof record.role === "string" ? record.role : "",
+      sessionKey,
+      parseSessionAgentAlias(sessionKey),
+    ];
+    for (const alias of aliases) {
+      setAliasName(out, alias, name);
+    }
+  }
+
+  return out;
 }
 
 function resolveFeedActorName(item: FeedApiItem): string {
@@ -209,12 +315,165 @@ function mapActivityToFeedItems(items: FeedApiItem[]): FeedItem[] {
   });
 }
 
-function mapRecentActivityToFeedItems(items: RecentActivityApiItem[]): FeedItem[] {
+function resolveRecentActivityActorName(
+  item: RecentActivityApiItem,
+  context: RecentFormattingContext,
+): string {
+  const rawAgentID = (item.agent_id || "").trim();
+  const sessionAgentAlias = parseSessionAgentAlias(item.session_key || "");
+  const aliases = [rawAgentID, sessionAgentAlias];
+  for (const alias of aliases) {
+    if (!alias) {
+      continue;
+    }
+    const resolved =
+      context.agentNamesByAlias.get(alias) ||
+      context.agentNamesByAlias.get(alias.toLowerCase()) ||
+      "";
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  if (!rawAgentID || rawAgentID.toLowerCase() === "system") {
+    return "System";
+  }
+
+  if (looksLikeUUID(rawAgentID)) {
+    return "Agent";
+  }
+
+  return titleCaseFromSlug(rawAgentID) || "Agent";
+}
+
+function resolveRecentProjectLabel(
+  item: RecentActivityApiItem,
+  context: RecentFormattingContext,
+): string {
+  const projectID = (item.project_id || "").trim();
+  if (projectID) {
+    return context.projectNamesByID.get(projectID) || context.projectNamesByID.get(projectID.toLowerCase()) || "";
+  }
+  const sessionKey = (item.session_key || "").trim();
+  if (!sessionKey) {
+    return "";
+  }
+  const match = /:project:([0-9a-f-]{36})/i.exec(sessionKey);
+  const fromSession = match?.[1]?.trim() || "";
+  if (!fromSession) {
+    return "";
+  }
+  return context.projectNamesByID.get(fromSession) || context.projectNamesByID.get(fromSession.toLowerCase()) || "";
+}
+
+function sanitizeRecentActivityText(
+  input: string,
+  item: RecentActivityApiItem,
+  context: RecentFormattingContext,
+): string {
+  let output = input.trim();
+  if (!output) {
+    return "";
+  }
+
+  const projectLabel = resolveRecentProjectLabel(item, context);
+  const sessionKey = (item.session_key || "").trim();
+  if (sessionKey) {
+    const agentAlias = parseSessionAgentAlias(sessionKey);
+    const actor =
+      (agentAlias && (context.agentNamesByAlias.get(agentAlias) || context.agentNamesByAlias.get(agentAlias.toLowerCase()))) ||
+      titleCaseFromSlug(agentAlias) ||
+      "Agent";
+    const scope = projectLabel ? `Project ${projectLabel}` : "Project";
+    output = output.replace(new RegExp(sessionKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), `${actor} • ${scope}`);
+  }
+  output = output.replace(/agent:([^:\s)]+):project:([^)\s]+)/gi, (_match, agentPart: string) => {
+    const agentAlias = String(agentPart || "").trim();
+    const actor =
+      (context.agentNamesByAlias.get(agentAlias) || context.agentNamesByAlias.get(agentAlias.toLowerCase())) ||
+      titleCaseFromSlug(agentAlias) ||
+      "Agent";
+    const scope = projectLabel ? `Project ${projectLabel}` : "Project";
+    return `${actor} • ${scope}`;
+  });
+
+  const projectID = (item.project_id || "").trim();
+  if (projectID && projectLabel) {
+    output = output.replace(new RegExp(projectID, "ig"), projectLabel);
+  }
+
+  const issueID = (item.issue_id || "").trim();
+  if (issueID) {
+    const issueLabel = item.issue_number ? `Issue #${item.issue_number}` : "Issue";
+    output = output.replace(new RegExp(issueID, "ig"), issueLabel);
+  }
+
+  const fallbackLabel =
+    item.trigger.toLowerCase().includes("issue")
+      ? "issue"
+      : item.trigger.toLowerCase().includes("project")
+        ? "project"
+        : "item";
+  output = output.replace(UUID_PATTERN, `this ${fallbackLabel}`);
+
+  return output.replace(/\s+/g, " ").trim();
+}
+
+function buildRecentActivityDescription(
+  item: RecentActivityApiItem,
+  context: RecentFormattingContext,
+): string {
+  const trigger = (item.trigger || "").trim().toLowerCase();
+  const projectLabel = resolveRecentProjectLabel(item, context);
+  const summary = sanitizeRecentActivityText(item.summary || "", item, context);
+  const detail = sanitizeRecentActivityText(item.detail || "", item, context);
+
+  if (trigger === "dispatch.project_chat") {
+    if (projectLabel) {
+      return `dispatched project chat for ${projectLabel}`;
+    }
+    return "dispatched project chat";
+  }
+
+  if (trigger === "system.event") {
+    if (/^session activity\b/i.test(summary)) {
+      return projectLabel ? `recorded session activity for ${projectLabel}` : "recorded session activity";
+    }
+    if (summary && !summary.toLowerCase().includes("system.event")) {
+      return summary;
+    }
+    if (detail) {
+      return detail;
+    }
+    return projectLabel ? `recorded system event for ${projectLabel}` : "recorded system event";
+  }
+
+  if (summary) {
+    return summary;
+  }
+  if (detail) {
+    return detail;
+  }
+
+  const status = (item.status || "").trim().toLowerCase();
+  if (status === "failed") {
+    return `failed ${humanizeType(item.trigger) || "activity"}`.trim();
+  }
+  if (status === "started") {
+    return `started ${humanizeType(item.trigger) || "activity"}`.trim();
+  }
+  return humanizeType(item.trigger) || "activity event";
+}
+
+function mapRecentActivityToFeedItems(
+  items: RecentActivityApiItem[],
+  context: RecentFormattingContext,
+): FeedItem[] {
   return items.map((item) => {
-    const actorName = (item.agent_id || "System").trim() || "System";
+    const actorName = resolveRecentActivityActorName(item, context);
     const trigger = (item.trigger || "activity").trim() || "activity";
     const typeConfig = getTypeConfig(trigger);
-    const description = (item.summary || "").trim() || (item.detail || "").trim() || "Activity event";
+    const description = buildRecentActivityDescription(item, context);
 
     return {
       id: item.id,
@@ -264,6 +523,7 @@ function parseRealtimeActivityEvent(payload: unknown): RecentActivityApiItem | n
     session_key: typeof record.session_key === "string" ? record.session_key : undefined,
     project_id: typeof record.project_id === "string" ? record.project_id : undefined,
     issue_id: typeof record.issue_id === "string" ? record.issue_id : undefined,
+    issue_number: typeof record.issue_number === "number" ? record.issue_number : undefined,
     thread_id: typeof record.thread_id === "string" ? record.thread_id : undefined,
     status: typeof record.status === "string" ? record.status : undefined,
     created_at: createdAt,
@@ -285,6 +545,7 @@ export default function Dashboard() {
   const [actionItems, setActionItems] = useState<ActionItem[]>(isDemoMode() ? DEMO_ACTION_ITEMS : []);
   const [feedItems, setFeedItems] = useState<FeedItem[]>(isDemoMode() ? DEMO_FEED_ITEMS : []);
   const [projects, setProjects] = useState<Project[]>(isDemoMode() ? (DEMO_PROJECTS as unknown as Project[]) : []);
+  const [agentNamesByAlias, setAgentNamesByAlias] = useState<Map<string, string>>(() => new Map());
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -337,9 +598,25 @@ export default function Dashboard() {
 
         if (cancelled) return;
 
+        const nextProjects = projectsResult.status === "fulfilled"
+          ? (projectsResult.value.projects || [])
+          : [];
+        const projectNamesByID = buildProjectNameMap(nextProjects);
+
+        const nextAgentNamesByAlias =
+          syncResult.status === "fulfilled"
+            ? buildAgentAliasNameMap(syncResult.value)
+            : new Map<string, string>();
+        setAgentNamesByAlias(nextAgentNamesByAlias);
+
         if (activityResult.status === "fulfilled" && (activityResult.value.items || []).length > 0) {
           setActionItems([]);
-          setFeedItems(mapRecentActivityToFeedItems(activityResult.value.items || []));
+          setFeedItems(
+            mapRecentActivityToFeedItems(activityResult.value.items || [], {
+              projectNamesByID,
+              agentNamesByAlias: nextAgentNamesByAlias,
+            }),
+          );
         } else {
           const feedResult = await Promise.resolve(api.feed()).then(
             (value) => ({ status: "fulfilled" as const, value }),
@@ -362,7 +639,7 @@ export default function Dashboard() {
         }
 
         if (projectsResult.status === "fulfilled") {
-          setProjects(projectsResult.value.projects || []);
+          setProjects(nextProjects);
         } else if (!isDemoMode()) {
           setProjects([]);
         }
@@ -417,7 +694,10 @@ export default function Dashboard() {
       return;
     }
 
-    const nextFeedItem = mapRecentActivityToFeedItems([realtimeEvent])[0];
+    const nextFeedItem = mapRecentActivityToFeedItems([realtimeEvent], {
+      projectNamesByID: buildProjectNameMap(projects),
+      agentNamesByAlias,
+    })[0];
     if (!nextFeedItem) {
       return;
     }
@@ -428,7 +708,7 @@ export default function Dashboard() {
     });
     setLastSync(new Date(realtimeEvent.created_at));
     setError(null);
-  }, [lastMessage]);
+  }, [agentNamesByAlias, lastMessage, projects]);
 
   const commands = useMemo<Command[]>(
     () => [
