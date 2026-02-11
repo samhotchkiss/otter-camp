@@ -1,4 +1,4 @@
-.PHONY: dev run setup seed prod-build prod-local start build build-otter install test release-gate migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean uninstall
+.PHONY: dev run setup seed prod-build prod-local start stop status build build-otter install test release-gate migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean uninstall
 
 # Development
 dev:
@@ -28,13 +28,51 @@ prod-local: prod-build
 
 start: prod-build
 	@echo "🦦 Starting Otter Camp on http://localhost:$${PORT:-4200}"
+	@# Kill any existing instances
+	@if [ -f /tmp/ottercamp-server.pid ]; then kill $$(cat /tmp/ottercamp-server.pid) 2>/dev/null || true; rm -f /tmp/ottercamp-server.pid; fi
+	@pkill -f 'openclaw-bridge.ts continuous' 2>/dev/null || true
+	@sleep 1
 	@if [ -f bridge/.env ]; then \
 		echo "🌉 Starting bridge..."; \
 		set -a; . bridge/.env; set +a; \
-		npx tsx bridge/openclaw-bridge.ts continuous &> /tmp/ottercamp-bridge.log & \
-		echo "   Bridge PID: $$!"; \
+		nohup npx tsx bridge/openclaw-bridge.ts continuous &> /tmp/ottercamp-bridge.log & \
+		echo "$$!" > /tmp/ottercamp-bridge.pid; \
+		echo "   Bridge PID: $$! (log: /tmp/ottercamp-bridge.log)"; \
 	fi
-	@STATIC_DIR=./web/dist ./bin/server
+	@STATIC_DIR=./web/dist nohup ./bin/server &> /tmp/ottercamp-server.log &\
+		echo "$$!" > /tmp/ottercamp-server.pid; \
+		echo "   Server PID: $$! (log: /tmp/ottercamp-server.log)"; \
+		sleep 2; \
+		if curl -s http://localhost:$${PORT:-4200}/health > /dev/null 2>&1; then \
+			echo "✅ Otter Camp is running at http://localhost:$${PORT:-4200}"; \
+		else \
+			echo "❌ Server failed to start. Check /tmp/ottercamp-server.log"; \
+			tail -10 /tmp/ottercamp-server.log; \
+		fi
+
+stop:
+	@echo "Stopping Otter Camp..."
+	@if [ -f /tmp/ottercamp-server.pid ]; then \
+		kill $$(cat /tmp/ottercamp-server.pid) 2>/dev/null && echo "   Server stopped" || echo "   Server not running"; \
+		rm -f /tmp/ottercamp-server.pid; \
+	else \
+		echo "   Server: no PID file"; \
+	fi
+	@pkill -f 'openclaw-bridge.ts continuous' 2>/dev/null && echo "   Bridge stopped" || echo "   Bridge not running"
+	@rm -f /tmp/ottercamp-bridge.pid
+
+status:
+	@echo "🦦 Otter Camp Status"
+	@if curl -s http://localhost:$${PORT:-4200}/health > /dev/null 2>&1; then \
+		echo "   Server: ✅ running"; \
+	else \
+		echo "   Server: ❌ not running"; \
+	fi
+	@if curl -s http://localhost:8787/health > /dev/null 2>&1; then \
+		echo "   Bridge: ✅ running"; \
+	else \
+		echo "   Bridge: ❌ not running"; \
+	fi
 
 # Build
 build:
