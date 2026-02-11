@@ -30,6 +30,7 @@ start: prod-build
 	@echo "🦦 Starting Otter Camp on http://localhost:$${PORT:-4200}"
 	@if [ -f bridge/.env ]; then \
 		echo "🌉 Starting bridge..."; \
+		set -a; . bridge/.env; set +a; \
 		npx tsx bridge/openclaw-bridge.ts continuous &> /tmp/ottercamp-bridge.log & \
 		echo "   Bridge PID: $$!"; \
 	fi

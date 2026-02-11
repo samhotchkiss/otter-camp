@@ -24,7 +24,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 const OPENCLAW_HOST = process.env.OPENCLAW_HOST || '127.0.0.1';
-const OPENCLAW_PORT = process.env.OPENCLAW_PORT || '18791';
+const OPENCLAW_PORT = process.env.OPENCLAW_PORT || '18789';
 const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || '';
 const OTTERCAMP_URL = process.env.OTTERCAMP_URL || 'https://api.otter.camp';
 const OTTERCAMP_TOKEN = process.env.OTTERCAMP_TOKEN || '';
