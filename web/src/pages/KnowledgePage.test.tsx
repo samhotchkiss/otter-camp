@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import KnowledgePage from "./KnowledgePage";
 
@@ -196,5 +197,93 @@ describe("KnowledgePage", () => {
 
     expect(await screen.findByText("Null tags should not crash")).toBeInTheDocument();
     expect(await screen.findByText("1 entries")).toBeInTheDocument();
+  });
+
+  it("creates a knowledge entry from the New Entry flow", async () => {
+    localStorage.setItem("otter-camp-user-name", "Sam");
+    let knowledgeListCalls = 0;
+    let capturedImportBody: unknown = null;
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/knowledge/import")) {
+        capturedImportBody = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+        return new Response(JSON.stringify({ inserted: 2 }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/knowledge")) {
+        const items = knowledgeListCalls === 0
+          ? [
+              {
+                id: "kb-existing",
+                title: "Existing entry",
+                content: "This already exists.",
+                tags: ["ops"],
+                created_by: "Stone",
+                created_at: "2026-02-06T12:00:00Z",
+                updated_at: "2026-02-06T12:00:00Z",
+              },
+            ]
+          : [
+              {
+                id: "kb-existing",
+                title: "Existing entry",
+                content: "This already exists.",
+                tags: ["ops"],
+                created_by: "Stone",
+                created_at: "2026-02-06T12:00:00Z",
+                updated_at: "2026-02-06T12:00:00Z",
+              },
+              {
+                id: "kb-new",
+                title: "How to add KB entries",
+                content: "Use + New Entry in the Knowledge page.",
+                tags: ["knowledge", "onboarding"],
+                created_by: "Sam",
+                created_at: "2026-02-11T06:20:00Z",
+                updated_at: "2026-02-11T06:20:00Z",
+              },
+            ];
+        knowledgeListCalls += 1;
+        return new Response(JSON.stringify({ items, total: items.length }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/memory/evaluations/latest")) {
+        return new Response(JSON.stringify({ run: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <KnowledgePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Existing entry")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "+ New Entry" }));
+    await user.type(screen.getByLabelText("Title"), "How to add KB entries");
+    await user.type(screen.getByLabelText("Content"), "Use + New Entry in the Knowledge page.");
+    await user.type(screen.getByLabelText("Tags (comma-separated)"), "knowledge, onboarding");
+    await user.click(screen.getByRole("button", { name: "Create entry" }));
+
+    expect(await screen.findByText("How to add KB entries")).toBeInTheDocument();
+    expect(capturedImportBody).toMatchObject({
+      entries: [
+        expect.objectContaining({ title: "Existing entry" }),
+        expect.objectContaining({
+          title: "How to add KB entries",
+          created_by: "Sam",
+          tags: ["knowledge", "onboarding"],
+        }),
+      ],
+    });
   });
 });

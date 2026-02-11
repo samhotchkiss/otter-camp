@@ -8,7 +8,7 @@
  * - Entry detail modal
  */
 
-import { useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiFetch, type ApiError } from '../lib/api';
 
@@ -25,6 +25,17 @@ interface KnowledgeEntry {
 interface KnowledgeListResponse {
   items: KnowledgeEntry[];
   total: number;
+}
+
+interface KnowledgeImportEntry {
+  title: string;
+  content: string;
+  tags: string[];
+  created_by: string;
+}
+
+interface KnowledgeImportResponse {
+  inserted: number;
 }
 
 interface MemoryEvaluationSummary {
@@ -58,39 +69,112 @@ export default function KnowledgePage() {
   const [selectedEntry, setSelectedEntry] = useState<KnowledgeEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isCreatingEntry, setIsCreatingEntry] = useState(false);
+  const [createEntryError, setCreateEntryError] = useState<string | null>(null);
+  const [newEntryTitle, setNewEntryTitle] = useState("");
+  const [newEntryContent, setNewEntryContent] = useState("");
+  const [newEntryTags, setNewEntryTags] = useState("");
+  const [newEntryAuthor, setNewEntryAuthor] = useState("");
   const [evaluation, setEvaluation] = useState<MemoryEvaluationSummary | null>(null);
   const [evaluationLoading, setEvaluationLoading] = useState(true);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let active = true;
+  const loadEntries = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
 
-    void apiFetch<KnowledgeListResponse>('/api/knowledge')
-      .then((payload) => {
-        if (!active) return;
-        const normalizedEntries = (payload.items ?? []).map((entry) => ({
-          ...entry,
-          tags: entry.tags ?? [],
-        }));
-        setEntries(normalizedEntries);
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
-        const message = error instanceof Error ? error.message : 'Failed to load knowledge entries';
-        setLoadError(message);
-        setEntries([]);
-      })
-      .finally(() => {
-        if (!active) return;
-        setLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
+    try {
+      const payload = await apiFetch<KnowledgeListResponse>('/api/knowledge');
+      const normalizedEntries = (payload.items ?? []).map((entry) => ({
+        ...entry,
+        tags: entry.tags ?? [],
+      }));
+      setEntries(normalizedEntries);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to load knowledge entries';
+      setLoadError(message);
+      setEntries([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadEntries();
+  }, [loadEntries]);
+
+  function normalizeTagsInput(rawTags: string): string[] {
+    return [...new Set(rawTags
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter((tag) => tag.length > 0))];
+  }
+
+  function toKnowledgeImportEntry(entry: KnowledgeEntry): KnowledgeImportEntry {
+    return {
+      title: entry.title,
+      content: entry.content,
+      tags: entry.tags ?? [],
+      created_by: entry.created_by,
+    };
+  }
+
+  function resetNewEntryDraft(): void {
+    setNewEntryTitle("");
+    setNewEntryContent("");
+    setNewEntryTags("");
+    setCreateEntryError(null);
+    const storedUserName = (window.localStorage.getItem("otter-camp-user-name") ?? "").trim();
+    setNewEntryAuthor(storedUserName || "You");
+  }
+
+  function openCreateModal(): void {
+    resetNewEntryDraft();
+    setIsCreateModalOpen(true);
+  }
+
+  async function handleCreateEntry(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (isCreatingEntry) {
+      return;
+    }
+
+    const title = newEntryTitle.trim();
+    const content = newEntryContent.trim();
+    const createdBy = newEntryAuthor.trim() || "You";
+    const tags = normalizeTagsInput(newEntryTags);
+    if (!title || !content) {
+      setCreateEntryError("Title and content are required.");
+      return;
+    }
+
+    setCreateEntryError(null);
+    setIsCreatingEntry(true);
+    try {
+      const mergedEntries: KnowledgeImportEntry[] = [
+        ...entries.map((entry) => toKnowledgeImportEntry(entry)),
+        {
+          title,
+          content,
+          tags,
+          created_by: createdBy,
+        },
+      ];
+      await apiFetch<KnowledgeImportResponse>("/api/knowledge/import", {
+        method: "POST",
+        body: JSON.stringify({ entries: mergedEntries }),
+      });
+      await loadEntries();
+      setIsCreateModalOpen(false);
+      setSelectedTag(null);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to create knowledge entry";
+      setCreateEntryError(message);
+    } finally {
+      setIsCreatingEntry(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -142,7 +226,9 @@ export default function KnowledgePage() {
           <h1 className="page-title">Knowledge Base</h1>
           <span className="entry-count">{entries.length} entries</span>
         </div>
-        <button className="btn btn-primary">+ New Entry</button>
+        <button type="button" className="btn btn-primary" onClick={openCreateModal}>
+          + New Entry
+        </button>
       </header>
 
       <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -299,6 +385,88 @@ export default function KnowledgePage() {
               <button className="btn btn-secondary">Edit</button>
               <button className="btn btn-ghost">Delete</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isCreateModalOpen && (
+        <div className="modal-overlay" onClick={() => {
+          if (!isCreatingEntry) {
+            setIsCreateModalOpen(false);
+          }
+        }}>
+          <div className="entry-modal" onClick={(event) => event.stopPropagation()}>
+            <header className="entry-modal-header">
+              <h2>New knowledge entry</h2>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setIsCreateModalOpen(false)}
+                disabled={isCreatingEntry}
+              >
+                ✕
+              </button>
+            </header>
+            <form className="space-y-3" onSubmit={(event) => void handleCreateEntry(event)}>
+              <label className="block text-sm text-[var(--text-muted)]">
+                Title
+                <input
+                  type="text"
+                  value={newEntryTitle}
+                  onChange={(event) => setNewEntryTitle(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  placeholder="Short, specific title"
+                  disabled={isCreatingEntry}
+                />
+              </label>
+              <label className="block text-sm text-[var(--text-muted)]">
+                Content
+                <textarea
+                  value={newEntryContent}
+                  onChange={(event) => setNewEntryContent(event.target.value)}
+                  className="mt-1 min-h-36 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  placeholder="Write the knowledge entry body"
+                  disabled={isCreatingEntry}
+                />
+              </label>
+              <label className="block text-sm text-[var(--text-muted)]">
+                Tags (comma-separated)
+                <input
+                  type="text"
+                  value={newEntryTags}
+                  onChange={(event) => setNewEntryTags(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  placeholder="product, onboarding, faq"
+                  disabled={isCreatingEntry}
+                />
+              </label>
+              <label className="block text-sm text-[var(--text-muted)]">
+                Author
+                <input
+                  type="text"
+                  value={newEntryAuthor}
+                  onChange={(event) => setNewEntryAuthor(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  disabled={isCreatingEntry}
+                />
+              </label>
+              {createEntryError ? (
+                <p className="text-sm text-rose-500">{createEntryError}</p>
+              ) : null}
+              <div className="entry-modal-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setIsCreateModalOpen(false)}
+                  disabled={isCreatingEntry}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={isCreatingEntry}>
+                  {isCreatingEntry ? "Saving..." : "Create entry"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
