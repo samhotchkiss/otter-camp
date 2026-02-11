@@ -328,6 +328,7 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issue = h.maybeAutoReadyForReviewFromWorkStatus(r.Context(), issue)
+	h.applyAutomaticIssueLabelsBestEffort(r.Context(), issue)
 
 	if issue.OwnerAgentID != nil {
 		if _, err := h.IssueStore.AddParticipant(r.Context(), store.AddProjectIssueParticipantInput{
@@ -406,6 +407,7 @@ func (h *IssuesHandler) CreateLinkedIssue(w http.ResponseWriter, r *http.Request
 		return
 	}
 	issue = h.maybeAutoReadyForReviewFromWorkStatus(r.Context(), issue)
+	h.applyAutomaticIssueLabelsBestEffort(r.Context(), issue)
 
 	if issue.OwnerAgentID != nil {
 		if _, err := h.IssueStore.AddParticipant(r.Context(), store.AddProjectIssueParticipantInput{
@@ -854,6 +856,7 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updated = h.maybeAutoReadyForReviewFromWorkStatus(r.Context(), updated)
+	h.applyAutomaticIssueLabelsBestEffort(r.Context(), updated)
 	if shouldDispatchIssueKickoffAfterPatch(*beforeIssue, *updated, req) {
 		h.dispatchIssueKickoffBestEffort(r.Context(), *updated)
 	}
@@ -1102,6 +1105,129 @@ func (h *IssuesHandler) maybeAutoReadyForReviewFromWorkStatus(
 		return issue
 	}
 	return updated
+}
+
+func (h *IssuesHandler) applyAutomaticIssueLabelsBestEffort(
+	ctx context.Context,
+	issue *store.ProjectIssue,
+) {
+	if issue == nil || h.DB == nil {
+		return
+	}
+
+	labelStore := store.NewLabelStore(h.DB)
+	if err := labelStore.EnsurePresetLabels(ctx); err != nil {
+		log.Printf("issues: failed to seed preset labels for issue %s: %v", issue.ID, err)
+		return
+	}
+
+	labelNames := inferAutomaticIssueLabelNames(*issue)
+	projectLabels, err := labelStore.ListForProject(ctx, issue.ProjectID)
+	if err != nil {
+		log.Printf("issues: failed to load project labels for issue %s: %v", issue.ID, err)
+	} else {
+		for _, label := range projectLabels {
+			labelNames = append(labelNames, label.Name)
+		}
+	}
+
+	seen := make(map[string]struct{}, len(labelNames))
+	for _, raw := range labelNames {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+
+		label, err := labelStore.EnsureByName(ctx, name, "")
+		if err != nil {
+			log.Printf("issues: failed to resolve label %q for issue %s: %v", name, issue.ID, err)
+			continue
+		}
+		if err := labelStore.AddToIssue(ctx, issue.ID, label.ID); err != nil {
+			log.Printf("issues: failed to apply label %q to issue %s: %v", name, issue.ID, err)
+		}
+	}
+}
+
+func inferAutomaticIssueLabelNames(issue store.ProjectIssue) []string {
+	parts := []string{strings.TrimSpace(issue.Title)}
+	if issue.Body != nil {
+		parts = append(parts, strings.TrimSpace(*issue.Body))
+	}
+	if issue.DocumentPath != nil {
+		parts = append(parts, strings.TrimSpace(*issue.DocumentPath))
+	}
+	text := strings.ToLower(strings.Join(parts, " "))
+
+	labels := make([]string, 0, 6)
+	if strings.TrimSpace(strings.ToLower(issue.WorkStatus)) == store.IssueWorkStatusBlocked {
+		labels = append(labels, "blocked")
+	}
+	if strings.TrimSpace(strings.ToLower(issue.WorkStatus)) == store.IssueWorkStatusReview ||
+		strings.TrimSpace(strings.ToLower(issue.ApprovalState)) == store.IssueApprovalStateReadyForReview ||
+		strings.TrimSpace(strings.ToLower(issue.ApprovalState)) == store.IssueApprovalStateNeedsChanges {
+		labels = append(labels, "needs-review")
+	}
+	if containsAnyIssueKeyword(text, []string{
+		"quick", "quick-win", "small", "minor", "typo", "cleanup", "refactor",
+	}) {
+		labels = append(labels, "quick-win")
+	}
+
+	topicalAssigned := false
+	if containsAnyIssueKeyword(text, []string{
+		"bug", "fix", "broken", "regression", "error", "crash", "failing", "failure",
+	}) {
+		labels = append(labels, "bug")
+		topicalAssigned = true
+	} else if containsAnyIssueKeyword(text, []string{
+		"feature", "implement", "add", "enable", "support",
+	}) {
+		labels = append(labels, "feature")
+		topicalAssigned = true
+	}
+	if containsAnyIssueKeyword(text, []string{
+		"design", "ux", "ui", "layout", "styling", "theme", "branding",
+	}) {
+		labels = append(labels, "design")
+		topicalAssigned = true
+	}
+	if containsAnyIssueKeyword(text, []string{
+		"content", "docs", "documentation", "readme", "markdown", ".md", "write", "writing", "poem", "article", "blog", "identity",
+	}) {
+		labels = append(labels, "content")
+		topicalAssigned = true
+	}
+	if containsAnyIssueKeyword(text, []string{
+		"infra", "infrastructure", "deploy", "deployment", "pipeline", "ci", "cd", "docker", "kubernetes", "server", "database", "migration", "oauth", "auth",
+	}) {
+		labels = append(labels, "infrastructure")
+		topicalAssigned = true
+	}
+	if containsAnyIssueKeyword(text, []string{
+		"personal", "my ", "myself", "for me",
+	}) {
+		labels = append(labels, "personal")
+		topicalAssigned = true
+	}
+	if !topicalAssigned {
+		labels = append(labels, "product")
+	}
+
+	return labels
+}
+
+func containsAnyIssueKeyword(text string, keywords []string) bool {
+	for _, keyword := range keywords {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildIssueKickoffMessage(issue store.ProjectIssue) string {

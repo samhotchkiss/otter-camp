@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -740,6 +741,116 @@ func TestIssuesHandlerCreateIssueCreatesStandaloneIssueWithWorkTrackingFields(t 
 	require.Len(t, participants, 1)
 	require.Equal(t, ownerAgentID, participants[0].AgentID)
 	require.Equal(t, "owner", participants[0].Role)
+}
+
+func TestIssuesHandlerCreateIssueAutoAppliesInferredAndProjectLabels(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-auto-label-create-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Auto Label Project")
+
+	ctx := issueTestCtx(orgID)
+	labelStore := store.NewLabelStore(db)
+	require.NoError(t, labelStore.EnsurePresetLabels(ctx))
+	infraLabel, err := labelStore.GetByName(ctx, "infrastructure")
+	require.NoError(t, err)
+	require.NoError(t, labelStore.AddToProject(ctx, projectID, infraLabel.ID))
+
+	issueStore := store.NewProjectIssueStore(db)
+	handler := &IssuesHandler{
+		IssueStore:   issueStore,
+		ProjectStore: store.NewProjectStore(db),
+		DB:           db,
+	}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/issues?org_id="+orgID,
+		bytes.NewReader([]byte(`{
+			"title":"Fix broken deploy pipeline typo",
+			"body":"Release build is failing after migration."
+		}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var summary issueSummaryPayload
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&summary))
+	labels, err := labelStore.ListForIssue(ctx, summary.ID)
+	require.NoError(t, err)
+	names := issueLabelNames(labels)
+	require.Contains(t, names, "bug")
+	require.Contains(t, names, "infrastructure")
+	require.Contains(t, names, "quick-win")
+}
+
+func TestIssuesHandlerPatchIssueAutoAddsStatusDrivenLabels(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-auto-label-patch-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Auto Label Patch Project")
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Write onboarding docs",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore: issueStore,
+		DB:         db,
+	}
+	router := newIssueTestRouter(handler)
+
+	blockedReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"work_status":"blocked"}`)),
+	)
+	blockedRec := httptest.NewRecorder()
+	router.ServeHTTP(blockedRec, blockedReq)
+	require.Equal(t, http.StatusOK, blockedRec.Code)
+
+	inProgressReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"work_status":"in_progress"}`)),
+	)
+	inProgressRec := httptest.NewRecorder()
+	router.ServeHTTP(inProgressRec, inProgressReq)
+	require.Equal(t, http.StatusOK, inProgressRec.Code)
+
+	doneReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"work_status":"done"}`)),
+	)
+	doneRec := httptest.NewRecorder()
+	router.ServeHTTP(doneRec, doneReq)
+	require.Equal(t, http.StatusOK, doneRec.Code)
+
+	updated, err := issueStore.GetIssueByID(ctx, issue.ID)
+	require.NoError(t, err)
+	require.Equal(t, store.IssueApprovalStateReadyForReview, updated.ApprovalState)
+
+	labels, err := store.NewLabelStore(db).ListForIssue(ctx, issue.ID)
+	require.NoError(t, err)
+	names := issueLabelNames(labels)
+	require.Contains(t, names, "blocked")
+	require.Contains(t, names, "content")
+	require.Contains(t, names, "needs-review")
+}
+
+func issueLabelNames(labels []store.Label) []string {
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		names = append(names, strings.TrimSpace(strings.ToLower(label.Name)))
+	}
+	sort.Strings(names)
+	return names
 }
 
 func TestIssuesHandlerCreateIssueDispatchesKickoffToAssignedAgent(t *testing.T) {
