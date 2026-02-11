@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { apiFetch } from '../lib/api';
+import { apiFetch, type ApiError } from '../lib/api';
 
 interface KnowledgeEntry {
   id: string;
@@ -104,6 +104,12 @@ export default function KnowledgePage() {
       })
       .catch((error: unknown) => {
         if (!active) return;
+        if (error && typeof error === "object" && (error as ApiError).status === 404) {
+          // Older deployments may not expose evaluation APIs yet.
+          setEvaluation(null);
+          setEvaluationError(null);
+          return;
+        }
         const message = error instanceof Error ? error.message : 'Failed to load memory evaluation summary';
         setEvaluationError(message);
         setEvaluation(null);

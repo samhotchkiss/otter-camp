@@ -112,6 +112,48 @@ describe("KnowledgePage", () => {
     expect(await screen.findByText(/Evaluation unavailable/)).toBeInTheDocument();
   });
 
+  it("treats missing evaluation endpoint as unavailable-not-error", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/knowledge")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "kb-404-eval",
+                title: "Feed still works",
+                content: "Knowledge entries should render even if eval endpoint is absent.",
+                tags: ["ops"],
+                created_by: "Nova",
+                created_at: "2026-02-06T12:00:00Z",
+                updated_at: "2026-02-06T12:00:00Z",
+              },
+            ],
+            total: 1,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("/api/memory/evaluations/latest")) {
+        return new Response(JSON.stringify({ error: "not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    render(
+      <MemoryRouter>
+        <KnowledgePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Feed still works")).toBeInTheDocument();
+    expect(screen.queryByText(/Evaluation unavailable/)).not.toBeInTheDocument();
+    expect(await screen.findByText("No evaluation runs recorded yet.")).toBeInTheDocument();
+  });
+
   it("handles knowledge entries with null tags", async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
