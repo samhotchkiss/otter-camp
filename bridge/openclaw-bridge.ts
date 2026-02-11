@@ -371,6 +371,13 @@ type OpenClawToolEvent = {
   args?: Record<string, unknown>;
 };
 
+type MutationTargetValidationResult = {
+  allowed: boolean;
+  targets: string[];
+  invalidTargets: string[];
+  reason?: 'not_mutation_tool' | 'missing_target_paths' | 'outside_project_root';
+};
+
 type WhoAmITaskPointer = {
   project?: string;
   issue?: string;
@@ -2622,6 +2629,143 @@ export async function isPathWithinProjectRoot(projectRoot: string, targetPath: s
     return false;
   }
   return true;
+}
+
+const MUTATION_TOOL_NAMES = new Set(['write', 'edit', 'apply_patch']);
+const MUTATION_PATH_ARG_KEYS = [
+  'path',
+  'file_path',
+  'filepath',
+  'filename',
+  'target',
+  'target_path',
+  'targetPath',
+];
+const APPLY_PATCH_HEADER_PATTERN = /^\*\*\* (?:Add File|Update File|Delete File|Move to):\s+(.+)$/;
+const UNIFIED_DIFF_TARGET_PATTERN = /^\+\+\+\s+(?:[ab]\/)?(.+)$/;
+
+function addUniquePath(paths: string[], rawPath: string): void {
+  const trimmed = getTrimmedString(rawPath);
+  if (!trimmed || trimmed === '/dev/null') {
+    return;
+  }
+  if (paths.includes(trimmed)) {
+    return;
+  }
+  paths.push(trimmed);
+}
+
+function extractPathValuesFromArgs(args: Record<string, unknown>, out: string[]): void {
+  for (const key of MUTATION_PATH_ARG_KEYS) {
+    const value = args[key];
+    if (typeof value === 'string') {
+      addUniquePath(out, value);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (typeof entry === 'string') {
+          addUniquePath(out, entry);
+        }
+      }
+    }
+  }
+}
+
+function extractApplyPatchTargets(args: Record<string, unknown>, out: string[]): void {
+  const patchText =
+    getTrimmedString(args.patch) ||
+    getTrimmedString(args.diff) ||
+    getTrimmedString(args.patch_text) ||
+    getTrimmedString(args.input);
+  if (!patchText) {
+    return;
+  }
+
+  for (const line of patchText.split(/\r?\n/)) {
+    const headerMatch = APPLY_PATCH_HEADER_PATTERN.exec(line);
+    if (headerMatch) {
+      addUniquePath(out, getTrimmedString(headerMatch[1] || ''));
+      continue;
+    }
+    const diffTargetMatch = UNIFIED_DIFF_TARGET_PATTERN.exec(line);
+    if (diffTargetMatch) {
+      addUniquePath(out, getTrimmedString(diffTargetMatch[1] || ''));
+    }
+  }
+}
+
+function extractMutationToolTargetPaths(toolName: string, args: Record<string, unknown>): string[] {
+  const normalizedTool = getTrimmedString(toolName).toLowerCase();
+  if (!MUTATION_TOOL_NAMES.has(normalizedTool)) {
+    return [];
+  }
+
+  const targets: string[] = [];
+  extractPathValuesFromArgs(args, targets);
+  if (normalizedTool === 'apply_patch') {
+    extractApplyPatchTargets(args, targets);
+  }
+  return targets;
+}
+
+export function extractMutationToolTargetPathsForTest(toolName: string, args: Record<string, unknown>): string[] {
+  return [...extractMutationToolTargetPaths(toolName, args)];
+}
+
+async function validateMutationToolTargetsWithinProjectRoot(
+  projectRoot: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<MutationTargetValidationResult> {
+  const normalizedTool = getTrimmedString(toolName).toLowerCase();
+  if (!MUTATION_TOOL_NAMES.has(normalizedTool)) {
+    return {
+      allowed: true,
+      targets: [],
+      invalidTargets: [],
+      reason: 'not_mutation_tool',
+    };
+  }
+
+  const targets = extractMutationToolTargetPaths(normalizedTool, args);
+  if (targets.length === 0) {
+    return {
+      allowed: false,
+      targets: [],
+      invalidTargets: [],
+      reason: 'missing_target_paths',
+    };
+  }
+
+  const invalidTargets: string[] = [];
+  for (const target of targets) {
+    if (!(await isPathWithinProjectRoot(projectRoot, target))) {
+      invalidTargets.push(target);
+    }
+  }
+  if (invalidTargets.length > 0) {
+    return {
+      allowed: false,
+      targets,
+      invalidTargets,
+      reason: 'outside_project_root',
+    };
+  }
+
+  return {
+    allowed: true,
+    targets,
+    invalidTargets: [],
+  };
+}
+
+export async function validateMutationToolTargetsWithinProjectRootForTest(
+  projectRoot: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<MutationTargetValidationResult> {
+  return validateMutationToolTargetsWithinProjectRoot(projectRoot, toolName, args);
 }
 
 export function resolveExecutionMode(context: SessionContext): ExecutionMode {

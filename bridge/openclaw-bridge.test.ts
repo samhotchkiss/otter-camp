@@ -14,6 +14,7 @@ import {
   formatSessionSystemPromptForTest,
   formatSessionDisplayLabel,
   getSessionContextForTest,
+  extractMutationToolTargetPathsForTest,
   isPathWithinProjectRoot,
   formatQuestionnaireForFallback,
   isCompactWhoAmIInsufficient,
@@ -41,6 +42,7 @@ import {
   triggerOpenClawCloseForTest,
   handleOpenClawEventForTest,
   getIngestedToolEventsStateForTest,
+  validateMutationToolTargetsWithinProjectRootForTest,
   type QuestionnairePayload,
   type QuestionnaireQuestion,
 } from "./openclaw-bridge";
@@ -722,6 +724,71 @@ describe("bridge execution mode + path guard helpers", () => {
       assert.equal(await isPathWithinProjectRoot(projectRoot, "../outside/secret.md"), false);
       assert.equal(await isPathWithinProjectRoot(projectRoot, "linked-outside/secret.md"), false);
       assert.equal(await isPathWithinProjectRoot(projectRootLink, "notes/today.md"), false);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bridge mutation target extraction + validation helpers", () => {
+  it("extracts mutation targets across write/edit/apply_patch arg shapes", () => {
+    const writeTargets = extractMutationToolTargetPathsForTest("write", {
+      path: "notes/today.md",
+      content: "hello",
+    });
+    assert.deepEqual(writeTargets, ["notes/today.md"]);
+
+    const editTargets = extractMutationToolTargetPathsForTest("edit", {
+      file_path: "src/app.ts",
+      old_string: "before",
+      new_string: "after",
+    });
+    assert.deepEqual(editTargets, ["src/app.ts"]);
+
+    const applyPatchTargets = extractMutationToolTargetPathsForTest("apply_patch", {
+      patch: [
+        "*** Begin Patch",
+        "*** Update File: web/src/main.tsx",
+        "*** Add File: docs/notes.md",
+        "*** Move to: web/src/app.tsx",
+        "*** End Patch",
+      ].join("\n"),
+    });
+    assert.deepEqual(applyPatchTargets, ["web/src/main.tsx", "docs/notes.md", "web/src/app.tsx"]);
+  });
+
+  it("validates mutation targets against project root and rejects traversal/symlink escapes", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "otter-mutation-targets-"));
+    const projectRoot = path.join(tempRoot, "project");
+    const outsideRoot = path.join(tempRoot, "outside");
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.mkdirSync(outsideRoot, { recursive: true });
+    fs.symlinkSync(outsideRoot, path.join(projectRoot, "linked-outside"));
+
+    try {
+      const allowed = await validateMutationToolTargetsWithinProjectRootForTest(
+        projectRoot,
+        "write",
+        { path: "notes/today.md" },
+      );
+      assert.equal(allowed.allowed, true);
+      assert.deepEqual(allowed.invalidTargets, []);
+
+      const traversalBlocked = await validateMutationToolTargetsWithinProjectRootForTest(
+        projectRoot,
+        "write",
+        { path: "../outside/secret.md" },
+      );
+      assert.equal(traversalBlocked.allowed, false);
+      assert.deepEqual(traversalBlocked.invalidTargets, ["../outside/secret.md"]);
+
+      const symlinkBlocked = await validateMutationToolTargetsWithinProjectRootForTest(
+        projectRoot,
+        "write",
+        { path: "linked-outside/secret.md" },
+      );
+      assert.equal(symlinkBlocked.allowed, false);
+      assert.deepEqual(symlinkBlocked.invalidTargets, ["linked-outside/secret.md"]);
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
