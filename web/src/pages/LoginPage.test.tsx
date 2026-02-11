@@ -48,6 +48,17 @@ describe("LoginPage", () => {
     expect(screen.queryByLabelText(/email address/i)).not.toBeInTheDocument();
   });
 
+  it("shows decision-aligned copy for local and hosted paths", async () => {
+    const user = userEvent.setup();
+    render(<LoginPage />);
+
+    expect(screen.getByText(/local setup is available now via magic link/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /hosted setup/i }));
+
+    expect(screen.getByText(/hosted setup is deferred for now/i)).toBeInTheDocument();
+  });
+
   it("submits local mode via login", async () => {
     const user = userEvent.setup();
     let resolveLogin: (() => void) | null = null;

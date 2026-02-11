@@ -72,64 +72,67 @@ export default function LoginPage() {
               )}
 
               {setupMode === "local" ? (
-                <form onSubmit={handleSubmit}>
-                  <div className="form-group">
-                    <label htmlFor="name" className="form-label">
-                      Name
-                    </label>
-                    <input
-                      id="name"
-                      type="text"
-                      className="form-input"
-                      placeholder="Your name"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      autoComplete="name"
-                      autoFocus
-                    />
-                  </div>
+                <>
+                  <p className="mode-copy">Local setup is available now via magic link.</p>
+                  <form onSubmit={handleSubmit}>
+                    <div className="form-group">
+                      <label htmlFor="name" className="form-label">
+                        Name
+                      </label>
+                      <input
+                        id="name"
+                        type="text"
+                        className="form-input"
+                        placeholder="Your name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        autoComplete="name"
+                        autoFocus
+                      />
+                    </div>
 
-                  <div className="form-group">
-                    <label htmlFor="org" className="form-label">
-                      Organization
-                    </label>
-                    <input
-                      id="org"
-                      type="text"
-                      className="form-input"
-                      placeholder="Your org name"
-                      value={org}
-                      onChange={(e) => setOrg(e.target.value)}
-                    />
-                  </div>
+                    <div className="form-group">
+                      <label htmlFor="org" className="form-label">
+                        Organization
+                      </label>
+                      <input
+                        id="org"
+                        type="text"
+                        className="form-input"
+                        placeholder="Your org name"
+                        value={org}
+                        onChange={(e) => setOrg(e.target.value)}
+                      />
+                    </div>
 
-                  <div className="form-group">
-                    <label htmlFor="email" className="form-label">
-                      Email address
-                    </label>
-                    <input
-                      id="email"
-                      type="email"
-                      className="form-input"
-                      placeholder="you@example.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      required
-                      autoComplete="email"
-                    />
-                    <p className="form-hint">
-                      We'll generate a magic link to sign in
-                    </p>
-                  </div>
+                    <div className="form-group">
+                      <label htmlFor="email" className="form-label">
+                        Email address
+                      </label>
+                      <input
+                        id="email"
+                        type="email"
+                        className="form-input"
+                        placeholder="you@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        required
+                        autoComplete="email"
+                      />
+                      <p className="form-hint">
+                        We'll generate a magic link to sign in
+                      </p>
+                    </div>
 
-                  <button
-                    type="submit"
-                    className="btn btn-primary"
-                    disabled={isSubmitting}
-                  >
-                    {isSubmitting ? "Sending..." : "Generate Magic Link"}
-                  </button>
-                </form>
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? "Sending..." : "Generate Magic Link"}
+                    </button>
+                  </form>
+                </>
               ) : (
                 <div className="hosted-panel">
                   <h3 className="hosted-title">Hosted onboarding is moving to otter.camp/setup</h3>
@@ -264,6 +267,12 @@ export default function LoginPage() {
           border-color: var(--accent, #C9A86C);
           background: rgba(201, 168, 108, 0.18);
           color: var(--text, #FAF8F5);
+        }
+
+        .mode-copy {
+          color: var(--text-muted, #A69582);
+          font-size: 14px;
+          margin: 0 0 16px;
         }
 
         .form-group {
