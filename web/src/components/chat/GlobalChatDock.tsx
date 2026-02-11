@@ -368,7 +368,7 @@ export default function GlobalChatDock() {
           </div>
         ) : null}
 
-        <div className={`grid grid-cols-[260px_1fr] ${isFullscreen ? "h-[calc(100%-44px)]" : "h-[min(72vh,620px)] max-h-[calc(100vh-2rem)]"}`}>
+        <div className={`grid grid-cols-[260px_minmax(0,1fr)] ${isFullscreen ? "h-[calc(100%-44px)]" : "h-[min(72vh,620px)] max-h-[calc(100vh-2rem)]"}`}>
           <aside className="min-h-0 border-r border-[var(--border)] bg-[var(--surface-alt)]/50">
             <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2 text-[11px]">
               <span className="font-semibold text-[var(--text)]">Active chats</span>
@@ -461,7 +461,7 @@ export default function GlobalChatDock() {
             </div>
           </aside>
 
-          <div className="flex h-full min-h-0 flex-col">
+          <div className="flex h-full min-h-0 min-w-0 flex-col">
             {selectedConversation ? (
               <>
                 {(() => {
