@@ -24,26 +24,26 @@ type ProjectsHandler struct {
 }
 
 type projectAPIResponse struct {
-	ID                string          `json:"id"`
-	OrgID             string          `json:"org_id,omitempty"`
-	Name              string          `json:"name"`
-	Description       string          `json:"description,omitempty"`
-	RepoURL           string          `json:"repo_url,omitempty"`
-	RequireHumanReview bool           `json:"require_human_review"`
-	Status            string          `json:"status"`
-	Labels            []store.Label   `json:"labels"`
-	Lead              string          `json:"lead,omitempty"`
-	PrimaryAgentID    *string         `json:"primary_agent_id,omitempty"`
-	WorkflowEnabled   bool            `json:"workflow_enabled"`
-	WorkflowSchedule  json.RawMessage `json:"workflow_schedule,omitempty"`
-	WorkflowTemplate  json.RawMessage `json:"workflow_template,omitempty"`
-	WorkflowAgentID   *string         `json:"workflow_agent_id,omitempty"`
-	WorkflowLastRunAt *string         `json:"workflow_last_run_at,omitempty"`
-	WorkflowNextRunAt *string         `json:"workflow_next_run_at,omitempty"`
-	WorkflowRunCount  int             `json:"workflow_run_count"`
-	CreatedAt         string          `json:"created_at,omitempty"`
-	TaskCount         int             `json:"taskCount"`
-	CompletedCount    int             `json:"completedCount"`
+	ID                 string          `json:"id"`
+	OrgID              string          `json:"org_id,omitempty"`
+	Name               string          `json:"name"`
+	Description        string          `json:"description,omitempty"`
+	RepoURL            string          `json:"repo_url,omitempty"`
+	RequireHumanReview bool            `json:"require_human_review"`
+	Status             string          `json:"status"`
+	Labels             []store.Label   `json:"labels"`
+	Lead               string          `json:"lead,omitempty"`
+	PrimaryAgentID     *string         `json:"primary_agent_id,omitempty"`
+	WorkflowEnabled    bool            `json:"workflow_enabled"`
+	WorkflowSchedule   json.RawMessage `json:"workflow_schedule,omitempty"`
+	WorkflowTemplate   json.RawMessage `json:"workflow_template,omitempty"`
+	WorkflowAgentID    *string         `json:"workflow_agent_id,omitempty"`
+	WorkflowLastRunAt  *string         `json:"workflow_last_run_at,omitempty"`
+	WorkflowNextRunAt  *string         `json:"workflow_next_run_at,omitempty"`
+	WorkflowRunCount   int             `json:"workflow_run_count"`
+	CreatedAt          string          `json:"created_at,omitempty"`
+	TaskCount          int             `json:"taskCount"`
+	CompletedCount     int             `json:"completedCount"`
 }
 
 type projectWorkflowRunResponse struct {
@@ -371,6 +371,7 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Description       *string          `json:"description"`
 		Status            string           `json:"status"`
 		RepoURL           *string          `json:"repo_url"`
+		PrimaryAgentID    *string          `json:"primary_agent_id"`
 		WorkflowEnabled   bool             `json:"workflow_enabled"`
 		WorkflowSchedule  *json.RawMessage `json:"workflow_schedule"`
 		WorkflowTemplate  *json.RawMessage `json:"workflow_template"`
@@ -445,6 +446,41 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	primaryAgentID := input.PrimaryAgentID
+	if primaryAgentID != nil {
+		trimmed := strings.TrimSpace(*primaryAgentID)
+		if trimmed == "" {
+			primaryAgentID = nil
+		} else {
+			primaryAgentID = &trimmed
+		}
+	}
+	if err := validateOptionalUUID(primaryAgentID, "primary_agent_id"); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	if primaryAgentID != nil {
+		if !supportsProjectPrimaryAgentColumn(r.Context(), h.DB) {
+			sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "project settings migration pending; primary agent not available yet"})
+			return
+		}
+		var exists bool
+		err := h.DB.QueryRowContext(
+			r.Context(),
+			"SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1 AND org_id = $2)",
+			*primaryAgentID,
+			workspaceID,
+		).Scan(&exists)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate primary agent"})
+			return
+		}
+		if !exists {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "primary_agent_id not found in workspace"})
+			return
+		}
+	}
+
 	workflowLastRunAt, err := parseProjectOptionalRFC3339(input.WorkflowLastRunAt, "workflow_last_run_at")
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
@@ -498,6 +534,20 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if primaryAgentID != nil {
+		if _, updateErr := h.DB.ExecContext(
+			ctx,
+			`UPDATE projects SET primary_agent_id = $1 WHERE id = $2 AND org_id = $3`,
+			*primaryAgentID,
+			project.ID,
+			workspaceID,
+		); updateErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to assign primary agent"})
+			return
+		}
+		project.PrimaryAgentID = primaryAgentID
+	}
+
 	sendJSON(w, http.StatusCreated, project)
 }
 
@@ -529,19 +579,19 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
-		Name              *string          `json:"name"`
-		Description       *string          `json:"description"`
-		Status            *string          `json:"status"`
-		RepoURL           *string          `json:"repo_url"`
+		Name                    *string          `json:"name"`
+		Description             *string          `json:"description"`
+		Status                  *string          `json:"status"`
+		RepoURL                 *string          `json:"repo_url"`
 		RequireHumanReview      *bool            `json:"requireHumanReview"`
 		RequireHumanReviewSnake *bool            `json:"require_human_review"`
-		WorkflowEnabled   *bool            `json:"workflow_enabled"`
-		WorkflowSchedule  *json.RawMessage `json:"workflow_schedule"`
-		WorkflowTemplate  *json.RawMessage `json:"workflow_template"`
-		WorkflowAgentID   *string          `json:"workflow_agent_id"`
-		WorkflowLastRunAt *string          `json:"workflow_last_run_at"`
-		WorkflowNextRunAt *string          `json:"workflow_next_run_at"`
-		WorkflowRunCount  *int             `json:"workflow_run_count"`
+		WorkflowEnabled         *bool            `json:"workflow_enabled"`
+		WorkflowSchedule        *json.RawMessage `json:"workflow_schedule"`
+		WorkflowTemplate        *json.RawMessage `json:"workflow_template"`
+		WorkflowAgentID         *string          `json:"workflow_agent_id"`
+		WorkflowLastRunAt       *string          `json:"workflow_last_run_at"`
+		WorkflowNextRunAt       *string          `json:"workflow_next_run_at"`
+		WorkflowRunCount        *int             `json:"workflow_run_count"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -566,18 +616,18 @@ func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updateInput := store.UpdateProjectInput{
-		Name:              existing.Name,
-		Description:       existing.Description,
-		Status:            existing.Status,
-		RepoURL:           existing.RepoURL,
+		Name:               existing.Name,
+		Description:        existing.Description,
+		Status:             existing.Status,
+		RepoURL:            existing.RepoURL,
 		RequireHumanReview: existing.RequireHumanReview,
-		WorkflowEnabled:   existing.WorkflowEnabled,
-		WorkflowSchedule:  existing.WorkflowSchedule,
-		WorkflowTemplate:  existing.WorkflowTemplate,
-		WorkflowAgentID:   existing.WorkflowAgentID,
-		WorkflowLastRunAt: existing.WorkflowLastRunAt,
-		WorkflowNextRunAt: existing.WorkflowNextRunAt,
-		WorkflowRunCount:  existing.WorkflowRunCount,
+		WorkflowEnabled:    existing.WorkflowEnabled,
+		WorkflowSchedule:   existing.WorkflowSchedule,
+		WorkflowTemplate:   existing.WorkflowTemplate,
+		WorkflowAgentID:    existing.WorkflowAgentID,
+		WorkflowLastRunAt:  existing.WorkflowLastRunAt,
+		WorkflowNextRunAt:  existing.WorkflowNextRunAt,
+		WorkflowRunCount:   existing.WorkflowRunCount,
 	}
 
 	if input.Name != nil {

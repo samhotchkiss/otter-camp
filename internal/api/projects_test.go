@@ -241,6 +241,63 @@ func TestProjectsHandlerGetIncludesTaskCounts(t *testing.T) {
 	require.Equal(t, 1, project.CompletedCount)
 }
 
+func TestProjectsHandlerCreateSetsPrimaryAgentWhenProvided(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-create-primary-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "projects-create-primary-agent")
+
+	handler := &ProjectsHandler{
+		DB:    db,
+		Store: store.NewProjectStore(db),
+	}
+	body := []byte(`{"name":"Create With Primary","primary_agent_id":"` + agentID + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+
+	handler.Create(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var created struct {
+		ID             string  `json:"id"`
+		PrimaryAgentID *string `json:"primary_agent_id"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	require.NotEmpty(t, created.ID)
+	require.NotNil(t, created.PrimaryAgentID)
+	require.Equal(t, agentID, *created.PrimaryAgentID)
+
+	var projectPrimary sql.NullString
+	err := db.QueryRow("SELECT primary_agent_id FROM projects WHERE id = $1", created.ID).Scan(&projectPrimary)
+	require.NoError(t, err)
+	require.True(t, projectPrimary.Valid)
+	require.Equal(t, agentID, projectPrimary.String)
+}
+
+func TestProjectsHandlerCreateRejectsCrossWorkspacePrimaryAgent(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-create-primary-auth-org")
+	otherOrgID := insertMessageTestOrganization(t, db, "projects-create-primary-auth-other-org")
+	otherAgentID := insertMessageTestAgent(t, db, otherOrgID, "projects-create-primary-other-agent")
+
+	handler := &ProjectsHandler{
+		DB:    db,
+		Store: store.NewProjectStore(db),
+	}
+	body := []byte(`{"name":"Create With Bad Primary","primary_agent_id":"` + otherAgentID + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+
+	handler.Create(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var createdCount int
+	err := db.QueryRow("SELECT COUNT(*) FROM projects WHERE org_id = $1 AND name = $2", orgID, "Create With Bad Primary").Scan(&createdCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, createdCount)
+}
+
 func TestProjectsHandlerUpdateSettingsSetsPrimaryAgent(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "projects-settings-org")
