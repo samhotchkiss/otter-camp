@@ -76,6 +76,29 @@ describe("AuthContext", () => {
       new Date(Date.now() + 3600 * 1000).toISOString()
     );
 
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/validate?token=oc_sess_token")) {
+        return {
+          ok: true,
+          json: async () => ({
+            session_token: "oc_sess_token",
+            user_id: "user-1",
+            name: "OpenClaw User",
+            email: "",
+            org_id: "org-1",
+            expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+          }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({}),
+        headers: { get: () => null },
+      } as Response;
+    });
+
     render(
       <AuthProvider>
         <TestComponent />
@@ -97,9 +120,27 @@ describe("AuthContext", () => {
     );
     localStorageMock.setItem("otter-camp-org-id", "stale-org");
 
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ org_id: "org-123" }),
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/validate?token=oc_sess_token")) {
+        return {
+          ok: true,
+          json: async () => ({
+            session_token: "oc_sess_token",
+            user_id: "user-1",
+            name: "OpenClaw User",
+            email: "",
+            org_id: "org-123",
+            expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+          }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({}),
+        headers: { get: () => null },
+      } as Response;
     });
 
     render(
@@ -117,9 +158,9 @@ describe("AuthContext", () => {
     });
   });
 
-  it("migrates local magic token sessions to canonical local auth token", async () => {
+  it("validates stored magic token sessions via API instead of creating new local token", async () => {
     const staleUser: User = { id: "stale-user", email: "admin@localhost", name: "Admin" };
-    localStorageMock.setItem("otter_camp_token", "oc_magic_stale");
+    localStorageMock.setItem("otter_camp_token", "oc_magic_valid");
     localStorageMock.setItem("otter_camp_user", JSON.stringify(staleUser));
     localStorageMock.setItem(
       "otter_camp_token_expires_at",
@@ -129,18 +170,11 @@ describe("AuthContext", () => {
 
     mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/auth/magic")) {
-        return {
-          ok: true,
-          json: async () => ({ token: "oc_local_shared" }),
-          headers: { get: () => null },
-        } as Response;
-      }
-      if (url.includes("/api/auth/validate?token=oc_local_shared")) {
+      if (url.includes("/api/auth/validate?token=oc_magic_valid")) {
         return {
           ok: true,
           json: async () => ({
-            session_token: "oc_local_shared",
+            session_token: "oc_sess_validated",
             org_id: "org-146",
             user_id: "user-1",
             name: "Admin",
@@ -167,11 +201,118 @@ describe("AuthContext", () => {
       expect(screen.getByText("Welcome, Admin")).toBeInTheDocument();
     });
 
-    expect(localStorageMock.setItem).toHaveBeenCalledWith("otter_camp_token", "oc_local_shared");
+    expect(localStorageMock.setItem).toHaveBeenCalledWith("otter_camp_token", "oc_sess_validated");
     expect(localStorageMock.setItem).toHaveBeenCalledWith("otter-camp-org-id", "org-146");
     expect(
-      mockFetch.mock.calls.some(([request]) => String(request).includes("/api/auth/magic")),
+      mockFetch.mock.calls.some(([request]) =>
+        String(request).includes("/api/auth/validate?token=oc_magic_valid"),
+      ),
     ).toBe(true);
+    expect(
+      mockFetch.mock.calls.some(([request]) => String(request).includes("/api/auth/magic")),
+    ).toBe(false);
+  });
+
+  it("clears stored auth when API token validation fails on startup", async () => {
+    const staleUser: User = { id: "stale-user", email: "admin@localhost", name: "Admin" };
+    localStorageMock.setItem("otter_camp_token", "oc_sess_invalid");
+    localStorageMock.setItem("otter_camp_user", JSON.stringify(staleUser));
+    localStorageMock.setItem(
+      "otter_camp_token_expires_at",
+      new Date(Date.now() + 3600 * 1000).toISOString(),
+    );
+    localStorageMock.setItem("otter-camp-org-id", "stale-org");
+
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/validate?token=oc_sess_invalid")) {
+        return {
+          ok: false,
+          json: async () => ({ error: "invalid token" }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      return {
+        ok: false,
+        json: async () => ({ error: "unexpected request" }),
+        headers: { get: () => null },
+      } as Response;
+    });
+
+    render(
+      <AuthProvider>
+        <TestComponent />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Not authenticated")).toBeInTheDocument();
+    });
+
+    expect(localStorageMock.removeItem).toHaveBeenCalledWith("otter_camp_token");
+    expect(localStorageMock.removeItem).toHaveBeenCalledWith("otter_camp_user");
+    expect(localStorageMock.removeItem).toHaveBeenCalledWith("otter_camp_token_expires_at");
+    expect(localStorageMock.removeItem).toHaveBeenCalledWith("otter-camp-org-id");
+  });
+
+  it("bootstraps local auth via magic endpoint when no stored token exists", async () => {
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/magic")) {
+        return {
+          ok: true,
+          json: async () => ({
+            token: "oc_local_bootstrap",
+          }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      if (url.includes("/api/auth/validate?token=oc_local_bootstrap")) {
+        return {
+          ok: true,
+          json: async () => ({
+            session_token: "oc_sess_bootstrap",
+            user_id: "user-local",
+            name: "Admin",
+            email: "admin@localhost",
+            org_id: "org-local",
+            expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+          }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      return {
+        ok: false,
+        json: async () => ({ error: "unexpected request" }),
+        headers: { get: () => null },
+      } as Response;
+    });
+
+    render(
+      <AuthProvider>
+        <TestComponent />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Welcome, Admin")).toBeInTheDocument();
+    });
+
+    const magicCall = mockFetch.mock.calls.find(([request]) =>
+      String(request).includes("/api/auth/magic"),
+    );
+    expect(magicCall).toBeTruthy();
+
+    const magicInit = (magicCall?.[1] ?? {}) as RequestInit;
+    expect(magicInit.method).toBe("POST");
+    expect(magicInit.headers).toEqual({ "Content-Type": "application/json" });
+    expect(JSON.parse(String(magicInit.body))).toEqual({
+      name: "Admin",
+      email: "admin@localhost",
+    });
+
+    expect(localStorageMock.setItem).toHaveBeenCalledWith("otter_camp_token", "oc_sess_bootstrap");
+    expect(localStorageMock.setItem).toHaveBeenCalledWith("otter-camp-org-id", "org-local");
   });
 
   it("clears expired token on mount", async () => {
@@ -227,6 +368,20 @@ describe("AuthContext", () => {
     );
     mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("/api/auth/validate?token=oc_sess_token")) {
+        return {
+          ok: true,
+          json: async () => ({
+            session_token: "oc_sess_token",
+            user_id: "user-1",
+            name: "OpenClaw User",
+            email: "",
+            org_id: "org-1",
+            expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+          }),
+          headers: { get: () => null },
+        } as Response;
+      }
       if (url.includes("/api/orgs")) {
         return {
           ok: true,
@@ -291,6 +446,20 @@ describe("AuthContext", () => {
     );
     mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("/api/auth/validate?token=existing-token")) {
+        return {
+          ok: true,
+          json: async () => ({
+            session_token: "existing-token",
+            user_id: "user-1",
+            name: "OpenClaw User",
+            email: "",
+            org_id: "org-1",
+            expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+          }),
+          headers: { get: () => null },
+        } as Response;
+      }
       if (url.includes("/api/orgs")) {
         return {
           ok: true,

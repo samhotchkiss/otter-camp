@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,6 +101,23 @@ func buildOpenClawToken(t *testing.T, claims openClawClaims, secret string) stri
 	_, _ = sig.Write([]byte(payloadB64))
 	signatureB64 := base64.RawURLEncoding.EncodeToString(sig.Sum(nil))
 	return openClawTokenPrefix + payloadB64 + "." + signatureB64
+}
+
+func setAuthDBMock(t *testing.T, db *sql.DB) {
+	t.Helper()
+	prevDB := authDB
+	prevErr := authDBErr
+
+	authDB = db
+	authDBErr = nil
+	authDBOnce = sync.Once{}
+	authDBOnce.Do(func() {})
+
+	t.Cleanup(func() {
+		authDB = prevDB
+		authDBErr = prevErr
+		authDBOnce = sync.Once{}
+	})
 }
 
 func TestAllowInsecureMagicTokenValidationEnvAliases(t *testing.T) {
@@ -190,6 +210,109 @@ func TestHandleMagicLinkCreatesMagicTokenWhenLocalTokenMissing(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Contains(t, resp.Token, "oc_magic_")
 	require.Contains(t, resp.URL, fmt.Sprintf("auth=%s", resp.Token))
+}
+
+func TestHandleMagicLinkAllowsLocalhostEmailWhenUsingLocalAuthToken(t *testing.T) {
+	t.Setenv("LOCAL_AUTH_TOKEN", "oc_local_shared_token")
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	setAuthDBMock(t, db)
+
+	expiresAt := time.Now().UTC().Add(2 * time.Hour)
+	mock.ExpectQuery(`SELECT expires_at`).
+		WithArgs("oc_local_shared_token").
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(expiresAt))
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/magic",
+		bytes.NewBufferString(`{"name":"Admin","email":"admin@localhost"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	HandleMagicLink(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp MagicLinkResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, "oc_local_shared_token", resp.Token)
+	require.Contains(t, resp.URL, "auth=oc_local_shared_token")
+	require.WithinDuration(t, expiresAt, resp.ExpiresAt, time.Second)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHandleMagicLinkSupportsCustomOrgSlugAndEmail(t *testing.T) {
+	t.Setenv("LOCAL_AUTH_TOKEN", "oc_local_shared_token")
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	setAuthDBMock(t, db)
+
+	mock.ExpectQuery(`INSERT INTO organizations`).
+		WithArgs("Acme Labs", "acme-sandbox").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("org-1"))
+	mock.ExpectQuery(`INSERT INTO users`).
+		WithArgs("org-1", "Casey", "casey@example.com", "magic:casey@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("user-1"))
+	mock.ExpectExec(`INSERT INTO sessions`).
+		WithArgs("org-1", "user-1", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/magic",
+		bytes.NewBufferString(`{"name":"Casey","email":"casey@example.com","organization_name":"Acme Labs","org_slug":"acme-sandbox"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	HandleMagicLink(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp MagicLinkResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Contains(t, resp.Token, "oc_magic_")
+	require.NotEqual(t, "oc_local_shared_token", resp.Token)
+	require.Contains(t, resp.URL, fmt.Sprintf("auth=%s", resp.Token))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHandleMagicLinkRejectsInvalidCustomEmail(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/magic",
+		bytes.NewBufferString(`{"name":"Casey","email":"not-an-email","organization_name":"Acme Labs","org_slug":"acme-sandbox"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	HandleMagicLink(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "invalid email", payload.Error)
+}
+
+func TestHandleMagicLinkRejectsInvalidCustomOrgSlug(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/magic",
+		bytes.NewBufferString(`{"name":"Casey","email":"casey@example.com","organization_name":"Acme Labs","org_slug":"!!!"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	HandleMagicLink(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "invalid org_slug", payload.Error)
 }
 
 func TestHandleValidateTokenReconcilesLocalAgentsByEmail(t *testing.T) {
