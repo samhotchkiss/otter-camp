@@ -555,10 +555,6 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	if email == "" {
 		email = "sam@otter.camp"
 	}
-	if !looksLikeEmail(email) {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid email"})
-		return
-	}
 
 	orgNameInput := strings.TrimSpace(firstNonEmpty(req.OrganizationName, req.OrgName, req.Org))
 	orgSlugInput := strings.TrimSpace(req.OrgSlug)
@@ -587,6 +583,16 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	localAuthToken := strings.TrimSpace(os.Getenv("LOCAL_AUTH_TOKEN"))
+	if !looksLikeEmail(email) {
+		isLocalBootstrapEmail := orgNameInput == "" && orgSlugInput == "" &&
+			localAuthToken != "" && strings.HasSuffix(email, "@localhost")
+		if !isLocalBootstrapEmail {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid email"})
+			return
+		}
+	}
+
 	db, err := getAuthDB()
 	if err != nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
@@ -595,21 +601,19 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 
 	// In local development, prefer the shared LOCAL_AUTH_TOKEN session when available.
 	// This keeps the web app and otter CLI on the same workspace/org context.
-	if orgNameInput == "" && orgSlugInput == "" {
-		if localToken := strings.TrimSpace(os.Getenv("LOCAL_AUTH_TOKEN")); localToken != "" {
-			if expiresAt, ok := lookupActiveSessionExpiry(r.Context(), db, localToken); ok {
-				baseURL := getPublicBaseURL(r)
-				if strings.Contains(baseURL, "api.otter.camp") {
-					baseURL = "https://sam.otter.camp"
-				}
-				magicURL := baseURL + "/?auth=" + localToken
-				sendJSON(w, http.StatusOK, MagicLinkResponse{
-					URL:       magicURL,
-					Token:     localToken,
-					ExpiresAt: expiresAt,
-				})
-				return
+	if orgNameInput == "" && orgSlugInput == "" && localAuthToken != "" {
+		if expiresAt, ok := lookupActiveSessionExpiry(r.Context(), db, localAuthToken); ok {
+			baseURL := getPublicBaseURL(r)
+			if strings.Contains(baseURL, "api.otter.camp") {
+				baseURL = "https://sam.otter.camp"
 			}
+			magicURL := baseURL + "/?auth=" + localAuthToken
+			sendJSON(w, http.StatusOK, MagicLinkResponse{
+				URL:       magicURL,
+				Token:     localAuthToken,
+				ExpiresAt: expiresAt,
+			})
+			return
 		}
 	}
 

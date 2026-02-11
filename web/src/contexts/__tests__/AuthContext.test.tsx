@@ -255,6 +255,66 @@ describe("AuthContext", () => {
     expect(localStorageMock.removeItem).toHaveBeenCalledWith("otter-camp-org-id");
   });
 
+  it("bootstraps local auth via magic endpoint when no stored token exists", async () => {
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/magic")) {
+        return {
+          ok: true,
+          json: async () => ({
+            token: "oc_local_bootstrap",
+          }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      if (url.includes("/api/auth/validate?token=oc_local_bootstrap")) {
+        return {
+          ok: true,
+          json: async () => ({
+            session_token: "oc_sess_bootstrap",
+            user_id: "user-local",
+            name: "Admin",
+            email: "admin@localhost",
+            org_id: "org-local",
+            expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+          }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      return {
+        ok: false,
+        json: async () => ({ error: "unexpected request" }),
+        headers: { get: () => null },
+      } as Response;
+    });
+
+    render(
+      <AuthProvider>
+        <TestComponent />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Welcome, Admin")).toBeInTheDocument();
+    });
+
+    const magicCall = mockFetch.mock.calls.find(([request]) =>
+      String(request).includes("/api/auth/magic"),
+    );
+    expect(magicCall).toBeTruthy();
+
+    const magicInit = (magicCall?.[1] ?? {}) as RequestInit;
+    expect(magicInit.method).toBe("POST");
+    expect(magicInit.headers).toEqual({ "Content-Type": "application/json" });
+    expect(JSON.parse(String(magicInit.body))).toEqual({
+      name: "Admin",
+      email: "admin@localhost",
+    });
+
+    expect(localStorageMock.setItem).toHaveBeenCalledWith("otter_camp_token", "oc_sess_bootstrap");
+    expect(localStorageMock.setItem).toHaveBeenCalledWith("otter-camp-org-id", "org-local");
+  });
+
   it("clears expired token on mount", async () => {
     const mockUser: User = { id: "user-1", email: "", name: "OpenClaw User" };
     localStorageMock.setItem("otter_camp_token", "oc_sess_token");

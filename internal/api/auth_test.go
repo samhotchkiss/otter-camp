@@ -212,6 +212,38 @@ func TestHandleMagicLinkCreatesMagicTokenWhenLocalTokenMissing(t *testing.T) {
 	require.Contains(t, resp.URL, fmt.Sprintf("auth=%s", resp.Token))
 }
 
+func TestHandleMagicLinkAllowsLocalhostEmailWhenUsingLocalAuthToken(t *testing.T) {
+	t.Setenv("LOCAL_AUTH_TOKEN", "oc_local_shared_token")
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	setAuthDBMock(t, db)
+
+	expiresAt := time.Now().UTC().Add(2 * time.Hour)
+	mock.ExpectQuery(`SELECT expires_at`).
+		WithArgs("oc_local_shared_token").
+		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(expiresAt))
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/magic",
+		bytes.NewBufferString(`{"name":"Admin","email":"admin@localhost"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	HandleMagicLink(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp MagicLinkResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, "oc_local_shared_token", resp.Token)
+	require.Contains(t, resp.URL, "auth=oc_local_shared_token")
+	require.WithinDuration(t, expiresAt, resp.ExpiresAt, time.Second)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestHandleMagicLinkSupportsCustomOrgSlugAndEmail(t *testing.T) {
 	t.Setenv("LOCAL_AUTH_TOKEN", "oc_local_shared_token")
 
