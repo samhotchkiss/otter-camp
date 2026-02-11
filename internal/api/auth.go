@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -728,6 +729,14 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if shouldReconcileLocalAuthAgents(token) {
+		if copied, err := reconcileLocalAuthAgents(r.Context(), db, orgID, userEmail); err != nil {
+			log.Printf("local auth agent reconcile failed: %v", err)
+		} else if copied > 0 {
+			log.Printf("local auth reconciled %d agent(s) into org %s", copied, orgID)
+		}
+	}
+
 	// Set the auth cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "otter_auth",
@@ -753,6 +762,80 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 			Email: userEmail,
 		},
 	})
+}
+
+func shouldReconcileLocalAuthAgents(sessionToken string) bool {
+	configured := strings.TrimSpace(os.Getenv("LOCAL_AUTH_TOKEN"))
+	if configured == "" {
+		return false
+	}
+	return strings.TrimSpace(sessionToken) == configured
+}
+
+func reconcileLocalAuthAgents(ctx context.Context, db *sql.DB, targetOrgID, userEmail string) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	targetOrgID = strings.TrimSpace(targetOrgID)
+	email := strings.ToLower(strings.TrimSpace(userEmail))
+	if targetOrgID == "" || email == "" {
+		return 0, nil
+	}
+
+	result, err := db.ExecContext(
+		ctx,
+		`WITH source_orgs AS (
+			SELECT DISTINCT u.org_id
+			FROM users u
+			WHERE LOWER(COALESCE(u.email, '')) = $2
+			  AND u.org_id <> $1::uuid
+		)
+		INSERT INTO agents (
+			org_id,
+			slug,
+			display_name,
+			avatar_url,
+			webhook_url,
+			status,
+			session_pattern,
+			role,
+			emoji,
+			soul_md,
+			identity_md,
+			instructions_md
+		)
+		SELECT
+			$1::uuid,
+			a.slug,
+			a.display_name,
+			a.avatar_url,
+			a.webhook_url,
+			a.status,
+			a.session_pattern,
+			a.role,
+			a.emoji,
+			a.soul_md,
+			a.identity_md,
+			a.instructions_md
+		FROM agents a
+		INNER JOIN source_orgs s
+			ON s.org_id = a.org_id
+		LEFT JOIN agents existing
+			ON existing.org_id = $1::uuid
+		   AND existing.slug = a.slug
+		WHERE existing.id IS NULL
+		ON CONFLICT (org_id, slug) DO NOTHING`,
+		targetOrgID,
+		email,
+	)
+	if err != nil {
+		return 0, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return rowsAffected, nil
 }
 
 func allowInsecureMagicTokenValidation() bool {

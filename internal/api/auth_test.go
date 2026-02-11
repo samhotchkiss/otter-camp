@@ -191,3 +191,88 @@ func TestHandleMagicLinkCreatesMagicTokenWhenLocalTokenMissing(t *testing.T) {
 	require.Contains(t, resp.Token, "oc_magic_")
 	require.Contains(t, resp.URL, fmt.Sprintf("auth=%s", resp.Token))
 }
+
+func TestHandleValidateTokenReconcilesLocalAgentsByEmail(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+	t.Setenv("LOCAL_AUTH_TOKEN", "oc_local_reconcile_token")
+
+	db := openFeedDatabase(t, connStr)
+	targetOrgID := insertFeedOrganization(t, db, "target-org")
+	sourceOrgID := insertFeedOrganization(t, db, "source-org")
+
+	var targetUserID string
+	err := db.QueryRow(
+		`INSERT INTO users (org_id, display_name, email, subject, issuer)
+		 VALUES ($1, 'Admin', 'admin@localhost', 'magic', 'otter.camp')
+		 RETURNING id`,
+		targetOrgID,
+	).Scan(&targetUserID)
+	require.NoError(t, err)
+
+	targetExpiry := time.Now().UTC().Add(24 * time.Hour)
+	_, err = db.Exec(
+		`INSERT INTO sessions (org_id, user_id, token, expires_at)
+		 VALUES ($1, $2, $3, $4)`,
+		targetOrgID,
+		targetUserID,
+		"oc_local_reconcile_token",
+		targetExpiry,
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO users (org_id, display_name, email, subject, issuer)
+		 VALUES ($1, 'Admin', 'admin@localhost', 'magic', 'otter.camp')`,
+		sourceOrgID,
+	)
+	require.NoError(t, err)
+
+	var sourceAgentID string
+	err = db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status, role, emoji, soul_md, identity_md, instructions_md)
+		 VALUES ($1, 'marcus', 'Marcus', 'active', 'Ops', '🦦', 'soul text', 'identity text', 'instructions text')
+		 RETURNING id`,
+		sourceOrgID,
+	).Scan(&sourceAgentID)
+	require.NoError(t, err)
+	require.NotEmpty(t, sourceAgentID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/validate?token=oc_local_reconcile_token", nil)
+	rec := httptest.NewRecorder()
+	HandleValidateToken(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var copiedCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM agents WHERE org_id = $1 AND slug = 'marcus'`,
+		targetOrgID,
+	).Scan(&copiedCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, copiedCount)
+
+	var copiedRole, copiedEmoji, copiedSoul string
+	err = db.QueryRow(
+		`SELECT COALESCE(role, ''), COALESCE(emoji, ''), COALESCE(soul_md, '')
+		 FROM agents
+		 WHERE org_id = $1 AND slug = 'marcus'`,
+		targetOrgID,
+	).Scan(&copiedRole, &copiedEmoji, &copiedSoul)
+	require.NoError(t, err)
+	require.Equal(t, "Ops", copiedRole)
+	require.Equal(t, "🦦", copiedEmoji)
+	require.Equal(t, "soul text", copiedSoul)
+
+	// Idempotent on repeated validate
+	rec2 := httptest.NewRecorder()
+	HandleValidateToken(rec2, req)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM agents WHERE org_id = $1 AND slug = 'marcus'`,
+		targetOrgID,
+	).Scan(&copiedCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, copiedCount)
+}
