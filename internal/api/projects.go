@@ -1342,20 +1342,23 @@ func listProjectsQuery(usePrimaryAgent bool, useWorkflow bool, workflowOnly bool
 	}
 
 	return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.require_human_review, FALSE) as require_human_review, COALESCE(p.status, 'active') as status, p.created_at` + leadSelect + workflowSelect + `,
-		COALESCE(t.task_count, 0) as task_count,
-		COALESCE(t.completed_count, 0) as completed_count
+			COALESCE(p.repo_url, '') as repo_url, COALESCE(p.require_human_review, FALSE) as require_human_review, COALESCE(p.status, 'active') as status, p.created_at` + leadSelect + workflowSelect + `,
+			COALESCE(t.task_count, 0) as task_count,
+			COALESCE(t.completed_count, 0) as completed_count
 		FROM projects p
 		` + leadJoin + `
-		LEFT JOIN (
-			SELECT project_id,
-				COUNT(*) as task_count,
-				COUNT(*) FILTER (WHERE status = 'done') as completed_count
-			FROM tasks
-			WHERE org_id = $1 AND project_id IS NOT NULL
-			GROUP BY project_id
-		) t ON t.project_id = p.id
-		WHERE p.org_id = $1` + workflowFilter + ` ORDER BY p.created_at DESC`
+			LEFT JOIN (
+				SELECT project_id,
+					COUNT(*) as task_count,
+					COUNT(*) FILTER (
+						WHERE state = 'closed'
+							OR work_status IN ('done', 'cancelled')
+					) as completed_count
+				FROM project_issues
+				WHERE org_id = $1 AND project_id IS NOT NULL
+				GROUP BY project_id
+			) t ON t.project_id = p.id
+			WHERE p.org_id = $1` + workflowFilter + ` ORDER BY p.created_at DESC`
 }
 
 func getProjectQuery(usePrimaryAgent bool, useWorkflow bool) string {
@@ -1379,19 +1382,22 @@ func getProjectQuery(usePrimaryAgent bool, useWorkflow bool) string {
 	}
 
 	return `SELECT p.id, p.org_id, p.name, COALESCE(p.description, '') as description,
-		COALESCE(p.repo_url, '') as repo_url, COALESCE(p.require_human_review, FALSE) as require_human_review, COALESCE(p.status, 'active') as status, p.created_at` + leadSelect + workflowSelect + `,
-		COALESCE(t.task_count, 0) as task_count,
-		COALESCE(t.completed_count, 0) as completed_count
+			COALESCE(p.repo_url, '') as repo_url, COALESCE(p.require_human_review, FALSE) as require_human_review, COALESCE(p.status, 'active') as status, p.created_at` + leadSelect + workflowSelect + `,
+			COALESCE(t.task_count, 0) as task_count,
+			COALESCE(t.completed_count, 0) as completed_count
 		FROM projects p
 		` + leadJoin + `
-		LEFT JOIN (
-			SELECT project_id,
-				COUNT(*) as task_count,
-				COUNT(*) FILTER (WHERE status = 'done') as completed_count
-			FROM tasks
-			WHERE org_id = $2 AND project_id IS NOT NULL
-			GROUP BY project_id
-		) t ON t.project_id = p.id
+			LEFT JOIN (
+				SELECT project_id,
+					COUNT(*) as task_count,
+					COUNT(*) FILTER (
+						WHERE state = 'closed'
+							OR work_status IN ('done', 'cancelled')
+					) as completed_count
+				FROM project_issues
+				WHERE org_id = $2 AND project_id IS NOT NULL
+				GROUP BY project_id
+			) t ON t.project_id = p.id
 		WHERE p.id = $1 AND p.org_id = $2`
 }
 

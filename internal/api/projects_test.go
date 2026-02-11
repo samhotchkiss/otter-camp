@@ -34,14 +34,26 @@ func insertProjectTestProject(t *testing.T, db *sql.DB, orgID, name string) stri
 	return id
 }
 
-func insertProjectTestTask(t *testing.T, db *sql.DB, orgID string, projectID *string, status string) {
+func insertProjectTestIssue(t *testing.T, db *sql.DB, orgID string, projectID string, state string, workStatus string) {
 	t.Helper()
 	_, err := db.Exec(
-		"INSERT INTO tasks (org_id, project_id, title, status, priority) VALUES ($1, $2, $3, $4, 'P2')",
+		`INSERT INTO project_issues (
+			org_id, project_id, issue_number, title, state, origin, work_status, priority
+		) VALUES (
+			$1,
+			$2,
+			COALESCE((SELECT MAX(issue_number) + 1 FROM project_issues WHERE project_id = $2), 1),
+			$3,
+			$4,
+			'local',
+			$5,
+			'P2'
+		)`,
 		orgID,
 		projectID,
-		"Task for "+status,
-		status,
+		"Issue "+state+"/"+workStatus,
+		state,
+		workStatus,
 	)
 	require.NoError(t, err)
 }
@@ -52,11 +64,12 @@ func TestProjectsHandlerListIncludesTaskCounts(t *testing.T) {
 
 	projectOne := insertProjectTestProject(t, db, orgID, "Project One")
 	projectTwo := insertProjectTestProject(t, db, orgID, "Project Two")
+	projectThree := insertProjectTestProject(t, db, orgID, "Project Three")
 
-	insertProjectTestTask(t, db, orgID, &projectOne, "done")
-	insertProjectTestTask(t, db, orgID, &projectOne, "done")
-	insertProjectTestTask(t, db, orgID, &projectOne, "queued")
-	insertProjectTestTask(t, db, orgID, nil, "done")
+	insertProjectTestIssue(t, db, orgID, projectOne, "closed", "done")
+	insertProjectTestIssue(t, db, orgID, projectOne, "closed", "done")
+	insertProjectTestIssue(t, db, orgID, projectOne, "open", "queued")
+	insertProjectTestIssue(t, db, orgID, projectThree, "closed", "done")
 
 	handler := &ProjectsHandler{DB: db}
 	req := httptest.NewRequest(http.MethodGet, "/api/projects?org_id="+orgID, nil)
@@ -219,8 +232,8 @@ func TestProjectsHandlerGetIncludesTaskCounts(t *testing.T) {
 	orgID := insertMessageTestOrganization(t, db, "projects-org-get")
 	projectID := insertProjectTestProject(t, db, orgID, "Project Get")
 
-	insertProjectTestTask(t, db, orgID, &projectID, "done")
-	insertProjectTestTask(t, db, orgID, &projectID, "review")
+	insertProjectTestIssue(t, db, orgID, projectID, "closed", "done")
+	insertProjectTestIssue(t, db, orgID, projectID, "open", "review")
 
 	handler := &ProjectsHandler{DB: db}
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"?org_id="+orgID, nil)
