@@ -3093,7 +3093,8 @@
           "alt": "qwen3-32b"
         },
         "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
-      }
+      },
+      "default_agent": true
     },
     {
       "role_id": "prompt-engineer",
@@ -5957,7 +5958,8 @@
           "alt": "qwen3-32b"
         },
         "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
-      }
+      },
+      "default_agent": true
     },
     {
       "role_id": "ux-researcher",
@@ -11530,7 +11532,8 @@
           "alt": "qwen3-32b"
         },
         "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
-      }
+      },
+      "default_agent": true
     },
     {
       "role_id": "cpp-systems-engineer",
