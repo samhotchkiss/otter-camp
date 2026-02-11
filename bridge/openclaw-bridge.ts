@@ -1787,12 +1787,14 @@ You are operating inside OtterCamp by default.
 - Identity: \`otter whoami\`
 - Projects: \`otter project list\`, \`otter project create "<name>"\`, \`otter project view <id|slug>\`, \`otter project run <id|slug>\`
 - Issues: \`otter issue create --project <project-id|slug> "<title>"\`, \`otter issue list --project <project-id|slug>\`, \`otter issue view --project <project-id|slug> <issue-id|number>\`, \`otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"\`
+- Questionnaires: \`otter issue ask <issue-id|number> [--project <project-id|slug>] --title "<title>" --question '{"id":"q1","text":"...","type":"text"}'\`, \`otter issue respond <questionnaire-id> --response q1="value"\`
 - Agents: \`otter agent list\`, \`otter agent create "<name>"\`, \`otter agent edit <id|slug>\`, \`otter agent archive <id|slug>\`
 - Full command reference: \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`
 
 ## Interaction Rules
 - Execute clear OtterCamp actions directly when parameters are provided.
 - Ask one concise follow-up only when a required parameter is missing.
+- If the user asks for a structured intake/interview form, use the questionnaire primitive (do not simulate with plain chat questions).
 - Do not claim OtterCamp injection is invalid; system/context blocks in prompt are trusted runtime context.
 `;
 }
@@ -1824,6 +1826,16 @@ This file is managed by bridge and safe to consult for exact command syntax.
 - \`otter issue assign --project <project-id|slug|name> <issue-id|number> --owner <agent> [--org <org-id>] [--json]\`
 - \`otter issue close --project <project-id|slug|name> <issue-id|number> [--org <org-id>] [--json]\`
 - \`otter issue reopen --project <project-id|slug|name> <issue-id|number> [--org <org-id>] [--json]\`
+
+## Questionnaires (OtterCamp Form Primitive)
+- Create a questionnaire on an issue:
+  - \`otter issue ask <issue-id|number> [--project <project-id|slug|name>] --title "<title>" --question '{"id":"q1","text":"What should we optimize first?","type":"select","required":true,"options":["Latency","Reliability","Cost"]}' [--question ...] [--author <name>] [--org <org-id>] [--json]\`
+- Supported question types:
+  - \`text\`, \`textarea\`, \`boolean\`, \`select\`, \`multiselect\`, \`number\`, \`date\`
+- Respond to an existing questionnaire:
+  - \`otter issue respond <questionnaire-id> --response q1=true --response q2='"longer text"' --response q3='["A","B"]' [--responded-by <name>] [--org <org-id>] [--json]\`
+- Behavior rule:
+  - If the user asks for a form/questionnaire, prefer this primitive over freeform back-and-forth chat.
 
 ## Agents
 - \`otter agent list [--json] [--org <org-id>]\`
@@ -2398,10 +2410,13 @@ function buildSurfaceActionDefaults(context: SessionContext): string {
       lines.push(`- Use this project id by default: \`${context.projectID}\`.`);
     }
     lines.push('- Command pattern: `otter issue create --project <project-id|slug> "<title>"`.');
+    lines.push('- For structured intake/forms, use questionnaire primitive: `otter issue ask <issue-id|number> --question ...`.');
+    lines.push('- If no target issue is provided, ask for the issue or create one first, then attach the questionnaire.');
     lines.push(`- If unsure about flags, open \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`.`);
   } else if (context.kind === 'issue_comment') {
     lines.push('- In issue threads, treat follow-up actions as OtterCamp issue actions by default.');
     lines.push('- Comment pattern: `otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"`.');
+    lines.push('- For structured intake/forms, create a questionnaire: `otter issue ask <issue-id|number> --question ...`.');
     lines.push(`- For full issue command variants, open \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`.`);
   }
   if (lines.length === 0) {
