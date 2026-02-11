@@ -90,6 +90,44 @@ describe("GlobalChatDock", () => {
     expect(screen.getByTestId("chat-initials-project:project-1")).toHaveTextContent("OC");
   });
 
+  it("prefers resolved DM identity over stale title placeholders", () => {
+    globalChatState.resolveAgentName = (raw: string) => {
+      const normalized = raw.trim();
+      if (normalized === "agent-uuid" || normalized === "marcus" || normalized === "dm_marcus") {
+        return "Marcus";
+      }
+      return raw;
+    };
+    globalChatState.conversations = [
+      {
+        key: "dm:dm_marcus",
+        type: "dm",
+        threadId: "dm_marcus",
+        title: "You",
+        contextLabel: "Direct message",
+        subtitle: "Agent chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-12T00:00:00.000Z",
+        agent: {
+          id: "agent-uuid",
+          name: "You",
+          status: "online",
+        },
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getAllByText("Marcus").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^You$/)).not.toBeInTheDocument();
+  });
+
   it("shows error banner on archive failure", async () => {
     const user = userEvent.setup();
     globalChatState.resolveAgentName = (raw: string) => raw;

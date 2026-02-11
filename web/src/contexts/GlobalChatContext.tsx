@@ -234,6 +234,18 @@ function parseDMThreadAgentID(threadId: string): string {
   return trimmed.slice(3).trim();
 }
 
+function parseAgentAliasFromSessionKey(sessionKey: string): string {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const match = /^agent:([^:]+):/i.exec(trimmed);
+  if (!match?.[1]) {
+    return "";
+  }
+  return match[1].trim();
+}
+
 function appendUniqueCandidate(candidates: string[], seen: Set<string>, value: string) {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -321,6 +333,42 @@ function looksLikeAgentSlotName(value: string): boolean {
   return /^[a-z0-9][a-z0-9._-]{1,127}$/.test(trimmed);
 }
 
+function isLikelyUUID(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value.trim(),
+  );
+}
+
+function isGenericDMTitle(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return true;
+  }
+  const lower = trimmed.toLowerCase();
+  if (
+    lower === "you" ||
+    lower === "user" ||
+    lower === "agent" ||
+    lower === "assistant" ||
+    lower === "direct message"
+  ) {
+    return true;
+  }
+  return isLikelyUUID(trimmed);
+}
+
+function setAgentAlias(map: Map<string, string>, alias: string, name: string) {
+  const normalizedAlias = alias.trim();
+  if (!normalizedAlias) {
+    return;
+  }
+  map.set(normalizedAlias, name);
+  const lower = normalizedAlias.toLowerCase();
+  if (lower !== normalizedAlias) {
+    map.set(lower, name);
+  }
+}
+
 function normalizeAgentDirectory(payload: unknown): Map<string, string> {
   const records =
     payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).agents)
@@ -334,22 +382,39 @@ function normalizeAgentDirectory(payload: unknown): Map<string, string> {
     if (!isRecord(raw)) {
       continue;
     }
-    const id =
-      asString(raw.id) ||
-      asString(raw.agentId) ||
-      asString(raw.slug);
     const name =
       asString(raw.name) ||
-      asString(raw.displayName);
-    if (!id || !name) {
+      asString(raw.displayName) ||
+      asString(raw.title);
+    if (!name) {
       continue;
     }
-    result.set(id, name);
-    if (id.toLowerCase() !== id) {
-      result.set(id.toLowerCase(), name);
+
+    const sessionKey = asString(raw.sessionKey) || asString(raw.session_key);
+    const aliases = [
+      asString(raw.id),
+      asString(raw.agentId),
+      asString(raw.slug),
+      asString(raw.slot),
+      asString(raw.role),
+      sessionKey,
+      parseAgentAliasFromSessionKey(sessionKey),
+    ];
+    for (const alias of aliases) {
+      setAgentAlias(result, alias, name);
     }
   }
   return result;
+}
+
+function mergeAgentDirectories(...directories: Array<Map<string, string>>): Map<string, string> {
+  const merged = new Map<string, string>();
+  for (const directory of directories) {
+    for (const [alias, name] of directory.entries()) {
+      merged.set(alias, name);
+    }
+  }
+  return merged;
 }
 
 function normalizeProjectDirectory(payload: unknown): Map<string, string> {
@@ -427,6 +492,9 @@ function shouldPreferIncomingTitle(
     return looksLikeIssueIdentifierTitle(existingTitle) && !looksLikeIssueIdentifierTitle(incomingTitle);
   }
   if (existing.type === "dm" && incoming.type === "dm") {
+    if (isGenericDMTitle(existingTitle) && !isGenericDMTitle(incomingTitle)) {
+      return true;
+    }
     return looksLikeAgentSlotName(existingTitle) && !looksLikeAgentSlotName(incomingTitle);
   }
   return false;
@@ -812,7 +880,8 @@ function parseIncomingEvent(lastMessage: {
       lookupAgentDisplayName(resolution?.agentNamesByID, agentId) ||
       lookupAgentDisplayName(resolution?.agentNamesByID, threadAgentID) ||
       lookupAgentDisplayName(resolution?.agentNamesByID, threadId) ||
-      (isSessionResetMarker ? threadAgentID : senderName) ||
+      threadAgentID ||
+      (normalizedSenderType === "agent" || normalizedSenderType === "assistant" ? senderName : "") ||
       senderName;
 
     return {
@@ -988,20 +1057,20 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         const syncPayload = syncAgentsResponse.ok
           ? await syncAgentsResponse.json().catch(() => null)
           : null;
-        let nextAgentNames = normalizeAgentDirectory(syncPayload);
+        const syncAgentNames = normalizeAgentDirectory(syncPayload);
 
-        if (nextAgentNames.size === 0) {
-          const agentsURL = new URL(`${API_URL}/api/agents`);
-          agentsURL.searchParams.set("org_id", orgID);
-          const agentsResponse = await fetch(agentsURL.toString(), {
-            headers,
-            cache: "no-store",
-          });
-          const agentsPayload = agentsResponse.ok
-            ? await agentsResponse.json().catch(() => null)
-            : null;
-          nextAgentNames = normalizeAgentDirectory(agentsPayload);
-        }
+        const agentsURL = new URL(`${API_URL}/api/agents`);
+        agentsURL.searchParams.set("org_id", orgID);
+        const agentsResponse = await fetch(agentsURL.toString(), {
+          headers,
+          cache: "no-store",
+        });
+        const agentsPayload = agentsResponse.ok
+          ? await agentsResponse.json().catch(() => null)
+          : null;
+        const storedAgentNames = normalizeAgentDirectory(agentsPayload);
+
+        const nextAgentNames = mergeAgentDirectories(syncAgentNames, storedAgentNames);
 
         if (!cancelled) {
           setAgentNamesByID(nextAgentNames);

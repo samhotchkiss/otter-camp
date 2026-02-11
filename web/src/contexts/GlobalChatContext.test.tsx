@@ -179,6 +179,65 @@ describe("GlobalChatContext", () => {
     });
   });
 
+  it("does not preserve 'You' as a DM title when role aliases resolve to an agent", async () => {
+    const agentID = "51636fa6-2ff7-4e3a-ad94-6bfbf27e28a1";
+    wsState.lastMessage = {
+      type: "DMMessageReceived",
+      data: {
+        thread_id: "dm_marcus",
+        message: {
+          sender_type: "user",
+          sender_id: "user:sam",
+          sender_name: "You",
+          content: "Do you know how to add things to my knowledge base?",
+        },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/projects?")) {
+          return {
+            ok: true,
+            json: async () => ({ projects: [] }),
+          };
+        }
+        if (url.includes("/api/sync/agents")) {
+          return {
+            ok: true,
+            json: async () => ({
+              agents: [{ id: agentID, name: "Marcus", status: "online" }],
+            }),
+          };
+        }
+        if (url.includes("/api/agents?")) {
+          return {
+            ok: true,
+            json: async () => ({
+              agents: [{ id: agentID, role: "marcus", name: "Marcus" }],
+            }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      <GlobalChatProvider>
+        <ConversationTitles />
+      </GlobalChatProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Marcus")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("You")).not.toBeInTheDocument();
+  });
+
   it("keeps DM routing agent id anchored to thread id on session reset markers", async () => {
     wsState.lastMessage = {
       type: "DMMessageReceived",

@@ -17,6 +17,11 @@ function conversationTypeLabel(type: "dm" | "project" | "issue"): string {
   return "DM";
 }
 
+function isGenericDMLabel(value: string): boolean {
+  const lower = value.trim().toLowerCase();
+  return lower === "" || lower === "you" || lower === "user" || lower === "agent" || lower === "assistant";
+}
+
 export default function GlobalChatDock() {
   const {
     isOpen,
@@ -160,24 +165,34 @@ export default function GlobalChatDock() {
       }
 
       const candidates = [
-        conversation.title,
         conversation.agent.name,
         conversation.agent.id,
         conversation.threadId,
+        conversation.title,
       ];
 
+      let fallbackLabel = "";
       for (const candidate of candidates) {
         const trimmed = candidate.trim();
         if (!trimmed) {
           continue;
         }
         const resolved = resolveAgentName(trimmed).trim();
+        if (!resolved) {
+          continue;
+        }
+        if (isGenericDMLabel(resolved)) {
+          if (!fallbackLabel) {
+            fallbackLabel = resolved;
+          }
+          continue;
+        }
         if (resolved) {
           return resolved;
         }
       }
 
-      return conversation.title || conversation.agent.name || "Untitled chat";
+      return fallbackLabel || conversation.title || conversation.agent.name || "Untitled chat";
     },
     [resolveAgentName],
   );
