@@ -560,6 +560,9 @@ const defaultProcessExit = (code: number): never => process.exit(code);
 let processExitFn: (code: number) => never = defaultProcessExit;
 let resolvedOtterCampOrgIDFromHostConfig = '';
 let resolvedOtterCampOrgIDFromHostConfigLoaded = false;
+let lastSyncDurationMS = 0;
+let syncCountTotal = 0;
+const bridgeErrorTimestampsMs: number[] = [];
 
 export function setExecFileForTest(
   fn: ((file: string, args: readonly string[], options: { timeout?: number; maxBuffer?: number }, callback: (error: Error | null, stdout?: string, stderr?: string) => void) => void) | null,
@@ -583,12 +586,28 @@ function resolveConfiguredOtterCampOrgID(): string {
   if (fromEnv) {
     return fromEnv;
   }
-  if (resolvedOtterCampOrgIDFromHostConfigLoaded) {
+  if (resolvedOtterCampOrgIDFromHostConfigLoaded && resolvedOtterCampOrgIDFromHostConfig) {
     return resolvedOtterCampOrgIDFromHostConfig;
   }
-  resolvedOtterCampOrgIDFromHostConfigLoaded = true;
   const hostConfig = loadHostOtterCLIConfig();
-  resolvedOtterCampOrgIDFromHostConfig = getTrimmedString(hostConfig?.defaultOrg);
+  const fromHostConfig = getTrimmedString(hostConfig?.defaultOrg);
+  if (fromHostConfig) {
+    resolvedOtterCampOrgIDFromHostConfigLoaded = true;
+    resolvedOtterCampOrgIDFromHostConfig = fromHostConfig;
+    return fromHostConfig;
+  }
+
+  const workspaceConfig = loadWorkspaceOtterCLIConfig();
+  const fromWorkspaceConfig = getTrimmedString(workspaceConfig?.defaultOrg);
+  if (fromWorkspaceConfig) {
+    resolvedOtterCampOrgIDFromHostConfigLoaded = true;
+    resolvedOtterCampOrgIDFromHostConfig = fromWorkspaceConfig;
+    return fromWorkspaceConfig;
+  }
+
+  // Retry resolution later in case CLI auth is installed after startup.
+  resolvedOtterCampOrgIDFromHostConfigLoaded = false;
+  resolvedOtterCampOrgIDFromHostConfig = '';
   return resolvedOtterCampOrgIDFromHostConfig;
 }
 
@@ -1885,8 +1904,7 @@ function resolveHostOtterCLIConfigPath(): string {
   return path.join(homeDir, '.config', 'otter', OTTER_CLI_CONFIG_FILENAME);
 }
 
-function loadHostOtterCLIConfig(): Record<string, unknown> | null {
-  const configPath = resolveHostOtterCLIConfigPath();
+function loadOtterCLIConfigFromPath(configPath: string): Record<string, unknown> | null {
   try {
     const raw = fs.readFileSync(configPath, 'utf8');
     const parsed = asRecord(parseJSONValue(raw));
@@ -1907,10 +1925,15 @@ function loadHostOtterCLIConfig(): Record<string, unknown> | null {
   } catch (err) {
     const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
     if (code !== 'ENOENT') {
-      console.warn('[bridge] failed to read host otter CLI config:', err);
+      console.warn(`[bridge] failed to read otter CLI config at ${configPath}:`, err);
     }
     return null;
   }
+}
+
+function loadHostOtterCLIConfig(): Record<string, unknown> | null {
+  const configPath = resolveHostOtterCLIConfigPath();
+  return loadOtterCLIConfigFromPath(configPath);
 }
 
 function resolveWorkspaceScopedOtterCLIConfigPaths(workspacePath: string): string[] {
@@ -1918,6 +1941,20 @@ function resolveWorkspaceScopedOtterCLIConfigPaths(workspacePath: string): strin
     path.join(workspacePath, 'Library', 'Application Support', 'otter', OTTER_CLI_CONFIG_FILENAME),
     path.join(workspacePath, '.config', 'otter', OTTER_CLI_CONFIG_FILENAME),
   ];
+}
+
+function loadWorkspaceOtterCLIConfig(): Record<string, unknown> | null {
+  const workspacePath = resolveChameleonWorkspacePath();
+  if (!workspacePath) {
+    return null;
+  }
+  for (const configPath of resolveWorkspaceScopedOtterCLIConfigPaths(workspacePath)) {
+    const parsed = loadOtterCLIConfigFromPath(configPath);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return null;
 }
 
 function ensureWorkspaceOtterCLIConfigFile(targetPath: string, payload: Record<string, unknown>): boolean {
@@ -4858,39 +4895,51 @@ function validateConfigPatchAgentTargets(patchObject: Record<string, unknown>): 
 }
 
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
+  const orgID = resolveConfiguredOtterCampOrgID();
   const [cronJobs, processes, progressLogLines] = await Promise.all([
     fetchCronJobsSnapshot(),
     fetchProcessesSnapshot(),
     readProgressLogDeltaLines(),
   ]);
+  const syncStartedAtMs = Date.now();
   const payload = {
     type: 'full',
     timestamp: new Date().toISOString(),
     sessions,
     ...(progressLogLines.length > 0 ? { progress_log_lines: progressLogLines } : {}),
+    host: buildHostDiagnosticsSnapshot(),
+    bridge: buildBridgeDiagnosticsSnapshot(syncStartedAtMs),
     cron_jobs: cronJobs,
     processes,
     source: 'bridge',
   };
 
-  if (progressLogLines.length > 0 && OTTERCAMP_ORG_ID) {
-    const queuedCompletionEvents = await queueCompletionEventsFromProgressLines(OTTERCAMP_ORG_ID, progressLogLines);
+  if (progressLogLines.length > 0 && orgID) {
+    const queuedCompletionEvents = await queueCompletionEventsFromProgressLines(orgID, progressLogLines);
     if (queuedCompletionEvents > 0) {
       console.log(`[bridge] queued ${queuedCompletionEvents} completion metadata event(s) from progress log`);
     }
   }
 
   const url = `${OTTERCAMP_URL}/api/sync/openclaw`;
-  const response = await fetchWithRetry(url, {
-    method: 'POST',
-    headers: buildOtterCampAuthHeaders(true),
-    body: JSON.stringify(payload),
-  }, 'push sync snapshot');
+  try {
+    const response = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: buildOtterCampAuthHeaders(true),
+      body: JSON.stringify(payload),
+    }, 'push sync snapshot');
 
-  if (!response.ok) {
-    throw new Error(`sync push failed: ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      throw new Error(`sync push failed: ${response.status} ${response.statusText}`);
+    }
+
+    syncCountTotal += 1;
+    lastSyncDurationMS = Math.max(0, Date.now() - syncStartedAtMs);
+    lastSuccessfulSyncAtMs = Date.now();
+  } catch (err) {
+    recordBridgeErrorTimestamp();
+    throw err;
   }
-  lastSuccessfulSyncAtMs = Date.now();
 
   try {
     await syncWorkflowProjectsFromCronJobs(cronJobs);
@@ -5620,15 +5669,70 @@ async function fetchProcessesSnapshot(): Promise<OpenClawProcessSnapshot[]> {
 }
 
 function buildOtterCampAuthHeaders(contentTypeJSON = false): Record<string, string> {
+  const otterCampToken = getTrimmedString(OTTERCAMP_TOKEN)
+    || getTrimmedString(loadHostOtterCLIConfig()?.token)
+    || getTrimmedString(loadWorkspaceOtterCLIConfig()?.token);
   const orgID = resolveConfiguredOtterCampOrgID();
   const headers: Record<string, string> = {
-    ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
+    ...(otterCampToken ? { Authorization: `Bearer ${otterCampToken}` } : {}),
     ...(orgID ? { 'X-Org-ID': orgID } : {}),
   };
   if (contentTypeJSON) {
     headers['Content-Type'] = 'application/json';
   }
   return headers;
+}
+
+function pruneBridgeErrorTimestamps(nowMs = Date.now()): void {
+  const cutoff = nowMs - (60 * 60 * 1000);
+  while (bridgeErrorTimestampsMs.length > 0 && bridgeErrorTimestampsMs[0] < cutoff) {
+    bridgeErrorTimestampsMs.shift();
+  }
+}
+
+function recordBridgeErrorTimestamp(nowMs = Date.now()): void {
+  bridgeErrorTimestampsMs.push(nowMs);
+  pruneBridgeErrorTimestamps(nowMs);
+}
+
+function bridgeErrorsLastHour(nowMs = Date.now()): number {
+  pruneBridgeErrorTimestamps(nowMs);
+  return bridgeErrorTimestampsMs.length;
+}
+
+function buildHostDiagnosticsSnapshot(): Record<string, unknown> {
+  const cpus = os.cpus();
+  const totalMemory = os.totalmem();
+  const availableMemory = os.freemem();
+  const usedMemory = Math.max(0, totalMemory - availableMemory);
+  const gatewayPort = Number.parseInt(OPENCLAW_PORT, 10);
+
+  return {
+    hostname: os.hostname(),
+    os: os.type(),
+    arch: os.arch(),
+    platform: os.platform(),
+    uptime_seconds: Math.max(0, Math.floor(os.uptime())),
+    gateway_port: Number.isFinite(gatewayPort) ? gatewayPort : undefined,
+    node_version: process.version,
+    cpu_model: cpus[0]?.model || undefined,
+    cpu_cores: cpus.length > 0 ? cpus.length : undefined,
+    memory_total_bytes: totalMemory > 0 ? totalMemory : undefined,
+    memory_used_bytes: usedMemory > 0 ? usedMemory : undefined,
+    memory_available_bytes: availableMemory > 0 ? availableMemory : undefined,
+  };
+}
+
+function buildBridgeDiagnosticsSnapshot(nowMs = Date.now()): Record<string, unknown> {
+  const reconnectCount = reconnectByRole.openclaw.totalReconnectAttempts + reconnectByRole.ottercamp.totalReconnectAttempts;
+  return {
+    uptime_seconds: Math.max(0, Math.floor((nowMs - processStartedAtMs) / 1000)),
+    reconnect_count: reconnectCount,
+    last_sync_duration_ms: Math.max(0, Math.floor(lastSyncDurationMS)),
+    sync_count_total: syncCountTotal,
+    dispatch_queue_depth: getDispatchQueueDepthForHealth(),
+    errors_last_hour: bridgeErrorsLastHour(nowMs),
+  };
 }
 
 async function fetchWorkflowProjectsSnapshot(): Promise<BridgeWorkflowProjectSnapshot[]> {
