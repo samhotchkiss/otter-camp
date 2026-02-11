@@ -42,5 +42,6 @@ describe("router", () => {
   it("registers active chat routes", () => {
     expect(hasPath(router.routes as RouteNode[], "chats")).toBe(true);
     expect(hasPath(router.routes as RouteNode[], "chats/:chatId")).toBe(true);
+    expect(hasPath(router.routes as RouteNode[], "chats/archived")).toBe(true);
   });
 });

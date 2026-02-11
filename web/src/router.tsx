@@ -23,6 +23,7 @@ const WorkflowsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/Workfl
 const KnowledgePage = lazy(() => lazyWithChunkRetry(() => import("./pages/KnowledgePage")));
 const MemoryEvaluationPage = lazy(() => lazyWithChunkRetry(() => import("./pages/MemoryEvaluationPage")));
 const ConnectionsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ConnectionsPage")));
+const ArchivedChatsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ArchivedChatsPage")));
 
 /**
  * Suspense wrapper for lazy-loaded routes with loading fallback.
@@ -72,6 +73,10 @@ export const router = createBrowserRouter([
       {
         path: "chats/:chatId",
         element: <Dashboard />,
+      },
+      {
+        path: "chats/archived",
+        element: <ArchivedChatsPage />,
       },
       {
         path: "agents",
