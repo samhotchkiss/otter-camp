@@ -659,12 +659,24 @@ func (h *AdminAgentsHandler) resolveAgentFilesRepository(
 	agentFilesProject, err := h.ProjectStore.GetByName(ctx, agentFilesProjectName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return "", "", "", "", errAgentFilesProjectNotConfigured
-		}
-		if errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNoWorkspace) {
+			// Auto-create the Agent Files project on first use.
+			desc := "Stores agent identity files (SOUL.md, IDENTITY.md, memory) managed by OtterCamp."
+			agentFilesProject, err = h.ProjectStore.Create(ctx, store.CreateProjectInput{
+				Name:        agentFilesProjectName,
+				Description: &desc,
+				Status:      "active",
+			})
+			if err != nil {
+				return "", "", "", "", fmt.Errorf("failed to auto-create Agent Files project: %w", err)
+			}
+			if err := h.ProjectStore.InitProjectRepo(ctx, agentFilesProject.ID); err != nil {
+				return "", "", "", "", fmt.Errorf("failed to initialize Agent Files repo: %w", err)
+			}
+		} else if errors.Is(err, store.ErrForbidden) || errors.Is(err, store.ErrNoWorkspace) {
 			return "", "", "", "", errAdminAgentForbidden
+		} else {
+			return "", "", "", "", err
 		}
-		return "", "", "", "", err
 	}
 	if strings.TrimSpace(agentFilesProject.OrgID) != strings.TrimSpace(workspaceID) {
 		return "", "", "", "", errAdminAgentForbidden
