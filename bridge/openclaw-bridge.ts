@@ -114,6 +114,7 @@ let otterCampOrgIDForTestOverride: string | null = null;
 const OTTERCAMP_WORKSPACE_GUIDE_FILENAME = 'OTTERCAMP.md';
 const OTTERCAMP_WORKSPACE_GUIDE_MARKER = '<!-- OTTERCAMP_MANAGED_GUIDE_V1 -->';
 const OTTERCAMP_WORKSPACE_GUIDE_MAX_CHARS = 5000;
+const OTTER_CLI_CONFIG_FILENAME = 'config.json';
 const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
 const IDENTITY_BLOCK_MAX_CHARS = 1200;
 const SESSION_TASK_SUMMARY_MAX_CHARS = 96;
@@ -1790,6 +1791,118 @@ You are operating inside OtterCamp by default.
 `;
 }
 
+function resolveHostOtterCLIConfigPath(): string {
+  const homeDir = os.homedir();
+  if (process.platform === 'darwin') {
+    return path.join(homeDir, 'Library', 'Application Support', 'otter', OTTER_CLI_CONFIG_FILENAME);
+  }
+  const xdgConfigHome = getTrimmedString(process.env.XDG_CONFIG_HOME);
+  if (xdgConfigHome) {
+    return path.join(xdgConfigHome, 'otter', OTTER_CLI_CONFIG_FILENAME);
+  }
+  return path.join(homeDir, '.config', 'otter', OTTER_CLI_CONFIG_FILENAME);
+}
+
+function loadHostOtterCLIConfig(): Record<string, unknown> | null {
+  const configPath = resolveHostOtterCLIConfigPath();
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const parsed = asRecord(parseJSONValue(raw));
+    if (!parsed) {
+      return null;
+    }
+    const token = getTrimmedString(parsed.token);
+    const apiBaseURL = getTrimmedString(parsed.apiBaseUrl) || OTTERCAMP_URL;
+    const defaultOrg = getTrimmedString(parsed.defaultOrg);
+    if (!token) {
+      return null;
+    }
+    return {
+      apiBaseUrl: apiBaseURL,
+      token,
+      defaultOrg,
+    };
+  } catch (err) {
+    const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
+    if (code !== 'ENOENT') {
+      console.warn('[bridge] failed to read host otter CLI config:', err);
+    }
+    return null;
+  }
+}
+
+function resolveWorkspaceScopedOtterCLIConfigPaths(workspacePath: string): string[] {
+  return [
+    path.join(workspacePath, 'Library', 'Application Support', 'otter', OTTER_CLI_CONFIG_FILENAME),
+    path.join(workspacePath, '.config', 'otter', OTTER_CLI_CONFIG_FILENAME),
+  ];
+}
+
+function ensureWorkspaceOtterCLIConfigFile(targetPath: string, payload: Record<string, unknown>): boolean {
+  const directory = path.dirname(targetPath);
+  if (!isPathWithinRoot(directory, targetPath)) {
+    return false;
+  }
+  fs.mkdirSync(directory, { recursive: true });
+
+  const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+  if (fs.existsSync(targetPath)) {
+    const existingInfo = fs.lstatSync(targetPath);
+    if (existingInfo.isSymbolicLink() || !existingInfo.isFile()) {
+      console.warn(`[bridge] refusing to write otter CLI config at non-regular path: ${targetPath}`);
+      return false;
+    }
+    const existing = fs.readFileSync(targetPath, 'utf8');
+    if (existing === serialized) {
+      return false;
+    }
+  }
+  fs.writeFileSync(targetPath, serialized, { encoding: 'utf8', mode: 0o600 });
+  return true;
+}
+
+function ensureChameleonWorkspaceOtterCLIConfigInstalled(): string[] {
+  const workspacePath = resolveChameleonWorkspacePath();
+  if (!workspacePath) {
+    return [];
+  }
+
+  const hostConfig = loadHostOtterCLIConfig();
+  if (!hostConfig) {
+    return [];
+  }
+
+  try {
+    if (fs.existsSync(workspacePath)) {
+      const workspaceInfo = fs.lstatSync(workspacePath);
+      if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) {
+        console.warn(`[bridge] refusing to sync otter CLI config; workspace is not a real directory: ${workspacePath}`);
+        return [];
+      }
+    } else {
+      fs.mkdirSync(workspacePath, { recursive: true });
+    }
+  } catch (err) {
+    console.warn('[bridge] failed to prepare chameleon workspace for otter CLI config sync:', err);
+    return [];
+  }
+
+  const updatedPaths: string[] = [];
+  for (const targetPath of resolveWorkspaceScopedOtterCLIConfigPaths(workspacePath)) {
+    try {
+      if (ensureWorkspaceOtterCLIConfigFile(targetPath, hostConfig)) {
+        updatedPaths.push(targetPath);
+      }
+    } catch (err) {
+      console.warn(`[bridge] failed to sync otter CLI config to ${targetPath}:`, err);
+    }
+  }
+  if (updatedPaths.length > 0) {
+    console.log(`[bridge] synced otter CLI auth config into chameleon workspace (${updatedPaths.length} path(s))`);
+  }
+  return updatedPaths;
+}
+
 function ensureChameleonWorkspaceGuideInstalled(): string {
   const workspacePath = resolveChameleonWorkspacePath();
   if (!workspacePath) {
@@ -1915,6 +2028,10 @@ function buildOtterCampOperatingGuideReminder(sessionKey: string): string {
 
 export function ensureChameleonWorkspaceGuideInstalledForTest(): string {
   return ensureChameleonWorkspaceGuideInstalled();
+}
+
+export function ensureChameleonWorkspaceOtterCLIConfigInstalledForTest(): string[] {
+  return ensureChameleonWorkspaceOtterCLIConfigInstalled();
 }
 
 function resolveOpenClawIdentityPath(fileName: string): string {
@@ -5882,6 +5999,7 @@ function isMainModule(): boolean {
 
 async function runByMode(modeArg: string | undefined): Promise<void> {
   ensureChameleonWorkspaceGuideInstalled();
+  ensureChameleonWorkspaceOtterCLIConfigInstalled();
   const mode = normalizeModeArg(modeArg);
   if (mode === 'continuous') {
     await runContinuous();

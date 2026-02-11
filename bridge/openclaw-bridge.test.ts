@@ -8,6 +8,7 @@ import {
   buildCompletionActivityEventFromProgressLineForTest,
   buildIdentityPreamble,
   ensureChameleonWorkspaceGuideInstalledForTest,
+  ensureChameleonWorkspaceOtterCLIConfigInstalledForTest,
   formatSessionContextMessageForTest,
   formatSessionSystemPromptForTest,
   formatSessionDisplayLabel,
@@ -317,6 +318,65 @@ describe("bridge identity preamble helpers", () => {
         delete process.env.OPENCLAW_CONFIG_PATH;
       } else {
         process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("syncs otter CLI auth config into the chameleon workspace home paths", () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const originalHome = process.env.HOME;
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "oc-cli-config-sync-"));
+    const hostHome = path.join(tempRoot, "host-home");
+    const workspacePath = path.join(tempRoot, "workspace-chameleon");
+    const configPath = path.join(tempRoot, "openclaw.json");
+
+    fs.mkdirSync(path.join(hostHome, "Library", "Application Support", "otter"), { recursive: true });
+    fs.writeFileSync(
+      path.join(hostHome, "Library", "Application Support", "otter", "config.json"),
+      `${JSON.stringify({
+        apiBaseUrl: "http://localhost:4200",
+        token: "oc_local_test_token",
+        defaultOrg: "146ca0fd-cf4c-4ed8-9f54-552d862e9a51",
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({ agents: { chameleon: { workspace: workspacePath } } }, null, 2)}\n`,
+      "utf8",
+    );
+    process.env.HOME = hostHome;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    try {
+      const updated = ensureChameleonWorkspaceOtterCLIConfigInstalledForTest();
+      assert.ok(updated.length >= 1);
+
+      const workspaceDarwinPath = path.join(
+        workspacePath,
+        "Library",
+        "Application Support",
+        "otter",
+        "config.json",
+      );
+      const workspaceUnixPath = path.join(workspacePath, ".config", "otter", "config.json");
+      assert.equal(fs.existsSync(workspaceDarwinPath), true);
+      assert.equal(fs.existsSync(workspaceUnixPath), true);
+
+      const darwinConfig = JSON.parse(fs.readFileSync(workspaceDarwinPath, "utf8")) as Record<string, unknown>;
+      assert.equal(darwinConfig.token, "oc_local_test_token");
+      assert.equal(darwinConfig.defaultOrg, "146ca0fd-cf4c-4ed8-9f54-552d862e9a51");
+    } finally {
+      if (originalConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
       }
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
