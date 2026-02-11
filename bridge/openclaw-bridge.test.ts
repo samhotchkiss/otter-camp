@@ -248,10 +248,13 @@ describe("bridge identity preamble helpers", () => {
     const systemPrompt = await formatSessionSystemPromptForTest(sessionKey, userText);
     assert.ok(systemPrompt.includes("[OtterCamp Identity Injection]"));
     assert.ok(systemPrompt.includes("[OTTERCAMP_CONTEXT]"));
+    assert.ok(systemPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"));
+    assert.ok(systemPrompt.includes('Default meaning: "project" refers to an OtterCamp project record'));
     assert.equal(systemPrompt.includes(userText), false);
 
     const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
     assert.ok(secondPrompt.includes("[OtterCamp Identity Injection]"));
+    assert.ok(secondPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"));
     assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
     assert.equal(secondPrompt.includes("next turn"), false);
   });

@@ -1826,6 +1826,8 @@ function buildContextEnvelope(context: SessionContext): string {
     if (context.agentID) {
       lines.push(`Target agent identity: ${context.agentID}.`);
     }
+    lines.push('Default meaning: "project" refers to an OtterCamp project record unless the user explicitly asks for local code scaffolding.');
+    lines.push('If asked to create a project and a name is provided, create it in OtterCamp with sensible defaults and confirm the result.');
   } else if (context.kind === 'project_chat') {
     lines.push('Surface: project chat.');
     if (context.projectID) {
@@ -1858,6 +1860,19 @@ function buildContextEnvelope(context: SessionContext): string {
   }
   lines.push('Load relevant AGENTS.md and project docs before taking action.');
   return `[OTTERCAMP_CONTEXT]\n${lines.map((line) => `- ${line}`).join('\n')}\n[/OTTERCAMP_CONTEXT]`;
+}
+
+function buildSurfaceActionDefaults(context: SessionContext): string {
+  if (context.kind !== 'dm') {
+    return '';
+  }
+  return [
+    '[OTTERCAMP_ACTION_DEFAULTS]',
+    '- In this DM, "project", "task", "issue", and "agent" refer to OtterCamp entities unless the user says otherwise.',
+    '- "Create a project" means create an OtterCamp project (status=active, description optional), not a local folder/repo scaffold.',
+    '- If a project name is provided, create it directly and confirm; ask at most one concise follow-up only when required.',
+    '[/OTTERCAMP_ACTION_DEFAULTS]',
+  ].join('\n');
 }
 
 function buildContextReminder(context: SessionContext): string {
@@ -2381,6 +2396,10 @@ async function withSessionContext(
       projectRoot: execution.projectRoot,
     }));
     sections.push(buildContextEnvelope(context));
+    const actionDefaults = buildSurfaceActionDefaults(context);
+    if (actionDefaults) {
+      sections.push(actionDefaults);
+    }
     if (includeUserContent) {
       sections.push(content);
     }
@@ -2394,6 +2413,10 @@ async function withSessionContext(
     : '';
   if (identityPreamble) {
     reminderSections.push(identityPreamble);
+  }
+  const actionDefaults = buildSurfaceActionDefaults(context);
+  if (actionDefaults) {
+    reminderSections.push(actionDefaults);
   }
   reminderSections.push(
     `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]`,
