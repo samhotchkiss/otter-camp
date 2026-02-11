@@ -91,7 +91,7 @@ describe("GlobalChatDock", () => {
         unreadCount: 0,
         updatedAt: "2026-02-08T00:00:00.000Z",
         agent: {
-          id: agentID,
+          id: "session-reset",
           name: "Marcus",
           status: "online",
         },

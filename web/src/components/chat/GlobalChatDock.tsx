@@ -147,7 +147,7 @@ export default function GlobalChatDock() {
         const threadAgentID = selectedConversation.threadId.startsWith("dm_")
           ? selectedConversation.threadId.slice(3).trim()
           : "";
-        const resetAgentID = selectedConversation.agent.id.trim() || threadAgentID;
+        const resetAgentID = threadAgentID || selectedConversation.agent.id.trim();
         if (!resetAgentID) {
           throw new Error("Failed to resolve DM agent for reset");
         }
