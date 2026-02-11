@@ -26,6 +26,8 @@ type AdminRosterAgent = {
   name: string;
   status: AgentStatus;
   model?: string;
+  contextTokens?: number;
+  totalTokens?: number;
   heartbeatEvery?: string;
   channel?: string;
   lastSeen?: string;
@@ -337,6 +339,8 @@ function AgentsPageComponent({
         name: String(agent.name || agent.id || "unknown").trim(),
         status: normalizeAgentStatus(agent.status) || "offline",
         model: typeof agent.model === "string" ? agent.model : undefined,
+        contextTokens: typeof agent.context_tokens === "number" ? agent.context_tokens : undefined,
+        totalTokens: typeof agent.total_tokens === "number" ? agent.total_tokens : undefined,
         heartbeatEvery: typeof agent.heartbeat_every === "string" ? agent.heartbeat_every : undefined,
         channel: typeof agent.channel === "string" ? agent.channel : undefined,
         lastSeen: typeof agent.last_seen === "string" ? agent.last_seen : undefined,
@@ -769,7 +773,11 @@ function AgentsPageComponent({
                     <td className="px-2 py-2">{agent.id}</td>
                     <td className="px-2 py-2">{agent.status}</td>
                     <td className="px-2 py-2">{agent.model || "n/a"}</td>
-                    <td className="px-2 py-2">—</td>
+                    <td className="px-2 py-2">
+                      {Number.isFinite(agent.totalTokens)
+                        ? Number(agent.totalTokens).toLocaleString()
+                        : "—"}
+                    </td>
                     <td className="px-2 py-2">{agent.lastSeen || "n/a"}</td>
                     <td className="px-2 py-2">{agent.heartbeatEvery || "n/a"}</td>
                     <td className="px-2 py-2">{agent.channel || "n/a"}</td>

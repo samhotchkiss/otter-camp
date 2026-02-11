@@ -41,6 +41,8 @@ type adminAgentSummary struct {
 	Name             string `json:"name"`
 	Status           string `json:"status"`
 	Model            string `json:"model,omitempty"`
+	ContextTokens    int    `json:"context_tokens,omitempty"`
+	TotalTokens      int    `json:"total_tokens,omitempty"`
 	HeartbeatEvery   string `json:"heartbeat_every,omitempty"`
 	Channel          string `json:"channel,omitempty"`
 	SessionKey       string `json:"session_key,omitempty"`
@@ -905,7 +907,24 @@ func (h *AdminAgentsHandler) listRows(ctx context.Context, workspaceID string) (
 			s.total_tokens
 		FROM agents a
 		LEFT JOIN openclaw_agent_configs c ON c.id = a.slug
-		LEFT JOIN agent_sync_state s ON s.id = a.slug AND s.org_id = a.org_id
+		LEFT JOIN LATERAL (
+			SELECT
+				state.name,
+				state.model,
+				state.channel,
+				state.session_key,
+				state.last_seen,
+				state.current_task,
+				state.status,
+				state.updated_at,
+				state.context_tokens,
+				state.total_tokens
+			FROM agent_sync_state state
+			WHERE state.org_id = a.org_id
+			  AND (state.id = a.slug OR state.id = a.id::text)
+			ORDER BY state.updated_at DESC NULLS LAST
+			LIMIT 1
+		) s ON true
 		WHERE a.org_id = $1
 		ORDER BY LOWER(COALESCE(NULLIF(s.name, ''), NULLIF(a.display_name, ''), a.slug)) ASC, a.slug ASC`
 	rows, err := h.DB.QueryContext(ctx, query, workspaceID)
@@ -948,7 +967,24 @@ func (h *AdminAgentsHandler) getRow(ctx context.Context, workspaceID, identifier
 			s.total_tokens
 		FROM agents a
 		LEFT JOIN openclaw_agent_configs c ON c.id = a.slug
-		LEFT JOIN agent_sync_state s ON s.id = a.slug AND s.org_id = a.org_id
+		LEFT JOIN LATERAL (
+			SELECT
+				state.name,
+				state.model,
+				state.channel,
+				state.session_key,
+				state.last_seen,
+				state.current_task,
+				state.status,
+				state.updated_at,
+				state.context_tokens,
+				state.total_tokens
+			FROM agent_sync_state state
+			WHERE state.org_id = a.org_id
+			  AND (state.id = a.slug OR state.id = a.id::text)
+			ORDER BY state.updated_at DESC NULLS LAST
+			LIMIT 1
+		) s ON true
 		WHERE a.org_id = $1
 		  AND (a.id::text = $2 OR a.slug = $2)
 		LIMIT 1`
@@ -1230,6 +1266,8 @@ func rowToAgentSummary(row adminAgentRow) adminAgentSummary {
 		Name:             name,
 		Status:           status,
 		Model:            strings.TrimSpace(row.SyncModel.String),
+		ContextTokens:    int(row.ContextTokens.Int64),
+		TotalTokens:      int(row.TotalTokens.Int64),
 		HeartbeatEvery:   strings.TrimSpace(row.HeartbeatEvery.String),
 		Channel:          strings.TrimSpace(row.SyncChannel.String),
 		SessionKey:       strings.TrimSpace(row.SyncSessionKey.String),

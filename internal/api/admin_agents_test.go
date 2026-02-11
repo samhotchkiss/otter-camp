@@ -107,6 +107,62 @@ func TestAdminAgentsListEnforcesWorkspace(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+func TestAdminAgentsListMatchesCanonicalChameleonSessionAgentID(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-canonical-session-id")
+
+	var workspaceAgentID string
+	err := db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'marcus', 'Marcus', 'active')
+		 RETURNING id::text`,
+		orgID,
+	).Scan(&workspaceAgentID)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	_, err = db.Exec(
+		`INSERT INTO agent_sync_state
+		    (org_id, id, name, status, model, context_tokens, total_tokens, channel, session_key, last_seen, updated_at)
+		 VALUES
+		    ($1, $2, 'Marcus', 'online', 'gpt-5.2-codex', 512, 2048, 'webchat', 'agent:chameleon:oc:' || $2, 'just now', $3)
+		 ON CONFLICT (org_id, id) DO UPDATE SET
+		    name = EXCLUDED.name,
+		    status = EXCLUDED.status,
+		    model = EXCLUDED.model,
+		    context_tokens = EXCLUDED.context_tokens,
+		    total_tokens = EXCLUDED.total_tokens,
+		    channel = EXCLUDED.channel,
+		    session_key = EXCLUDED.session_key,
+		    last_seen = EXCLUDED.last_seen,
+		    updated_at = EXCLUDED.updated_at`,
+		orgID,
+		workspaceAgentID,
+		now,
+	)
+	require.NoError(t, err)
+
+	handler := &AdminAgentsHandler{
+		DB:    db,
+		Store: store.NewAgentStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/agents", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.List(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminAgentsListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Len(t, payload.Agents, 1)
+	require.Equal(t, "marcus", payload.Agents[0].ID)
+	require.Equal(t, "gpt-5.2-codex", payload.Agents[0].Model)
+	require.Equal(t, 512, payload.Agents[0].ContextTokens)
+	require.Equal(t, 2048, payload.Agents[0].TotalTokens)
+	require.Equal(t, "webchat", payload.Agents[0].Channel)
+}
+
 func TestAdminAgentsGetReturnsMergedDetail(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-agents-get")

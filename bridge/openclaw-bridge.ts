@@ -558,6 +558,8 @@ const defaultExecFileAsync = promisify(execFile);
 let execFileAsync = defaultExecFileAsync;
 const defaultProcessExit = (code: number): never => process.exit(code);
 let processExitFn: (code: number) => never = defaultProcessExit;
+let resolvedOtterCampOrgIDFromHostConfig = '';
+let resolvedOtterCampOrgIDFromHostConfigLoaded = false;
 
 export function setExecFileForTest(
   fn: ((file: string, args: readonly string[], options: { timeout?: number; maxBuffer?: number }, callback: (error: Error | null, stdout?: string, stderr?: string) => void) => void) | null,
@@ -577,12 +579,24 @@ function resolveConfiguredOtterCampOrgID(): string {
   if (otterCampOrgIDForTestOverride !== null) {
     return otterCampOrgIDForTestOverride;
   }
-  return OTTERCAMP_ORG_ID;
+  const fromEnv = getTrimmedString(OTTERCAMP_ORG_ID);
+  if (fromEnv) {
+    return fromEnv;
+  }
+  if (resolvedOtterCampOrgIDFromHostConfigLoaded) {
+    return resolvedOtterCampOrgIDFromHostConfig;
+  }
+  resolvedOtterCampOrgIDFromHostConfigLoaded = true;
+  const hostConfig = loadHostOtterCLIConfig();
+  resolvedOtterCampOrgIDFromHostConfig = getTrimmedString(hostConfig?.defaultOrg);
+  return resolvedOtterCampOrgIDFromHostConfig;
 }
 
 export function setOtterCampOrgIDForTest(orgID: string | null): void {
   if (orgID === null) {
     otterCampOrgIDForTestOverride = null;
+    resolvedOtterCampOrgIDFromHostConfig = '';
+    resolvedOtterCampOrgIDFromHostConfigLoaded = false;
     return;
   }
   otterCampOrgIDForTestOverride = getTrimmedString(orgID);
@@ -4869,10 +4883,7 @@ async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   const url = `${OTTERCAMP_URL}/api/sync/openclaw`;
   const response = await fetchWithRetry(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
-    },
+    headers: buildOtterCampAuthHeaders(true),
     body: JSON.stringify(payload),
   }, 'push sync snapshot');
 
@@ -4893,9 +4904,7 @@ async function pullDispatchQueueJobs(limit = 50): Promise<DispatchQueueJob[]> {
   url.searchParams.set('limit', String(limit));
   const response = await fetchWithRetry(url.toString(), {
     method: 'GET',
-    headers: {
-      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
-    },
+    headers: buildOtterCampAuthHeaders(),
   }, 'pull queued dispatch jobs');
 
   if (!response.ok) {
@@ -4918,10 +4927,7 @@ async function ackDispatchQueueJob(
   const url = `${OTTERCAMP_URL}/api/sync/openclaw/dispatch/${encodeURIComponent(String(jobID))}/ack`;
   const response = await fetchWithRetry(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
-    },
+    headers: buildOtterCampAuthHeaders(true),
     body: JSON.stringify({
       claim_token: claimToken,
       success,
@@ -5614,9 +5620,10 @@ async function fetchProcessesSnapshot(): Promise<OpenClawProcessSnapshot[]> {
 }
 
 function buildOtterCampAuthHeaders(contentTypeJSON = false): Record<string, string> {
+  const orgID = resolveConfiguredOtterCampOrgID();
   const headers: Record<string, string> = {
     ...(OTTERCAMP_TOKEN ? { Authorization: `Bearer ${OTTERCAMP_TOKEN}` } : {}),
-    ...(OTTERCAMP_ORG_ID ? { 'X-Org-ID': OTTERCAMP_ORG_ID } : {}),
+    ...(orgID ? { 'X-Org-ID': orgID } : {}),
   };
   if (contentTypeJSON) {
     headers['Content-Type'] = 'application/json';
