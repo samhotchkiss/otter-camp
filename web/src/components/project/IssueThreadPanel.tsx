@@ -472,7 +472,6 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [visibleCount, setVisibleCount] = useState(COMMENTS_PAGE_SIZE);
   const [draft, setDraft] = useState("");
-  const [commentAuthorID, setCommentAuthorID] = useState("");
   const [selectedAgentID, setSelectedAgentID] = useState("");
   const [submittingComment, setSubmittingComment] = useState(false);
   const [updatingParticipant, setUpdatingParticipant] = useState(false);
@@ -508,6 +507,22 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     const activeSet = new Set(activeParticipants.map((participant) => participant.agent_id));
     return agents.filter((agent) => !activeSet.has(agent.id));
   }, [activeParticipants, agents]);
+  const defaultCommentAuthorID = useMemo(() => {
+    const issueOwnerID = issue?.owner_agent_id?.trim() ?? "";
+    if (issueOwnerID) {
+      return issueOwnerID;
+    }
+    const ownerParticipantID =
+      activeParticipants.find((participant) => participant.role === "owner")?.agent_id?.trim() ?? "";
+    if (ownerParticipantID) {
+      return ownerParticipantID;
+    }
+    const activeParticipantID = activeParticipants[0]?.agent_id?.trim() ?? "";
+    if (activeParticipantID) {
+      return activeParticipantID;
+    }
+    return agents[0]?.id?.trim() ?? "";
+  }, [activeParticipants, agents, issue?.owner_agent_id]);
 
   const visibleComments = useMemo(() => {
     const sorted = sortComments(comments);
@@ -568,9 +583,6 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
 
         const agentList = Array.isArray(agentsPayload.agents) ? agentsPayload.agents : [];
         setAgents(agentList);
-        if (agentList.length > 0) {
-          setCommentAuthorID((current) => current || agentList[0].id);
-        }
         setReviewHistory([]);
         setReviewHistoryError(null);
         setSelectedReviewSHA(null);
@@ -888,7 +900,8 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     event.preventDefault();
     const orgID = getOrgID();
     const body = draft.trim();
-    if (!orgID || !body || !commentAuthorID) {
+    const authorID = defaultCommentAuthorID;
+    if (!orgID || !body || !authorID) {
       return;
     }
 
@@ -896,7 +909,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
     const optimisticID = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const optimisticComment: IssueComment = {
       id: optimisticID,
-      author_agent_id: commentAuthorID,
+      author_agent_id: authorID,
       body,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -912,7 +925,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            author_agent_id: commentAuthorID,
+            author_agent_id: authorID,
             body,
             sender_type: "user",
           }),
@@ -1464,7 +1477,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
                 <DocumentWorkspace
                   path={issue.document_path}
                   content={displayedDocumentContent}
-                  reviewerName={agentNameByID.get(commentAuthorID) ?? "Reviewer"}
+                  reviewerName={agentNameByID.get(defaultCommentAuthorID) ?? "Reviewer"}
                   readOnly={isViewingHistoricalVersion}
                 />
               ) : (
@@ -1596,25 +1609,6 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
                 </p>
               </div>
             )}
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="text-xs font-semibold text-[var(--text-muted)]" htmlFor="issue-comment-author">
-                Comment as
-              </label>
-              <select
-                id="issue-comment-author"
-                aria-label="Comment author agent"
-                className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                value={commentAuthorID}
-                onChange={(event) => setCommentAuthorID(event.target.value)}
-              >
-                <option value="">Select agent…</option>
-                {agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </option>
-                ))}
-              </select>
-            </div>
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
@@ -1625,7 +1619,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
               <button
                 type="submit"
                 className="rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#b79658] disabled:opacity-50"
-                disabled={submittingComment || !draft.trim() || !commentAuthorID}
+                disabled={submittingComment || !draft.trim() || !defaultCommentAuthorID}
               >
                 {submittingComment ? "Posting..." : "Post Comment"}
               </button>
