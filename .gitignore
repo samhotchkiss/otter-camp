@@ -28,6 +28,7 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+data/repos/
 issues/
 .autowork/
 scripts/*
@@ -57,4 +58,3 @@ otter
 seed
 server
 otter
-
