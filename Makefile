@@ -1,4 +1,4 @@
-.PHONY: dev run setup seed prod-local build build-otter install test release-gate migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean
+.PHONY: dev run setup seed prod-local build build-otter install test release-gate migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean uninstall
 
 # Development
 dev:
@@ -95,6 +95,9 @@ test-web:
 clean:
 	rm -rf bin/
 	rm -rf web/dist/
+
+uninstall:
+	@bash scripts/uninstall.sh
 
 # Railway deployment
 deploy:

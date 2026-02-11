@@ -34,6 +34,8 @@ scripts/*
 !scripts/install.sh
 !scripts/install_test.sh
 !scripts/setup.sh
+!scripts/setup_test.sh
+!scripts/uninstall.sh
 !scripts/seed/
 !scripts/seed/**
 
