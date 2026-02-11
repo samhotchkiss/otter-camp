@@ -23,6 +23,7 @@ export type AgentsPageProps = {
 
 type AdminRosterAgent = {
   id: string;
+  workspaceAgentID?: string;
   name: string;
   status: AgentStatus;
   model?: string;
@@ -30,10 +31,27 @@ type AdminRosterAgent = {
   totalTokens?: number;
   heartbeatEvery?: string;
   channel?: string;
+  sessionKey?: string;
   lastSeen?: string;
 };
 
 type RosterSort = "name" | "status" | "model" | "last_seen";
+
+type AdminConnectionsSession = {
+  id?: string;
+  name?: string;
+  status?: string;
+  model?: string;
+  context_tokens?: number;
+  total_tokens?: number;
+  channel?: string;
+  session_key?: string;
+  last_seen?: string;
+};
+
+type AdminConnectionsPayload = {
+  sessions?: AdminConnectionsSession[];
+};
 
 // Status filter styles - memoized outside component
 // Using gold/amber for active states per DESIGN-SPEC.md
@@ -239,6 +257,40 @@ function normalizeActivityLookupKey(value: string | undefined): string | undefin
   return trimmed || undefined;
 }
 
+function parseSessionAgentIdentity(sessionKey: string | undefined): string | undefined {
+  if (!sessionKey) {
+    return undefined;
+  }
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const canonicalMatch = /^agent:chameleon:oc:([0-9a-f-]{36})$/i.exec(trimmed);
+  if (canonicalMatch?.[1]) {
+    return canonicalMatch[1].toLowerCase();
+  }
+
+  if (!trimmed.toLowerCase().startsWith("agent:")) {
+    return undefined;
+  }
+  const rest = trimmed.slice("agent:".length).trim();
+  if (!rest) {
+    return undefined;
+  }
+  const delimiterIdx = rest.indexOf(":");
+  const token = delimiterIdx === -1 ? rest : rest.slice(0, delimiterIdx).trim();
+  return token ? token.toLowerCase() : undefined;
+}
+
+function appendAlias(target: Set<string>, value: string | undefined): void {
+  const normalized = normalizeActivityLookupKey(value);
+  if (!normalized) {
+    return;
+  }
+  target.add(normalized);
+}
+
 function buildIdleFallbackText(agent: AgentCardData): string {
   const lastActive = formatLastActive(agent.lastActive);
   if (lastActive === "Never") {
@@ -334,17 +386,90 @@ function AgentsPageComponent({
   const fetchAdminRoster = useCallback(async () => {
     try {
       const payload = (await apiFetch<{ agents?: Array<Record<string, unknown>> }>(`/api/admin/agents`));
+      let connectionSessions: AdminConnectionsSession[] = [];
+      try {
+        const connectionsPayload = await apiFetch<AdminConnectionsPayload>(`/api/admin/connections`);
+        connectionSessions = Array.isArray(connectionsPayload.sessions)
+          ? connectionsPayload.sessions
+          : [];
+      } catch {
+        connectionSessions = [];
+      }
+
+      const sessionByAlias = new Map<string, AdminConnectionsSession>();
+      for (const session of connectionSessions) {
+        const aliases = new Set<string>();
+        appendAlias(aliases, typeof session.id === "string" ? session.id : undefined);
+        appendAlias(aliases, typeof session.name === "string" ? session.name : undefined);
+        appendAlias(
+          aliases,
+          parseSessionAgentIdentity(typeof session.session_key === "string" ? session.session_key : undefined),
+        );
+        for (const alias of aliases) {
+          if (!sessionByAlias.has(alias)) {
+            sessionByAlias.set(alias, session);
+          }
+        }
+      }
+
       const next = (payload.agents || []).map((agent) => ({
         id: String(agent.id || "").trim(),
+        workspaceAgentID:
+          typeof agent.workspace_agent_id === "string" && agent.workspace_agent_id.trim() !== ""
+            ? agent.workspace_agent_id.trim()
+            : undefined,
         name: String(agent.name || agent.id || "unknown").trim(),
         status: normalizeAgentStatus(agent.status) || "offline",
-        model: typeof agent.model === "string" ? agent.model : undefined,
+        model: typeof agent.model === "string" && agent.model.trim() !== ""
+          ? agent.model
+          : undefined,
         contextTokens: typeof agent.context_tokens === "number" ? agent.context_tokens : undefined,
         totalTokens: typeof agent.total_tokens === "number" ? agent.total_tokens : undefined,
         heartbeatEvery: typeof agent.heartbeat_every === "string" ? agent.heartbeat_every : undefined,
         channel: typeof agent.channel === "string" ? agent.channel : undefined,
+        sessionKey: typeof agent.session_key === "string" ? agent.session_key : undefined,
         lastSeen: typeof agent.last_seen === "string" ? agent.last_seen : undefined,
-      }));
+      }))
+        .map((agent) => {
+          const aliases = new Set<string>();
+          appendAlias(aliases, agent.id);
+          appendAlias(aliases, agent.workspaceAgentID);
+          appendAlias(aliases, agent.name);
+          appendAlias(aliases, parseSessionAgentIdentity(agent.sessionKey));
+          const matchedSession = [...aliases]
+            .map((alias) => sessionByAlias.get(alias))
+            .find((entry): entry is AdminConnectionsSession => Boolean(entry));
+
+          return {
+            ...agent,
+            status:
+              agent.status ||
+              normalizeAgentStatus(matchedSession?.status) ||
+              "offline",
+            model:
+              agent.model ||
+              (typeof matchedSession?.model === "string" ? matchedSession.model : undefined),
+            contextTokens:
+              agent.contextTokens ??
+              (typeof matchedSession?.context_tokens === "number"
+                ? matchedSession.context_tokens
+                : undefined),
+            totalTokens:
+              agent.totalTokens ??
+              (typeof matchedSession?.total_tokens === "number"
+                ? matchedSession.total_tokens
+                : undefined),
+            channel:
+              agent.channel ||
+              (typeof matchedSession?.channel === "string" ? matchedSession.channel : undefined),
+            sessionKey:
+              agent.sessionKey ||
+              (typeof matchedSession?.session_key === "string" ? matchedSession.session_key : undefined),
+            lastSeen:
+              agent.lastSeen ||
+              (typeof matchedSession?.last_seen === "string" ? matchedSession.last_seen : undefined),
+          };
+        });
       setRosterAgents(next);
     } catch {
       setRosterAgents([]);
@@ -448,31 +573,65 @@ function AgentsPageComponent({
   const latestActivityByAgent = useMemo(() => {
     const map = new Map<string, NonNullable<AgentCardData["lastAction"]>>();
     for (const event of recentActivityEvents) {
-      const lookupKey = normalizeActivityLookupKey(event.agentId);
-      if (!lookupKey) {
+      const aliases = new Set<string>();
+      appendAlias(aliases, event.agentId);
+      appendAlias(aliases, event.sessionKey);
+      appendAlias(aliases, parseSessionAgentIdentity(event.sessionKey));
+      if (aliases.size === 0) {
         continue;
       }
-      const existing = map.get(lookupKey);
-      if (!existing || new Date(existing.startedAt || 0).getTime() < event.startedAt.getTime()) {
-        map.set(lookupKey, {
-          summary: event.summary,
-          trigger: event.trigger,
-          channel: event.channel,
-          status: event.status,
-          startedAt: event.startedAt,
-        });
+
+      for (const lookupKey of aliases) {
+        const existing = map.get(lookupKey);
+        if (!existing || new Date(existing.startedAt || 0).getTime() < event.startedAt.getTime()) {
+          map.set(lookupKey, {
+            summary: event.summary,
+            trigger: event.trigger,
+            channel: event.channel,
+            status: event.status,
+            startedAt: event.startedAt,
+          });
+        }
       }
     }
     return map;
   }, [recentActivityEvents]);
 
+  const rosterByAlias = useMemo(() => {
+    const lookup = new Map<string, AdminRosterAgent>();
+    for (const rosterAgent of rosterAgents) {
+      const aliases = new Set<string>();
+      appendAlias(aliases, rosterAgent.id);
+      appendAlias(aliases, rosterAgent.workspaceAgentID);
+      appendAlias(aliases, rosterAgent.name);
+      appendAlias(aliases, rosterAgent.sessionKey);
+      appendAlias(aliases, parseSessionAgentIdentity(rosterAgent.sessionKey));
+      for (const alias of aliases) {
+        if (!lookup.has(alias)) {
+          lookup.set(alias, rosterAgent);
+        }
+      }
+    }
+    return lookup;
+  }, [rosterAgents]);
+
   const agentsWithLastAction = useMemo(
     () =>
       agents.map((agent) => {
-        const candidateKeys = [
-          normalizeActivityLookupKey(agent.id),
-          normalizeActivityLookupKey(agent.name),
-        ].filter((value): value is string => Boolean(value));
+        const aliases = new Set<string>();
+        appendAlias(aliases, agent.id);
+        appendAlias(aliases, agent.name);
+        const matchedRosterAgent =
+          [...aliases]
+            .map((alias) => rosterByAlias.get(alias))
+            .find((entry): entry is AdminRosterAgent => Boolean(entry)) ||
+          null;
+
+        appendAlias(aliases, matchedRosterAgent?.workspaceAgentID);
+        appendAlias(aliases, matchedRosterAgent?.sessionKey);
+        appendAlias(aliases, parseSessionAgentIdentity(matchedRosterAgent?.sessionKey));
+
+        const candidateKeys = [...aliases];
 
         let lastAction: AgentCardData["lastAction"];
         for (const key of candidateKeys) {
@@ -489,12 +648,25 @@ function AgentsPageComponent({
           lastActionFallbackText: lastAction ? undefined : buildIdleFallbackText(agent),
         };
       }),
-    [agents, latestActivityByAgent],
+    [agents, latestActivityByAgent, rosterByAlias],
   );
 
   const agentsWithLiveActivity = useMemo(() => {
     return agentsWithLastAction.map((agent) => {
-      const latestEmission = latestBySource.get(agent.id);
+      const aliases = new Set<string>();
+      appendAlias(aliases, agent.id);
+      appendAlias(aliases, agent.name);
+      const matchedRosterAgent =
+        [...aliases]
+          .map((alias) => rosterByAlias.get(alias))
+          .find((entry): entry is AdminRosterAgent => Boolean(entry)) ||
+        null;
+      appendAlias(aliases, matchedRosterAgent?.workspaceAgentID);
+      appendAlias(aliases, parseSessionAgentIdentity(matchedRosterAgent?.sessionKey));
+
+      const latestEmission = [...aliases]
+        .map((alias) => latestBySource.get(alias) || latestBySource.get(alias.toLowerCase()))
+        .find((entry) => Boolean(entry));
       if (!latestEmission) {
         return agent;
       }
@@ -506,7 +678,7 @@ function AgentsPageComponent({
         },
       };
     });
-  }, [agentsWithLastAction, latestBySource]);
+  }, [agentsWithLastAction, latestBySource, rosterByAlias]);
 
   // Calculate counts for filters - memoized
   const counts = useMemo(() => {
@@ -579,7 +751,7 @@ function AgentsPageComponent({
     if (typeof rowVirtualizer.measure === "function") {
       rowVirtualizer.measure();
     }
-  }, [columns, filteredAgents.length, rowVirtualizer]);
+  }, [columns, filteredAgents.length, latestBySource.size, recentActivityEvents.length, rowVirtualizer]);
 
   // Handle card click - memoized
   const handleAgentClick = useCallback((agent: AgentCardData) => {
