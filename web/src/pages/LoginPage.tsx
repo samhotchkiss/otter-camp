@@ -9,6 +9,7 @@ import { useAuth } from "../contexts/AuthContext";
  */
 export default function LoginPage() {
   const { login } = useAuth();
+  const [setupMode, setSetupMode] = useState<"local" | "hosted">("local");
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [org, setOrg] = useState("");
@@ -45,70 +46,109 @@ export default function LoginPage() {
         <div className="login-card">
           {!emailSent ? (
             <>
-              <h2 className="login-card-title">Sign in to your account</h2>
+              <h2 className="login-card-title">Choose your setup path</h2>
+
+              <div className="setup-mode-switch" role="group" aria-label="Setup mode">
+                <button
+                  type="button"
+                  className={`setup-mode-button ${setupMode === "local" ? "is-active" : ""}`}
+                  aria-pressed={setupMode === "local"}
+                  onClick={() => setSetupMode("local")}
+                >
+                  Local setup
+                </button>
+                <button
+                  type="button"
+                  className={`setup-mode-button ${setupMode === "hosted" ? "is-active" : ""}`}
+                  aria-pressed={setupMode === "hosted"}
+                  onClick={() => setSetupMode("hosted")}
+                >
+                  Hosted setup
+                </button>
+              </div>
 
               {error && (
                 <div className="login-error">{error}</div>
               )}
 
-              <form onSubmit={handleSubmit}>
-                <div className="form-group">
-                  <label htmlFor="name" className="form-label">
-                    Name
-                  </label>
-                  <input
-                    id="name"
-                    type="text"
-                    className="form-input"
-                    placeholder="Your name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    autoComplete="name"
-                    autoFocus
-                  />
-                </div>
+              {setupMode === "local" ? (
+                <>
+                  <p className="mode-copy">Local setup is available now via magic link.</p>
+                  <form onSubmit={handleSubmit}>
+                    <div className="form-group">
+                      <label htmlFor="name" className="form-label">
+                        Name
+                      </label>
+                      <input
+                        id="name"
+                        type="text"
+                        className="form-input"
+                        placeholder="Your name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        autoComplete="name"
+                        autoFocus
+                      />
+                    </div>
 
-                <div className="form-group">
-                  <label htmlFor="org" className="form-label">
-                    Organization
-                  </label>
-                  <input
-                    id="org"
-                    type="text"
-                    className="form-input"
-                    placeholder="Your org name"
-                    value={org}
-                    onChange={(e) => setOrg(e.target.value)}
-                  />
-                </div>
+                    <div className="form-group">
+                      <label htmlFor="org" className="form-label">
+                        Organization
+                      </label>
+                      <input
+                        id="org"
+                        type="text"
+                        className="form-input"
+                        placeholder="Your org name"
+                        value={org}
+                        onChange={(e) => setOrg(e.target.value)}
+                      />
+                    </div>
 
-                <div className="form-group">
-                  <label htmlFor="email" className="form-label">
-                    Email address
-                  </label>
-                  <input
-                    id="email"
-                    type="email"
-                    className="form-input"
-                    placeholder="you@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                    autoComplete="email"
-                  />
-                  <p className="form-hint">
-                    We'll generate a magic link to sign in
+                    <div className="form-group">
+                      <label htmlFor="email" className="form-label">
+                        Email address
+                      </label>
+                      <input
+                        id="email"
+                        type="email"
+                        className="form-input"
+                        placeholder="you@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        required
+                        autoComplete="email"
+                      />
+                      <p className="form-hint">
+                        We'll generate a magic link to sign in
+                      </p>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? "Sending..." : "Generate Magic Link"}
+                    </button>
+                  </form>
+                </>
+              ) : (
+                <div className="hosted-panel">
+                  <h3 className="hosted-title">Hosted onboarding is moving to otter.camp/setup</h3>
+                  <p className="hosted-text">
+                    Hosted setup is deferred for now. Use the setup page to continue.
                   </p>
+                  <a
+                    className="btn btn-primary hosted-link"
+                    href="https://otter.camp/setup"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Go to hosted setup
+                  </a>
                 </div>
-
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={isSubmitting}
-                >
-                  {isSubmitting ? "Sending..." : "Generate Magic Link"}
-                </button>
-              </form>
+              )}
             </>
           ) : (
             <div className="login-success">
@@ -199,6 +239,42 @@ export default function LoginPage() {
           margin-bottom: 20px;
         }
 
+        .setup-mode-switch {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-bottom: 20px;
+        }
+
+        .setup-mode-button {
+          border: 1px solid var(--border, #3D3A36);
+          background: var(--surface-alt, #2D2B28);
+          color: var(--text-muted, #A69582);
+          border-radius: 10px;
+          padding: 10px 12px;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+
+        .setup-mode-button:hover {
+          border-color: var(--accent, #C9A86C);
+          color: var(--text, #FAF8F5);
+        }
+
+        .setup-mode-button.is-active {
+          border-color: var(--accent, #C9A86C);
+          background: rgba(201, 168, 108, 0.18);
+          color: var(--text, #FAF8F5);
+        }
+
+        .mode-copy {
+          color: var(--text-muted, #A69582);
+          font-size: 14px;
+          margin: 0 0 16px;
+        }
+
         .form-group {
           margin-bottom: 20px;
         }
@@ -276,6 +352,34 @@ export default function LoginPage() {
 
         .btn-secondary:hover {
           background: var(--border, #3D3A36);
+        }
+
+        .hosted-panel {
+          border: 1px solid var(--border, #3D3A36);
+          border-radius: 12px;
+          background: var(--surface-alt, #2D2B28);
+          padding: 20px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .hosted-title {
+          margin: 0;
+          font-size: 16px;
+          font-weight: 600;
+          color: var(--text, #FAF8F5);
+        }
+
+        .hosted-text {
+          margin: 0;
+          color: var(--text-muted, #A69582);
+          font-size: 14px;
+        }
+
+        .hosted-link {
+          margin-top: 8px;
+          text-decoration: none;
         }
 
         .btn-oauth {
