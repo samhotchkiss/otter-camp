@@ -128,6 +128,9 @@ func (h *AgentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// Try real mode if store is available and workspace is set
 	workspaceID := middleware.WorkspaceFromContext(r.Context())
 	if h.Store != nil && workspaceID != "" {
+		if err := ensureProtectedSystemAgents(r.Context(), h.DB, workspaceID); err != nil {
+			log.Printf("Failed to ensure protected system agents: %v", err)
+		}
 		agents, err := h.Store.List(r.Context())
 		if err != nil {
 			log.Printf("Failed to list agents from store: %v, falling back to demo", err)

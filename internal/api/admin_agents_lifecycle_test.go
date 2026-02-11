@@ -168,3 +168,32 @@ func TestAdminAgentsLifecycleReactivateRejectsMissingArchive(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.Contains(t, payload.Error, "retired agent archive is missing")
 }
+
+func TestAdminAgentsLifecycleRetireRejectsProtectedElephant(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-retire-protected-elephant")
+	_, err := db.Exec(
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, 'elephant', 'Elephant', 'active')`,
+		orgID,
+	)
+	require.NoError(t, err)
+
+	handler := &AdminAgentsHandler{
+		DB:           db,
+		Store:        store.NewAgentStore(db),
+		ProjectStore: store.NewProjectStore(db),
+		ProjectRepos: store.NewProjectRepoStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/agents/elephant/retire", nil)
+	req = addRouteParam(req, "id", "elephant")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Retire(rec, req)
+	require.Equal(t, http.StatusConflict, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Contains(t, payload.Error, "protected system agents cannot be retired")
+}

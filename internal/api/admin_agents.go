@@ -133,6 +133,18 @@ const resolveAvailableAgentSlotMaxAttempts = 100
 const openClawSystemAgentChameleon = "chameleon"
 const openClawSystemAgentElephant = "elephant"
 
+type protectedSystemAgent struct {
+	Slug        string
+	DisplayName string
+}
+
+var protectedSystemAgents = []protectedSystemAgent{
+	{
+		Slug:        openClawSystemAgentElephant,
+		DisplayName: "Elephant",
+	},
+}
+
 var builtInAgentProfiles = map[string]builtInAgentProfileTemplate{
 	"marcus": {
 		ID: "marcus",
@@ -431,6 +443,10 @@ func (h *AdminAgentsHandler) List(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
 		return
 	}
+	if err := ensureProtectedSystemAgents(r.Context(), h.DB, workspaceID); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load admin agents"})
+		return
+	}
 
 	rows, err := h.listRows(r.Context(), workspaceID)
 	if err != nil {
@@ -457,6 +473,10 @@ func (h *AdminAgentsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.DB == nil || h.Store == nil {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+	if err := ensureProtectedSystemAgents(r.Context(), h.DB, workspaceID); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load admin agent"})
 		return
 	}
 
@@ -600,6 +620,10 @@ func (h *AdminAgentsHandler) Retire(w http.ResponseWriter, r *http.Request) {
 	row, workspaceID, err := h.resolveFileAgentRow(r)
 	if err != nil {
 		h.writeAgentLookupError(w, err)
+		return
+	}
+	if isProtectedSystemAgentNonRemovable(row.Slug) {
+		sendJSON(w, http.StatusConflict, errorResponse{Error: "protected system agents cannot be retired"})
 		return
 	}
 
@@ -1210,11 +1234,72 @@ func (h *AdminAgentsHandler) resolveFileAgentRow(r *http.Request) (*adminAgentRo
 	if identifier == "" {
 		return nil, "", fmt.Errorf("agent id is required")
 	}
+	if err := ensureProtectedSystemAgents(r.Context(), h.DB, workspaceID); err != nil {
+		return nil, "", err
+	}
 	row, err := h.getRow(r.Context(), workspaceID, identifier)
 	if err != nil {
 		return nil, "", err
 	}
 	return row, workspaceID, nil
+}
+
+func ensureProtectedSystemAgents(ctx context.Context, db *sql.DB, workspaceID string) error {
+	if db == nil {
+		return nil
+	}
+	trimmedWorkspace := strings.TrimSpace(workspaceID)
+	if trimmedWorkspace == "" {
+		return nil
+	}
+	for _, spec := range protectedSystemAgents {
+		if err := ensureProtectedSystemAgent(ctx, db, trimmedWorkspace, spec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureProtectedSystemAgent(
+	ctx context.Context,
+	db *sql.DB,
+	workspaceID string,
+	spec protectedSystemAgent,
+) error {
+	slug := strings.TrimSpace(strings.ToLower(spec.Slug))
+	if slug == "" {
+		return nil
+	}
+	displayName := strings.TrimSpace(spec.DisplayName)
+	if displayName == "" {
+		displayName = "Elephant"
+	}
+	_, err := db.ExecContext(
+		ctx,
+		`INSERT INTO agents (org_id, slug, display_name, status)
+		 VALUES ($1, $2, $3, 'active')
+		 ON CONFLICT (org_id, slug) DO UPDATE
+		 SET
+		   display_name = CASE
+		     WHEN COALESCE(NULLIF(agents.display_name, ''), '') = '' THEN EXCLUDED.display_name
+		     ELSE agents.display_name
+		   END,
+		   status = 'active',
+		   updated_at = NOW()`,
+		workspaceID,
+		slug,
+		displayName,
+	)
+	return err
+}
+
+func isProtectedSystemAgentNonRemovable(slug string) bool {
+	switch strings.ToLower(strings.TrimSpace(slug)) {
+	case openClawSystemAgentElephant:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *AdminAgentsHandler) writeAgentLookupError(w http.ResponseWriter, err error) {

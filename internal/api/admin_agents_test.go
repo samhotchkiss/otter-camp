@@ -73,25 +73,33 @@ func TestAdminAgentsListReturnsMergedRoster(t *testing.T) {
 
 	var payload adminAgentsListResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.Len(t, payload.Agents, 2)
-	require.Equal(t, 2, payload.Total)
+	require.Len(t, payload.Agents, 3)
+	require.Equal(t, 3, payload.Total)
+	agentsByID := make(map[string]adminAgentSummary, len(payload.Agents))
+	for _, agent := range payload.Agents {
+		agentsByID[agent.ID] = agent
+	}
 
-	first := payload.Agents[0]
-	second := payload.Agents[1]
+	mainAgent, ok := agentsByID["main"]
+	require.True(t, ok)
+	require.Equal(t, "Frank", mainAgent.Name)
+	require.Equal(t, "online", mainAgent.Status)
+	require.Equal(t, "gpt-5.2-codex", mainAgent.Model)
+	require.Equal(t, "15m", mainAgent.HeartbeatEvery)
+	require.Equal(t, "slack:#engineering", mainAgent.Channel)
+	require.Equal(t, "agent:main:main", mainAgent.SessionKey)
 
-	require.Equal(t, "main", first.ID)
-	require.Equal(t, "Frank", first.Name)
-	require.Equal(t, "online", first.Status)
-	require.Equal(t, "gpt-5.2-codex", first.Model)
-	require.Equal(t, "15m", first.HeartbeatEvery)
-	require.Equal(t, "slack:#engineering", first.Channel)
-	require.Equal(t, "agent:main:main", first.SessionKey)
+	stoneAgent, ok := agentsByID["three-stones"]
+	require.True(t, ok)
+	require.Equal(t, "Stone", stoneAgent.Name)
+	require.Equal(t, "offline", stoneAgent.Status)
+	require.Equal(t, "", stoneAgent.Model)
+	require.Equal(t, "", stoneAgent.Channel)
 
-	require.Equal(t, "three-stones", second.ID)
-	require.Equal(t, "Stone", second.Name)
-	require.Equal(t, "offline", second.Status)
-	require.Equal(t, "", second.Model)
-	require.Equal(t, "", second.Channel)
+	elephantAgent, ok := agentsByID["elephant"]
+	require.True(t, ok)
+	require.Equal(t, "Elephant", elephantAgent.Name)
+	require.Equal(t, "online", elephantAgent.Status)
 }
 
 func TestAdminAgentsListEnforcesWorkspace(t *testing.T) {
@@ -155,12 +163,21 @@ func TestAdminAgentsListMatchesCanonicalChameleonSessionAgentID(t *testing.T) {
 
 	var payload adminAgentsListResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.Len(t, payload.Agents, 1)
-	require.Equal(t, "marcus", payload.Agents[0].ID)
-	require.Equal(t, "gpt-5.2-codex", payload.Agents[0].Model)
-	require.Equal(t, 512, payload.Agents[0].ContextTokens)
-	require.Equal(t, 2048, payload.Agents[0].TotalTokens)
-	require.Equal(t, "webchat", payload.Agents[0].Channel)
+	require.Len(t, payload.Agents, 2)
+	agentsByID := make(map[string]adminAgentSummary, len(payload.Agents))
+	for _, agent := range payload.Agents {
+		agentsByID[agent.ID] = agent
+	}
+	marcusAgent, ok := agentsByID["marcus"]
+	require.True(t, ok)
+	require.Equal(t, "gpt-5.2-codex", marcusAgent.Model)
+	require.Equal(t, 512, marcusAgent.ContextTokens)
+	require.Equal(t, 2048, marcusAgent.TotalTokens)
+	require.Equal(t, "webchat", marcusAgent.Channel)
+
+	elephantAgent, ok := agentsByID["elephant"]
+	require.True(t, ok)
+	require.Equal(t, "Elephant", elephantAgent.Name)
 }
 
 func TestAdminAgentsGetReturnsMergedDetail(t *testing.T) {
