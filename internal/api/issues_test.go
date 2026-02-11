@@ -783,6 +783,54 @@ func TestIssuesHandlerCreateIssueDispatchesKickoffToAssignedAgent(t *testing.T) 
 	require.True(t, strings.Contains(event.Data.Content, "Kickoff issue"))
 }
 
+func TestIssuesHandlerPatchIssueDispatchesKickoffWhenWorkStarts(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-api-patch-kickoff-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Patch Kickoff Project")
+	ownerAgentID := insertMessageTestAgent(t, db, orgID, "issue-patch-kickoff-owner")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID:    projectID,
+		Title:        "Patch kickoff issue",
+		Origin:       "local",
+		OwnerAgentID: &ownerAgentID,
+		WorkStatus:   store.IssueWorkStatusQueued,
+	})
+	require.NoError(t, err)
+	_, err = issueStore.AddParticipant(issueTestCtx(orgID), store.AddProjectIssueParticipantInput{
+		IssueID: issue.ID,
+		AgentID: ownerAgentID,
+		Role:    "owner",
+	})
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newIssueTestRouter(handler)
+
+	patchReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"work_status":"in_progress"}`)),
+	)
+	patchRec := httptest.NewRecorder()
+	router.ServeHTTP(patchRec, patchReq)
+	require.Equal(t, http.StatusOK, patchRec.Code)
+
+	require.Len(t, dispatcher.calls, 1)
+	event, ok := dispatcher.calls[0].(openClawIssueCommentDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, "issue.comment.message", event.Type)
+	require.Equal(t, issue.ID, event.Data.IssueID)
+	require.Equal(t, ownerAgentID, event.Data.ResponderAgentID)
+	require.True(t, strings.Contains(event.Data.Content, "New issue assigned:"))
+}
+
 func TestIssuesHandlerCreateIssueValidatesPayload(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-create-validate-org")

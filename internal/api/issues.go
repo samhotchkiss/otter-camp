@@ -854,6 +854,9 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updated = h.maybeAutoReadyForReviewFromWorkStatus(r.Context(), updated)
+	if shouldDispatchIssueKickoffAfterPatch(*beforeIssue, *updated, req) {
+		h.dispatchIssueKickoffBestEffort(r.Context(), *updated)
+	}
 	if h.ChatThreadStore != nil &&
 		!strings.EqualFold(strings.TrimSpace(beforeIssue.State), "closed") &&
 		strings.EqualFold(strings.TrimSpace(updated.State), "closed") {
@@ -1175,6 +1178,40 @@ func (h *IssuesHandler) dispatchIssueKickoffBestEffort(
 	if queuedForRetry {
 		_ = markOpenClawDispatchDeliveredByKey(ctx, h.DB, dedupeKey)
 	}
+}
+
+func shouldDispatchIssueKickoffAfterPatch(
+	before store.ProjectIssue,
+	after store.ProjectIssue,
+	req issuePatchRequest,
+) bool {
+	if strings.EqualFold(strings.TrimSpace(after.State), "closed") {
+		return false
+	}
+	if after.OwnerAgentID == nil || strings.TrimSpace(*after.OwnerAgentID) == "" {
+		return false
+	}
+
+	if req.OwnerAgentID != nil {
+		beforeOwner := ""
+		if before.OwnerAgentID != nil {
+			beforeOwner = strings.TrimSpace(*before.OwnerAgentID)
+		}
+		afterOwner := strings.TrimSpace(*after.OwnerAgentID)
+		if beforeOwner != afterOwner {
+			return true
+		}
+	}
+
+	if req.WorkStatus != nil {
+		beforeStatus := strings.TrimSpace(strings.ToLower(before.WorkStatus))
+		afterStatus := strings.TrimSpace(strings.ToLower(after.WorkStatus))
+		if beforeStatus != afterStatus && (afterStatus == store.IssueWorkStatusQueued || afterStatus == store.IssueWorkStatusInProgress) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (h *IssuesHandler) broadcastIssueCreated(
