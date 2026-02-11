@@ -38,6 +38,7 @@ import {
   resetSessionContextsForTest,
   runSerializedSyncOperationForTest,
   setContinuousModeEnabledForTest,
+  setPathWithinProjectRootForTest,
   sanitizeWebSocketURLForLog,
   setMutationAbortForTest,
   setSessionContextForTest,
@@ -807,7 +808,7 @@ describe("bridge mutation target extraction + validation helpers", () => {
 });
 
 describe("bridge runtime mutation enforcement", () => {
-  const abortCalls: Array<{ sessionKey: string; runId?: string; reason: string }> = [];
+  const abortCalls: Array<{ sessionKey: string; runId?: string; toolCallId?: string; reason: string }> = [];
 
   beforeEach(() => {
     resetSessionContextsForTest();
@@ -817,13 +818,16 @@ describe("bridge runtime mutation enforcement", () => {
       abortCalls.push({
         sessionKey: request.sessionKey,
         runId: request.runId,
+        ...(request.toolCallId ? { toolCallId: request.toolCallId } : {}),
         reason: request.reason,
       });
     });
+    setPathWithinProjectRootForTest(null);
   });
 
   afterEach(() => {
     setMutationAbortForTest(null);
+    setPathWithinProjectRootForTest(null);
   });
 
   it("aborts mutation tool runs in conversation mode", async () => {
@@ -858,6 +862,123 @@ describe("bridge runtime mutation enforcement", () => {
         reason: "mutation denied: conversation mode requires project_id context",
       },
     ]);
+  });
+
+  it("forwards toolCallId in abort payload when provided", async () => {
+    const sessionKey = "agent:main:slack";
+    setSessionContextForTest(sessionKey, {
+      kind: "dm",
+      orgID: "org-1",
+      threadID: "dm-1",
+      agentID: "main",
+    });
+
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "tool",
+        phase: "start",
+        sessionKey,
+        runId: "run-toolcall",
+        toolCallId: "toolcall-123",
+        tool: "write",
+        args: { path: "notes/today.md", content: "hello" },
+      },
+    });
+
+    assert.deepEqual(abortCalls, [
+      {
+        sessionKey,
+        runId: "run-toolcall",
+        toolCallId: "toolcall-123",
+        reason: "mutation denied: conversation mode requires project_id context",
+      },
+    ]);
+  });
+
+  it("aborts project-mode mutation tools when target paths are missing", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "otter-mutation-enforce-missing-"));
+    const projectRoot = path.join(tempRoot, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    const sessionKey = "agent:main:project:99999999-aaaa-bbbb-cccc-dddddddddddd";
+    setSessionContextForTest(sessionKey, {
+      kind: "project_chat",
+      orgID: "org-1",
+      projectID: "99999999-aaaa-bbbb-cccc-dddddddddddd",
+      agentID: "main",
+      projectRoot,
+    });
+
+    try {
+      await handleOpenClawEventForTest({
+        event: "agent",
+        payload: {
+          stream: "tool",
+          phase: "start",
+          sessionKey,
+          runId: "run-missing-targets",
+          tool: "write",
+          args: {},
+        },
+      });
+
+      const enforcement = getMutationEnforcementStateForTest();
+      assert.equal(enforcement.count, 1);
+      assert.equal(enforcement.last?.blocked, true);
+      assert.match(enforcement.last?.reason || "", /missing target path/i);
+      assert.deepEqual(abortCalls, [
+        {
+          sessionKey,
+          runId: "run-missing-targets",
+          reason: "mutation denied: missing target path(s) in tool args",
+        },
+      ]);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks null-byte target paths and denies the mutation", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "otter-mutation-enforce-null-"));
+    const projectRoot = path.join(tempRoot, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    const sessionKey = "agent:main:project:12121212-3434-5656-7878-909090909090";
+    setSessionContextForTest(sessionKey, {
+      kind: "project_chat",
+      orgID: "org-1",
+      projectID: "12121212-3434-5656-7878-909090909090",
+      agentID: "main",
+      projectRoot,
+    });
+
+    try {
+      await handleOpenClawEventForTest({
+        event: "agent",
+        payload: {
+          stream: "tool",
+          phase: "start",
+          sessionKey,
+          runId: "run-null-byte-target",
+          tool: "write",
+          args: { path: "file\u0000../../etc/passwd", content: "x" },
+        },
+      });
+
+      const enforcement = getMutationEnforcementStateForTest();
+      assert.equal(enforcement.last?.blocked, true);
+      assert.match(enforcement.last?.reason || "", /missing target path/i);
+      assert.deepEqual(abortCalls, [
+        {
+          sessionKey,
+          runId: "run-null-byte-target",
+          reason: "mutation denied: missing target path(s) in tool args",
+        },
+      ]);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("allows in-root project mutations and passes through non-mutation tools", async () => {
@@ -973,6 +1094,158 @@ describe("bridge runtime mutation enforcement", () => {
         },
       ]);
     } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts apply_patch runs when unified diff targets escape project root", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "otter-mutation-enforce-unified-"));
+    const projectRoot = path.join(tempRoot, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    const sessionKey = "agent:main:project:67676767-1111-2222-3333-444444444444";
+    setSessionContextForTest(sessionKey, {
+      kind: "project_chat",
+      orgID: "org-1",
+      projectID: "67676767-1111-2222-3333-444444444444",
+      agentID: "main",
+      projectRoot,
+    });
+
+    try {
+      await handleOpenClawEventForTest({
+        event: "agent",
+        payload: {
+          stream: "tool",
+          phase: "start",
+          sessionKey,
+          runId: "run-unified-diff-escape",
+          tool: "apply_patch",
+          args: {
+            patch: [
+              "--- a/docs/notes.md",
+              "+++ b/../outside/secret.md",
+              "@@ -1 +1 @@",
+              "-before",
+              "+after",
+            ].join("\n"),
+          },
+        },
+      });
+
+      const enforcement = getMutationEnforcementStateForTest();
+      assert.equal(enforcement.last?.blocked, true);
+      assert.match(enforcement.last?.reason || "", /write_guard_root|escapes/i);
+      assert.deepEqual(abortCalls, [
+        {
+          sessionKey,
+          runId: "run-unified-diff-escape",
+          reason: "mutation denied: target path escapes active project write_guard_root",
+        },
+      ]);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed and aborts when path validation throws unexpectedly", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "otter-mutation-enforce-throw-"));
+    const projectRoot = path.join(tempRoot, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    const sessionKey = "agent:main:project:78787878-aaaa-bbbb-cccc-dddddddddddd";
+    setSessionContextForTest(sessionKey, {
+      kind: "project_chat",
+      orgID: "org-1",
+      projectID: "78787878-aaaa-bbbb-cccc-dddddddddddd",
+      agentID: "main",
+      projectRoot,
+    });
+
+    setPathWithinProjectRootForTest(async () => {
+      throw new Error("simulated validation failure");
+    });
+
+    try {
+      await handleOpenClawEventForTest({
+        event: "agent",
+        payload: {
+          stream: "tool",
+          phase: "start",
+          sessionKey,
+          runId: "run-validation-throws",
+          tool: "write",
+          args: { path: "notes/today.md", content: "x" },
+        },
+      });
+
+      const enforcement = getMutationEnforcementStateForTest();
+      assert.equal(enforcement.last?.blocked, true);
+      assert.match(enforcement.last?.reason || "", /enforcement error/i);
+      assert.deepEqual(abortCalls, [
+        {
+          sessionKey,
+          runId: "run-validation-throws",
+          reason: "mutation denied: enforcement error while validating target paths",
+        },
+      ]);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+      setPathWithinProjectRootForTest(null);
+    }
+  });
+
+  it("fails closed when lstat raises non-ENOENT errors during symlink checks", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "otter-mutation-enforce-lstat-"));
+    const projectRoot = path.join(tempRoot, "project");
+    fs.mkdirSync(path.join(projectRoot, "trigger-eacces"), { recursive: true });
+
+    const sessionKey = "agent:main:project:89898989-aaaa-bbbb-cccc-eeeeeeeeeeee";
+    setSessionContextForTest(sessionKey, {
+      kind: "project_chat",
+      orgID: "org-1",
+      projectID: "89898989-aaaa-bbbb-cccc-eeeeeeeeeeee",
+      agentID: "main",
+      projectRoot,
+    });
+
+    const originalLstat = fs.promises.lstat.bind(fs.promises);
+    const lstatAny = originalLstat as unknown as (...args: unknown[]) => Promise<unknown>;
+    (fs.promises as unknown as { lstat: typeof fs.promises.lstat }).lstat = async (...args: unknown[]) => {
+      const targetPath = args[0];
+      if (String(targetPath).includes("trigger-eacces")) {
+        const err = new Error("permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return lstatAny(...args);
+    };
+
+    try {
+      await handleOpenClawEventForTest({
+        event: "agent",
+        payload: {
+          stream: "tool",
+          phase: "start",
+          sessionKey,
+          runId: "run-lstat-eacces",
+          tool: "write",
+          args: { path: "trigger-eacces/file.txt", content: "x" },
+        },
+      });
+
+      const enforcement = getMutationEnforcementStateForTest();
+      assert.equal(enforcement.last?.blocked, true);
+      assert.match(enforcement.last?.reason || "", /enforcement error/i);
+      assert.deepEqual(abortCalls, [
+        {
+          sessionKey,
+          runId: "run-lstat-eacces",
+          reason: "mutation denied: enforcement error while validating target paths",
+        },
+      ]);
+    } finally {
+      (fs.promises as unknown as { lstat: typeof fs.promises.lstat }).lstat = originalLstat;
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });

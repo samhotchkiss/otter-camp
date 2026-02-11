@@ -392,6 +392,7 @@ type MutationEnforcementDecision = {
 type MutationAbortRequest = {
   sessionKey: string;
   runId?: string;
+  toolCallId?: string;
   reason: string;
 };
 
@@ -594,6 +595,9 @@ const defaultMutationAbortFn = async (request: MutationAbortRequest): Promise<vo
   const payload: Record<string, unknown> = { sessionKey: request.sessionKey };
   if (request.runId) {
     payload.runId = request.runId;
+  }
+  if (request.toolCallId) {
+    payload.toolCallId = request.toolCallId;
   }
   await sendRequest('chat.abort', payload);
 };
@@ -2636,6 +2640,9 @@ async function pathHasSymlinkSegments(fromRoot: string, targetPath: string): Pro
 }
 
 export async function isPathWithinProjectRoot(projectRoot: string, targetPath: string): Promise<boolean> {
+  if (targetPath.includes('\0')) {
+    return false;
+  }
   const root = path.resolve(projectRoot);
   try {
     const rootStat = await fs.promises.lstat(root);
@@ -2659,6 +2666,8 @@ export async function isPathWithinProjectRoot(projectRoot: string, targetPath: s
   return true;
 }
 
+let pathWithinProjectRootFn: (projectRoot: string, targetPath: string) => Promise<boolean> = isPathWithinProjectRoot;
+
 const MUTATION_TOOL_NAMES = new Set(['write', 'edit', 'apply_patch']);
 const MUTATION_PATH_ARG_KEYS = [
   'path',
@@ -2674,7 +2683,7 @@ const UNIFIED_DIFF_TARGET_PATTERN = /^\+\+\+\s+(?:[ab]\/)?(.+)$/;
 
 function addUniquePath(paths: string[], rawPath: string): void {
   const trimmed = getTrimmedString(rawPath);
-  if (!trimmed || trimmed === '/dev/null') {
+  if (!trimmed || trimmed === '/dev/null' || trimmed.includes('\0')) {
     return;
   }
   if (paths.includes(trimmed)) {
@@ -2741,6 +2750,12 @@ export function extractMutationToolTargetPathsForTest(toolName: string, args: Re
   return [...extractMutationToolTargetPaths(toolName, args)];
 }
 
+export function setPathWithinProjectRootForTest(
+  fn: ((projectRoot: string, targetPath: string) => Promise<boolean>) | null,
+): void {
+  pathWithinProjectRootFn = fn || isPathWithinProjectRoot;
+}
+
 async function validateMutationToolTargetsWithinProjectRoot(
   projectRoot: string,
   toolName: string,
@@ -2768,7 +2783,7 @@ async function validateMutationToolTargetsWithinProjectRoot(
 
   const invalidTargets: string[] = [];
   for (const target of targets) {
-    if (!(await isPathWithinProjectRoot(projectRoot, target))) {
+    if (!(await pathWithinProjectRootFn(projectRoot, target))) {
       invalidTargets.push(target);
     }
   }
@@ -4775,6 +4790,7 @@ async function abortMutationRun(event: OpenClawToolEvent, reason: string): Promi
   await mutationAbortFn({
     sessionKey: event.sessionKey,
     ...(event.runID ? { runId: event.runID } : {}),
+    ...(event.toolCallID ? { toolCallId: event.toolCallID } : {}),
     reason,
   }).catch((err) => {
     console.warn(`[bridge] failed to abort mutation run for ${event.sessionKey}:`, err);
@@ -4798,7 +4814,57 @@ async function enforceMutationToolPolicy(event: OpenClawToolEvent): Promise<void
   const projectID = getTrimmedString(context?.projectID);
   const mode: ExecutionMode = projectID ? 'project' : 'conversation';
 
-  if (!MUTATION_TOOL_NAMES.has(normalizedTool)) {
+  try {
+    if (!MUTATION_TOOL_NAMES.has(normalizedTool)) {
+      recordMutationEnforcementDecision({
+        sessionKey: event.sessionKey,
+        tool: normalizedTool,
+        phase: event.phase,
+        mode,
+        blocked: false,
+      });
+      return;
+    }
+
+    if (!projectID) {
+      const reason = 'mutation denied: conversation mode requires project_id context';
+      recordMutationEnforcementDecision({
+        sessionKey: event.sessionKey,
+        tool: normalizedTool,
+        phase: event.phase,
+        mode,
+        blocked: true,
+        reason,
+      });
+      console.warn(`[bridge] ${reason} (${event.sessionKey}, tool=${normalizedTool})`);
+      await abortMutationRun(event, reason);
+      return;
+    }
+
+    const projectRoot = getTrimmedString(context?.projectRoot) || resolveProjectWorktreeRoot(projectID, event.sessionKey);
+    const validation = await validateMutationToolTargetsWithinProjectRoot(
+      projectRoot,
+      normalizedTool,
+      event.args || {},
+    );
+    if (!validation.allowed) {
+      const reason = resolveMutationBlockReason(validation);
+      recordMutationEnforcementDecision({
+        sessionKey: event.sessionKey,
+        tool: normalizedTool,
+        phase: event.phase,
+        mode,
+        blocked: true,
+        reason,
+        ...(validation.invalidTargets.length > 0 ? { invalidTargets: [...validation.invalidTargets] } : {}),
+      });
+      console.warn(
+        `[bridge] ${reason} (${event.sessionKey}, tool=${normalizedTool}, invalid=${validation.invalidTargets.join(', ') || 'n/a'})`,
+      );
+      await abortMutationRun(event, reason);
+      return;
+    }
+
     recordMutationEnforcementDecision({
       sessionKey: event.sessionKey,
       tool: normalizedTool,
@@ -4806,11 +4872,8 @@ async function enforceMutationToolPolicy(event: OpenClawToolEvent): Promise<void
       mode,
       blocked: false,
     });
-    return;
-  }
-
-  if (!projectID) {
-    const reason = 'mutation denied: conversation mode requires project_id context';
+  } catch (err) {
+    const reason = 'mutation denied: enforcement error while validating target paths';
     recordMutationEnforcementDecision({
       sessionKey: event.sessionKey,
       tool: normalizedTool,
@@ -4819,42 +4882,9 @@ async function enforceMutationToolPolicy(event: OpenClawToolEvent): Promise<void
       blocked: true,
       reason,
     });
-    console.warn(`[bridge] ${reason} (${event.sessionKey}, tool=${normalizedTool})`);
+    console.warn(`[bridge] ${reason} (${event.sessionKey}, tool=${normalizedTool})`, err);
     await abortMutationRun(event, reason);
-    return;
   }
-
-  const projectRoot = getTrimmedString(context?.projectRoot) || resolveProjectWorktreeRoot(projectID, event.sessionKey);
-  const validation = await validateMutationToolTargetsWithinProjectRoot(
-    projectRoot,
-    normalizedTool,
-    event.args || {},
-  );
-  if (!validation.allowed) {
-    const reason = resolveMutationBlockReason(validation);
-    recordMutationEnforcementDecision({
-      sessionKey: event.sessionKey,
-      tool: normalizedTool,
-      phase: event.phase,
-      mode,
-      blocked: true,
-      reason,
-      ...(validation.invalidTargets.length > 0 ? { invalidTargets: [...validation.invalidTargets] } : {}),
-    });
-    console.warn(
-      `[bridge] ${reason} (${event.sessionKey}, tool=${normalizedTool}, invalid=${validation.invalidTargets.join(', ') || 'n/a'})`,
-    );
-    await abortMutationRun(event, reason);
-    return;
-  }
-
-  recordMutationEnforcementDecision({
-    sessionKey: event.sessionKey,
-    tool: normalizedTool,
-    phase: event.phase,
-    mode,
-    blocked: false,
-  });
 }
 
 async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> {
