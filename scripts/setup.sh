@@ -693,6 +693,14 @@ run_bootstrap_steps() {
   fi
   log_success "Migrations complete."
 
+  echo "Installing root packages (bridge dependencies)..."
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "↪ npm ci"
+  else
+    npm ci --silent
+  fi
+  log_success "Root packages installed."
+
   echo "Installing frontend packages..."
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "↪ (cd web && npm ci)"
