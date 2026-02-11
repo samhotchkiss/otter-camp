@@ -215,6 +215,51 @@ describe("bridge identity preamble helpers", () => {
     assert.ok(contextual.includes("Full soul context with deeply specific guidance."));
   });
 
+  it("retries identity bootstrap when whoami is temporarily unavailable", async () => {
+    setSessionContextForTest(sessionKey, {
+      kind: "dm",
+      orgID: "org-1",
+      threadID: "dm_3",
+      agentID,
+    });
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      if (fetchCalls === 1) {
+        return new Response("temporary failure", {
+          status: 403,
+          statusText: "Forbidden",
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          profile: "compact",
+          agent: {
+            id: agentID,
+            name: "Marcus",
+            role: "Operator",
+          },
+          soul_summary: "Grounded and direct.",
+          identity_summary: "Leads execution and closes loops.",
+          instructions_summary: "State assumptions and confirm outcomes.",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+
+    const first = await formatSessionContextMessageForTest(sessionKey, "Status check.");
+    assert.equal(first.includes("[OtterCamp Identity Injection]"), false);
+
+    const second = await formatSessionContextMessageForTest(sessionKey, "Status check (retry).");
+    assert.ok(second.includes("[OtterCamp Identity Injection]"));
+    assert.ok(second.includes("You are Marcus, Operator."));
+    assert.ok(fetchCalls >= 2);
+  });
+
   it("uses deterministic compact insufficiency checks and label formatting", () => {
     assert.equal(
       isCompactWhoAmIInsufficient({

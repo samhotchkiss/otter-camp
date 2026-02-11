@@ -2189,7 +2189,13 @@ async function withSessionContext(sessionKey: string, rawContent: string): Promi
   if (!context) {
     return content;
   }
-  if (!contextPrimedSessions.has(sessionKey)) {
+  const isCanonicalChameleonDM =
+    context.kind === 'dm' && parseChameleonSessionKey(sessionKey) !== null;
+  const shouldBootstrapIdentity =
+    !contextPrimedSessions.has(sessionKey) ||
+    (isCanonicalChameleonDM && !context.identityMetadata);
+
+  if (shouldBootstrapIdentity) {
     const execution = await resolveSessionExecutionContext(sessionKey, context);
     context = {
       ...context,
@@ -2213,7 +2219,13 @@ async function withSessionContext(sessionKey: string, rawContent: string): Promi
       }
     }
     setSessionContext(sessionKey, context);
-    contextPrimedSessions.add(sessionKey);
+    // Canonical chameleon DM sessions should only be considered primed once
+    // identity metadata is available; otherwise retry bootstrap next turn.
+    if (!isCanonicalChameleonDM || identityMetadata) {
+      contextPrimedSessions.add(sessionKey);
+    } else {
+      contextPrimedSessions.delete(sessionKey);
+    }
     const sections: string[] = [];
     if (identityMetadata?.preamble) {
       sections.push(identityMetadata.preamble);
@@ -4310,11 +4322,13 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
     return;
   }
 
+  const existingContext = sessionContexts.get(sessionKey);
   setSessionContext(sessionKey, {
+    ...existingContext,
     kind: 'dm',
-    orgID,
-    threadID,
-    agentID,
+    orgID: orgID || existingContext?.orgID,
+    threadID: threadID || existingContext?.threadID,
+    agentID: agentID || existingContext?.agentID,
   });
 
   try {
