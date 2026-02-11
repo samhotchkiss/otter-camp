@@ -137,6 +137,17 @@ type SessionActivitySummary = {
 
 const CONNECTIONS_POLL_INTERVAL_MS = 30_000;
 
+function resolveStoredOrgID(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  try {
+    return (window.localStorage.getItem("otter-camp-org-id") ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
 function formatRelativeOrUnknown(raw?: string): string {
   if (!raw) {
     return "Unknown";
@@ -212,14 +223,6 @@ export default function ConnectionsPage() {
   const [processesError, setProcessesError] = useState<string | null>(null);
   const [processActionID, setProcessActionID] = useState<string | null>(null);
 
-  const orgID = useMemo(() => {
-    try {
-      return (localStorage.getItem("otter-camp-org-id") ?? "").trim();
-    } catch {
-      return "";
-    }
-  }, []);
-
   const { events: recentActivityEvents } = useAgentActivity({
     mode: "recent",
     limit: 500,
@@ -262,6 +265,7 @@ export default function ConnectionsPage() {
   }, [recentActivityEvents]);
 
   const loadLogs = useCallback(async () => {
+    const orgID = resolveStoredOrgID();
     if (!orgID) {
       return;
     }
@@ -277,9 +281,10 @@ export default function ConnectionsPage() {
     } finally {
       setLogsLoading(false);
     }
-  }, [orgID]);
+  }, []);
 
   const loadCronJobs = useCallback(async () => {
+    const orgID = resolveStoredOrgID();
     if (!orgID) {
       return;
     }
@@ -295,9 +300,10 @@ export default function ConnectionsPage() {
     } finally {
       setCronLoading(false);
     }
-  }, [orgID]);
+  }, []);
 
   const loadProcesses = useCallback(async () => {
+    const orgID = resolveStoredOrgID();
     if (!orgID) {
       return;
     }
@@ -313,9 +319,10 @@ export default function ConnectionsPage() {
     } finally {
       setProcessesLoading(false);
     }
-  }, [orgID]);
+  }, []);
 
   const runCronJob = useCallback(async (jobID: string) => {
+    const orgID = resolveStoredOrgID();
     if (!orgID) {
       return;
     }
@@ -332,9 +339,10 @@ export default function ConnectionsPage() {
     } finally {
       setCronActionID(null);
     }
-  }, [loadCronJobs, loadLogs, orgID]);
+  }, [loadCronJobs, loadLogs]);
 
   const toggleCronJob = useCallback(async (job: CronJob) => {
+    const orgID = resolveStoredOrgID();
     if (!orgID) {
       return;
     }
@@ -352,9 +360,10 @@ export default function ConnectionsPage() {
     } finally {
       setCronActionID(null);
     }
-  }, [loadCronJobs, loadLogs, orgID]);
+  }, [loadCronJobs, loadLogs]);
 
   const killProcess = useCallback(async (processID: string) => {
+    const orgID = resolveStoredOrgID();
     if (!orgID) {
       return;
     }
@@ -374,9 +383,10 @@ export default function ConnectionsPage() {
     } finally {
       setProcessActionID(null);
     }
-  }, [loadLogs, loadProcesses, orgID]);
+  }, [loadLogs, loadProcesses]);
 
   const load = useCallback(async () => {
+    const orgID = resolveStoredOrgID();
     if (!orgID) {
       setError("Missing organization context");
       setLoading(false);
@@ -420,9 +430,10 @@ export default function ConnectionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [loadCronJobs, loadLogs, loadProcesses, orgID]);
+  }, [loadCronJobs, loadLogs, loadProcesses]);
 
   const runDiagnostics = useCallback(async () => {
+    const orgID = resolveStoredOrgID();
     if (!orgID) {
       return;
     }
@@ -439,14 +450,14 @@ export default function ConnectionsPage() {
     } finally {
       setDiagnosticsLoading(false);
     }
-  }, [orgID]);
+  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    if (!orgID || typeof window === "undefined") {
+    if (typeof window === "undefined") {
       return undefined;
     }
     const intervalID = window.setInterval(() => {
@@ -455,7 +466,7 @@ export default function ConnectionsPage() {
     return () => {
       window.clearInterval(intervalID);
     };
-  }, [load, orgID]);
+  }, [load]);
 
   return (
     <section className="space-y-6">
