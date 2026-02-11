@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -216,6 +217,140 @@ func TestActivityEventsIngestCompletionMetadataUpsert(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "failed", feedPushStatus)
 	require.Equal(t, "abcdef1234567", feedCommitSHA)
+}
+
+func TestActivityEventsIngestCompletionCreatesElephantMemory(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "activity-ingest-elephant-memory-org")
+	elephantAgentID := insertMessageTestAgent(t, db, orgID, "elephant")
+	handler := &AgentActivityHandler{DB: db}
+
+	startedAt := time.Date(2026, 2, 11, 7, 15, 0, 0, time.UTC)
+	eventID := "01HZZ000000000000000000760"
+	reqBody := ingestAgentActivityEventsRequest{
+		OrgID: orgID,
+		Events: []ingestAgentActivityRecord{
+			{
+				ID:           eventID,
+				AgentID:      "main",
+				Trigger:      "task.completion",
+				Summary:      "Completion captured for issue #88",
+				Detail:       "Issue #88 finished and pushed.",
+				CommitSHA:    "abcdef1234567",
+				CommitBranch: "main",
+				CommitRemote: "origin",
+				PushStatus:   "succeeded",
+				Status:       "completed",
+				StartedAt:    startedAt,
+				Scope: &ingestAgentActivityScope{
+					IssueNumber: intPtr(88),
+				},
+			},
+		},
+	}
+
+	rec := postActivityIngestRequest(t, handler, reqBody, "sync-secret")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var memoryCount int
+	err := db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM memory_entries
+		  WHERE org_id = $1
+		    AND agent_id = $2
+		    AND metadata->>'completion_event' = $3`,
+		orgID,
+		elephantAgentID,
+		eventID,
+	).Scan(&memoryCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, memoryCount)
+
+	var memoryEventCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM memory_events
+		  WHERE org_id = $1
+		    AND event_type = 'memory.created'`,
+		orgID,
+	).Scan(&memoryEventCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, memoryEventCount)
+
+	stats := fetchElephantIngestStats(t, db, orgID)
+	require.Equal(t, 1, stats.LastRunProcessed)
+	require.Equal(t, 1, stats.LastRunInserted)
+	require.Equal(t, 0, stats.LastRunDuplicates)
+	require.Equal(t, 0, stats.LastRunFailed)
+	require.Equal(t, 0, stats.DeadLetterCount)
+}
+
+func TestActivityEventsIngestCompletionMemoryDuplicateTracked(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	t.Setenv("OPENCLAW_SYNC_TOKEN", "")
+	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
+
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "activity-ingest-elephant-memory-dup-org")
+	elephantAgentID := insertMessageTestAgent(t, db, orgID, "elephant")
+	handler := &AgentActivityHandler{DB: db}
+
+	startedAt := time.Date(2026, 2, 11, 7, 30, 0, 0, time.UTC)
+	eventID := "01HZZ000000000000000000761"
+	reqBody := ingestAgentActivityEventsRequest{
+		OrgID: orgID,
+		Events: []ingestAgentActivityRecord{
+			{
+				ID:           eventID,
+				AgentID:      "main",
+				Trigger:      "task.completion",
+				Summary:      "Completion captured for issue #89",
+				Detail:       "Issue #89 finished and pushed.",
+				CommitSHA:    "abcdef1234567",
+				CommitBranch: "main",
+				CommitRemote: "origin",
+				PushStatus:   "succeeded",
+				Status:       "completed",
+				StartedAt:    startedAt,
+				Scope: &ingestAgentActivityScope{
+					IssueNumber: intPtr(89),
+				},
+			},
+		},
+	}
+
+	firstRec := postActivityIngestRequest(t, handler, reqBody, "sync-secret")
+	require.Equal(t, http.StatusOK, firstRec.Code)
+	secondRec := postActivityIngestRequest(t, handler, reqBody, "sync-secret")
+	require.Equal(t, http.StatusOK, secondRec.Code)
+
+	var memoryCount int
+	err := db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM memory_entries
+		  WHERE org_id = $1
+		    AND agent_id = $2
+		    AND metadata->>'completion_event' = $3`,
+		orgID,
+		elephantAgentID,
+		eventID,
+	).Scan(&memoryCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, memoryCount)
+
+	stats := fetchElephantIngestStats(t, db, orgID)
+	require.Equal(t, 1, stats.LastRunProcessed)
+	require.Equal(t, 0, stats.LastRunInserted)
+	require.Equal(t, 1, stats.LastRunDuplicates)
+	require.Equal(t, 0, stats.LastRunFailed)
+	require.Equal(t, 0, stats.DeadLetterCount)
+	require.Equal(t, 2, stats.TotalProcessed)
+	require.Equal(t, 1, stats.TotalInserted)
+	require.Equal(t, 1, stats.TotalDuplicates)
 }
 
 func TestActivityEventWebsocketBroadcast(t *testing.T) {
@@ -833,6 +968,42 @@ func newAgentActivityTestRouter(handler *AgentActivityHandler) http.Handler {
 	router.With(middleware.OptionalWorkspace).Get("/api/agents/{id}/activity", handler.ListByAgent)
 	router.With(middleware.OptionalWorkspace).Get("/api/activity/recent", handler.ListRecent)
 	return router
+}
+
+func postActivityIngestRequest(
+	t *testing.T,
+	handler *AgentActivityHandler,
+	payload ingestAgentActivityEventsRequest,
+	token string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/activity/events", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("X-OpenClaw-Token", token)
+	}
+	rec := httptest.NewRecorder()
+	handler.IngestEvents(rec, req)
+	return rec
+}
+
+func fetchElephantIngestStats(t *testing.T, db *sql.DB, orgID string) elephantIngestStats {
+	t.Helper()
+
+	var raw string
+	err := db.QueryRow(
+		`SELECT value FROM sync_metadata WHERE key = $1`,
+		elephantStatsSyncMetadataKey(orgID),
+	).Scan(&raw)
+	require.NoError(t, err)
+	require.NotEmpty(t, strings.TrimSpace(raw))
+
+	var stats elephantIngestStats
+	require.NoError(t, json.Unmarshal([]byte(raw), &stats))
+	return stats
 }
 
 func intPtr(v int) *int {

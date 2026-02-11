@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	maxActivityEventsBodySize = 2 << 20 // 2MB
-	maxActivityEventsBatch    = 500
-	activityListDefaultLimit  = 50
-	activityListMaxLimit      = 200
+	maxActivityEventsBodySize    = 2 << 20 // 2MB
+	maxActivityEventsBatch       = 500
+	activityListDefaultLimit     = 50
+	activityListMaxLimit         = 200
+	elephantIngestMaxDeadLetters = 500
 )
 
 var activityStatusValues = map[string]struct{}{
@@ -98,6 +99,43 @@ type listAgentActivityResponse struct {
 	Items      []store.AgentActivityEvent `json:"items"`
 	Total      int                        `json:"total"`
 	NextBefore string                     `json:"next_before,omitempty"`
+}
+
+type elephantCompletionMemoryDraft struct {
+	EventID      string `json:"event_id"`
+	Summary      string `json:"summary"`
+	Detail       string `json:"detail,omitempty"`
+	IssueID      string `json:"issue_id,omitempty"`
+	IssueNumber  int    `json:"issue_number,omitempty"`
+	ProjectID    string `json:"project_id,omitempty"`
+	CommitSHA    string `json:"commit_sha,omitempty"`
+	CommitBranch string `json:"commit_branch,omitempty"`
+	CommitRemote string `json:"commit_remote,omitempty"`
+	PushStatus   string `json:"push_status,omitempty"`
+	SessionKey   string `json:"session_key,omitempty"`
+	StartedAt    string `json:"started_at,omitempty"`
+}
+
+type elephantIngestDeadLetter struct {
+	Draft         elephantCompletionMemoryDraft `json:"draft"`
+	Attempts      int                           `json:"attempts"`
+	LastError     string                        `json:"last_error,omitempty"`
+	LastAttemptAt string                        `json:"last_attempt_at,omitempty"`
+	NextAttemptAt string                        `json:"next_attempt_at,omitempty"`
+}
+
+type elephantIngestStats struct {
+	LastRunAt          string `json:"last_run_at,omitempty"`
+	LastRunProcessed   int    `json:"last_run_processed"`
+	LastRunInserted    int    `json:"last_run_inserted"`
+	LastRunDuplicates  int    `json:"last_run_duplicates"`
+	LastRunFailed      int    `json:"last_run_failed"`
+	TotalProcessed     int    `json:"total_processed"`
+	TotalInserted      int    `json:"total_inserted"`
+	TotalDuplicates    int    `json:"total_duplicates"`
+	TotalFailed        int    `json:"total_failed"`
+	DeadLetterCount    int    `json:"dead_letter_count"`
+	LastFailureMessage string `json:"last_failure_message,omitempty"`
 }
 
 func (h *AgentActivityHandler) IngestEvents(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +213,10 @@ func (h *AgentActivityHandler) IngestEvents(w http.ResponseWriter, r *http.Reque
 	}
 	if err := h.persistCompletionMetadataActivities(ctx, req.OrgID, createInputs); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to persist completion metadata"})
+		return
+	}
+	if err := h.persistElephantCompletionMemories(ctx, req.OrgID, createInputs); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to persist elephant memory ingestion"})
 		return
 	}
 
@@ -306,6 +348,430 @@ func (h *AgentActivityHandler) persistCompletionMetadataActivities(
 		}
 	}
 	return nil
+}
+
+func (h *AgentActivityHandler) persistElephantCompletionMemories(
+	ctx context.Context,
+	orgID string,
+	events []store.CreateAgentActivityEventInput,
+) error {
+	if h == nil || h.DB == nil {
+		return nil
+	}
+	workspaceID := strings.TrimSpace(orgID)
+	if workspaceID == "" {
+		return nil
+	}
+
+	conn, err := store.WithWorkspace(ctx, h.DB)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	elephantAgentID, err := resolveElephantAgentIDForWorkspace(ctx, conn, workspaceID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+
+	now := time.Now().UTC()
+	deadLetterKey := elephantDeadLettersSyncMetadataKey(workspaceID)
+	statsKey := elephantStatsSyncMetadataKey(workspaceID)
+
+	deadLetters, err := loadElephantIngestDeadLetters(ctx, conn, deadLetterKey)
+	if err != nil {
+		return err
+	}
+	stats, err := loadElephantIngestStats(ctx, conn, statsKey)
+	if err != nil {
+		return err
+	}
+	if stats == nil {
+		stats = &elephantIngestStats{}
+	}
+	stats.LastRunProcessed = 0
+	stats.LastRunInserted = 0
+	stats.LastRunDuplicates = 0
+	stats.LastRunFailed = 0
+
+	pendingByEventID := make(map[string]elephantIngestDeadLetter, len(deadLetters))
+	for _, deadLetter := range deadLetters {
+		eventID := strings.TrimSpace(deadLetter.Draft.EventID)
+		if eventID == "" {
+			continue
+		}
+		pendingByEventID[eventID] = deadLetter
+	}
+	for _, draft := range buildElephantCompletionMemoryDrafts(events) {
+		pendingByEventID[draft.EventID] = elephantIngestDeadLetter{Draft: draft}
+	}
+
+	lastFailureMessage := ""
+	for eventID, deadLetter := range pendingByEventID {
+		nextAttemptAt := parseOptionalRFC3339FromValue(deadLetter.NextAttemptAt)
+		if !nextAttemptAt.IsZero() && nextAttemptAt.After(now) {
+			continue
+		}
+		stats.LastRunProcessed++
+		stats.TotalProcessed++
+
+		duplicate, ingestErr := h.ingestElephantCompletionDraft(ctx, elephantAgentID, deadLetter.Draft)
+		if ingestErr == nil {
+			if duplicate {
+				stats.LastRunDuplicates++
+				stats.TotalDuplicates++
+			} else {
+				stats.LastRunInserted++
+				stats.TotalInserted++
+			}
+			delete(pendingByEventID, eventID)
+			continue
+		}
+
+		deadLetter.Attempts++
+		deadLetter.LastError = strings.TrimSpace(ingestErr.Error())
+		deadLetter.LastAttemptAt = now.Format(time.RFC3339)
+		deadLetter.NextAttemptAt = now.Add(elephantIngestRetryBackoff(deadLetter.Attempts)).Format(time.RFC3339)
+		pendingByEventID[eventID] = deadLetter
+
+		stats.LastRunFailed++
+		stats.TotalFailed++
+		lastFailureMessage = deadLetter.LastError
+	}
+
+	stats.LastRunAt = now.Format(time.RFC3339)
+	stats.DeadLetterCount = len(pendingByEventID)
+	stats.LastFailureMessage = lastFailureMessage
+
+	remainingDeadLetters := trimElephantIngestDeadLetters(pendingByEventID, elephantIngestMaxDeadLetters)
+	if err := upsertSyncMetadataValue(ctx, conn, deadLetterKey, remainingDeadLetters, now); err != nil {
+		return err
+	}
+	if err := upsertSyncMetadataValue(ctx, conn, statsKey, stats, now); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (h *AgentActivityHandler) ingestElephantCompletionDraft(
+	ctx context.Context,
+	elephantAgentID string,
+	draft elephantCompletionMemoryDraft,
+) (bool, error) {
+	if h == nil || h.DB == nil {
+		return false, nil
+	}
+
+	kind := store.MemoryKindFact
+	if strings.EqualFold(strings.TrimSpace(draft.PushStatus), "failed") {
+		kind = store.MemoryKindLesson
+	}
+
+	title := elephantCompletionTitle(draft, kind)
+	content := elephantCompletionContent(draft)
+	if strings.TrimSpace(content) == "" {
+		content = title
+	}
+
+	metadata := map[string]any{
+		"ingestion_source": "agent_activity_completion",
+		"completion_event": draft.EventID,
+		"commit_sha":       strings.TrimSpace(draft.CommitSHA),
+		"push_status":      strings.TrimSpace(strings.ToLower(draft.PushStatus)),
+		"issue_number":     draft.IssueNumber,
+		"issue_id":         strings.TrimSpace(draft.IssueID),
+		"project_id":       strings.TrimSpace(draft.ProjectID),
+		"session_key":      strings.TrimSpace(draft.SessionKey),
+	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return false, err
+	}
+
+	occurredAt := parseOptionalRFC3339FromValue(draft.StartedAt)
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+
+	sourceIssue := strings.TrimSpace(draft.IssueID)
+	if sourceIssue == "" && draft.IssueNumber > 0 {
+		sourceIssue = strconv.Itoa(draft.IssueNumber)
+	}
+	sourceProject := strings.TrimSpace(draft.ProjectID)
+	sourceSession := strings.TrimSpace(draft.SessionKey)
+
+	memoryStore := store.NewMemoryStore(h.DB)
+	entry, createErr := memoryStore.Create(ctx, store.CreateMemoryEntryInput{
+		AgentID:       strings.TrimSpace(elephantAgentID),
+		Kind:          kind,
+		Title:         title,
+		Content:       content,
+		Metadata:      metadataJSON,
+		Importance:    3,
+		Confidence:    0.8,
+		Sensitivity:   store.MemorySensitivityInternal,
+		OccurredAt:    occurredAt,
+		SourceSession: optionalStringPtr(sourceSession),
+		SourceProject: optionalStringPtr(sourceProject),
+		SourceIssue:   optionalStringPtr(sourceIssue),
+	})
+	if createErr != nil {
+		if errors.Is(createErr, store.ErrDuplicateMemory) {
+			return true, nil
+		}
+		return false, createErr
+	}
+
+	eventsStore := store.NewMemoryEventsStore(h.DB)
+	eventPayload, err := json.Marshal(map[string]any{
+		"memory_id":         entry.ID,
+		"agent_id":          elephantAgentID,
+		"source_event_id":   draft.EventID,
+		"source_session":    sourceSession,
+		"source_project_id": sourceProject,
+		"source_issue":      sourceIssue,
+		"kind":              kind,
+		"title":             title,
+	})
+	if err == nil {
+		_, _ = eventsStore.Publish(ctx, store.PublishMemoryEventInput{
+			EventType: store.MemoryEventTypeMemoryCreated,
+			Payload:   eventPayload,
+		})
+	}
+
+	return false, nil
+}
+
+func buildElephantCompletionMemoryDrafts(events []store.CreateAgentActivityEventInput) []elephantCompletionMemoryDraft {
+	drafts := make([]elephantCompletionMemoryDraft, 0, len(events))
+	for _, event := range events {
+		trigger := strings.TrimSpace(strings.ToLower(event.Trigger))
+		commitSHA := strings.TrimSpace(event.CommitSHA)
+		if trigger != "task.completion" && commitSHA == "" {
+			continue
+		}
+		eventID := strings.TrimSpace(event.ID)
+		if eventID == "" {
+			continue
+		}
+		startedAt := ""
+		if !event.StartedAt.IsZero() {
+			startedAt = event.StartedAt.UTC().Format(time.RFC3339)
+		}
+		drafts = append(drafts, elephantCompletionMemoryDraft{
+			EventID:      eventID,
+			Summary:      strings.TrimSpace(event.Summary),
+			Detail:       strings.TrimSpace(event.Detail),
+			IssueID:      strings.TrimSpace(event.IssueID),
+			IssueNumber:  event.IssueNumber,
+			ProjectID:    strings.TrimSpace(event.ProjectID),
+			CommitSHA:    commitSHA,
+			CommitBranch: strings.TrimSpace(event.CommitBranch),
+			CommitRemote: strings.TrimSpace(event.CommitRemote),
+			PushStatus:   strings.TrimSpace(strings.ToLower(event.PushStatus)),
+			SessionKey:   strings.TrimSpace(event.SessionKey),
+			StartedAt:    startedAt,
+		})
+	}
+	return drafts
+}
+
+func resolveElephantAgentIDForWorkspace(ctx context.Context, conn *sql.Conn, orgID string) (string, error) {
+	var agentID string
+	err := conn.QueryRowContext(
+		ctx,
+		`SELECT id
+		   FROM agents
+		  WHERE org_id = $1
+		    AND slug = 'elephant'
+		    AND status != 'retired'
+		  ORDER BY created_at ASC
+		  LIMIT 1`,
+		orgID,
+	).Scan(&agentID)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(agentID), nil
+}
+
+func elephantCompletionTitle(draft elephantCompletionMemoryDraft, kind string) string {
+	issueLabel := "project completion"
+	if draft.IssueNumber > 0 {
+		issueLabel = fmt.Sprintf("issue #%d completion", draft.IssueNumber)
+	} else if strings.TrimSpace(draft.IssueID) != "" {
+		issueLabel = "issue completion"
+	}
+	if kind == store.MemoryKindLesson {
+		return fmt.Sprintf("Push failure captured for %s", issueLabel)
+	}
+	return fmt.Sprintf("Completion captured for %s", issueLabel)
+}
+
+func elephantCompletionContent(draft elephantCompletionMemoryDraft) string {
+	segments := make([]string, 0, 6)
+	summary := strings.TrimSpace(draft.Summary)
+	if summary != "" {
+		segments = append(segments, summary)
+	}
+	detail := strings.TrimSpace(draft.Detail)
+	if detail != "" && !strings.EqualFold(detail, summary) {
+		segments = append(segments, detail)
+	}
+	if sha := strings.TrimSpace(draft.CommitSHA); sha != "" {
+		segments = append(segments, fmt.Sprintf("commit %s", sha))
+	}
+	if status := strings.TrimSpace(strings.ToLower(draft.PushStatus)); status != "" {
+		segments = append(segments, fmt.Sprintf("push %s", status))
+	}
+	if branch := strings.TrimSpace(draft.CommitBranch); branch != "" {
+		segments = append(segments, fmt.Sprintf("branch %s", branch))
+	}
+	if remote := strings.TrimSpace(draft.CommitRemote); remote != "" {
+		segments = append(segments, fmt.Sprintf("remote %s", remote))
+	}
+	return strings.Join(segments, " | ")
+}
+
+func loadElephantIngestDeadLetters(
+	ctx context.Context,
+	conn *sql.Conn,
+	key string,
+) ([]elephantIngestDeadLetter, error) {
+	var raw string
+	err := conn.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = $1`, key).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	out := make([]elephantIngestDeadLetter, 0)
+	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func loadElephantIngestStats(
+	ctx context.Context,
+	conn *sql.Conn,
+	key string,
+) (*elephantIngestStats, error) {
+	var raw string
+	err := conn.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = $1`, key).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	stats := &elephantIngestStats{}
+	if err := json.Unmarshal([]byte(trimmed), stats); err != nil {
+		return nil, nil
+	}
+	return stats, nil
+}
+
+func upsertSyncMetadataValue(
+	ctx context.Context,
+	conn *sql.Conn,
+	key string,
+	value any,
+	now time.Time,
+) error {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(
+		ctx,
+		`INSERT INTO sync_metadata (key, value, updated_at)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (key) DO UPDATE
+		 SET value = EXCLUDED.value,
+		     updated_at = EXCLUDED.updated_at`,
+		key,
+		string(payload),
+		now,
+	)
+	return err
+}
+
+func trimElephantIngestDeadLetters(
+	byEventID map[string]elephantIngestDeadLetter,
+	limit int,
+) []elephantIngestDeadLetter {
+	if limit <= 0 {
+		limit = elephantIngestMaxDeadLetters
+	}
+	items := make([]elephantIngestDeadLetter, 0, len(byEventID))
+	for _, value := range byEventID {
+		eventID := strings.TrimSpace(value.Draft.EventID)
+		if eventID == "" {
+			continue
+		}
+		items = append(items, value)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		leftNext := parseOptionalRFC3339FromValue(items[i].NextAttemptAt)
+		rightNext := parseOptionalRFC3339FromValue(items[j].NextAttemptAt)
+		if !leftNext.Equal(rightNext) {
+			return leftNext.After(rightNext)
+		}
+		if items[i].Attempts != items[j].Attempts {
+			return items[i].Attempts > items[j].Attempts
+		}
+		return items[i].Draft.EventID < items[j].Draft.EventID
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items
+}
+
+func elephantIngestRetryBackoff(attempt int) time.Duration {
+	if attempt <= 1 {
+		return time.Minute
+	}
+	if attempt > 8 {
+		attempt = 8
+	}
+	return time.Duration(1<<(attempt-1)) * time.Minute
+}
+
+func parseOptionalRFC3339FromValue(raw string) time.Time {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed.UTC()
+}
+
+func elephantDeadLettersSyncMetadataKey(orgID string) string {
+	return "elephant_memory_ingest_dead_letters:" + strings.TrimSpace(orgID)
+}
+
+func elephantStatsSyncMetadataKey(orgID string) string {
+	return "elephant_memory_ingest_stats:" + strings.TrimSpace(orgID)
 }
 
 func normalizeActivityIngestRecord(event ingestAgentActivityRecord) (store.CreateAgentActivityEventInput, error) {
