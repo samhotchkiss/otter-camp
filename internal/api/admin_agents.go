@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -245,7 +246,7 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repoPath, _, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	repoPath, _, _, _, err := h.ensureAgentFilesRepository(r.Context(), workspaceID)
 	if err != nil {
 		h.writeAgentFilesResolveError(w, err)
 		return
@@ -690,6 +691,121 @@ func (h *AdminAgentsHandler) resolveAgentFilesRepository(
 		return "", "", "", "", err
 	}
 	return repoPath, strings.TrimSpace(agentFilesProject.ID), repoMode, defaultRef, nil
+}
+
+func (h *AdminAgentsHandler) ensureAgentFilesRepository(
+	ctx context.Context,
+	workspaceID string,
+) (string, string, gitRepoMode, string, error) {
+	repoPath, projectID, repoMode, defaultRef, err := h.resolveAgentFilesRepository(ctx, workspaceID)
+	if err == nil {
+		return repoPath, projectID, repoMode, defaultRef, nil
+	}
+	if !errors.Is(err, errAgentFilesProjectNotConfigured) {
+		return "", "", "", "", err
+	}
+	if h.ProjectStore == nil || h.ProjectRepos == nil {
+		return "", "", "", "", errAgentFilesProjectNotConfigured
+	}
+
+	agentFilesProject, getErr := h.ProjectStore.GetByName(ctx, agentFilesProjectName)
+	if getErr != nil {
+		if !errors.Is(getErr, store.ErrNotFound) {
+			return "", "", "", "", getErr
+		}
+		agentFilesProject, getErr = h.ProjectStore.Create(ctx, store.CreateProjectInput{
+			Name:   agentFilesProjectName,
+			Status: "active",
+		})
+		if getErr != nil {
+			return "", "", "", "", getErr
+		}
+	}
+	if strings.TrimSpace(agentFilesProject.OrgID) != strings.TrimSpace(workspaceID) {
+		return "", "", "", "", errAdminAgentForbidden
+	}
+
+	bareRepoPath, pathErr := h.ProjectStore.GetRepoPath(ctx, agentFilesProject.ID)
+	if pathErr != nil {
+		return "", "", "", "", pathErr
+	}
+	workingRepoPath, cloneErr := ensureAgentFilesWorkingRepo(ctx, bareRepoPath)
+	if cloneErr != nil {
+		return "", "", "", "", cloneErr
+	}
+
+	if _, bindErr := h.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          strings.TrimSpace(agentFilesProject.ID),
+		RepositoryFullName: syntheticAgentFilesRepositoryFullName(agentFilesProject.ID),
+		DefaultBranch:      "main",
+		LocalRepoPath:      &workingRepoPath,
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNone,
+		ConflictDetails:    json.RawMessage("{}"),
+	}); bindErr != nil {
+		return "", "", "", "", bindErr
+	}
+
+	return h.resolveAgentFilesRepository(ctx, workspaceID)
+}
+
+func syntheticAgentFilesRepositoryFullName(projectID string) string {
+	trimmed := strings.TrimSpace(projectID)
+	if trimmed == "" {
+		return "ottercamp/agent-files"
+	}
+	return "ottercamp/" + trimmed
+}
+
+func agentFilesWorkingRepoPath(bareRepoPath string) string {
+	clean := filepath.Clean(strings.TrimSpace(bareRepoPath))
+	if strings.HasSuffix(clean, ".git") {
+		return strings.TrimSuffix(clean, ".git") + "-working"
+	}
+	return clean + "-working"
+}
+
+func ensureAgentFilesWorkingRepo(ctx context.Context, bareRepoPath string) (string, error) {
+	barePath := filepath.Clean(strings.TrimSpace(bareRepoPath))
+	if barePath == "" {
+		return "", fmt.Errorf("agent files bare repo path is required")
+	}
+	if _, err := os.Stat(barePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("agent files bare repo path %q does not exist", barePath)
+		}
+		return "", fmt.Errorf("failed to inspect bare repo path: %w", err)
+	}
+
+	workingPath := agentFilesWorkingRepoPath(barePath)
+	if info, err := os.Stat(workingPath); err == nil {
+		if !info.IsDir() {
+			return "", fmt.Errorf("agent files working repo path %q is not a directory", workingPath)
+		}
+		if err := ensureGitRepoPath(workingPath); err != nil {
+			return "", err
+		}
+		return workingPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("failed to inspect agent files working repo path: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(workingPath), 0o755); err != nil {
+		return "", fmt.Errorf("failed to create agent files working repo parent: %w", err)
+	}
+	cloneCommand := exec.CommandContext(ctx, "git", "clone", barePath, workingPath)
+	cloneCommand.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if output, err := cloneCommand.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git clone failed: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+
+	// Ensure first commit uses main for deterministic defaults.
+	if _, err := runGitInRepo(ctx, workingPath, "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		return "", err
+	}
+	return workingPath, nil
 }
 
 func trimAgentRootEntries(entries []projectTreeEntry, root string) []projectTreeEntry {

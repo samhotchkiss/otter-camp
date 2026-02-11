@@ -210,6 +210,65 @@ func TestAdminAgentsCreateRequiresDisplayName(t *testing.T) {
 	require.Empty(t, dispatcher.calls)
 }
 
+func TestAdminAgentsCreateAutoCreatesAgentFilesProjectWhenMissing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-create-autoproject")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+
+	handler := &AdminAgentsHandler{
+		DB:              db,
+		Store:           store.NewAgentStore(db),
+		ProjectStore:    store.NewProjectStore(db),
+		ProjectRepos:    store.NewProjectRepoStore(db),
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	firstReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/agents",
+		strings.NewReader(`{"displayName":"Marcus","model":"gpt-5.2-codex"}`),
+	)
+	firstReq = firstReq.WithContext(context.WithValue(firstReq.Context(), middleware.WorkspaceIDKey, orgID))
+	firstRec := httptest.NewRecorder()
+	handler.Create(firstRec, firstReq)
+	require.Equal(t, http.StatusOK, firstRec.Code)
+
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	agentFilesProject, err := handler.ProjectStore.GetByName(ctx, agentFilesProjectName)
+	require.NoError(t, err)
+	require.Equal(t, orgID, agentFilesProject.OrgID)
+
+	binding, err := handler.ProjectRepos.GetBinding(ctx, agentFilesProject.ID)
+	require.NoError(t, err)
+	require.NotNil(t, binding.LocalRepoPath)
+	repoPath := strings.TrimSpace(*binding.LocalRepoPath)
+	require.NotEmpty(t, repoPath)
+	require.DirExists(t, filepath.Join(repoPath, ".git"))
+	require.FileExists(t, filepath.Join(repoPath, "agents", "marcus", "SOUL.md"))
+	require.FileExists(t, filepath.Join(repoPath, "agents", "marcus", "IDENTITY.md"))
+
+	secondReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/agents",
+		strings.NewReader(`{"displayName":"Sage","model":"gpt-5.2-codex"}`),
+	)
+	secondReq = secondReq.WithContext(context.WithValue(secondReq.Context(), middleware.WorkspaceIDKey, orgID))
+	secondRec := httptest.NewRecorder()
+	handler.Create(secondRec, secondReq)
+	require.Equal(t, http.StatusOK, secondRec.Code)
+	require.FileExists(t, filepath.Join(repoPath, "agents", "sage", "SOUL.md"))
+	require.FileExists(t, filepath.Join(repoPath, "agents", "sage", "IDENTITY.md"))
+
+	var projectCount int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM projects WHERE org_id = $1 AND name = $2`,
+		orgID,
+		agentFilesProjectName,
+	).Scan(&projectCount))
+	require.Equal(t, 1, projectCount)
+}
+
 func TestAdminAgentsCreateRollsBackOnTemplateWriteFailure(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-agents-create-rollback")
