@@ -14,7 +14,6 @@ import WorkflowConfig, {
 } from "../components/project/WorkflowConfig";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { useOptionalWS } from "../contexts/WebSocketContext";
-import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
 import useEmissions from "../hooks/useEmissions";
 import useNowTicker from "../hooks/useNowTicker";
 import { API_URL } from "../lib/api";
@@ -503,38 +502,38 @@ export default function ProjectDetailPage() {
       setActivity([]);
       return;
     }
+
     const params = new URLSearchParams({
       org_id: resolvedOrgId,
-      limit: "10",
+      limit: "20",
     });
     if (resolvedProjectId) {
       params.set("project_id", resolvedProjectId);
     }
-    const activityUrl = `${API_URL}/api/feed?${params.toString()}`;
+    const activityUrl = `${API_URL}/api/activity/recent?${params.toString()}`;
     const activityRes = await fetch(activityUrl);
     if (!activityRes.ok) {
       return;
     }
     const activityData = await activityRes.json();
-    const items = activityData.items || [];
-    const transformedActivity: Activity[] = items.slice(0, 5).map((item: {
+    const items = (activityData.items || []) as Array<{
       id: string;
-      agent_name?: string;
-      type?: string;
+      agent_id?: string;
+      trigger?: string;
+      detail?: string;
       summary?: string;
-      task_title?: string;
-      metadata?: unknown;
+      status?: string;
       created_at?: string;
-    }) => {
-      const agentName = item.agent_name?.trim() || "System";
-      const type = item.type?.trim() || "activity";
-      const highlight = getActivityDescription({
-        type,
-        actorName: agentName,
-        taskTitle: item.task_title,
-        summary: item.summary,
-        metadata: normalizeMetadata(item.metadata),
-      });
+    }>;
+    const transformedActivity: Activity[] = items.slice(0, 10).map((item) => {
+      const rawAgent = item.agent_id?.trim() || "System";
+      const agentName = agentIdToNameRef.current[rawAgent] || rawAgent;
+      const baseSummary = item.summary?.trim() || item.detail?.trim() || item.trigger?.trim() || "Activity event";
+      const status = item.status?.trim();
+      const highlight =
+        status && status.toLowerCase() !== "completed"
+          ? `${baseSummary} (${status})`
+          : baseSummary;
       return {
         id: item.id,
         agent: agentName,

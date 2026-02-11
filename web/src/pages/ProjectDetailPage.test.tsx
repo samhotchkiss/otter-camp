@@ -775,7 +775,7 @@ describe("ProjectDetailPage files tab", () => {
       if (url.includes("/api/issues?") && method === "GET") {
         return mockJSONResponse({ items: [] });
       }
-      if (url.includes("/api/feed?") && method === "GET") {
+      if (url.includes("/api/activity/recent?") && method === "GET") {
         return mockJSONResponse({ items: [] });
       }
       if (url.includes("/api/projects/project-1/settings") && method === "PATCH") {
@@ -907,7 +907,7 @@ describe("ProjectDetailPage files tab", () => {
       if (url.includes("/api/issues?") && method === "GET") {
         return mockJSONResponse({ items: [] });
       }
-      if (url.includes("/api/feed?") && method === "GET") {
+      if (url.includes("/api/activity/recent?") && method === "GET") {
         return mockJSONResponse({ items: [] });
       }
       if (url.includes("/api/projects/project-1/settings") && method === "PATCH") {
@@ -978,7 +978,7 @@ describe("ProjectDetailPage files tab", () => {
       if (url.includes("/api/issues")) {
         return Promise.resolve(mockJSONResponse({ items: [] }));
       }
-      if (url.includes("/api/feed")) {
+      if (url.includes("/api/activity/recent")) {
         return Promise.resolve(mockJSONResponse({ items: [] }));
       }
       return Promise.resolve(mockJSONResponse({}, false));
@@ -996,7 +996,7 @@ describe("ProjectDetailPage files tab", () => {
 
     await waitFor(() => {
       const fetchedURLs = fetchMock.mock.calls.map(([input]: [unknown]) => String(input));
-      const activityURL = fetchedURLs.find((url) => url.includes("/api/feed?"));
+      const activityURL = fetchedURLs.find((url) => url.includes("/api/activity/recent?"));
       expect(activityURL).toBeDefined();
       expect(activityURL).toContain("org_id=org-from-project");
       expect(activityURL).toContain("project_id=project-1");
