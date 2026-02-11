@@ -262,6 +262,7 @@ type ProjectChatDispatchEvent = {
   data?: {
     message_id?: string;
     project_id?: string;
+    project_name?: string;
     agent_id?: string;
     agent_name?: string;
     session_key?: string;
@@ -344,6 +345,7 @@ type SessionContext = {
   agentID?: string;
   agentName?: string;
   projectID?: string;
+  projectName?: string;
   issueID?: string;
   issueNumber?: number;
   issueTitle?: string;
@@ -2243,6 +2245,9 @@ function buildContextEnvelope(context: SessionContext): string {
     lines.push('Surface: project chat.');
     if (context.projectID) {
       lines.push(`Project ID: ${context.projectID}.`);
+    }
+    if (context.projectName) {
+      lines.push(`Project name: ${context.projectName}.`);
     }
     if (context.agentName || context.agentID) {
       lines.push(`Primary project agent: ${context.agentName || context.agentID}.`);
@@ -5025,6 +5030,7 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
 
 async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): Promise<void> {
   const projectID = getTrimmedString(event.data?.project_id);
+  const projectName = getTrimmedString(event.data?.project_name);
   const agentID = getTrimmedString(event.data?.agent_id);
   const agentName = getTrimmedString(event.data?.agent_name);
   const content = getTrimmedString(event.data?.content);
@@ -5051,6 +5057,7 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
     agentID,
     agentName,
     projectID,
+    projectName,
     pendingQuestionnaire: questionnaire || undefined,
   });
 

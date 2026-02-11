@@ -98,13 +98,14 @@ type openClawProjectChatDispatchEvent struct {
 }
 
 type openClawProjectChatDispatchData struct {
-	MessageID  string `json:"message_id"`
-	ProjectID  string `json:"project_id"`
-	AgentID    string `json:"agent_id"`
-	AgentName  string `json:"agent_name,omitempty"`
-	SessionKey string `json:"session_key"`
-	Content    string `json:"content"`
-	Author     string `json:"author,omitempty"`
+	MessageID   string `json:"message_id"`
+	ProjectID   string `json:"project_id"`
+	ProjectName string `json:"project_name,omitempty"`
+	AgentID     string `json:"agent_id"`
+	AgentName   string `json:"agent_name,omitempty"`
+	SessionKey  string `json:"session_key"`
+	Content     string `json:"content"`
+	Author      string `json:"author,omitempty"`
 }
 
 type projectChatDispatchTarget struct {
@@ -608,22 +609,52 @@ func (h *ProjectChatHandler) buildProjectChatDispatchEvent(
 		return openClawProjectChatDispatchEvent{}, fmt.Errorf("missing workspace")
 	}
 
+	projectName := ""
+	if h.DB != nil {
+		resolvedName, resolveErr := h.resolveProjectName(ctx, message.ProjectID)
+		if resolveErr != nil {
+			log.Printf("[project-chat] failed to resolve project name for %s: %v", message.ProjectID, resolveErr)
+		} else {
+			projectName = resolvedName
+		}
+	}
+
 	event := openClawProjectChatDispatchEvent{
 		Type:      "project.chat.message",
 		Timestamp: time.Now().UTC(),
 		OrgID:     workspaceID,
 		Data: openClawProjectChatDispatchData{
-			MessageID:  message.ID,
-			ProjectID:  message.ProjectID,
-			AgentID:    target.AgentID,
-			AgentName:  target.AgentName,
-			SessionKey: target.SessionKey,
-			Content:    message.Body,
-			Author:     message.Author,
+			MessageID:   message.ID,
+			ProjectID:   message.ProjectID,
+			ProjectName: projectName,
+			AgentID:     target.AgentID,
+			AgentName:   target.AgentName,
+			SessionKey:  target.SessionKey,
+			Content:     message.Body,
+			Author:      message.Author,
 		},
 	}
 
 	return event, nil
+}
+
+func (h *ProjectChatHandler) resolveProjectName(ctx context.Context, projectID string) (string, error) {
+	if h.DB == nil {
+		return "", nil
+	}
+	var name string
+	err := h.DB.QueryRowContext(
+		ctx,
+		`SELECT name FROM projects WHERE id = $1`,
+		strings.TrimSpace(projectID),
+	).Scan(&name)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(name), nil
 }
 
 func (h *ProjectChatHandler) dispatchProjectChatMessageToOpenClaw(

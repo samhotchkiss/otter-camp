@@ -427,6 +427,7 @@ func TestProjectChatHandlerCreateDispatchesToOpenClaw(t *testing.T) {
 	require.Equal(t, "project.chat.message", event.Type)
 	require.Equal(t, orgID, event.OrgID)
 	require.Equal(t, projectID, event.Data.ProjectID)
+	require.Equal(t, "Project Dispatch", event.Data.ProjectName)
 	require.Equal(t, "Please review this project update", event.Data.Content)
 	require.Equal(t, "Sam", event.Data.Author)
 	require.Equal(t, "stone", event.Data.AgentID)
