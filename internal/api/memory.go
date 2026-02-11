@@ -33,24 +33,24 @@ type createMemoryEntryRequest struct {
 }
 
 type memoryEntryPayload struct {
-	ID             string           `json:"id"`
-	AgentID        string           `json:"agent_id"`
-	Kind           string           `json:"kind"`
-	Title          string           `json:"title"`
-	Content        string           `json:"content"`
-	Metadata       json.RawMessage  `json:"metadata"`
-	Importance     int              `json:"importance"`
-	Confidence     float64          `json:"confidence"`
-	Sensitivity    string           `json:"sensitivity"`
-	Status         string           `json:"status"`
-	OccurredAt     string           `json:"occurred_at"`
-	ExpiresAt      *string          `json:"expires_at,omitempty"`
-	SourceSession  *string          `json:"source_session,omitempty"`
-	SourceProject  *string          `json:"source_project,omitempty"`
-	SourceIssue    *string          `json:"source_issue,omitempty"`
-	CreatedAt      string           `json:"created_at"`
-	UpdatedAt      string           `json:"updated_at"`
-	RelevanceScore *float64         `json:"relevance,omitempty"`
+	ID             string          `json:"id"`
+	AgentID        string          `json:"agent_id"`
+	Kind           string          `json:"kind"`
+	Title          string          `json:"title"`
+	Content        string          `json:"content"`
+	Metadata       json.RawMessage `json:"metadata"`
+	Importance     int             `json:"importance"`
+	Confidence     float64         `json:"confidence"`
+	Sensitivity    string          `json:"sensitivity"`
+	Status         string          `json:"status"`
+	OccurredAt     string          `json:"occurred_at"`
+	ExpiresAt      *string         `json:"expires_at,omitempty"`
+	SourceSession  *string         `json:"source_session,omitempty"`
+	SourceProject  *string         `json:"source_project,omitempty"`
+	SourceIssue    *string         `json:"source_issue,omitempty"`
+	CreatedAt      string          `json:"created_at"`
+	UpdatedAt      string          `json:"updated_at"`
+	RelevanceScore *float64        `json:"relevance,omitempty"`
 }
 
 type memoryListResponse struct {
@@ -60,6 +60,22 @@ type memoryListResponse struct {
 
 type memoryRecallResponse struct {
 	Context string `json:"context"`
+}
+
+type memoryEvaluationRunPayload struct {
+	ID          string   `json:"id"`
+	Passed      bool     `json:"passed"`
+	FailedGates []string `json:"failed_gates,omitempty"`
+	Metrics     struct {
+		PrecisionAtK        *float64 `json:"precision_at_k,omitempty"`
+		FalseInjectionRate  *float64 `json:"false_injection_rate,omitempty"`
+		RecoverySuccessRate *float64 `json:"recovery_success_rate,omitempty"`
+		P95LatencyMs        *float64 `json:"p95_latency_ms,omitempty"`
+	} `json:"metrics,omitempty"`
+}
+
+type memoryEvaluationLatestResponse struct {
+	Run *memoryEvaluationRunPayload `json:"run"`
 }
 
 func (h *MemoryHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -265,6 +281,10 @@ func (h *MemoryHandler) Recall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, memoryRecallResponse{Context: contextText})
+}
+
+func (h *MemoryHandler) LatestEvaluation(w http.ResponseWriter, r *http.Request) {
+	sendJSON(w, http.StatusOK, memoryEvaluationLatestResponse{Run: nil})
 }
 
 func (h *MemoryHandler) Delete(w http.ResponseWriter, r *http.Request) {

@@ -21,6 +21,7 @@ func newMemoryTestRouter(handler *MemoryHandler) http.Handler {
 	r.With(middleware.RequireWorkspace).Delete("/api/memory/entries/{id}", handler.Delete)
 	r.With(middleware.RequireWorkspace).Get("/api/memory/search", handler.Search)
 	r.With(middleware.RequireWorkspace).Get("/api/memory/recall", handler.Recall)
+	r.With(middleware.RequireWorkspace).Get("/api/memory/evaluations/latest", handler.LatestEvaluation)
 	return r
 }
 
@@ -178,4 +179,21 @@ func TestMemoryHandlerCapsListAndSearchLimit(t *testing.T) {
 	require.Equal(t, 100, clampMemorySearchLimit(999999))
 	require.Equal(t, 20, clampMemoryListLimit(0))
 	require.Equal(t, 20, clampMemorySearchLimit(0))
+}
+
+func TestMemoryEvaluationLatestReturnsNoRunWhenUnavailable(t *testing.T) {
+	router := newMemoryTestRouter(&MemoryHandler{})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/memory/evaluations/latest?org_id=00000000-0000-0000-0000-000000000001",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload memoryEvaluationLatestResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Nil(t, payload.Run)
 }

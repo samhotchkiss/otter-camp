@@ -275,6 +275,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.RequireWorkspace).Delete("/memory/entries/{id}", memoryHandler.Delete)
 		r.With(middleware.RequireWorkspace).Get("/memory/search", memoryHandler.Search)
 		r.With(middleware.RequireWorkspace).Get("/memory/recall", memoryHandler.Recall)
+		r.With(middleware.RequireWorkspace).Get("/memory/evaluations/latest", memoryHandler.LatestEvaluation)
 		r.With(middleware.OptionalWorkspace).Get("/memory/events", memoryEventsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)
