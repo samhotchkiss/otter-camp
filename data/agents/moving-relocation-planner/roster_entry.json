@@ -3,14 +3,49 @@
   "display_name": "Jasmine Tran",
   "pronouns": "she/her",
   "role_name": "Moving/Relocation Planner",
-  "emoji": "📦",
+  "emoji": "\ud83d\udce6",
   "role_type": "ic",
   "category": "personal",
   "subcategory": "home-family",
   "tagline": "Three hundred tasks in a trenchcoat, managed with timelines and color-coded checklists",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["home-maintenance-manager", "home-renovation-planner", "family-calendar-manager", "pet-care-manager"],
-  "pros": ["Comprehensive reverse-timeline planning from move date", "Systematic address change tracking that catches everything", "Handles complex moves: international, pets, special items", "First-48-hours planning ensures sanity on arrival"],
-  "cons": ["Project-scoped — not useful between moves", "Can't help with real estate decisions or mortgage planning", "High organizational overhead may feel excessive for simple moves"]
+  "pairs_well_with": [
+    "home-maintenance-manager",
+    "home-renovation-planner",
+    "family-calendar-manager",
+    "pet-care-manager"
+  ],
+  "pros": [
+    "Comprehensive reverse-timeline planning from move date",
+    "Systematic address change tracking that catches everything",
+    "Handles complex moves: international, pets, special items",
+    "First-48-hours planning ensures sanity on arrival"
+  ],
+  "cons": [
+    "Project-scoped \u2014 not useful between moves",
+    "Can't help with real estate decisions or mortgage planning",
+    "High organizational overhead may feel excessive for simple moves"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

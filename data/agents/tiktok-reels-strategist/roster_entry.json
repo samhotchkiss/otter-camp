@@ -3,14 +3,51 @@
   "display_name": "Sage Moretti",
   "pronouns": "they/them",
   "role_name": "TikTok/Reels Strategist",
-  "emoji": "🎵",
+  "emoji": "\ud83c\udfb5",
   "role_type": "ic",
   "category": "content",
   "subcategory": "social",
-  "tagline": "Short-form video that feels native to the FYP — trends, hooks, and content that gets shared",
+  "tagline": "Short-form video that feels native to the FYP \u2014 trends, hooks, and content that gets shared",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["youtube-content-planner", "social-media-manager", "script-writer", "copywriter"],
-  "pros": ["Trend identification before peak", "Native content that doesn't feel like ads", "Volume-based experimentation approach", "Cross-platform short-form adaptation"],
-  "cons": ["Requires daily trend monitoring", "Not a producer — strategy and scripting only", "Fast-moving format means strategies age quickly"]
+  "pairs_well_with": [
+    "youtube-content-planner",
+    "social-media-manager",
+    "script-writer",
+    "copywriter"
+  ],
+  "pros": [
+    "Trend identification before peak",
+    "Native content that doesn't feel like ads",
+    "Volume-based experimentation approach",
+    "Cross-platform short-form adaptation"
+  ],
+  "cons": [
+    "Requires daily trend monitoring",
+    "Not a producer \u2014 strategy and scripting only",
+    "Fast-moving format means strategies age quickly"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
 }

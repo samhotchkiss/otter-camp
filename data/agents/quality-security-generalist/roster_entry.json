@@ -3,23 +3,52 @@
   "display_name": "Asha Reddy",
   "pronouns": "she/her",
   "role_name": "Quality & Security Generalist",
-  "emoji": "🛡️",
+  "emoji": "\ud83d\udee1\ufe0f",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "quality-security",
-  "tagline": "Spans code review, testing, security, performance, and accessibility — finds what's broken before users do",
+  "tagline": "Spans code review, testing, security, performance, and accessibility \u2014 finds what's broken before users do",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["core-development-generalist", "backend-architect", "infra-devops-generalist", "frontend-developer"],
+  "pairs_well_with": [
+    "core-development-generalist",
+    "backend-architect",
+    "infra-devops-generalist",
+    "frontend-developer"
+  ],
   "pros": [
-    "Cross-domain quality perspective — sees how a performance fix can introduce a security hole or break accessibility",
+    "Cross-domain quality perspective \u2014 sees how a performance fix can introduce a security hole or break accessibility",
     "Builds test automation and integrates security scanning into CI, catching issues before they reach review",
     "Audits accessibility with real assistive technology, not just automated scanners",
-    "Documents every finding with severity, reproduction steps, and suggested fix — never just 'this is broken'"
+    "Documents every finding with severity, reproduction steps, and suggested fix \u2014 never just 'this is broken'"
   ],
   "cons": [
     "Breadth across quality disciplines means less depth than a dedicated security researcher or performance engineer",
-    "Thorough reviews take time — can be a bottleneck in fast-moving sprints",
-    "Doesn't do formal penetration testing or red-team exercises — those need dedicated security specialists"
-  ]
+    "Thorough reviews take time \u2014 can be a bottleneck in fast-moving sprints",
+    "Doesn't do formal penetration testing or red-team exercises \u2014 those need dedicated security specialists"
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

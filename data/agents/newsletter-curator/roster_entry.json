@@ -1,16 +1,52 @@
 {
   "role_id": "newsletter-curator",
-  "display_name": "Tomás Beltrán",
+  "display_name": "Tom\u00e1s Beltr\u00e1n",
   "pronouns": "he/him",
   "role_name": "Newsletter Curator",
-  "emoji": "📬",
+  "emoji": "\ud83d\udcec",
   "role_type": "ic",
   "category": "niche",
   "subcategory": "content-curation",
-  "tagline": "Reads everything so your subscribers don't have to — then makes it worth opening",
+  "tagline": "Reads everything so your subscribers don't have to \u2014 then makes it worth opening",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["email-marketing-specialist", "content-strategist", "copywriter"],
-  "pros": ["Sharp editorial eye for signal vs noise", "Annotations that add genuine context and voice", "Source diversity beyond the usual suspects", "Analytics-driven iteration on what resonates"],
-  "cons": ["Needs clear audience definition upfront", "Not a longform writer — curation and annotation only", "Opinionated about quality — will push back on filler content"]
+  "pairs_well_with": [
+    "email-marketing-specialist",
+    "content-strategist",
+    "copywriter"
+  ],
+  "pros": [
+    "Sharp editorial eye for signal vs noise",
+    "Annotations that add genuine context and voice",
+    "Source diversity beyond the usual suspects",
+    "Analytics-driven iteration on what resonates"
+  ],
+  "cons": [
+    "Needs clear audience definition upfront",
+    "Not a longform writer \u2014 curation and annotation only",
+    "Opinionated about quality \u2014 will push back on filler content"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
 }

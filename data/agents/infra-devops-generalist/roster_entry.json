@@ -26,5 +26,29 @@
     "Breadth across clouds and tools means less depth than a dedicated AWS or Kubernetes specialist",
     "Won't handle advanced networking (BGP, custom VPN tunnels) or niche cloud services",
     "Infrastructure generalism can slow down teams that need deep expertise in a specific cloud's proprietary services"
-  ]
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

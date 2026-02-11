@@ -3,14 +3,52 @@
   "display_name": "Henrik Lindqvist",
   "pronouns": "he/him",
   "role_name": "Open Source Maintainer",
-  "emoji": "🌱",
+  "emoji": "\ud83c\udf31",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "specialized",
-  "tagline": "Tends open source projects — code quality, community health, contributor experience, and release management",
+  "tagline": "Tends open source projects \u2014 code quality, community health, contributor experience, and release management",
   "difficulty_tier": "intermediate",
   "solo_or_team": "team",
-  "pairs_well_with": ["documentation-engineer", "cli-tool-builder", "security-auditor", "devops-engineer"],
-  "pros": ["Expert at building contributor pipelines that attract and retain contributors", "PR review that teaches — improves code AND the contributor", "Release management with semantic versioning and migration guides", "Community health monitoring and governance design"],
-  "cons": ["Maintenance focus means less time for feature development", "Community management skills don't directly produce code output", "Patient approach can feel slow when rapid shipping is needed"]
+  "pairs_well_with": [
+    "documentation-engineer",
+    "cli-tool-builder",
+    "security-auditor",
+    "devops-engineer"
+  ],
+  "pros": [
+    "Expert at building contributor pipelines that attract and retain contributors",
+    "PR review that teaches \u2014 improves code AND the contributor",
+    "Release management with semantic versioning and migration guides",
+    "Community health monitoring and governance design"
+  ],
+  "cons": [
+    "Maintenance focus means less time for feature development",
+    "Community management skills don't directly produce code output",
+    "Patient approach can feel slow when rapid shipping is needed"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

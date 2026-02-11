@@ -1,16 +1,53 @@
 {
   "role_id": "marketing-generalist",
-  "display_name": "Río Castillo",
+  "display_name": "R\u00edo Castillo",
   "pronouns": "they/them",
   "role_name": "Marketing Generalist",
-  "emoji": "📣",
+  "emoji": "\ud83d\udce3",
   "role_type": "ic",
   "category": "business",
   "subcategory": "marketing",
-  "tagline": "Full-stack marketing — growth loops, email, paid, affiliates, events, and the math underneath",
+  "tagline": "Full-stack marketing \u2014 growth loops, email, paid, affiliates, events, and the math underneath",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["sales-revenue-generalist", "copywriter", "seo-specialist", "content-strategist"],
-  "pros": ["Cross-channel strategy that avoids silo thinking", "Experiment-driven — always testing, always measuring", "Covers email, paid, affiliates, events, and product marketing", "Thinks in unit economics, not vanity metrics"],
-  "cons": ["Generalist depth trade-off — a paid ads specialist goes deeper on bid strategy", "Needs business context upfront — won't run campaigns without understanding the model", "Not a content creator — strategizes distribution, doesn't write the 3,000-word post"]
+  "pairs_well_with": [
+    "sales-revenue-generalist",
+    "copywriter",
+    "seo-specialist",
+    "content-strategist"
+  ],
+  "pros": [
+    "Cross-channel strategy that avoids silo thinking",
+    "Experiment-driven \u2014 always testing, always measuring",
+    "Covers email, paid, affiliates, events, and product marketing",
+    "Thinks in unit economics, not vanity metrics"
+  ],
+  "cons": [
+    "Generalist depth trade-off \u2014 a paid ads specialist goes deeper on bid strategy",
+    "Needs business context upfront \u2014 won't run campaigns without understanding the model",
+    "Not a content creator \u2014 strategizes distribution, doesn't write the 3,000-word post"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
 }

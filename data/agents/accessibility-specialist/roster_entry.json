@@ -3,23 +3,52 @@
   "display_name": "Lucia Fontaine",
   "pronouns": "she/her",
   "role_name": "Accessibility Specialist",
-  "emoji": "♿",
+  "emoji": "\u267f",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "quality-security",
-  "tagline": "Real accessibility testing with assistive technology — not just automated scans and checkboxes",
+  "tagline": "Real accessibility testing with assistive technology \u2014 not just automated scans and checkboxes",
   "difficulty_tier": "intermediate",
   "solo_or_team": "team",
-  "pairs_well_with": ["frontend-developer", "ui-ux-designer", "qa-engineer", "senior-code-reviewer"],
+  "pairs_well_with": [
+    "frontend-developer",
+    "ui-ux-designer",
+    "qa-engineer",
+    "senior-code-reviewer"
+  ],
   "pros": [
-    "Tests with real assistive technology — NVDA, JAWS, VoiceOver, TalkBack",
+    "Tests with real assistive technology \u2014 NVDA, JAWS, VoiceOver, TalkBack",
     "Catches the 70% of issues automated tools miss: focus order, ARIA, meaningful content",
-    "Provides code examples with every finding — shows exactly how to fix it",
+    "Provides code examples with every finding \u2014 shows exactly how to fix it",
     "Reviews designs before development to catch issues at the cheapest stage"
   ],
   "cons": [
-    "Doesn't implement large-scale fixes — provides guidance for developers to execute",
-    "Deep audits take time — can't speed-run a full WCAG AA assessment",
-    "Most effective when involved early — retrofitting accessibility is harder"
-  ]
+    "Doesn't implement large-scale fixes \u2014 provides guidance for developers to execute",
+    "Deep audits take time \u2014 can't speed-run a full WCAG AA assessment",
+    "Most effective when involved early \u2014 retrofitting accessibility is harder"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

@@ -1,16 +1,51 @@
 {
   "role_id": "family-calendar-manager",
-  "display_name": "Lucía Mendoza",
+  "display_name": "Luc\u00eda Mendoza",
   "pronouns": "she/her",
   "role_name": "Family Calendar Manager",
-  "emoji": "📅",
+  "emoji": "\ud83d\udcc5",
   "role_type": "ic",
   "category": "personal",
   "subcategory": "home-family",
-  "tagline": "Air traffic control for family life — no double bookings, no forgotten permission slips",
+  "tagline": "Air traffic control for family life \u2014 no double bookings, no forgotten permission slips",
   "difficulty_tier": "starter",
   "solo_or_team": "both",
-  "pairs_well_with": ["personal-assistant", "kids-activity-planner", "calendar-optimizer", "travel-planner"],
-  "pros": ["Prevents scheduling conflicts before they happen", "Tracks fairness in logistics labor distribution", "Builds systems that handle disruption gracefully", "Proactive weekly previews keep everyone informed"],
-  "cons": ["Manages schedules, not the family dynamics behind them", "Can't solve overcommitment — that requires saying no", "Needs buy-in from all family members to work well"]
+  "pairs_well_with": [
+    "personal-assistant",
+    "kids-activity-planner",
+    "calendar-optimizer",
+    "travel-planner"
+  ],
+  "pros": [
+    "Prevents scheduling conflicts before they happen",
+    "Tracks fairness in logistics labor distribution",
+    "Builds systems that handle disruption gracefully",
+    "Proactive weekly previews keep everyone informed"
+  ],
+  "cons": [
+    "Manages schedules, not the family dynamics behind them",
+    "Can't solve overcommitment \u2014 that requires saying no",
+    "Needs buy-in from all family members to work well"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

@@ -3,14 +3,49 @@
   "display_name": "Nico Vargas",
   "pronouns": "they/them",
   "role_name": "Restaurant/Experience Scout",
-  "emoji": "🍽️",
+  "emoji": "\ud83c\udf7d\ufe0f",
   "role_type": "ic",
   "category": "personal",
   "subcategory": "experiences-lifestyle",
-  "tagline": "Specific, honest recommendations for dining and experiences — not just 'try this place' but 'order this dish'",
+  "tagline": "Specific, honest recommendations for dining and experiences \u2014 not just 'try this place' but 'order this dish'",
   "difficulty_tier": "starter",
   "solo_or_team": "solo",
-  "pairs_well_with": ["travel-planner", "meal-planner", "personal-assistant", "gift-planner"],
-  "pros": ["Specific order-level recommendations, not just restaurant names", "Calibrates to budget, dietary needs, and adventurousness", "Honest about hype — distinguishes genuine quality from trends", "Cultural context enriches the dining experience"],
-  "cons": ["Recommends only — doesn't handle reservations or booking", "Regional knowledge varies — needs location context", "Opinionated — may not match everyone's taste exactly"]
+  "pairs_well_with": [
+    "travel-planner",
+    "meal-planner",
+    "personal-assistant",
+    "gift-planner"
+  ],
+  "pros": [
+    "Specific order-level recommendations, not just restaurant names",
+    "Calibrates to budget, dietary needs, and adventurousness",
+    "Honest about hype \u2014 distinguishes genuine quality from trends",
+    "Cultural context enriches the dining experience"
+  ],
+  "cons": [
+    "Recommends only \u2014 doesn't handle reservations or booking",
+    "Regional knowledge varies \u2014 needs location context",
+    "Opinionated \u2014 may not match everyone's taste exactly"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

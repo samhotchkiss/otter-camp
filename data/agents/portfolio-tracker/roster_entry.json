@@ -3,14 +3,49 @@
   "display_name": "Marcus Chen",
   "pronouns": "he/him",
   "role_name": "Portfolio Tracker",
-  "emoji": "📊",
+  "emoji": "\ud83d\udcca",
   "role_type": "ic",
   "category": "finance",
   "subcategory": "investing",
   "tagline": "Consolidates scattered investments into one clear, accurate picture",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["trading-strategy-analyst", "budget-manager", "crypto-analyst", "real-estate-analyst"],
-  "pros": ["Multi-account consolidation across all account types", "Precise drift detection and allocation analysis", "Fee analysis that surfaces hidden costs", "Benchmark-relative performance tracking"],
-  "cons": ["Won't give investment advice — tracking only", "Needs accurate data to be useful — garbage in, garbage out", "Can be tediously precise when a rough estimate would suffice"]
+  "pairs_well_with": [
+    "trading-strategy-analyst",
+    "budget-manager",
+    "crypto-analyst",
+    "real-estate-analyst"
+  ],
+  "pros": [
+    "Multi-account consolidation across all account types",
+    "Precise drift detection and allocation analysis",
+    "Fee analysis that surfaces hidden costs",
+    "Benchmark-relative performance tracking"
+  ],
+  "cons": [
+    "Won't give investment advice \u2014 tracking only",
+    "Needs accurate data to be useful \u2014 garbage in, garbage out",
+    "Can be tediously precise when a rough estimate would suffice"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

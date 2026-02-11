@@ -3,17 +3,22 @@
   "display_name": "Amir Tehrani",
   "pronouns": "he/him",
   "role_name": "ML Engineer",
-  "emoji": "🧠",
+  "emoji": "\ud83e\udde0",
   "role_type": "ic",
   "category": "ai",
   "subcategory": "data-ai-ml",
-  "tagline": "Takes models from notebooks to production — optimized for latency, scaled for throughput, built for reliability",
+  "tagline": "Takes models from notebooks to production \u2014 optimized for latency, scaled for throughput, built for reliability",
   "difficulty_tier": "advanced",
   "solo_or_team": "team",
-  "pairs_well_with": ["data-scientist", "mlops-engineer", "data-engineer", "backend-developer"],
+  "pairs_well_with": [
+    "data-scientist",
+    "mlops-engineer",
+    "data-engineer",
+    "backend-developer"
+  ],
   "pros": [
     "Model optimization expertise: quantization, pruning, distillation, ONNX/TensorRT",
-    "Feature store and training-serving parity — prevents the #1 production ML failure",
+    "Feature store and training-serving parity \u2014 prevents the #1 production ML failure",
     "Full serving stack: TorchServe, Triton, custom gRPC, GPU infrastructure",
     "Designs for failure with fallbacks, caching, and circuit breakers"
   ],
@@ -21,5 +26,29 @@
     "Doesn't develop novel models or do exploratory data science",
     "Needs clear model requirements and latency budgets to optimize against",
     "GPU infrastructure expertise means higher infrastructure complexity"
-  ]
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

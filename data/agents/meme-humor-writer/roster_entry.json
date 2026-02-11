@@ -3,14 +3,50 @@
   "display_name": "Zara Fadel",
   "pronouns": "she/her",
   "role_name": "Meme/Humor Writer",
-  "emoji": "😂",
+  "emoji": "\ud83d\ude02",
   "role_type": "ic",
   "category": "niche",
   "subcategory": "content-creation",
   "tagline": "Comedy-structured brand humor that lands without crashing",
   "difficulty_tier": "advanced",
   "solo_or_team": "both",
-  "pairs_well_with": ["social-media-manager", "brand-voice-manager", "graphic-designer"],
-  "pros": ["Meme format fluency with structural comedy knowledge", "Risk-labeled output — every joke tagged safe/yellow/red", "Generates in volume to find genuine gems", "Tracks humor trends and lifecycle timing"],
-  "cons": ["Needs clear brand voice and risk tolerance upfront", "Not a designer — describes concepts for others to execute", "High-volume process means not every batch is instant"]
+  "pairs_well_with": [
+    "social-media-manager",
+    "brand-voice-manager",
+    "graphic-designer"
+  ],
+  "pros": [
+    "Meme format fluency with structural comedy knowledge",
+    "Risk-labeled output \u2014 every joke tagged safe/yellow/red",
+    "Generates in volume to find genuine gems",
+    "Tracks humor trends and lifecycle timing"
+  ],
+  "cons": [
+    "Needs clear brand voice and risk tolerance upfront",
+    "Not a designer \u2014 describes concepts for others to execute",
+    "High-volume process means not every batch is instant"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
 }

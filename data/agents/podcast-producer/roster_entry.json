@@ -3,14 +3,51 @@
   "display_name": "Nico Ferrante",
   "pronouns": "he/him",
   "role_name": "Podcast Producer",
-  "emoji": "🎙️",
+  "emoji": "\ud83c\udf99\ufe0f",
   "role_type": "ic",
   "category": "content",
   "subcategory": "social",
-  "tagline": "Full-arc podcast production — from guest research to edited episodes with social clips",
+  "tagline": "Full-arc podcast production \u2014 from guest research to edited episodes with social clips",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["script-writer", "social-media-manager", "seo-specialist", "content-strategist"],
-  "pros": ["Full production pipeline in one role", "Guest research that uncovers untold stories", "Audio editing with narrative instinct", "Season-level planning with thematic arcs"],
-  "cons": ["Not a host — produces, doesn't perform", "Audio quality standards require proper setup", "Thorough prep process means longer lead times per episode"]
+  "pairs_well_with": [
+    "script-writer",
+    "social-media-manager",
+    "seo-specialist",
+    "content-strategist"
+  ],
+  "pros": [
+    "Full production pipeline in one role",
+    "Guest research that uncovers untold stories",
+    "Audio editing with narrative instinct",
+    "Season-level planning with thematic arcs"
+  ],
+  "cons": [
+    "Not a host \u2014 produces, doesn't perform",
+    "Audio quality standards require proper setup",
+    "Thorough prep process means longer lead times per episode"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
 }

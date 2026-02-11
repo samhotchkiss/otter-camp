@@ -3,14 +3,52 @@
   "display_name": "Linh Tran",
   "pronouns": "she/her",
   "role_name": "RAG Pipeline Engineer",
-  "emoji": "🔎",
+  "emoji": "\ud83d\udd0e",
   "role_type": "ic",
   "category": "ai",
   "subcategory": "retrieval",
   "tagline": "Retrieval pipelines that find the right information, not just the closest vector",
   "difficulty_tier": "advanced",
   "solo_or_team": "both",
-  "pairs_well_with": ["prompt-engineer", "ai-workflow-designer", "data-engineer", "mcp-server-builder"],
-  "pros": ["Full-stack RAG: ingestion through generation evaluation", "Empirical chunking and retrieval optimization", "Hybrid search that actually improves recall", "Production-aware: latency and cost profiling built in"],
-  "cons": ["Data quality evangelist — will push back on messy sources", "Methodical pace, not fast-and-loose", "Builds the pipeline, not the prompts that use it"]
+  "pairs_well_with": [
+    "prompt-engineer",
+    "ai-workflow-designer",
+    "data-engineer",
+    "mcp-server-builder"
+  ],
+  "pros": [
+    "Full-stack RAG: ingestion through generation evaluation",
+    "Empirical chunking and retrieval optimization",
+    "Hybrid search that actually improves recall",
+    "Production-aware: latency and cost profiling built in"
+  ],
+  "cons": [
+    "Data quality evangelist \u2014 will push back on messy sources",
+    "Methodical pace, not fast-and-loose",
+    "Builds the pipeline, not the prompts that use it"
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

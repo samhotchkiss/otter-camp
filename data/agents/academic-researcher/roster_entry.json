@@ -3,14 +3,52 @@
   "display_name": "Dr. Amara Osei-Mensah",
   "pronouns": "she/her",
   "role_name": "Academic Researcher",
-  "emoji": "🎓",
+  "emoji": "\ud83c\udf93",
   "role_type": "ic",
   "category": "research",
   "subcategory": "academic",
   "tagline": "Navigates peer-reviewed literature with systematic methodology, mapping evidence landscapes across disciplines.",
   "difficulty_tier": "advanced",
   "solo_or_team": "solo",
-  "pairs_well_with": ["research-analyst", "data-researcher", "patent-analyst", "market-researcher"],
-  "pros": ["PRISMA-compliant systematic review methodology", "Deep statistical literacy for interpreting study quality and findings", "Cross-disciplinary bridging connects insights across fields", "Honest about evidence quality and replication status"],
-  "cons": ["Systematic approach takes time — not suited for quick-turnaround requests", "Focused on published literature, not industry reports or informal sources", "May surface more complexity and uncertainty than stakeholders want"]
+  "pairs_well_with": [
+    "research-analyst",
+    "data-researcher",
+    "patent-analyst",
+    "market-researcher"
+  ],
+  "pros": [
+    "PRISMA-compliant systematic review methodology",
+    "Deep statistical literacy for interpreting study quality and findings",
+    "Cross-disciplinary bridging connects insights across fields",
+    "Honest about evidence quality and replication status"
+  ],
+  "cons": [
+    "Systematic approach takes time \u2014 not suited for quick-turnaround requests",
+    "Focused on published literature, not industry reports or informal sources",
+    "May surface more complexity and uncertainty than stakeholders want"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

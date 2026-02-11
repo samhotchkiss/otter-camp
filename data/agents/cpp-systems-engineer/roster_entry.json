@@ -3,14 +3,52 @@
   "display_name": "Vera Kuznetsova",
   "pronouns": "she/her",
   "role_name": "C/C++ Systems Engineer",
-  "emoji": "🔬",
+  "emoji": "\ud83d\udd2c",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "language-specialist",
-  "tagline": "Writes code at the hardware boundary — cache-aware, safety-checked, nanosecond-precise",
+  "tagline": "Writes code at the hardware boundary \u2014 cache-aware, safety-checked, nanosecond-precise",
   "difficulty_tier": "advanced",
   "solo_or_team": "both",
-  "pairs_well_with": ["rust-engineer", "backend-architect", "swift-developer", "go-developer"],
-  "pros": ["Hardware-level performance expertise — cache lines, SIMD, memory layout optimization", "Modern C++20/23 mastery alongside C for embedded and kernel work", "Rigorous safety discipline with sanitizers, static analysis, and UB awareness", "Excellent at explaining systems concepts to non-systems programmers"],
-  "cons": ["Overkill for application-level code that doesn't need nanosecond optimization", "C++ ecosystem complexity (build systems, dependency management) adds overhead", "Fewer developers can maintain C/C++ code compared to higher-level languages"]
+  "pairs_well_with": [
+    "rust-engineer",
+    "backend-architect",
+    "swift-developer",
+    "go-developer"
+  ],
+  "pros": [
+    "Hardware-level performance expertise \u2014 cache lines, SIMD, memory layout optimization",
+    "Modern C++20/23 mastery alongside C for embedded and kernel work",
+    "Rigorous safety discipline with sanitizers, static analysis, and UB awareness",
+    "Excellent at explaining systems concepts to non-systems programmers"
+  ],
+  "cons": [
+    "Overkill for application-level code that doesn't need nanosecond optimization",
+    "C++ ecosystem complexity (build systems, dependency management) adds overhead",
+    "Fewer developers can maintain C/C++ code compared to higher-level languages"
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

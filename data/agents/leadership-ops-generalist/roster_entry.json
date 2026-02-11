@@ -3,23 +3,52 @@
   "display_name": "Carmen Delgado-Park",
   "pronouns": "she/her",
   "role_name": "Leadership & Operations Generalist",
-  "emoji": "🎯",
+  "emoji": "\ud83c\udfaf",
   "role_type": "manager",
   "category": "business",
   "subcategory": "leadership-ops",
-  "tagline": "Chief of staff, PM, project manager, strategist, and ops lead — the bridge between plans and execution",
+  "tagline": "Chief of staff, PM, project manager, strategist, and ops lead \u2014 the bridge between plans and execution",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["sales-revenue-generalist", "marketing-generalist", "core-development-generalist", "writing-generalist"],
+  "pairs_well_with": [
+    "sales-revenue-generalist",
+    "marketing-generalist",
+    "core-development-generalist",
+    "writing-generalist"
+  ],
   "pros": [
     "Operates across leadership, operations, product, and project management without domain switching friction",
-    "Brings structured execution to ambiguous situations — defines success criteria, tracks risks, removes blockers",
+    "Brings structured execution to ambiguous situations \u2014 defines success criteria, tracks risks, removes blockers",
     "Facilitates decision-making by surfacing options with recommendations, not just problems",
     "Bridges communication between technical teams, business stakeholders, and executives"
   ],
   "cons": [
     "Breadth across leadership disciplines means less depth than a dedicated PM, scrum master, or strategy consultant",
     "Operational focus can feel process-heavy for small teams that just need someone to make quick calls",
-    "Doesn't do the domain work itself — needs specialists to execute the actual deliverables"
-  ]
+    "Doesn't do the domain work itself \u2014 needs specialists to execute the actual deliverables"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

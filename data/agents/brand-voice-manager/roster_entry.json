@@ -3,14 +3,51 @@
   "display_name": "Elliott Nkomo",
   "pronouns": "he/him",
   "role_name": "Brand Voice Manager",
-  "emoji": "🔊",
+  "emoji": "\ud83d\udd0a",
   "role_type": "manager",
   "category": "content",
   "subcategory": "editorial",
-  "tagline": "Defines how the brand sounds across every channel — voice guides, tone maps, and consistency audits",
+  "tagline": "Defines how the brand sounds across every channel \u2014 voice guides, tone maps, and consistency audits",
   "difficulty_tier": "advanced",
   "solo_or_team": "both",
-  "pairs_well_with": ["editor", "copywriter", "content-strategist", "localization-specialist"],
-  "pros": ["Voice and tone guide creation with do/don't examples", "Multi-channel consistency enforcement", "Writer training and onboarding for voice", "Quarterly audit systems for voice drift"],
-  "cons": ["Requires access to all content channels for auditing", "Voice definition process needs stakeholder buy-in", "Doesn't write content — defines how it should sound"]
+  "pairs_well_with": [
+    "editor",
+    "copywriter",
+    "content-strategist",
+    "localization-specialist"
+  ],
+  "pros": [
+    "Voice and tone guide creation with do/don't examples",
+    "Multi-channel consistency enforcement",
+    "Writer training and onboarding for voice",
+    "Quarterly audit systems for voice drift"
+  ],
+  "cons": [
+    "Requires access to all content channels for auditing",
+    "Voice definition process needs stakeholder buy-in",
+    "Doesn't write content \u2014 defines how it should sound"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
 }

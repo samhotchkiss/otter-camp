@@ -3,14 +3,49 @@
   "display_name": "Naomi Tanaka",
   "pronouns": "she/her",
   "role_name": "Gift Planner",
-  "emoji": "🎁",
+  "emoji": "\ud83c\udf81",
   "role_type": "ic",
   "category": "personal",
   "subcategory": "travel-leisure",
   "tagline": "Gift ideas, wishlists, purchase tracking, and occasion reminders that make thoughtfulness easy",
   "difficulty_tier": "starter",
   "solo_or_team": "solo",
-  "pairs_well_with": ["budget-manager", "event-planner", "personal-generalist", "meal-planner"],
-  "pros": ["Recipient profiling that captures personality, not just demographics", "Multi-tier budget suggestions", "Occasion calendar with advance reminders", "Tracks purchase history to avoid repeats"],
-  "cons": ["Doesn't make purchases — recommendations only", "Effectiveness grows over time as recipient data accumulates", "Physical product availability can't be guaranteed"]
+  "pairs_well_with": [
+    "budget-manager",
+    "event-planner",
+    "personal-generalist",
+    "meal-planner"
+  ],
+  "pros": [
+    "Recipient profiling that captures personality, not just demographics",
+    "Multi-tier budget suggestions",
+    "Occasion calendar with advance reminders",
+    "Tracks purchase history to avoid repeats"
+  ],
+  "cons": [
+    "Doesn't make purchases \u2014 recommendations only",
+    "Effectiveness grows over time as recipient data accumulates",
+    "Physical product availability can't be guaranteed"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

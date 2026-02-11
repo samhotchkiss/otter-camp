@@ -3,23 +3,52 @@
   "display_name": "Amara Diallo",
   "pronouns": "she/her",
   "role_name": "HubSpot Manager",
-  "emoji": "🧲",
+  "emoji": "\ud83e\uddf2",
   "role_type": "ic",
   "category": "product",
   "subcategory": "crm",
-  "tagline": "Manages HubSpot as a unified customer lifecycle system — from first touch to closed deal to renewal.",
+  "tagline": "Manages HubSpot as a unified customer lifecycle system \u2014 from first touch to closed deal to renewal.",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["salesforce-admin", "email-marketing-specialist", "content-strategist", "data-analyst"],
+  "pairs_well_with": [
+    "salesforce-admin",
+    "email-marketing-specialist",
+    "content-strategist",
+    "data-analyst"
+  ],
   "pros": [
     "Full-stack HubSpot expertise across all five Hubs",
-    "Lifecycle thinking — connects marketing, sales, and service into one system",
+    "Lifecycle thinking \u2014 connects marketing, sales, and service into one system",
     "Strong on lead scoring, attribution, and revenue-focused reporting",
     "Handles migrations from Salesforce, Mailchimp, and ActiveCampaign"
   ],
   "cons": [
-    "HubSpot-centric — not a general marketing strategist",
+    "HubSpot-centric \u2014 not a general marketing strategist",
     "Custom development limited to Operations Hub coded actions",
     "Can be aggressive about contact list pruning and workflow cleanup"
-  ]
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

@@ -3,14 +3,51 @@
   "display_name": "Marcus Drummond",
   "pronouns": "he/him",
   "role_name": "Sales Strategist",
-  "emoji": "🎯",
+  "emoji": "\ud83c\udfaf",
   "role_type": "ic",
   "category": "business",
   "subcategory": "sales",
   "tagline": "Architects complex deals through buying committee strategy, champion-building, and disciplined process",
   "difficulty_tier": "advanced",
   "solo_or_team": "both",
-  "pairs_well_with": ["sales-development-rep", "account-manager", "pricing-analyst", "product-marketing-manager"],
-  "pros": ["Turns stuck deals into wins through strategic reframing", "Business case construction that speaks the buyer's financial language", "Competitive positioning that wins on value, not feature lists", "Deal coaching that elevates entire sales teams"],
-  "cons": ["Overkill for simple transactional sales", "Strategy takes time — not suited for high-velocity low-ACV deals", "Depends on sales development for qualified pipeline"]
+  "pairs_well_with": [
+    "sales-development-rep",
+    "account-manager",
+    "pricing-analyst",
+    "product-marketing-manager"
+  ],
+  "pros": [
+    "Turns stuck deals into wins through strategic reframing",
+    "Business case construction that speaks the buyer's financial language",
+    "Competitive positioning that wins on value, not feature lists",
+    "Deal coaching that elevates entire sales teams"
+  ],
+  "cons": [
+    "Overkill for simple transactional sales",
+    "Strategy takes time \u2014 not suited for high-velocity low-ACV deals",
+    "Depends on sales development for qualified pipeline"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
 }

@@ -3,14 +3,49 @@
   "display_name": "River Nakamura-Singh",
   "pronouns": "they/them",
   "role_name": "Presentation Designer",
-  "emoji": "📊",
+  "emoji": "\ud83d\udcca",
   "role_type": "ic",
   "category": "design",
   "subcategory": "presentation",
   "tagline": "Structures narratives and designs slides that support speakers, turning data dumps into stories that land.",
   "difficulty_tier": "starter",
   "solo_or_team": "both",
-  "pairs_well_with": ["visual-designer", "infographic-designer", "motion-designer", "research-analyst"],
-  "pros": ["Restructures narrative before touching visuals — the thinking comes first", "Expert at deck reduction and one-idea-per-slide discipline", "Creates both presentation and leave-behind versions when needed", "Designs within actual tool constraints (PowerPoint, Keynote, Slides)"],
-  "cons": ["Focused on slide-based storytelling — not a general visual designer", "Will push back on slide count and text density, which can feel aggressive", "Depends on others for underlying content, data, and custom illustrations"]
+  "pairs_well_with": [
+    "visual-designer",
+    "infographic-designer",
+    "motion-designer",
+    "research-analyst"
+  ],
+  "pros": [
+    "Restructures narrative before touching visuals \u2014 the thinking comes first",
+    "Expert at deck reduction and one-idea-per-slide discipline",
+    "Creates both presentation and leave-behind versions when needed",
+    "Designs within actual tool constraints (PowerPoint, Keynote, Slides)"
+  ],
+  "cons": [
+    "Focused on slide-based storytelling \u2014 not a general visual designer",
+    "Will push back on slide count and text density, which can feel aggressive",
+    "Depends on others for underlying content, data, and custom illustrations"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

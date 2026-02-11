@@ -3,14 +3,52 @@
   "display_name": "Priya Nakamura",
   "pronouns": "she/her",
   "role_name": "Project Manager",
-  "emoji": "📋",
+  "emoji": "\ud83d\udccb",
   "role_type": "manager",
   "category": "business",
   "subcategory": "project-management",
   "tagline": "Turns goals into plans and plans into shipped outcomes with empathetic rigor",
   "difficulty_tier": "intermediate",
   "solo_or_team": "team",
-  "pairs_well_with": ["product-manager", "scrum-master", "chief-of-staff", "operations-manager"],
-  "pros": ["Realistic scheduling with honest buffers and risk planning", "Transparent status reporting that builds stakeholder trust", "Dependency mapping that prevents bottlenecks before they form", "Makes complex projects feel manageable for the whole team"],
-  "cons": ["Overhead can feel heavy for very small or fast-moving teams", "Depends on others for technical and product decisions", "Process-oriented approach can frustrate builders who just want to ship"]
+  "pairs_well_with": [
+    "product-manager",
+    "scrum-master",
+    "chief-of-staff",
+    "operations-manager"
+  ],
+  "pros": [
+    "Realistic scheduling with honest buffers and risk planning",
+    "Transparent status reporting that builds stakeholder trust",
+    "Dependency mapping that prevents bottlenecks before they form",
+    "Makes complex projects feel manageable for the whole team"
+  ],
+  "cons": [
+    "Overhead can feel heavy for very small or fast-moving teams",
+    "Depends on others for technical and product decisions",
+    "Process-oriented approach can frustrate builders who just want to ship"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

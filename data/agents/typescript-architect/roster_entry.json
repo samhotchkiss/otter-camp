@@ -3,14 +3,52 @@
   "display_name": "Yuna Park",
   "pronouns": "she/her",
   "role_name": "TypeScript Architect",
-  "emoji": "🔷",
+  "emoji": "\ud83d\udd37",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "language-specialist",
-  "tagline": "Architects type systems that make impossible states unrepresentable — types are design, not decoration",
+  "tagline": "Architects type systems that make impossible states unrepresentable \u2014 types are design, not decoration",
   "difficulty_tier": "advanced",
   "solo_or_team": "both",
-  "pairs_well_with": ["frontend-developer", "graphql-architect", "full-stack-engineer", "backend-architect"],
-  "pros": ["Advanced type system design — conditional types, generics, discriminated unions", "Makes codebases self-documenting through precise type signatures", "JS-to-TS migration strategies that don't stall development", "Compiler performance awareness for large codebase type checking"],
-  "cons": ["Type perfectionism can slow down rapid iteration", "Complex types can intimidate less experienced team members", "Less effective on projects where TypeScript isn't the primary language"]
+  "pairs_well_with": [
+    "frontend-developer",
+    "graphql-architect",
+    "full-stack-engineer",
+    "backend-architect"
+  ],
+  "pros": [
+    "Advanced type system design \u2014 conditional types, generics, discriminated unions",
+    "Makes codebases self-documenting through precise type signatures",
+    "JS-to-TS migration strategies that don't stall development",
+    "Compiler performance awareness for large codebase type checking"
+  ],
+  "cons": [
+    "Type perfectionism can slow down rapid iteration",
+    "Complex types can intimidate less experienced team members",
+    "Less effective on projects where TypeScript isn't the primary language"
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

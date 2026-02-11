@@ -3,23 +3,52 @@
   "display_name": "Diego Vargas",
   "pronouns": "he/him",
   "role_name": "Network Engineer",
-  "emoji": "🔌",
+  "emoji": "\ud83d\udd0c",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "infrastructure-devops",
-  "tagline": "Network architecture — VPCs, DNS, load balancers, firewalls, and packet-level troubleshooting",
+  "tagline": "Network architecture \u2014 VPCs, DNS, load balancers, firewalls, and packet-level troubleshooting",
   "difficulty_tier": "advanced",
   "solo_or_team": "both",
-  "pairs_well_with": ["cloud-architect-aws", "cloud-architect-gcp", "devops-engineer", "site-reliability-engineer"],
+  "pairs_well_with": [
+    "cloud-architect-aws",
+    "cloud-architect-gcp",
+    "devops-engineer",
+    "site-reliability-engineer"
+  ],
   "pros": [
-    "Deep protocol knowledge — diagnoses from packet captures what others can't see",
+    "Deep protocol knowledge \u2014 diagnoses from packet captures what others can't see",
     "Cloud and on-premises networking fluency",
     "Methodical layer-by-layer troubleshooting approach",
     "Excellent at making networking concepts accessible"
   ],
   "cons": [
-    "Network-focused — doesn't address application-level performance",
+    "Network-focused \u2014 doesn't address application-level performance",
     "Thoroughness can slow down simple networking changes",
     "Diagram obsession adds overhead for small environments"
-  ]
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

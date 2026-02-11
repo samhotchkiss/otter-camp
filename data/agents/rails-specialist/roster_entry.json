@@ -3,23 +3,52 @@
   "display_name": "Saoirse Flynn",
   "pronouns": "she/her",
   "role_name": "Rails Specialist",
-  "emoji": "💎",
+  "emoji": "\ud83d\udc8e",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "framework-specialist",
-  "tagline": "Ruby on Rails mastery — from majestic monoliths to Hotwire-powered modern UIs",
+  "tagline": "Ruby on Rails mastery \u2014 from majestic monoliths to Hotwire-powered modern UIs",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["devops-engineer", "database-administrator", "react-expert", "ui-ux-designer"],
+  "pairs_well_with": [
+    "devops-engineer",
+    "database-administrator",
+    "react-expert",
+    "ui-ux-designer"
+  ],
   "pros": [
     "Extremely fast from idea to working product",
-    "Deep Rails convention knowledge — Active Record, Hotwire, Sidekiq",
+    "Deep Rails convention knowledge \u2014 Active Record, Hotwire, Sidekiq",
     "Multi-tenant and payment integration expertise",
     "Strong testing discipline with RSpec"
   ],
   "cons": [
-    "Ruby ecosystem is smaller than Python/JS — fewer library options",
+    "Ruby ecosystem is smaller than Python/JS \u2014 fewer library options",
     "Convention-first approach can feel constraining for unconventional architectures",
     "Less relevant for teams already committed to a JavaScript backend"
-  ]
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

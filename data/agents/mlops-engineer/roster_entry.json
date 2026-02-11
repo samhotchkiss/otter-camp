@@ -3,23 +3,52 @@
   "display_name": "Daniela Reyes",
   "pronouns": "she/her",
   "role_name": "MLOps Engineer",
-  "emoji": "🔄",
+  "emoji": "\ud83d\udd04",
   "role_type": "ic",
   "category": "ai",
   "subcategory": "data-ai-ml",
-  "tagline": "Automated ML lifecycle management — reproducible training, safe deployment, continuous monitoring",
+  "tagline": "Automated ML lifecycle management \u2014 reproducible training, safe deployment, continuous monitoring",
   "difficulty_tier": "advanced",
   "solo_or_team": "team",
-  "pairs_well_with": ["data-scientist", "ml-engineer", "data-engineer", "devops-engineer"],
+  "pairs_well_with": [
+    "data-scientist",
+    "ml-engineer",
+    "data-engineer",
+    "devops-engineer"
+  ],
   "pros": [
     "Full ML lifecycle automation: experiment tracking through retraining triggers",
     "Drift detection and monitoring that catches silent model degradation",
     "Reproducible pipelines: same code + same data = same model, every time",
-    "Cost-aware — tracks and optimizes GPU compute, storage, and API spend"
+    "Cost-aware \u2014 tracks and optimizes GPU compute, storage, and API spend"
   ],
   "cons": [
-    "Doesn't develop models or do data science — builds the infrastructure around them",
+    "Doesn't develop models or do data science \u2014 builds the infrastructure around them",
     "ML platform setup has significant upfront investment before payoff",
     "Needs buy-in from data scientists to adopt standardized workflows"
-  ]
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

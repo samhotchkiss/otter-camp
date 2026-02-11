@@ -3,14 +3,51 @@
   "display_name": "Riley Sato",
   "pronouns": "they/them",
   "role_name": "Content Generalist",
-  "emoji": "✏️",
+  "emoji": "\u270f\ufe0f",
   "role_type": "ic",
   "category": "content",
   "subcategory": "editorial-brand",
   "tagline": "Versatile content support spanning writing, editing, brand voice, and editorial planning",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["copywriter", "seo-specialist", "brand-voice-manager", "content-strategist"],
-  "pros": ["Breadth across writing, editing, strategy, and brand voice", "Efficient content repurposing across formats", "Strong editorial calendar management", "Effective at routing to the right specialist"],
-  "cons": ["Generalist depth — specialist tasks need handoff", "May prioritize shipping over polish", "Not a substitute for dedicated copywriting or SEO expertise"]
+  "pairs_well_with": [
+    "copywriter",
+    "seo-specialist",
+    "brand-voice-manager",
+    "content-strategist"
+  ],
+  "pros": [
+    "Breadth across writing, editing, strategy, and brand voice",
+    "Efficient content repurposing across formats",
+    "Strong editorial calendar management",
+    "Effective at routing to the right specialist"
+  ],
+  "cons": [
+    "Generalist depth \u2014 specialist tasks need handoff",
+    "May prioritize shipping over polish",
+    "Not a substitute for dedicated copywriting or SEO expertise"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
 }

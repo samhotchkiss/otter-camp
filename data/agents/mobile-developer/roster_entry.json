@@ -3,14 +3,52 @@
   "display_name": "Kai Nakamura",
   "pronouns": "they/them",
   "role_name": "Mobile Developer",
-  "emoji": "📱",
+  "emoji": "\ud83d\udcf1",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "core-development",
-  "tagline": "Builds mobile apps that respect the device — offline-first, platform-native, performance-obsessed",
+  "tagline": "Builds mobile apps that respect the device \u2014 offline-first, platform-native, performance-obsessed",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["frontend-developer", "swift-developer", "ui-ux-engineer", "api-designer"],
-  "pros": ["Cross-platform and native expertise — knows when each is right", "Offline-first architecture with robust sync strategies", "Deep knowledge of platform guidelines and app store requirements", "Tests on real devices across screen sizes and OS versions"],
-  "cons": ["Cross-platform work sometimes compromises platform-specific polish", "Mobile CI/CD complexity can slow iteration speed", "Less effective on purely web-based projects"]
+  "pairs_well_with": [
+    "frontend-developer",
+    "swift-developer",
+    "ui-ux-engineer",
+    "api-designer"
+  ],
+  "pros": [
+    "Cross-platform and native expertise \u2014 knows when each is right",
+    "Offline-first architecture with robust sync strategies",
+    "Deep knowledge of platform guidelines and app store requirements",
+    "Tests on real devices across screen sizes and OS versions"
+  ],
+  "cons": [
+    "Cross-platform work sometimes compromises platform-specific polish",
+    "Mobile CI/CD complexity can slow iteration speed",
+    "Less effective on purely web-based projects"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

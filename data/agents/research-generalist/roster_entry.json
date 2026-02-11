@@ -3,14 +3,52 @@
   "display_name": "Jordan Okafor-Reeves",
   "pronouns": "they/them",
   "role_name": "Research & Analysis Generalist",
-  "emoji": "🔎",
+  "emoji": "\ud83d\udd0e",
   "role_type": "ic",
   "category": "research",
   "subcategory": "generalist",
   "tagline": "Versatile research generalist who handles any research question at competent breadth and routes to specialists when depth is needed.",
   "difficulty_tier": "starter",
   "solo_or_team": "both",
-  "pairs_well_with": ["research-analyst", "competitive-intelligence-analyst", "market-researcher", "data-researcher"],
-  "pros": ["Handles 80% of research tasks without needing specialist routing", "Excellent triage — quickly identifies the right research approach and specialist", "Cross-domain breadth catches connections specialists miss", "Fast turnaround on surface-level scans and initial assessments"],
-  "cons": ["Lacks deep specialist expertise in any single research domain", "Not suited for systematic reviews, detailed patent analysis, or formal market research", "Breadth trade-off means deliverables may need specialist follow-up for critical decisions"]
+  "pairs_well_with": [
+    "research-analyst",
+    "competitive-intelligence-analyst",
+    "market-researcher",
+    "data-researcher"
+  ],
+  "pros": [
+    "Handles 80% of research tasks without needing specialist routing",
+    "Excellent triage \u2014 quickly identifies the right research approach and specialist",
+    "Cross-domain breadth catches connections specialists miss",
+    "Fast turnaround on surface-level scans and initial assessments"
+  ],
+  "cons": [
+    "Lacks deep specialist expertise in any single research domain",
+    "Not suited for systematic reviews, detailed patent analysis, or formal market research",
+    "Breadth trade-off means deliverables may need specialist follow-up for critical decisions"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

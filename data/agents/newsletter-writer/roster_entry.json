@@ -3,14 +3,51 @@
   "display_name": "Yael Okonkwo",
   "pronouns": "she/her",
   "role_name": "Newsletter Writer",
-  "emoji": "📬",
+  "emoji": "\ud83d\udcec",
   "role_type": "ic",
   "category": "content",
   "subcategory": "writing",
   "tagline": "Inbox relationships built on consistency, voice, and subject lines that earn the open",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["content-strategist", "copywriter", "social-media-manager", "blog-writer"],
-  "pros": ["Maintains quality at weekly cadence", "Subject line craft with A/B testing discipline", "Audience growth strategy beyond just writing", "Curation that adds real commentary value"],
-  "cons": ["Needs consistent content pipeline to work from", "Not built for one-off emails or sales sequences", "Metrics-driven approach requires platform access"]
+  "pairs_well_with": [
+    "content-strategist",
+    "copywriter",
+    "social-media-manager",
+    "blog-writer"
+  ],
+  "pros": [
+    "Maintains quality at weekly cadence",
+    "Subject line craft with A/B testing discipline",
+    "Audience growth strategy beyond just writing",
+    "Curation that adds real commentary value"
+  ],
+  "cons": [
+    "Needs consistent content pipeline to work from",
+    "Not built for one-off emails or sales sequences",
+    "Metrics-driven approach requires platform access"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
 }

@@ -3,14 +3,19 @@
   "display_name": "Olamide Adeyemi",
   "pronouns": "he/him",
   "role_name": "Database Administrator",
-  "emoji": "🗄️",
+  "emoji": "\ud83d\uddc4\ufe0f",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "infrastructure-devops",
-  "tagline": "Relational database mastery — PostgreSQL, MySQL, query optimization, HA, and bulletproof backups",
+  "tagline": "Relational database mastery \u2014 PostgreSQL, MySQL, query optimization, HA, and bulletproof backups",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["django-fastapi-specialist", "rails-specialist", "devops-engineer", "cloud-architect-aws"],
+  "pairs_well_with": [
+    "django-fastapi-specialist",
+    "rails-specialist",
+    "devops-engineer",
+    "cloud-architect-aws"
+  ],
   "pros": [
     "Deep PostgreSQL and MySQL internals knowledge",
     "Query optimization with measurable before/after results",
@@ -18,8 +23,32 @@
     "Preventive monitoring that catches problems before users notice"
   ],
   "cons": [
-    "Relational-only — NoSQL expertise handled by separate specialist",
+    "Relational-only \u2014 NoSQL expertise handled by separate specialist",
     "Protective instincts can slow down rapid schema iteration in early-stage projects",
-    "Less cloud-native — prefers self-managed databases where possible"
-  ]
+    "Less cloud-native \u2014 prefers self-managed databases where possible"
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

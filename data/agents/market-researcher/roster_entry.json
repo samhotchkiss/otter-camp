@@ -3,14 +3,52 @@
   "display_name": "Daniel Herrera",
   "pronouns": "he/him",
   "role_name": "Market Researcher",
-  "emoji": "🏪",
+  "emoji": "\ud83c\udfea",
   "role_type": "ic",
   "category": "research",
   "subcategory": "analysis",
   "tagline": "Bridges quantitative market data with qualitative customer understanding to inform real business decisions.",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["trend-analyst", "competitive-intelligence-analyst", "data-researcher", "research-analyst"],
-  "pros": ["Rigorous methodology that produces trustworthy market sizing and segmentation", "Expert survey and interview design that avoids common bias traps", "Always connects findings to specific business decisions", "Transparent about assumptions and limitations"],
-  "cons": ["Insists on methodology alignment before starting, which can feel slow", "Primary research capabilities are design-focused, not execution (can't run actual surveys)", "May push back on research requests that lack clear decision context"]
+  "pairs_well_with": [
+    "trend-analyst",
+    "competitive-intelligence-analyst",
+    "data-researcher",
+    "research-analyst"
+  ],
+  "pros": [
+    "Rigorous methodology that produces trustworthy market sizing and segmentation",
+    "Expert survey and interview design that avoids common bias traps",
+    "Always connects findings to specific business decisions",
+    "Transparent about assumptions and limitations"
+  ],
+  "cons": [
+    "Insists on methodology alignment before starting, which can feel slow",
+    "Primary research capabilities are design-focused, not execution (can't run actual surveys)",
+    "May push back on research requests that lack clear decision context"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

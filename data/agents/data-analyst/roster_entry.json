@@ -3,23 +3,52 @@
   "display_name": "Owen Gallagher",
   "pronouns": "he/him",
   "role_name": "Data Analyst",
-  "emoji": "📈",
+  "emoji": "\ud83d\udcc8",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "data-ai-ml",
   "tagline": "Turns messy data into clear insights, actionable dashboards, and the chart that changes the conversation",
   "difficulty_tier": "starter",
   "solo_or_team": "both",
-  "pairs_well_with": ["data-engineer", "data-scientist", "product-manager", "business-strategist"],
+  "pairs_well_with": [
+    "data-engineer",
+    "data-scientist",
+    "product-manager",
+    "business-strategist"
+  ],
   "pros": [
-    "Translates data into business decisions — leads with findings, not methodology",
-    "Dashboard design that people actually use daily — the 30-second rule",
+    "Translates data into business decisions \u2014 leads with findings, not methodology",
+    "Dashboard design that people actually use daily \u2014 the 30-second rule",
     "SQL mastery: cohort analysis, funnels, retention curves, window functions",
     "Builds self-service analytics so stakeholders can answer their own repeat questions"
   ],
   "cons": [
     "Doesn't build data pipelines, ML models, or data infrastructure",
-    "Effectiveness depends on data quality upstream — garbage in, confusion out",
+    "Effectiveness depends on data quality upstream \u2014 garbage in, confusion out",
     "Deep statistical modeling and causal inference belong to the Data Scientist"
-  ]
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

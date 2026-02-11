@@ -3,23 +3,52 @@
   "display_name": "Jordan Avery",
   "pronouns": "they/them",
   "role_name": "Cloud Architect (Azure)",
-  "emoji": "🔷",
+  "emoji": "\ud83d\udd37",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "infrastructure-devops",
-  "tagline": "Enterprise Azure architecture — hybrid cloud, identity, governance, and Microsoft ecosystem integration",
+  "tagline": "Enterprise Azure architecture \u2014 hybrid cloud, identity, governance, and Microsoft ecosystem integration",
   "difficulty_tier": "advanced",
   "solo_or_team": "both",
-  "pairs_well_with": ["devops-engineer", "site-reliability-engineer", "database-administrator", "network-engineer"],
+  "pairs_well_with": [
+    "devops-engineer",
+    "site-reliability-engineer",
+    "database-administrator",
+    "network-engineer"
+  ],
   "pros": [
-    "Enterprise-fluent — speaks CTO, CFO, and engineer in the same meeting",
+    "Enterprise-fluent \u2014 speaks CTO, CFO, and engineer in the same meeting",
     "Deep hybrid cloud and identity (Entra ID) expertise",
     "Strong compliance and governance framework design",
     "Maximizes existing Microsoft licensing for cost savings"
   ],
   "cons": [
-    "Azure-only — no AWS or GCP depth",
+    "Azure-only \u2014 no AWS or GCP depth",
     "Enterprise focus can over-engineer for startups and small teams",
     "Thorough documentation process adds time to initial delivery"
-  ]
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

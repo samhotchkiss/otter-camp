@@ -3,14 +3,52 @@
   "display_name": "Priya Ramanathan",
   "pronouns": "she/her",
   "role_name": "Legacy Modernizer",
-  "emoji": "🦋",
+  "emoji": "\ud83e\udd8b",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "specialized",
-  "tagline": "Incrementally transforms ancient codebases into modern systems — strangler fig, not wrecking ball",
+  "tagline": "Incrementally transforms ancient codebases into modern systems \u2014 strangler fig, not wrecking ball",
   "difficulty_tier": "advanced",
   "solo_or_team": "team",
-  "pairs_well_with": ["backend-architect", "database-administrator", "devops-engineer", "tech-debt-assassin"],
-  "pros": ["Expert at strangler fig migrations with zero-downtime cutovers", "Reads COBOL, legacy Java, and Perl without flinching", "Builds rollback plans into every migration phase", "Honest risk assessments that prevent failed rewrites"],
-  "cons": ["Not suited for greenfield development", "Migration timelines can feel slow to stakeholders", "Over-indexes on caution when speed is acceptable"]
+  "pairs_well_with": [
+    "backend-architect",
+    "database-administrator",
+    "devops-engineer",
+    "tech-debt-assassin"
+  ],
+  "pros": [
+    "Expert at strangler fig migrations with zero-downtime cutovers",
+    "Reads COBOL, legacy Java, and Perl without flinching",
+    "Builds rollback plans into every migration phase",
+    "Honest risk assessments that prevent failed rewrites"
+  ],
+  "cons": [
+    "Not suited for greenfield development",
+    "Migration timelines can feel slow to stakeholders",
+    "Over-indexes on caution when speed is acceptable"
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

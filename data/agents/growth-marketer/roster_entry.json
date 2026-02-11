@@ -3,14 +3,52 @@
   "display_name": "Diego Reyes",
   "pronouns": "he/him",
   "role_name": "Growth Marketer",
-  "emoji": "🚀",
+  "emoji": "\ud83d\ude80",
   "role_type": "ic",
   "category": "business",
   "subcategory": "marketing",
   "tagline": "Builds growth systems through disciplined experimentation and full-funnel optimization",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["email-marketer", "paid-ads-manager", "product-manager", "product-marketing-manager"],
-  "pros": ["Structured experimentation that turns assumptions into proven growth levers", "Full-funnel thinking from acquisition through retention and referral", "Channel strategy based on CAC, LTV, and scalability — not guesswork", "Institutional experiment knowledge that compounds over time"],
-  "cons": ["Experimentation requires patience — meaningful results take weeks", "Statistical rigor needs sufficient traffic volume", "Growth tactics without brand strategy can feel fragmented"]
+  "pairs_well_with": [
+    "email-marketer",
+    "paid-ads-manager",
+    "product-manager",
+    "product-marketing-manager"
+  ],
+  "pros": [
+    "Structured experimentation that turns assumptions into proven growth levers",
+    "Full-funnel thinking from acquisition through retention and referral",
+    "Channel strategy based on CAC, LTV, and scalability \u2014 not guesswork",
+    "Institutional experiment knowledge that compounds over time"
+  ],
+  "cons": [
+    "Experimentation requires patience \u2014 meaningful results take weeks",
+    "Statistical rigor needs sufficient traffic volume",
+    "Growth tactics without brand strategy can feel fragmented"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

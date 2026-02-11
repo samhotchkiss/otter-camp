@@ -3,14 +3,51 @@
   "display_name": "Marisol Vega",
   "pronouns": "she/her",
   "role_name": "Agent Relations Expert",
-  "emoji": "🤝",
+  "emoji": "\ud83e\udd1d",
   "role_type": "manager",
   "category": "hr",
   "subcategory": "team-management",
   "tagline": "Builds your agent team, makes sure it works, and coaches you on getting the most from it",
   "difficulty_tier": "starter",
   "solo_or_team": "both",
-  "pairs_well_with": ["process-management-expert", "chief-of-staff", "product-manager"],
-  "pros": ["Knows every agent in the catalog and their real-world strengths", "Team composition that avoids overlap and friction", "Onboarding that actually sets agents up to succeed", "Coaches users on working effectively with AI agents"],
-  "cons": ["Won't do the agents' jobs for you — recommends, doesn't execute", "Can be protective of team balance — may push back on hiring sprees", "Needs clear project context to give good recommendations"]
+  "pairs_well_with": [
+    "process-management-expert",
+    "chief-of-staff",
+    "product-manager"
+  ],
+  "pros": [
+    "Knows every agent in the catalog and their real-world strengths",
+    "Team composition that avoids overlap and friction",
+    "Onboarding that actually sets agents up to succeed",
+    "Coaches users on working effectively with AI agents"
+  ],
+  "cons": [
+    "Won't do the agents' jobs for you \u2014 recommends, doesn't execute",
+    "Can be protective of team balance \u2014 may push back on hiring sprees",
+    "Needs clear project context to give good recommendations"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
 }

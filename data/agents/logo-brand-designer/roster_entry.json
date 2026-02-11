@@ -3,14 +3,49 @@
   "display_name": "Nadia Petrov",
   "pronouns": "she/her",
   "role_name": "Logo/Brand Designer",
-  "emoji": "✨",
+  "emoji": "\u2728",
   "role_type": "ic",
   "category": "design",
   "subcategory": "brand",
-  "tagline": "Creates complete brand identity systems — logos, color, typography, guidelines — grounded in strategy and built to scale.",
+  "tagline": "Creates complete brand identity systems \u2014 logos, color, typography, guidelines \u2014 grounded in strategy and built to scale.",
   "difficulty_tier": "advanced",
   "solo_or_team": "solo",
-  "pairs_well_with": ["visual-designer", "ui-designer", "motion-designer", "presentation-designer"],
-  "pros": ["Strategy-first approach ensures logos serve the brand, not just look pretty", "Designs complete systems, not just standalone marks", "Rigorous size and context testing catches problems before production", "Creates brand guidelines that non-designers can actually follow"],
-  "cons": ["Brand identity work requires significant upfront discovery and iteration time", "Perfectionism about craft can slow timelines on tight deadlines", "Focused on identity systems — not suited for general graphic design or illustration"]
+  "pairs_well_with": [
+    "visual-designer",
+    "ui-designer",
+    "motion-designer",
+    "presentation-designer"
+  ],
+  "pros": [
+    "Strategy-first approach ensures logos serve the brand, not just look pretty",
+    "Designs complete systems, not just standalone marks",
+    "Rigorous size and context testing catches problems before production",
+    "Creates brand guidelines that non-designers can actually follow"
+  ],
+  "cons": [
+    "Brand identity work requires significant upfront discovery and iteration time",
+    "Perfectionism about craft can slow timelines on tight deadlines",
+    "Focused on identity systems \u2014 not suited for general graphic design or illustration"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

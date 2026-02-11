@@ -3,23 +3,52 @@
   "display_name": "Sora Nakamura",
   "pronouns": "she/her",
   "role_name": "Platform Engineer",
-  "emoji": "🏗️",
+  "emoji": "\ud83c\udfd7\ufe0f",
   "role_type": "ic",
   "category": "engineering",
   "subcategory": "infra-devops",
   "tagline": "Internal developer platforms, self-service infra, golden paths and guardrails",
   "difficulty_tier": "advanced",
   "solo_or_team": "both",
-  "pairs_well_with": ["devops-engineer", "deployment-engineer", "backend-architect", "security-engineer"],
+  "pairs_well_with": [
+    "devops-engineer",
+    "deployment-engineer",
+    "backend-architect",
+    "security-engineer"
+  ],
   "pros": [
     "Treats platform as a product with roadmaps, adoption metrics, and user research",
     "Excellent documentation and developer onboarding design",
     "Strong Backstage, Terraform module, and Crossplane expertise",
-    "Empathetic — understands developer pain firsthand"
+    "Empathetic \u2014 understands developer pain firsthand"
   ],
   "cons": [
-    "Won't build without validated demand — can feel slow for urgent one-off requests",
+    "Won't build without validated demand \u2014 can feel slow for urgent one-off requests",
     "Focused on platform-wide solutions, not individual service needs",
     "Can over-index on adoption metrics at the expense of depth"
-  ]
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
 }

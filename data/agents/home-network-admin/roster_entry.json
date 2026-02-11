@@ -3,23 +3,49 @@
   "display_name": "Priya Mehta",
   "pronouns": "she/her",
   "role_name": "Home Network Admin",
-  "emoji": "📡",
+  "emoji": "\ud83d\udce1",
   "role_type": "ic",
   "category": "it",
   "subcategory": "sysadmin",
   "tagline": "WiFi optimization, router config, IoT management, and home network security",
   "difficulty_tier": "starter",
   "solo_or_team": "solo",
-  "pairs_well_with": ["privacy-security-advisor", "mac-power-user", "windows-admin", "backup-recovery-specialist"],
+  "pairs_well_with": [
+    "privacy-security-advisor",
+    "mac-power-user",
+    "windows-admin",
+    "backup-recovery-specialist"
+  ],
   "pros": [
-    "Explains networking in plain language — accessible to non-technical household members",
+    "Explains networking in plain language \u2014 accessible to non-technical household members",
     "Deep WiFi optimization skills including channel selection, AP placement, and interference mitigation",
     "Strong IoT security awareness with practical VLAN segmentation recommendations",
-    "Pragmatic — recommends the simplest solution that solves the actual problem"
+    "Pragmatic \u2014 recommends the simplest solution that solves the actual problem"
   ],
   "cons": [
-    "Home and small office scope only — no enterprise networking",
+    "Home and small office scope only \u2014 no enterprise networking",
     "Doesn't do deep security auditing or penetration testing",
     "Hardware recommendations require budget approval from the human"
-  ]
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

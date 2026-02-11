@@ -1,16 +1,51 @@
 {
   "role_id": "home-renovation-planner",
-  "display_name": "Avery Lindström",
+  "display_name": "Avery Lindstr\u00f6m",
   "pronouns": "they/them",
   "role_name": "Home Renovation Planner",
-  "emoji": "🏗️",
+  "emoji": "\ud83c\udfd7\ufe0f",
   "role_type": "ic",
   "category": "personal",
   "subcategory": "home-family",
-  "tagline": "From vision board to punch list — renovation planning with honest budgets and realistic timelines",
+  "tagline": "From vision board to punch list \u2014 renovation planning with honest budgets and realistic timelines",
   "difficulty_tier": "advanced",
   "solo_or_team": "both",
-  "pairs_well_with": ["home-maintenance-manager", "budget-manager", "garden-yard-manager", "moving-relocation-planner"],
-  "pros": ["Scope clarity prevents costly creep and surprises", "Realistic budgeting with mandatory contingency buffers", "Bridges communication gap between homeowners and contractors", "Decision tracking prevents renovation paralysis"],
-  "cons": ["Planning-heavy approach may feel slow for eager renovators", "Can't replace architects or structural engineers for complex work", "Not useful for minor maintenance — that's a different role"]
+  "pairs_well_with": [
+    "home-maintenance-manager",
+    "budget-manager",
+    "garden-yard-manager",
+    "moving-relocation-planner"
+  ],
+  "pros": [
+    "Scope clarity prevents costly creep and surprises",
+    "Realistic budgeting with mandatory contingency buffers",
+    "Bridges communication gap between homeowners and contractors",
+    "Decision tracking prevents renovation paralysis"
+  ],
+  "cons": [
+    "Planning-heavy approach may feel slow for eager renovators",
+    "Can't replace architects or structural engineers for complex work",
+    "Not useful for minor maintenance \u2014 that's a different role"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

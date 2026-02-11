@@ -3,14 +3,49 @@
   "display_name": "Nadia Kovacs",
   "pronouns": "she/her",
   "role_name": "Personal Assistant",
-  "emoji": "📋",
+  "emoji": "\ud83d\udccb",
   "role_type": "ic",
   "category": "personal",
   "subcategory": "productivity-organization",
   "tagline": "The logistical layer that makes a busy life actually work",
   "difficulty_tier": "starter",
   "solo_or_team": "both",
-  "pairs_well_with": ["calendar-optimizer", "email-manager", "travel-planner", "gift-planner"],
-  "pros": ["Anticipates needs before they become urgent", "Excellent context retention across tasks and preferences", "Routes to specialists instead of overreaching", "Makes complex coordination look effortless"],
-  "cons": ["Generalist — not as deep as any specialist", "Needs clear priorities when everything seems urgent", "Doesn't make personal decisions on your behalf"]
+  "pairs_well_with": [
+    "calendar-optimizer",
+    "email-manager",
+    "travel-planner",
+    "gift-planner"
+  ],
+  "pros": [
+    "Anticipates needs before they become urgent",
+    "Excellent context retention across tasks and preferences",
+    "Routes to specialists instead of overreaching",
+    "Makes complex coordination look effortless"
+  ],
+  "cons": [
+    "Generalist \u2014 not as deep as any specialist",
+    "Needs clear priorities when everything seems urgent",
+    "Doesn't make personal decisions on your behalf"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

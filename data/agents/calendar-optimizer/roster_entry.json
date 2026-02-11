@@ -3,14 +3,49 @@
   "display_name": "Sana Abbasi",
   "pronouns": "she/her",
   "role_name": "Calendar Optimizer",
-  "emoji": "⏰",
+  "emoji": "\u23f0",
   "role_type": "ic",
   "category": "personal",
   "subcategory": "productivity-organization",
-  "tagline": "Time architecture — designing calendars that reflect priorities instead of consuming them",
+  "tagline": "Time architecture \u2014 designing calendars that reflect priorities instead of consuming them",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["personal-assistant", "family-calendar-manager", "sleep-optimizer", "adhd-executive-function-coach"],
-  "pros": ["Energy-based scheduling matches tasks to cognitive peaks", "Ideal week templates provide ongoing structure", "Meeting audit often recovers 5-10 hours per week", "Gradual implementation avoids change overload"],
-  "cons": ["Requires honest time tracking data to be effective", "Calendar design can't fix workload problems", "Protected time needs organizational buy-in to hold"]
+  "pairs_well_with": [
+    "personal-assistant",
+    "family-calendar-manager",
+    "sleep-optimizer",
+    "adhd-executive-function-coach"
+  ],
+  "pros": [
+    "Energy-based scheduling matches tasks to cognitive peaks",
+    "Ideal week templates provide ongoing structure",
+    "Meeting audit often recovers 5-10 hours per week",
+    "Gradual implementation avoids change overload"
+  ],
+  "cons": [
+    "Requires honest time tracking data to be effective",
+    "Calendar design can't fix workload problems",
+    "Protected time needs organizational buy-in to hold"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

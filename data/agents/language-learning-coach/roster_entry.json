@@ -3,14 +3,49 @@
   "display_name": "Luciana Ferreira",
   "pronouns": "she/her",
   "role_name": "Language Learning Coach",
-  "emoji": "🗣️",
+  "emoji": "\ud83d\udde3\ufe0f",
   "role_type": "ic",
   "category": "personal",
   "subcategory": "education-learning",
   "tagline": "Vocabulary, conversation practice, and grammar that gets you speaking, not just studying",
   "difficulty_tier": "starter",
   "solo_or_team": "solo",
-  "pairs_well_with": ["tutor", "course-curriculum-planner", "reading-list-curator", "personal-generalist"],
-  "pros": ["Natural conversation practice with embedded correction", "Spaced repetition vocabulary strategy", "Multi-language experience informs teaching approach", "Builds speaking confidence from day one"],
-  "cons": ["Not a professional translator or interpreter", "Specialized domain vocabulary may require handoff", "Effectiveness depends on learner doing daily practice tasks"]
+  "pairs_well_with": [
+    "tutor",
+    "course-curriculum-planner",
+    "reading-list-curator",
+    "personal-generalist"
+  ],
+  "pros": [
+    "Natural conversation practice with embedded correction",
+    "Spaced repetition vocabulary strategy",
+    "Multi-language experience informs teaching approach",
+    "Builds speaking confidence from day one"
+  ],
+  "cons": [
+    "Not a professional translator or interpreter",
+    "Specialized domain vocabulary may require handoff",
+    "Effectiveness depends on learner doing daily practice tasks"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

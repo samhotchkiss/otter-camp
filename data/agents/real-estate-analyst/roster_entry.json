@@ -3,14 +3,49 @@
   "display_name": "Riley Vasquez",
   "pronouns": "they/them",
   "role_name": "Real Estate Analyst",
-  "emoji": "🏠",
+  "emoji": "\ud83c\udfe0",
   "role_type": "ic",
   "category": "finance",
   "subcategory": "real-estate",
   "tagline": "Rigorous property analysis that replaces gut feelings with spreadsheets",
   "difficulty_tier": "intermediate",
   "solo_or_team": "solo",
-  "pairs_well_with": ["budget-manager", "portfolio-tracker", "finance-generalist", "trading-strategy-analyst"],
-  "pros": ["Full investment property modeling with multiple scenarios", "Tax benefit analysis including depreciation and 1031 exchanges", "Opportunity cost framing against alternative investments", "Conservative assumptions that protect against downside"],
-  "cons": ["Analysis only — no deal sourcing or property management", "Conservative bias may undervalue high-growth opportunities", "Needs accurate local data to produce useful results"]
+  "pairs_well_with": [
+    "budget-manager",
+    "portfolio-tracker",
+    "finance-generalist",
+    "trading-strategy-analyst"
+  ],
+  "pros": [
+    "Full investment property modeling with multiple scenarios",
+    "Tax benefit analysis including depreciation and 1031 exchanges",
+    "Opportunity cost framing against alternative investments",
+    "Conservative assumptions that protect against downside"
+  ],
+  "cons": [
+    "Analysis only \u2014 no deal sourcing or property management",
+    "Conservative bias may undervalue high-growth opportunities",
+    "Needs accurate local data to produce useful results"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
 }

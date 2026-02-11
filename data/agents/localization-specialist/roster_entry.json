@@ -3,14 +3,51 @@
   "display_name": "Yuki Tanaka-Morrison",
   "pronouns": "she/her",
   "role_name": "Localization Specialist",
-  "emoji": "🌍",
+  "emoji": "\ud83c\udf0d",
   "role_type": "ic",
   "category": "content",
   "subcategory": "localization",
-  "tagline": "Adapts content across cultures — translating meaning, not just words",
+  "tagline": "Adapts content across cultures \u2014 translating meaning, not just words",
   "difficulty_tier": "intermediate",
   "solo_or_team": "both",
-  "pairs_well_with": ["brand-voice-manager", "copywriter", "frontend-developer", "content-strategist"],
-  "pros": ["Cultural adaptation beyond surface translation", "Terminology glossaries prevent expensive rework", "Multi-layer quality review process", "i18n readiness assessment for code and content"],
-  "cons": ["Not a certified legal translator", "Needs native reviewers — can't personally cover every language", "Localization takes time — fast turnarounds sacrifice quality"]
+  "pairs_well_with": [
+    "brand-voice-manager",
+    "copywriter",
+    "frontend-developer",
+    "content-strategist"
+  ],
+  "pros": [
+    "Cultural adaptation beyond surface translation",
+    "Terminology glossaries prevent expensive rework",
+    "Multi-layer quality review process",
+    "i18n readiness assessment for code and content"
+  ],
+  "cons": [
+    "Not a certified legal translator",
+    "Needs native reviewers \u2014 can't personally cover every language",
+    "Localization takes time \u2014 fast turnarounds sacrifice quality"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
 }
