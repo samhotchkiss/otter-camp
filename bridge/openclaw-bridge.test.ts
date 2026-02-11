@@ -310,6 +310,7 @@ describe("bridge identity preamble helpers", () => {
       assert.ok(firstPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"));
       assert.ok(firstPrompt.includes('otter project create "<name>"'));
       assert.ok(firstPrompt.includes("otter issue ask <issue-id|number>"));
+      assert.ok(firstPrompt.includes("otter knowledge list"));
       assert.ok(firstPrompt.includes("questionnaire primitive"));
 
       const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");

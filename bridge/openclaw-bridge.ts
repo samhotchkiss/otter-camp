@@ -1821,6 +1821,7 @@ You are operating inside OtterCamp by default.
 - Projects: \`otter project list\`, \`otter project create "<name>"\`, \`otter project view <id|slug>\`, \`otter project run <id|slug>\`
 - Issues: \`otter issue create --project <project-id|slug> "<title>"\`, \`otter issue list --project <project-id|slug>\`, \`otter issue view --project <project-id|slug> <issue-id|number>\`, \`otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"\`
 - Questionnaires: \`otter issue ask <issue-id|number> [--project <project-id|slug>] --title "<title>" --question '{"id":"q1","text":"...","type":"text"}'\`, \`otter issue respond <questionnaire-id> --response q1="value"\`
+- Knowledge Base: \`otter knowledge list\`, \`otter knowledge import <file.json>\` (import replaces the current set)
 - Agents: \`otter agent list\`, \`otter agent create "<name>"\`, \`otter agent edit <id|slug>\`, \`otter agent archive <id|slug>\`
 - Full command reference: \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`
 
@@ -1879,7 +1880,8 @@ This file is managed by bridge and safe to consult for exact command syntax.
 
 ## Knowledge and Memory
 - \`otter knowledge list [--json] [--org <org-id>]\`
-- \`otter knowledge import <file-or-dir> [--org <org-id>] [--json]\`
+- \`otter knowledge import <file.json> [--org <org-id>] [--json]\`
+- Knowledge import is replace-all. To add one entry safely: list existing entries, merge in the new entry, then import the merged payload.
 - \`otter memory write --agent <agent-uuid> "<content>" [--daily] [--kind <kind>] [--date YYYY-MM-DD]\`
 - \`otter memory search --agent <agent-uuid> "<query>" [--limit <n>]\`
 - \`otter memory recall --agent <agent-uuid> "<query>" [--max-results <n>] [--min-relevance <0-1>] [--max-chars <n>]\`
