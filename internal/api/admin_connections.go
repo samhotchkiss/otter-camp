@@ -180,14 +180,22 @@ func resolveAdminCommandAgentTarget(
 		}
 		syncSessionKey = strings.TrimSpace(syncSessionKey)
 		if syncSessionKey != "" {
-			return syncAgentID, syncSessionKey, nil
+			normalizedSessionKey, normalizeErr := normalizeDMDispatchSessionKey(ctx, db, workspaceID, syncAgentID, syncSessionKey)
+			if normalizeErr != nil {
+				return "", "", normalizeErr
+			}
+			return syncAgentID, normalizedSessionKey, nil
 		}
 		resolvedDMID, resolveErr := resolveDMThreadWorkspaceAgentID(ctx, db, workspaceID, syncAgentID)
 		if resolveErr != nil {
 			return "", "", resolveErr
 		}
 		if resolvedDMID != "" {
-			return resolvedDMID, canonicalChameleonSessionKey(resolvedDMID), nil
+			fallbackSessionKey, fallbackErr := fallbackDMDispatchSessionKey(ctx, db, workspaceID, resolvedDMID)
+			if fallbackErr != nil {
+				return "", "", fallbackErr
+			}
+			return resolvedDMID, fallbackSessionKey, nil
 		}
 		return syncAgentID, fmt.Sprintf("agent:%s:main", syncAgentID), nil
 	}
@@ -209,9 +217,17 @@ func resolveAdminCommandAgentTarget(
 		}
 		existingSessionKey = strings.TrimSpace(existingSessionKey)
 		if existingSessionKey != "" {
-			return resolvedDMID, existingSessionKey, nil
+			normalizedSessionKey, normalizeErr := normalizeDMDispatchSessionKey(ctx, db, workspaceID, resolvedDMID, existingSessionKey)
+			if normalizeErr != nil {
+				return "", "", normalizeErr
+			}
+			return resolvedDMID, normalizedSessionKey, nil
 		}
-		return resolvedDMID, canonicalChameleonSessionKey(resolvedDMID), nil
+		fallbackSessionKey, fallbackErr := fallbackDMDispatchSessionKey(ctx, db, workspaceID, resolvedDMID)
+		if fallbackErr != nil {
+			return "", "", fallbackErr
+		}
+		return resolvedDMID, fallbackSessionKey, nil
 	}
 
 	return trimmedAgentID, defaultSessionKey, nil

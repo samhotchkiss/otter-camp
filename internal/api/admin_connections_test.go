@@ -552,6 +552,69 @@ func TestAdminConnectionsResetAgentResolvesSlugToCanonicalChameleonSessionKey(t 
 	require.Equal(t, canonicalChameleonSessionKey(agentID), dispatched.Data.SessionKey)
 }
 
+func TestAdminConnectionsResetAgentResolvesElephantSlugToElephantSessionKey(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-reset-elephant-slug-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "elephant")
+
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+	handler := &AdminConnectionsHandler{
+		DB:              db,
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/agents/elephant/reset", nil)
+	req = addRouteParam(req, "id", "elephant")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.ResetAgent(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, dispatcher.calls, 1)
+	dispatched, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
+	require.True(t, ok)
+	require.Equal(t, adminCommandActionAgentReset, dispatched.Data.Action)
+	require.Equal(t, agentID, dispatched.Data.AgentID)
+	require.Equal(t, "agent:elephant:main", dispatched.Data.SessionKey)
+}
+
+func TestAdminConnectionsResetAgentNormalizesElephantSyncStateFromChameleonKey(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "conn-reset-elephant-sync-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "elephant")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, 'Elephant', 'online', $3, NOW())`,
+		orgID,
+		agentID,
+		canonicalChameleonSessionKey(agentID),
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+	handler := &AdminConnectionsHandler{
+		DB:              db,
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/agents/"+agentID+"/reset", nil)
+	req = addRouteParam(req, "id", agentID)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.ResetAgent(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, dispatcher.calls, 1)
+	dispatched, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
+	require.True(t, ok)
+	require.Equal(t, adminCommandActionAgentReset, dispatched.Data.Action)
+	require.Equal(t, agentID, dispatched.Data.AgentID)
+	require.Equal(t, "agent:elephant:main", dispatched.Data.SessionKey)
+}
+
 func TestAdminConnectionsRunDiagnosticsReturnsChecks(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "conn-diagnostics-org")

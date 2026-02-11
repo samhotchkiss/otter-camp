@@ -860,19 +860,28 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 			return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
 		}
 	} else if strings.TrimSpace(target.SessionKey) != "" {
+		normalizedSessionKey, normalizeErr := normalizeDMDispatchSessionKey(ctx, db, orgID, target.AgentID, target.SessionKey)
+		if normalizeErr != nil {
+			return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+		}
+		target.SessionKey = normalizedSessionKey
 		return target, true, "", 0, nil
 	}
 
-	// Chameleon-routed fallback: allow DM dispatch even when sync state is empty
-	// by deriving the canonical chameleon session from the workspace agent UUID.
+	// DM fallback: when sync state is empty, derive a safe session key from the
+	// workspace agent identity (Elephant routes as its own OpenClaw agent slot).
 	fallbackAgentID, fallbackErr := resolveDMThreadWorkspaceAgentID(ctx, db, orgID, agentID)
 	if fallbackErr != nil {
 		return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
 	}
 	if fallbackAgentID != "" {
+		fallbackSessionKey, fallbackSessionErr := fallbackDMDispatchSessionKey(ctx, db, orgID, fallbackAgentID)
+		if fallbackSessionErr != nil {
+			return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+		}
 		return dmDispatchTarget{
 			AgentID:    fallbackAgentID,
-			SessionKey: canonicalChameleonSessionKey(fallbackAgentID),
+			SessionKey: fallbackSessionKey,
 		}, true, "", 0, nil
 	}
 
@@ -924,6 +933,76 @@ func resolveDMThreadWorkspaceAgentID(
 
 func canonicalChameleonSessionKey(agentID string) string {
 	return "agent:chameleon:oc:" + strings.ToLower(strings.TrimSpace(agentID))
+}
+
+func fallbackDMDispatchSessionKey(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+	agentID string,
+) (string, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return "", nil
+	}
+
+	agentSlug, err := resolveWorkspaceAgentSlugByID(ctx, db, orgID, agentID)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(agentSlug, openClawSystemAgentElephant) {
+		return "agent:elephant:main", nil
+	}
+	return canonicalChameleonSessionKey(agentID), nil
+}
+
+func normalizeDMDispatchSessionKey(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+	agentID string,
+	sessionKey string,
+) (string, error) {
+	normalizedSessionKey := strings.TrimSpace(sessionKey)
+	if normalizedSessionKey == "" {
+		return fallbackDMDispatchSessionKey(ctx, db, orgID, agentID)
+	}
+
+	agentSlug, err := resolveWorkspaceAgentSlugByID(ctx, db, orgID, agentID)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(agentSlug, openClawSystemAgentElephant) && ValidateChameleonSessionKey(normalizedSessionKey) {
+		return "agent:elephant:main", nil
+	}
+	return normalizedSessionKey, nil
+}
+
+func resolveWorkspaceAgentSlugByID(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+	agentID string,
+) (string, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return "", nil
+	}
+
+	var slug string
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT COALESCE(slug, '') FROM agents WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+	).Scan(&slug)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(slug), nil
 }
 
 func (h *MessageHandler) buildDMDispatchEvent(

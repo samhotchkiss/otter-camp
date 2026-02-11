@@ -478,6 +478,74 @@ func TestCreateMessageDMUsesChameleonFallbackWhenSyncStateMissingBySlug(t *testi
 	require.Equal(t, "agent:chameleon:oc:"+agentID, event.Data.SessionKey)
 }
 
+func TestCreateMessageDMUsesElephantMainFallbackWhenSyncStateMissing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-elephant-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "elephant")
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_elephant",
+		"content":     "Hey Elephant",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, "agent:elephant:main", event.Data.SessionKey)
+}
+
+func TestCreateMessageDMNormalizesElephantSyncStateFromChameleonKey(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-elephant-normalize-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "elephant")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, 'online', $4, NOW())`,
+		orgID,
+		agentID,
+		"Elephant",
+		canonicalChameleonSessionKey(agentID),
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_" + agentID,
+		"content":     "Still there?",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, "agent:elephant:main", event.Data.SessionKey)
+}
+
 func TestCreateMessageDMDispatchFailurePersistsMessageWithDeliveryWarning(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-failure-org")
