@@ -289,6 +289,10 @@ test_run_bootstrap_steps_dry_run_lists_core_commands() {
     echo "expected dry-run build command output" >&2
     exit 1
   }
+  [[ "$output" == *"ln -sf"* ]] || {
+    echo "expected dry-run otter install command output" >&2
+    exit 1
+  }
 }
 
 test_ensure_local_postgres_role_and_database_generates_role_and_db_sql() {
@@ -365,6 +369,35 @@ test_run_bootstrap_steps_dry_run_bootstraps_local_postgres_before_migrate() {
   }
 }
 
+test_install_otter_cli_binary_uses_override_dir() {
+  local tmp source_bin install_dir
+  tmp="$(track_tmp_dir)"
+  source_bin="$tmp/bin/otter"
+  install_dir="$tmp/install"
+
+  mkdir -p "$(dirname "$source_bin")"
+  cat > "$source_bin" <<'EOF'
+#!/usr/bin/env bash
+echo "otter"
+EOF
+  chmod +x "$source_bin"
+
+  (
+    OTTER_CLI_INSTALL_DIR="$install_dir"
+    DRY_RUN=0
+    install_otter_cli_binary "$source_bin"
+  )
+
+  [[ -L "$install_dir/otter" ]] || {
+    echo "expected otter symlink to be installed" >&2
+    exit 1
+  }
+  [[ "$(readlink "$install_dir/otter")" == "$source_bin" ]] || {
+    echo "expected otter symlink to point to built binary" >&2
+    exit 1
+  }
+}
+
 test_main_completion_mentions_start_and_dashboard() {
   local output
   output="$(
@@ -376,7 +409,7 @@ test_main_completion_mentions_start_and_dashboard() {
     setup_main --dry-run --yes 2>&1 || true
   )"
 
-  [[ "$output" == *"make start"* ]] || {
+  [[ "$output" == *"Start Otter Camp:  make start"* ]] || {
     echo "expected setup completion to mention make start" >&2
     exit 1
   }
@@ -400,6 +433,7 @@ run_tests() {
   test_ensure_local_postgres_role_and_database_skips_when_compose_available
   test_run_bootstrap_steps_dry_run_lists_core_commands
   test_run_bootstrap_steps_dry_run_bootstraps_local_postgres_before_migrate
+  test_install_otter_cli_binary_uses_override_dir
   test_main_completion_mentions_start_and_dashboard
   echo "setup.sh tests passed"
 }
