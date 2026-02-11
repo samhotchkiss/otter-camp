@@ -1208,9 +1208,16 @@ export default function SettingsPage() {
   }, [integrations.apiKeys.length]);
 
   const handleRevokeApiKey = useCallback(async (keyId: string) => {
-    await fetch(`/api/settings/integrations/api-keys/${keyId}`, {
-      method: "DELETE",
+    setGitTokenError(null);
+    const response = await fetch(`/api/git/tokens/${encodeURIComponent(keyId)}/revoke`, {
+      method: "POST",
     });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      setGitTokenError(payload?.error ?? "Failed to revoke git token.");
+      return;
+    }
 
     setIntegrations((prev) => ({
       ...prev,
