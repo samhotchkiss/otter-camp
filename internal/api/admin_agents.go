@@ -1661,6 +1661,12 @@ func renderNewAgentToolsTemplate() string {
 		"  - `otter issue ask <issue-id-or-number> --title \"Clarify requirements\" --question '{\"id\":\"q1\",\"text\":\"...\",\"type\":\"text\"}'`\n" +
 		"- Submit responses:\n" +
 		"  - `otter issue respond <questionnaire-id> --response q1='\"answer\"'`\n\n" +
+		"### Knowledge base\n" +
+		"- List current shared knowledge:\n" +
+		"  - `otter knowledge list`\n" +
+		"- Import knowledge entries from JSON:\n" +
+		"  - `otter knowledge import <file.json>`\n" +
+		"- IMPORTANT: knowledge import replaces the full knowledge set. To add one entry, export/list current entries, merge, then import the merged payload.\n\n" +
 		"### Rules\n" +
 		"- If no project context exists, create/select one before writing deliverables.\n" +
 		"- Keep final artifacts in the project repo, not in legacy agent workspace files.\n" +

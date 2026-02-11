@@ -113,4 +113,6 @@ func TestRenderNewAgentToolsTemplateIncludesOtterCampCommands(t *testing.T) {
 	require.Contains(t, tools, "otter issue create")
 	require.Contains(t, tools, "otter issue ask")
 	require.Contains(t, tools, "otter issue respond")
+	require.Contains(t, tools, "otter knowledge list")
+	require.Contains(t, tools, "otter knowledge import")
 }
