@@ -9,6 +9,7 @@ import { lazyWithChunkRetry } from "./lib/lazyRoute";
 // Lazy load all page components for code splitting
 const Dashboard = lazy(() => lazyWithChunkRetry(() => import("./pages/Dashboard")));
 const AgentsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/AgentsPage")));
+const AgentsNewPage = lazy(() => lazyWithChunkRetry(() => import("./pages/AgentsNewPage")));
 const AgentDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/AgentDetailPage")));
 const SettingsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/SettingsPage")));
 const FeedPage = lazy(() => lazyWithChunkRetry(() => import("./pages/FeedPage")));
@@ -67,6 +68,10 @@ export const router = createBrowserRouter([
       {
         path: "agents",
         element: <AgentsPage />,
+      },
+      {
+        path: "agents/new",
+        element: <AgentsNewPage />,
       },
       {
         path: "agents/:id",
