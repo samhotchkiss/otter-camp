@@ -18,6 +18,7 @@ const (
 	MessageGitPush                   MessageType = "GitPush"
 	MessageIssueReviewAddressed      MessageType = "IssueReviewAddressed"
 	MessageIssueReviewSaved          MessageType = "IssueReviewSaved"
+	MessageIssueCreated              MessageType = "IssueCreated"
 	MessageIssueCommentCreated       MessageType = "IssueCommentCreated"
 	MessageProjectChatMessageCreated MessageType = "ProjectChatMessageCreated"
 	MessageEmissionReceived          MessageType = "EmissionReceived"

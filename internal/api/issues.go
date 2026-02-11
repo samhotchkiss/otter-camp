@@ -95,6 +95,11 @@ type issueCommentCreatedEvent struct {
 	Comment issueCommentPayload `json:"comment"`
 }
 
+type issueCreatedEvent struct {
+	Type  ws.MessageType      `json:"type"`
+	Issue issueSummaryPayload `json:"issue"`
+}
+
 type openClawIssueCommentDispatchEvent struct {
 	Type      string                           `json:"type"`
 	Timestamp time.Time                        `json:"timestamp"`
@@ -293,6 +298,11 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ownerAgentID := req.OwnerAgentID
+	if ownerAgentID == nil {
+		ownerAgentID = h.resolveDefaultIssueOwnerAgentID(r.Context(), projectID)
+	}
+
 	issue, err := h.IssueStore.CreateIssue(r.Context(), store.CreateProjectIssueInput{
 		ProjectID:     projectID,
 		Title:         title,
@@ -301,7 +311,7 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		Origin:        "local",
 		DocumentPath:  nil,
 		ApprovalState: req.ApprovalState,
-		OwnerAgentID:  req.OwnerAgentID,
+		OwnerAgentID:  ownerAgentID,
 		WorkStatus:    req.WorkStatus,
 		Priority:      req.Priority,
 		DueAt:         dueAt,
@@ -330,7 +340,9 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendJSON(w, http.StatusCreated, toIssueSummaryPayload(*issue, participants, nil))
+	createdPayload := toIssueSummaryPayload(*issue, participants, nil)
+	h.broadcastIssueCreated(r.Context(), createdPayload)
+	sendJSON(w, http.StatusCreated, createdPayload)
 }
 
 func (h *IssuesHandler) CreateLinkedIssue(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +383,8 @@ func (h *IssuesHandler) CreateLinkedIssue(w http.ResponseWriter, r *http.Request
 		title = defaultLinkedIssueTitle(documentPath)
 	}
 
+	defaultOwnerAgentID := h.resolveDefaultIssueOwnerAgentID(r.Context(), projectID)
+
 	issue, err := h.IssueStore.CreateIssue(r.Context(), store.CreateProjectIssueInput{
 		ProjectID:     projectID,
 		Title:         title,
@@ -378,13 +392,33 @@ func (h *IssuesHandler) CreateLinkedIssue(w http.ResponseWriter, r *http.Request
 		Origin:        "local",
 		DocumentPath:  &documentPath,
 		ApprovalState: req.ApprovalState,
+		OwnerAgentID:  defaultOwnerAgentID,
 	})
 	if err != nil {
 		handleIssueStoreError(w, err)
 		return
 	}
 
-	sendJSON(w, http.StatusCreated, toIssueSummaryPayload(*issue, nil, nil))
+	if issue.OwnerAgentID != nil {
+		if _, err := h.IssueStore.AddParticipant(r.Context(), store.AddProjectIssueParticipantInput{
+			IssueID: issue.ID,
+			AgentID: *issue.OwnerAgentID,
+			Role:    "owner",
+		}); err != nil {
+			handleIssueStoreError(w, err)
+			return
+		}
+	}
+
+	participants, err := h.IssueStore.ListParticipants(r.Context(), issue.ID, false)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
+	createdPayload := toIssueSummaryPayload(*issue, participants, nil)
+	h.broadcastIssueCreated(r.Context(), createdPayload)
+	sendJSON(w, http.StatusCreated, createdPayload)
 }
 
 func (h *IssuesHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -1000,6 +1034,55 @@ func findIssueLink(
 	}
 	copy := link
 	return &copy
+}
+
+func (h *IssuesHandler) resolveDefaultIssueOwnerAgentID(ctx context.Context, projectID string) *string {
+	if h.DB == nil {
+		return nil
+	}
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(ctx))
+	if workspaceID == "" {
+		return nil
+	}
+
+	var primaryAgentID sql.NullString
+	if err := h.DB.QueryRowContext(
+		ctx,
+		`SELECT primary_agent_id FROM projects WHERE id = $1 AND org_id = $2`,
+		strings.TrimSpace(projectID),
+		workspaceID,
+	).Scan(&primaryAgentID); err != nil {
+		return nil
+	}
+	if !primaryAgentID.Valid {
+		return nil
+	}
+	trimmed := strings.TrimSpace(primaryAgentID.String)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func (h *IssuesHandler) broadcastIssueCreated(
+	ctx context.Context,
+	issue issueSummaryPayload,
+) {
+	if h.Hub == nil {
+		return
+	}
+	workspaceID := middleware.WorkspaceFromContext(ctx)
+	if workspaceID == "" {
+		return
+	}
+	payload, err := json.Marshal(issueCreatedEvent{
+		Type:  ws.MessageIssueCreated,
+		Issue: issue,
+	})
+	if err != nil {
+		return
+	}
+	h.Hub.Broadcast(workspaceID, payload)
 }
 
 func (h *IssuesHandler) broadcastIssueCommentCreated(

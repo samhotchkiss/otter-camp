@@ -125,6 +125,14 @@ func (h *OpenClawHandler) readPump(conn *websocket.Conn) {
 
 	conn.SetReadLimit(maxMessageSize * 10) // Allow larger messages from OpenClaw
 	conn.SetReadDeadline(time.Now().Add(pongWait * 2))
+	defaultPingHandler := conn.PingHandler()
+	conn.SetPingHandler(func(appData string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait * 2))
+		if defaultPingHandler != nil {
+			return defaultPingHandler(appData)
+		}
+		return nil
+	})
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(pongWait * 2))
 		return nil
