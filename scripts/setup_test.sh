@@ -140,6 +140,37 @@ test_write_bridge_env_if_missing_targets_4200() {
   )
 }
 
+test_write_cli_config_uses_detected_org() {
+  local tmp cfg_path
+  tmp="$(track_tmp_dir)"
+
+  (
+    HOME="$tmp/home"
+    mkdir -p "$HOME"
+    LOCAL_AUTH_TOKEN="oc_local_test_token"
+    detect_default_org_id() {
+      echo "146ca0fd-cf4c-4ed8-9f54-552d862e9a51"
+    }
+
+    write_cli_config
+
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      cfg_path="$HOME/Library/Application Support/otter/config.json"
+    else
+      cfg_path="$HOME/.config/otter/config.json"
+    fi
+
+    [[ -f "$cfg_path" ]] || {
+      echo "expected CLI config to be created at $cfg_path" >&2
+      exit 1
+    }
+    grep -q '"defaultOrg": "146ca0fd-cf4c-4ed8-9f54-552d862e9a51"' "$cfg_path" || {
+      echo "expected CLI config to include detected default org id" >&2
+      exit 1
+    }
+  )
+}
+
 test_install_dependency_brew_dry_run_avoids_network_eval() {
   local tmp marker
   tmp="$(track_tmp_dir)"
@@ -425,6 +456,7 @@ run_tests() {
   test_ensure_dependency_fails_when_user_declines_install
   test_write_env_if_missing_sets_4200_defaults
   test_write_bridge_env_if_missing_targets_4200
+  test_write_cli_config_uses_detected_org
   test_install_dependency_brew_dry_run_avoids_network_eval
   test_generate_secret_falls_back_without_openssl
   test_load_env_treats_values_as_literals

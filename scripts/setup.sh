@@ -724,6 +724,9 @@ ensure_local_postgres_role_and_database() {
 }
 
 write_cli_config() {
+  local default_org
+  default_org="$(detect_default_org_id)"
+
   local cfg_dir
   if [[ "$(uname -s)" == "Darwin" ]]; then
     cfg_dir="${HOME}/Library/Application Support/otter"
@@ -736,10 +739,32 @@ write_cli_config() {
 {
   "apiBaseUrl": "http://localhost:4200",
   "token": "${LOCAL_AUTH_TOKEN}",
-  "defaultOrg": ""
+  "defaultOrg": "${default_org}"
 }
 EOF
   log_success "Wrote CLI config to ${cfg_dir}/config.json"
+  if [[ -z "$default_org" ]]; then
+    log_warn "Could not auto-detect default org id for otter CLI auth."
+  fi
+}
+
+detect_default_org_id() {
+  local org_id=""
+  local uuid_pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+
+  if command -v psql >/dev/null 2>&1 && [[ -n "${DATABASE_URL:-}" ]]; then
+    org_id="$(psql "$DATABASE_URL" -Atqc "SELECT id::text FROM organizations ORDER BY created_at ASC LIMIT 1;" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
+  fi
+
+  if [[ -z "$org_id" ]] && command -v docker >/dev/null 2>&1; then
+    if docker ps --format '{{.Names}}' | grep -qx "otter-camp-db"; then
+      org_id="$(docker exec otter-camp-db psql -U otter -d ottercamp -Atqc "SELECT id::text FROM organizations ORDER BY created_at ASC LIMIT 1;" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
+    fi
+  fi
+
+  if [[ "$org_id" =~ $uuid_pattern ]]; then
+    echo "$org_id"
+  fi
 }
 
 detect_openclaw_gateway() {
