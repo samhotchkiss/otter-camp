@@ -11,6 +11,7 @@ This directory includes launchd and monitor assets for bridge self-healing.
 
 1. Copy the plist:
    - `cp bridge/com.ottercamp.bridge.plist ~/Library/LaunchAgents/`
+   - Edit `~/Library/LaunchAgents/com.ottercamp.bridge.plist` and replace `__OTTERCAMP_ROOT__` with your local repo path.
 2. Reload the service:
    - `launchctl unload ~/Library/LaunchAgents/com.ottercamp.bridge.plist 2>/dev/null || true`
    - `launchctl load ~/Library/LaunchAgents/com.ottercamp.bridge.plist`
@@ -23,7 +24,7 @@ Rate limiting is configured via `ThrottleInterval=12` (roughly 5 restart attempt
 
 Run every 60 seconds from OpenClaw cron or system cron:
 
-- `* * * * * /Users/sam/Documents/Dev/otter-camp-codex/bridge/bridge-monitor.sh`
+- `* * * * * /path/to/otter-camp/bridge/bridge-monitor.sh`
 
 Behavior:
 
