@@ -28,7 +28,7 @@ func agentFilesRepoPathForProject(t *testing.T, db *sql.DB, orgID string, projec
 	return strings.TrimSpace(*binding.LocalRepoPath)
 }
 
-func TestAdminAgentsCreateValidRequestCreatesAgentAndTemplates(t *testing.T) {
+func TestAdminAgentsCreateGeneratesSlotFromDisplayNameAndCreatesTemplates(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-agents-create-valid")
 	projectID := seedAdminAgentFilesProjectFixture(t, db, orgID, "main")
@@ -47,7 +47,7 @@ func TestAdminAgentsCreateValidRequestCreatesAgentAndTemplates(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/admin/agents",
-		strings.NewReader(`{"slot":"research","display_name":"Riley","model":"gpt-5.2-codex","heartbeat_every":"15m"}`),
+		strings.NewReader(`{"displayName":"Riley","model":"gpt-5.2-codex"}`),
 	)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
@@ -62,15 +62,15 @@ func TestAdminAgentsCreateValidRequestCreatesAgentAndTemplates(t *testing.T) {
 
 	createdAgent, err := handler.Store.GetBySlug(
 		context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
-		"research",
+		"riley",
 	)
 	require.NoError(t, err)
 	require.Equal(t, "Riley", createdAgent.DisplayName)
 
-	identityPath := filepath.Join(repoPath, "agents", "research", "IDENTITY.md")
-	soulPath := filepath.Join(repoPath, "agents", "research", "SOUL.md")
-	toolsPath := filepath.Join(repoPath, "agents", "research", "TOOLS.md")
-	memoryPath := filepath.Join(repoPath, "agents", "research", "MEMORY.md")
+	identityPath := filepath.Join(repoPath, "agents", "riley", "IDENTITY.md")
+	soulPath := filepath.Join(repoPath, "agents", "riley", "SOUL.md")
+	toolsPath := filepath.Join(repoPath, "agents", "riley", "TOOLS.md")
+	memoryPath := filepath.Join(repoPath, "agents", "riley", "MEMORY.md")
 	for _, path := range []string{identityPath, soulPath, toolsPath, memoryPath} {
 		_, statErr := os.Stat(path)
 		require.NoError(t, statErr)
@@ -85,18 +85,18 @@ func TestAdminAgentsCreateValidRequestCreatesAgentAndTemplates(t *testing.T) {
 	require.Equal(t, adminCommandActionConfigPatch, event.Data.Action)
 	require.JSONEq(
 		t,
-		`{"agents":{"research":{"enabled":true,"heartbeat":{"every":"15m"},"model":{"primary":"gpt-5.2-codex"}}}}`,
+		`{"agents":{"riley":{"enabled":true,"model":{"primary":"gpt-5.2-codex"}}}}`,
 		string(event.Data.ConfigPatch),
 	)
 }
 
-func TestAdminAgentsCreateRejectsDuplicateSlot(t *testing.T) {
+func TestAdminAgentsCreateCollisionSuffixesGeneratedSlot(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-agents-create-duplicate")
 	_ = seedAdminAgentFilesProjectFixture(t, db, orgID, "main")
 	_, err := db.Exec(
 		`INSERT INTO agents (org_id, slug, display_name, status)
-		 VALUES ($1, 'research', 'Existing Agent', 'active')`,
+		 VALUES ($1, 'riley', 'Existing Agent', 'active')`,
 		orgID,
 	)
 	require.NoError(t, err)
@@ -114,13 +114,28 @@ func TestAdminAgentsCreateRejectsDuplicateSlot(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/admin/agents",
-		strings.NewReader(`{"slot":"research","display_name":"Riley","model":"gpt-5.2-codex"}`),
+		strings.NewReader(`{"displayName":"Riley","model":"gpt-5.2-codex"}`),
 	)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
 	handler.Create(rec, req)
-	require.Equal(t, http.StatusConflict, rec.Code)
-	require.Empty(t, dispatcher.calls)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	createdAgent, getErr := handler.Store.GetBySlug(
+		context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
+		"riley-2",
+	)
+	require.NoError(t, getErr)
+	require.Equal(t, "Riley", createdAgent.DisplayName)
+
+	require.Len(t, dispatcher.calls, 1)
+	event, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
+	require.True(t, ok)
+	require.JSONEq(
+		t,
+		`{"agents":{"riley-2":{"enabled":true,"model":{"primary":"gpt-5.2-codex"}}}}`,
+		string(event.Data.ConfigPatch),
+	)
 }
 
 func TestAdminAgentsCreateQueuesConfigMutationWhenBridgeUnavailable(t *testing.T) {
@@ -142,7 +157,7 @@ func TestAdminAgentsCreateQueuesConfigMutationWhenBridgeUnavailable(t *testing.T
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/admin/agents",
-		strings.NewReader(`{"slot":"ops","display_name":"Ops Agent","model":"gpt-5.2-codex"}`),
+		strings.NewReader(`{"displayName":"Ops Agent","model":"gpt-5.2-codex"}`),
 	)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
@@ -157,11 +172,42 @@ func TestAdminAgentsCreateQueuesConfigMutationWhenBridgeUnavailable(t *testing.T
 
 	_, err := handler.Store.GetBySlug(
 		context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
-		"ops",
+		"ops-agent",
 	)
 	require.NoError(t, err)
-	_, err = os.Stat(filepath.Join(repoPath, "agents", "ops", "IDENTITY.md"))
+	_, err = os.Stat(filepath.Join(repoPath, "agents", "ops-agent", "IDENTITY.md"))
 	require.NoError(t, err)
+}
+
+func TestAdminAgentsCreateRequiresDisplayName(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-create-validates-display-name")
+	_ = seedAdminAgentFilesProjectFixture(t, db, orgID, "main")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+
+	handler := &AdminAgentsHandler{
+		DB:              db,
+		Store:           store.NewAgentStore(db),
+		ProjectStore:    store.NewProjectStore(db),
+		ProjectRepos:    store.NewProjectRepoStore(db),
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/agents",
+		strings.NewReader(`{"model":"gpt-5.2-codex"}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Create(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "displayName is required", payload.Error)
+	require.Empty(t, dispatcher.calls)
 }
 
 func TestAdminAgentsCreateRollsBackOnTemplateWriteFailure(t *testing.T) {
@@ -185,7 +231,7 @@ func TestAdminAgentsCreateRollsBackOnTemplateWriteFailure(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/admin/agents",
-		strings.NewReader(`{"slot":"broken","display_name":"Broken Agent","model":"gpt-5.2-codex"}`),
+		strings.NewReader(`{"displayName":"Broken Agent","model":"gpt-5.2-codex"}`),
 	)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
@@ -194,7 +240,7 @@ func TestAdminAgentsCreateRollsBackOnTemplateWriteFailure(t *testing.T) {
 
 	_, err := handler.Store.GetBySlug(
 		context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
-		"broken",
+		"broken-agent",
 	)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, store.ErrNotFound))

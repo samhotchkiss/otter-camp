@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -71,11 +72,13 @@ type adminAgentFilesListResponse struct {
 }
 
 type adminAgentCreateRequest struct {
-	Slot           string `json:"slot"`
-	DisplayName    string `json:"display_name"`
-	Model          string `json:"model"`
-	HeartbeatEvery string `json:"heartbeat_every,omitempty"`
-	Channel        string `json:"channel,omitempty"`
+	DisplayName       string `json:"displayName"`
+	DisplayNameLegacy string `json:"display_name,omitempty"`
+	ProfileID         string `json:"profileId,omitempty"`
+	Soul              string `json:"soul,omitempty"`
+	Identity          string `json:"identity,omitempty"`
+	Model             string `json:"model"`
+	Avatar            string `json:"avatar,omitempty"`
 }
 
 type adminAgentRow struct {
@@ -208,18 +211,15 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req.Slot = strings.ToLower(strings.TrimSpace(req.Slot))
-	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	req.DisplayName = strings.TrimSpace(firstNonEmpty(req.DisplayName, req.DisplayNameLegacy))
 	req.Model = strings.TrimSpace(req.Model)
-	req.HeartbeatEvery = strings.TrimSpace(req.HeartbeatEvery)
-	req.Channel = strings.TrimSpace(req.Channel)
+	req.ProfileID = strings.TrimSpace(req.ProfileID)
+	req.Soul = strings.TrimSpace(req.Soul)
+	req.Identity = strings.TrimSpace(req.Identity)
+	req.Avatar = strings.TrimSpace(req.Avatar)
 
-	if !agentSlotPattern.MatchString(req.Slot) {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "slot must match ^[a-z0-9][a-z0-9-]{1,62}$"})
-		return
-	}
 	if req.DisplayName == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "display_name is required"})
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "displayName is required"})
 		return
 	}
 	if req.Model == "" {
@@ -227,12 +227,20 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := h.Store.GetBySlug(r.Context(), req.Slot)
-	if err == nil && existing != nil {
-		sendJSON(w, http.StatusConflict, errorResponse{Error: "agent slot already exists"})
-		return
-	}
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+	slot, err := resolveAvailableAgentSlot(agentSlotFromDisplayName(req.DisplayName), func(candidate string) (bool, error) {
+		existing, lookupErr := h.Store.GetBySlug(r.Context(), candidate)
+		if lookupErr == nil && existing != nil {
+			return true, nil
+		}
+		if errors.Is(lookupErr, store.ErrNotFound) {
+			return false, nil
+		}
+		if lookupErr != nil {
+			return false, lookupErr
+		}
+		return false, nil
+	})
+	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate agent slot"})
 		return
 	}
@@ -244,7 +252,7 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	createdAgent, err := h.Store.Create(r.Context(), store.CreateAgentInput{
-		Slug:        req.Slot,
+		Slug:        slot,
 		DisplayName: req.DisplayName,
 		Status:      "active",
 	})
@@ -257,13 +265,13 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if writeTemplates == nil {
 		writeTemplates = h.writeAgentTemplates
 	}
-	if err := writeTemplates(r.Context(), repoPath, req.Slot, req.DisplayName); err != nil {
+	if err := writeTemplates(r.Context(), repoPath, slot, req.DisplayName); err != nil {
 		_ = h.Store.Delete(r.Context(), createdAgent.ID)
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to scaffold agent files"})
 		return
 	}
 
-	configPatch, err := buildCreateAgentConfigPatch(req)
+	configPatch, err := buildCreateAgentConfigPatch(slot, req.Model)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to build config patch"})
 		return
@@ -882,32 +890,91 @@ func (h *AdminAgentsHandler) writeAgentTemplates(
 	return nil
 }
 
-func buildCreateAgentConfigPatch(req adminAgentCreateRequest) (json.RawMessage, error) {
+func agentSlotFromDisplayName(displayName string) string {
+	name := strings.ToLower(strings.TrimSpace(displayName))
+	if name == "" {
+		return "agent"
+	}
+	var b strings.Builder
+	lastWasDash := false
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			if b.Len() >= 63 {
+				break
+			}
+			b.WriteRune(r)
+			lastWasDash = false
+			continue
+		}
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			continue
+		}
+		if b.Len() == 0 || lastWasDash {
+			continue
+		}
+		if b.Len() >= 63 {
+			break
+		}
+		b.WriteByte('-')
+		lastWasDash = true
+	}
+	slot := strings.Trim(b.String(), "-")
+	if len(slot) < 2 || !agentSlotPattern.MatchString(slot) {
+		return "agent"
+	}
+	return slot
+}
+
+func resolveAvailableAgentSlot(baseSlot string, existsFn func(slot string) (bool, error)) (string, error) {
+	base := strings.TrimSpace(baseSlot)
+	if !agentSlotPattern.MatchString(base) {
+		base = "agent"
+	}
+	for i := 1; ; i++ {
+		candidate := base
+		if i > 1 {
+			suffix := fmt.Sprintf("-%d", i)
+			maxBaseLen := 63 - len(suffix)
+			if maxBaseLen < 2 {
+				maxBaseLen = 2
+			}
+			prefix := base
+			if len(prefix) > maxBaseLen {
+				prefix = prefix[:maxBaseLen]
+			}
+			prefix = strings.TrimRight(prefix, "-")
+			if len(prefix) < 2 {
+				prefix = "agent"
+				if len(prefix) > maxBaseLen {
+					prefix = prefix[:maxBaseLen]
+				}
+			}
+			candidate = prefix + suffix
+			if !agentSlotPattern.MatchString(candidate) {
+				continue
+			}
+		}
+		exists, err := existsFn(candidate)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+	}
+}
+
+func buildCreateAgentConfigPatch(slot string, model string) (json.RawMessage, error) {
 	agentPatch := map[string]interface{}{
 		"enabled": true,
 		"model": map[string]interface{}{
-			"primary": req.Model,
+			"primary": model,
 		},
-	}
-	if req.HeartbeatEvery != "" {
-		agentPatch["heartbeat"] = map[string]interface{}{
-			"every": req.HeartbeatEvery,
-		}
-	}
-	if req.Channel != "" {
-		agentPatch["channels"] = []map[string]interface{}{
-			{
-				"channel":          req.Channel,
-				"require_mention":  false,
-				"requireMention":   false,
-				"delivery_channel": req.Channel,
-			},
-		}
 	}
 
 	patch := map[string]interface{}{
 		"agents": map[string]interface{}{
-			req.Slot: agentPatch,
+			slot: agentPatch,
 		},
 	}
 	return canonicalizeOpenClawConfigData(patch)
