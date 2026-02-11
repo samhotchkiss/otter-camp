@@ -47,4 +47,57 @@ describe("LoginPage", () => {
     expect(screen.queryByLabelText(/name/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/email address/i)).not.toBeInTheDocument();
   });
+
+  it("submits local mode via login", async () => {
+    const user = userEvent.setup();
+    let resolveLogin: (() => void) | null = null;
+    mockLogin.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveLogin = resolve;
+        }),
+    );
+
+    render(<LoginPage />);
+
+    await user.click(screen.getByRole("button", { name: /hosted setup/i }));
+    await user.click(screen.getByRole("button", { name: /local setup/i }));
+
+    await user.type(screen.getByLabelText(/name/i), "Sam");
+    await user.type(screen.getByLabelText(/organization/i), "Otter Camp");
+    await user.type(screen.getByLabelText(/email address/i), "sam@example.com");
+    await user.click(screen.getByRole("button", { name: /generate magic link/i }));
+
+    expect(mockLogin).toHaveBeenCalledWith("sam@example.com", "Sam", "Otter Camp");
+    expect(screen.getByRole("button", { name: /sending/i })).toBeDisabled();
+
+    resolveLogin?.();
+    expect(await screen.findByText(/check your email/i)).toBeInTheDocument();
+  });
+
+  it("shows magic-link success state after local submit", async () => {
+    const user = userEvent.setup();
+    mockLogin.mockResolvedValueOnce(undefined);
+
+    render(<LoginPage />);
+
+    await user.type(screen.getByLabelText(/email address/i), "sam@example.com");
+    await user.click(screen.getByRole("button", { name: /generate magic link/i }));
+
+    expect(await screen.findByText(/check your email/i)).toBeInTheDocument();
+    expect(screen.getByText(/we generated a magic link for/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /use a different email/i })).toBeInTheDocument();
+  });
+
+  it("shows API error when local submit fails", async () => {
+    const user = userEvent.setup();
+    mockLogin.mockRejectedValueOnce(new Error("Invalid login request"));
+
+    render(<LoginPage />);
+
+    await user.type(screen.getByLabelText(/email address/i), "sam@example.com");
+    await user.click(screen.getByRole("button", { name: /generate magic link/i }));
+
+    expect(await screen.findByText("Invalid login request")).toBeInTheDocument();
+  });
 });
