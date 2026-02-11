@@ -186,6 +186,17 @@ describe("SettingsPage label management", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Generate Git Token" }));
 
     expect(await screen.findByText("Git Token 1")).toBeInTheDocument();
+    const createCall = fetchMock.mock.calls.find(
+      ([input, requestInit]) =>
+        String(input).includes("/api/git/tokens") &&
+        (requestInit as RequestInit | undefined)?.method === "POST",
+    );
+    expect(createCall).toBeDefined();
+    const createBody = JSON.parse(((createCall?.[1] as RequestInit).body as string) || "{}");
+    expect(createBody).toMatchObject({
+      name: "Git Token 1",
+      projects: [{ project_id: "project-1", permission: "write" }],
+    });
     expect(
       fetchMock.mock.calls.some(([input, requestInit]) =>
         String(input).includes("/api/git/tokens") &&
