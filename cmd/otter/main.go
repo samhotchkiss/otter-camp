@@ -43,6 +43,18 @@ func main() {
 		handleAuth(os.Args[2:])
 	case "init":
 		handleInit(os.Args[2:])
+	case "start":
+		handleLocalControl("start", os.Args[2:])
+	case "stop":
+		handleLocalControl("stop", os.Args[2:])
+	case "restart":
+		handleLocalControl("restart", os.Args[2:])
+	case "status":
+		handleLocalControl("status", os.Args[2:])
+	case "repair":
+		handleLocalControl("repair", os.Args[2:])
+	case "autostart":
+		handleAutostart(os.Args[2:])
 	case "whoami":
 		handleWhoami(os.Args[2:])
 	case "release-gate":
@@ -81,6 +93,12 @@ func usage() {
 Commands:
   auth login       Store API token + default org
   init             Run onboarding setup wizard
+  start            Start local Otter Camp services
+  stop             Stop local Otter Camp services
+  restart          Restart local Otter Camp services
+  status           Show local Otter Camp service health
+  repair           Repair local Otter Camp runtime (build + restart)
+  autostart        Manage launch-at-login service (macOS launchd)
   whoami           Validate token and show user
   release-gate     Run Spec 110 release gate checks
   project          Manage projects

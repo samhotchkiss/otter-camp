@@ -121,6 +121,68 @@ $ otter whoami --json
 
 ---
 
+## Local Runtime Control
+
+These commands manage a local Otter Camp install from the repository checkout.
+
+### `otter start`
+
+Build and start Otter Camp (API + web assets, and bridge when `bridge/.env` exists).
+
+```bash
+otter start
+otter start --root /path/to/otter-camp
+```
+
+### `otter stop`
+
+Stop local Otter Camp services.
+
+```bash
+otter stop
+```
+
+### `otter restart`
+
+Restart local Otter Camp services.
+
+```bash
+otter restart
+```
+
+### `otter status`
+
+Show local health status.
+
+```bash
+otter status
+```
+
+### `otter repair`
+
+Run local repair flow (stop, rebuild, restart, health checks).
+
+```bash
+otter repair
+otter repair --deep   # includes scripts/setup.sh --yes first
+```
+
+### `otter autostart`
+
+Manage launch-at-login on macOS (launchd), modeled after OpenClaw's service behavior.
+
+```bash
+otter autostart enable
+otter autostart status
+otter autostart disable
+```
+
+| Flag | Description |
+|------|-------------|
+| `--root <path>` | Otter Camp repository root override |
+
+---
+
 ## Projects
 
 ### `otter project create`

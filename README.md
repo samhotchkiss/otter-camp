@@ -50,6 +50,15 @@ Optional development mode:
 make dev      # API + frontend with hot reload
 ```
 
+Service controls:
+
+```bash
+otter status
+otter restart
+otter repair
+otter autostart enable   # macOS launch-at-login
+```
+
 We ship curated agent profiles — engineering, content, design, research, personal ops. Pick one, tweak it, go.
 
 ## Architecture
