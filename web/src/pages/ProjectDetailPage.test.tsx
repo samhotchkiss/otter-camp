@@ -329,14 +329,15 @@ describe("ProjectDetailPage files tab", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
 
-    const queuedColumn = screen.getByTestId("board-column-queued");
+    const planningColumn = screen.getByTestId("board-column-planning");
+    const queueColumn = screen.getByTestId("board-column-queue");
     const inProgressColumn = screen.getByTestId("board-column-in_progress");
     const reviewColumn = screen.getByTestId("board-column-review");
     const doneColumn = screen.getByTestId("board-column-done");
 
-    expect(within(queuedColumn).getByText("Queued issue")).toBeInTheDocument();
-    expect(within(queuedColumn).getByText("Planning issue")).toBeInTheDocument();
-    expect(within(queuedColumn).getByText("Ready for work issue")).toBeInTheDocument();
+    expect(within(planningColumn).getByText("Planning issue")).toBeInTheDocument();
+    expect(within(queueColumn).getByText("Queued issue")).toBeInTheDocument();
+    expect(within(queueColumn).getByText("Ready for work issue")).toBeInTheDocument();
     expect(within(inProgressColumn).getByText("In progress issue")).toBeInTheDocument();
     expect(within(inProgressColumn).getByTestId("project-board-mini-issue-in-progress")).toBeInTheDocument();
     expect(within(reviewColumn).getByText("Review issue")).toBeInTheDocument();

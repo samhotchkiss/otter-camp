@@ -1,18 +1,22 @@
 // Cache bust: 2026-02-05-11:15
-import { useState, useEffect, useMemo, useRef, type FormEvent } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, type FormEvent } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ProjectFileBrowser from "../components/project/ProjectFileBrowser";
 import ProjectIssuesList from "../components/project/ProjectIssuesList";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
 import PipelineMiniProgress from "../components/issues/PipelineMiniProgress";
+import EmissionStream from "../components/EmissionStream";
 import ProjectSettingsPage from "./project/ProjectSettingsPage";
 import WorkflowConfig, {
   defaultWorkflowConfigState,
   type WorkflowConfigState,
 } from "../components/project/WorkflowConfig";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
+import { useOptionalWS } from "../contexts/WebSocketContext";
 import { getActivityDescription, normalizeMetadata } from "../components/activity/activityFormat";
+import useEmissions from "../hooks/useEmissions";
+import useNowTicker from "../hooks/useNowTicker";
 import { API_URL } from "../lib/api";
 
 // Agent color mappings
@@ -106,6 +110,7 @@ type Task = {
   assignee: string;
   avatarColor: string;
   blocked?: boolean;
+  isActive?: boolean;
 };
 
 type Activity = {
@@ -205,10 +210,11 @@ type TaskColumn = {
 };
 
 const COLUMNS: TaskColumn[] = [
-  { key: "queued", title: "📋 Queued", statuses: ["queued", "dispatched", "ready", "planning", "ready_for_work"] },
-  { key: "in_progress", title: "🔨 In Progress", statuses: ["in_progress"] },
-  { key: "review", title: "👀 Review", statuses: ["review", "blocked", "flagged"] },
-  { key: "done", title: "✅ Done", statuses: ["done", "cancelled"] },
+  { key: "planning", title: "Planning", statuses: ["planning"] },
+  { key: "queue", title: "Queue", statuses: ["queued", "dispatched", "ready", "ready_for_work"] },
+  { key: "in_progress", title: "In Progress", statuses: ["in_progress"] },
+  { key: "review", title: "Review", statuses: ["review", "blocked", "flagged"] },
+  { key: "done", title: "Done", statuses: ["done", "cancelled"] },
 ];
 
 const LIST_STATUS_BADGE: Record<Task["status"], { label: string; className: string }> = {
@@ -258,6 +264,8 @@ const LIST_STATUS_BADGE: Record<Task["status"], { label: string; className: stri
   },
 };
 
+const ACTIVE_EMISSION_WINDOW_MS = 45_000;
+
 function formatTimeAgo(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
@@ -294,6 +302,12 @@ function TaskCard({ task, onClick }: { task: Task; onClick?: () => void }) {
           #{task.issueNumber}
         </p>
       )}
+      {task.isActive ? (
+        <p className="mb-2 inline-flex items-center gap-1 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-300" />
+          Working
+        </p>
+      ) : null}
       <h4 className="mb-3 text-sm font-semibold text-[var(--text)]">
         {task.title}
       </h4>
@@ -405,7 +419,114 @@ export default function ProjectDetailPage() {
   const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
   const [workflowConfig, setWorkflowConfig] = useState<WorkflowConfigState>(defaultWorkflowConfigState());
   const agentIdToNameRef = useRef<Record<string, string>>({});
+  const ws = useOptionalWS();
+  const lastMessage = ws?.lastMessage ?? null;
+  const nowMs = useNowTicker();
   const { upsertConversation, openConversation } = useGlobalChat();
+  const { emissions: projectEmissions } = useEmissions({
+    projectId: id,
+    issueId: issueId ?? undefined,
+    limit: 20,
+  });
+
+  const refreshProjectIssues = useCallback(async (projectID: string) => {
+    const orgId = localStorage.getItem("otter-camp-org-id");
+    const issuesUrl = orgId
+      ? `${API_URL}/api/issues?org_id=${encodeURIComponent(orgId)}&project_id=${encodeURIComponent(projectID)}&limit=200`
+      : `${API_URL}/api/issues?project_id=${encodeURIComponent(projectID)}&limit=200`;
+    const issuesRes = await fetch(issuesUrl);
+    if (!issuesRes.ok) {
+      return;
+    }
+    const payload = await issuesRes.json() as
+      | { items?: ApiIssue[] }
+      | ApiIssue[];
+    const apiIssues = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload.items)
+        ? payload.items
+        : [];
+    const transformedTasks: Task[] = apiIssues.map((raw) => {
+      const issue = raw as ApiIssue;
+      const ownerAgentID = issue.owner_agent_id;
+      const issueStatusRaw = issue.work_status ?? "queued";
+      const normalizedStatus = issueStatusRaw.trim().toLowerCase();
+      const status = (
+        normalizedStatus === "queued" ||
+        normalizedStatus === "ready" ||
+        normalizedStatus === "planning" ||
+        normalizedStatus === "ready_for_work" ||
+        normalizedStatus === "in_progress" ||
+        normalizedStatus === "review" ||
+        normalizedStatus === "blocked" ||
+        normalizedStatus === "flagged" ||
+        normalizedStatus === "done" ||
+        normalizedStatus === "cancelled" ||
+        normalizedStatus === "dispatched"
+      )
+        ? normalizedStatus
+        : "queued";
+      const priorityRaw = (issue.priority ?? "P2").toUpperCase();
+      const priority = (priorityRaw === "P0" || priorityRaw === "P1" || priorityRaw === "P2" || priorityRaw === "P3")
+        ? priorityRaw
+        : "P2";
+      const agentName = ownerAgentID
+        ? (agentIdToNameRef.current[ownerAgentID] || "Unassigned")
+        : "Unassigned";
+      return {
+        id: raw.id,
+        issueNumber: issue.issue_number,
+        title: raw.title,
+        status,
+        priority,
+        assignee: agentName,
+        avatarColor: agentColors[agentName] || "var(--accent, #C9A86C)",
+        blocked: status === "blocked" || status === "flagged",
+      };
+    });
+    setTasks(transformedTasks);
+  }, []);
+
+  const refreshProjectActivity = useCallback(async () => {
+    const orgId = localStorage.getItem("otter-camp-org-id");
+    const activityUrl = orgId
+      ? `${API_URL}/api/feed?org_id=${orgId}&limit=10`
+      : `${API_URL}/api/feed?limit=10`;
+    const activityRes = await fetch(activityUrl);
+    if (!activityRes.ok) {
+      return;
+    }
+    const activityData = await activityRes.json();
+    const items = activityData.items || [];
+    const transformedActivity: Activity[] = items.slice(0, 5).map((item: {
+      id: string;
+      agent_name?: string;
+      type?: string;
+      summary?: string;
+      task_title?: string;
+      metadata?: unknown;
+      created_at?: string;
+    }) => {
+      const agentName = item.agent_name?.trim() || "System";
+      const type = item.type?.trim() || "activity";
+      const highlight = getActivityDescription({
+        type,
+        actorName: agentName,
+        taskTitle: item.task_title,
+        summary: item.summary,
+        metadata: normalizeMetadata(item.metadata),
+      });
+      return {
+        id: item.id,
+        agent: agentName,
+        avatarColor: agentColors[agentName] || "var(--accent, #C9A86C)",
+        text: "",
+        highlight,
+        timeAgo: item.created_at ? formatTimeAgo(item.created_at) : "",
+      };
+    });
+    setActivity(transformedActivity);
+  }, []);
 
   // Fetch project and issue work items
   useEffect(() => {
@@ -455,100 +576,10 @@ export default function ProjectDetailPage() {
           parsedAgents.sort((a, b) => a.name.localeCompare(b.name));
           setAvailableAgents(parsedAgents);
         }
-        
-        // Fetch issues for this project
-        const issuesUrl = orgId
-          ? `${API_URL}/api/issues?org_id=${encodeURIComponent(orgId)}&project_id=${encodeURIComponent(id)}&limit=200`
-          : `${API_URL}/api/issues?project_id=${encodeURIComponent(id)}&limit=200`;
-        const issuesRes = await fetch(issuesUrl);
-        if (issuesRes.ok) {
-          const payload = await issuesRes.json() as
-            | { items?: ApiIssue[] }
-            | ApiIssue[];
-          const apiIssues = Array.isArray(payload)
-            ? payload
-            : Array.isArray(payload.items)
-              ? payload.items
-                : [];
-
-          const transformedTasks: Task[] = apiIssues.map((raw) => {
-            const issue = raw as ApiIssue;
-            const ownerAgentID = issue.owner_agent_id;
-            const issueStatusRaw = issue.work_status ?? "queued";
-            const normalizedStatus = issueStatusRaw.trim().toLowerCase();
-            const status = (
-              normalizedStatus === "queued" ||
-              normalizedStatus === "ready" ||
-              normalizedStatus === "planning" ||
-              normalizedStatus === "ready_for_work" ||
-              normalizedStatus === "in_progress" ||
-              normalizedStatus === "review" ||
-              normalizedStatus === "blocked" ||
-              normalizedStatus === "flagged" ||
-              normalizedStatus === "done" ||
-              normalizedStatus === "cancelled" ||
-              normalizedStatus === "dispatched"
-            )
-              ? normalizedStatus
-              : "queued";
-            const priorityRaw = (issue.priority ?? "P2").toUpperCase();
-            const priority = (priorityRaw === "P0" || priorityRaw === "P1" || priorityRaw === "P2" || priorityRaw === "P3")
-              ? priorityRaw
-              : "P2";
-            const agentName = ownerAgentID
-              ? (agentIdToNameRef.current[ownerAgentID] || "Unassigned")
-              : "Unassigned";
-            return {
-              id: raw.id,
-              issueNumber: issue.issue_number,
-              title: raw.title,
-              status,
-              priority,
-              assignee: agentName,
-              avatarColor: agentColors[agentName] || "var(--accent, #C9A86C)",
-              blocked: status === "blocked" || status === "flagged",
-            };
-          });
-          setTasks(transformedTasks);
-        }
-        
-        // Fetch activity for this project
-        const activityUrl = orgId
-          ? `${API_URL}/api/feed?org_id=${orgId}&limit=10`
-          : `${API_URL}/api/feed?limit=10`;
-        const activityRes = await fetch(activityUrl);
-        if (activityRes.ok) {
-          const activityData = await activityRes.json();
-          const items = activityData.items || [];
-          const transformedActivity: Activity[] = items.slice(0, 5).map((item: {
-            id: string;
-            agent_name?: string;
-            type?: string;
-            summary?: string;
-            task_title?: string;
-            metadata?: unknown;
-            created_at?: string;
-          }) => {
-            const agentName = item.agent_name?.trim() || "System";
-            const type = item.type?.trim() || "activity";
-            const highlight = getActivityDescription({
-              type,
-              actorName: agentName,
-              taskTitle: item.task_title,
-              summary: item.summary,
-              metadata: normalizeMetadata(item.metadata),
-            });
-            return {
-              id: item.id,
-              agent: agentName,
-              avatarColor: agentColors[agentName] || "var(--accent, #C9A86C)",
-              text: "",
-              highlight: highlight,
-              timeAgo: item.created_at ? formatTimeAgo(item.created_at) : "",
-            };
-          });
-          setActivity(transformedActivity);
-        }
+        await Promise.all([
+          refreshProjectIssues(id),
+          refreshProjectActivity(),
+        ]);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load project');
       } finally {
@@ -557,7 +588,49 @@ export default function ProjectDetailPage() {
     }
     
     fetchData();
-  }, [id]);
+  }, [id, refreshProjectActivity, refreshProjectIssues]);
+
+  useEffect(() => {
+    if (!id || !lastMessage || !lastMessage.data || typeof lastMessage.data !== "object") {
+      return;
+    }
+    const payload = lastMessage.data as Record<string, unknown>;
+
+    if (lastMessage.type === "IssueCreated") {
+      const issueRecord =
+        payload.issue && typeof payload.issue === "object"
+          ? (payload.issue as Record<string, unknown>)
+          : payload;
+      const eventProjectID =
+        (typeof issueRecord.project_id === "string" && issueRecord.project_id.trim()) ||
+        (typeof issueRecord.projectId === "string" && issueRecord.projectId.trim()) ||
+        "";
+      if (eventProjectID === id) {
+        void refreshProjectIssues(id);
+        void refreshProjectActivity();
+      }
+      return;
+    }
+
+    if (lastMessage.type === "ProjectChatMessageCreated") {
+      const messageRecord =
+        payload.message && typeof payload.message === "object"
+          ? (payload.message as Record<string, unknown>)
+          : payload;
+      const eventProjectID =
+        (typeof messageRecord.project_id === "string" && messageRecord.project_id.trim()) ||
+        (typeof messageRecord.projectId === "string" && messageRecord.projectId.trim()) ||
+        "";
+      if (eventProjectID === id) {
+        void refreshProjectActivity();
+      }
+      return;
+    }
+
+    if (lastMessage.type === "ActivityEventReceived") {
+      void refreshProjectActivity();
+    }
+  }, [id, lastMessage, refreshProjectActivity, refreshProjectIssues]);
 
   useEffect(() => {
     if (!project) {
@@ -602,12 +675,34 @@ export default function ProjectDetailPage() {
   }, [activeTab, issueId, openConversation, project]);
 
   const tasksByColumn = useMemo(() => {
+    const activeIssueIDs = new Set<string>();
+    for (const emission of projectEmissions) {
+      const issueID = emission.scope?.issue_id?.trim() ?? "";
+      if (!issueID) {
+        continue;
+      }
+      const emittedAtMs = Date.parse(emission.timestamp);
+      if (Number.isNaN(emittedAtMs)) {
+        continue;
+      }
+      const ageMs = nowMs - emittedAtMs;
+      if (ageMs < -ACTIVE_EMISSION_WINDOW_MS || ageMs > ACTIVE_EMISSION_WINDOW_MS) {
+        continue;
+      }
+      activeIssueIDs.add(issueID);
+    }
+
+    const decoratedTasks = tasks.map((task) => ({
+      ...task,
+      isActive: activeIssueIDs.has(task.id),
+    }));
+
     const grouped: Record<string, Task[]> = {};
     for (const col of COLUMNS) {
-      grouped[col.key] = tasks.filter((t) => col.statuses.includes(t.status));
+      grouped[col.key] = decoratedTasks.filter((t) => col.statuses.includes(t.status));
     }
     return grouped;
-  }, [tasks]);
+  }, [nowMs, projectEmissions, tasks]);
 
   const waitingCount = useMemo(() => {
     return tasks.filter((t) => t.blocked).length;
@@ -992,6 +1087,19 @@ export default function ProjectDetailPage() {
               </span>
             </div>
             <div className="flex-1 overflow-y-auto p-3">
+              <div className="mb-3 rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                  Live Emissions
+                </p>
+                <EmissionStream
+                  emissions={projectEmissions}
+                  projectId={project.id}
+                  issueId={issueId ?? undefined}
+                  limit={4}
+                  emptyText="No live emissions yet"
+                  className="mt-2 text-xs text-[var(--text-muted)]"
+                />
+              </div>
               {activity.length > 0 ? (
                 activity.map((a) => (
                   <ActivityItem key={a.id} activity={a} />
@@ -1061,6 +1169,19 @@ export default function ProjectDetailPage() {
 
       {activeTab === "activity" && (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+          <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+              Live Emissions
+            </p>
+            <EmissionStream
+              emissions={projectEmissions}
+              projectId={project.id}
+              issueId={issueId ?? undefined}
+              limit={8}
+              emptyText="No live emissions yet"
+              className="mt-2 text-sm text-[var(--text-muted)]"
+            />
+          </div>
           <div className="space-y-2">
             {activity.length > 0 ? (
               activity.map((a) => (
