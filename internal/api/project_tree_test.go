@@ -316,7 +316,7 @@ func TestProjectTreeHandlerReturnsEmptyEntriesForEmptyRepository(t *testing.T) {
 	require.Empty(t, payload.Entries)
 }
 
-func TestProjectTreeHandlerReturnsNoRepoConfiguredWhenBindingMissing(t *testing.T) {
+func TestProjectTreeHandlerAutoBootstrapsRepoWhenBindingMissing(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "project-tree-no-repo-org")
 	projectID := insertProjectTestProject(t, db, orgID, "Project Tree No Repo")
@@ -334,11 +334,12 @@ func TestProjectTreeHandlerReturnsNoRepoConfiguredWhenBindingMissing(t *testing.
 	)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusConflict, rec.Code)
+	require.Equal(t, http.StatusOK, rec.Code)
 
-	var payload errorResponse
+	var payload projectTreeResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.Equal(t, "No repository configured for this project", payload.Error)
+	require.Equal(t, "/", payload.Path)
+	require.Empty(t, payload.Entries)
 }
 
 func TestProjectTreeHandlerFallsBackToProjectLocalRepoPathWhenBindingMissing(t *testing.T) {

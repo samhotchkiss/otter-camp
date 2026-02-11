@@ -224,6 +224,14 @@ func (h *ProjectTreeHandler) resolveBrowseRepository(
 	}
 
 	if strings.TrimSpace(repoPath) == "" {
+		bootstrappedRepoPath, pathErr := h.ProjectStore.GetRepoPath(ctx, projectID)
+		if pathErr != nil {
+			return "", "", "", pathErr
+		}
+		repoPath = strings.TrimSpace(bootstrappedRepoPath)
+	}
+
+	if strings.TrimSpace(repoPath) == "" {
 		return "", "", "", errProjectRepoNotConfigured
 	}
 
