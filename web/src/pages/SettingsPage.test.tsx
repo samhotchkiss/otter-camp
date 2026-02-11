@@ -172,4 +172,37 @@ describe("SettingsPage label management", () => {
     expect(lightThemeButton.className).toContain("bg-[var(--surface)]");
     expect(lightThemeButton.className).toContain("border-[var(--border)]");
   });
+
+  it("renders workspace slug", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/settings/profile")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/settings/notifications")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/settings/workspace")) {
+        return jsonResponse({
+          name: "Acme Workspace",
+          slug: "acme-workspace",
+          members: [],
+        });
+      }
+      if (url.includes("/api/settings/integrations")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/labels?org_id=org-123&seed=true")) {
+        return jsonResponse({ labels: [] });
+      }
+      return jsonResponse({ error: "unexpected request" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<SettingsPage />);
+
+    const slugInput = await screen.findByLabelText("Organization Slug");
+    expect(slugInput).toHaveValue("acme-workspace");
+    expect(slugInput).toHaveAttribute("readonly");
+  });
 });

@@ -37,6 +37,7 @@ type WorkspaceMember = {
 
 type Workspace = {
   name: string;
+  slug: string;
   members: WorkspaceMember[];
 };
 
@@ -489,6 +490,13 @@ function WorkspaceSection({
       icon="🏕️"
     >
       <div className="space-y-6">
+        <Input
+          label="Organization Slug"
+          value={workspace.slug}
+          onChange={() => {}}
+          readOnly
+        />
+
         {/* Workspace Name */}
         <Input
           label="Workspace Name"
@@ -906,6 +914,7 @@ export default function SettingsPage() {
   // Workspace state
   const [workspace, setWorkspace] = useState<Workspace>({
     name: "",
+    slug: "",
     members: [],
   });
   const [savingWorkspace, setSavingWorkspace] = useState(false);
@@ -966,7 +975,11 @@ export default function SettingsPage() {
 
         if (workspaceRes.ok) {
           const data = await workspaceRes.json();
-          setWorkspace(data);
+          setWorkspace({
+            name: data?.name ?? "",
+            slug: data?.slug ?? "",
+            members: Array.isArray(data?.members) ? data.members : [],
+          });
         }
 
         if (integrationsRes.ok) {
