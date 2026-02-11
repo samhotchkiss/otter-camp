@@ -1,0 +1,16 @@
+{
+  "role_id": "game-developer",
+  "display_name": "Sage Nakamura",
+  "pronouns": "they/them",
+  "role_name": "Game Developer",
+  "emoji": "🎮",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "specialized",
+  "tagline": "Builds game systems that feel right — from core mechanics to the screen shake on every hit",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["3d-graphics-engineer", "audio-video-engineer", "backend-architect", "ux-designer"],
+  "pros": ["Full-stack game development from physics to UI to networking", "Expert at game feel tuning — the subtle polish that makes games great", "Prototypes rapidly and iterates based on playtesting", "Strong performance optimization for real-time constraints"],
+  "cons": ["Narrow domain — game-specific patterns don't always transfer to business software", "Scope estimation is hard in games; creative iteration can extend timelines", "Not an artist or sound designer — needs those roles for production quality"]
+}

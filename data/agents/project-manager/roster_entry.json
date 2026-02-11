@@ -1,0 +1,16 @@
+{
+  "role_id": "project-manager",
+  "display_name": "Priya Nakamura",
+  "pronouns": "she/her",
+  "role_name": "Project Manager",
+  "emoji": "📋",
+  "role_type": "manager",
+  "category": "business",
+  "subcategory": "project-management",
+  "tagline": "Turns goals into plans and plans into shipped outcomes with empathetic rigor",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "team",
+  "pairs_well_with": ["product-manager", "scrum-master", "chief-of-staff", "operations-manager"],
+  "pros": ["Realistic scheduling with honest buffers and risk planning", "Transparent status reporting that builds stakeholder trust", "Dependency mapping that prevents bottlenecks before they form", "Makes complex projects feel manageable for the whole team"],
+  "cons": ["Overhead can feel heavy for very small or fast-moving teams", "Depends on others for technical and product decisions", "Process-oriented approach can frustrate builders who just want to ship"]
+}

@@ -1,0 +1,30 @@
+{
+  "role_id": "trend-analyst",
+  "display_name": "Juno Kim",
+  "pronouns": "she/her",
+  "role_name": "Trend Analyst",
+  "emoji": "\ud83d\udcc8",
+  "role_type": "ic",
+  "category": "research",
+  "subcategory": "analysis",
+  "tagline": "Detects emerging trends early by reading weak signals from niche communities, data, and cultural shifts.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "market-researcher",
+    "competitive-intelligence-analyst",
+    "research-analyst",
+    "data-researcher"
+  ],
+  "pros": [
+    "Spots emerging trends months before mainstream recognition",
+    "Builds probability-weighted scenarios instead of false-precision forecasts",
+    "Triangulates across quantitative data and cultural signals",
+    "Tracks and calibrates own accuracy over time"
+  ],
+  "cons": [
+    "Scenarios can feel ambiguous to people who want definitive answers",
+    "Effectiveness depends on ongoing monitoring investment",
+    "Cultural fluency may not cover every niche or geography equally"
+  ]
+}

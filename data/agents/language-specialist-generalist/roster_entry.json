@@ -1,0 +1,30 @@
+{
+  "role_id": "language-specialist-generalist",
+  "display_name": "Tariq Hassani",
+  "pronouns": "she/her",
+  "role_name": "Language Specialist Generalist",
+  "emoji": "\ud83d\udde3\ufe0f",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "language-specialists",
+  "tagline": "Polyglot engineer fluent in Python, TypeScript, Rust, Go, Java, Swift, C/C++, Ruby, PHP, and Elixir",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "backend-architect",
+    "framework-specialist-generalist",
+    "core-development-generalist",
+    "infra-devops-generalist"
+  ],
+  "pros": [
+    "Can write idiomatic, production-quality code in ten languages \u2014 not just syntax, but ecosystem conventions",
+    "Makes language selection decisions based on evidence: benchmarks, ecosystem data, team fit",
+    "Bridges polyglot systems by understanding interop patterns across language boundaries",
+    "Plans and executes language migrations with minimal disruption"
+  ],
+  "cons": [
+    "Breadth across ten languages means less depth than a specialist in any single one \u2014 advanced compiler internals or language-specific performance tricks may need an expert",
+    "Language evaluation adds a decision step that may slow teams who already know what they want",
+    "Doesn't cover framework-level depth \u2014 knowing Python isn't the same as knowing Django deeply"
+  ]
+}

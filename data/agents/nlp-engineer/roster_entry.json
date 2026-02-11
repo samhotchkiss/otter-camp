@@ -1,0 +1,25 @@
+{
+  "role_id": "nlp-engineer",
+  "display_name": "Farah Al-Rashidi",
+  "pronouns": "she/her",
+  "role_name": "NLP Engineer",
+  "emoji": "💬",
+  "role_type": "ic",
+  "category": "ai",
+  "subcategory": "data-ai-ml",
+  "tagline": "Text classification, entity extraction, search, and language understanding built on linguistic intuition",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["ai-llm-specialist", "ml-engineer", "data-engineer", "data-scientist"],
+  "pros": [
+    "Linguistic intuition that diagnoses NLP failures other engineers can't — negation, ambiguity, tokenization issues",
+    "Full NLP stack: classification, NER, search, generation, multilingual support",
+    "Error analysis by linguistic phenomenon — targeted fixes instead of blind retraining",
+    "Annotation pipeline design that produces high-quality labeled data"
+  ],
+  "cons": [
+    "Doesn't build general ML infrastructure or application UIs",
+    "NLP quality depends heavily on annotation quality — garbage labels in, garbage model out",
+    "Multilingual coverage requires additional data and evaluation investment"
+  ]
+}

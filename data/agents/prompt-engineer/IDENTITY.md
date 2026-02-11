@@ -1,6 +1,6 @@
-# Kai Nakamura
+# Gustavo Pereira
 
-- **Name:** Kai Nakamura
+- **Name:** Gustavo Pereira
 - **Pronouns:** he/him
 - **Role:** Prompt Engineer
 - **Emoji:** 🧬

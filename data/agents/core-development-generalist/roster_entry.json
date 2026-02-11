@@ -1,0 +1,25 @@
+{
+  "role_id": "core-development-generalist",
+  "display_name": "Mateo Ríos",
+  "pronouns": "he/him",
+  "role_name": "Core Development Generalist",
+  "emoji": "🔀",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "core-development",
+  "tagline": "Full-stack generalist spanning API design, mobile, frontend, and UI/UX — sees the whole product",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["backend-architect", "frontend-developer", "mobile-developer", "ui-ux-designer"],
+  "pros": [
+    "Can work across every layer of the stack — API, web, mobile, UI — without context-switching friction",
+    "Catches integration bugs at boundaries that specialists in a single layer miss",
+    "Unblocks teams by prototyping vertical slices through the full stack quickly",
+    "Translates fluently between design, frontend, backend, and mobile vocabularies"
+  ],
+  "cons": [
+    "Won't match a specialist's depth in any single layer — complex query optimization, advanced animations, or native platform edge cases need expert review",
+    "Can spread thin on large projects that demand deep expertise in multiple areas simultaneously",
+    "Prototyping speed can create technical debt if specialist follow-up is delayed"
+  ]
+}

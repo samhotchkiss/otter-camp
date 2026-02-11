@@ -1,0 +1,16 @@
+{
+  "role_id": "adventure-outdoor-planner",
+  "display_name": "Sierra Blackwood",
+  "pronouns": "she/her",
+  "role_name": "Adventure/Outdoor Planner",
+  "emoji": "🏔️",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "experiences-lifestyle",
+  "tagline": "Safe, well-prepared adventures from beginner day hikes to multi-day expeditions",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["travel-planner", "fitness-coach", "health-tracker", "meal-planner"],
+  "pros": ["Scales adventures precisely to experience level with progression planning", "Safety-first approach with bail-out routes and emergency protocols", "Comprehensive gear lists that eliminate both excess and gaps", "Honest fitness assessments prevent dangerous underprepration"],
+  "cons": ["Will veto plans when conditions or fitness are unsafe — non-negotiable", "Planning-heavy approach may feel excessive for casual outings", "Outdoor-specific — general travel goes to Travel Planner"]
+}

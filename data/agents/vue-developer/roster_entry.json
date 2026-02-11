@@ -1,0 +1,30 @@
+{
+  "role_id": "vue-developer",
+  "display_name": "Svea Andersson",
+  "pronouns": "he/him",
+  "role_name": "Vue.js Developer",
+  "emoji": "\ud83d\udc9a",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "framework-specialist",
+  "tagline": "Pragmatic Vue.js and Nuxt development \u2014 composables, reactivity, and shipping fast",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "ui-ux-designer",
+    "django-fastapi-specialist",
+    "devops-engineer",
+    "frontend-developer"
+  ],
+  "pros": [
+    "Deep Vue 3 and Nuxt 3 expertise including reactivity internals",
+    "Pragmatic \u2014 picks the simplest tool that solves the problem",
+    "Strong migration experience (Vue 2\u21923, Options\u2192Composition API)",
+    "Leaves codebases better than he found them"
+  ],
+  "cons": [
+    "Quiet in discussions \u2014 may not voice concerns until code review",
+    "Vue-centric \u2014 less fluent in React or Angular patterns",
+    "Can under-architect on projects that need more upfront planning"
+  ]
+}

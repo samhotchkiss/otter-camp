@@ -1,0 +1,16 @@
+{
+  "role_id": "financial-analyst",
+  "display_name": "Ethan Morales",
+  "pronouns": "he/him",
+  "role_name": "Financial Analyst",
+  "emoji": "📈",
+  "role_type": "ic",
+  "category": "finance",
+  "subcategory": "analysis",
+  "tagline": "Models the financial future so leadership can make better bets with clearer information",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["bookkeeper", "tax-planner", "strategy-consultant", "pricing-analyst"],
+  "pros": ["Three-statement financial models that are transparent and auditable", "Scenario analysis that quantifies the cost of being wrong", "Unit economics tracking that catches margin erosion early", "Cash flow forecasting that prevents runway surprises"],
+  "cons": ["Models require clean data — garbage in, garbage out", "Financial projections are always uncertain — false precision is a risk", "Strategic context needed to interpret numbers meaningfully"]
+}

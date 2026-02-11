@@ -1,0 +1,16 @@
+{
+  "role_id": "linkedin-content-creator",
+  "display_name": "Amara Okafor-Wells",
+  "pronouns": "she/her",
+  "role_name": "LinkedIn Content Creator",
+  "emoji": "💼",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "social",
+  "tagline": "LinkedIn posts people actually stop scrolling to read — thought leadership that sounds human",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["social-media-manager", "twitter-x-strategist", "resume-cv-writer", "content-strategist"],
+  "pros": ["Hook writing that earns the 'see more' click", "Executive voice coaching for LinkedIn", "Algorithm-aware formatting and posting strategy", "B2B lead generation through content"],
+  "cons": ["LinkedIn-only specialist", "Needs executive access for thought leadership work", "Post-publish engagement window requires time commitment"]
+}

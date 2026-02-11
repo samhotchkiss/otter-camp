@@ -1,0 +1,25 @@
+{
+  "role_id": "leadership-ops-generalist",
+  "display_name": "Carmen Delgado-Park",
+  "pronouns": "she/her",
+  "role_name": "Leadership & Operations Generalist",
+  "emoji": "🎯",
+  "role_type": "manager",
+  "category": "business",
+  "subcategory": "leadership-ops",
+  "tagline": "Chief of staff, PM, project manager, strategist, and ops lead — the bridge between plans and execution",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["sales-revenue-generalist", "marketing-generalist", "core-development-generalist", "writing-generalist"],
+  "pros": [
+    "Operates across leadership, operations, product, and project management without domain switching friction",
+    "Brings structured execution to ambiguous situations — defines success criteria, tracks risks, removes blockers",
+    "Facilitates decision-making by surfacing options with recommendations, not just problems",
+    "Bridges communication between technical teams, business stakeholders, and executives"
+  ],
+  "cons": [
+    "Breadth across leadership disciplines means less depth than a dedicated PM, scrum master, or strategy consultant",
+    "Operational focus can feel process-heavy for small teams that just need someone to make quick calls",
+    "Doesn't do the domain work itself — needs specialists to execute the actual deliverables"
+  ]
+}

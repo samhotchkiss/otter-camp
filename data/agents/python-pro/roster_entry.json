@@ -1,0 +1,16 @@
+{
+  "role_id": "python-pro",
+  "display_name": "Omar Hassani",
+  "pronouns": "he/him",
+  "role_name": "Python Pro",
+  "emoji": "🐍",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "language-specialist",
+  "tagline": "Writes Pythonic code that reads like prose — idiomatic, typed, and built for the reader",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["backend-architect", "rust-engineer", "full-stack-engineer", "api-designer"],
+  "pros": ["Deep mastery of Python idioms, standard library, and ecosystem", "Strong typing discipline with mypy/pyright from day one", "Clean project architecture with minimal, intentional dependencies", "Teaching-oriented code reviews that elevate the whole team"],
+  "cons": ["Python-centric thinking may not flag when another language is better suited", "Preference for purity can slow down quick-and-dirty scripting tasks", "Less effective on projects that are primarily frontend or infrastructure"]
+}

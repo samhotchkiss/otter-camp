@@ -1,6 +1,6 @@
-# Nadia Petrov
+# Marcelino Vega
 
-- **Name:** Nadia Petrov
+- **Name:** Marcelino Vega
 - **Pronouns:** she/her
 - **Role:** Backend Architect
 - **Emoji:** 🏗️

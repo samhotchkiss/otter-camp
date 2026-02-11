@@ -1,0 +1,25 @@
+{
+  "role_id": "content-strategist",
+  "display_name": "Naomi Baptiste",
+  "pronouns": "she/her",
+  "role_name": "Content Strategist",
+  "emoji": "🗺️",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "editorial-brand",
+  "tagline": "Content pillars, editorial calendars, audience mapping, and strategic content planning",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["seo-specialist", "pr-writer", "localization-specialist", "copywriter"],
+  "pros": [
+    "Builds realistic content systems that teams can actually sustain",
+    "Strong audience research connecting content to real user needs",
+    "Excellent content brief creation that empowers writers without constraining them",
+    "Data-driven — measures performance and adjusts strategy based on evidence"
+  ],
+  "cons": [
+    "Strategist, not a writer — doesn't create the content herself",
+    "Prioritizes depth over volume, which can feel slow for teams wanting rapid output",
+    "Framework-heavy approach may feel over-structured for very small teams"
+  ]
+}

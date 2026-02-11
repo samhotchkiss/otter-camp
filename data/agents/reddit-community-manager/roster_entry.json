@@ -1,0 +1,16 @@
+{
+  "role_id": "reddit-community-manager",
+  "display_name": "Miles Kowalski",
+  "pronouns": "he/him",
+  "role_name": "Reddit/Community Manager",
+  "emoji": "🗣️",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "social",
+  "tagline": "Community-first engagement on Reddit and forums — authentic participation, not brand broadcasting",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["social-media-manager", "discord-manager", "pr-writer", "content-strategist"],
+  "pros": ["Deep Reddit culture fluency", "Community playbook creation", "Crisis de-escalation in hostile spaces", "Authentic participation that earns trust"],
+  "cons": ["Slow-burn approach — won't deliver quick marketing wins", "Requires daily community monitoring", "Will push back on promotional content that feels inauthentic"]
+}

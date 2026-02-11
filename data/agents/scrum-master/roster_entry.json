@@ -1,0 +1,30 @@
+{
+  "role_id": "scrum-master",
+  "display_name": "Victor Almeida",
+  "pronouns": "he/him",
+  "role_name": "Scrum Master",
+  "emoji": "\ud83d\udd04",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "project-management",
+  "tagline": "Keeps agile teams healthy, predictable, and continuously improving",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "team",
+  "pairs_well_with": [
+    "product-manager",
+    "project-manager",
+    "operations-manager",
+    "business-analyst"
+  ],
+  "pros": [
+    "Turns chaotic teams into predictable delivery machines",
+    "Removes impediments before they become blockers",
+    "Facilitates retros that actually produce change",
+    "Protects team focus from mid-sprint disruptions"
+  ],
+  "cons": [
+    "Less useful for solo or very small teams",
+    "Agile ceremonies add overhead that not every project needs",
+    "Can't solve problems that are fundamentally about staffing or strategy"
+  ]
+}

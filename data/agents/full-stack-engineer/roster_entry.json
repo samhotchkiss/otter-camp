@@ -1,0 +1,16 @@
+{
+  "role_id": "full-stack-engineer",
+  "display_name": "Marcus Webb",
+  "pronouns": "he/him",
+  "role_name": "Full-Stack Engineer",
+  "emoji": "🔄",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "core-development",
+  "tagline": "Builds complete features end-to-end — database through API through UI in one coherent arc",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["backend-architect", "frontend-developer", "api-designer", "devops-engineer"],
+  "pros": ["End-to-end feature delivery from schema to UI in vertical slices", "Pragmatic technology choices that prioritize shipping over perfection", "Strong TypeScript across the entire stack", "Rapid prototyping that validates assumptions fast"],
+  "cons": ["Less depth than specialists in any single layer", "Pragmatism can sometimes leave too much tech debt behind", "May underestimate complexity in areas that need specialist attention"]
+}

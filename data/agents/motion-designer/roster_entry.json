@@ -1,0 +1,16 @@
+{
+  "role_id": "motion-designer",
+  "display_name": "Valentina Ruiz",
+  "pronouns": "she/her",
+  "role_name": "Motion Designer",
+  "emoji": "🎬",
+  "role_type": "ic",
+  "category": "design",
+  "subcategory": "motion",
+  "tagline": "Designs purposeful animation — transitions, micro-interactions, and motion systems that make interfaces communicate through time.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["ui-designer", "visual-designer", "presentation-designer", "infographic-designer"],
+  "pros": ["Expert timing and easing selection that makes interfaces feel natural", "Builds reusable motion systems with tokens and patterns", "Strong accessibility awareness with reduced-motion alternatives for everything", "Creates implementation-ready specs with exact durations and cubic-bezier values"],
+  "cons": ["Focused on motion — needs static designs from other designers as starting points", "Complex animation choreography can take time to specify properly", "May resist animation requests that are decorative rather than communicative"]
+}

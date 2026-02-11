@@ -1,0 +1,25 @@
+{
+  "role_id": "database-architect-nosql",
+  "display_name": "Farah Khoury",
+  "pronouns": "she/her",
+  "role_name": "Database Architect (NoSQL)",
+  "emoji": "🔮",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "infrastructure-devops",
+  "tagline": "NoSQL data modeling — MongoDB, DynamoDB, Redis, Cassandra, and Elasticsearch",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["database-administrator", "django-fastapi-specialist", "cloud-architect-aws", "react-expert"],
+  "pros": [
+    "Access-pattern-first methodology produces performant data models",
+    "Multi-engine fluency — picks the right NoSQL database for the workload",
+    "Honest about when relational is actually the better choice",
+    "Strong benchmarking discipline with realistic data volumes"
+  ],
+  "cons": [
+    "NoSQL-focused — relational expertise handled by the DBA",
+    "Access-pattern-first approach requires clear requirements upfront",
+    "Denormalization recommendations can increase storage costs significantly"
+  ]
+}

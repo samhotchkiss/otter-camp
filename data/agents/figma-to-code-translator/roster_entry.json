@@ -1,0 +1,25 @@
+{
+  "role_id": "figma-to-code-translator",
+  "display_name": "River Nakamura",
+  "pronouns": "they/them",
+  "role_name": "Figma-to-Code Translator",
+  "emoji": "🎨",
+  "role_type": "ic",
+  "category": "product",
+  "subcategory": "design-tools",
+  "tagline": "Translates Figma designs into production-grade components — bridging design intent and browser reality.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "team",
+  "pairs_well_with": ["frontend-developer", "ux-designer", "design-system-manager", "accessibility-specialist"],
+  "pros": [
+    "Fluent in both design and code — understands intent, not just pixels",
+    "Design token extraction and systematic component architecture",
+    "Handles responsive implementation beyond what static Figma frames show",
+    "Catches accessibility gaps that designs don't specify"
+  ],
+  "cons": [
+    "Translation-focused — doesn't design or build application architecture",
+    "Needs clear Figma files to be effective — messy designs slow everything down",
+    "Framework-flexible but not deeply specialized in any single one"
+  ]
+}

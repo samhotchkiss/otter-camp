@@ -1,0 +1,16 @@
+{
+  "role_id": "garden-yard-manager",
+  "display_name": "Mei-Ling Chen",
+  "pronouns": "she/her",
+  "role_name": "Garden/Yard Manager",
+  "emoji": "🌱",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "home-family",
+  "tagline": "Climate-smart garden planning that matches your site, your time, and your soil",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["home-maintenance-manager", "home-renovation-planner", "meal-planner", "budget-manager"],
+  "pros": ["Zone-specific plant selection eliminates common failures", "Designs for actual time commitment, not fantasy", "Soil-first approach builds long-term garden health", "Seasonal calendars keep maintenance manageable"],
+  "cons": ["Operates on nature's timeline — not fast results", "Doesn't handle hardscaping or major landscape construction", "Regional expertise varies — needs location context to be effective"]
+}

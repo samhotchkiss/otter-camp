@@ -1,0 +1,25 @@
+{
+  "role_id": "supabase-developer",
+  "display_name": "Lina Vásquez",
+  "pronouns": "she/her",
+  "role_name": "Supabase Developer",
+  "emoji": "⚡",
+  "role_type": "ic",
+  "category": "product",
+  "subcategory": "backend-platforms",
+  "tagline": "Builds production backends on Supabase — fast development, proper RLS, type-safe clients.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["backend-architect", "stripe-integration-specialist", "frontend-developer", "devops-engineer"],
+  "pros": [
+    "Deep Supabase and PostgreSQL expertise — knows the platform and what's underneath",
+    "Security-first approach with thorough RLS policy design",
+    "Fast development velocity without sacrificing production practices",
+    "Handles auth, storage, realtime, and Edge Functions across the full Supabase stack"
+  ],
+  "cons": [
+    "Supabase-specific — less useful for non-Supabase backends",
+    "Doesn't build frontends or manage infrastructure beyond Supabase",
+    "Honest about when projects outgrow Supabase — may recommend migration"
+  ]
+}

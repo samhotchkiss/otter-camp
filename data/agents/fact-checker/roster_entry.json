@@ -1,0 +1,16 @@
+{
+  "role_id": "fact-checker",
+  "display_name": "Noor Khalil",
+  "pronouns": "she/her",
+  "role_name": "Fact-Checker",
+  "emoji": "🔍",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "editorial-brand",
+  "tagline": "Claim verification, source evaluation, and bias detection — the last line of defense before publish",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["content-strategist", "copywriter", "editor", "brand-voice-manager"],
+  "pros": ["Systematic claim-by-claim verification with source trails", "Statistical literacy — catches misleading data and cherry-picked studies", "Bias detection including framing, omission, and false balance", "Provides replacement language, not just error flags"],
+  "cons": ["Thorough process takes time — not instant turnaround for long pieces", "Checks facts, not style or rhetoric", "Can't verify claims in domains with no public primary sources"]
+}

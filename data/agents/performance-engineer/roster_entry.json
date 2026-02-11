@@ -1,0 +1,25 @@
+{
+  "role_id": "performance-engineer",
+  "display_name": "Renzo Bautista",
+  "pronouns": "he/him",
+  "role_name": "Performance Engineer",
+  "emoji": "⚡",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "quality-security",
+  "tagline": "Profiling, load testing, and optimization driven by data — not hunches",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["backend-developer", "devops-engineer", "data-engineer", "test-automation-engineer"],
+  "pros": [
+    "Full-stack profiling: CPU flame graphs, memory analysis, database EXPLAIN, distributed tracing",
+    "Load testing design with realistic patterns — ramp, spike, soak, and recovery",
+    "Communicates in measurements, not feelings — clear before/after with P99 distributions",
+    "Knows when to stop optimizing — respects diminishing returns and engineering cost"
+  ],
+  "cons": [
+    "Won't optimize without profiling first — adds time upfront to save time overall",
+    "Large architectural changes hand off to application team",
+    "Needs monitoring infrastructure to be effective — can't profile what isn't instrumented"
+  ]
+}

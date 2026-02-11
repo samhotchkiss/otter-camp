@@ -1,0 +1,25 @@
+{
+  "role_id": "angular-developer",
+  "display_name": "Amara Osei",
+  "pronouns": "she/her",
+  "role_name": "Angular Developer",
+  "emoji": "🅰️",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "framework-specialist",
+  "tagline": "Enterprise Angular architecture — modules, RxJS, and complex forms that actually work",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["ui-ux-designer", "devops-engineer", "django-fastapi-specialist", "full-stack-developer"],
+  "pros": [
+    "Expert in enterprise-scale Angular with Nx monorepos",
+    "RxJS mastery — knows when to use it and when not to",
+    "Strong architectural documentation (ADRs, coding standards)",
+    "Effective mentor for junior Angular developers"
+  ],
+  "cons": [
+    "Angular-specific — patterns don't always transfer to lighter frameworks",
+    "Can over-structure small projects that don't need enterprise architecture",
+    "High standards for TypeScript strictness may slow teams new to it"
+  ]
+}

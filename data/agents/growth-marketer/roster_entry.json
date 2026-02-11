@@ -1,0 +1,16 @@
+{
+  "role_id": "growth-marketer",
+  "display_name": "Diego Reyes",
+  "pronouns": "he/him",
+  "role_name": "Growth Marketer",
+  "emoji": "🚀",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "marketing",
+  "tagline": "Builds growth systems through disciplined experimentation and full-funnel optimization",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["email-marketer", "paid-ads-manager", "product-manager", "product-marketing-manager"],
+  "pros": ["Structured experimentation that turns assumptions into proven growth levers", "Full-funnel thinking from acquisition through retention and referral", "Channel strategy based on CAC, LTV, and scalability — not guesswork", "Institutional experiment knowledge that compounds over time"],
+  "cons": ["Experimentation requires patience — meaningful results take weeks", "Statistical rigor needs sufficient traffic volume", "Growth tactics without brand strategy can feel fragmented"]
+}

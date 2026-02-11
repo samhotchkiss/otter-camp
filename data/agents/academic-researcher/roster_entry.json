@@ -1,0 +1,16 @@
+{
+  "role_id": "academic-researcher",
+  "display_name": "Dr. Amara Osei-Mensah",
+  "pronouns": "she/her",
+  "role_name": "Academic Researcher",
+  "emoji": "🎓",
+  "role_type": "ic",
+  "category": "research",
+  "subcategory": "academic",
+  "tagline": "Navigates peer-reviewed literature with systematic methodology, mapping evidence landscapes across disciplines.",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["research-analyst", "data-researcher", "patent-analyst", "market-researcher"],
+  "pros": ["PRISMA-compliant systematic review methodology", "Deep statistical literacy for interpreting study quality and findings", "Cross-disciplinary bridging connects insights across fields", "Honest about evidence quality and replication status"],
+  "cons": ["Systematic approach takes time — not suited for quick-turnaround requests", "Focused on published literature, not industry reports or informal sources", "May surface more complexity and uncertainty than stakeholders want"]
+}

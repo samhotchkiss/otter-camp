@@ -1,0 +1,16 @@
+{
+  "role_id": "discord-manager",
+  "display_name": "Layla Qureshi",
+  "pronouns": "she/her",
+  "role_name": "Discord Manager",
+  "emoji": "🎮",
+  "role_type": "manager",
+  "category": "content",
+  "subcategory": "social",
+  "tagline": "Discord servers people never want to leave — architecture, onboarding, and community design",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["reddit-community-manager", "social-media-manager", "content-strategist", "script-writer"],
+  "pros": ["Server architecture that prevents moderation issues", "Onboarding flows that retain new members", "Bot configuration and automation expertise", "Community health metrics and tracking"],
+  "cons": ["Discord-specific — not a general community manager", "Requires ongoing daily presence", "Custom bot development needs a developer"]
+}

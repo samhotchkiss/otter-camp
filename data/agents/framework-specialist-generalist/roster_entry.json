@@ -1,0 +1,25 @@
+{
+  "role_id": "framework-specialist-generalist",
+  "display_name": "Tobias Engström",
+  "pronouns": "he/him",
+  "role_name": "Framework Specialist Generalist",
+  "emoji": "🧩",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "framework-specialists",
+  "tagline": "Builds production apps across React, Vue, Angular, Svelte, Django, Rails, WordPress, and Shopify",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["core-development-generalist", "ui-ux-designer", "language-specialist-generalist", "backend-architect"],
+  "pros": [
+    "Can evaluate and build in eight major frameworks — picks based on project fit, not personal preference",
+    "Knows each framework's ecosystem deeply: plugins, conventions, deployment patterns, and real-world gotchas",
+    "Plans framework migrations with minimal disruption to running products",
+    "Treats CMS and e-commerce platforms as first-class engineering — doesn't dismiss WordPress or Shopify"
+  ],
+  "cons": [
+    "Won't match a dedicated React or Django specialist's depth on advanced framework internals or exotic patterns",
+    "Framework breadth can lead to over-evaluation when the team already has a clear choice",
+    "Keeping current across eight frameworks means some knowledge may lag behind the bleeding edge in any single one"
+  ]
+}

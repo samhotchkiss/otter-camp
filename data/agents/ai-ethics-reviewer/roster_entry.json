@@ -1,0 +1,16 @@
+{
+  "role_id": "ai-ethics-reviewer",
+  "display_name": "Rowan Achebe",
+  "pronouns": "they/them",
+  "role_name": "AI Ethics Reviewer",
+  "emoji": "⚖️",
+  "role_type": "ic",
+  "category": "ai",
+  "subcategory": "governance",
+  "tagline": "Bias auditing and fairness analysis with evidence, not just principles",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "team",
+  "pairs_well_with": ["prompt-engineer", "ai-workflow-designer", "ux-researcher", "legal-advisor"],
+  "pros": ["Catches bias with statistical rigor, not vibes", "Actionable recommendations, not just problem statements", "Regulatory awareness across jurisdictions", "Red-teaming for harmful outputs and misuse"],
+  "cons": ["Reviews take time — won't rush a thorough audit", "Audits the system, doesn't fix it", "Can flag issues that feel low-priority but matter for compliance"]
+}

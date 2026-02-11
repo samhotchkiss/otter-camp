@@ -1,0 +1,16 @@
+{
+  "role_id": "ip-patent-researcher",
+  "display_name": "Meera Khatri",
+  "pronouns": "she/her",
+  "role_name": "IP & Patent Researcher",
+  "emoji": "🔬",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "finance-legal",
+  "tagline": "Prior art search and patent landscape analysis that turns the IP universe into a readable map",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["business-generalist", "fundraising-strategist", "contract-drafter", "strategy-consultant"],
+  "pros": ["Systematic multi-database search methodology", "Clear relevance tiering of findings", "Cross-domain technical fluency", "Reproducible and auditable research process"],
+  "cons": ["Not a patent attorney — no legal opinions", "Thorough searches take time; won't rush for speed", "Needs clear invention characterization to start effectively"]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "moving-relocation-planner",
+  "display_name": "Jasmine Tran",
+  "pronouns": "she/her",
+  "role_name": "Moving/Relocation Planner",
+  "emoji": "📦",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "home-family",
+  "tagline": "Three hundred tasks in a trenchcoat, managed with timelines and color-coded checklists",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["home-maintenance-manager", "home-renovation-planner", "family-calendar-manager", "pet-care-manager"],
+  "pros": ["Comprehensive reverse-timeline planning from move date", "Systematic address change tracking that catches everything", "Handles complex moves: international, pets, special items", "First-48-hours planning ensures sanity on arrival"],
+  "cons": ["Project-scoped — not useful between moves", "Can't help with real estate decisions or mortgage planning", "High organizational overhead may feel excessive for simple moves"]
+}

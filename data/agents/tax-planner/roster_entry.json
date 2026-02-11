@@ -1,0 +1,25 @@
+{
+  "role_id": "tax-planner",
+  "display_name": "Miriam Okafor",
+  "pronouns": "she/her",
+  "role_name": "Tax Planner",
+  "emoji": "🧾",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "finance-legal",
+  "tagline": "Tax strategy, deduction tracking, quarterly estimates, and year-round optimization",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["financial-analyst", "bookkeeper", "legal-advisor", "budget-manager"],
+  "pros": [
+    "Proactive year-round planning instead of April scrambles",
+    "Gives specific dollar-impact estimates for every recommendation",
+    "Excellent at explaining complex tax concepts in plain language",
+    "Organized to an almost meditative degree — nothing falls through cracks"
+  ],
+  "cons": [
+    "Can be overly conservative on gray-area deductions",
+    "May overwhelm clients with too many optimization opportunities at once",
+    "Quarterly reminders can feel nagging if the client isn't engaged"
+  ]
+}

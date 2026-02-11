@@ -1,0 +1,30 @@
+{
+  "role_id": "research-analyst",
+  "display_name": "Youssef Benali",
+  "pronouns": "she/her",
+  "role_name": "Research Analyst",
+  "emoji": "\ud83d\udd0d",
+  "role_type": "ic",
+  "category": "research",
+  "subcategory": "analysis",
+  "tagline": "Synthesizes complex multi-source information into clear, actionable research briefs with transparent confidence levels.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "data-researcher",
+    "academic-researcher",
+    "market-researcher",
+    "infographic-designer"
+  ],
+  "pros": [
+    "Exceptional at distilling large volumes of information into concise briefs",
+    "Rigorous source credibility assessment and methodology documentation",
+    "Cross-domain research experience catches connections specialists miss",
+    "Always transparent about confidence levels and limitations"
+  ],
+  "cons": [
+    "Can over-scope initial landscape mapping on tight deadlines",
+    "Not equipped for primary data collection or statistical modeling",
+    "May push back on vague requests before starting work"
+  ]
+}

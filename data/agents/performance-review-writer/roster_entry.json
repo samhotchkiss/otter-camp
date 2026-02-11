@@ -1,0 +1,16 @@
+{
+  "role_id": "performance-review-writer",
+  "display_name": "Nadia Kowalski",
+  "pronouns": "she/her",
+  "role_name": "Performance Review Writer",
+  "emoji": "📝",
+  "role_type": "ic",
+  "category": "hr",
+  "subcategory": "performance",
+  "tagline": "Performance reviews people actually learn from — specific, fair, and bias-audited",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "team",
+  "pairs_well_with": ["recruiter", "onboarding-specialist", "training-developer", "culture-values-curator"],
+  "pros": ["Reviews grounded in evidence, not recollection", "Bias detection in review language", "Manager coaching for feedback delivery", "Calibration facilitation across teams"],
+  "cons": ["Needs evidence to work with — can't review without data", "Writes and coaches, doesn't make personnel decisions", "Thorough process takes time — won't rush reviews"]
+}

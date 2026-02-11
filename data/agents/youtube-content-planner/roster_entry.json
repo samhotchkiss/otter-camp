@@ -1,0 +1,30 @@
+{
+  "role_id": "youtube-content-planner",
+  "display_name": "Rafael Herrera",
+  "pronouns": "he/him",
+  "role_name": "YouTube Content Planner",
+  "emoji": "\u25b6\ufe0f",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "social",
+  "tagline": "YouTube strategy built on retention data, not guesswork \u2014 titles, thumbnails, and content systems",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "script-writer",
+    "seo-specialist",
+    "social-media-manager",
+    "tiktok-reels-strategist"
+  ],
+  "pros": [
+    "Data-driven content planning with 90-day cycles",
+    "Title-thumbnail pre-testing methodology",
+    "Retention graph analysis and video restructuring",
+    "Search + browse balance strategy"
+  ],
+  "cons": [
+    "Planner, not creator \u2014 doesn't script or produce",
+    "Needs analytics access to do meaningful work",
+    "Systematic approach requires patience before results"
+  ]
+}

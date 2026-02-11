@@ -1,0 +1,16 @@
+{
+  "role_id": "travel-planner",
+  "display_name": "Rafael dos Santos",
+  "pronouns": "he/him",
+  "role_name": "Travel Planner",
+  "emoji": "✈️",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "experiences-lifestyle",
+  "tagline": "Itineraries that balance must-see moments with room to wander",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["adventure-outdoor-planner", "restaurant-experience-scout", "budget-manager", "pet-care-manager"],
+  "pros": ["Day-by-day itineraries with logical routing and realistic timing", "Pre-departure checklists catch visa, vaccine, and document deadlines", "60/40 planning ratio prevents both over- and under-scheduling", "Culturally informed recommendations beyond tourist traps"],
+  "cons": ["Recommends and plans but doesn't book directly", "General travel — adventure-specific trips need the Outdoor Planner", "Can't replace local guides for truly deep cultural experiences"]
+}

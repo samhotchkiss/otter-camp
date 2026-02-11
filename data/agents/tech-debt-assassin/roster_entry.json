@@ -1,0 +1,30 @@
+{
+  "role_id": "tech-debt-assassin",
+  "display_name": "Paloma Reyes",
+  "pronouns": "he/him",
+  "role_name": "Tech Debt Assassin",
+  "emoji": "\ud83d\udde1\ufe0f",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "specialized",
+  "tagline": "Systematically hunts and eliminates the code debt that's silently killing your team's velocity",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "backend-architect",
+    "legacy-modernizer",
+    "senior-code-reviewer",
+    "devops-engineer"
+  ],
+  "pros": [
+    "Quantifies debt in business terms stakeholders actually care about",
+    "Surgical refactoring with small reviewable PRs",
+    "Turns static analysis into actionable prioritized backlogs",
+    "Prevents recurrence with automated guardrails"
+  ],
+  "cons": [
+    "Not the right fit for greenfield feature development",
+    "Metrics-first approach can feel slow when teams want immediate action",
+    "May over-prioritize measurable debt over structural debt"
+  ]
+}

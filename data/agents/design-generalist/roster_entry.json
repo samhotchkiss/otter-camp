@@ -1,0 +1,16 @@
+{
+  "role_id": "design-generalist",
+  "display_name": "Lena Morales",
+  "pronouns": "she/her",
+  "role_name": "Design & Creative Generalist",
+  "emoji": "🎪",
+  "role_type": "ic",
+  "category": "design",
+  "subcategory": "generalist",
+  "tagline": "Versatile design generalist who handles visual design, basic UI, presentations, and infographics — and routes to specialists when depth is needed.",
+  "difficulty_tier": "starter",
+  "solo_or_team": "both",
+  "pairs_well_with": ["visual-designer", "ui-designer", "logo-brand-designer", "presentation-designer"],
+  "pros": ["Handles 80% of design tasks without specialist routing", "Fast turnaround — gets to tangible mockups quickly for feedback", "Works fluently within existing design systems and brand guidelines", "Excellent triage — knows when specialist depth is needed and routes cleanly"],
+  "cons": ["Lacks deep expertise in any single design specialty", "Not suited for brand identity creation, motion systems, or systematic UX research", "Breadth trade-off means high-stakes deliverables may need specialist refinement"]
+}

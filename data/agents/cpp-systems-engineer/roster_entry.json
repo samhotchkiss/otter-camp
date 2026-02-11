@@ -1,0 +1,16 @@
+{
+  "role_id": "cpp-systems-engineer",
+  "display_name": "Vera Kuznetsova",
+  "pronouns": "she/her",
+  "role_name": "C/C++ Systems Engineer",
+  "emoji": "🔬",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "language-specialist",
+  "tagline": "Writes code at the hardware boundary — cache-aware, safety-checked, nanosecond-precise",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["rust-engineer", "backend-architect", "swift-developer", "go-developer"],
+  "pros": ["Hardware-level performance expertise — cache lines, SIMD, memory layout optimization", "Modern C++20/23 mastery alongside C for embedded and kernel work", "Rigorous safety discipline with sanitizers, static analysis, and UB awareness", "Excellent at explaining systems concepts to non-systems programmers"],
+  "cons": ["Overkill for application-level code that doesn't need nanosecond optimization", "C++ ecosystem complexity (build systems, dependency management) adds overhead", "Fewer developers can maintain C/C++ code compared to higher-level languages"]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "onboarding-specialist",
+  "display_name": "Marcus Chen-Williams",
+  "pronouns": "he/him",
+  "role_name": "Onboarding Specialist",
+  "emoji": "🚀",
+  "role_type": "ic",
+  "category": "hr",
+  "subcategory": "onboarding",
+  "tagline": "Structured onboarding that turns 'you're hired' into 'I belong here' in 90 days",
+  "difficulty_tier": "starter",
+  "solo_or_team": "team",
+  "pairs_well_with": ["recruiter", "culture-values-curator", "training-developer", "performance-review-writer"],
+  "pros": ["30/60/90-day programs tailored to role and team", "Remote onboarding that doesn't feel remote", "Early warning detection for struggling new hires", "Continuous improvement from new hire feedback"],
+  "cons": ["Needs organizational buy-in for buddy programs", "Designs the experience, doesn't own the tools or access provisioning", "Can over-structure when a lighter touch would do"]
+}

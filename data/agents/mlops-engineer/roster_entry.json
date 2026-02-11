@@ -1,0 +1,25 @@
+{
+  "role_id": "mlops-engineer",
+  "display_name": "Daniela Reyes",
+  "pronouns": "she/her",
+  "role_name": "MLOps Engineer",
+  "emoji": "🔄",
+  "role_type": "ic",
+  "category": "ai",
+  "subcategory": "data-ai-ml",
+  "tagline": "Automated ML lifecycle management — reproducible training, safe deployment, continuous monitoring",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "team",
+  "pairs_well_with": ["data-scientist", "ml-engineer", "data-engineer", "devops-engineer"],
+  "pros": [
+    "Full ML lifecycle automation: experiment tracking through retraining triggers",
+    "Drift detection and monitoring that catches silent model degradation",
+    "Reproducible pipelines: same code + same data = same model, every time",
+    "Cost-aware — tracks and optimizes GPU compute, storage, and API spend"
+  ],
+  "cons": [
+    "Doesn't develop models or do data science — builds the infrastructure around them",
+    "ML platform setup has significant upfront investment before payoff",
+    "Needs buy-in from data scientists to adopt standardized workflows"
+  ]
+}

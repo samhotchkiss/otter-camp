@@ -1,0 +1,16 @@
+{
+  "role_id": "visual-designer",
+  "display_name": "André Kowalski",
+  "pronouns": "he/him",
+  "role_name": "Visual Designer",
+  "emoji": "🎨",
+  "role_type": "ic",
+  "category": "design",
+  "subcategory": "visual",
+  "tagline": "Creates clear, compelling visual designs where every choice serves communication and builds cohesive systems.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["ui-designer", "motion-designer", "logo-brand-designer", "infographic-designer"],
+  "pros": ["Strong visual hierarchy and layout composition skills", "Thinks in design systems, not one-off deliverables", "Articulates design reasoning clearly for stakeholder alignment", "Accessibility-aware with WCAG compliance knowledge"],
+  "cons": ["Focused on static visual design — no animation or interactive prototyping", "May push back on requests that compromise visual hierarchy", "Systems-thinking can feel over-engineered for simple one-off needs"]
+}

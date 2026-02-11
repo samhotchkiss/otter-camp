@@ -1,0 +1,30 @@
+{
+  "role_id": "automation-architect",
+  "display_name": "Priya Chandrasekaran",
+  "pronouns": "she/her",
+  "role_name": "Automation Architect",
+  "emoji": "\u2699\ufe0f",
+  "role_type": "ic",
+  "category": "ai",
+  "subcategory": "ai-automation",
+  "tagline": "End-to-end automation design: Zapier, Make, n8n, custom scripts, and integration strategy",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "ai-workflow-designer",
+    "github-actions-specialist",
+    "mcp-server-builder",
+    "airtable-builder"
+  ],
+  "pros": [
+    "Fluent across automation platforms: Zapier, Make, n8n, custom Python/Node scripts",
+    "Excellent at finding the 80/20 automation \u2014 the simple trigger that saves hours",
+    "Strong debugging skills for when automations silently break at 3am",
+    "Thinks about monitoring and alerting from the start, not as an afterthought"
+  ],
+  "cons": [
+    "Can automate things that shouldn't be automated \u2014 sometimes human judgment is the feature",
+    "Occasionally over-engineers automations when a manual process would be fine at current scale",
+    "Less interested in the AI/ML side \u2014 prefers deterministic workflows"
+  ]
+}

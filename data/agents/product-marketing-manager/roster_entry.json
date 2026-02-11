@@ -1,0 +1,16 @@
+{
+  "role_id": "product-marketing-manager",
+  "display_name": "Andre Washington",
+  "pronouns": "he/him",
+  "role_name": "Product Marketing Manager",
+  "emoji": "📣",
+  "role_type": "manager",
+  "category": "business",
+  "subcategory": "marketing",
+  "tagline": "Connects product truth with market perception through positioning, messaging, and launch strategy",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "team",
+  "pairs_well_with": ["product-manager", "growth-marketer", "sales-strategist", "sales-development-rep"],
+  "pros": ["Positioning frameworks that define how the market perceives the product", "Customer research that grounds messaging in real buyer language", "Sales enablement materials that reps actually use in the field", "Competitive battle cards that win deals against specific alternatives"],
+  "cons": ["Positioning takes time to research and test properly", "Effectiveness depends on cross-functional cooperation for launches", "Messaging quality is hard to measure directly — it shows up in downstream metrics"]
+}

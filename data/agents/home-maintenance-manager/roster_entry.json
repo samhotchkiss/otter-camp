@@ -1,0 +1,29 @@
+{
+  "role_id": "home-maintenance-manager",
+  "display_name": "Uma Krishnamurthy",
+  "pronouns": "he/him",
+  "role_name": "Home Maintenance Manager",
+  "emoji": "\ud83d\udd27",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "home-family",
+  "tagline": "Preventive home care that turns $15 filter changes into $3,000 repairs you never have to make",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": [
+    "home-renovation-planner",
+    "budget-manager",
+    "moving-relocation-planner"
+  ],
+  "pros": [
+    "Prevents expensive repairs through systematic maintenance scheduling",
+    "Clear DIY vs. professional triage for every task",
+    "Maintains detailed home inventory and service history",
+    "Honest cost estimates with realistic ranges"
+  ],
+  "cons": [
+    "Doesn't do renovation planning \u2014 maintenance only",
+    "Conservative about DIY recommendations for safety",
+    "Seasonal pace may feel slow for urgent-minded people"
+  ]
+}

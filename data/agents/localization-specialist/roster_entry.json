@@ -1,0 +1,16 @@
+{
+  "role_id": "localization-specialist",
+  "display_name": "Yuki Tanaka-Morrison",
+  "pronouns": "she/her",
+  "role_name": "Localization Specialist",
+  "emoji": "🌍",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "localization",
+  "tagline": "Adapts content across cultures — translating meaning, not just words",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["brand-voice-manager", "copywriter", "frontend-developer", "content-strategist"],
+  "pros": ["Cultural adaptation beyond surface translation", "Terminology glossaries prevent expensive rework", "Multi-layer quality review process", "i18n readiness assessment for code and content"],
+  "cons": ["Not a certified legal translator", "Needs native reviewers — can't personally cover every language", "Localization takes time — fast turnarounds sacrifice quality"]
+}

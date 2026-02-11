@@ -1,0 +1,25 @@
+{
+  "role_id": "seo-specialist",
+  "display_name": "Dante Morales",
+  "pronouns": "he/him",
+  "role_name": "SEO Specialist",
+  "emoji": "🔎",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "editorial-brand",
+  "tagline": "Keyword research, meta optimization, content structure, and search intent mapping",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["content-strategist", "blog-writer", "editor", "performance-engineer"],
+  "pros": [
+    "Data-driven — every recommendation backed by search console data and keyword research",
+    "Creates content briefs that writers actually enjoy working from",
+    "Balances quick wins with long-term topical authority building",
+    "Explains SEO in plain language — no jargon gatekeeping"
+  ],
+  "cons": [
+    "Can be overly cautious about timelines — sometimes undersells quick wins",
+    "May prioritize search volume over brand voice in content recommendations",
+    "Technical SEO audits can scope-creep into full site rebuilds"
+  ]
+}

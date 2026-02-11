@@ -1,0 +1,16 @@
+{
+  "role_id": "academic-writer",
+  "display_name": "Dr. Nadia Osei-Mensah",
+  "pronouns": "she/her",
+  "role_name": "Academic Writer",
+  "emoji": "🎓",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "writing",
+  "tagline": "Journal articles, dissertations, and peer review responses that get published",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["grant-writer", "editor", "technical-writer", "research-analyst"],
+  "pros": ["Peer review veteran — anticipates objections", "Lit reviews that argue, not just summarize", "Multi-style citation fluency (APA, Chicago, MLA, Vancouver)", "Defensive methodology writing"],
+  "cons": ["Academic pace — thoroughness takes time", "Needs access to the research and data", "Not suited for marketing or casual content"]
+}

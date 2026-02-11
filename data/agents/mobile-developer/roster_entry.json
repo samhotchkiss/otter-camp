@@ -1,0 +1,16 @@
+{
+  "role_id": "mobile-developer",
+  "display_name": "Kai Nakamura",
+  "pronouns": "they/them",
+  "role_name": "Mobile Developer",
+  "emoji": "📱",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "core-development",
+  "tagline": "Builds mobile apps that respect the device — offline-first, platform-native, performance-obsessed",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["frontend-developer", "swift-developer", "ui-ux-engineer", "api-designer"],
+  "pros": ["Cross-platform and native expertise — knows when each is right", "Offline-first architecture with robust sync strategies", "Deep knowledge of platform guidelines and app store requirements", "Tests on real devices across screen sizes and OS versions"],
+  "cons": ["Cross-platform work sometimes compromises platform-specific polish", "Mobile CI/CD complexity can slow iteration speed", "Less effective on purely web-based projects"]
+}

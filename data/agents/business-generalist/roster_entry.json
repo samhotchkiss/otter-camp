@@ -1,0 +1,16 @@
+{
+  "role_id": "business-generalist",
+  "display_name": "Jordan Achebe",
+  "pronouns": "they/them",
+  "role_name": "Business Generalist",
+  "emoji": "💼",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "finance-legal",
+  "tagline": "Cross-functional business support spanning finance, legal, strategy, and operations",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["financial-analyst", "ip-patent-researcher", "fundraising-strategist", "strategy-consultant"],
+  "pros": ["Cross-domain fluency across finance, legal, and operations", "Fast triage and specialist routing", "Clean documentation of decisions and rationale", "Effective at 80% answers when speed matters"],
+  "cons": ["Jack of all trades, master of none — deep questions need specialists", "May over-generalize in domains that require precision", "Not a substitute for legal counsel or certified financial analysis"]
+}

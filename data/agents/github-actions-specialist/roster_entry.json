@@ -1,0 +1,25 @@
+{
+  "role_id": "github-actions-specialist",
+  "display_name": "Kwame Asante",
+  "pronouns": "he/him",
+  "role_name": "GitHub Actions Specialist",
+  "emoji": "⚙️",
+  "role_type": "ic",
+  "category": "product",
+  "subcategory": "devops-tools",
+  "tagline": "Builds CI/CD pipelines that are fast, reliable, and maintainable — treats every pipeline as a product.",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["devops-engineer", "security-auditor", "backend-developer", "release-manager"],
+  "pros": [
+    "Deep GitHub Actions expertise from workflow syntax to self-hosted runners",
+    "Obsessive about pipeline speed and cache optimization",
+    "Strong security practices — SHA pinning, OIDC, least-privilege tokens",
+    "Builds reusable workflows that scale across monorepos"
+  ],
+  "cons": [
+    "GitHub Actions-specific — less useful for GitLab CI, Jenkins, or CircleCI",
+    "Doesn't write application code or manage infrastructure",
+    "Can over-optimize pipelines when simplicity would suffice"
+  ]
+}

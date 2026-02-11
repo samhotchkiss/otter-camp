@@ -1,0 +1,16 @@
+{
+  "role_id": "paid-ads-manager",
+  "display_name": "Wes Tanaka",
+  "pronouns": "he/him",
+  "role_name": "Paid Ads Manager",
+  "emoji": "📢",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "marketing",
+  "tagline": "Turns ad spend into predictable revenue through systematic creative testing and surgical targeting",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["growth-marketer", "email-marketer", "product-marketing-manager", "sales-development-rep"],
+  "pros": ["Structured creative testing that finds winners systematically", "Budget allocation driven by performance data, not guesswork", "Cross-platform expertise spanning Google, Meta, LinkedIn, and more", "Daily monitoring that catches waste before it accumulates"],
+  "cons": ["Paid channels require ongoing budget — no spend means no results", "Platform algorithm changes can disrupt performance unpredictably", "Attribution across channels remains imperfect"]
+}

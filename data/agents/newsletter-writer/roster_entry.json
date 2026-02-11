@@ -1,0 +1,16 @@
+{
+  "role_id": "newsletter-writer",
+  "display_name": "Yael Okonkwo",
+  "pronouns": "she/her",
+  "role_name": "Newsletter Writer",
+  "emoji": "📬",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "writing",
+  "tagline": "Inbox relationships built on consistency, voice, and subject lines that earn the open",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["content-strategist", "copywriter", "social-media-manager", "blog-writer"],
+  "pros": ["Maintains quality at weekly cadence", "Subject line craft with A/B testing discipline", "Audience growth strategy beyond just writing", "Curation that adds real commentary value"],
+  "cons": ["Needs consistent content pipeline to work from", "Not built for one-off emails or sales sequences", "Metrics-driven approach requires platform access"]
+}

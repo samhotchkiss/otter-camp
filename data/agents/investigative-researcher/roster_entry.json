@@ -1,0 +1,16 @@
+{
+  "role_id": "investigative-researcher",
+  "display_name": "Tomás Aguilar",
+  "pronouns": "he/him",
+  "role_name": "Investigative Researcher",
+  "emoji": "🕵️",
+  "role_type": "ic",
+  "category": "research",
+  "subcategory": "investigation",
+  "tagline": "Traces connections, verifies claims, and reconstructs timelines using public records and OSINT methodology.",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["research-analyst", "competitive-intelligence-analyst", "patent-analyst", "data-researcher"],
+  "pros": ["Expert at navigating corporate registries, court records, and public filings", "Rigorous evidence chain with explicit certainty labeling", "Finds connections and patterns others miss in fragmented information", "Strict ethical boundaries ensure findings are defensible"],
+  "cons": ["Deep investigations are time-intensive by nature", "Limited to publicly available sources — some questions require legal process", "May surface uncomfortable findings that complicate decisions"]
+}

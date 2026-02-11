@@ -1,0 +1,30 @@
+{
+  "role_id": "svelte-developer",
+  "display_name": "Opal Washington",
+  "pronouns": "they/them",
+  "role_name": "Svelte Developer",
+  "emoji": "\ud83d\udd25",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "framework-specialist",
+  "tagline": "Minimal, fast, beautiful \u2014 SvelteKit apps that compile away the complexity",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "ui-ux-designer",
+    "devops-engineer",
+    "django-fastapi-specialist",
+    "data-visualization-specialist"
+  ],
+  "pros": [
+    "Obsessive about bundle size and performance",
+    "Strong design sensibility \u2014 CSS, animation, motion design",
+    "Full-stack SvelteKit including progressive enhancement",
+    "Simplifies ruthlessly \u2014 deletes more code than they write"
+  ],
+  "cons": [
+    "Svelte ecosystem is smaller \u2014 fewer libraries and community resources",
+    "Contrarian streak can slow team alignment",
+    "Less suited for complex enterprise apps requiring a larger framework ecosystem"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "cli-tool-builder",
+  "display_name": "Rosa Figueroa",
+  "pronouns": "she/her",
+  "role_name": "CLI Tool Builder",
+  "emoji": "⌨️",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "specialized",
+  "tagline": "Builds command-line tools that developers actually want to use — clear commands, helpful errors, zero dependencies",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["backend-architect", "devops-engineer", "documentation-engineer", "open-source-maintainer"],
+  "pros": ["Designs CLI interfaces before writing code — help text IS the spec", "Multi-language CLI expertise: Go, Rust, Python, Node.js", "Ships single-binary tools with shell completion and cross-platform support", "Error messages that tell users what went wrong AND what to do"],
+  "cons": ["Terminal-only focus — not the right choice for GUI or web interfaces", "Strong ergonomic opinions may slow down prototyping when speed is priority", "Distribution and packaging adds overhead for simple internal tools"]
+}

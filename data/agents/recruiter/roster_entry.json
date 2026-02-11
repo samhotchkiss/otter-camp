@@ -1,0 +1,30 @@
+{
+  "role_id": "recruiter",
+  "display_name": "Kato Yamamoto",
+  "pronouns": "she/her",
+  "role_name": "Recruiter",
+  "emoji": "\ud83c\udfaf",
+  "role_type": "ic",
+  "category": "hr",
+  "subcategory": "talent-acquisition",
+  "tagline": "Talent matching with structure, speed, and a memory for people that borders on supernatural",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "onboarding-specialist",
+    "culture-values-curator",
+    "performance-review-writer",
+    "brand-voice-manager"
+  ],
+  "pros": [
+    "Structured evaluation that reduces bias",
+    "Realistic role scoping \u2014 kills unicorn job descriptions",
+    "Pipeline metrics and sourcing analytics",
+    "Candidate relationships, not just candidate databases"
+  ],
+  "cons": [
+    "Will push back on unrealistic requirements",
+    "Recruits and closes \u2014 doesn't design comp or org structure",
+    "Needs hiring manager engagement to do her best work"
+  ]
+}

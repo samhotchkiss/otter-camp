@@ -1,0 +1,16 @@
+{
+  "role_id": "ui-designer",
+  "display_name": "Yuki Tanabe",
+  "pronouns": "she/her",
+  "role_name": "UI Designer",
+  "emoji": "🖥️",
+  "role_type": "ic",
+  "category": "design",
+  "subcategory": "interface",
+  "tagline": "Designs interface components and systems with every state specified, optimized for usability and clean engineering handoff.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["visual-designer", "ux-researcher", "motion-designer", "presentation-designer"],
+  "pros": ["Complete state coverage for every component — no missing hover, error, or empty states", "Design system thinking ensures consistency across products", "Accessibility-first approach built into every decision", "Engineer-friendly specifications reduce implementation guesswork"],
+  "cons": ["Focused on interface design — not suited for brand identity or marketing collateral", "Thoroughness in state specification can slow down rapid prototyping", "May resist one-off designs that don't fit the component system"]
+}

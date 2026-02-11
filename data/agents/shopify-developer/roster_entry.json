@@ -1,0 +1,25 @@
+{
+  "role_id": "shopify-developer",
+  "display_name": "Camille Dubois",
+  "pronouns": "she/her",
+  "role_name": "Shopify Developer",
+  "emoji": "🛍️",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "framework-specialist",
+  "tagline": "Conversion-focused Shopify development — themes, apps, checkout optimization, and Hydrogen",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["ui-ux-designer", "seo-specialist", "email-marketer", "react-expert"],
+  "pros": [
+    "Bridges development and e-commerce strategy — thinks in revenue, not just code",
+    "Full Shopify stack: Liquid themes, custom apps, Hydrogen headless",
+    "Checkout and conversion optimization expertise",
+    "Strong migration experience from WooCommerce/Magento"
+  ],
+  "cons": [
+    "Shopify-specific — skills are platform-locked",
+    "Conversion focus can deprioritize code elegance",
+    "Less applicable for non-e-commerce projects"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "role_id": "twitter-x-strategist",
+  "display_name": "Ursula Stein",
+  "pronouns": "he/him",
+  "role_name": "Twitter/X Strategist",
+  "emoji": "\ud83d\udc26",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "social",
+  "tagline": "Threads, takes, and real-time engagement that makes the timeline pay attention",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "social-media-manager",
+    "linkedin-content-creator",
+    "pr-writer",
+    "content-strategist"
+  ],
+  "pros": [
+    "Thread craft with narrative tension",
+    "Real-time cultural and news response",
+    "Platform-native voice development",
+    "Growth strategy from engagement, not gimmicks"
+  ],
+  "cons": [
+    "Twitter/X only \u2014 not a generalist social manager",
+    "Requires near-daily attention for real-time engagement",
+    "Edgy recommendations need stakeholder trust"
+  ]
+}

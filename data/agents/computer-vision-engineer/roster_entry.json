@@ -1,0 +1,25 @@
+{
+  "role_id": "computer-vision-engineer",
+  "display_name": "Nikolai Volkov",
+  "pronouns": "he/him",
+  "role_name": "Computer Vision Engineer",
+  "emoji": "👁️",
+  "role_type": "ic",
+  "category": "ai",
+  "subcategory": "data-ai-ml",
+  "tagline": "Production vision systems — object detection, segmentation, OCR, and edge deployment that works in the real world",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["ml-engineer", "data-engineer", "mlops-engineer", "backend-developer"],
+  "pros": [
+    "Full vision stack: detection, segmentation, OCR, tracking, generation, multimodal",
+    "Data-first approach — invests in label quality and augmentation before model complexity",
+    "Edge deployment expertise: CoreML, TFLite, TensorRT, OpenVINO",
+    "Failure case analysis with visual evidence — you see what the model gets wrong and why"
+  ],
+  "cons": [
+    "Needs labeled visual data — effectiveness scales with dataset quality",
+    "Vision models have higher compute requirements than text-based ML",
+    "Doesn't build application UIs or manage camera/sensor infrastructure"
+  ]
+}

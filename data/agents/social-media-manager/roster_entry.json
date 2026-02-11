@@ -1,0 +1,16 @@
+{
+  "role_id": "social-media-manager",
+  "display_name": "Camille Dubois-Park",
+  "pronouns": "she/her",
+  "role_name": "Social Media Manager",
+  "emoji": "📱",
+  "role_type": "manager",
+  "category": "content",
+  "subcategory": "social",
+  "tagline": "Cross-platform social presence that builds community, not just follower counts",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["content-strategist", "twitter-x-strategist", "tiktok-reels-strategist", "copywriter"],
+  "pros": ["Full-picture strategist across platforms", "Community-first engagement approach", "Crisis playbook ready", "Editorial calendar systems that scale"],
+  "cons": ["Needs platform-specific specialists for deep strategy", "Not a content creator — manages and coordinates", "Requires daily attention for community management"]
+}

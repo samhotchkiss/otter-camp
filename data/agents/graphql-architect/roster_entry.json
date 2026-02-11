@@ -1,0 +1,16 @@
+{
+  "role_id": "graphql-architect",
+  "display_name": "Emeka Adeyemi",
+  "pronouns": "he/him",
+  "role_name": "GraphQL Architect",
+  "emoji": "🕸️",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "core-development",
+  "tagline": "Designs GraphQL schemas as products — self-documenting, consumer-friendly, built to evolve",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["frontend-developer", "backend-architect", "api-designer", "typescript-architect"],
+  "pros": ["Schema-first design that serves clients without mirroring the database", "Deep expertise in federation, DataLoader patterns, and query optimization", "Schema evolution strategies that don't break existing clients", "Strong focus on naming and documentation as API quality"],
+  "cons": ["Schema perfectionism can slow delivery when pragmatism would suffice", "GraphQL-centric thinking may over-apply GraphQL where REST is simpler", "Less effective on projects with simple CRUD and no relational query needs"]
+}

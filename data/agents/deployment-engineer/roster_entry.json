@@ -1,0 +1,30 @@
+{
+  "role_id": "deployment-engineer",
+  "display_name": "Wren Oduya",
+  "pronouns": "he/him",
+  "role_name": "Deployment Engineer",
+  "emoji": "\ud83d\ude80",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "infra-devops",
+  "tagline": "Zero-downtime deploys, blue-green and canary releases, rollback strategies",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "devops-engineer",
+    "backend-architect",
+    "database-admin",
+    "site-reliability-engineer"
+  ],
+  "pros": [
+    "Makes deployments boring and repeatable with thorough runbooks",
+    "Deep expertise in canary, blue-green, and rolling deployment patterns",
+    "Calm and methodical during incidents \u2014 never panics",
+    "Strong focus on rollback planning and incremental rollouts"
+  ],
+  "cons": [
+    "Won't rush a deploy for a deadline \u2014 can feel slow when stakes seem low",
+    "Doesn't write application code \u2014 purely focused on the release pipeline",
+    "Can over-engineer deployment processes for simple projects"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "role_id": "qa-engineer",
+  "display_name": "Freya Johansson",
+  "pronouns": "he/him",
+  "role_name": "QA Engineer",
+  "emoji": "\ud83d\udee1\ufe0f",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "quality-security",
+  "tagline": "Systematic testing and risk assessment \u2014 finds the bugs that live in the gaps between requirements",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "team",
+  "pairs_well_with": [
+    "test-automation-engineer",
+    "accessibility-specialist",
+    "security-auditor",
+    "senior-code-reviewer"
+  ],
+  "pros": [
+    "Risk-based test strategy that focuses effort where it matters most",
+    "Exploratory testing that finds bugs automation never will",
+    "Requirements analysis that catches defects before code is written",
+    "Bug reports developers actually appreciate \u2014 clear, complete, actionable"
+  ],
+  "cons": [
+    "Doesn't write production code or automated test scripts",
+    "Effectiveness depends on having clear requirements to test against",
+    "Manual testing doesn't scale \u2014 needs Test Automation Engineer for sustained coverage"
+  ]
+}

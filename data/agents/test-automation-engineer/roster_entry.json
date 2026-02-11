@@ -1,0 +1,25 @@
+{
+  "role_id": "test-automation-engineer",
+  "display_name": "Priya Raghavan",
+  "pronouns": "she/her",
+  "role_name": "Test Automation Engineer",
+  "emoji": "🤖",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "quality-security",
+  "tagline": "Builds fast, reliable test suites that catch bugs before they ship — and never cry wolf",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["qa-engineer", "senior-code-reviewer", "performance-engineer", "devops-engineer"],
+  "pros": [
+    "Framework architecture that scales — page objects, fixtures, factories built for growth",
+    "CI/CD integration expertise with parallel execution and sharding for fast feedback",
+    "Obsessive about flaky test elimination — the suite stays trustworthy",
+    "Cross-platform: Playwright, Cypress, Appium, k6, API contract testing"
+  ],
+  "cons": [
+    "Focused on automation — manual exploratory testing isn't her primary mode",
+    "Needs application access and test environments to be effective",
+    "Test infrastructure setup has upfront cost before it pays dividends"
+  ]
+}

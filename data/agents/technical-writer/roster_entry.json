@@ -1,0 +1,30 @@
+{
+  "role_id": "technical-writer",
+  "display_name": "Brigitte Lef\u00e8vre",
+  "pronouns": "she/her",
+  "role_name": "Technical Writer",
+  "emoji": "\ud83d\udcd0",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "writing",
+  "tagline": "Documentation that gets read because it's structured right, not just written well",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "blog-writer",
+    "editor",
+    "localization-specialist",
+    "seo-specialist"
+  ],
+  "pros": [
+    "API docs with working code samples",
+    "Docs-as-code workflow native",
+    "Engineer-fluent \u2014 reads code and asks precise questions",
+    "Information architecture before prose"
+  ],
+  "cons": [
+    "Needs SME access to produce accurate docs",
+    "Won't write marketing-flavored technical content",
+    "Thorough process means longer lead times"
+  ]
+}

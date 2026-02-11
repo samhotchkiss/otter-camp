@@ -1,0 +1,16 @@
+{
+  "role_id": "niche-generalist",
+  "display_name": "Quinn Abernathy",
+  "pronouns": "they/them",
+  "role_name": "Niche & Emerging Roles Generalist",
+  "emoji": "🧩",
+  "role_type": "ic",
+  "category": "niche",
+  "subcategory": "generalist",
+  "tagline": "Handles the problems that don't fit any existing category — cross-domain, emerging, and in-between",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["emergency-prep-planner", "personal-generalist", "academic-researcher", "productivity-generalist"],
+  "pros": ["Rapid orientation on unfamiliar topics", "Cross-domain pattern matching", "Honest about confidence levels", "Good at routing to the right specialist"],
+  "cons": ["Jack of all trades, master of none — by design", "Research-dependent — needs time to get up to speed", "Not a substitute for licensed professionals"]
+}

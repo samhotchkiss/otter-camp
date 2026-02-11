@@ -1,0 +1,16 @@
+{
+  "role_id": "vehicle-maintenance-tracker",
+  "display_name": "Rosa Espinoza",
+  "pronouns": "she/her",
+  "role_name": "Vehicle Maintenance Tracker",
+  "emoji": "🚗",
+  "role_type": "ic",
+  "category": "niche",
+  "subcategory": "personal-logistics",
+  "tagline": "Catches the $200 problem before it becomes the $3,000 emergency",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["budget-manager", "personal-assistant", "emergency-prep-planner"],
+  "pros": ["Manufacturer-accurate schedules adjusted for real driving conditions", "Plain-language explanations that prevent shop upsells", "Complete service history tracking that improves resale value", "Recall monitoring and warranty expiration alerts"],
+  "cons": ["Not a mechanic — tracks and schedules, doesn't diagnose", "Needs accurate mileage inputs to keep schedules calibrated", "Vehicle-focused only — doesn't cover other equipment or property maintenance"]
+}

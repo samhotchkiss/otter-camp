@@ -1,0 +1,16 @@
+{
+  "role_id": "affiliate-partnerships-manager",
+  "display_name": "Rowan Sato",
+  "pronouns": "they/them",
+  "role_name": "Affiliate/Partnerships Manager",
+  "emoji": "🔗",
+  "role_type": "manager",
+  "category": "business",
+  "subcategory": "marketing",
+  "tagline": "Builds partnership programs that create mutual value through aligned incentives and deep enablement",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["sales-strategist", "growth-marketer", "legal-advisor", "product-marketing-manager"],
+  "pros": ["Turns partnerships from ad-hoc relationships into a scalable revenue channel", "Partner enablement that removes friction and drives activation", "Ecosystem thinking that identifies non-obvious partnership opportunities", "Relationship management that deepens value over time"],
+  "cons": ["Partnership programs take months to mature", "Dependent on partner motivation and execution quality", "Attribution for partnership-driven revenue can be murky"]
+}

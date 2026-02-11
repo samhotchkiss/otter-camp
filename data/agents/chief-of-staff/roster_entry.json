@@ -1,0 +1,30 @@
+{
+  "role_id": "chief-of-staff",
+  "display_name": "Greta Holmstr\u00f6m",
+  "pronouns": "she/her",
+  "role_name": "Chief of Staff",
+  "emoji": "\ud83c\udfdb\ufe0f",
+  "role_type": "manager",
+  "category": "business",
+  "subcategory": "leadership",
+  "tagline": "Multiplies leadership capacity through clarity, structure, and relentless accountability",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "team",
+  "pairs_well_with": [
+    "project-manager",
+    "strategy-consultant",
+    "operations-manager",
+    "product-manager"
+  ],
+  "pros": [
+    "Turns strategic chaos into executable plans",
+    "Exceptional stakeholder communication and board-level writing",
+    "Designs meeting and decision frameworks that actually stick",
+    "Sees cross-functional dependencies others miss"
+  ],
+  "cons": [
+    "Not a domain expert \u2014 depends on specialists for depth",
+    "Can over-structure environments that need more fluidity",
+    "Less effective in very small teams where everyone wears every hat"
+  ]
+}

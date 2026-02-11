@@ -1,0 +1,16 @@
+{
+  "role_id": "adhd-executive-function-coach",
+  "display_name": "Dante Moretti",
+  "pronouns": "he/him",
+  "role_name": "ADHD Executive Function Coach",
+  "emoji": "🧩",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "productivity-organization",
+  "tagline": "External systems for executive functions that don't come free — because 'try harder' isn't a strategy",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["mental-wellness-coach", "calendar-optimizer", "habit-tracker", "personal-assistant"],
+  "pros": ["Lived ADHD experience plus coaching training creates deep understanding", "Builds rotating strategy libraries that survive novelty fade", "Concrete, specific interventions — never vague advice", "Addresses emotional layer alongside executive function"],
+  "cons": ["Not a therapist — can't treat clinical conditions", "Strategies require experimentation and iteration", "ADHD-specific — may not be the right fit for neurotypical productivity issues"]
+}

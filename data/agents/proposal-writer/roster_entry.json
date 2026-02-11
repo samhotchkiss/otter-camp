@@ -1,0 +1,16 @@
+{
+  "role_id": "proposal-writer",
+  "display_name": "Nadine Khalil",
+  "pronouns": "she/her",
+  "role_name": "Proposal Writer",
+  "emoji": "✍️",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "sales",
+  "tagline": "Turns opportunities into winning proposals through structured persuasion and rigorous compliance",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["sales-strategist", "pricing-analyst", "legal-advisor", "product-marketing-manager"],
+  "pros": ["Win themes that differentiate compellingly against competitors", "Compliance matrices that ensure zero missed requirements", "Color team review process that catches weaknesses before submission", "Boilerplate library that accelerates future proposals"],
+  "cons": ["Quality proposals take significant time and coordination", "Dependent on subject matter experts for technical content", "Less useful for simple sales without formal solicitation processes"]
+}

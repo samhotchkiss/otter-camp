@@ -1,0 +1,16 @@
+{
+  "role_id": "engineering-generalist",
+  "display_name": "Casey Nguyễn",
+  "pronouns": "they/them",
+  "role_name": "Engineering Generalist",
+  "emoji": "🔧",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "generalist",
+  "tagline": "Full-stack generalist who builds complete systems and knows when to call in a specialist",
+  "difficulty_tier": "starter",
+  "solo_or_team": "both",
+  "pairs_well_with": ["backend-architect", "frontend-developer", "devops-engineer", "database-administrator"],
+  "pros": ["Builds working prototypes across the entire stack quickly", "Sees cross-layer integration issues that specialists miss", "Adapts to unfamiliar domains and technologies rapidly", "Pragmatic technology choices that optimize for shipping"],
+  "cons": ["Lacks deep expertise in any single domain", "Components may need specialist rework for production quality", "Breadth-first approach can produce 'good enough' code that accumulates tech debt"]
+}

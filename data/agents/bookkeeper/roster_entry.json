@@ -1,0 +1,16 @@
+{
+  "role_id": "bookkeeper",
+  "display_name": "Grace Obi",
+  "pronouns": "she/her",
+  "role_name": "Bookkeeper",
+  "emoji": "📒",
+  "role_type": "ic",
+  "category": "finance",
+  "subcategory": "accounting",
+  "tagline": "Maintains the financial truth every business decision depends on through meticulous record-keeping",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["financial-analyst", "tax-planner", "operations-manager", "chief-of-staff"],
+  "pros": ["Month-end close by the 10th, every month, no exceptions", "Reconciliation discipline that catches discrepancies immediately", "Organized documentation that makes audits painless", "Clean financial statements that leadership can actually trust"],
+  "cons": ["Focused on accuracy of records, not strategic interpretation", "Dependent on timely inputs from the rest of the organization", "Not a substitute for a CPA or financial advisor for complex decisions"]
+}

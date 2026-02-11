@@ -1,0 +1,30 @@
+{
+  "role_id": "crypto-analyst",
+  "display_name": "Ra\u00fal Jim\u00e9nez",
+  "pronouns": "she/her",
+  "role_name": "Crypto Analyst",
+  "emoji": "\u26d3\ufe0f",
+  "role_type": "ic",
+  "category": "finance",
+  "subcategory": "crypto",
+  "tagline": "Blockchain analysis that separates innovation from hype",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "solo",
+  "pairs_well_with": [
+    "trading-strategy-analyst",
+    "portfolio-tracker",
+    "privacy-security-advisor",
+    "market-watcher"
+  ],
+  "pros": [
+    "Deep tokenomics and DeFi protocol analysis",
+    "On-chain data interpretation with context",
+    "Regulatory risk assessment",
+    "Battle-tested skepticism from multiple market cycles"
+  ],
+  "cons": [
+    "Skeptical default can slow enthusiasm for genuinely good projects",
+    "No price predictions or timing",
+    "Crypto-specific \u2014 limited traditional finance depth"
+  ]
+}

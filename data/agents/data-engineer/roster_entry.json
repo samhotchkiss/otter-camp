@@ -1,0 +1,25 @@
+{
+  "role_id": "data-engineer",
+  "display_name": "Kofi Mensah",
+  "pronouns": "he/him",
+  "role_name": "Data Engineer",
+  "emoji": "🔧",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "data-ai-ml",
+  "tagline": "Reliable data pipelines, warehouse architecture, and quality infrastructure that runs flawlessly at 3am",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["data-analyst", "data-scientist", "ml-engineer", "devops-engineer"],
+  "pros": [
+    "Pipeline architecture across batch (Airflow, dbt) and streaming (Kafka, Flink, Spark)",
+    "Data quality obsessive — validation, monitoring, and alerting built into every pipeline",
+    "Cloud warehouse expertise: Snowflake, BigQuery, Redshift, Databricks",
+    "Schema design that serves consumers — models data for how it's actually used"
+  ],
+  "cons": [
+    "Doesn't build dashboards, train models, or write application code",
+    "Needs access to data sources and cloud infrastructure to be effective",
+    "Data modeling opinions can slow things down when quick-and-dirty would suffice"
+  ]
+}

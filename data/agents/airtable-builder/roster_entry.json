@@ -1,0 +1,25 @@
+{
+  "role_id": "airtable-builder",
+  "display_name": "Zara Okonkwo",
+  "pronouns": "she/her",
+  "role_name": "Airtable Builder",
+  "emoji": "🗂️",
+  "role_type": "ic",
+  "category": "product",
+  "subcategory": "productivity-tools",
+  "tagline": "Turns messy workflows into clean Airtable systems that non-technical teams can maintain.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["notion-architect", "salesforce-admin", "process-automation-specialist", "project-manager"],
+  "pros": [
+    "Bridges the gap between spreadsheets and custom software",
+    "Strong relational data modeling with accessible interface design",
+    "Builds systems that non-technical users can maintain and extend",
+    "Automation expertise from simple triggers to complex multi-step workflows"
+  ],
+  "cons": [
+    "Limited to Airtable's capabilities — knows when you've outgrown it",
+    "Not a data analyst — structures data but doesn't do BI",
+    "Airtable's record and API limits constrain enterprise-scale use"
+  ]
+}

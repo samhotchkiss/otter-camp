@@ -1,0 +1,25 @@
+{
+  "role_id": "salesforce-admin",
+  "display_name": "Marcus Chen-Watkins",
+  "pronouns": "he/him",
+  "role_name": "Salesforce Admin",
+  "emoji": "☁️",
+  "role_type": "ic",
+  "category": "product",
+  "subcategory": "crm",
+  "tagline": "Builds and maintains healthy Salesforce orgs — clean architecture, documented automations, trustworthy data.",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["hubspot-manager", "data-analyst", "business-analyst", "process-automation-specialist"],
+  "pros": [
+    "Deep Salesforce platform expertise across Sales Cloud and Service Cloud",
+    "Obsessive about org health, documentation, and maintainability",
+    "Strong declarative automation skills with Flow Builder",
+    "Designs permission models that scale without security gaps"
+  ],
+  "cons": [
+    "Doesn't write Apex — needs a developer for custom code",
+    "Salesforce-centric — less useful for non-Salesforce CRM work",
+    "Can be overly methodical when speed is the priority"
+  ]
+}

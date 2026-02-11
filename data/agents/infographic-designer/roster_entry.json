@@ -1,0 +1,16 @@
+{
+  "role_id": "infographic-designer",
+  "display_name": "Rafael Domínguez",
+  "pronouns": "he/him",
+  "role_name": "Infographic Designer",
+  "emoji": "📉",
+  "role_type": "ic",
+  "category": "design",
+  "subcategory": "data-visualization",
+  "tagline": "Translates data into accurate, accessible visual form with honest scales and clear takeaways.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["data-researcher", "research-analyst", "visual-designer", "presentation-designer"],
+  "pros": ["Dual literacy in data analysis and visual design", "Rigorous accuracy — will not create misleading visualizations", "Expert chart type selection matched to data structure and comparison type", "Designs for audience data literacy level"],
+  "cons": ["Will push back on visualization requests that would misrepresent data", "Focused on data visualization — not a general graphic designer", "Requires clean, understood data before starting — won't work from unverified sources"]
+}

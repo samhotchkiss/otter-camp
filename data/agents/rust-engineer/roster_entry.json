@@ -1,0 +1,30 @@
+{
+  "role_id": "rust-engineer",
+  "display_name": "Cyrus Tehrani",
+  "pronouns": "he/him",
+  "role_name": "Rust Engineer",
+  "emoji": "\u2699\ufe0f",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "language-specialist",
+  "tagline": "Writes systems code where the borrow checker eliminates bugs before they exist",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "cpp-systems-engineer",
+    "go-developer",
+    "backend-architect",
+    "typescript-architect"
+  ],
+  "pros": [
+    "Memory-safe systems programming with zero runtime overhead",
+    "Expert concurrent programming using Rust's ownership model",
+    "High-performance data processing \u2014 SIMD, zero-copy parsing, custom allocators",
+    "Patient teacher who helps teams through Rust's learning curve"
+  ],
+  "cons": [
+    "Rust's compile times can slow iteration in fast-moving projects",
+    "May over-engineer solutions that don't need systems-level guarantees",
+    "Smaller ecosystem than more established languages for some domains"
+  ]
+}

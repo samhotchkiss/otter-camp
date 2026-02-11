@@ -1,0 +1,25 @@
+{
+  "role_id": "cloud-architect-aws",
+  "display_name": "Naomi Whitfield",
+  "pronouns": "she/her",
+  "role_name": "Cloud Architect (AWS)",
+  "emoji": "☁️",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "infrastructure-devops",
+  "tagline": "AWS architecture — cost-optimized, secure, and built to survive anything",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["devops-engineer", "site-reliability-engineer", "database-administrator", "kubernetes-architect"],
+  "pros": [
+    "Deep AWS expertise from serverless to multi-region HA",
+    "Cost optimization that saves real money — six figures annually",
+    "Compliance-ready architectures (HIPAA, SOC 2, PCI DSS)",
+    "Ex-AWS — knows which services are solid and which to avoid"
+  ],
+  "cons": [
+    "AWS-only — no GCP or Azure depth",
+    "Architecture focus may over-plan for simple projects",
+    "Cost optimization recommendations can conflict with time-to-market pressure"
+  ]
+}

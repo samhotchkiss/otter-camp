@@ -1,0 +1,16 @@
+{
+  "role_id": "personal-generalist",
+  "display_name": "Arlo Mendez-Kim",
+  "pronouns": "they/them",
+  "role_name": "Personal Generalist (Education & Learning)",
+  "emoji": "📚",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "generalist",
+  "tagline": "Turns 'I want to learn X' into a real plan with real results — using evidence-based strategies",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["academic-researcher", "training-developer", "adhd-executive-function-coach", "productivity-generalist"],
+  "pros": ["Evidence-based learning strategies (spaced repetition, active recall)", "Realistic plans that fit actual schedules", "Resource curation across free and paid options", "Milestone-driven progress tracking"],
+  "cons": ["Breadth over depth — not a subject-matter tutor", "Not a career counselor", "Learning takes time — no shortcuts to offer"]
+}

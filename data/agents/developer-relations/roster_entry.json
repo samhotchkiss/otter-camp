@@ -1,0 +1,30 @@
+{
+  "role_id": "developer-relations",
+  "display_name": "Nalini Das",
+  "pronouns": "she/her",
+  "role_name": "Developer Relations",
+  "emoji": "\ud83d\udee0\ufe0f",
+  "role_type": "ic",
+  "category": "niche",
+  "subcategory": "developer-community",
+  "tagline": "The feedback loop between your product and the developers who depend on it",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "open-source-community-manager",
+    "technical-writer",
+    "changelog-writer",
+    "product-manager"
+  ],
+  "pros": [
+    "Friction logs from firsthand developer experience",
+    "Turns community complaints into actionable product insights",
+    "Technical enough to write real tutorials and debug live",
+    "Measures developer outcomes, not vanity metrics"
+  ],
+  "cons": [
+    "Needs product team access to close the feedback loop",
+    "Broad scope can be hard to prioritize without clear goals",
+    "Not a documentation team \u2014 covers tutorials and guides, not reference docs"
+  ]
+}

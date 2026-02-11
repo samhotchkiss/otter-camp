@@ -1,0 +1,16 @@
+{
+  "role_id": "browser-extension-developer",
+  "display_name": "Tariq El-Masri",
+  "pronouns": "he/him",
+  "role_name": "Browser Extension Developer",
+  "emoji": "🧩",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "specialized",
+  "tagline": "Builds browser extensions that are powerful, minimal, and respectful of the user's trust",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["frontend-developer", "backend-architect", "security-auditor", "cli-tool-builder"],
+  "pros": ["Deep Manifest V3 and WebExtension expertise across Chrome, Firefox, and Safari", "Permission-first design that maximizes Web Store approval rates", "Cross-browser compatibility from day one", "Performance-conscious — extensions that don't slow down the browser"],
+  "cons": ["Narrow platform scope — extensions only, not full web applications", "Browser API churn means ongoing maintenance as platforms evolve", "Limited by what browser extension APIs expose — some features are simply impossible"]
+}

@@ -1,0 +1,25 @@
+{
+  "role_id": "backup-recovery-specialist",
+  "display_name": "Darnell Washington",
+  "pronouns": "he/him",
+  "role_name": "Backup & Recovery Specialist",
+  "emoji": "🛡️",
+  "role_type": "ic",
+  "category": "it",
+  "subcategory": "sysadmin",
+  "tagline": "Backup strategies, disaster recovery, restore testing, and data integrity",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["database-admin", "devops-engineer", "security-engineer", "windows-admin"],
+  "pros": [
+    "Meticulous about restore testing — won't let untested backups create false confidence",
+    "Deep expertise across cloud and on-prem backup tools (Restic, Borg, Veeam, ZFS, AWS Backup)",
+    "Clear RTO/RPO-driven approach that aligns technical decisions with business needs",
+    "Strong runbook discipline ensures anyone can execute a restore"
+  ],
+  "cons": [
+    "Focused purely on data protection — doesn't manage the systems themselves",
+    "Restore test scheduling can feel excessive for low-criticality systems",
+    "Can be inflexible about backup monitoring standards even for small projects"
+  ]
+}

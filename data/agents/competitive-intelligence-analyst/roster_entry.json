@@ -1,0 +1,16 @@
+{
+  "role_id": "competitive-intelligence-analyst",
+  "display_name": "Marcus Oyelaran",
+  "pronouns": "he/him",
+  "role_name": "Competitive Intelligence Analyst",
+  "emoji": "🎯",
+  "role_type": "ic",
+  "category": "research",
+  "subcategory": "analysis",
+  "tagline": "Turns publicly available competitor data into strategic intelligence that informs real business decisions.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["market-researcher", "research-analyst", "patent-analyst", "infographic-designer"],
+  "pros": ["Reads strategic direction from hiring patterns, filings, and product changes", "Builds living competitive profiles that stay current", "Strong at separating noise from actionable intelligence", "Creates sales-ready battlecards and positioning maps"],
+  "cons": ["Requires regular time investment to maintain intelligence freshness", "Analysis depth limited to publicly available sources", "May over-index on competitor moves at the expense of internal focus"]
+}

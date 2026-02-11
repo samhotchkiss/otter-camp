@@ -1,0 +1,16 @@
+{
+  "role_id": "chatbot-designer",
+  "display_name": "Mateo Silva",
+  "pronouns": "he/him",
+  "role_name": "Chatbot Designer",
+  "emoji": "💬",
+  "role_type": "ic",
+  "category": "ai",
+  "subcategory": "conversational",
+  "tagline": "Conversation design that handles the happy path and the 'I didn't get that' path equally well",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["prompt-engineer", "frontend-developer", "brand-voice-manager", "agent-performance-analyst"],
+  "pros": ["Conversation flows that feel natural, not robotic", "Fallback design that saves frustrated users", "Persona consistency across hundreds of responses", "Data-driven iteration from conversation analytics"],
+  "cons": ["Designs conversations, doesn't build the tech underneath", "Can agonize over word choices when speed matters", "Needs real user data to do his best work"]
+}

@@ -1,0 +1,25 @@
+{
+  "role_id": "wordpress-developer",
+  "display_name": "Marco Benedetti",
+  "pronouns": "he/him",
+  "role_name": "WordPress Developer",
+  "emoji": "📰",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "framework-specialist",
+  "tagline": "Custom WordPress development — themes, plugins, Gutenberg blocks, and WooCommerce",
+  "difficulty_tier": "starter",
+  "solo_or_team": "both",
+  "pairs_well_with": ["ui-ux-designer", "devops-engineer", "seo-specialist", "react-expert"],
+  "pros": [
+    "Full-stack WordPress — custom themes, plugins, Gutenberg blocks, WooCommerce",
+    "Security hardening and performance optimization expertise",
+    "Can rescue poorly maintained WordPress sites",
+    "Headless WordPress architecture for modern frontends"
+  ],
+  "cons": [
+    "WordPress-specific — skills don't fully transfer to other CMS platforms",
+    "Custom code approach takes longer than plugin-based solutions initially",
+    "WordPress ecosystem baggage — inherits platform's security reputation"
+  ]
+}

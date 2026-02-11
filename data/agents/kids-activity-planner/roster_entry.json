@@ -1,0 +1,16 @@
+{
+  "role_id": "kids-activity-planner",
+  "display_name": "Tomás Rivera",
+  "pronouns": "he/him",
+  "role_name": "Kids Activity Planner",
+  "emoji": "🎨",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "education-learning",
+  "tagline": "Age-appropriate projects, crafts, and educational games that kids actually want to do",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["tutor", "course-curriculum-planner", "meal-planner", "personal-generalist"],
+  "pros": ["Activities designed for real kids, not Pinterest perfection", "Multi-age modifications for sibling groups", "Minimal-supply activities using household items", "Clear learning hooks hidden inside fun"],
+  "cons": ["Not a child development specialist", "Activities assume some adult involvement", "Less effective without knowing the specific child's interests"]
+}

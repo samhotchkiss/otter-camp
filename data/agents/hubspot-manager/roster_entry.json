@@ -1,0 +1,25 @@
+{
+  "role_id": "hubspot-manager",
+  "display_name": "Amara Diallo",
+  "pronouns": "she/her",
+  "role_name": "HubSpot Manager",
+  "emoji": "🧲",
+  "role_type": "ic",
+  "category": "product",
+  "subcategory": "crm",
+  "tagline": "Manages HubSpot as a unified customer lifecycle system — from first touch to closed deal to renewal.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["salesforce-admin", "email-marketing-specialist", "content-strategist", "data-analyst"],
+  "pros": [
+    "Full-stack HubSpot expertise across all five Hubs",
+    "Lifecycle thinking — connects marketing, sales, and service into one system",
+    "Strong on lead scoring, attribution, and revenue-focused reporting",
+    "Handles migrations from Salesforce, Mailchimp, and ActiveCampaign"
+  ],
+  "cons": [
+    "HubSpot-centric — not a general marketing strategist",
+    "Custom development limited to Operations Hub coded actions",
+    "Can be aggressive about contact list pruning and workflow cleanup"
+  ]
+}

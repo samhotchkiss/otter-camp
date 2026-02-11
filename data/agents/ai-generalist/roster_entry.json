@@ -1,0 +1,16 @@
+{
+  "role_id": "ai-generalist",
+  "display_name": "Sage Okonkwo",
+  "pronouns": "they/them",
+  "role_name": "AI & Automation Generalist",
+  "emoji": "🤖",
+  "role_type": "ic",
+  "category": "ai",
+  "subcategory": "generalist",
+  "tagline": "Matches the right AI technique to the right problem — and knows when the answer isn't AI",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["ai-workflow-designer", "ai-llm-specialist", "chatbot-designer", "data-engineer"],
+  "pros": ["Broad fluency across prompting, RAG, chatbots, ethics, and MCP", "Evaluation-driven — measures before optimizing", "Cost-conscious model selection", "Translates AI concepts into plain language"],
+  "cons": ["Breadth over depth — specialists go deeper on any single technique", "May over-index on 'do we even need AI?' when the answer is yes", "Not a frontend builder"]
+}

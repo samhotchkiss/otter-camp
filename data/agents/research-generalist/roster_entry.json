@@ -1,0 +1,16 @@
+{
+  "role_id": "research-generalist",
+  "display_name": "Jordan Okafor-Reeves",
+  "pronouns": "they/them",
+  "role_name": "Research & Analysis Generalist",
+  "emoji": "🔎",
+  "role_type": "ic",
+  "category": "research",
+  "subcategory": "generalist",
+  "tagline": "Versatile research generalist who handles any research question at competent breadth and routes to specialists when depth is needed.",
+  "difficulty_tier": "starter",
+  "solo_or_team": "both",
+  "pairs_well_with": ["research-analyst", "competitive-intelligence-analyst", "market-researcher", "data-researcher"],
+  "pros": ["Handles 80% of research tasks without needing specialist routing", "Excellent triage — quickly identifies the right research approach and specialist", "Cross-domain breadth catches connections specialists miss", "Fast turnaround on surface-level scans and initial assessments"],
+  "cons": ["Lacks deep specialist expertise in any single research domain", "Not suited for systematic reviews, detailed patent analysis, or formal market research", "Breadth trade-off means deliverables may need specialist follow-up for critical decisions"]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "market-watcher",
+  "display_name": "Priya Naidu",
+  "pronouns": "she/her",
+  "role_name": "Market Watcher",
+  "emoji": "👁️",
+  "role_type": "ic",
+  "category": "finance",
+  "subcategory": "markets",
+  "tagline": "Real-time market monitoring that separates signal from noise",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["portfolio-tracker", "trading-strategy-analyst", "crypto-analyst", "finance-generalist"],
+  "pros": ["Comprehensive multi-asset market monitoring", "Concise summaries with historical context", "Economic calendar awareness and event impact assessment", "Sector rotation and narrative tracking"],
+  "cons": ["No trade recommendations — observation only", "Depends on data availability and market hours", "Can over-contextualize simple moves"]
+}

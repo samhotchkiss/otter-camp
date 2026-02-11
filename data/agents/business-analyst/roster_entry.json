@@ -1,0 +1,16 @@
+{
+  "role_id": "business-analyst",
+  "display_name": "Ravi Chandrasekaran",
+  "pronouns": "he/him",
+  "role_name": "Business Analyst",
+  "emoji": "📊",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "analysis",
+  "tagline": "Turns raw data into business decisions and messy processes into clear maps",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["product-manager", "financial-analyst", "operations-manager", "strategy-consultant"],
+  "pros": ["Bridges the gap between data and action with structured analysis", "Exceptional at requirements gathering and stakeholder interviews", "Process mapping that reveals hidden inefficiencies", "Builds reusable frameworks that accelerate future analyses"],
+  "cons": ["Analysis can take longer than stakeholders want to wait", "Depends on data quality — garbage in, garbage out", "Less effective when problems are more political than analytical"]
+}

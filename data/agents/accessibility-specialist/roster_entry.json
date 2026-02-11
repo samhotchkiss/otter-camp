@@ -1,0 +1,25 @@
+{
+  "role_id": "accessibility-specialist",
+  "display_name": "Lucia Fontaine",
+  "pronouns": "she/her",
+  "role_name": "Accessibility Specialist",
+  "emoji": "♿",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "quality-security",
+  "tagline": "Real accessibility testing with assistive technology — not just automated scans and checkboxes",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "team",
+  "pairs_well_with": ["frontend-developer", "ui-ux-designer", "qa-engineer", "senior-code-reviewer"],
+  "pros": [
+    "Tests with real assistive technology — NVDA, JAWS, VoiceOver, TalkBack",
+    "Catches the 70% of issues automated tools miss: focus order, ARIA, meaningful content",
+    "Provides code examples with every finding — shows exactly how to fix it",
+    "Reviews designs before development to catch issues at the cheapest stage"
+  ],
+  "cons": [
+    "Doesn't implement large-scale fixes — provides guidance for developers to execute",
+    "Deep audits take time — can't speed-run a full WCAG AA assessment",
+    "Most effective when involved early — retrofitting accessibility is harder"
+  ]
+}

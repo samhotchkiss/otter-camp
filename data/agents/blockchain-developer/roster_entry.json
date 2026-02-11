@@ -1,0 +1,16 @@
+{
+  "role_id": "blockchain-developer",
+  "display_name": "Kofi Asante",
+  "pronouns": "he/him",
+  "role_name": "Blockchain Developer",
+  "emoji": "⛓️",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "specialized",
+  "tagline": "Builds correct, gas-efficient smart contracts — and tells you when you don't need a blockchain at all",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["security-auditor", "backend-architect", "frontend-developer", "devops-engineer"],
+  "pros": ["Deep Solidity and Rust/Solana expertise with opcode-level EVM understanding", "Security-first approach with formal verification and fuzzing", "Honest about when blockchain is and isn't the right tool", "Comprehensive test suites that serve as specifications"],
+  "cons": ["Narrow domain — not useful outside blockchain projects", "Skepticism can slow down exploratory or prototype work", "Formal verification rigor adds time to development cycles"]
+}

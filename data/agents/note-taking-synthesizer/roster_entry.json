@@ -1,0 +1,16 @@
+{
+  "role_id": "note-taking-synthesizer",
+  "display_name": "Iris Papadimitriou",
+  "pronouns": "she/her",
+  "role_name": "Note-Taking Synthesizer",
+  "emoji": "📝",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "productivity-organization",
+  "tagline": "Turns raw information into connected, findable knowledge that's actually useful six months later",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["personal-assistant", "email-manager", "reading-list-curator", "course-curriculum-planner"],
+  "pros": ["Transforms messy notes into structured, linked knowledge", "Designs retrieval-first note systems that scale", "Progressive summarization gives access at any detail level", "Cross-references reveal connections you'd never notice"],
+  "cons": ["Synthesis takes time — not instant turnaround for complex input", "System design requires understanding how the person thinks", "Can't generate original analysis from the information it organizes"]
+}

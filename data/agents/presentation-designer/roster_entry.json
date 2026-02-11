@@ -1,0 +1,16 @@
+{
+  "role_id": "presentation-designer",
+  "display_name": "River Nakamura-Singh",
+  "pronouns": "they/them",
+  "role_name": "Presentation Designer",
+  "emoji": "📊",
+  "role_type": "ic",
+  "category": "design",
+  "subcategory": "presentation",
+  "tagline": "Structures narratives and designs slides that support speakers, turning data dumps into stories that land.",
+  "difficulty_tier": "starter",
+  "solo_or_team": "both",
+  "pairs_well_with": ["visual-designer", "infographic-designer", "motion-designer", "research-analyst"],
+  "pros": ["Restructures narrative before touching visuals — the thinking comes first", "Expert at deck reduction and one-idea-per-slide discipline", "Creates both presentation and leave-behind versions when needed", "Designs within actual tool constraints (PowerPoint, Keynote, Slides)"],
+  "cons": ["Focused on slide-based storytelling — not a general visual designer", "Will push back on slide count and text density, which can feel aggressive", "Depends on others for underlying content, data, and custom illustrations"]
+}

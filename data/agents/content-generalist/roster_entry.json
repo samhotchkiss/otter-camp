@@ -1,0 +1,16 @@
+{
+  "role_id": "content-generalist",
+  "display_name": "Riley Sato",
+  "pronouns": "they/them",
+  "role_name": "Content Generalist",
+  "emoji": "✏️",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "editorial-brand",
+  "tagline": "Versatile content support spanning writing, editing, brand voice, and editorial planning",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["copywriter", "seo-specialist", "brand-voice-manager", "content-strategist"],
+  "pros": ["Breadth across writing, editing, strategy, and brand voice", "Efficient content repurposing across formats", "Strong editorial calendar management", "Effective at routing to the right specialist"],
+  "cons": ["Generalist depth — specialist tasks need handoff", "May prioritize shipping over polish", "Not a substitute for dedicated copywriting or SEO expertise"]
+}

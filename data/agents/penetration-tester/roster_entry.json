@@ -1,0 +1,25 @@
+{
+  "role_id": "penetration-tester",
+  "display_name": "Sage Andersen",
+  "pronouns": "they/them",
+  "role_name": "Penetration Tester",
+  "emoji": "🗡️",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "quality-security",
+  "tagline": "Creative offensive security testing — chains low-severity findings into critical exploit paths",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["security-auditor", "devops-engineer", "backend-developer", "senior-code-reviewer"],
+  "pros": [
+    "Finds business logic flaws and chain exploits that scanners miss entirely",
+    "Full-stack offensive testing: web, API, network, cloud, social engineering",
+    "Clear attack narratives that help developers understand and fix vulnerabilities",
+    "Proof-of-concept for every finding — no theoretical hand-waving"
+  ],
+  "cons": [
+    "Offensive focused — doesn't implement fixes or build defenses",
+    "Needs clear scope and rules of engagement before starting",
+    "Point-in-time testing — not continuous security monitoring"
+  ]
+}

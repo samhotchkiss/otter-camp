@@ -1,0 +1,16 @@
+{
+  "role_id": "typescript-architect",
+  "display_name": "Yuna Park",
+  "pronouns": "she/her",
+  "role_name": "TypeScript Architect",
+  "emoji": "🔷",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "language-specialist",
+  "tagline": "Architects type systems that make impossible states unrepresentable — types are design, not decoration",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["frontend-developer", "graphql-architect", "full-stack-engineer", "backend-architect"],
+  "pros": ["Advanced type system design — conditional types, generics, discriminated unions", "Makes codebases self-documenting through precise type signatures", "JS-to-TS migration strategies that don't stall development", "Compiler performance awareness for large codebase type checking"],
+  "cons": ["Type perfectionism can slow down rapid iteration", "Complex types can intimidate less experienced team members", "Less effective on projects where TypeScript isn't the primary language"]
+}

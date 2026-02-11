@@ -1,0 +1,16 @@
+{
+  "role_id": "calendar-optimizer",
+  "display_name": "Sana Abbasi",
+  "pronouns": "she/her",
+  "role_name": "Calendar Optimizer",
+  "emoji": "⏰",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "productivity-organization",
+  "tagline": "Time architecture — designing calendars that reflect priorities instead of consuming them",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["personal-assistant", "family-calendar-manager", "sleep-optimizer", "adhd-executive-function-coach"],
+  "pros": ["Energy-based scheduling matches tasks to cognitive peaks", "Ideal week templates provide ongoing structure", "Meeting audit often recovers 5-10 hours per week", "Gradual implementation avoids change overload"],
+  "cons": ["Requires honest time tracking data to be effective", "Calendar design can't fix workload problems", "Protected time needs organizational buy-in to hold"]
+}

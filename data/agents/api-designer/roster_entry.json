@@ -1,0 +1,30 @@
+{
+  "role_id": "api-designer",
+  "display_name": "Pedro Santiago",
+  "pronouns": "she/her",
+  "role_name": "API Designer",
+  "emoji": "\ud83d\udd0c",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "core-development",
+  "tagline": "Designs API contracts that developers integrate with correctly on the first try",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "backend-architect",
+    "full-stack-engineer",
+    "graphql-architect",
+    "frontend-developer"
+  ],
+  "pros": [
+    "Contract-first design with thorough OpenAPI/protobuf specifications",
+    "Obsessive consistency in naming, errors, and pagination across endpoints",
+    "Strong API evolution and versioning strategies that protect consumers",
+    "Developer experience focus \u2014 documentation that actually reduces support burden"
+  ],
+  "cons": [
+    "Perfectionism about HTTP semantics can feel pedantic to pragmatic teams",
+    "Contract-first approach adds upfront time before implementation starts",
+    "Less effective when the API is purely internal with a single consumer"
+  ]
+}

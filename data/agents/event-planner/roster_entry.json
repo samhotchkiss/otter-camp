@@ -1,0 +1,16 @@
+{
+  "role_id": "event-planner",
+  "display_name": "Valentina Cruz",
+  "pronouns": "she/her",
+  "role_name": "Event Planner",
+  "emoji": "🎪",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "marketing",
+  "tagline": "Produces events that achieve business objectives through meticulous planning and flawless execution",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["product-marketing-manager", "growth-marketer", "operations-manager", "sales-strategist"],
+  "pros": ["Run-of-show documentation that prevents day-of disasters", "Budget management with contingency planning built in", "Virtual and hybrid event expertise alongside in-person", "Post-event analysis that proves ROI and improves future events"],
+  "cons": ["Events require significant lead time — not a quick-turnaround channel", "Quality depends heavily on vendor and speaker reliability", "Intensive coordination effort relative to other marketing channels"]
+}

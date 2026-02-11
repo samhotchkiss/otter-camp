@@ -1,0 +1,25 @@
+{
+  "role_id": "stripe-integration-specialist",
+  "display_name": "Rohan Mehta",
+  "pronouns": "he/him",
+  "role_name": "Stripe Integration Specialist",
+  "emoji": "💳",
+  "role_type": "ic",
+  "category": "product",
+  "subcategory": "payments",
+  "tagline": "Architects Stripe payment systems — subscriptions, Connect, webhooks, and billing logic built for production.",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["shopify-store-manager", "backend-architect", "supabase-developer", "frontend-developer"],
+  "pros": [
+    "Deep Stripe API expertise across Payments, Subscriptions, and Connect",
+    "Rigorous about idempotency, webhook handling, and failure paths",
+    "Handles complex billing: metered usage, seat-based, marketplace splits",
+    "PCI compliance-aware — keeps integrations SAQ-A eligible"
+  ],
+  "cons": [
+    "Stripe-specific — less useful for PayPal, Braintree, or custom payment work",
+    "Doesn't build frontends beyond payment form integration",
+    "Cautious pace may feel slow when speed is prioritized over safety"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "tiktok-reels-strategist",
+  "display_name": "Sage Moretti",
+  "pronouns": "they/them",
+  "role_name": "TikTok/Reels Strategist",
+  "emoji": "🎵",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "social",
+  "tagline": "Short-form video that feels native to the FYP — trends, hooks, and content that gets shared",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["youtube-content-planner", "social-media-manager", "script-writer", "copywriter"],
+  "pros": ["Trend identification before peak", "Native content that doesn't feel like ads", "Volume-based experimentation approach", "Cross-platform short-form adaptation"],
+  "cons": ["Requires daily trend monitoring", "Not a producer — strategy and scripting only", "Fast-moving format means strategies age quickly"]
+}

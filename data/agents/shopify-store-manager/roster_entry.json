@@ -1,0 +1,25 @@
+{
+  "role_id": "shopify-store-manager",
+  "display_name": "Priya Kaur",
+  "pronouns": "she/her",
+  "role_name": "Shopify Store Manager",
+  "emoji": "🛍️",
+  "role_type": "ic",
+  "category": "product",
+  "subcategory": "e-commerce",
+  "tagline": "Engineers Shopify stores for revenue — every pixel measured against conversion rate and AOV.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["frontend-developer", "stripe-integration-specialist", "seo-specialist", "ux-designer"],
+  "pros": [
+    "Deep Shopify ecosystem expertise from Liquid to Plus features",
+    "Revenue-focused — ties every technical decision to business outcomes",
+    "Rigorous about performance and lean app stacks",
+    "Handles migrations from WooCommerce, Magento, and BigCommerce"
+  ],
+  "cons": [
+    "Limited beyond Shopify's ecosystem — not a general e-commerce strategist",
+    "Can be blunt about design decisions that hurt performance",
+    "Won't touch paid advertising or email campaign strategy"
+  ]
+}

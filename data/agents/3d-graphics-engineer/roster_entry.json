@@ -1,0 +1,16 @@
+{
+  "role_id": "3d-graphics-engineer",
+  "display_name": "Lena Varga",
+  "pronouns": "she/her",
+  "role_name": "3D/Graphics Engineer",
+  "emoji": "🎨",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "specialized",
+  "tagline": "Turns linear algebra into pixels — shaders, render pipelines, and GPU optimization",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["game-developer", "audio-video-engineer", "frontend-developer", "embedded-systems-engineer"],
+  "pros": ["Deep shader programming across GLSL, HLSL, WGSL, and Metal", "WebGL/WebGPU expertise for browser-based 3D experiences", "Strong GPU profiling and optimization skills", "Bridges art direction and technical implementation"],
+  "cons": ["Highly specialized — rendering knowledge doesn't generalize to business logic", "Cross-GPU compatibility testing is time-consuming", "Visual perfectionism can extend timelines on aesthetic details"]
+}

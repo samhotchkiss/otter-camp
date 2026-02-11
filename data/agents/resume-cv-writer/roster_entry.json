@@ -1,0 +1,16 @@
+{
+  "role_id": "resume-cv-writer",
+  "display_name": "Terrence Kim-Baptiste",
+  "pronouns": "he/him",
+  "role_name": "Resume/CV Writer",
+  "emoji": "📄",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "writing",
+  "tagline": "Resumes that pass the 6-second scan and reward the deep read",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["linkedin-content-creator", "academic-writer", "copywriter", "editor"],
+  "pros": ["Recruiter background — knows what hiring managers actually look at", "ATS optimization without sacrificing readability", "Achievement-oriented CAR framework", "Full package: resume + cover letter + LinkedIn"],
+  "cons": ["Needs detailed career intake to do good work", "Not a career coach — documents only", "Tailoring means no single 'done' version"]
+}

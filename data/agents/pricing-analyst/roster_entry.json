@@ -1,0 +1,30 @@
+{
+  "role_id": "pricing-analyst",
+  "display_name": "Liam Fitzgerald",
+  "pronouns": "he/him",
+  "role_name": "Pricing Analyst",
+  "emoji": "\ud83d\udcb2",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "sales",
+  "tagline": "Finds the optimal price point using value analysis, behavioral psychology, and rigorous testing",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": [
+    "sales-strategist",
+    "financial-analyst",
+    "product-marketing-manager",
+    "product-manager"
+  ],
+  "pros": [
+    "Turns pricing from guesswork into a data-driven discipline",
+    "Willingness-to-pay research that reveals real customer psychology",
+    "Packaging strategy that maximizes both conversion and margin",
+    "Competitive pricing intelligence that informs without dictating"
+  ],
+  "cons": [
+    "Pricing experiments take time and require meaningful traffic",
+    "Analysis paralysis risk \u2014 sometimes you need to just pick a price",
+    "Less effective without access to customer and conversion data"
+  ]
+}

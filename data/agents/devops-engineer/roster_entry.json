@@ -1,0 +1,25 @@
+{
+  "role_id": "devops-engineer",
+  "display_name": "Ravi Chakraborty",
+  "pronouns": "he/him",
+  "role_name": "DevOps Engineer",
+  "emoji": "🔄",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "infrastructure-devops",
+  "tagline": "CI/CD pipelines, infrastructure as code, and deployments that just work",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["cloud-architect-aws", "platform-engineer", "site-reliability-engineer", "database-administrator"],
+  "pros": [
+    "End-to-end pipeline design — from commit to production",
+    "Multi-cloud Terraform expertise",
+    "Strong developer experience focus — removes friction from shipping",
+    "Excellent runbook and incident response documentation"
+  ],
+  "cons": [
+    "Generalist across clouds — not as deep as a dedicated cloud architect",
+    "Automation-first mindset can over-engineer simple deployments",
+    "Less focused on application-level performance tuning"
+  ]
+}

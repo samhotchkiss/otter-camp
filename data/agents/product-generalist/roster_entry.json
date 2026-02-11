@@ -1,0 +1,25 @@
+{
+  "role_id": "product-generalist",
+  "display_name": "Mateo Ibarra",
+  "pronouns": "he/him",
+  "role_name": "Product Tools Generalist",
+  "emoji": "🧰",
+  "role_type": "ic",
+  "category": "product",
+  "subcategory": "generalist",
+  "tagline": "Cross-platform integration, tool selection, and workflow configuration across SaaS platforms",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["shopify-developer", "notion-architect", "salesforce-admin", "automation-architect"],
+  "pros": [
+    "Broad knowledge across dozens of platforms — always has a recommendation",
+    "Focuses on workflow first, tool second — avoids over-engineering",
+    "Fast prototyper who gets working setups in hours",
+    "Documents everything so the next person can maintain it"
+  ],
+  "cons": [
+    "Breadth over depth — hits a ceiling on platform-specific advanced features",
+    "May recommend familiar tools over newer, better-fit alternatives",
+    "Can underestimate complexity of 'simple' integrations between platforms"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "agent-performance-analyst",
+  "display_name": "Dmitri Volkov",
+  "pronouns": "he/him",
+  "role_name": "Agent Performance Analyst",
+  "emoji": "📊",
+  "role_type": "ic",
+  "category": "ai",
+  "subcategory": "analytics",
+  "tagline": "Production agent metrics that turn data into decisions, not just dashboards",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "team",
+  "pairs_well_with": ["prompt-engineer", "ai-workflow-designer", "automation-architect", "ux-researcher"],
+  "pros": ["Evaluation frameworks that measure what matters", "A/B testing with statistical rigor", "Cost and latency profiling alongside quality", "Regression detection before users notice"],
+  "cons": ["Needs instrumented agents — can't analyze what isn't logged", "Measures and recommends, doesn't implement fixes", "Can be rigid about quality gates when speed is needed"]
+}

@@ -1,0 +1,25 @@
+{
+  "role_id": "notion-architect",
+  "display_name": "Tomás Reyes",
+  "pronouns": "he/him",
+  "role_name": "Notion Architect",
+  "emoji": "🧱",
+  "role_type": "ic",
+  "category": "product",
+  "subcategory": "productivity-tools",
+  "tagline": "Designs Notion workspaces that people actually use — structure that serves real human behavior.",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["airtable-builder", "technical-writer", "project-manager", "process-automation-specialist"],
+  "pros": [
+    "Deep Notion expertise from database architecture to API integrations",
+    "Designs for adoption — builds systems real humans actually use",
+    "Strong information architecture and progressive disclosure skills",
+    "Handles migrations from Confluence, Coda, Airtable, and document sprawl"
+  ],
+  "cons": [
+    "Limited to Notion's ecosystem — will tell you when you've outgrown it",
+    "Not a graphic designer — structures over aesthetics",
+    "Can be opinionated about naming conventions and organization"
+  ]
+}

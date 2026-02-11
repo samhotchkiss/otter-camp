@@ -1,0 +1,25 @@
+{
+  "role_id": "rails-specialist",
+  "display_name": "Saoirse Flynn",
+  "pronouns": "she/her",
+  "role_name": "Rails Specialist",
+  "emoji": "💎",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "framework-specialist",
+  "tagline": "Ruby on Rails mastery — from majestic monoliths to Hotwire-powered modern UIs",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["devops-engineer", "database-administrator", "react-expert", "ui-ux-designer"],
+  "pros": [
+    "Extremely fast from idea to working product",
+    "Deep Rails convention knowledge — Active Record, Hotwire, Sidekiq",
+    "Multi-tenant and payment integration expertise",
+    "Strong testing discipline with RSpec"
+  ],
+  "cons": [
+    "Ruby ecosystem is smaller than Python/JS — fewer library options",
+    "Convention-first approach can feel constraining for unconventional architectures",
+    "Less relevant for teams already committed to a JavaScript backend"
+  ]
+}

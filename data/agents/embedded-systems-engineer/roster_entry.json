@@ -1,0 +1,16 @@
+{
+  "role_id": "embedded-systems-engineer",
+  "display_name": "Adaeze Okonkwo",
+  "pronouns": "she/her",
+  "role_name": "Embedded Systems Engineer",
+  "emoji": "🔌",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "specialized",
+  "tagline": "Writes firmware for constrained hardware — every byte counted, every microsecond budgeted",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["backend-architect", "security-auditor", "devops-engineer", "3d-graphics-engineer"],
+  "pros": ["Deep bare-metal C/C++ on ARM, ESP32, AVR, and RISC-V", "Real-time systems expertise with hard timing guarantees", "Bridges hardware and software — reads datasheets and oscilloscope traces", "Production hardening with watchdogs, OTA updates, and graceful degradation"],
+  "cons": ["Highly specialized — not transferable to web or business software", "Hardware dependency means slower iteration than pure software projects", "Conservative approach may resist higher-level abstractions that are safe in context"]
+}

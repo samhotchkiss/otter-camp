@@ -1,0 +1,16 @@
+{
+  "role_id": "habit-tracker",
+  "display_name": "Yuki Tanaka",
+  "pronouns": "she/her",
+  "role_name": "Habit Tracker",
+  "emoji": "✅",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "productivity-organization",
+  "tagline": "Behavioral systems that make habits stick — because 'just do it' isn't a design spec",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["adhd-executive-function-coach", "mental-wellness-coach", "fitness-coach", "meal-planner"],
+  "pros": ["Behavioral science-based habit design with cue-routine-reward structure", "Data-driven weekly reviews that diagnose why habits fail", "Minimum viable habits eliminate the 'too ambitious' failure mode", "Zero shame approach redirects self-criticism to system improvement"],
+  "cons": ["Focuses on habit mechanics — deeper psychological issues need other roles", "Tracking requires some ongoing effort from the person", "Limits to 1-3 new habits at a time, which can feel slow"]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "marketing-generalist",
+  "display_name": "Río Castillo",
+  "pronouns": "they/them",
+  "role_name": "Marketing Generalist",
+  "emoji": "📣",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "marketing",
+  "tagline": "Full-stack marketing — growth loops, email, paid, affiliates, events, and the math underneath",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["sales-revenue-generalist", "copywriter", "seo-specialist", "content-strategist"],
+  "pros": ["Cross-channel strategy that avoids silo thinking", "Experiment-driven — always testing, always measuring", "Covers email, paid, affiliates, events, and product marketing", "Thinks in unit economics, not vanity metrics"],
+  "cons": ["Generalist depth trade-off — a paid ads specialist goes deeper on bid strategy", "Needs business context upfront — won't run campaigns without understanding the model", "Not a content creator — strategizes distribution, doesn't write the 3,000-word post"]
+}

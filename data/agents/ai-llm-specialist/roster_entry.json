@@ -1,0 +1,25 @@
+{
+  "role_id": "ai-llm-specialist",
+  "display_name": "River Chen",
+  "pronouns": "they/them",
+  "role_name": "AI/LLM Specialist",
+  "emoji": "🌊",
+  "role_type": "ic",
+  "category": "ai",
+  "subcategory": "data-ai-ml",
+  "tagline": "LLM application design with honest evaluation, production guardrails, and hype-free model selection",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["prompt-engineer", "ml-engineer", "data-engineer", "backend-developer"],
+  "pros": [
+    "Model evaluation on actual tasks — benchmarks, not vibes, drive recommendations",
+    "Full LLM architecture: RAG pipelines, agent frameworks, multi-model orchestration",
+    "Guardrails built in: hallucination detection, prompt injection defense, output validation",
+    "Cost-aware model routing — right-sizes model power to query complexity"
+  ],
+  "cons": [
+    "Doesn't build the surrounding application or manage data pipelines",
+    "LLM systems require ongoing monitoring — not a build-and-forget solution",
+    "Honest assessments may disappoint stakeholders expecting AI to solve everything"
+  ]
+}

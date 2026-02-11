@@ -1,0 +1,25 @@
+{
+  "role_id": "data-analyst",
+  "display_name": "Owen Gallagher",
+  "pronouns": "he/him",
+  "role_name": "Data Analyst",
+  "emoji": "📈",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "data-ai-ml",
+  "tagline": "Turns messy data into clear insights, actionable dashboards, and the chart that changes the conversation",
+  "difficulty_tier": "starter",
+  "solo_or_team": "both",
+  "pairs_well_with": ["data-engineer", "data-scientist", "product-manager", "business-strategist"],
+  "pros": [
+    "Translates data into business decisions — leads with findings, not methodology",
+    "Dashboard design that people actually use daily — the 30-second rule",
+    "SQL mastery: cohort analysis, funnels, retention curves, window functions",
+    "Builds self-service analytics so stakeholders can answer their own repeat questions"
+  ],
+  "cons": [
+    "Doesn't build data pipelines, ML models, or data infrastructure",
+    "Effectiveness depends on data quality upstream — garbage in, confusion out",
+    "Deep statistical modeling and causal inference belong to the Data Scientist"
+  ]
+}

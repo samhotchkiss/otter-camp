@@ -1,0 +1,16 @@
+{
+  "role_id": "sales-strategist",
+  "display_name": "Marcus Drummond",
+  "pronouns": "he/him",
+  "role_name": "Sales Strategist",
+  "emoji": "🎯",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "sales",
+  "tagline": "Architects complex deals through buying committee strategy, champion-building, and disciplined process",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["sales-development-rep", "account-manager", "pricing-analyst", "product-marketing-manager"],
+  "pros": ["Turns stuck deals into wins through strategic reframing", "Business case construction that speaks the buyer's financial language", "Competitive positioning that wins on value, not feature lists", "Deal coaching that elevates entire sales teams"],
+  "cons": ["Overkill for simple transactional sales", "Strategy takes time — not suited for high-velocity low-ACV deals", "Depends on sales development for qualified pipeline"]
+}

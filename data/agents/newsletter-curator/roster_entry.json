@@ -1,0 +1,16 @@
+{
+  "role_id": "newsletter-curator",
+  "display_name": "Tomás Beltrán",
+  "pronouns": "he/him",
+  "role_name": "Newsletter Curator",
+  "emoji": "📬",
+  "role_type": "ic",
+  "category": "niche",
+  "subcategory": "content-curation",
+  "tagline": "Reads everything so your subscribers don't have to — then makes it worth opening",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["email-marketing-specialist", "content-strategist", "copywriter"],
+  "pros": ["Sharp editorial eye for signal vs noise", "Annotations that add genuine context and voice", "Source diversity beyond the usual suspects", "Analytics-driven iteration on what resonates"],
+  "cons": ["Needs clear audience definition upfront", "Not a longform writer — curation and annotation only", "Opinionated about quality — will push back on filler content"]
+}

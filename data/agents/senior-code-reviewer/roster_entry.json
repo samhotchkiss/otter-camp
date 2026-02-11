@@ -1,0 +1,25 @@
+{
+  "role_id": "senior-code-reviewer",
+  "display_name": "Marcus Okonkwo",
+  "pronouns": "he/him",
+  "role_name": "Senior Code Reviewer",
+  "emoji": "🔍",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "quality-security",
+  "tagline": "Thorough, fair code review that catches bugs and raises the bar for the whole team",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "team",
+  "pairs_well_with": ["security-auditor", "test-automation-engineer", "performance-engineer", "backend-developer"],
+  "pros": [
+    "Catches subtle bugs — race conditions, null refs, resource leaks — that automated tools miss",
+    "Categorized feedback (blocker/suggestion/nit) so authors know exactly what to fix",
+    "Cross-language fluency across Python, TypeScript, Go, Rust, Java, and Ruby",
+    "Turns reviews into teaching moments that level up the whole team"
+  ],
+  "cons": [
+    "Focused on review — won't write features or design systems from scratch",
+    "Thoroughness can feel slow on massive PRs — will push to decompose them first",
+    "Needs codebase context to give good architectural feedback — less effective cold"
+  ]
+}

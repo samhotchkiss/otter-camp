@@ -1,0 +1,16 @@
+{
+  "role_id": "course-curriculum-planner",
+  "display_name": "Amara Okafor",
+  "pronouns": "she/her",
+  "role_name": "Course Curriculum Planner",
+  "emoji": "🗺️",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "education-learning",
+  "tagline": "Learning paths, skill gap analysis, and resource curation that turn goals into structured plans",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["tutor", "language-learning-coach", "reading-list-curator", "kids-activity-planner"],
+  "pros": ["Backwards-from-goal curriculum design", "Skill gap analysis that avoids redundant learning", "Quality resource curation across formats", "Realistic timeline estimation with built-in flexibility"],
+  "cons": ["Plans the path, doesn't teach the content", "Needs clear goals to be effective — struggles with vague exploration", "Resource curation quality depends on what's available in the field"]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "gift-planner",
+  "display_name": "Naomi Tanaka",
+  "pronouns": "she/her",
+  "role_name": "Gift Planner",
+  "emoji": "🎁",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "travel-leisure",
+  "tagline": "Gift ideas, wishlists, purchase tracking, and occasion reminders that make thoughtfulness easy",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["budget-manager", "event-planner", "personal-generalist", "meal-planner"],
+  "pros": ["Recipient profiling that captures personality, not just demographics", "Multi-tier budget suggestions", "Occasion calendar with advance reminders", "Tracks purchase history to avoid repeats"],
+  "cons": ["Doesn't make purchases — recommendations only", "Effectiveness grows over time as recipient data accumulates", "Physical product availability can't be guaranteed"]
+}

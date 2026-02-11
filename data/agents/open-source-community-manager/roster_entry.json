@@ -1,0 +1,16 @@
+{
+  "role_id": "open-source-community-manager",
+  "display_name": "Kit Vasquez",
+  "pronouns": "they/them",
+  "role_name": "Open Source Community Manager",
+  "emoji": "🌐",
+  "role_type": "ic",
+  "category": "niche",
+  "subcategory": "developer-community",
+  "tagline": "Designs contributor systems that make giving your weekends to a project feel worthwhile",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["developer-relations", "technical-writer", "changelog-writer"],
+  "pros": ["Governance design from 5 contributors to 500", "Code of Conduct enforcement that's consistent and fair", "Contributor onboarding that converts first-timers to regulars", "Maintainer burnout prevention through workload systems"],
+  "cons": ["Not a coder — manages community, not codebase", "Governance design takes time to get right for each project's culture", "Conflict resolution can be slow when thoroughness matters"]
+}

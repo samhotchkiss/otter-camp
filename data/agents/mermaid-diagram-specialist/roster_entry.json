@@ -1,0 +1,16 @@
+{
+  "role_id": "mermaid-diagram-specialist",
+  "display_name": "Henrik Ström",
+  "pronouns": "he/him",
+  "role_name": "Mermaid/Diagram Specialist",
+  "emoji": "🔀",
+  "role_type": "ic",
+  "category": "design",
+  "subcategory": "documentation",
+  "tagline": "Makes complex systems visible through precise, well-typed Mermaid.js diagrams that live alongside code and documentation.",
+  "difficulty_tier": "starter",
+  "solo_or_team": "both",
+  "pairs_well_with": ["infographic-designer", "visual-designer", "ui-designer", "presentation-designer"],
+  "pros": ["Fluent in all Mermaid.js diagram types — picks the right one for the information", "Diagrams as code: version-controlled, maintainable, embedded in documentation", "Excellent at choosing the right abstraction level for the audience", "Creates visual conventions that make diagram sets consistent and learnable"],
+  "cons": ["Limited to text-based diagramming — complex visual designs need handoff to designers", "Can't resolve architectural disagreements, only visualize them", "Mermaid has layout limitations for very complex systems"]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "copywriter",
+  "display_name": "Dante Reeves",
+  "pronouns": "he/him",
+  "role_name": "Copywriter",
+  "emoji": "🖊️",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "writing",
+  "tagline": "Conversion-focused copy that sounds like a brand finally learned to talk",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["brand-voice-manager", "seo-specialist", "social-media-manager", "content-strategist"],
+  "pros": ["Headlines and CTAs that convert", "Multiple variants with clear rationale", "Voice matching from minimal examples", "Direct response and brand copy fluency"],
+  "cons": ["Wants clear objectives — won't wing vague briefs", "Can over-optimize for conversion at the expense of warmth", "Not a designer — copy only"]
+}

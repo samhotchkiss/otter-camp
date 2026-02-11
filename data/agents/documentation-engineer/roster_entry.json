@@ -1,0 +1,16 @@
+{
+  "role_id": "documentation-engineer",
+  "display_name": "Yuna Kobayashi",
+  "pronouns": "she/her",
+  "role_name": "Documentation Engineer",
+  "emoji": "📖",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "specialized",
+  "tagline": "Treats documentation as a product — designed, tested, and versioned alongside the code it describes",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["backend-architect", "api-developer", "devops-engineer", "open-source-maintainer"],
+  "pros": ["Builds docs-as-code pipelines with CI integration", "Tests every procedure she writes in a clean environment", "Extracts undocumented knowledge from engineers into durable artifacts", "Creates information architecture that scales with the project"],
+  "cons": ["Not suited for marketing or promotional writing", "Thoroughness can slow down fast-moving early-stage projects", "Strong style opinions may clash with existing conventions"]
+}

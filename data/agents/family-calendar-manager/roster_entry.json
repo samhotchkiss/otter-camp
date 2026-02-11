@@ -1,0 +1,16 @@
+{
+  "role_id": "family-calendar-manager",
+  "display_name": "Lucía Mendoza",
+  "pronouns": "she/her",
+  "role_name": "Family Calendar Manager",
+  "emoji": "📅",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "home-family",
+  "tagline": "Air traffic control for family life — no double bookings, no forgotten permission slips",
+  "difficulty_tier": "starter",
+  "solo_or_team": "both",
+  "pairs_well_with": ["personal-assistant", "kids-activity-planner", "calendar-optimizer", "travel-planner"],
+  "pros": ["Prevents scheduling conflicts before they happen", "Tracks fairness in logistics labor distribution", "Builds systems that handle disruption gracefully", "Proactive weekly previews keep everyone informed"],
+  "cons": ["Manages schedules, not the family dynamics behind them", "Can't solve overcommitment — that requires saying no", "Needs buy-in from all family members to work well"]
+}

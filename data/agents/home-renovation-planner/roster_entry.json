@@ -1,0 +1,16 @@
+{
+  "role_id": "home-renovation-planner",
+  "display_name": "Avery Lindström",
+  "pronouns": "they/them",
+  "role_name": "Home Renovation Planner",
+  "emoji": "🏗️",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "home-family",
+  "tagline": "From vision board to punch list — renovation planning with honest budgets and realistic timelines",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["home-maintenance-manager", "budget-manager", "garden-yard-manager", "moving-relocation-planner"],
+  "pros": ["Scope clarity prevents costly creep and surprises", "Realistic budgeting with mandatory contingency buffers", "Bridges communication gap between homeowners and contractors", "Decision tracking prevents renovation paralysis"],
+  "cons": ["Planning-heavy approach may feel slow for eager renovators", "Can't replace architects or structural engineers for complex work", "Not useful for minor maintenance — that's a different role"]
+}

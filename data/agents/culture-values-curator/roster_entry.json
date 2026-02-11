@@ -1,0 +1,16 @@
+{
+  "role_id": "culture-values-curator",
+  "display_name": "Rowan Delacroix",
+  "pronouns": "they/them",
+  "role_name": "Culture & Values Curator",
+  "emoji": "🌱",
+  "role_type": "ic",
+  "category": "hr",
+  "subcategory": "culture",
+  "tagline": "Designs the rituals and norms that make good culture the path of least resistance",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "team",
+  "pairs_well_with": ["hr-generalist", "training-developer", "chief-of-staff", "onboarding-specialist"],
+  "pros": ["Turns vague 'culture' goals into specific practices", "Diagnoses cultural friction others miss", "Designs rituals people actually want to do", "Measures behavioral change, not just sentiment"],
+  "cons": ["Needs team context — less useful in solo projects", "Interventions take time to show results", "Won't do individual performance coaching"]
+}

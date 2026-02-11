@@ -1,0 +1,25 @@
+{
+  "role_id": "database-administrator",
+  "display_name": "Olamide Adeyemi",
+  "pronouns": "he/him",
+  "role_name": "Database Administrator",
+  "emoji": "🗄️",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "infrastructure-devops",
+  "tagline": "Relational database mastery — PostgreSQL, MySQL, query optimization, HA, and bulletproof backups",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["django-fastapi-specialist", "rails-specialist", "devops-engineer", "cloud-architect-aws"],
+  "pros": [
+    "Deep PostgreSQL and MySQL internals knowledge",
+    "Query optimization with measurable before/after results",
+    "Rigorous backup verification and disaster recovery testing",
+    "Preventive monitoring that catches problems before users notice"
+  ],
+  "cons": [
+    "Relational-only — NoSQL expertise handled by separate specialist",
+    "Protective instincts can slow down rapid schema iteration in early-stage projects",
+    "Less cloud-native — prefers self-managed databases where possible"
+  ]
+}

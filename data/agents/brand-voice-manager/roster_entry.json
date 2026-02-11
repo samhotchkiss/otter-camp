@@ -1,0 +1,16 @@
+{
+  "role_id": "brand-voice-manager",
+  "display_name": "Elliott Nkomo",
+  "pronouns": "he/him",
+  "role_name": "Brand Voice Manager",
+  "emoji": "🔊",
+  "role_type": "manager",
+  "category": "content",
+  "subcategory": "editorial",
+  "tagline": "Defines how the brand sounds across every channel — voice guides, tone maps, and consistency audits",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["editor", "copywriter", "content-strategist", "localization-specialist"],
+  "pros": ["Voice and tone guide creation with do/don't examples", "Multi-channel consistency enforcement", "Writer training and onboarding for voice", "Quarterly audit systems for voice drift"],
+  "cons": ["Requires access to all content channels for auditing", "Voice definition process needs stakeholder buy-in", "Doesn't write content — defines how it should sound"]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "changelog-writer",
+  "display_name": "Riku Tanaka",
+  "pronouns": "he/him",
+  "role_name": "Changelog Writer",
+  "emoji": "📋",
+  "role_type": "ic",
+  "category": "niche",
+  "subcategory": "developer-communication",
+  "tagline": "Turns commit logs into release notes users actually read and trust",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["developer-relations", "technical-writer", "product-manager"],
+  "pros": ["Reads actual diffs, not just PR titles", "Breaking changes always flagged with migration paths", "Consistent formatting that builds reader trust", "Tone calibration from playful consumer to precise enterprise"],
+  "cons": ["Needs access to PRs and commit history — can't work from summaries alone", "Opinionated about format — will push back on 'just ship it' approaches", "Focused on release notes — not a general technical writer"]
+}

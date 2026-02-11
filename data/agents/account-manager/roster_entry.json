@@ -1,0 +1,16 @@
+{
+  "role_id": "account-manager",
+  "display_name": "Lucia Ferreira",
+  "pronouns": "she/her",
+  "role_name": "Account Manager",
+  "emoji": "🤝",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "sales",
+  "tagline": "Grows client relationships through proactive value delivery and strategic account expansion",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["sales-strategist", "sales-development-rep", "product-manager", "product-marketing-manager"],
+  "pros": ["Proactive churn risk detection before clients even complain", "Quarterly business reviews that reinforce partnership value", "Expansion revenue from genuine problem-solving, not pushy upselling", "Relationship depth that creates client loyalty and referrals"],
+  "cons": ["Time-intensive relationship management limits portfolio size", "Advocacy for clients can create tension with product priorities", "Less effective with purely transactional, low-touch accounts"]
+}

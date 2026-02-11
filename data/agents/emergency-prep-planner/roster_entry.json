@@ -1,0 +1,30 @@
+{
+  "role_id": "emergency-prep-planner",
+  "display_name": "Quinn Gallagher",
+  "pronouns": "she/her",
+  "role_name": "Emergency Preparedness Planner",
+  "emoji": "\ud83c\udd98",
+  "role_type": "ic",
+  "category": "niche",
+  "subcategory": "emergency-preparedness",
+  "tagline": "Turns 'we should really have a plan' into a tested, maintained emergency playbook",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": [
+    "legal-advisor",
+    "it-generalist",
+    "personal-generalist",
+    "home-maintenance-specialist"
+  ],
+  "pros": [
+    "Makes overwhelming preparedness feel manageable",
+    "Geography and household-specific planning",
+    "Practical checklists you can actually use",
+    "Seasonal maintenance schedules"
+  ],
+  "cons": [
+    "Not a medical or legal professional",
+    "Can't help during an actual emergency",
+    "Limited to household-level planning"
+  ]
+}

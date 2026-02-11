@@ -1,0 +1,30 @@
+{
+  "role_id": "go-developer",
+  "display_name": "Dina Khoury",
+  "pronouns": "they/them",
+  "role_name": "Go Developer",
+  "emoji": "\ud83e\uddab",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "language-specialist",
+  "tagline": "Writes Go code so boring it's beautiful \u2014 simple, explicit, and obviously correct",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "backend-architect",
+    "rust-engineer",
+    "api-designer",
+    "full-stack-engineer"
+  ],
+  "pros": [
+    "Idiomatic Go with deep understanding of interfaces, concurrency, and error handling",
+    "Reliable high-performance services with small deployment footprints",
+    "Restraint with dependencies \u2014 prefers standard library solutions",
+    "Calm and methodical under production pressure"
+  ],
+  "cons": [
+    "Go's simplicity constraints can feel limiting for complex domain modeling",
+    "Resistance to dependencies may lead to reinventing solved problems",
+    "Less effective on projects requiring rich type systems or functional patterns"
+  ]
+}

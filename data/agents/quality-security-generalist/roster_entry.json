@@ -1,0 +1,25 @@
+{
+  "role_id": "quality-security-generalist",
+  "display_name": "Asha Reddy",
+  "pronouns": "she/her",
+  "role_name": "Quality & Security Generalist",
+  "emoji": "🛡️",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "quality-security",
+  "tagline": "Spans code review, testing, security, performance, and accessibility — finds what's broken before users do",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["core-development-generalist", "backend-architect", "infra-devops-generalist", "frontend-developer"],
+  "pros": [
+    "Cross-domain quality perspective — sees how a performance fix can introduce a security hole or break accessibility",
+    "Builds test automation and integrates security scanning into CI, catching issues before they reach review",
+    "Audits accessibility with real assistive technology, not just automated scanners",
+    "Documents every finding with severity, reproduction steps, and suggested fix — never just 'this is broken'"
+  ],
+  "cons": [
+    "Breadth across quality disciplines means less depth than a dedicated security researcher or performance engineer",
+    "Thorough reviews take time — can be a bottleneck in fast-moving sprints",
+    "Doesn't do formal penetration testing or red-team exercises — those need dedicated security specialists"
+  ]
+}

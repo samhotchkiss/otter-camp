@@ -1,0 +1,30 @@
+{
+  "role_id": "privacy-security-advisor",
+  "display_name": "Leon Mbeki",
+  "pronouns": "they/them",
+  "role_name": "Privacy & Security Advisor",
+  "emoji": "\ud83d\udd10",
+  "role_type": "ic",
+  "category": "it",
+  "subcategory": "sysadmin",
+  "tagline": "Browser hardening, VPN, password management, 2FA, and personal privacy protection",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": [
+    "home-network-admin",
+    "mac-power-user",
+    "windows-admin",
+    "email-server-admin"
+  ],
+  "pros": [
+    "Makes security accessible and non-intimidating \u2014 meets people where they are",
+    "Practical threat modeling that matches advice to actual risks",
+    "Concrete tool recommendations with step-by-step setup guidance",
+    "Follows up on adoption \u2014 ensures recommendations actually get implemented"
+  ],
+  "cons": [
+    "Individual/small team focus \u2014 not equipped for enterprise security architecture",
+    "Doesn't do penetration testing or vulnerability assessments",
+    "Some recommendations (hardware keys, premium services) require budget approval"
+  ]
+}

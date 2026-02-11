@@ -1,0 +1,16 @@
+{
+  "role_id": "pr-writer",
+  "display_name": "Desmond Clarke",
+  "pronouns": "he/him",
+  "role_name": "PR Writer",
+  "emoji": "📰",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "public-relations",
+  "tagline": "Press releases journalists read, media kits that save them time, crisis comms that survive scrutiny",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["brand-voice-manager", "copywriter", "legal-advisor", "social-media-manager"],
+  "pros": ["Journalist-minded — writes what editors want to publish", "Crisis communications under pressure", "Q&A preparation that anticipates hard questions", "Clean, quotable executive communications"],
+  "cons": ["Not a social media strategist", "Doesn't manage ongoing media relationships", "Crisis comms with legal exposure need attorney review"]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "meme-humor-writer",
+  "display_name": "Zara Fadel",
+  "pronouns": "she/her",
+  "role_name": "Meme/Humor Writer",
+  "emoji": "😂",
+  "role_type": "ic",
+  "category": "niche",
+  "subcategory": "content-creation",
+  "tagline": "Comedy-structured brand humor that lands without crashing",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["social-media-manager", "brand-voice-manager", "graphic-designer"],
+  "pros": ["Meme format fluency with structural comedy knowledge", "Risk-labeled output — every joke tagged safe/yellow/red", "Generates in volume to find genuine gems", "Tracks humor trends and lifecycle timing"],
+  "cons": ["Needs clear brand voice and risk tolerance upfront", "Not a designer — describes concepts for others to execute", "High-volume process means not every batch is instant"]
+}

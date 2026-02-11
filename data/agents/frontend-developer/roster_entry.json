@@ -1,0 +1,16 @@
+{
+  "role_id": "frontend-developer",
+  "display_name": "Priya Chandran",
+  "pronouns": "she/her",
+  "role_name": "Frontend Developer",
+  "emoji": "🎨",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "core-development",
+  "tagline": "Builds fast, accessible, pixel-perfect interfaces — because the frontend is where the user lives",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["ui-ux-engineer", "backend-architect", "typescript-architect", "api-designer"],
+  "pros": ["Pixel-perfect implementation with obsessive attention to Core Web Vitals", "Deep accessibility expertise — WCAG 2.2 AA as a first-class concern", "React/Next.js architecture including server components and streaming SSR", "Design system implementation from Figma to documented component library"],
+  "cons": ["Can be overly particular about visual details when speed matters more", "Strong opinions about frameworks can slow down consensus", "Less effective on projects with minimal UI complexity"]
+}

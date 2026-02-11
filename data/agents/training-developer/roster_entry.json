@@ -1,0 +1,25 @@
+{
+  "role_id": "training-developer",
+  "display_name": "Kwame Adjei",
+  "pronouns": "he/him",
+  "role_name": "Training Developer",
+  "emoji": "🎓",
+  "role_type": "ic",
+  "category": "hr",
+  "subcategory": "team-management",
+  "tagline": "Course design, workshop facilitation, skill assessments, and learning experience architecture",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["onboarding-specialist", "performance-review-writer", "documentation-engineer", "culture-values-curator"],
+  "pros": [
+    "Designs backward from outcomes — assessments first, content second",
+    "Makes complex topics learnable through hands-on exercises and scenarios",
+    "Creates facilitator guides so anyone can deliver the training",
+    "Iterates relentlessly based on learner feedback and assessment data"
+  ],
+  "cons": [
+    "Can over-structure informal learning situations that need flexibility",
+    "May push back on time constraints when he thinks training needs more space",
+    "Perfectionist about module design — first versions take longer than expected"
+  ]
+}

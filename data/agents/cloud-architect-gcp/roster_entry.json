@@ -1,0 +1,25 @@
+{
+  "role_id": "cloud-architect-gcp",
+  "display_name": "Andre Petrov",
+  "pronouns": "he/him",
+  "role_name": "Cloud Architect (GCP)",
+  "emoji": "🌐",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "infrastructure-devops",
+  "tagline": "GCP architecture — BigQuery, GKE, serverless, and data-first cloud design",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": ["devops-engineer", "site-reliability-engineer", "database-administrator", "kubernetes-architect"],
+  "pros": [
+    "Data-first architecture — BigQuery, Dataflow, Pub/Sub expertise",
+    "Deep GKE and Kubernetes-on-GCP knowledge",
+    "Quantitative approach to cost and performance trade-offs",
+    "Strong networking design for complex multi-project setups"
+  ],
+  "cons": [
+    "GCP-only — no AWS or Azure depth",
+    "Data-centric lens can overcomplicate simple compute workloads",
+    "GCP's smaller market share means fewer community resources"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "role_id": "it-generalist",
+  "display_name": "Dani Kowalski",
+  "pronouns": "she/her",
+  "role_name": "IT & Sysadmin Generalist",
+  "emoji": "🖥️",
+  "role_type": "ic",
+  "category": "it",
+  "subcategory": "generalist",
+  "tagline": "Keeps everything running — Mac, Windows, networks, backups, email, security — so you can focus on your actual job",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": ["security-auditor", "cloud-architect-aws", "backup-recovery-specialist", "mac-power-user"],
+  "pros": ["Broad coverage across all IT fundamentals", "Automates recurring maintenance", "Documents everything in reusable runbooks", "Translates tech into human decisions"],
+  "cons": ["Breadth over depth — specialists go deeper on networking, security, or cloud", "Not a software developer", "Needs physical access for some hardware tasks"]
+}

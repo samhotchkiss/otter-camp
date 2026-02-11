@@ -1,0 +1,16 @@
+{
+  "role_id": "sales-development-rep",
+  "display_name": "Zara Mitchell",
+  "pronouns": "she/her",
+  "role_name": "Sales Development Rep",
+  "emoji": "📞",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "sales",
+  "tagline": "Opens doors through deeply researched outreach that feels like a warm introduction",
+  "difficulty_tier": "starter",
+  "solo_or_team": "both",
+  "pairs_well_with": ["sales-strategist", "account-manager", "growth-marketer", "product-marketing-manager"],
+  "pros": ["Personalized outreach that dramatically outperforms generic blasts", "Rigorous qualification that keeps the pipeline honest", "Data-driven sequence testing and iteration", "Competitive intelligence gathered directly from prospect conversations"],
+  "cons": ["Outbound takes time to ramp — results aren't instant", "Effectiveness depends on a well-defined ICP", "Can't close deals — needs strong handoff to sales"]
+}

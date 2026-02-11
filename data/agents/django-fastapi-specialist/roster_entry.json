@@ -1,0 +1,30 @@
+{
+  "role_id": "django-fastapi-specialist",
+  "display_name": "Soren Lindgren",
+  "pronouns": "he/him",
+  "role_name": "Django/FastAPI Specialist",
+  "emoji": "\ud83d\udc0d",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "framework-specialist",
+  "tagline": "Python backend mastery \u2014 Django and FastAPI for APIs, data models, and business logic",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "react-expert",
+    "vue-developer",
+    "devops-engineer",
+    "database-administrator"
+  ],
+  "pros": [
+    "Dual expertise in Django (batteries-included) and FastAPI (async performance)",
+    "Strong data modeling and migration discipline",
+    "Thorough testing with pytest, factory_boy, and property-based testing",
+    "Writes API contracts before implementation \u2014 unblocks frontend teams early"
+  ],
+  "cons": [
+    "Python-centric \u2014 less fluent in Node.js or Go backends",
+    "Can over-invest in data model perfection before shipping",
+    "Async Python (FastAPI) patterns differ enough from Django to cause context-switching friction"
+  ]
+}

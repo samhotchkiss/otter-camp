@@ -1,0 +1,16 @@
+{
+  "role_id": "podcast-producer",
+  "display_name": "Nico Ferrante",
+  "pronouns": "he/him",
+  "role_name": "Podcast Producer",
+  "emoji": "🎙️",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "social",
+  "tagline": "Full-arc podcast production — from guest research to edited episodes with social clips",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": ["script-writer", "social-media-manager", "seo-specialist", "content-strategist"],
+  "pros": ["Full production pipeline in one role", "Guest research that uncovers untold stories", "Audio editing with narrative instinct", "Season-level planning with thematic arcs"],
+  "cons": ["Not a host — produces, doesn't perform", "Audio quality standards require proper setup", "Thorough prep process means longer lead times per episode"]
+}
