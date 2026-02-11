@@ -527,34 +527,38 @@ export default function GlobalChatDock() {
                   const selectedTitle = resolveConversationTitle(selectedConversation);
                   return (
                     <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2">
-                      <div>
-                        <h3 className="text-sm font-semibold text-[var(--text)]">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="truncate text-sm font-semibold text-[var(--text)]">
                           {selectedTitle || "Untitled chat"}
                         </h3>
-                        <p className="text-xs text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
+                        <p className="truncate text-xs text-[var(--text-muted)]">
+                          {selectedConversation.contextLabel}
+                        </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (selectedJumpTarget) {
-                            navigate(selectedJumpTarget.href);
-                          }
-                        }}
-                        disabled={!selectedJumpTarget}
-                        className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {selectedJumpTarget?.label || "Open context"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void handleClearSession();
-                        }}
-                        disabled={resettingProjectSession}
-                        className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {resettingProjectSession ? "Clearing..." : "Clear session"}
-                      </button>
+                      <div className="ml-3 flex shrink-0 items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (selectedJumpTarget) {
+                              navigate(selectedJumpTarget.href);
+                            }
+                          }}
+                          disabled={!selectedJumpTarget}
+                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {selectedJumpTarget?.label || "Open context"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleClearSession();
+                          }}
+                          disabled={resettingProjectSession}
+                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {resettingProjectSession ? "Clearing..." : "Clear session"}
+                        </button>
+                      </div>
                     </div>
                   );
                 })()}
