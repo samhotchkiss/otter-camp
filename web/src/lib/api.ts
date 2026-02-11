@@ -154,6 +154,34 @@ export interface FeedApiItem {
   priority?: string | null;
 }
 
+export interface RecentActivityApiItem {
+  id: string;
+  org_id: string;
+  agent_id: string;
+  session_key?: string;
+  trigger: string;
+  channel?: string;
+  summary: string;
+  detail?: string;
+  project_id?: string;
+  issue_id?: string;
+  issue_number?: number;
+  thread_id?: string;
+  tokens_used?: number;
+  model_used?: string;
+  duration_ms?: number;
+  status?: string;
+  started_at?: string;
+  completed_at?: string;
+  created_at: string;
+}
+
+export interface RecentActivityResponse {
+  items: RecentActivityApiItem[];
+  total?: number;
+  next_before?: string;
+}
+
 export interface PaginatedFeedResponse {
   org_id: string;
   feed_mode?: string;
@@ -211,6 +239,13 @@ export const api = {
   health: () => apiFetch<HealthResponse>('/health'),
   // Pass org_id to get real data, or demo=true for demo mode
   feed: () => apiFetch<DashboardFeedResponse>(`/api/feed${getOrgQueryParam()}`),
+  activityRecent: (limit = 30) => {
+    const params = new URLSearchParams(getOrgQueryParam().replace(/^\?/, ""));
+    params.set("limit", String(limit));
+    const query = params.toString();
+    const path = query ? `/api/activity/recent?${query}` : "/api/activity/recent";
+    return apiFetch<RecentActivityResponse>(path);
+  },
   tasks: () => apiFetch<Task[]>(`/api/tasks${getOrgQueryParam()}`),
   inbox: () => apiFetch<InboxResponse>(`/api/inbox${getOrgQueryParam()}`),
   approvals: () => apiFetch<Approval[]>(`/api/approvals/exec${getOrgQueryParam()}`),

@@ -5,7 +5,14 @@ import TaskDetail from "../components/TaskDetail";
 import NewTaskModal from "../components/NewTaskModal";
 import type { Command } from "../hooks/useCommandPalette";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
-import { api, type ActionItem, type FeedApiItem, type FeedItem, type Project } from "../lib/api";
+import {
+  api,
+  type ActionItem,
+  type FeedApiItem,
+  type FeedItem,
+  type Project,
+  type RecentActivityApiItem,
+} from "../lib/api";
 import { formatProjectTaskSummary } from "../lib/projectTaskSummary";
 import { getActivityDescription, formatRelativeTime, getTypeConfig, normalizeMetadata } from "../components/activity/activityFormat";
 import { getInitials } from "../components/messaging/utils";
@@ -201,6 +208,28 @@ function mapActivityToFeedItems(items: FeedApiItem[]): FeedItem[] {
   });
 }
 
+function mapRecentActivityToFeedItems(items: RecentActivityApiItem[]): FeedItem[] {
+  return items.map((item) => {
+    const actorName = (item.agent_id || "System").trim() || "System";
+    const trigger = (item.trigger || "activity").trim() || "activity";
+    const typeConfig = getTypeConfig(trigger);
+    const description = (item.summary || "").trim() || (item.detail || "").trim() || "Activity event";
+
+    return {
+      id: item.id,
+      avatar: getInitials(actorName),
+      avatarBg: resolveAvatarColor(actorName),
+      title: actorName,
+      text: description,
+      meta: formatRelativeTime(new Date(item.created_at)),
+      type: {
+        label: typeConfig.label,
+        className: resolveFeedBadgeClass(trigger, null),
+      },
+    };
+  });
+}
+
 export default function Dashboard() {
   const {
     isCommandPaletteOpen,
@@ -257,26 +286,37 @@ export default function Dashboard() {
       try {
         setIsLoading(true);
         setError(null);
-        const [feedResult, projectsResult, syncResult] = await Promise.allSettled([
-          api.feed(),
+        const [activityResult, projectsResult, syncResult] = await Promise.allSettled([
+          api.activityRecent(50),
           api.projects(),
           api.syncAgents(),
         ]);
+        let feedFallbackFailed = false;
 
         if (cancelled) return;
 
-        if (feedResult.status === "fulfilled") {
-          const feedValue = feedResult.value;
-          if ("feedItems" in feedValue) {
-            setActionItems(feedValue.actionItems || []);
-            setFeedItems(feedValue.feedItems || []);
-          } else {
-            setActionItems([]);
-            setFeedItems(mapActivityToFeedItems(feedValue.items || []));
-          }
-        } else if (!isDemoMode()) {
+        if (activityResult.status === "fulfilled" && (activityResult.value.items || []).length > 0) {
           setActionItems([]);
-          setFeedItems([]);
+          setFeedItems(mapRecentActivityToFeedItems(activityResult.value.items || []));
+        } else {
+          const feedResult = await Promise.resolve(api.feed()).then(
+            (value) => ({ status: "fulfilled" as const, value }),
+            (reason) => ({ status: "rejected" as const, reason }),
+          );
+          if (feedResult.status === "fulfilled") {
+            const feedValue = feedResult.value;
+            if ("feedItems" in feedValue) {
+              setActionItems(feedValue.actionItems || []);
+              setFeedItems(feedValue.feedItems || []);
+            } else {
+              setActionItems([]);
+              setFeedItems(mapActivityToFeedItems(feedValue.items || []));
+            }
+          } else if (!isDemoMode()) {
+            feedFallbackFailed = true;
+            setActionItems([]);
+            setFeedItems([]);
+          }
         }
 
         if (projectsResult.status === "fulfilled") {
@@ -292,12 +332,12 @@ export default function Dashboard() {
         }
 
         if (
-          feedResult.status === "rejected" ||
+          (activityResult.status === "rejected" && feedFallbackFailed) ||
           projectsResult.status === "rejected" ||
           syncResult.status === "rejected"
         ) {
           console.warn("API unavailable:", {
-            feed: feedResult.status === "rejected" ? feedResult.reason : null,
+            recentActivity: activityResult.status === "rejected" ? activityResult.reason : null,
             projects: projectsResult.status === "rejected" ? projectsResult.reason : null,
             sync: syncResult.status === "rejected" ? syncResult.reason : null,
           });

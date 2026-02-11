@@ -47,6 +47,7 @@ vi.mock("../lib/api", async () => {
     ...actual,
     api: {
       ...actual.api,
+      activityRecent: vi.fn(),
       feed: vi.fn(),
       projects: vi.fn(),
       syncAgents: vi.fn(),
@@ -56,6 +57,8 @@ vi.mock("../lib/api", async () => {
 
 describe("Dashboard", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+
     vi.mocked(useEmissions).mockReturnValue({
       emissions: [
         {
@@ -77,6 +80,9 @@ describe("Dashboard", () => {
       actionItems: [],
       feedItems: [],
     } as Awaited<ReturnType<typeof api.feed>>);
+    vi.mocked(api.activityRecent).mockResolvedValue({
+      items: [],
+    } as Awaited<ReturnType<typeof api.activityRecent>>);
     vi.mocked(api.projects).mockResolvedValue({
       projects: [
         { id: "project-1", name: "Project One", status: "active" },
@@ -95,6 +101,9 @@ describe("Dashboard", () => {
   });
 
   it("resolves git push actor from metadata sender_login and avoids redundant push wording", async () => {
+    vi.mocked(api.activityRecent).mockResolvedValueOnce({
+      items: [],
+    } as Awaited<ReturnType<typeof api.activityRecent>>);
     vi.mocked(api.feed).mockResolvedValueOnce({
       org_id: "org-1",
       items: [
@@ -117,5 +126,26 @@ describe("Dashboard", () => {
     expect(await screen.findByText("samhotchkiss")).toBeInTheDocument();
     expect(screen.getByText(/main: "Fix feed actor fallback"/i)).toBeInTheDocument();
     expect(screen.queryByText(/pushed to/i)).not.toBeInTheDocument();
+  });
+
+  it("prefers recent activity endpoint when items are available", async () => {
+    vi.mocked(api.activityRecent).mockResolvedValueOnce({
+      items: [
+        {
+          id: "act-1",
+          org_id: "org-1",
+          agent_id: "marcus",
+          trigger: "dispatch.project_chat",
+          summary: "Dispatched project chat for Testerooni",
+          created_at: "2026-02-08T12:00:00Z",
+        },
+      ],
+    } as Awaited<ReturnType<typeof api.activityRecent>>);
+
+    render(<Dashboard />);
+
+    expect(await screen.findByText("marcus")).toBeInTheDocument();
+    expect(screen.getByText(/Dispatched project chat for Testerooni/i)).toBeInTheDocument();
+    expect(api.feed).not.toHaveBeenCalled();
   });
 });
