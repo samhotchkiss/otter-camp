@@ -24,12 +24,12 @@ import (
 var startTime = time.Now()
 
 type HealthResponse struct {
-	Status     string `json:"status"`
-	Uptime     string `json:"uptime"`
-	Version    string `json:"version"`
-	Timestamp  string `json:"timestamp"`
-	DBVersion  *int   `json:"db_version,omitempty"`
-	DBPending  *int   `json:"db_pending,omitempty"`
+	Status    string `json:"status"`
+	Uptime    string `json:"uptime"`
+	Version   string `json:"version"`
+	Timestamp string `json:"timestamp"`
+	DBVersion *int   `json:"db_version,omitempty"`
+	DBPending *int   `json:"db_pending,omitempty"`
 }
 
 func NewRouter() http.Handler {
@@ -471,12 +471,16 @@ func handleAdminMigrate(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-
 func handleRoot(w http.ResponseWriter, r *http.Request) {
 	// Check if we should serve the frontend
 	staticDir := os.Getenv("STATIC_DIR")
 	if staticDir == "" {
-		staticDir = "./static"
+		for _, candidate := range []string{"./web/dist", "./static"} {
+			if _, err := os.Stat(candidate); err == nil {
+				staticDir = candidate
+				break
+			}
+		}
 	}
 
 	// Check if static directory exists
