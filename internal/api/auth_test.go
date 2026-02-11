@@ -107,7 +107,6 @@ func setAuthDBMock(t *testing.T, db *sql.DB) {
 	t.Helper()
 	prevDB := authDB
 	prevErr := authDBErr
-	prevOnce := authDBOnce
 
 	authDB = db
 	authDBErr = nil
@@ -117,7 +116,7 @@ func setAuthDBMock(t *testing.T, db *sql.DB) {
 	t.Cleanup(func() {
 		authDB = prevDB
 		authDBErr = prevErr
-		authDBOnce = prevOnce
+		authDBOnce = sync.Once{}
 	})
 }
 
