@@ -398,6 +398,7 @@ describe("useWebSocket", () => {
       "DMMessageReceived",
       "ExecApprovalRequested",
       "ExecApprovalResolved",
+      "IssueCreated",
       "ProjectChatMessageCreated",
       "IssueCommentCreated",
       "IssueReviewSaved",

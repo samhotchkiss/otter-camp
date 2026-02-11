@@ -15,6 +15,7 @@ export type WebSocketMessageType =
   | "DMMessageReceived"
   | "ExecApprovalRequested"
   | "ExecApprovalResolved"
+  | "IssueCreated"
   | "ProjectChatMessageCreated"
   | "IssueCommentCreated"
   | "IssueReviewSaved"
@@ -56,6 +57,7 @@ const MESSAGE_TYPES: WebSocketMessageType[] = [
   "DMMessageReceived",
   "ExecApprovalRequested",
   "ExecApprovalResolved",
+  "IssueCreated",
   "ProjectChatMessageCreated",
   "IssueCommentCreated",
   "IssueReviewSaved",

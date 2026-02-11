@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import PipelineMiniProgress from "../issues/PipelineMiniProgress";
 import { API_URL } from "../../lib/api";
+import { useOptionalWS } from "../../contexts/WebSocketContext";
 
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 
@@ -119,6 +120,8 @@ export default function ProjectIssuesList({
   selectedIssueID,
   onSelectIssue,
 }: ProjectIssuesListProps) {
+  const ws = useOptionalWS();
+  const lastMessage = ws?.lastMessage ?? null;
   const [items, setItems] = useState<ProjectIssueItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -226,6 +229,29 @@ export default function ProjectIssuesList({
       cancelled = true;
     };
   }, [kindFilter, originFilter, projectId, refreshKey, stateFilter]);
+
+  useEffect(() => {
+    if (!lastMessage || lastMessage.type !== "IssueCreated") {
+      return;
+    }
+    if (!lastMessage.data || typeof lastMessage.data !== "object") {
+      return;
+    }
+
+    const payload = lastMessage.data as Record<string, unknown>;
+    const issueRecord =
+      payload.issue && typeof payload.issue === "object"
+        ? (payload.issue as Record<string, unknown>)
+        : payload;
+    const eventProjectID =
+      (typeof issueRecord.project_id === "string" && issueRecord.project_id.trim()) ||
+      (typeof issueRecord.projectId === "string" && issueRecord.projectId.trim()) ||
+      "";
+    if (eventProjectID !== projectId) {
+      return;
+    }
+    setRefreshKey((current) => current + 1);
+  }, [lastMessage, projectId]);
 
   const ownerLabelByIssueID = useMemo(() => {
     const labels = new Map<string, string>();
@@ -340,7 +366,7 @@ export default function ProjectIssuesList({
                   onClick={() => onSelectIssue?.(issue.id)}
                   className={`w-full rounded-xl border px-4 py-3 text-left transition ${
                     selected
-                      ? "border-amber-500 bg-amber-50"
+                      ? "border-amber-500 bg-[var(--surface)] shadow-[0_0_0_1px_rgba(201,168,108,0.22)]"
                       : "border-[var(--border)] hover:border-amber-300 hover:bg-[var(--surface-alt)]"
                   }`}
                 >
