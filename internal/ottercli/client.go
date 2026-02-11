@@ -920,6 +920,87 @@ func (c *Client) DeleteMemoryEntry(id string) error {
 	return c.do(req, nil)
 }
 
+func (c *Client) GetLatestMemoryEvaluation() (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodGet, "/api/memory/evaluations/latest", nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ListMemoryEvaluations(limit int) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	q := url.Values{}
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	req, err := c.newRequest(http.MethodGet, "/api/memory/evaluations/runs?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) RunMemoryEvaluation(fixturePath string) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	body := map[string]any{}
+	if trimmedFixture := strings.TrimSpace(fixturePath); trimmedFixture != "" {
+		body["fixture_path"] = trimmedFixture
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/memory/evaluations/run", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) TuneMemoryEvaluation(apply bool) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"apply": apply,
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/memory/evaluations/tune", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 func (c *Client) ListKnowledge(limit int) (map[string]any, error) {
 	if err := c.requireAuth(); err != nil {
 		return nil, err

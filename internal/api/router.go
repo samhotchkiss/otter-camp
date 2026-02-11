@@ -170,6 +170,7 @@ func NewRouter() http.Handler {
 		sharedKnowledgeHandler.Store = store.NewSharedKnowledgeStore(db)
 		sharedKnowledgeHandler.EventsStore = store.NewMemoryEventsStore(db)
 		memoryHandler.Store = store.NewMemoryStore(db)
+		memoryHandler.DB = db
 		memoryEventsHandler.Store = store.NewMemoryEventsStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db, ChatThreadStore: chatThreadStore}
@@ -284,6 +285,9 @@ func NewRouter() http.Handler {
 		r.With(middleware.RequireWorkspace).Get("/memory/search", memoryHandler.Search)
 		r.With(middleware.RequireWorkspace).Get("/memory/recall", memoryHandler.Recall)
 		r.With(middleware.RequireWorkspace).Get("/memory/evaluations/latest", memoryHandler.LatestEvaluation)
+		r.With(middleware.RequireWorkspace).Get("/memory/evaluations/runs", memoryHandler.ListEvaluations)
+		r.With(middleware.RequireWorkspace).Post("/memory/evaluations/run", memoryHandler.RunEvaluation)
+		r.With(middleware.RequireWorkspace).Post("/memory/evaluations/tune", memoryHandler.TuneEvaluation)
 		r.With(middleware.OptionalWorkspace).Get("/memory/events", memoryEventsHandler.List)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/pull-requests", githubPullRequestsHandler.ListByProject)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/pull-requests", githubPullRequestsHandler.CreateForProject)

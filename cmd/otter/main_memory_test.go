@@ -346,6 +346,76 @@ func TestHandleMemoryRecallFlags(t *testing.T) {
 	require.ErrorContains(t, err, "--max-chars must be positive")
 }
 
+func TestHandleMemoryEvalCommands(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	var mu sync.Mutex
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		gotBody = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/memory/evaluations/latest":
+			_, _ = w.Write([]byte(`{"run":{"id":"eval-1","passed":true}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/memory/evaluations/runs":
+			_, _ = w.Write([]byte(`{"items":[{"id":"eval-1"}],"total":1}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/memory/evaluations/run":
+			_, _ = w.Write([]byte(`{"id":"eval-2","passed":true}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/memory/evaluations/tune":
+			_, _ = w.Write([]byte(`{"attempt_id":"attempt-1","status":"skipped"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	require.NoError(t, ottercli.SaveConfig(ottercli.Config{
+		APIBaseURL: srv.URL,
+		Token:      "token-1",
+		DefaultOrg: "org-1",
+	}))
+
+	handleMemory([]string{"eval", "latest", "--json"})
+	mu.Lock()
+	require.Equal(t, http.MethodGet, gotMethod)
+	require.Equal(t, "/api/memory/evaluations/latest", gotPath)
+	mu.Unlock()
+
+	handleMemory([]string{"eval", "runs", "--limit", "5", "--json"})
+	mu.Lock()
+	require.Equal(t, http.MethodGet, gotMethod)
+	require.True(t, strings.HasPrefix(gotPath, "/api/memory/evaluations/runs?"))
+	require.Contains(t, gotPath, "limit=5")
+	mu.Unlock()
+
+	handleMemory([]string{"eval", "run", "--fixture", "/tmp/eval.jsonl", "--json"})
+	mu.Lock()
+	require.Equal(t, http.MethodPost, gotMethod)
+	require.Equal(t, "/api/memory/evaluations/run", gotPath)
+	require.Equal(t, "/tmp/eval.jsonl", gotBody["fixture_path"])
+	mu.Unlock()
+
+	handleMemory([]string{"eval", "tune", "--apply", "--json"})
+	mu.Lock()
+	require.Equal(t, http.MethodPost, gotMethod)
+	require.Equal(t, "/api/memory/evaluations/tune", gotPath)
+	require.Equal(t, true, gotBody["apply"])
+	mu.Unlock()
+}
+
 func TestHandleMemoryCreateValidatesRanges(t *testing.T) {
 	err := validateMemoryCreateFlags(0, 0.5, "internal")
 	require.ErrorContains(t, err, "--importance must be between 1 and 5")

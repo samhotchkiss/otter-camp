@@ -431,7 +431,7 @@ func handleAgent(args []string) {
 }
 
 func handleMemory(args []string) {
-	const usageText = "usage: otter memory <create|list|search|recall|delete|write|read> ..."
+	const usageText = "usage: otter memory <create|list|search|recall|delete|write|read|eval> ..."
 	if len(args) == 0 {
 		fmt.Println(usageText)
 		os.Exit(1)
@@ -700,6 +700,95 @@ func handleMemory(args []string) {
 			return
 		}
 		fmt.Printf("Deleted memory entry %s\n", memoryID)
+	case "eval":
+		const evalUsage = "usage: otter memory eval <latest|runs|run|tune> ..."
+		if len(args) < 2 {
+			fmt.Println(evalUsage)
+			os.Exit(1)
+		}
+		switch args[1] {
+		case "latest":
+			flags := flag.NewFlagSet("memory eval latest", flag.ExitOnError)
+			org := flags.String("org", "", "org id override")
+			jsonOut := flags.Bool("json", false, "JSON output")
+			_ = flags.Parse(args[2:])
+
+			cfg, err := ottercli.LoadConfig()
+			dieIf(err)
+			client, _ := ottercli.NewClient(cfg, *org)
+			response, err := client.GetLatestMemoryEvaluation()
+			dieIf(err)
+
+			if *jsonOut {
+				printJSON(response)
+				return
+			}
+			fmt.Println("Latest memory evaluation")
+			printJSON(response)
+		case "runs":
+			flags := flag.NewFlagSet("memory eval runs", flag.ExitOnError)
+			limit := flags.Int("limit", 20, "max results")
+			org := flags.String("org", "", "org id override")
+			jsonOut := flags.Bool("json", false, "JSON output")
+			_ = flags.Parse(args[2:])
+			if *limit <= 0 {
+				die("--limit must be positive")
+			}
+
+			cfg, err := ottercli.LoadConfig()
+			dieIf(err)
+			client, _ := ottercli.NewClient(cfg, *org)
+			response, err := client.ListMemoryEvaluations(*limit)
+			dieIf(err)
+
+			if *jsonOut {
+				printJSON(response)
+				return
+			}
+			fmt.Println("Memory evaluation runs")
+			printJSON(response)
+		case "run":
+			flags := flag.NewFlagSet("memory eval run", flag.ExitOnError)
+			fixture := flags.String("fixture", "", "optional benchmark fixture path")
+			org := flags.String("org", "", "org id override")
+			jsonOut := flags.Bool("json", false, "JSON output")
+			_ = flags.Parse(args[2:])
+
+			cfg, err := ottercli.LoadConfig()
+			dieIf(err)
+			client, _ := ottercli.NewClient(cfg, *org)
+			response, err := client.RunMemoryEvaluation(*fixture)
+			dieIf(err)
+
+			if *jsonOut {
+				printJSON(response)
+				return
+			}
+			fmt.Println("Memory evaluation run complete")
+			printJSON(response)
+		case "tune":
+			flags := flag.NewFlagSet("memory eval tune", flag.ExitOnError)
+			apply := flags.Bool("apply", false, "apply candidate config if tuner approves")
+			org := flags.String("org", "", "org id override")
+			jsonOut := flags.Bool("json", false, "JSON output")
+			_ = flags.Parse(args[2:])
+
+			cfg, err := ottercli.LoadConfig()
+			dieIf(err)
+			client, _ := ottercli.NewClient(cfg, *org)
+			response, err := client.TuneMemoryEvaluation(*apply)
+			dieIf(err)
+
+			if *jsonOut {
+				printJSON(response)
+				return
+			}
+			fmt.Println("Memory tuning decision")
+			printJSON(response)
+		default:
+			fmt.Println(evalUsage)
+			os.Exit(1)
+		}
 	default:
 		fmt.Println(usageText)
 		os.Exit(1)

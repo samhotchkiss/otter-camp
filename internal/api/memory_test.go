@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -22,6 +23,9 @@ func newMemoryTestRouter(handler *MemoryHandler) http.Handler {
 	r.With(middleware.RequireWorkspace).Get("/api/memory/search", handler.Search)
 	r.With(middleware.RequireWorkspace).Get("/api/memory/recall", handler.Recall)
 	r.With(middleware.RequireWorkspace).Get("/api/memory/evaluations/latest", handler.LatestEvaluation)
+	r.With(middleware.RequireWorkspace).Get("/api/memory/evaluations/runs", handler.ListEvaluations)
+	r.With(middleware.RequireWorkspace).Post("/api/memory/evaluations/run", handler.RunEvaluation)
+	r.With(middleware.RequireWorkspace).Post("/api/memory/evaluations/tune", handler.TuneEvaluation)
 	return r
 }
 
@@ -196,4 +200,78 @@ func TestMemoryEvaluationLatestReturnsNoRunWhenUnavailable(t *testing.T) {
 	var payload memoryEvaluationLatestResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.Nil(t, payload.Run)
+}
+
+func TestMemoryEvaluationRunListLatestAndTune(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "memory-eval-handler-org")
+
+	handler := &MemoryHandler{Store: store.NewMemoryStore(db), DB: db}
+	router := newMemoryTestRouter(handler)
+	fixturePath := filepath.Join("..", "memory", "testdata", "evaluator_benchmark_v1.jsonl")
+
+	runBody := []byte(`{"fixture_path":"` + fixturePath + `"}`)
+	runReq := httptest.NewRequest(http.MethodPost, "/api/memory/evaluations/run?org_id="+orgID, bytes.NewReader(runBody))
+	runReq.Header.Set("Content-Type", "application/json")
+	runRec := httptest.NewRecorder()
+	router.ServeHTTP(runRec, runReq)
+	require.Equal(t, http.StatusCreated, runRec.Code)
+
+	var created memoryEvaluationRunPayload
+	require.NoError(t, json.NewDecoder(runRec.Body).Decode(&created))
+	require.NotEmpty(t, created.ID)
+	require.NotNil(t, created.Metrics.PrecisionAtK)
+
+	latestReq := httptest.NewRequest(http.MethodGet, "/api/memory/evaluations/latest?org_id="+orgID, nil)
+	latestRec := httptest.NewRecorder()
+	router.ServeHTTP(latestRec, latestReq)
+	require.Equal(t, http.StatusOK, latestRec.Code)
+
+	var latest memoryEvaluationLatestResponse
+	require.NoError(t, json.NewDecoder(latestRec.Body).Decode(&latest))
+	require.NotNil(t, latest.Run)
+	require.Equal(t, created.ID, latest.Run.ID)
+
+	runsReq := httptest.NewRequest(http.MethodGet, "/api/memory/evaluations/runs?org_id="+orgID+"&limit=5", nil)
+	runsRec := httptest.NewRecorder()
+	router.ServeHTTP(runsRec, runsReq)
+	require.Equal(t, http.StatusOK, runsRec.Code)
+
+	var runs memoryEvaluationRunsResponse
+	require.NoError(t, json.NewDecoder(runsRec.Body).Decode(&runs))
+	require.Len(t, runs.Items, 1)
+	require.Equal(t, created.ID, runs.Items[0].ID)
+
+	tuneReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/memory/evaluations/tune?org_id="+orgID,
+		bytes.NewReader([]byte(`{"apply":false}`)),
+	)
+	tuneReq.Header.Set("Content-Type", "application/json")
+	tuneRec := httptest.NewRecorder()
+	router.ServeHTTP(tuneRec, tuneReq)
+	require.Equal(t, http.StatusOK, tuneRec.Code)
+
+	var tuneResp memoryTuningResponse
+	require.NoError(t, json.NewDecoder(tuneRec.Body).Decode(&tuneResp))
+	require.NotEmpty(t, tuneResp.AttemptID)
+	require.NotEmpty(t, tuneResp.Status)
+}
+
+func TestMemoryEvaluationTuneRequiresBaselineRun(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "memory-eval-tune-missing-run-org")
+
+	handler := &MemoryHandler{Store: store.NewMemoryStore(db), DB: db}
+	router := newMemoryTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/memory/evaluations/tune?org_id="+orgID,
+		bytes.NewReader([]byte(`{"apply":true}`)),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusConflict, rec.Code)
 }
