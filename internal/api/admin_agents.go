@@ -127,6 +127,7 @@ var (
 )
 
 const agentFilesProjectName = "Agent Files"
+const resolveAvailableAgentSlotMaxAttempts = 100
 
 var builtInAgentProfiles = map[string]builtInAgentProfileTemplate{
 	"marcus": {
@@ -1380,7 +1381,7 @@ func resolveAvailableAgentSlot(baseSlot string, existsFn func(slot string) (bool
 	if !agentSlotPattern.MatchString(base) {
 		base = "agent"
 	}
-	for i := 1; ; i++ {
+	for i := 1; i <= resolveAvailableAgentSlotMaxAttempts; i++ {
 		candidate := base
 		if i > 1 {
 			suffix := fmt.Sprintf("-%d", i)
@@ -1412,6 +1413,7 @@ func resolveAvailableAgentSlot(baseSlot string, existsFn func(slot string) (bool
 			return candidate, nil
 		}
 	}
+	return "", fmt.Errorf("failed to resolve available agent slot after %d attempts", resolveAvailableAgentSlotMaxAttempts)
 }
 
 func buildCreateAgentConfigPatch(slot string, model string) (json.RawMessage, error) {

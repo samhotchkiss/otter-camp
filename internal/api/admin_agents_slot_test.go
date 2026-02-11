@@ -63,4 +63,18 @@ func TestResolveAvailableAgentSlot(t *testing.T) {
 		})
 		require.ErrorIs(t, err, expectedErr)
 	})
+
+	t.Run("returns error when every candidate is occupied up to max attempts", func(t *testing.T) {
+		t.Parallel()
+
+		lookups := 0
+		_, err := resolveAvailableAgentSlot("riley", func(string) (bool, error) {
+			lookups++
+			return true, nil
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to resolve available agent slot")
+		require.Contains(t, err.Error(), "100")
+		require.Equal(t, resolveAvailableAgentSlotMaxAttempts, lookups)
+	})
 }
