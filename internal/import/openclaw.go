@@ -59,7 +59,7 @@ type EnsureOpenClawRequiredAgentsOptions struct {
 
 type EnsureOpenClawRequiredAgentsResult struct {
 	Updated            bool
-	AddedMemoryAgent   bool
+	AddedElephant   bool
 	AddedChameleon     bool
 	MemoryWorkspaceDir string
 }
@@ -80,15 +80,15 @@ type openClawAgentCandidate struct {
 	Workspace string
 }
 
-var memoryAgentSOULTemplate = strings.TrimSpace(`# Memory Agent
+var elephantSOULTemplate = strings.TrimSpace(`# Elephant
 
-You are the Memory Agent. Your job is to read agent session logs, extract what's worth
+You are the Elephant. Your job is to read agent session logs, extract what's worth
 remembering, and distribute it via Otter Camp memory and knowledge commands.
 
 You run quietly and prioritize signal over noise.
 `)
 
-var memoryAgentStateTemplate = map[string]any{
+var elephantStateTemplate = map[string]any{
 	"file_offsets": map[string]any{},
 	"last_run":     nil,
 	"extraction_stats": map[string]any{
@@ -128,16 +128,16 @@ func EnsureOpenClawRequiredAgents(
 		if list, ok := agents["list"].([]any); ok {
 			updatedList, addedMemory, addedChameleon := ensureListAgentSlots(list, opts)
 			agents["list"] = updatedList
-			result.AddedMemoryAgent = addedMemory
+			result.AddedElephant = addedMemory
 			result.AddedChameleon = addedChameleon
 			result.Updated = addedMemory || addedChameleon
 		} else {
-			addedMemory := ensureMapAgentSlot(agents, "memory-agent", buildMemoryAgentSlot())
+			addedMemory := ensureMapAgentSlot(agents, "elephant", buildElephantSlot())
 			addedChameleon := false
 			if opts.IncludeChameleon {
 				addedChameleon = ensureMapAgentSlot(agents, "chameleon", buildChameleonSlot())
 			}
-			result.AddedMemoryAgent = addedMemory
+			result.AddedElephant = addedMemory
 			result.AddedChameleon = addedChameleon
 			result.Updated = addedMemory || addedChameleon
 		}
@@ -145,7 +145,7 @@ func EnsureOpenClawRequiredAgents(
 	case []any:
 		updated, addedMemory, addedChameleon := ensureListAgentSlots(agents, opts)
 		result.Updated = addedMemory || addedChameleon
-		result.AddedMemoryAgent = addedMemory
+		result.AddedElephant = addedMemory
 		result.AddedChameleon = addedChameleon
 		root["agents"] = updated
 	default:
@@ -156,12 +156,12 @@ func EnsureOpenClawRequiredAgents(
 		agentsObj["list"] = updated
 		root["agents"] = agentsObj
 		result.Updated = addedMemory || addedChameleon
-		result.AddedMemoryAgent = addedMemory
+		result.AddedElephant = addedMemory
 		result.AddedChameleon = addedChameleon
 	}
 
-	if result.AddedMemoryAgent {
-		workspaceDir, err := ensureMemoryAgentWorkspace(install.RootDir)
+	if result.AddedElephant {
+		workspaceDir, err := ensureElephantWorkspace(install.RootDir)
 		if err != nil {
 			return EnsureOpenClawRequiredAgentsResult{}, err
 		}
@@ -188,8 +188,8 @@ func ensureListAgentSlots(
 	opts EnsureOpenClawRequiredAgentsOptions,
 ) (updated []any, addedMemory bool, addedChameleon bool) {
 	updated = append([]any{}, agents...)
-	if !listHasAgentID(updated, "memory-agent") {
-		updated = append(updated, buildMemoryAgentSlot())
+	if !listHasAgentID(updated, "elephant") {
+		updated = append(updated, buildElephantSlot())
 		addedMemory = true
 	}
 	if opts.IncludeChameleon && !listHasAgentID(updated, "chameleon") {
@@ -238,12 +238,12 @@ func ensureMapAgentSlot(agents map[string]any, id string, value map[string]any) 
 	return true
 }
 
-func buildMemoryAgentSlot() map[string]any {
+func buildElephantSlot() map[string]any {
 	return map[string]any{
-		"id":        "memory-agent",
-		"name":      "Memory Agent",
+		"id":        "elephant",
+		"name":      "Elephant",
 		"model":     "anthropic/claude-sonnet-4-20250514",
-		"workspace": "~/.openclaw/workspace-memory-agent",
+		"workspace": "~/.openclaw/workspace-elephant",
 		"thinking":  "low",
 		"channels":  []any{},
 	}
@@ -257,7 +257,7 @@ func buildChameleonSlot() map[string]any {
 	}
 }
 
-func ensureMemoryAgentWorkspace(rootDir string) (string, error) {
+func ensureElephantWorkspace(rootDir string) (string, error) {
 	base := strings.TrimSpace(rootDir)
 	if base == "" {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -267,7 +267,7 @@ func ensureMemoryAgentWorkspace(rootDir string) (string, error) {
 	if base == "" {
 		return "", errors.New("openclaw root dir is required for memory workspace setup")
 	}
-	workspaceDir := filepath.Join(base, "workspace-memory-agent")
+	workspaceDir := filepath.Join(base, "workspace-elephant")
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		return "", err
 	}
@@ -279,16 +279,16 @@ func ensureMemoryAgentWorkspace(rootDir string) (string, error) {
 		return "", fmt.Errorf("workspace path is not a real directory: %s", workspaceDir)
 	}
 
-	if err := writeFileIfMissing(filepath.Join(workspaceDir, "SOUL.md"), []byte(memoryAgentSOULTemplate+"\n"), 0o644); err != nil {
+	if err := writeFileIfMissing(filepath.Join(workspaceDir, "SOUL.md"), []byte(elephantSOULTemplate+"\n"), 0o644); err != nil {
 		return "", err
 	}
 
-	stateRaw, err := json.MarshalIndent(memoryAgentStateTemplate, "", "  ")
+	stateRaw, err := json.MarshalIndent(elephantStateTemplate, "", "  ")
 	if err != nil {
 		return "", err
 	}
 	stateRaw = append(stateRaw, '\n')
-	if err := writeFileIfMissing(filepath.Join(workspaceDir, "memory-agent-state.json"), stateRaw, 0o644); err != nil {
+	if err := writeFileIfMissing(filepath.Join(workspaceDir, "elephant-state.json"), stateRaw, 0o644); err != nil {
 		return "", err
 	}
 

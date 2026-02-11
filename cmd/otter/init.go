@@ -257,8 +257,8 @@ func runInitImportAndBridge(reader *bufio.Reader, out io.Writer, client initBoot
 	case ensureErr != nil:
 		fmt.Fprintf(out, "WARNING: OpenClaw config update failed: %v\n", ensureErr)
 	case ensureResult.Updated:
-		if ensureResult.AddedMemoryAgent {
-			fmt.Fprintln(out, "Added Memory Agent to OpenClaw config. Restart OpenClaw when ready to activate.")
+		if ensureResult.AddedElephant {
+			fmt.Fprintln(out, "Added Elephant to OpenClaw config. Restart OpenClaw when ready to activate.")
 		}
 		if ensureResult.AddedChameleon {
 			fmt.Fprintln(out, "Added Chameleon to OpenClaw config. Restart OpenClaw when ready to activate.")

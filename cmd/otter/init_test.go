@@ -336,7 +336,7 @@ func TestInitAddsRequiredOpenClawAgentsToConfig(t *testing.T) {
 	state.detectErr = nil
 	state.ensureResult = importer.EnsureOpenClawRequiredAgentsResult{
 		Updated:          true,
-		AddedMemoryAgent: true,
+		AddedElephant: true,
 		AddedChameleon:   true,
 	}
 

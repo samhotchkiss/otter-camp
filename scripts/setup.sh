@@ -727,6 +727,19 @@ run_bootstrap_steps() {
 
   write_cli_config
   write_bridge_env_if_missing
+
+  # Build and run otter init to add required agents (Chameleon, Elephant) to OpenClaw config
+  echo "Building otter CLI..."
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "↪ go build -o bin/otter ./cmd/otter"
+    echo "↪ ./bin/otter init --yes"
+  else
+    go build -o bin/otter ./cmd/otter
+    echo "Running otter init (configures OpenClaw agents)..."
+    ./bin/otter init --yes 2>&1 || log_warn "otter init had warnings (non-fatal)"
+  fi
+  log_success "Otter CLI configured."
+
   pull_ollama_model
 }
 

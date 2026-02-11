@@ -171,7 +171,7 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.True(t, result.Updated)
-		require.True(t, result.AddedMemoryAgent)
+		require.True(t, result.AddedElephant)
 		require.True(t, result.AddedChameleon)
 
 		updatedRaw, err := os.ReadFile(configPath)
@@ -199,10 +199,10 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.Equal(t, "anthropic/claude-sonnet-4-20250514", main["model"])
 		require.Equal(t, true, main["default"])
 
-		memoryAgent := entryByID["memory-agent"]
-		require.Equal(t, "Memory Agent", memoryAgent["name"])
+		memoryAgent := entryByID["elephant"]
+		require.Equal(t, "Elephant", memoryAgent["name"])
 		require.Equal(t, "anthropic/claude-sonnet-4-20250514", memoryAgent["model"])
-		require.Equal(t, "~/.openclaw/workspace-memory-agent", memoryAgent["workspace"])
+		require.Equal(t, "~/.openclaw/workspace-elephant", memoryAgent["workspace"])
 		require.Equal(t, "low", memoryAgent["thinking"])
 		channels, ok := memoryAgent["channels"].([]any)
 		require.True(t, ok)
@@ -212,12 +212,12 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.Equal(t, "Chameleon", chameleon["name"])
 		require.Equal(t, "~/.openclaw/workspace-chameleon", chameleon["workspace"])
 
-		require.DirExists(t, filepath.Join(root, "workspace-memory-agent"))
-		soulRaw, err := os.ReadFile(filepath.Join(root, "workspace-memory-agent", "SOUL.md"))
+		require.DirExists(t, filepath.Join(root, "workspace-elephant"))
+		soulRaw, err := os.ReadFile(filepath.Join(root, "workspace-elephant", "SOUL.md"))
 		require.NoError(t, err)
-		require.Contains(t, string(soulRaw), "# Memory Agent")
+		require.Contains(t, string(soulRaw), "# Elephant")
 
-		stateRaw, err := os.ReadFile(filepath.Join(root, "workspace-memory-agent", "memory-agent-state.json"))
+		stateRaw, err := os.ReadFile(filepath.Join(root, "workspace-elephant", "elephant-state.json"))
 		require.NoError(t, err)
 		require.True(t, strings.Contains(string(stateRaw), "\"file_offsets\""))
 
@@ -229,7 +229,7 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.False(t, second.Updated)
-		require.False(t, second.AddedMemoryAgent)
+		require.False(t, second.AddedElephant)
 		require.False(t, second.AddedChameleon)
 	})
 
@@ -258,7 +258,7 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.True(t, result.Updated)
-		require.True(t, result.AddedMemoryAgent)
+		require.True(t, result.AddedElephant)
 		require.False(t, result.AddedChameleon)
 
 		updatedRaw, err := os.ReadFile(configPath)
@@ -270,7 +270,7 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		list, ok := agentsObj["list"].([]any)
 		require.True(t, ok)
 		require.Len(t, list, 2)
-		require.True(t, listHasAgentID(list, "memory-agent"))
+		require.True(t, listHasAgentID(list, "elephant"))
 		require.False(t, listHasAgentID(list, "chameleon"))
 	})
 }
@@ -293,18 +293,18 @@ func TestWriteFileIfMissingDoesNotFollowSymlinks(t *testing.T) {
 func TestEnsureMemoryAgentWorkspaceRejectsSymlink(t *testing.T) {
 	root := t.TempDir()
 	targetDir := t.TempDir()
-	link := filepath.Join(root, "workspace-memory-agent")
+	link := filepath.Join(root, "workspace-elephant")
 	if err := os.Symlink(targetDir, link); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	_, err := ensureMemoryAgentWorkspace(root)
+	_, err := ensureElephantWorkspace(root)
 	require.Error(t, err)
 
 	_, soulErr := os.Stat(filepath.Join(targetDir, "SOUL.md"))
 	require.Error(t, soulErr)
 	require.True(t, os.IsNotExist(soulErr))
-	_, stateErr := os.Stat(filepath.Join(targetDir, "memory-agent-state.json"))
+	_, stateErr := os.Stat(filepath.Join(targetDir, "elephant-state.json"))
 	require.Error(t, stateErr)
 	require.True(t, os.IsNotExist(stateErr))
 }
