@@ -222,7 +222,8 @@ func TestChatThreadStore_AutoArchiveByIssueAndProject(t *testing.T) {
 	db := setupTestDatabase(t, connStr)
 
 	orgID := createTestOrganization(t, db, "chat-thread-auto-archive-org")
-	userID := insertChatThreadTestUser(t, db, orgID, "chat-thread-auto-user")
+	userA := insertChatThreadTestUser(t, db, orgID, "chat-thread-auto-user-a")
+	userB := insertChatThreadTestUser(t, db, orgID, "chat-thread-auto-user-b")
 	projectID := createTestProject(t, db, orgID, "chat-thread-auto-project")
 	issueID := insertChatThreadTestIssue(t, db, orgID, projectID, "auto archive issue")
 
@@ -230,8 +231,8 @@ func TestChatThreadStore_AutoArchiveByIssueAndProject(t *testing.T) {
 	store := NewChatThreadStore(db)
 	now := time.Now().UTC()
 
-	issueThread, err := store.TouchThread(ctx, TouchChatThreadInput{
-		UserID:             userID,
+	issueThreadA, err := store.TouchThread(ctx, TouchChatThreadInput{
+		UserID:             userA,
 		ThreadKey:          "issue:" + issueID,
 		ThreadType:         ChatThreadTypeIssue,
 		ProjectID:          &projectID,
@@ -242,8 +243,20 @@ func TestChatThreadStore_AutoArchiveByIssueAndProject(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	projectThread, err := store.TouchThread(ctx, TouchChatThreadInput{
-		UserID:             userID,
+	issueThreadB, err := store.TouchThread(ctx, TouchChatThreadInput{
+		UserID:             userB,
+		ThreadKey:          "issue:" + issueID,
+		ThreadType:         ChatThreadTypeIssue,
+		ProjectID:          &projectID,
+		IssueID:            &issueID,
+		Title:              "Issue Thread (User B)",
+		LastMessagePreview: "issue message b",
+		LastMessageAt:      now.Add(30 * time.Second),
+	})
+	require.NoError(t, err)
+
+	projectThreadA, err := store.TouchThread(ctx, TouchChatThreadInput{
+		UserID:             userA,
 		ThreadKey:          "project:" + projectID,
 		ThreadType:         ChatThreadTypeProject,
 		ProjectID:          &projectID,
@@ -253,23 +266,46 @@ func TestChatThreadStore_AutoArchiveByIssueAndProject(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	projectThreadB, err := store.TouchThread(ctx, TouchChatThreadInput{
+		UserID:             userB,
+		ThreadKey:          "project:" + projectID,
+		ThreadType:         ChatThreadTypeProject,
+		ProjectID:          &projectID,
+		Title:              "Project Thread (User B)",
+		LastMessagePreview: "project message b",
+		LastMessageAt:      now.Add(90 * time.Second),
+	})
+	require.NoError(t, err)
+
 	affectedByIssue, err := store.AutoArchiveByIssue(ctx, issueID)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, affectedByIssue)
+	require.EqualValues(t, 2, affectedByIssue)
 
-	issueThreadAfter, err := store.GetByIDForUser(ctx, userID, issueThread.ID)
+	issueThreadAfterA, err := store.GetByIDForUser(ctx, userA, issueThreadA.ID)
 	require.NoError(t, err)
-	require.NotNil(t, issueThreadAfter.ArchivedAt)
-	require.NotNil(t, issueThreadAfter.AutoArchivedReason)
-	require.Equal(t, ChatThreadArchiveReasonIssueClosed, *issueThreadAfter.AutoArchivedReason)
+	require.NotNil(t, issueThreadAfterA.ArchivedAt)
+	require.NotNil(t, issueThreadAfterA.AutoArchivedReason)
+	require.Equal(t, ChatThreadArchiveReasonIssueClosed, *issueThreadAfterA.AutoArchivedReason)
+
+	issueThreadAfterB, err := store.GetByIDForUser(ctx, userB, issueThreadB.ID)
+	require.NoError(t, err)
+	require.NotNil(t, issueThreadAfterB.ArchivedAt)
+	require.NotNil(t, issueThreadAfterB.AutoArchivedReason)
+	require.Equal(t, ChatThreadArchiveReasonIssueClosed, *issueThreadAfterB.AutoArchivedReason)
 
 	affectedByProject, err := store.AutoArchiveByProject(ctx, projectID)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, affectedByProject)
+	require.EqualValues(t, 2, affectedByProject)
 
-	projectThreadAfter, err := store.GetByIDForUser(ctx, userID, projectThread.ID)
+	projectThreadAfterA, err := store.GetByIDForUser(ctx, userA, projectThreadA.ID)
 	require.NoError(t, err)
-	require.NotNil(t, projectThreadAfter.ArchivedAt)
-	require.NotNil(t, projectThreadAfter.AutoArchivedReason)
-	require.Equal(t, ChatThreadArchiveReasonProjectArchived, *projectThreadAfter.AutoArchivedReason)
+	require.NotNil(t, projectThreadAfterA.ArchivedAt)
+	require.NotNil(t, projectThreadAfterA.AutoArchivedReason)
+	require.Equal(t, ChatThreadArchiveReasonProjectArchived, *projectThreadAfterA.AutoArchivedReason)
+
+	projectThreadAfterB, err := store.GetByIDForUser(ctx, userB, projectThreadB.ID)
+	require.NoError(t, err)
+	require.NotNil(t, projectThreadAfterB.ArchivedAt)
+	require.NotNil(t, projectThreadAfterB.AutoArchivedReason)
+	require.Equal(t, ChatThreadArchiveReasonProjectArchived, *projectThreadAfterB.AutoArchivedReason)
 }

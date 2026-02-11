@@ -73,6 +73,26 @@ describe("ArchivedChatsPage", () => {
     });
   });
 
+  it("shows error on fetch failure", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/chats?")) {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ error: "boom" }),
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    renderArchivedChatsPage();
+
+    expect(await screen.findByText("Failed to load archived chats (500)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
   it("passes query text to archived chat search", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -227,5 +247,41 @@ describe("ArchivedChatsPage", () => {
           (init as RequestInit | undefined)?.method === "POST",
       ),
     ).toBe(true);
+  });
+
+  it("keeps chat in list and shows error when unarchive fails", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/chats?")) {
+        return makeResponse([
+          {
+            id: "chat-archive-1",
+            thread_type: "project",
+            thread_key: "project:project-1",
+            title: "Archived planning thread",
+            last_message_preview: "Final notes",
+            last_message_at: "2026-02-10T10:00:00Z",
+          },
+        ]);
+      }
+      if (url.includes("/api/chats/chat-archive-1/unarchive")) {
+        return {
+          ok: false,
+          status: init?.method === "POST" ? 500 : 400,
+          json: async () => ({ error: "nope" }),
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    renderArchivedChatsPage();
+    expect(await screen.findByText("Archived planning thread")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Unarchive" }));
+
+    expect(await screen.findByText("Failed to unarchive chat (500)")).toBeInTheDocument();
+    expect(screen.getByText("Archived planning thread")).toBeInTheDocument();
   });
 });
