@@ -109,6 +109,7 @@ const SAFE_SESSION_FILENAME_PATTERN = /^[a-z0-9][a-z0-9._-]{7,127}$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS = new Set(['chameleon', 'elephant']);
+const OPENCLAW_TOOL_EVENT_CAP = 'tool-events';
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 let otterCampOrgIDForTestOverride: string | null = null;
 const OTTERCAMP_WORKSPACE_GUIDE_FILENAME = 'OTTERCAMP.md';
@@ -362,6 +363,39 @@ type SessionContext = {
 
 type ExecutionMode = 'conversation' | 'project';
 
+type OpenClawToolEvent = {
+  sessionKey: string;
+  tool: string;
+  phase: string;
+  runID?: string;
+  toolCallID?: string;
+  args?: Record<string, unknown>;
+};
+
+type MutationTargetValidationResult = {
+  allowed: boolean;
+  targets: string[];
+  invalidTargets: string[];
+  reason?: 'not_mutation_tool' | 'missing_target_paths' | 'outside_project_root';
+};
+
+type MutationEnforcementDecision = {
+  sessionKey: string;
+  tool: string;
+  phase: string;
+  mode: ExecutionMode;
+  blocked: boolean;
+  reason?: string;
+  invalidTargets?: string[];
+};
+
+type MutationAbortRequest = {
+  sessionKey: string;
+  runId?: string;
+  toolCallId?: string;
+  reason: string;
+};
+
 type WhoAmITaskPointer = {
   project?: string;
   issue?: string;
@@ -552,8 +586,30 @@ let lastSuccessfulSyncAtMs = 0;
 let gitCompletionDefaultsResolved = false;
 let gitCompletionBranch = '';
 let gitCompletionRemote = '';
+let ingestedToolEventCountForTest = 0;
+let lastIngestedToolEventForTest: OpenClawToolEvent | null = null;
+const mutationEnforcementDecisionsForTest: MutationEnforcementDecision[] = [];
+const MAX_MUTATION_ENFORCEMENT_DECISIONS = 200;
+
+const defaultMutationAbortFn = async (request: MutationAbortRequest): Promise<void> => {
+  const payload: Record<string, unknown> = { sessionKey: request.sessionKey };
+  if (request.runId) {
+    payload.runId = request.runId;
+  }
+  if (request.toolCallId) {
+    payload.toolCallId = request.toolCallId;
+  }
+  await sendRequest('chat.abort', payload);
+};
+let mutationAbortFn: (request: MutationAbortRequest) => Promise<void> = defaultMutationAbortFn;
 
 const genId = () => `req-${++requestId}`;
+function buildGatewayConnectCaps(): string[] {
+  return [OPENCLAW_TOOL_EVENT_CAP];
+}
+export function buildGatewayConnectCapsForTest(): string[] {
+  return [...buildGatewayConnectCaps()];
+}
 const defaultExecFileAsync = promisify(execFile);
 let execFileAsync = defaultExecFileAsync;
 const defaultProcessExit = (code: number): never => process.exit(code);
@@ -2644,6 +2700,9 @@ async function pathHasSymlinkSegments(fromRoot: string, targetPath: string): Pro
 }
 
 export async function isPathWithinProjectRoot(projectRoot: string, targetPath: string): Promise<boolean> {
+  if (targetPath.includes('\0')) {
+    return false;
+  }
   const root = path.resolve(projectRoot);
   try {
     const rootStat = await fs.promises.lstat(root);
@@ -2667,6 +2726,151 @@ export async function isPathWithinProjectRoot(projectRoot: string, targetPath: s
   return true;
 }
 
+let pathWithinProjectRootFn: (projectRoot: string, targetPath: string) => Promise<boolean> = isPathWithinProjectRoot;
+
+const MUTATION_TOOL_NAMES = new Set(['write', 'edit', 'apply_patch']);
+const MUTATION_PATH_ARG_KEYS = [
+  'path',
+  'file_path',
+  'filepath',
+  'filename',
+  'target',
+  'target_path',
+  'targetPath',
+];
+const APPLY_PATCH_HEADER_PATTERN = /^\*\*\* (?:Add File|Update File|Delete File|Move to):\s+(.+)$/;
+const UNIFIED_DIFF_TARGET_PATTERN = /^\+\+\+\s+(?:[ab]\/)?(.+)$/;
+
+function addUniquePath(paths: string[], rawPath: string): void {
+  const trimmed = getTrimmedString(rawPath);
+  if (!trimmed || trimmed === '/dev/null' || trimmed.includes('\0')) {
+    return;
+  }
+  if (paths.includes(trimmed)) {
+    return;
+  }
+  paths.push(trimmed);
+}
+
+function extractPathValuesFromArgs(args: Record<string, unknown>, out: string[]): void {
+  for (const key of MUTATION_PATH_ARG_KEYS) {
+    const value = args[key];
+    if (typeof value === 'string') {
+      addUniquePath(out, value);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (typeof entry === 'string') {
+          addUniquePath(out, entry);
+        }
+      }
+    }
+  }
+}
+
+function extractApplyPatchTargets(args: Record<string, unknown>, out: string[]): void {
+  const patchText =
+    getTrimmedString(args.patch) ||
+    getTrimmedString(args.diff) ||
+    getTrimmedString(args.patch_text) ||
+    getTrimmedString(args.input);
+  if (!patchText) {
+    return;
+  }
+
+  for (const line of patchText.split(/\r?\n/)) {
+    const headerMatch = APPLY_PATCH_HEADER_PATTERN.exec(line);
+    if (headerMatch) {
+      addUniquePath(out, getTrimmedString(headerMatch[1] || ''));
+      continue;
+    }
+    const diffTargetMatch = UNIFIED_DIFF_TARGET_PATTERN.exec(line);
+    if (diffTargetMatch) {
+      addUniquePath(out, getTrimmedString(diffTargetMatch[1] || ''));
+    }
+  }
+}
+
+function extractMutationToolTargetPaths(toolName: string, args: Record<string, unknown>): string[] {
+  const normalizedTool = getTrimmedString(toolName).toLowerCase();
+  if (!MUTATION_TOOL_NAMES.has(normalizedTool)) {
+    return [];
+  }
+
+  const targets: string[] = [];
+  extractPathValuesFromArgs(args, targets);
+  if (normalizedTool === 'apply_patch') {
+    extractApplyPatchTargets(args, targets);
+  }
+  return targets;
+}
+
+export function extractMutationToolTargetPathsForTest(toolName: string, args: Record<string, unknown>): string[] {
+  return [...extractMutationToolTargetPaths(toolName, args)];
+}
+
+export function setPathWithinProjectRootForTest(
+  fn: ((projectRoot: string, targetPath: string) => Promise<boolean>) | null,
+): void {
+  pathWithinProjectRootFn = fn || isPathWithinProjectRoot;
+}
+
+async function validateMutationToolTargetsWithinProjectRoot(
+  projectRoot: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<MutationTargetValidationResult> {
+  const normalizedTool = getTrimmedString(toolName).toLowerCase();
+  if (!MUTATION_TOOL_NAMES.has(normalizedTool)) {
+    return {
+      allowed: true,
+      targets: [],
+      invalidTargets: [],
+      reason: 'not_mutation_tool',
+    };
+  }
+
+  const targets = extractMutationToolTargetPaths(normalizedTool, args);
+  if (targets.length === 0) {
+    return {
+      allowed: false,
+      targets: [],
+      invalidTargets: [],
+      reason: 'missing_target_paths',
+    };
+  }
+
+  const invalidTargets: string[] = [];
+  for (const target of targets) {
+    if (!(await pathWithinProjectRootFn(projectRoot, target))) {
+      invalidTargets.push(target);
+    }
+  }
+  if (invalidTargets.length > 0) {
+    return {
+      allowed: false,
+      targets,
+      invalidTargets,
+      reason: 'outside_project_root',
+    };
+  }
+
+  return {
+    allowed: true,
+    targets,
+    invalidTargets: [],
+  };
+}
+
+export async function validateMutationToolTargetsWithinProjectRootForTest(
+  projectRoot: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<MutationTargetValidationResult> {
+  return validateMutationToolTargetsWithinProjectRoot(projectRoot, toolName, args);
+}
+
 export function resolveExecutionMode(context: SessionContext): ExecutionMode {
   return getTrimmedString(context.projectID) ? 'project' : 'conversation';
 }
@@ -2688,9 +2892,8 @@ async function resolveSessionExecutionContext(
 
   try {
     await fs.promises.mkdir(projectRoot, { recursive: true });
-    // NOTE: v1 enforcement is policy-level only. Without OpenClaw file-write interception
-    // hooks, we cannot mechanically enforce per-write path guard checks here.
-    // TODO(spec-110-hardening): Wire isPathWithinProjectRoot into write/edit/apply_patch hooks.
+    // Runtime mutation enforcement is active via tool-event interception.
+    // projectRoot seeds write_guard_root context and target validation checks.
     return {
       mode: 'project',
       projectRoot,
@@ -2715,15 +2918,13 @@ function buildExecutionPolicyBlock(params: {
     lines.push(`- cwd: ${params.projectRoot}`);
     lines.push(`- write_guard_root: ${params.projectRoot}`);
     lines.push('- write policy: writes allowed only within write_guard_root');
-    lines.push('- enforcement: policy-level only (prompt contract, no write hooks in v1)');
-    lines.push('- TODO: enforce write/edit/apply_patch paths via OpenClaw file-write hooks');
-    lines.push('- security: path traversal and symlink escape SHOULD NOT be used');
+    lines.push('- enforcement: hard runtime guard (tool-event interception + path/symlink validation)');
+    lines.push('- security: path traversal and symlink escape are blocked at runtime');
   } else {
     lines.push('- mode: conversation');
     lines.push('- project_id: none');
     lines.push('- write policy: deny write/edit/apply_patch and any filesystem mutation');
-    lines.push('- enforcement: policy-level only (prompt contract, no write hooks in v1)');
-    lines.push('- TODO: enforce mutation denial via OpenClaw tool/write interception hooks');
+    lines.push('- enforcement: hard runtime deny (mutation tool calls are aborted)');
     lines.push('- workspaceAccess: none');
   }
   lines.push('[/OTTERCAMP_EXECUTION_MODE]');
@@ -3738,6 +3939,54 @@ export function resetSessionContextsForTest(): void {
   workspaceGuideCache = null;
 }
 
+export function resetIngestedToolEventsForTest(): void {
+  ingestedToolEventCountForTest = 0;
+  lastIngestedToolEventForTest = null;
+}
+
+export function getIngestedToolEventsStateForTest(): {
+  count: number;
+  last: OpenClawToolEvent | null;
+} {
+  return {
+    count: ingestedToolEventCountForTest,
+    last: lastIngestedToolEventForTest
+      ? {
+        ...lastIngestedToolEventForTest,
+        ...(lastIngestedToolEventForTest.args ? { args: { ...lastIngestedToolEventForTest.args } } : {}),
+      }
+      : null,
+  };
+}
+
+export function resetMutationEnforcementStateForTest(): void {
+  mutationEnforcementDecisionsForTest.length = 0;
+}
+
+export function getMutationEnforcementStateForTest(): {
+  count: number;
+  last: MutationEnforcementDecision | null;
+} {
+  const last = mutationEnforcementDecisionsForTest.length > 0
+    ? mutationEnforcementDecisionsForTest[mutationEnforcementDecisionsForTest.length - 1] || null
+    : null;
+  return {
+    count: mutationEnforcementDecisionsForTest.length,
+    last: last
+      ? {
+        ...last,
+        ...(last.invalidTargets ? { invalidTargets: [...last.invalidTargets] } : {}),
+      }
+      : null,
+  };
+}
+
+export function setMutationAbortForTest(
+  fn: ((request: MutationAbortRequest) => Promise<void>) | null,
+): void {
+  mutationAbortFn = fn || defaultMutationAbortFn;
+}
+
 export function setSessionContextForTest(sessionKey: string, context: SessionContext): void {
   setSessionContext(sessionKey, context);
 }
@@ -3932,7 +4181,7 @@ async function connectToOpenClaw(): Promise<void> {
               },
               role,
               scopes,
-              caps: [],
+              caps: buildGatewayConnectCaps(),
               commands: [],
               permissions: {},
               auth: authToken ? { token: authToken } : undefined,
@@ -4565,10 +4814,168 @@ export function resetCompactionRecoveryStateForTest(): void {
   recentCompactionRecoveryByKey.clear();
 }
 
+function extractOpenClawToolEvent(
+  eventName: string,
+  payload: Record<string, unknown>,
+): OpenClawToolEvent | null {
+  if (eventName !== 'agent') {
+    return null;
+  }
+  const stream = getTrimmedString(payload.stream).toLowerCase();
+  if (stream !== 'tool') {
+    return null;
+  }
+
+  const sessionKey = getTrimmedString(payload.sessionKey) || getTrimmedString(payload.session_key);
+  const tool = getTrimmedString(payload.tool) || getTrimmedString(payload.tool_name);
+  if (!sessionKey || !tool) {
+    return null;
+  }
+
+  const phase = getTrimmedString(payload.phase).toLowerCase() || 'unknown';
+  const runID = getTrimmedString(payload.runId) || getTrimmedString(payload.run_id);
+  const toolCallID = getTrimmedString(payload.toolCallId) || getTrimmedString(payload.tool_call_id);
+  const args = asRecord(payload.args) || asRecord(payload.input) || undefined;
+  return {
+    sessionKey,
+    tool,
+    phase,
+    ...(runID ? { runID } : {}),
+    ...(toolCallID ? { toolCallID } : {}),
+    ...(args ? { args } : {}),
+  };
+}
+
+function recordMutationEnforcementDecision(decision: MutationEnforcementDecision): void {
+  mutationEnforcementDecisionsForTest.push(decision);
+  if (mutationEnforcementDecisionsForTest.length > MAX_MUTATION_ENFORCEMENT_DECISIONS) {
+    mutationEnforcementDecisionsForTest.splice(
+      0,
+      mutationEnforcementDecisionsForTest.length - MAX_MUTATION_ENFORCEMENT_DECISIONS,
+    );
+  }
+}
+
+async function abortMutationRun(event: OpenClawToolEvent, reason: string): Promise<void> {
+  await mutationAbortFn({
+    sessionKey: event.sessionKey,
+    ...(event.runID ? { runId: event.runID } : {}),
+    ...(event.toolCallID ? { toolCallId: event.toolCallID } : {}),
+    reason,
+  }).catch((err) => {
+    console.warn(`[bridge] failed to abort mutation run for ${event.sessionKey}:`, err);
+  });
+}
+
+function resolveMutationBlockReason(validation: MutationTargetValidationResult): string {
+  if (validation.reason === 'missing_target_paths') {
+    return 'mutation denied: missing target path(s) in tool args';
+  }
+  return 'mutation denied: target path escapes active project write_guard_root';
+}
+
+async function enforceMutationToolPolicy(event: OpenClawToolEvent): Promise<void> {
+  if (event.phase !== 'start') {
+    return;
+  }
+
+  const normalizedTool = getTrimmedString(event.tool).toLowerCase();
+  const context = sessionContexts.get(event.sessionKey);
+  const projectID = getTrimmedString(context?.projectID);
+  const mode: ExecutionMode = projectID ? 'project' : 'conversation';
+
+  try {
+    if (!MUTATION_TOOL_NAMES.has(normalizedTool)) {
+      recordMutationEnforcementDecision({
+        sessionKey: event.sessionKey,
+        tool: normalizedTool,
+        phase: event.phase,
+        mode,
+        blocked: false,
+      });
+      return;
+    }
+
+    if (!projectID) {
+      const reason = 'mutation denied: conversation mode requires project_id context';
+      recordMutationEnforcementDecision({
+        sessionKey: event.sessionKey,
+        tool: normalizedTool,
+        phase: event.phase,
+        mode,
+        blocked: true,
+        reason,
+      });
+      console.warn(`[bridge] ${reason} (${event.sessionKey}, tool=${normalizedTool})`);
+      await abortMutationRun(event, reason);
+      return;
+    }
+
+    const projectRoot = getTrimmedString(context?.projectRoot) || resolveProjectWorktreeRoot(projectID, event.sessionKey);
+    const validation = await validateMutationToolTargetsWithinProjectRoot(
+      projectRoot,
+      normalizedTool,
+      event.args || {},
+    );
+    if (!validation.allowed) {
+      const reason = resolveMutationBlockReason(validation);
+      recordMutationEnforcementDecision({
+        sessionKey: event.sessionKey,
+        tool: normalizedTool,
+        phase: event.phase,
+        mode,
+        blocked: true,
+        reason,
+        ...(validation.invalidTargets.length > 0 ? { invalidTargets: [...validation.invalidTargets] } : {}),
+      });
+      console.warn(
+        `[bridge] ${reason} (${event.sessionKey}, tool=${normalizedTool}, invalid=${validation.invalidTargets.join(', ') || 'n/a'})`,
+      );
+      await abortMutationRun(event, reason);
+      return;
+    }
+
+    recordMutationEnforcementDecision({
+      sessionKey: event.sessionKey,
+      tool: normalizedTool,
+      phase: event.phase,
+      mode,
+      blocked: false,
+    });
+  } catch (err) {
+    const reason = 'mutation denied: enforcement error while validating target paths';
+    recordMutationEnforcementDecision({
+      sessionKey: event.sessionKey,
+      tool: normalizedTool,
+      phase: event.phase,
+      mode,
+      blocked: true,
+      reason,
+    });
+    console.warn(`[bridge] ${reason} (${event.sessionKey}, tool=${normalizedTool})`, err);
+    await abortMutationRun(event, reason);
+  }
+}
+
+async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> {
+  ingestedToolEventCountForTest += 1;
+  lastIngestedToolEventForTest = {
+    ...event,
+    ...(event.args ? { args: { ...event.args } } : {}),
+  };
+  await enforceMutationToolPolicy(event);
+}
+
 async function handleOpenClawEvent(message: Record<string, unknown>): Promise<void> {
   const eventName = getTrimmedString(message.event).toLowerCase();
   const payload = asRecord(message.payload) || asRecord(message.data);
   if (!payload) {
+    return;
+  }
+
+  const toolEvent = extractOpenClawToolEvent(eventName, payload);
+  if (toolEvent) {
+    await handleOpenClawToolEvent(toolEvent);
     return;
   }
 
@@ -4648,6 +5055,10 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
   } catch (err) {
     console.error(`[bridge] failed to persist assistant reply for ${sessionKey}:`, err);
   }
+}
+
+export async function handleOpenClawEventForTest(message: Record<string, unknown>): Promise<void> {
+  await handleOpenClawEvent(message);
 }
 
 async function fetchSessions(): Promise<OpenClawSession[]> {
