@@ -209,6 +209,57 @@ func TestIssuesHandlerCommentCreateValidatesAndPersists(t *testing.T) {
 	require.Equal(t, "Looks good", detail.Comments[0].Body)
 }
 
+func TestIssuesHandlerCommentCreateTouchesChatThreadForAuthenticatedUser(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-comment-chat-thread-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Comment Thread Project")
+	authorID := insertMessageTestAgent(t, db, orgID, "issue-comment-thread-author")
+	userID := insertTestUser(t, db, orgID, "issues-comment-thread-user")
+	token := "oc_sess_issues_comment_thread_user"
+	insertTestSession(t, db, orgID, userID, token, time.Now().UTC().Add(1*time.Hour))
+
+	issueStore := store.NewProjectIssueStore(db)
+	ctx := issueTestCtx(orgID)
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Issue for thread touch",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore:      issueStore,
+		ChatThreadStore: store.NewChatThreadStore(db),
+	}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/issues/"+issue.ID+"/comments?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author_agent_id":"`+authorID+`","body":"Issue thread touch comment"}`)),
+	)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var (
+		threadType string
+		preview    string
+	)
+	err = db.QueryRow(
+		`SELECT thread_type, last_message_preview
+		 FROM chat_threads
+		 WHERE org_id = $1 AND user_id = $2 AND thread_key = $3`,
+		orgID,
+		userID,
+		"issue:"+issue.ID,
+	).Scan(&threadType, &preview)
+	require.NoError(t, err)
+	require.Equal(t, store.ChatThreadTypeIssue, threadType)
+	require.Equal(t, "Issue thread touch comment", preview)
+}
+
 func TestIssuesHandlerGetIncludesQuestionnaires(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "issues-api-questionnaire-org")

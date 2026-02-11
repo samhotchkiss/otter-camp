@@ -33,6 +33,7 @@ const (
 type ProjectChatHandler struct {
 	ProjectStore       *store.ProjectStore
 	ChatStore          *store.ProjectChatStore
+	ChatThreadStore    *store.ChatThreadStore
 	QuestionnaireStore *store.QuestionnaireStore
 	IssueStore         *store.ProjectIssueStore
 	DB                 *sql.DB
@@ -305,6 +306,7 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := toProjectChatPayload(*message)
+	h.touchProjectChatThreadBestEffort(r.Context(), r, projectID, workspaceID, payload)
 	delivery := dmDeliveryStatus{
 		Attempted: shouldDispatch,
 		Delivered: false,
@@ -346,6 +348,49 @@ func (h *ProjectChatHandler) Create(w http.ResponseWriter, r *http.Request) {
 		"message":  payload,
 		"delivery": delivery,
 	})
+}
+
+func (h *ProjectChatHandler) touchProjectChatThreadBestEffort(
+	ctx context.Context,
+	r *http.Request,
+	projectID string,
+	workspaceID string,
+	message projectChatMessagePayload,
+) {
+	if h.ChatThreadStore == nil || h.DB == nil {
+		return
+	}
+
+	identity, err := requireSessionIdentity(ctx, h.DB, r)
+	if err != nil {
+		return
+	}
+	if identity.OrgID != workspaceID {
+		return
+	}
+
+	projectName := "Project chat"
+	if h.ProjectStore != nil {
+		workspaceCtx := context.WithValue(ctx, middleware.WorkspaceIDKey, identity.OrgID)
+		if project, projectErr := h.ProjectStore.GetByID(workspaceCtx, projectID); projectErr == nil {
+			if trimmedName := strings.TrimSpace(project.Name); trimmedName != "" {
+				projectName = trimmedName
+			}
+		}
+	}
+
+	workspaceCtx := context.WithValue(ctx, middleware.WorkspaceIDKey, identity.OrgID)
+	if _, err := h.ChatThreadStore.TouchThread(workspaceCtx, store.TouchChatThreadInput{
+		UserID:             identity.UserID,
+		ProjectID:          &projectID,
+		ThreadKey:          "project:" + projectID,
+		ThreadType:         store.ChatThreadTypeProject,
+		Title:              projectName,
+		LastMessagePreview: strings.TrimSpace(message.Body),
+		LastMessageAt:      message.CreatedAt,
+	}); err != nil {
+		log.Printf("project chat: failed to touch thread for project %s: %v", projectID, err)
+	}
 }
 
 func (h *ProjectChatHandler) ResetSession(w http.ResponseWriter, r *http.Request) {

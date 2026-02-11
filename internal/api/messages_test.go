@@ -19,6 +19,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/lib/pq"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 	"github.com/stretchr/testify/require"
 )
@@ -451,4 +452,48 @@ func TestCreateMessageDMDispatchFailurePersistsMessageWithDeliveryWarning(t *tes
 	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
+}
+
+func TestCreateMessageDMTouchesChatThreadForAuthenticatedUser(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "messages-chat-thread-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "messages-chat-thread-agent")
+	userID := insertTestUser(t, db, orgID, "messages-chat-thread-user")
+	token := "oc_sess_messages_chat_thread_user"
+	insertTestSession(t, db, orgID, userID, token, time.Now().UTC().Add(1*time.Hour))
+
+	handler := &MessageHandler{
+		ChatThreadStore: store.NewChatThreadStore(db),
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"org_id":      orgID,
+		"thread_id":   "dm_" + agentID,
+		"content":     "Thread touch DM message",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.CreateMessage(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var (
+		threadType string
+		preview    string
+	)
+	err = db.QueryRow(
+		`SELECT thread_type, last_message_preview
+		 FROM chat_threads
+		 WHERE org_id = $1 AND user_id = $2 AND thread_key = $3`,
+		orgID,
+		userID,
+		"dm:dm_"+agentID,
+	).Scan(&threadType, &preview)
+	require.NoError(t, err)
+	require.Equal(t, store.ChatThreadTypeDM, threadType)
+	require.Equal(t, "Thread touch DM message", preview)
 }

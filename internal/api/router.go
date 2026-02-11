@@ -24,12 +24,12 @@ import (
 var startTime = time.Now()
 
 type HealthResponse struct {
-	Status     string `json:"status"`
-	Uptime     string `json:"uptime"`
-	Version    string `json:"version"`
-	Timestamp  string `json:"timestamp"`
-	DBVersion  *int   `json:"db_version,omitempty"`
-	DBPending  *int   `json:"db_pending,omitempty"`
+	Status    string `json:"status"`
+	Uptime    string `json:"uptime"`
+	Version   string `json:"version"`
+	Timestamp string `json:"timestamp"`
+	DBVersion *int   `json:"db_version,omitempty"`
+	DBPending *int   `json:"db_pending,omitempty"`
 }
 
 func NewRouter() http.Handler {
@@ -116,11 +116,13 @@ func NewRouter() http.Handler {
 	var githubSyncJobStore *store.GitHubSyncJobStore
 	var projectRepoStore *store.ProjectRepoStore
 	var activityStore *store.ActivityStore
+	var chatThreadStore *store.ChatThreadStore
 	if db != nil {
 		projectStore = store.NewProjectStore(db)
 		githubSyncJobStore = store.NewGitHubSyncJobStore(db)
 		projectRepoStore = store.NewProjectRepoStore(db)
 		activityStore = store.NewActivityStore(db)
+		chatThreadStore = store.NewChatThreadStore(db)
 		adminConnectionsHandler.EventStore = store.NewConnectionEventStore(db)
 		adminConfigHandler.EventStore = adminConnectionsHandler.EventStore
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
@@ -129,16 +131,19 @@ func NewRouter() http.Handler {
 		githubPullRequestsHandler.ProjectRepos = projectRepoStore
 		githubIntegrationHandler.SyncJobs = githubSyncJobStore
 		projectChatHandler.ChatStore = store.NewProjectChatStore(db)
+		projectChatHandler.ChatThreadStore = chatThreadStore
 		projectChatHandler.IssueStore = store.NewProjectIssueStore(db)
 		projectChatHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		projectChatHandler.DB = db
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
+		issuesHandler.ChatThreadStore = chatThreadStore
 		issuesHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		questionnaireHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		issuesHandler.ProjectStore = projectStore
 		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
 		issuesHandler.ProjectRepos = projectRepoStore
 		issuesHandler.DB = db
+		messageHandler.ChatThreadStore = chatThreadStore
 		projectCommitsHandler.ProjectStore = projectStore
 		projectCommitsHandler.CommitStore = store.NewProjectCommitStore(db)
 		projectCommitsHandler.ProjectRepos = projectRepoStore
@@ -470,7 +475,6 @@ func handleAdminMigrate(db *sql.DB) http.HandlerFunc {
 		})
 	}
 }
-
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
 	// Check if we should serve the frontend

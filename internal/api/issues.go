@@ -24,6 +24,7 @@ import (
 
 type IssuesHandler struct {
 	IssueStore         *store.ProjectIssueStore
+	ChatThreadStore    *store.ChatThreadStore
 	QuestionnaireStore *store.QuestionnaireStore
 	ProjectStore       *store.ProjectStore
 	CommitStore        *store.ProjectCommitStore
@@ -540,11 +541,58 @@ func (h *IssuesHandler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		delivery.Error = dispatchWarning
 	}
 
+	h.touchIssueChatThreadBestEffort(r.Context(), r, issueID, response)
 	h.broadcastIssueCommentCreated(r.Context(), issueID, response)
 	sendJSON(w, http.StatusCreated, issueCommentCreateResponse{
 		issueCommentPayload: response,
 		Delivery:            delivery,
 	})
+}
+
+func (h *IssuesHandler) touchIssueChatThreadBestEffort(
+	ctx context.Context,
+	r *http.Request,
+	issueID string,
+	comment issueCommentPayload,
+) {
+	if h.ChatThreadStore == nil || h.IssueStore == nil || h.DB == nil {
+		return
+	}
+
+	identity, err := requireSessionIdentity(ctx, h.DB, r)
+	if err != nil {
+		return
+	}
+	workspaceCtx := context.WithValue(ctx, middleware.WorkspaceIDKey, identity.OrgID)
+
+	issue, err := h.IssueStore.GetIssueByID(workspaceCtx, issueID)
+	if err != nil {
+		return
+	}
+
+	title := strings.TrimSpace(issue.Title)
+	if title == "" {
+		title = "Issue " + issue.ID
+	}
+	projectID := issue.ProjectID
+	trimmedIssueID := strings.TrimSpace(issue.ID)
+	lastMessageAt := time.Now().UTC()
+	if createdAt, err := time.Parse(time.RFC3339, comment.CreatedAt); err == nil {
+		lastMessageAt = createdAt.UTC()
+	}
+
+	if _, err := h.ChatThreadStore.TouchThread(workspaceCtx, store.TouchChatThreadInput{
+		UserID:             identity.UserID,
+		ProjectID:          &projectID,
+		IssueID:            &trimmedIssueID,
+		ThreadKey:          "issue:" + trimmedIssueID,
+		ThreadType:         store.ChatThreadTypeIssue,
+		Title:              title,
+		LastMessagePreview: strings.TrimSpace(comment.Body),
+		LastMessageAt:      lastMessageAt,
+	}); err != nil {
+		log.Printf("issues: failed to touch chat thread for issue %s: %v", issueID, err)
+	}
 }
 
 func (h *IssuesHandler) TransitionApprovalState(w http.ResponseWriter, r *http.Request) {
