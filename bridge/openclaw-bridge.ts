@@ -2024,6 +2024,7 @@ function buildOtterCampOperatingGuideReminder(sessionKey: string): string {
     '[OTTERCAMP_OPERATING_GUIDE_REMINDER]',
     '- Default to OtterCamp entities/CLI for project, issue, and agent requests.',
     '- "Create a project" means create an OtterCamp project unless local scaffolding is explicitly requested.',
+    '- Issue commands: `otter issue create --project <project-id|slug> "<title>"`, `otter issue list --project <project-id|slug>`, `otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"`.',
     '- Ask a single concise follow-up only when a required OtterCamp parameter is missing.',
     '[/OTTERCAMP_OPERATING_GUIDE_REMINDER]',
   ].join('\n');
@@ -2294,8 +2295,14 @@ function buildSurfaceActionDefaults(context: SessionContext): string {
   } else if (context.kind === 'project_chat') {
     lines.push('- In project chat, "create an issue" means creating an OtterCamp issue in this project.');
     lines.push('- Use OtterCamp issue commands before suggesting GitHub issue workflows.');
+    if (context.projectID) {
+      lines.push(`- Use this project id by default: \`${context.projectID}\`.`);
+    }
+    lines.push('- Command pattern: `otter issue create --project <project-id|slug> "<title>"`.');
+    lines.push('- List/view pattern: `otter issue list --project <project-id|slug>` and `otter issue view --project <project-id|slug> <issue-id|number>`.');
   } else if (context.kind === 'issue_comment') {
     lines.push('- In issue threads, treat follow-up actions as OtterCamp issue actions by default.');
+    lines.push('- Comment pattern: `otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"`.');
   }
   if (lines.length === 0) {
     return '';
