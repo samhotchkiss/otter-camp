@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import AgentCard, { type AgentCardData, formatLastActive } from "../components/AgentCard";
-import AddAgentModal from "../components/agents/AddAgentModal";
 import { type AgentStatus } from "../components/AgentDM";
 import { useWS } from "../contexts/WebSocketContext";
 import { useGlobalChat } from "../contexts/GlobalChatContext";
@@ -258,7 +257,6 @@ function AgentsPageComponent({
   const [rosterAgents, setRosterAgents] = useState<AdminRosterAgent[]>([]);
   const [rosterSort, setRosterSort] = useState<RosterSort>("name");
   const [rosterSortAsc, setRosterSortAsc] = useState(true);
-  const [isAddAgentModalOpen, setIsAddAgentModalOpen] = useState(false);
   const [columns, setColumns] = useState(GRID_COLUMNS.lg);
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -367,16 +365,6 @@ function AgentsPageComponent({
       throw err instanceof Error ? err : new Error("Failed to load agents");
     }
   }, [apiEndpoint]);
-
-  const refreshData = useCallback(async () => {
-    try {
-      const fetchedAgents = await fetchAgents();
-      setAgents(fetchedAgents);
-    } catch {
-      // Keep current grid data if refresh fails.
-    }
-    await fetchAdminRoster();
-  }, [fetchAgents, fetchAdminRoster]);
 
   // Initial fetch
   useEffect(() => {
@@ -660,13 +648,12 @@ function AgentsPageComponent({
           </div>
 
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setIsAddAgentModalOpen(true)}
+            <a
+              href="/agents/new"
               className="rounded-lg border border-[#C9A86C]/60 bg-[#C9A86C]/20 px-3 py-1.5 text-xs font-medium text-[#C9A86C]"
             >
               Add Agent
-            </button>
+            </a>
             <div
               className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${
                 connected
@@ -847,14 +834,6 @@ function AgentsPageComponent({
           </div>
         </div>
       )}
-
-      <AddAgentModal
-        isOpen={isAddAgentModalOpen}
-        onClose={() => setIsAddAgentModalOpen(false)}
-        onCreated={() => {
-          void refreshData();
-        }}
-      />
     </div>
   );
 }

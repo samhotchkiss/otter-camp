@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -30,7 +32,7 @@ type AdminAgentsHandler struct {
 	OpenClawHandler openClawConnectionStatus
 	EventStore      *store.ConnectionEventStore
 
-	writeTemplatesFn func(ctx context.Context, repoPath, slot, displayName string) error
+	writeTemplatesFn func(ctx context.Context, repoPath, slot string, input adminAgentTemplateInput) error
 }
 
 type adminAgentSummary struct {
@@ -71,11 +73,27 @@ type adminAgentFilesListResponse struct {
 }
 
 type adminAgentCreateRequest struct {
-	Slot           string `json:"slot"`
-	DisplayName    string `json:"display_name"`
-	Model          string `json:"model"`
-	HeartbeatEvery string `json:"heartbeat_every,omitempty"`
-	Channel        string `json:"channel,omitempty"`
+	DisplayName       string `json:"displayName"`
+	DisplayNameLegacy string `json:"display_name,omitempty"`
+	ProfileID         string `json:"profileId,omitempty"`
+	Soul              string `json:"soul,omitempty"`
+	Identity          string `json:"identity,omitempty"`
+	Model             string `json:"model"`
+	Avatar            string `json:"avatar,omitempty"`
+}
+
+type adminAgentTemplateInput struct {
+	DisplayName string
+	Soul        string
+	Identity    string
+	Avatar      string
+}
+
+type builtInAgentProfileTemplate struct {
+	ID       string
+	Soul     string
+	Identity string
+	Avatar   string
 }
 
 type adminAgentRow struct {
@@ -109,6 +127,295 @@ var (
 )
 
 const agentFilesProjectName = "Agent Files"
+const resolveAvailableAgentSlotMaxAttempts = 100
+
+var builtInAgentProfiles = map[string]builtInAgentProfileTemplate{
+	"marcus": {
+		ID: "marcus",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Calm, structured, and decisive.
+- Values: Clarity, ownership, and momentum.
+- Working style: Turns ambiguity into plans and keeps priorities moving.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Chief of Staff
+- **Vibe:** Calm operator, detail-aware, strategic.
+- **Avatar:** /assets/agent-profiles/marcus.webp
+`),
+		Avatar: "/assets/agent-profiles/marcus.webp",
+	},
+	"rory": {
+		ID: "rory",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Direct, precise, and evidence-first.
+- Values: Correctness, readability, and long-term maintainability.
+- Working style: Finds edge cases, demands test coverage, and removes ambiguity.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Code Reviewer
+- **Vibe:** Opinionated, sharp, and quality obsessed.
+- **Avatar:** /assets/agent-profiles/rory.webp
+`),
+		Avatar: "/assets/agent-profiles/rory.webp",
+	},
+	"sage": {
+		ID: "sage",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Curious, methodical, and grounded.
+- Values: Truth-seeking, source quality, and synthesis.
+- Working style: Explores deeply and cites what matters.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Research Analyst
+- **Vibe:** Thorough, calm, and insight-driven.
+- **Avatar:** /assets/agent-profiles/sage.webp
+`),
+		Avatar: "/assets/agent-profiles/sage.webp",
+	},
+	"kit": {
+		ID: "kit",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Witty, concise, and no-fluff.
+- Values: Clarity, punch, and memorable phrasing.
+- Working style: Drafts quickly, trims filler, and ships clean copy.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Content Writer
+- **Vibe:** Sharp, punchy, anti-fluff.
+- **Avatar:** /assets/agent-profiles/kit.webp
+`),
+		Avatar: "/assets/agent-profiles/kit.webp",
+	},
+	"jules": {
+		ID: "jules",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Warm, proactive, and reassuring.
+- Values: Follow-through, reliability, and coordination.
+- Working style: Tracks commitments and closes loops before reminders are needed.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Personal Assistant
+- **Vibe:** Organized, caring, and calm.
+- **Avatar:** /assets/agent-profiles/jules.webp
+`),
+		Avatar: "/assets/agent-profiles/jules.webp",
+	},
+	"harlow": {
+		ID: "harlow",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Bold, expressive, and specific.
+- Values: Originality, taste, and creative risk-taking.
+- Working style: Pushes past safe defaults and gives concrete aesthetic direction.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Creative Director
+- **Vibe:** Vision-led, high taste, and unapologetically distinct.
+- **Avatar:** /assets/agent-profiles/harlow.webp
+`),
+		Avatar: "/assets/agent-profiles/harlow.webp",
+	},
+	"quinn": {
+		ID: "quinn",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Analytical, skeptical, and evidence-first.
+- Values: Signal over noise, transparent assumptions, and practical recommendations.
+- Working style: Finds patterns, explains caveats, and turns metrics into decisions.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Data Analyst
+- **Vibe:** Pattern-obsessed and chart-friendly.
+- **Avatar:** /assets/agent-profiles/quinn.webp
+`),
+		Avatar: "/assets/agent-profiles/quinn.webp",
+	},
+	"blair": {
+		ID: "blair",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Current, authentic, and brand-safe.
+- Values: Relevance, credibility, and consistency.
+- Working style: Spots platform trends and adapts tone without sounding forced.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Social Media Strategist
+- **Vibe:** Trend-aware and anti-cringe.
+- **Avatar:** /assets/agent-profiles/blair.webp
+`),
+		Avatar: "/assets/agent-profiles/blair.webp",
+	},
+	"avery": {
+		ID: "avery",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Calm, operational, and pragmatic.
+- Values: Reliability, automation, and resilient systems.
+- Working style: Reduces toil, hardens deployments, and keeps incidents manageable.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** DevOps / Infrastructure
+- **Vibe:** Calm under pressure and automation-first.
+- **Avatar:** /assets/agent-profiles/avery.webp
+`),
+		Avatar: "/assets/agent-profiles/avery.webp",
+	},
+	"morgan": {
+		ID: "morgan",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Direct, structured, and deadline-aware.
+- Values: Sequencing, accountability, and execution cadence.
+- Working style: Turns priorities into milestones and protects the critical path.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Project Manager
+- **Vibe:** Ruthlessly organized and delivery-focused.
+- **Avatar:** /assets/agent-profiles/morgan.webp
+`),
+		Avatar: "/assets/agent-profiles/morgan.webp",
+	},
+	"reese": {
+		ID: "reese",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Patient, empathetic, and practical.
+- Values: Trust, clarity, and complete resolution.
+- Working style: De-escalates friction and provides actionable next steps.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Customer Support
+- **Vibe:** Calm, kind, and solution-focused.
+- **Avatar:** /assets/agent-profiles/reese.webp
+`),
+		Avatar: "/assets/agent-profiles/reese.webp",
+	},
+	"emery": {
+		ID: "emery",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Opinionated, outcome-driven, and direct.
+- Values: User impact, focus, and disciplined scope.
+- Working style: Defines clear outcomes, cuts distractions, and pushes decisive delivery.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Product Manager
+- **Vibe:** User-obsessed and scope-aware.
+- **Avatar:** /assets/agent-profiles/emery.webp
+`),
+		Avatar: "/assets/agent-profiles/emery.webp",
+	},
+	"sloane": {
+		ID: "sloane",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Polished, strategic, and concise.
+- Values: Executive clarity, narrative coherence, and credibility.
+- Working style: Turns rough notes into crisp updates for high-stakes audiences.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Executive Comms
+- **Vibe:** Sharp, poised, and message-disciplined.
+- **Avatar:** /assets/agent-profiles/sloane.webp
+`),
+		Avatar: "/assets/agent-profiles/sloane.webp",
+	},
+	"finley": {
+		ID: "finley",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Cautious, methodical, and explicit.
+- Values: Risk reduction, control coverage, and auditability.
+- Working style: Threat-models early, closes gaps, and documents safeguards.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Security / Compliance
+- **Vibe:** Thorough, prevention-focused, and precise.
+- **Avatar:** /assets/agent-profiles/finley.webp
+`),
+		Avatar: "/assets/agent-profiles/finley.webp",
+	},
+	"rowan": {
+		ID: "rowan",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Patient, encouraging, and structured.
+- Values: Understanding, adaptability, and learner confidence.
+- Working style: Uses Socratic prompts, checks comprehension, and adjusts depth to the learner.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Learning / Tutor
+- **Vibe:** Supportive, clear, and level-aware.
+- **Avatar:** /assets/agent-profiles/rowan.webp
+`),
+		Avatar: "/assets/agent-profiles/rowan.webp",
+	},
+}
 
 func (h *AdminAgentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
@@ -208,18 +515,15 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req.Slot = strings.ToLower(strings.TrimSpace(req.Slot))
-	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	req.DisplayName = strings.TrimSpace(firstNonEmpty(req.DisplayName, req.DisplayNameLegacy))
 	req.Model = strings.TrimSpace(req.Model)
-	req.HeartbeatEvery = strings.TrimSpace(req.HeartbeatEvery)
-	req.Channel = strings.TrimSpace(req.Channel)
+	req.ProfileID = strings.TrimSpace(req.ProfileID)
+	req.Soul = strings.TrimSpace(req.Soul)
+	req.Identity = strings.TrimSpace(req.Identity)
+	req.Avatar = strings.TrimSpace(req.Avatar)
 
-	if !agentSlotPattern.MatchString(req.Slot) {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "slot must match ^[a-z0-9][a-z0-9-]{1,62}$"})
-		return
-	}
 	if req.DisplayName == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "display_name is required"})
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "displayName is required"})
 		return
 	}
 	if req.Model == "" {
@@ -227,24 +531,32 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := h.Store.GetBySlug(r.Context(), req.Slot)
-	if err == nil && existing != nil {
-		sendJSON(w, http.StatusConflict, errorResponse{Error: "agent slot already exists"})
-		return
-	}
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+	slot, err := resolveAvailableAgentSlot(agentSlotFromDisplayName(req.DisplayName), func(candidate string) (bool, error) {
+		existing, lookupErr := h.Store.GetBySlug(r.Context(), candidate)
+		if lookupErr == nil && existing != nil {
+			return true, nil
+		}
+		if errors.Is(lookupErr, store.ErrNotFound) {
+			return false, nil
+		}
+		if lookupErr != nil {
+			return false, lookupErr
+		}
+		return false, nil
+	})
+	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate agent slot"})
 		return
 	}
 
-	repoPath, _, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	repoPath, _, _, _, err := h.ensureAgentFilesRepository(r.Context(), workspaceID)
 	if err != nil {
 		h.writeAgentFilesResolveError(w, err)
 		return
 	}
 
 	createdAgent, err := h.Store.Create(r.Context(), store.CreateAgentInput{
-		Slug:        req.Slot,
+		Slug:        slot,
 		DisplayName: req.DisplayName,
 		Status:      "active",
 	})
@@ -257,13 +569,18 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if writeTemplates == nil {
 		writeTemplates = h.writeAgentTemplates
 	}
-	if err := writeTemplates(r.Context(), repoPath, req.Slot, req.DisplayName); err != nil {
+	templateInput, err := buildCreateAgentTemplateInput(req)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	if err := writeTemplates(r.Context(), repoPath, slot, templateInput); err != nil {
 		_ = h.Store.Delete(r.Context(), createdAgent.ID)
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to scaffold agent files"})
 		return
 	}
 
-	configPatch, err := buildCreateAgentConfigPatch(req)
+	configPatch, err := buildCreateAgentConfigPatch(slot, req.Model)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to build config patch"})
 		return
@@ -696,6 +1013,121 @@ func (h *AdminAgentsHandler) resolveAgentFilesRepository(
 	return repoPath, strings.TrimSpace(agentFilesProject.ID), repoMode, defaultRef, nil
 }
 
+func (h *AdminAgentsHandler) ensureAgentFilesRepository(
+	ctx context.Context,
+	workspaceID string,
+) (string, string, gitRepoMode, string, error) {
+	repoPath, projectID, repoMode, defaultRef, err := h.resolveAgentFilesRepository(ctx, workspaceID)
+	if err == nil {
+		return repoPath, projectID, repoMode, defaultRef, nil
+	}
+	if !errors.Is(err, errAgentFilesProjectNotConfigured) {
+		return "", "", "", "", err
+	}
+	if h.ProjectStore == nil || h.ProjectRepos == nil {
+		return "", "", "", "", errAgentFilesProjectNotConfigured
+	}
+
+	agentFilesProject, getErr := h.ProjectStore.GetByName(ctx, agentFilesProjectName)
+	if getErr != nil {
+		if !errors.Is(getErr, store.ErrNotFound) {
+			return "", "", "", "", getErr
+		}
+		agentFilesProject, getErr = h.ProjectStore.Create(ctx, store.CreateProjectInput{
+			Name:   agentFilesProjectName,
+			Status: "active",
+		})
+		if getErr != nil {
+			return "", "", "", "", getErr
+		}
+	}
+	if strings.TrimSpace(agentFilesProject.OrgID) != strings.TrimSpace(workspaceID) {
+		return "", "", "", "", errAdminAgentForbidden
+	}
+
+	bareRepoPath, pathErr := h.ProjectStore.GetRepoPath(ctx, agentFilesProject.ID)
+	if pathErr != nil {
+		return "", "", "", "", pathErr
+	}
+	workingRepoPath, cloneErr := ensureAgentFilesWorkingRepo(ctx, bareRepoPath)
+	if cloneErr != nil {
+		return "", "", "", "", cloneErr
+	}
+
+	if _, bindErr := h.ProjectRepos.UpsertBinding(ctx, store.UpsertProjectRepoBindingInput{
+		ProjectID:          strings.TrimSpace(agentFilesProject.ID),
+		RepositoryFullName: syntheticAgentFilesRepositoryFullName(agentFilesProject.ID),
+		DefaultBranch:      "main",
+		LocalRepoPath:      &workingRepoPath,
+		Enabled:            true,
+		SyncMode:           store.RepoSyncModeSync,
+		AutoSync:           true,
+		ConflictState:      store.RepoConflictNone,
+		ConflictDetails:    json.RawMessage("{}"),
+	}); bindErr != nil {
+		return "", "", "", "", bindErr
+	}
+
+	return h.resolveAgentFilesRepository(ctx, workspaceID)
+}
+
+func syntheticAgentFilesRepositoryFullName(projectID string) string {
+	trimmed := strings.TrimSpace(projectID)
+	if trimmed == "" {
+		return "ottercamp/agent-files"
+	}
+	return "ottercamp/" + trimmed
+}
+
+func agentFilesWorkingRepoPath(bareRepoPath string) string {
+	clean := filepath.Clean(strings.TrimSpace(bareRepoPath))
+	if strings.HasSuffix(clean, ".git") {
+		return strings.TrimSuffix(clean, ".git") + "-working"
+	}
+	return clean + "-working"
+}
+
+func ensureAgentFilesWorkingRepo(ctx context.Context, bareRepoPath string) (string, error) {
+	barePath := filepath.Clean(strings.TrimSpace(bareRepoPath))
+	if barePath == "" {
+		return "", fmt.Errorf("agent files bare repo path is required")
+	}
+	if _, err := os.Stat(barePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("agent files bare repo path %q does not exist", barePath)
+		}
+		return "", fmt.Errorf("failed to inspect bare repo path: %w", err)
+	}
+
+	workingPath := agentFilesWorkingRepoPath(barePath)
+	if info, err := os.Stat(workingPath); err == nil {
+		if !info.IsDir() {
+			return "", fmt.Errorf("agent files working repo path %q is not a directory", workingPath)
+		}
+		if err := ensureGitRepoPath(workingPath); err != nil {
+			return "", err
+		}
+		return workingPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("failed to inspect agent files working repo path: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(workingPath), 0o755); err != nil {
+		return "", fmt.Errorf("failed to create agent files working repo parent: %w", err)
+	}
+	cloneCommand := exec.CommandContext(ctx, "git", "clone", barePath, workingPath)
+	cloneCommand.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if output, err := cloneCommand.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git clone failed: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+
+	// Ensure first commit uses main for deterministic defaults.
+	if _, err := runGitInRepo(ctx, workingPath, "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		return "", err
+	}
+	return workingPath, nil
+}
+
 func trimAgentRootEntries(entries []projectTreeEntry, root string) []projectTreeEntry {
 	root = strings.Trim(strings.TrimSpace(root), "/")
 	prefix := root + "/"
@@ -833,7 +1265,7 @@ func (h *AdminAgentsHandler) writeAgentTemplates(
 	ctx context.Context,
 	repoPath string,
 	slot string,
-	displayName string,
+	input adminAgentTemplateInput,
 ) error {
 	if err := ensureGitRepoPath(repoPath); err != nil {
 		return err
@@ -852,11 +1284,20 @@ func (h *AdminAgentsHandler) writeAgentTemplates(
 		return err
 	}
 
+	soul := strings.TrimSpace(input.Soul)
+	if soul == "" {
+		soul = renderNewAgentSoulTemplate("New Agent")
+	}
+	identity := strings.TrimSpace(input.Identity)
+	if identity == "" {
+		identity = renderNewAgentIdentityTemplate("New Agent", strings.TrimSpace(input.Avatar))
+	}
+
 	files := map[string]string{
-		filepath.Join("agents", slot, "SOUL.md"):     renderNewAgentSoulTemplate(displayName),
-		filepath.Join("agents", slot, "IDENTITY.md"): renderNewAgentIdentityTemplate(displayName),
+		filepath.Join("agents", slot, "SOUL.md"):     soul,
+		filepath.Join("agents", slot, "IDENTITY.md"): identity,
 		filepath.Join("agents", slot, "TOOLS.md"):    renderNewAgentToolsTemplate(),
-		filepath.Join("agents", slot, "MEMORY.md"):   renderNewAgentMemoryTemplate(displayName),
+		filepath.Join("agents", slot, "MEMORY.md"):   renderNewAgentMemoryTemplate(strings.TrimSpace(input.DisplayName)),
 	}
 	for relativePath, content := range files {
 		absolutePath := filepath.Join(repoPath, relativePath)
@@ -894,32 +1335,148 @@ func (h *AdminAgentsHandler) writeAgentTemplates(
 	return nil
 }
 
-func buildCreateAgentConfigPatch(req adminAgentCreateRequest) (json.RawMessage, error) {
+func buildCreateAgentTemplateInput(req adminAgentCreateRequest) (adminAgentTemplateInput, error) {
+	displayName := strings.TrimSpace(req.DisplayName)
+	profileID := strings.ToLower(strings.TrimSpace(req.ProfileID))
+
+	profile := builtInAgentProfileTemplate{}
+	hasProfile := false
+	if profileID != "" {
+		resolved, ok := builtInAgentProfiles[profileID]
+		if !ok {
+			return adminAgentTemplateInput{}, fmt.Errorf("profileId %q is not recognized", req.ProfileID)
+		}
+		profile = resolved
+		hasProfile = true
+	}
+
+	avatar := strings.TrimSpace(req.Avatar)
+	if avatar == "" && hasProfile {
+		avatar = strings.TrimSpace(profile.Avatar)
+	}
+
+	soul := strings.TrimSpace(req.Soul)
+	if soul == "" {
+		if hasProfile && strings.TrimSpace(profile.Soul) != "" {
+			soul = renderAgentProfileTemplate(profile.Soul, displayName, avatar)
+		} else {
+			soul = renderNewAgentSoulTemplate(displayName)
+		}
+	}
+
+	identity := strings.TrimSpace(req.Identity)
+	if identity == "" {
+		if hasProfile && strings.TrimSpace(profile.Identity) != "" {
+			identity = renderAgentProfileTemplate(profile.Identity, displayName, avatar)
+		} else {
+			identity = renderNewAgentIdentityTemplate(displayName, avatar)
+		}
+	}
+
+	return adminAgentTemplateInput{
+		DisplayName: displayName,
+		Soul:        soul,
+		Identity:    identity,
+		Avatar:      avatar,
+	}, nil
+}
+
+func renderAgentProfileTemplate(templateBody string, displayName string, avatar string) string {
+	out := strings.TrimSpace(templateBody)
+	out = strings.ReplaceAll(out, "{{name}}", strings.TrimSpace(displayName))
+	out = strings.ReplaceAll(out, "{{avatar}}", strings.TrimSpace(avatar))
+	if out == "" {
+		return ""
+	}
+	return out + "\n"
+}
+
+func agentSlotFromDisplayName(displayName string) string {
+	name := strings.ToLower(strings.TrimSpace(displayName))
+	if name == "" {
+		return "agent"
+	}
+	var b strings.Builder
+	lastWasDash := false
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			if b.Len() >= 63 {
+				break
+			}
+			b.WriteRune(r)
+			lastWasDash = false
+			continue
+		}
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			continue
+		}
+		if b.Len() == 0 || lastWasDash {
+			continue
+		}
+		if b.Len() >= 63 {
+			break
+		}
+		b.WriteByte('-')
+		lastWasDash = true
+	}
+	slot := strings.Trim(b.String(), "-")
+	if len(slot) < 2 || !agentSlotPattern.MatchString(slot) {
+		return "agent"
+	}
+	return slot
+}
+
+func resolveAvailableAgentSlot(baseSlot string, existsFn func(slot string) (bool, error)) (string, error) {
+	base := strings.TrimSpace(baseSlot)
+	if !agentSlotPattern.MatchString(base) {
+		base = "agent"
+	}
+	for i := 1; i <= resolveAvailableAgentSlotMaxAttempts; i++ {
+		candidate := base
+		if i > 1 {
+			suffix := fmt.Sprintf("-%d", i)
+			maxBaseLen := 63 - len(suffix)
+			if maxBaseLen < 2 {
+				maxBaseLen = 2
+			}
+			prefix := base
+			if len(prefix) > maxBaseLen {
+				prefix = prefix[:maxBaseLen]
+			}
+			prefix = strings.TrimRight(prefix, "-")
+			if len(prefix) < 2 {
+				prefix = "agent"
+				if len(prefix) > maxBaseLen {
+					prefix = prefix[:maxBaseLen]
+				}
+			}
+			candidate = prefix + suffix
+			if !agentSlotPattern.MatchString(candidate) {
+				continue
+			}
+		}
+		exists, err := existsFn(candidate)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("failed to resolve available agent slot after %d attempts", resolveAvailableAgentSlotMaxAttempts)
+}
+
+func buildCreateAgentConfigPatch(slot string, model string) (json.RawMessage, error) {
 	agentPatch := map[string]interface{}{
 		"enabled": true,
 		"model": map[string]interface{}{
-			"primary": req.Model,
+			"primary": model,
 		},
-	}
-	if req.HeartbeatEvery != "" {
-		agentPatch["heartbeat"] = map[string]interface{}{
-			"every": req.HeartbeatEvery,
-		}
-	}
-	if req.Channel != "" {
-		agentPatch["channels"] = []map[string]interface{}{
-			{
-				"channel":          req.Channel,
-				"require_mention":  false,
-				"requireMention":   false,
-				"delivery_channel": req.Channel,
-			},
-		}
 	}
 
 	patch := map[string]interface{}{
 		"agents": map[string]interface{}{
-			req.Slot: agentPatch,
+			slot: agentPatch,
 		},
 	}
 	return canonicalizeOpenClawConfigData(patch)
@@ -936,14 +1493,18 @@ func renderNewAgentSoulTemplate(displayName string) string {
 	)
 }
 
-func renderNewAgentIdentityTemplate(displayName string) string {
+func renderNewAgentIdentityTemplate(displayName string, avatar string) string {
 	name := strings.TrimSpace(displayName)
 	if name == "" {
 		name = "New Agent"
 	}
+	avatarValue := strings.TrimSpace(avatar)
+	if avatarValue == "" {
+		avatarValue = "*(workspace-relative path or URL)*"
+	}
 	return fmt.Sprintf(
-		"# IDENTITY.md - Who Am I?\n\n- **Name:** %s\n- **Creature:** *(to be determined)*\n- **Vibe:** *(to be determined)*\n- **Emoji:** *(pick one)*\n- **Avatar:** *(workspace-relative path or URL)*\n",
-		name,
+		"# IDENTITY.md - Who Am I?\n\n- **Name:** %s\n- **Creature:** *(to be determined)*\n- **Vibe:** *(to be determined)*\n- **Emoji:** *(pick one)*\n- **Avatar:** %s\n",
+		name, avatarValue,
 	)
 }
 
