@@ -498,6 +498,113 @@ function buildAttachmentLinksMarkdown(attachments: ChatAttachment[]): string {
     .join("\n");
 }
 
+function normalizeMessageTextForMatch(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function attachmentSignature(message: ChatMessage): string {
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  if (attachments.length === 0) {
+    return "";
+  }
+  return attachments
+    .map((attachment) => attachment.id || attachment.url || attachment.filename || "")
+    .filter((token) => token.trim() !== "")
+    .sort()
+    .join("|");
+}
+
+function likelyOptimisticEchoMatch(existing: ChatMessage, incoming: ChatMessage): boolean {
+  if (!existing.optimistic || existing.failed) {
+    return false;
+  }
+  if (existing.threadId !== incoming.threadId || existing.senderType !== incoming.senderType) {
+    return false;
+  }
+  if (existing.senderType !== "user") {
+    return false;
+  }
+  if (normalizeMessageTextForMatch(existing.content) !== normalizeMessageTextForMatch(incoming.content)) {
+    return false;
+  }
+  if (attachmentSignature(existing) !== attachmentSignature(incoming)) {
+    return false;
+  }
+  const existingMs = Date.parse(existing.createdAt);
+  const incomingMs = Date.parse(incoming.createdAt);
+  if (Number.isNaN(existingMs) || Number.isNaN(incomingMs)) {
+    return true;
+  }
+  return Math.abs(existingMs - incomingMs) <= 2 * 60 * 1000;
+}
+
+function upsertIncomingMessage(
+  prev: ChatMessage[],
+  incoming: ChatMessage,
+  sortResult = false,
+): ChatMessage[] {
+  const byID = prev.findIndex((entry) => entry.id === incoming.id);
+  if (byID >= 0) {
+    const next = [...prev];
+    next[byID] = {
+      ...next[byID],
+      ...incoming,
+      optimistic: false,
+      failed: false,
+    };
+    if (sortResult) {
+      return next.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+    }
+    return next;
+  }
+
+  const optimisticMatchIndex = prev.findIndex((entry) => likelyOptimisticEchoMatch(entry, incoming));
+  if (optimisticMatchIndex >= 0) {
+    const next = [...prev];
+    next[optimisticMatchIndex] = {
+      ...incoming,
+      optimistic: false,
+      failed: false,
+    };
+    if (sortResult) {
+      return next.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+    }
+    return next;
+  }
+
+  const next = [...prev, incoming];
+  if (sortResult) {
+    return next.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  }
+  return next;
+}
+
+function reconcileOptimisticPersistedMessage(
+  prev: ChatMessage[],
+  optimisticID: string,
+  persisted: ChatMessage | null,
+): ChatMessage[] {
+  const replaced = prev.map((entry) =>
+    entry.id === optimisticID
+      ? {
+          ...(persisted ?? entry),
+          optimistic: false,
+          failed: false,
+        }
+      : entry,
+  );
+  const deduped: ChatMessage[] = [];
+  const seen = new Set<string>();
+  for (const entry of replaced) {
+    if (seen.has(entry.id)) {
+      continue;
+    }
+    seen.add(entry.id);
+    deduped.push(entry);
+  }
+  return deduped;
+}
+
 export default function GlobalChatSurface({
   conversation,
   onConversationTouched,
@@ -788,12 +895,7 @@ export default function GlobalChatSurface({
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
       }
 
-      setMessages((prev) => {
-        if (prev.some((entry) => entry.id === normalized.id)) {
-          return prev;
-        }
-        return [...prev, normalized];
-      });
+      setMessages((prev) => upsertIncomingMessage(prev, normalized));
       return;
     }
 
@@ -817,14 +919,7 @@ export default function GlobalChatSurface({
         setDeliveryIndicator({ tone: "neutral", text: "Started new session" });
       }
 
-      setMessages((prev) => {
-        if (prev.some((entry) => entry.id === normalized.id)) {
-          return prev;
-        }
-        return [...prev, normalized].sort(
-          (a: ChatMessage, b: ChatMessage) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
-        );
-      });
+      setMessages((prev) => upsertIncomingMessage(prev, normalized, true));
       return;
     }
 
@@ -863,14 +958,7 @@ export default function GlobalChatSurface({
         setDeliveryIndicator({ tone: "success", text: "Agent replied" });
       }
 
-      setMessages((prev) => {
-        if (prev.some((entry) => entry.id === normalized.id)) {
-          return prev;
-        }
-        return [...prev, normalized].sort(
-          (a: ChatMessage, b: ChatMessage) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
-        );
-      });
+      setMessages((prev) => upsertIncomingMessage(prev, normalized, true));
     }
   }, [
     conversationKey,
@@ -1090,17 +1178,7 @@ export default function GlobalChatSurface({
           currentUserName,
           currentUserID,
         );
-        setMessages((prev) =>
-          prev.map((entry) =>
-            entry.id === optimisticID
-              ? {
-                  ...(persisted ?? entry),
-                  optimistic: false,
-                  failed: false,
-                }
-              : entry,
-          ),
-        );
+        setMessages((prev) => reconcileOptimisticPersistedMessage(prev, optimisticID, persisted));
 
         if (payload?.delivery?.delivered === true) {
           setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
@@ -1146,17 +1224,7 @@ export default function GlobalChatSurface({
           currentUserName,
           currentUserID,
         );
-        setMessages((prev) =>
-          prev.map((entry) =>
-            entry.id === optimisticID
-              ? {
-                  ...(persisted ?? entry),
-                  optimistic: false,
-                  failed: false,
-                }
-              : entry,
-          ),
-        );
+        setMessages((prev) => reconcileOptimisticPersistedMessage(prev, optimisticID, persisted));
 
         if (payload?.delivery?.delivered === true) {
           setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });
@@ -1211,17 +1279,7 @@ export default function GlobalChatSurface({
           issueAgentNameByID,
           issueAuthorID,
         );
-        setMessages((prev) =>
-          prev.map((entry) =>
-            entry.id === optimisticID
-              ? {
-                  ...(persisted ?? entry),
-                  optimistic: false,
-                  failed: false,
-                }
-              : entry,
-          ),
-        );
+        setMessages((prev) => reconcileOptimisticPersistedMessage(prev, optimisticID, persisted));
 
         if (payload?.delivery?.delivered === true) {
           setDeliveryIndicator({ tone: "success", text: "Delivered to bridge" });

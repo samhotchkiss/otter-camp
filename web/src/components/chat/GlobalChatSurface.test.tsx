@@ -73,6 +73,9 @@ describe("GlobalChatSurface", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wsState.connected = true;
+    wsState.lastMessage = null;
+    wsState.sendMessage.mockReset();
     lastMessageHistoryProps = null;
     window.localStorage.clear();
     window.localStorage.setItem("otter-camp-org-id", "org-1");
@@ -447,5 +450,100 @@ describe("GlobalChatSurface", () => {
       const questionnaire = entry.questionnaire as { responses?: Record<string, unknown> } | undefined;
       return questionnaire?.responses?.q1 === "WebSocket";
     })).toBe(true);
+  });
+
+  it("reconciles websocket user echo with optimistic project message without duplicate rows", async () => {
+    const user = userEvent.setup();
+    const projectConversation: GlobalProjectConversation = {
+      key: "project:project-1",
+      type: "project",
+      projectId: "project-1",
+      title: "Project One",
+      contextLabel: "Project chat",
+      subtitle: "Team thread",
+      unreadCount: 0,
+      updatedAt: "2026-02-07T00:00:00.000Z",
+    };
+
+    let resolvePost:
+      | ((response: { ok: boolean; json: () => Promise<unknown> }) => void)
+      | null = null;
+    const nowISO = new Date().toISOString();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/projects/project-1/chat?")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ messages: [] }),
+        });
+      }
+      if (url.includes("/api/projects/project-1/chat/messages")) {
+        return new Promise((resolve) => {
+          resolvePost = resolve as (response: { ok: boolean; json: () => Promise<unknown> }) => void;
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({}),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(<GlobalChatSurface conversation={projectConversation} />);
+    const composer = await screen.findByPlaceholderText("Message Project One...");
+    await user.type(composer, "Echo once");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => {
+      const matches = (lastMessageHistoryProps?.messages ?? []).filter(
+        (entry) => String(entry.content ?? "") === "Echo once",
+      );
+      expect(matches).toHaveLength(1);
+      expect(String(matches[0]?.id ?? "")).toMatch(/^temp-/);
+    });
+
+    wsState.lastMessage = {
+      type: "ProjectChatMessageCreated",
+      data: {
+        id: "msg-echo-1",
+        project_id: "project-1",
+        author: "Sam",
+        body: "Echo once",
+        created_at: nowISO,
+        updated_at: nowISO,
+      },
+    };
+    rerender(<GlobalChatSurface conversation={projectConversation} />);
+
+    await waitFor(() => {
+      const matches = (lastMessageHistoryProps?.messages ?? []).filter(
+        (entry) => String(entry.content ?? "") === "Echo once",
+      );
+      expect(matches).toHaveLength(1);
+      expect(String(matches[0]?.id ?? "")).toBe("msg-echo-1");
+    });
+
+    resolvePost?.({
+      ok: true,
+      json: async () => ({
+        message: {
+          id: "msg-echo-1",
+          project_id: "project-1",
+          author: "Sam",
+          body: "Echo once",
+          created_at: nowISO,
+          updated_at: nowISO,
+        },
+        delivery: { delivered: true },
+      }),
+    });
+
+    await waitFor(() => {
+      const matches = (lastMessageHistoryProps?.messages ?? []).filter(
+        (entry) => String(entry.content ?? "") === "Echo once",
+      );
+      expect(matches).toHaveLength(1);
+      expect(String(matches[0]?.id ?? "")).toBe("msg-echo-1");
+    });
   });
 });
