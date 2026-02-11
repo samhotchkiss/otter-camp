@@ -136,6 +136,7 @@ export default function AgentDetailPage() {
   const overviewContextTokens = agentDetail?.sync?.context_tokens ?? 0;
   const overviewTotalTokens = agentDetail?.sync?.total_tokens ?? 0;
   const isRetired = overviewStatus.toLowerCase() === "retired";
+  const isProtectedSystemAgent = id.trim().toLowerCase() === "elephant";
 
   if (!id) {
     return (
@@ -345,8 +346,11 @@ export default function AgentDetailPage() {
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    disabled={isLifecyclePending}
+                    disabled={isLifecyclePending || isProtectedSystemAgent}
                     onClick={async () => {
+                      if (isProtectedSystemAgent) {
+                        return;
+                      }
                       const action = isRetired ? "reactivate" : "retire";
                       const label = isRetired ? "Reactivate Agent" : "Retire Agent";
                       const confirmed = window.confirm(
@@ -390,6 +394,11 @@ export default function AgentDetailPage() {
                     {isLifecyclePending ? "Applying..." : isRetired ? "Reactivate Agent" : "Retire Agent"}
                   </button>
                 </div>
+                {isProtectedSystemAgent && (
+                  <p className="mt-2 text-sm text-[var(--text-muted)]">
+                    Elephant is a protected system agent and cannot be retired.
+                  </p>
+                )}
                 {lifecycleMessage && (
                   <p className="mt-2 text-sm text-[var(--text-muted)]">{lifecycleMessage}</p>
                 )}

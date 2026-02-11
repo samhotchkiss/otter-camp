@@ -206,4 +206,41 @@ describe("AgentDetailPage", () => {
     expect(await screen.findByText("Search hit")).toBeInTheDocument();
     expect(await screen.findByText(/\[RECALLED CONTEXT\]/)).toBeInTheDocument();
   });
+
+  it("disables lifecycle controls for elephant", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/admin/agents/elephant")) {
+        return new Response(
+          JSON.stringify({
+            agent: {
+              id: "elephant",
+              workspace_agent_id: "11111111-1111-1111-1111-111111111111",
+              name: "Elephant",
+              status: "online",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/agents/elephant/activity")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(
+      <MemoryRouter initialEntries={["/agents/elephant"]}>
+        <Routes>
+          <Route path="/agents/:id" element={<AgentDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(await screen.findByText("Elephant is a protected system agent and cannot be retired.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retire Agent" })).toBeDisabled();
+  });
 });
