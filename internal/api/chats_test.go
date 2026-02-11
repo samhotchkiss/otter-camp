@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -112,6 +113,61 @@ func TestChatsHandlerListArchiveUnarchive(t *testing.T) {
 	var activeAgainResp chatsListResponse
 	require.NoError(t, json.NewDecoder(activeAgainRec.Body).Decode(&activeAgainResp))
 	require.Len(t, activeAgainResp.Chats, 2)
+}
+
+func TestChatsHandlerListPaginationReturnsCursorAndNextPage(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "chats-handler-pagination-org")
+	userID := insertTestUser(t, db, orgID, "chats-handler-pagination-user")
+	token := "oc_sess_chats_handler_pagination_user"
+	insertTestSession(t, db, orgID, userID, token, time.Now().UTC().Add(1*time.Hour))
+
+	chatStore := store.NewChatThreadStore(db)
+	ctx := chatsTestCtx(orgID)
+	base := time.Date(2026, 2, 11, 11, 0, 0, 0, time.UTC)
+	ids := make([]string, 0, 5)
+	for i := 0; i < 5; i++ {
+		thread, err := chatStore.TouchThread(ctx, store.TouchChatThreadInput{
+			UserID:             userID,
+			ThreadKey:          fmt.Sprintf("dm:dm_pagination_%d", i),
+			ThreadType:         store.ChatThreadTypeDM,
+			Title:              fmt.Sprintf("Chat %d", i+1),
+			LastMessagePreview: fmt.Sprintf("message %d", i+1),
+			LastMessageAt:      base.Add(time.Duration(i) * time.Minute),
+		})
+		require.NoError(t, err)
+		ids = append(ids, thread.ID)
+	}
+
+	handler := &ChatsHandler{ChatThreadStore: chatStore, DB: db}
+	router := newChatsTestRouter(handler)
+
+	firstReq := httptest.NewRequest(http.MethodGet, "/api/chats?org_id="+orgID+"&limit=2", nil)
+	firstReq.Header.Set("Authorization", "Bearer "+token)
+	firstRec := httptest.NewRecorder()
+	router.ServeHTTP(firstRec, firstReq)
+	require.Equal(t, http.StatusOK, firstRec.Code)
+
+	var firstResp chatsListResponse
+	require.NoError(t, json.NewDecoder(firstRec.Body).Decode(&firstResp))
+	require.Len(t, firstResp.Chats, 2)
+	require.NotEmpty(t, firstResp.NextCursor)
+	require.Equal(t, ids[4], firstResp.Chats[0].ID)
+	require.Equal(t, ids[3], firstResp.Chats[1].ID)
+
+	secondReq := httptest.NewRequest(http.MethodGet, "/api/chats?org_id="+orgID+"&cursor="+firstResp.NextCursor, nil)
+	secondReq.Header.Set("Authorization", "Bearer "+token)
+	secondRec := httptest.NewRecorder()
+	router.ServeHTTP(secondRec, secondReq)
+	require.Equal(t, http.StatusOK, secondRec.Code)
+
+	var secondResp chatsListResponse
+	require.NoError(t, json.NewDecoder(secondRec.Body).Decode(&secondResp))
+	require.Len(t, secondResp.Chats, 3)
+	require.Equal(t, ids[2], secondResp.Chats[0].ID)
+	require.Equal(t, ids[1], secondResp.Chats[1].ID)
+	require.Equal(t, ids[0], secondResp.Chats[2].ID)
+	require.Empty(t, secondResp.NextCursor)
 }
 
 func TestChatsHandlerRequiresAuthentication(t *testing.T) {

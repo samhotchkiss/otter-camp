@@ -39,7 +39,8 @@ type chatThreadPayload struct {
 }
 
 type chatsListResponse struct {
-	Chats []chatThreadPayload `json:"chats"`
+	Chats      []chatThreadPayload `json:"chats"`
+	NextCursor string              `json:"next_cursor,omitempty"`
 }
 
 type chatMessagePayload struct {
@@ -69,11 +70,29 @@ func (h *ChatsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	archived := parseBooleanQuery(r.URL.Query().Get("archived"))
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	threads, err := h.ChatThreadStore.ListByUser(ctx, identity.UserID, store.ListChatThreadsInput{
+	limit, err := parseLimit(r.URL.Query().Get("limit"), 50, 200)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid limit"})
+		return
+	}
+	cursorToken, err := parseCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid cursor"})
+		return
+	}
+
+	input := store.ListChatThreadsInput{
 		Archived: archived,
 		Query:    query,
-		Limit:    200,
-	})
+		Limit:    limit,
+	}
+	if cursorToken != nil {
+		input.Cursor = &store.ChatThreadListCursor{
+			LastMessageAt: cursorToken.CreatedAt,
+			ID:            cursorToken.ID,
+		}
+	}
+	threads, err := h.ChatThreadStore.ListByUser(ctx, identity.UserID, input)
 	if err != nil {
 		handleChatThreadStoreError(w, err)
 		return
@@ -83,7 +102,13 @@ func (h *ChatsHandler) List(w http.ResponseWriter, r *http.Request) {
 	for _, thread := range threads {
 		payload = append(payload, toChatThreadPayload(thread))
 	}
-	sendJSON(w, http.StatusOK, chatsListResponse{Chats: payload})
+
+	response := chatsListResponse{Chats: payload}
+	if len(threads) == limit {
+		last := threads[len(threads)-1]
+		response.NextCursor = encodeCursor(last.LastMessageAt, last.ID)
+	}
+	sendJSON(w, http.StatusOK, response)
 }
 
 func (h *ChatsHandler) Get(w http.ResponseWriter, r *http.Request) {

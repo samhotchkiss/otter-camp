@@ -54,6 +54,12 @@ type ListChatThreadsInput struct {
 	Archived bool
 	Query    string
 	Limit    int
+	Cursor   *ChatThreadListCursor
+}
+
+type ChatThreadListCursor struct {
+	LastMessageAt time.Time
+	ID            string
 }
 
 type ChatThreadStore struct {
@@ -192,6 +198,17 @@ func (s *ChatThreadStore) ListByUser(ctx context.Context, userID string, input L
 		limit = 200
 	}
 
+	if input.Cursor != nil {
+		input.Cursor.ID = strings.TrimSpace(input.Cursor.ID)
+		if !uuidRegex.MatchString(input.Cursor.ID) {
+			return nil, fmt.Errorf("invalid cursor id")
+		}
+		input.Cursor.LastMessageAt = input.Cursor.LastMessageAt.UTC()
+		if input.Cursor.LastMessageAt.IsZero() {
+			return nil, fmt.Errorf("invalid cursor timestamp")
+		}
+	}
+
 	conn, err := WithWorkspace(ctx, s.db)
 	if err != nil {
 		return nil, err
@@ -209,6 +226,12 @@ func (s *ChatThreadStore) ListByUser(ctx context.Context, userID string, input L
 		args = append(args, "%"+query+"%")
 		idx := len(args)
 		where = append(where, fmt.Sprintf("(title ILIKE $%d OR last_message_preview ILIKE $%d OR thread_key ILIKE $%d)", idx, idx, idx))
+	}
+	if input.Cursor != nil {
+		args = append(args, input.Cursor.LastMessageAt, input.Cursor.ID)
+		tsIdx := len(args) - 1
+		idIdx := len(args)
+		where = append(where, fmt.Sprintf("(last_message_at < $%d OR (last_message_at = $%d AND id < $%d::uuid))", tsIdx, tsIdx, idIdx))
 	}
 	args = append(args, limit)
 
