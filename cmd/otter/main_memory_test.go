@@ -146,6 +146,91 @@ func TestHandleKnowledge(t *testing.T) {
 	mu.Unlock()
 }
 
+func TestHandleKnowledgeSharedCommands(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	var mu sync.Mutex
+	var gotMethod string
+	var gotPath string
+	var gotBody map[string]any
+
+	agentID := "00000000-0000-0000-0000-000000000111"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+		gotBody = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/agents":
+			_, _ = w.Write([]byte(`{"agents":[{"id":"` + agentID + `","name":"Marcus","slug":"marcus"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/shared-knowledge":
+			_, _ = w.Write([]byte(`{"items":[{"id":"k1"}],"total":1}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/shared-knowledge/search":
+			_, _ = w.Write([]byte(`{"items":[{"id":"k2"}],"total":1}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/shared-knowledge":
+			_, _ = w.Write([]byte(`{"id":"k3"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/shared-knowledge/k3/confirm":
+			_, _ = w.Write([]byte(`{"id":"k3","confirmations":1}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/shared-knowledge/k3/contradict":
+			_, _ = w.Write([]byte(`{"id":"k3","contradictions":1}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	require.NoError(t, ottercli.SaveConfig(ottercli.Config{
+		APIBaseURL: srv.URL,
+		Token:      "token-1",
+		DefaultOrg: "org-1",
+	}))
+
+	handleKnowledge([]string{"list", "--agent", "marcus", "--limit", "5", "--json"})
+	mu.Lock()
+	require.Equal(t, http.MethodGet, gotMethod)
+	require.True(t, strings.HasPrefix(gotPath, "/api/shared-knowledge?"))
+	require.Contains(t, gotPath, "agent_id="+agentID)
+	require.Contains(t, gotPath, "limit=5")
+	mu.Unlock()
+
+	handleKnowledge([]string{"search", "--limit", "5", "--min-quality", "0.7", "--json", "shared rule"})
+	mu.Lock()
+	require.Equal(t, http.MethodGet, gotMethod)
+	require.True(t, strings.HasPrefix(gotPath, "/api/shared-knowledge/search?"))
+	require.Contains(t, gotPath, "q=shared+rule")
+	require.Contains(t, gotPath, "min_quality=0.7")
+	mu.Unlock()
+
+	handleKnowledge([]string{"share", "--agent", "marcus", "--title", "Rule", "--scope", "org", "--quality", "0.8", "--json", "Always link issues"})
+	mu.Lock()
+	require.Equal(t, http.MethodPost, gotMethod)
+	require.Equal(t, "/api/shared-knowledge", gotPath)
+	require.Equal(t, agentID, gotBody["source_agent_id"])
+	require.Equal(t, "Rule", gotBody["title"])
+	require.Equal(t, "Always link issues", gotBody["content"])
+	mu.Unlock()
+
+	handleKnowledge([]string{"confirm", "--json", "k3"})
+	mu.Lock()
+	require.Equal(t, http.MethodPost, gotMethod)
+	require.Equal(t, "/api/shared-knowledge/k3/confirm", gotPath)
+	mu.Unlock()
+
+	handleKnowledge([]string{"contradict", "--json", "k3"})
+	mu.Lock()
+	require.Equal(t, http.MethodPost, gotMethod)
+	require.Equal(t, "/api/shared-knowledge/k3/contradict", gotPath)
+	mu.Unlock()
+}
+
 func TestHandleMemoryWriteRead(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

@@ -520,16 +520,16 @@ type OnboardingBootstrapRequest struct {
 }
 
 type OnboardingBootstrapResponse struct {
-	OrgID       string `json:"org_id"`
-	OrgSlug     string `json:"org_slug"`
-	UserID      string `json:"user_id"`
-	Token       string `json:"token"`
+	OrgID       string    `json:"org_id"`
+	OrgSlug     string    `json:"org_slug"`
+	UserID      string    `json:"user_id"`
+	Token       string    `json:"token"`
 	ExpiresAt   time.Time `json:"expires_at"`
-	ProjectID   string `json:"project_id"`
-	ProjectName string `json:"project_name"`
-	IssueID     string `json:"issue_id"`
-	IssueNumber int64  `json:"issue_number"`
-	IssueTitle  string `json:"issue_title"`
+	ProjectID   string    `json:"project_id"`
+	ProjectName string    `json:"project_name"`
+	IssueID     string    `json:"issue_id"`
+	IssueNumber int64     `json:"issue_number"`
+	IssueTitle  string    `json:"issue_title"`
 }
 
 func (c *Client) WhoAmI() (whoamiResponse, error) {
@@ -959,6 +959,129 @@ func (c *Client) ImportKnowledge(entries []map[string]any) (map[string]any, erro
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ListSharedKnowledge(agentID string, limit int) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	q := url.Values{}
+	q.Set("agent_id", agentID)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+
+	req, err := c.newRequest(http.MethodGet, "/api/shared-knowledge?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) SearchSharedKnowledge(query string, limit int, minQuality float64, kinds, statuses []string) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, errors.New("query is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if minQuality < 0 || minQuality > 1 {
+		return nil, errors.New("min_quality must be between 0 and 1")
+	}
+	q := url.Values{}
+	q.Set("q", query)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	if minQuality > 0 {
+		q.Set("min_quality", strconv.FormatFloat(minQuality, 'f', -1, 64))
+	}
+	if len(kinds) > 0 {
+		q.Set("kinds", strings.Join(kinds, ","))
+	}
+	if len(statuses) > 0 {
+		q.Set("statuses", strings.Join(statuses, ","))
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/shared-knowledge/search?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) CreateSharedKnowledge(input map[string]any) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/shared-knowledge", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ConfirmSharedKnowledge(id string) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, errors.New("knowledge id is required")
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/shared-knowledge/"+url.PathEscape(id)+"/confirm", nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ContradictSharedKnowledge(id string) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, errors.New("knowledge id is required")
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/shared-knowledge/"+url.PathEscape(id)+"/contradict", nil)
+	if err != nil {
+		return nil, err
+	}
 	var response map[string]any
 	if err := c.do(req, &response); err != nil {
 		return nil, err

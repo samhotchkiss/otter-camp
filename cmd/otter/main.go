@@ -707,7 +707,7 @@ func handleMemory(args []string) {
 }
 
 func handleKnowledge(args []string) {
-	const usageText = "usage: otter knowledge <list|import> ..."
+	const usageText = "usage: otter knowledge <list|search|share|confirm|contradict|import> ..."
 	if len(args) == 0 {
 		fmt.Println(usageText)
 		os.Exit(1)
@@ -716,6 +716,7 @@ func handleKnowledge(args []string) {
 	switch args[0] {
 	case "list":
 		flags := flag.NewFlagSet("knowledge list", flag.ExitOnError)
+		agentRef := flags.String("agent", "", "agent id/name/slug for scoped shared knowledge")
 		limit := flags.Int("limit", 200, "max results")
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
@@ -728,14 +729,174 @@ func handleKnowledge(args []string) {
 		cfg, err := ottercli.LoadConfig()
 		dieIf(err)
 		client, _ := ottercli.NewClient(cfg, *org)
-		response, err := client.ListKnowledge(*limit)
+		if strings.TrimSpace(*agentRef) == "" {
+			response, err := client.ListKnowledge(*limit)
+			dieIf(err)
+
+			if *jsonOut {
+				printJSON(response)
+				return
+			}
+			fmt.Println("Knowledge entries")
+			printJSON(response)
+			return
+		}
+
+		resolvedAgent, err := client.ResolveAgent(strings.TrimSpace(*agentRef))
+		dieIf(err)
+		response, err := client.ListSharedKnowledge(resolvedAgent.ID, *limit)
 		dieIf(err)
 
 		if *jsonOut {
 			printJSON(response)
 			return
 		}
-		fmt.Println("Knowledge entries")
+		fmt.Printf("Shared knowledge for %s\n", strings.TrimSpace(resolvedAgent.Name))
+		printJSON(response)
+	case "search":
+		flags := flag.NewFlagSet("knowledge search", flag.ExitOnError)
+		limit := flags.Int("limit", 20, "max results")
+		minQuality := flags.Float64("min-quality", 0, "minimum quality score (0-1)")
+		kinds := flags.String("kinds", "", "comma-separated kinds")
+		statuses := flags.String("statuses", "", "comma-separated statuses")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		query := strings.TrimSpace(strings.Join(flags.Args(), " "))
+		if query == "" {
+			die("usage: otter knowledge search [--limit N] [--min-quality 0-1] \"query\"")
+		}
+		if *limit <= 0 {
+			die("--limit must be positive")
+		}
+		if *minQuality < 0 || *minQuality > 1 {
+			die("--min-quality must be between 0 and 1")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.SearchSharedKnowledge(
+			query,
+			*limit,
+			*minQuality,
+			splitCSV(*kinds),
+			splitCSV(*statuses),
+		)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Println("Shared knowledge search")
+		printJSON(response)
+	case "share":
+		flags := flag.NewFlagSet("knowledge share", flag.ExitOnError)
+		agentRef := flags.String("agent", "", "source agent id/name/slug")
+		kind := flags.String("kind", "fact", "knowledge kind")
+		title := flags.String("title", "", "knowledge title")
+		scope := flags.String("scope", "org", "scope (org|team)")
+		teams := flags.String("teams", "", "comma-separated team names (required for team scope)")
+		quality := flags.Float64("quality", 0.6, "initial quality score (0-1)")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		content := strings.TrimSpace(strings.Join(flags.Args(), " "))
+		if content == "" {
+			die("usage: otter knowledge share --agent <agent> --title <title> [--kind <kind>] [--scope org|team] [--teams a,b] [--quality 0-1] \"content\"")
+		}
+		if strings.TrimSpace(*title) == "" {
+			die("--title is required")
+		}
+		if *quality < 0 || *quality > 1 {
+			die("--quality must be between 0 and 1")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		sourceAgentRef := strings.TrimSpace(*agentRef)
+		if sourceAgentRef == "" {
+			sourceAgentRef = strings.TrimSpace(os.Getenv("OTTER_AGENT_ID"))
+		}
+		if sourceAgentRef == "" {
+			die("--agent is required (or set OTTER_AGENT_ID)")
+		}
+
+		resolvedAgent, err := client.ResolveAgent(sourceAgentRef)
+		dieIf(err)
+		scopeTeams := splitCSV(*teams)
+		payload := map[string]any{
+			"source_agent_id": resolvedAgent.ID,
+			"kind":            strings.TrimSpace(*kind),
+			"title":           strings.TrimSpace(*title),
+			"content":         content,
+			"scope":           strings.TrimSpace(*scope),
+			"scope_teams":     scopeTeams,
+			"quality_score":   *quality,
+		}
+
+		response, err := client.CreateSharedKnowledge(payload)
+		dieIf(err)
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Shared knowledge created by %s\n", strings.TrimSpace(resolvedAgent.Name))
+		printJSON(response)
+	case "confirm":
+		flags := flag.NewFlagSet("knowledge confirm", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter knowledge confirm <knowledge-id>")
+		}
+		knowledgeID := strings.TrimSpace(flags.Args()[0])
+		if knowledgeID == "" {
+			die("knowledge id is required")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.ConfirmSharedKnowledge(knowledgeID)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Confirmed shared knowledge %s\n", knowledgeID)
+		printJSON(response)
+	case "contradict":
+		flags := flag.NewFlagSet("knowledge contradict", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if len(flags.Args()) == 0 {
+			die("usage: otter knowledge contradict <knowledge-id>")
+		}
+		knowledgeID := strings.TrimSpace(flags.Args()[0])
+		if knowledgeID == "" {
+			die("knowledge id is required")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.ContradictSharedKnowledge(knowledgeID)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Contradicted shared knowledge %s\n", knowledgeID)
 		printJSON(response)
 	case "import":
 		flags := flag.NewFlagSet("knowledge import", flag.ExitOnError)
@@ -2033,6 +2194,23 @@ func validateKnowledgeImportFileSize(path string, maxBytes int64) error {
 		return fmt.Errorf("knowledge import file exceeds %d bytes", maxBytes)
 	}
 	return nil
+}
+
+func splitCSV(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	parts := strings.Split(trimmed, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }
 
 func slugifyAgentName(name string) string {
