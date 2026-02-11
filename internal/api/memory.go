@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -439,6 +440,12 @@ func (h *MemoryHandler) RunEvaluation(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "memory evaluation operation failed"})
 		return
 	}
+	h.publishMemoryOpsEvent(r, store.MemoryEventTypeMemoryEvaluated, map[string]any{
+		"evaluation_id": runRecord.ID,
+		"passed":        runRecord.Passed,
+		"failed_gates":  runRecord.FailedGates,
+		"fixture_path":  runRecord.FixturePath,
+	})
 
 	sendJSON(w, http.StatusCreated, mapMemoryEvaluationRunRecord(runRecord))
 }
@@ -534,6 +541,13 @@ func (h *MemoryHandler) TuneEvaluation(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "memory tuning operation failed"})
 		return
 	}
+	h.publishMemoryOpsEvent(r, store.MemoryEventTypeMemoryTuned, map[string]any{
+		"attempt_id":      response.AttemptID,
+		"status":          response.Status,
+		"apply_requested": response.ApplyRequested,
+		"applied":         response.Applied,
+		"rolled_back":     response.RolledBack,
+	})
 
 	sendJSON(w, http.StatusOK, response)
 }
@@ -995,4 +1009,21 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (h *MemoryHandler) publishMemoryOpsEvent(r *http.Request, eventType string, payload map[string]any) {
+	if h.DB == nil {
+		return
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("memory event marshal failed (%s): %v", eventType, err)
+		return
+	}
+	if _, err := store.NewMemoryEventsStore(h.DB).Publish(r.Context(), store.PublishMemoryEventInput{
+		EventType: eventType,
+		Payload:   encoded,
+	}); err != nil {
+		log.Printf("memory event publish failed (%s): %v", eventType, err)
+	}
 }

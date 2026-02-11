@@ -31,6 +31,8 @@ func TestMemoryEvaluationClientMethodsUseExpectedPaths(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"eval-2","passed":true}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/memory/evaluations/tune":
 			_, _ = w.Write([]byte(`{"attempt_id":"attempt-1","status":"skipped"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/memory/events":
+			_, _ = w.Write([]byte(`{"items":[{"id":1,"event_type":"memory.evaluated"}],"total":1}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"not found"}`))
@@ -96,5 +98,22 @@ func TestMemoryEvaluationClientMethodsUseExpectedPaths(t *testing.T) {
 	}
 	if tuneResp["attempt_id"] != "attempt-1" {
 		t.Fatalf("TuneMemoryEvaluation() attempt_id = %v, want attempt-1", tuneResp["attempt_id"])
+	}
+
+	eventsResp, err := client.ListMemoryEvents(20, "2026-02-11T00:00:00Z", []string{"memory.evaluated", "memory.tuned"})
+	if err != nil {
+		t.Fatalf("ListMemoryEvents() error = %v", err)
+	}
+	if gotMethod != http.MethodGet || !strings.HasPrefix(gotPath, "/api/memory/events?") {
+		t.Fatalf("ListMemoryEvents request = %s %s", gotMethod, gotPath)
+	}
+	if !strings.Contains(gotPath, "limit=20") || !strings.Contains(gotPath, "since=2026-02-11T00%3A00%3A00Z") {
+		t.Fatalf("ListMemoryEvents query mismatch: %s", gotPath)
+	}
+	if !strings.Contains(gotPath, "types=memory.evaluated%2Cmemory.tuned") {
+		t.Fatalf("ListMemoryEvents types mismatch: %s", gotPath)
+	}
+	if eventsResp["total"] != float64(1) {
+		t.Fatalf("ListMemoryEvents() total = %v, want 1", eventsResp["total"])
 	}
 }

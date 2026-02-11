@@ -1001,6 +1001,33 @@ func (c *Client) TuneMemoryEvaluation(apply bool) (map[string]any, error) {
 	return response, nil
 }
 
+func (c *Client) ListMemoryEvents(limit int, since string, types []string) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	q := url.Values{}
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	if trimmedSince := strings.TrimSpace(since); trimmedSince != "" {
+		q.Set("since", trimmedSince)
+	}
+	if len(types) > 0 {
+		q.Set("types", strings.Join(types, ","))
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/memory/events?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 func (c *Client) ListKnowledge(limit int) (map[string]any, error) {
 	if err := c.requireAuth(); err != nil {
 		return nil, err

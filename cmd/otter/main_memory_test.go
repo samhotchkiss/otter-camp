@@ -375,6 +375,8 @@ func TestHandleMemoryEvalCommands(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"eval-2","passed":true}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/memory/evaluations/tune":
 			_, _ = w.Write([]byte(`{"attempt_id":"attempt-1","status":"skipped"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/memory/events":
+			_, _ = w.Write([]byte(`{"items":[{"id":1}],"total":1}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"not found"}`))
@@ -413,6 +415,15 @@ func TestHandleMemoryEvalCommands(t *testing.T) {
 	require.Equal(t, http.MethodPost, gotMethod)
 	require.Equal(t, "/api/memory/evaluations/tune", gotPath)
 	require.Equal(t, true, gotBody["apply"])
+	mu.Unlock()
+
+	handleMemory([]string{"events", "--limit", "5", "--since", "2026-02-11T00:00:00Z", "--types", "memory.evaluated,memory.tuned", "--json"})
+	mu.Lock()
+	require.Equal(t, http.MethodGet, gotMethod)
+	require.True(t, strings.HasPrefix(gotPath, "/api/memory/events?"))
+	require.Contains(t, gotPath, "limit=5")
+	require.Contains(t, gotPath, "since=2026-02-11T00%3A00%3A00Z")
+	require.Contains(t, gotPath, "types=memory.evaluated%2Cmemory.tuned")
 	mu.Unlock()
 }
 

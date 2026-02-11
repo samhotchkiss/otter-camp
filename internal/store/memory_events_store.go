@@ -22,6 +22,8 @@ const (
 	MemoryEventTypeKnowledgeContradict = "knowledge.contradicted"
 	MemoryEventTypeCompactionDetected  = "compaction.detected"
 	MemoryEventTypeCompactionRecovered = "compaction.recovered"
+	MemoryEventTypeMemoryEvaluated     = "memory.evaluated"
+	MemoryEventTypeMemoryTuned         = "memory.tuned"
 )
 
 var (
@@ -37,6 +39,8 @@ var memoryEventTypes = map[string]struct{}{
 	MemoryEventTypeKnowledgeContradict: {},
 	MemoryEventTypeCompactionDetected:  {},
 	MemoryEventTypeCompactionRecovered: {},
+	MemoryEventTypeMemoryEvaluated:     {},
+	MemoryEventTypeMemoryTuned:         {},
 }
 
 type MemoryEvent struct {

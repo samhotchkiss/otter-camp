@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -256,6 +257,21 @@ func TestMemoryEvaluationRunListLatestAndTune(t *testing.T) {
 	require.NoError(t, json.NewDecoder(tuneRec.Body).Decode(&tuneResp))
 	require.NotEmpty(t, tuneResp.AttemptID)
 	require.NotEmpty(t, tuneResp.Status)
+
+	events, err := store.NewMemoryEventsStore(db).List(
+		context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
+		store.ListMemoryEventsParams{
+			Types: []string{
+				store.MemoryEventTypeMemoryEvaluated,
+				store.MemoryEventTypeMemoryTuned,
+			},
+			Limit: 10,
+		},
+	)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(events), 2)
+	require.Equal(t, store.MemoryEventTypeMemoryTuned, events[0].EventType)
+	require.Equal(t, store.MemoryEventTypeMemoryEvaluated, events[1].EventType)
 }
 
 func TestMemoryEvaluationTuneRequiresBaselineRun(t *testing.T) {

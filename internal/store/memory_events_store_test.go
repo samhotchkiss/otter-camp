@@ -77,3 +77,30 @@ func TestMemoryEventsStoreOrgIsolation(t *testing.T) {
 	require.Len(t, orgBEvents, 1)
 	require.Contains(t, string(orgBEvents[0].Payload), "Org B")
 }
+
+func TestMemoryEventsStoreSupportsEvaluatorAndTunerEventTypes(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+	orgID := createTestOrganization(t, db, "memory-events-new-types-org")
+	ctx := ctxWithWorkspace(orgID)
+
+	store := NewMemoryEventsStore(db)
+	_, err := store.Publish(ctx, PublishMemoryEventInput{
+		EventType: MemoryEventTypeMemoryEvaluated,
+		Payload:   []byte(`{"evaluation_id":"eval-1"}`),
+	})
+	require.NoError(t, err)
+
+	_, err = store.Publish(ctx, PublishMemoryEventInput{
+		EventType: MemoryEventTypeMemoryTuned,
+		Payload:   []byte(`{"attempt_id":"attempt-1"}`),
+	})
+	require.NoError(t, err)
+
+	events, err := store.List(ctx, ListMemoryEventsParams{
+		Types: []string{MemoryEventTypeMemoryEvaluated, MemoryEventTypeMemoryTuned},
+		Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+}

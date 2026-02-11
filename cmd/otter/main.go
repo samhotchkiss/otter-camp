@@ -431,7 +431,7 @@ func handleAgent(args []string) {
 }
 
 func handleMemory(args []string) {
-	const usageText = "usage: otter memory <create|list|search|recall|delete|write|read|eval> ..."
+	const usageText = "usage: otter memory <create|list|search|recall|events|delete|write|read|eval> ..."
 	if len(args) == 0 {
 		fmt.Println(usageText)
 		os.Exit(1)
@@ -700,6 +700,30 @@ func handleMemory(args []string) {
 			return
 		}
 		fmt.Printf("Deleted memory entry %s\n", memoryID)
+	case "events":
+		flags := flag.NewFlagSet("memory events", flag.ExitOnError)
+		limit := flags.Int("limit", 100, "max results")
+		since := flags.String("since", "", "optional RFC3339 timestamp filter")
+		types := flags.String("types", "", "comma-separated memory event types")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+		if *limit <= 0 {
+			die("--limit must be positive")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.ListMemoryEvents(*limit, strings.TrimSpace(*since), splitCSV(*types))
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Println("Memory events")
+		printJSON(response)
 	case "eval":
 		const evalUsage = "usage: otter memory eval <latest|runs|run|tune> ..."
 		if len(args) < 2 {
