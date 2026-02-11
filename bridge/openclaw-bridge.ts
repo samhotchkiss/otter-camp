@@ -2241,6 +2241,9 @@ function buildContextEnvelope(context: SessionContext): string {
     }
     lines.push('Default meaning: "project" refers to an OtterCamp project record unless the user explicitly asks for local code scaffolding.');
     lines.push('If asked to create a project and a name is provided, create it in OtterCamp with sensible defaults and confirm the result.');
+    if (context.agentID) {
+      lines.push(`When creating a project, default primary agent to ${context.agentID} unless the user requests a different owner.`);
+    }
   } else if (context.kind === 'project_chat') {
     lines.push('Surface: project chat.');
     if (context.projectID) {
@@ -2286,6 +2289,7 @@ function buildSurfaceActionDefaults(context: SessionContext): string {
     '[OTTERCAMP_ACTION_DEFAULTS]',
     '- In this DM, "project", "task", "issue", and "agent" refer to OtterCamp entities unless the user says otherwise.',
     '- "Create a project" means create an OtterCamp project (status=active, description optional), not a local folder/repo scaffold.',
+    '- When creating a project via CLI, include --agent with the active target agent identity unless the user asks for another owner.',
     '- If a project name is provided, create it directly and confirm; ask at most one concise follow-up only when required.',
     '[/OTTERCAMP_ACTION_DEFAULTS]',
   ].join('\n');
