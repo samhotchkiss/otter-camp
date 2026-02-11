@@ -108,6 +108,7 @@ const SAFE_AGENT_SLOT_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const SAFE_SESSION_FILENAME_PATTERN = /^[a-z0-9][a-z0-9._-]{7,127}$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
+const OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS = new Set(['chameleon', 'elephant']);
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 let otterCampOrgIDForTestOverride: string | null = null;
 const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
@@ -4259,6 +4260,26 @@ function writeOpenClawConfigFile(configPath: string, configValue: unknown): void
   }
 }
 
+function validateConfigPatchAgentTargets(patchObject: Record<string, unknown>): void {
+  if (!Object.prototype.hasOwnProperty.call(patchObject, 'agents')) {
+    return;
+  }
+  const agentsPatch = asRecord(patchObject.agents);
+  if (!agentsPatch) {
+    throw new Error('config.patch field "agents" must be a JSON object keyed by agent id');
+  }
+
+  const invalidTargets = Object.keys(agentsPatch).filter((key) => {
+    const target = getTrimmedString(key).toLowerCase();
+    return !target || !OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS.has(target);
+  });
+  if (invalidTargets.length > 0) {
+    throw new Error(
+      `config.patch field "agents" only supports "chameleon" and "elephant" targets (received: ${invalidTargets.join(', ')})`,
+    );
+  }
+}
+
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   const [cronJobs, processes, progressLogLines] = await Promise.all([
     fetchCronJobsSnapshot(),
@@ -5338,6 +5359,7 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
     if (!patchObject) {
       throw new Error('config.patch missing config_patch object');
     }
+    validateConfigPatchAgentTargets(patchObject);
     if (dryRun) {
       console.log(`[bridge] validated admin.command config.patch dry-run (${commandID})`);
       return;

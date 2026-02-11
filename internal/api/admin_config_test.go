@@ -122,6 +122,10 @@ func TestAdminConfigPatchValidatesPayload(t *testing.T) {
 			name: "rejects unsupported keys",
 			body: `{"confirm":true,"patch":{"forbidden":{"foo":"bar"}}}`,
 		},
+		{
+			name: "rejects non-system agent patch targets",
+			body: `{"confirm":true,"patch":{"agents":{"main":{"model":{"primary":"gpt-5.2-codex"}}}}}`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -201,7 +205,7 @@ func TestAdminConfigPatchQueuesWhenBridgeUnavailable(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPatch,
 		"/api/admin/config",
-		strings.NewReader(`{"confirm":true,"patch":{"agents":{"main":{"heartbeat":{"every":"15m"}}}}}`),
+		strings.NewReader(`{"confirm":true,"patch":{"agents":{"chameleon":{"heartbeat":{"every":"15m"}}}}}`),
 	)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
@@ -239,7 +243,7 @@ func TestAdminConfigPatchDispatchesCommand(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPatch,
 		"/api/admin/config",
-		strings.NewReader(`{"confirm":true,"patch":{"agents":{"main":{"model":{"primary":"gpt-5.2-codex"}}}}}`),
+		strings.NewReader(`{"confirm":true,"patch":{"agents":{"chameleon":{"model":{"primary":"gpt-5.2-codex"}}}}}`),
 	)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
@@ -258,7 +262,7 @@ func TestAdminConfigPatchDispatchesCommand(t *testing.T) {
 	require.Equal(t, adminCommandActionConfigPatch, event.Data.Action)
 	require.True(t, event.Data.Confirm)
 	require.False(t, event.Data.DryRun)
-	require.JSONEq(t, `{"agents":{"main":{"model":{"primary":"gpt-5.2-codex"}}}}`, string(event.Data.ConfigPatch))
+	require.JSONEq(t, `{"agents":{"chameleon":{"model":{"primary":"gpt-5.2-codex"}}}}`, string(event.Data.ConfigPatch))
 }
 
 func TestOpenClawConfigCutoverBuildTwoAgentConfig(t *testing.T) {

@@ -143,6 +143,11 @@ var allowedAdminConfigPatchKeys = map[string]struct{}{
 	"agent_config": {},
 }
 
+var allowedAdminConfigAgentPatchTargets = map[string]struct{}{
+	openClawSystemAgentChameleon: {},
+	openClawSystemAgentElephant:  {},
+}
+
 func (h *AdminConfigHandler) GetCurrent(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(middleware.WorkspaceFromContext(r.Context())) == "" {
 		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
@@ -1136,10 +1141,44 @@ func validateAdminConfigPatchPayload(raw json.RawMessage) (json.RawMessage, erro
 		sort.Strings(unsupported)
 		return nil, fmt.Errorf("unsupported patch keys: %s", strings.Join(unsupported, ", "))
 	}
+	if agentsRaw, ok := patch["agents"]; ok {
+		if err := validateAdminConfigAgentPatchTargets(agentsRaw); err != nil {
+			return nil, err
+		}
+	}
 
 	var normalized map[string]interface{}
 	if err := json.Unmarshal(raw, &normalized); err != nil {
 		return nil, fmt.Errorf("patch must be valid JSON")
 	}
 	return canonicalizeOpenClawConfigData(normalized)
+}
+
+func validateAdminConfigAgentPatchTargets(raw json.RawMessage) error {
+	var targets map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &targets); err != nil || targets == nil {
+		return fmt.Errorf("patch field %q must be a JSON object keyed by agent id", "agents")
+	}
+
+	invalid := make([]string, 0)
+	for key := range targets {
+		target := strings.ToLower(strings.TrimSpace(key))
+		if target == "" {
+			return fmt.Errorf("patch field %q contains an empty agent key", "agents")
+		}
+		if _, ok := allowedAdminConfigAgentPatchTargets[target]; !ok {
+			invalid = append(invalid, key)
+		}
+	}
+	if len(invalid) > 0 {
+		sort.Strings(invalid)
+		return fmt.Errorf(
+			"patch field %q only supports %q and %q targets (received: %s)",
+			"agents",
+			openClawSystemAgentChameleon,
+			openClawSystemAgentElephant,
+			strings.Join(invalid, ", "),
+		)
+	}
+	return nil
 }
