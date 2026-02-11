@@ -29,6 +29,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const TOKEN_KEY = "otter_camp_token";
 const USER_KEY = "otter_camp_user";
 const TOKEN_EXP_KEY = "otter_camp_token_expires_at";
+const ORG_KEY = "otter-camp-org-id";
 
 type AuthRequest = {
   request_id: string;
@@ -60,6 +61,38 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const reconcileWorkspaceOrg = useCallback(async (sessionToken: string) => {
+    const token = sessionToken.trim();
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/api/orgs`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "X-Session-Token": token,
+        },
+      });
+      if (!response.ok) {
+        return;
+      }
+      const payload = await response.json().catch(() => null);
+      const orgs = Array.isArray(payload?.orgs) ? payload.orgs : [];
+      const normalized = orgs
+        .map((entry: unknown) => (entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null))
+        .map((entry) => (entry && typeof entry.id === "string" ? entry.id.trim() : ""))
+        .filter((value) => value.length > 0);
+      if (normalized.length === 0) {
+        return;
+      }
+      const current = (localStorage.getItem(ORG_KEY) ?? "").trim();
+      if (current && normalized.includes(current)) {
+        return;
+      }
+      localStorage.setItem(ORG_KEY, normalized[0]);
+    } catch {
+      // Non-blocking: keep existing org selection if reconciliation fails.
+    }
+  }, []);
+
   // Initialize auth state from localStorage or magic link
   useEffect(() => {
     // Check for magic link auth param FIRST
@@ -85,9 +118,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
           localStorage.setItem(TOKEN_KEY, sessionToken);
           localStorage.setItem(USER_KEY, JSON.stringify(validatedUser));
-          if (orgId) localStorage.setItem('otter-camp-org-id', orgId);
+          if (orgId) localStorage.setItem(ORG_KEY, orgId);
           if (expiresAt) localStorage.setItem(TOKEN_EXP_KEY, expiresAt);
           setUser(validatedUser);
+          void reconcileWorkspaceOrg(sessionToken);
 
           // Remove auth param from URL
           params.delete('auth');
@@ -111,6 +145,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (token && storedUser && !isTokenExpired()) {
       try {
         setUser(JSON.parse(storedUser));
+        void reconcileWorkspaceOrg(token);
       } catch {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
@@ -149,9 +184,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
                 const expiresAt = vData.expires_at || '';
                 localStorage.setItem(TOKEN_KEY, authToken);
                 localStorage.setItem(USER_KEY, JSON.stringify(autoUser));
-                if (orgId) localStorage.setItem('otter-camp-org-id', orgId);
+                if (orgId) localStorage.setItem(ORG_KEY, orgId);
                 if (expiresAt) localStorage.setItem(TOKEN_EXP_KEY, expiresAt);
                 setUser(autoUser);
+                void reconcileWorkspaceOrg(authToken);
                 setIsLoading(false);
               });
           }
@@ -162,7 +198,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
 
     setIsLoading(false);
-  }, []);
+  }, [reconcileWorkspaceOrg]);
 
   const requestLogin = useCallback(async (orgId: string) => {
     const response = await fetch(`${API_URL}/api/auth/login`, {

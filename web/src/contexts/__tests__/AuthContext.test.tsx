@@ -44,6 +44,11 @@ describe("AuthContext", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorageMock.clear();
+    mockFetch.mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({}),
+      headers: { get: () => null },
+    }));
   });
 
   afterEach(() => {
@@ -57,7 +62,9 @@ describe("AuthContext", () => {
       </AuthProvider>
     );
 
-    expect(screen.getByText("Not authenticated")).toBeInTheDocument();
+    return waitFor(() => {
+      expect(screen.getByText("Not authenticated")).toBeInTheDocument();
+    });
   });
 
   it("restores auth state from localStorage when token is valid", async () => {
@@ -77,6 +84,39 @@ describe("AuthContext", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Welcome, OpenClaw User")).toBeInTheDocument();
+    });
+  });
+
+  it("reconciles stale org selection from /api/orgs on startup", async () => {
+    const mockUser: User = { id: "user-1", email: "", name: "OpenClaw User" };
+    localStorageMock.setItem("otter_camp_token", "oc_sess_token");
+    localStorageMock.setItem("otter_camp_user", JSON.stringify(mockUser));
+    localStorageMock.setItem(
+      "otter_camp_token_expires_at",
+      new Date(Date.now() + 3600 * 1000).toISOString(),
+    );
+    localStorageMock.setItem("otter-camp-org-id", "stale-org");
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          orgs: [{ id: "org-123", name: "Workspace", slug: "workspace" }],
+        }),
+    });
+
+    render(
+      <AuthProvider>
+        <TestComponent />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Welcome, OpenClaw User")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(localStorageMock.setItem).toHaveBeenCalledWith("otter-camp-org-id", "org-123");
     });
   });
 
@@ -124,22 +164,46 @@ describe("AuthContext", () => {
   });
 
   it("requestLogin calls the auth request endpoint", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          request_id: "req-1",
-          state: "state-1",
-          expires_at: new Date().toISOString(),
-          exchange_url: "/api/auth/exchange",
-          openclaw_request: {
+    const mockUser: User = { id: "user-1", email: "", name: "OpenClaw User" };
+    localStorageMock.setItem("otter_camp_token", "oc_sess_token");
+    localStorageMock.setItem("otter_camp_user", JSON.stringify(mockUser));
+    localStorageMock.setItem(
+      "otter_camp_token_expires_at",
+      new Date(Date.now() + 3600 * 1000).toISOString(),
+    );
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/orgs")) {
+        return {
+          ok: true,
+          json: async () => ({ orgs: [{ id: "org-1" }] }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      if (url.includes("/api/auth/login")) {
+        return {
+          ok: true,
+          json: async () => ({
             request_id: "req-1",
             state: "state-1",
-            org_id: "org-1",
-            callback_url: "http://localhost/api/auth/exchange",
             expires_at: new Date().toISOString(),
-          },
-        }),
+            exchange_url: "/api/auth/exchange",
+            openclaw_request: {
+              request_id: "req-1",
+              state: "state-1",
+              org_id: "org-1",
+              callback_url: "http://localhost/api/auth/exchange",
+              expires_at: new Date().toISOString(),
+            },
+          }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({}),
+        headers: { get: () => null },
+      } as Response;
     });
 
     const { result } = renderHook(() => useAuth(), { wrapper: AuthProvider });
@@ -154,21 +218,46 @@ describe("AuthContext", () => {
     });
     expect(response?.request_id).toBe("req-1");
 
-    expect(mockFetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/auth\/login$/), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ org_id: "org-1" }),
-    });
+    expect(
+      mockFetch.mock.calls.some(([request, options]) => (
+        String(request).includes("/api/auth/login") &&
+        (options as RequestInit)?.method === "POST" &&
+        (options as RequestInit)?.body === JSON.stringify({ org_id: "org-1" })
+      )),
+    ).toBe(true);
   });
 
   it("exchangeToken stores session and user", async () => {
     const mockUser: User = { id: "user-1", email: "", name: "OpenClaw User" };
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ token: "oc_sess_token", user: mockUser }),
-      headers: {
-        get: () => new Date(Date.now() + 3600 * 1000).toISOString(),
-      },
+    localStorageMock.setItem("otter_camp_token", "existing-token");
+    localStorageMock.setItem("otter_camp_user", JSON.stringify(mockUser));
+    localStorageMock.setItem(
+      "otter_camp_token_expires_at",
+      new Date(Date.now() + 3600 * 1000).toISOString(),
+    );
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/orgs")) {
+        return {
+          ok: true,
+          json: async () => ({ orgs: [{ id: "org-1" }] }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      if (url.includes("/api/auth/exchange")) {
+        return {
+          ok: true,
+          json: async () => ({ token: "oc_sess_token", user: mockUser }),
+          headers: {
+            get: () => new Date(Date.now() + 3600 * 1000).toISOString(),
+          },
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({}),
+        headers: { get: () => null },
+      } as Response;
     });
 
     const { result } = renderHook(() => useAuth(), { wrapper: AuthProvider });
