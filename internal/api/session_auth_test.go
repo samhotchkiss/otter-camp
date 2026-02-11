@@ -32,16 +32,28 @@ func TestRequireSessionIdentityAcceptsMagicToken(t *testing.T) {
 }
 
 func TestRequireSessionIdentityRejectsMalformedMagicToken(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	testCases := []string{
+		"oc_magic_",
+		"oc_magic_foo/../bar",
+		"oc_magic_foo;DROP",
+		"oc_magic_foo..bar",
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
-	req.Header.Set("Authorization", "Bearer oc_magic_")
+	for _, token := range testCases {
+		token := token
+		t.Run(token, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
 
-	identity, err := requireSessionIdentity(context.Background(), db, req)
-	require.ErrorIs(t, err, errInvalidSessionToken)
-	require.Empty(t, identity.OrgID)
-	require.Empty(t, identity.UserID)
-	require.NoError(t, mock.ExpectationsWereMet())
+			req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			identity, err := requireSessionIdentity(context.Background(), db, req)
+			require.ErrorIs(t, err, errInvalidSessionToken)
+			require.Empty(t, identity.OrgID)
+			require.Empty(t, identity.UserID)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
