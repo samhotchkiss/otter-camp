@@ -568,6 +568,115 @@ start_postgres_if_needed() {
   return 1
 }
 
+sql_escape_literal() {
+  local value="$1"
+  printf "%s" "${value//\'/\'\'}"
+}
+
+parse_database_url_user_and_password() {
+  local raw_url="${DATABASE_URL:-}"
+  if [[ -z "$raw_url" || "$raw_url" != *"://"* ]]; then
+    return 1
+  fi
+
+  local without_scheme authority userinfo username password
+  without_scheme="${raw_url#*://}"
+  authority="${without_scheme%%/*}"
+  if [[ -z "$authority" || "$authority" != *"@"* ]]; then
+    return 1
+  fi
+
+  userinfo="${authority%%@*}"
+  username="${userinfo%%:*}"
+  password=""
+  if [[ "$userinfo" == *":"* ]]; then
+    password="${userinfo#*:}"
+  fi
+
+  if [[ -z "$username" ]]; then
+    return 1
+  fi
+
+  printf '%s\n%s\n' "$username" "$password"
+}
+
+parse_database_url_name() {
+  local raw_url="${DATABASE_URL:-}"
+  if [[ -z "$raw_url" || "$raw_url" != *"://"* ]]; then
+    return 1
+  fi
+
+  local without_scheme path db_name
+  without_scheme="${raw_url#*://}"
+  path="${without_scheme#*/}"
+  db_name="${path%%\?*}"
+  db_name="${db_name%%\#*}"
+  if [[ -z "$db_name" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$db_name"
+}
+
+run_psql_sql() {
+  local sql="$1"
+  psql postgres -v ON_ERROR_STOP=1 -c "$sql"
+}
+
+ensure_local_postgres_role_and_database() {
+  local compose_cmd
+  compose_cmd="$(resolve_compose_cmd)"
+  if [[ -n "$compose_cmd" ]]; then
+    return 0
+  fi
+  if ! check_dependency psql; then
+    return 0
+  fi
+
+  local parsed_creds db_role db_password db_name
+  if ! parsed_creds="$(parse_database_url_user_and_password)"; then
+    log_warn "Skipping local PostgreSQL role/database bootstrap (unable to parse DATABASE_URL user info)."
+    return 0
+  fi
+  db_role="$(printf '%s\n' "$parsed_creds" | sed -n '1p')"
+  db_password="$(printf '%s\n' "$parsed_creds" | sed -n '2p')"
+
+  if ! db_name="$(parse_database_url_name)"; then
+    log_warn "Skipping local PostgreSQL role/database bootstrap (unable to parse DATABASE_URL database name)."
+    return 0
+  fi
+
+  local role_lit password_lit db_lit role_sql db_sql
+  role_lit="$(sql_escape_literal "$db_role")"
+  db_lit="$(sql_escape_literal "$db_name")"
+
+  if [[ -n "$db_password" ]]; then
+    password_lit="$(sql_escape_literal "$db_password")"
+    role_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role_lit}') THEN EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', '${role_lit}', '${password_lit}'); END IF; END \$\$;"
+  else
+    role_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role_lit}') THEN EXECUTE format('CREATE ROLE %I LOGIN', '${role_lit}'); END IF; END \$\$;"
+  fi
+  db_sql="DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '${db_lit}') THEN EXECUTE format('CREATE DATABASE %I OWNER %I', '${db_lit}', '${role_lit}'); END IF; END \$\$;"
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "↪ psql postgres -v ON_ERROR_STOP=1 -c \"$role_sql\""
+    echo "↪ psql postgres -v ON_ERROR_STOP=1 -c \"$db_sql\""
+    return 0
+  fi
+
+  echo "Ensuring local PostgreSQL role/database from DATABASE_URL..."
+  if ! run_psql_sql "$role_sql"; then
+    log_error "Failed to ensure PostgreSQL role '${db_role}'."
+    return 1
+  fi
+  if ! run_psql_sql "$db_sql"; then
+    log_error "Failed to ensure PostgreSQL database '${db_name}'."
+    return 1
+  fi
+
+  log_success "Local PostgreSQL role/database verified."
+}
+
 write_cli_config() {
   local cfg_dir
   if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -672,6 +781,7 @@ run_bootstrap_steps() {
 
   mkdir -p data/repos
   log_success "Prepared local repo storage."
+  ensure_local_postgres_role_and_database
 
   echo "Running database migrations..."
   if [[ "$DRY_RUN" -eq 1 ]]; then

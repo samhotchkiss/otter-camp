@@ -285,13 +285,87 @@ test_run_bootstrap_steps_dry_run_lists_core_commands() {
     echo "expected dry-run seed command output" >&2
     exit 1
   }
-  [[ "$output" == *"make prod-local"* ]] || {
+  [[ "$output" == *"make prod-build"* ]] || {
     echo "expected dry-run build command output" >&2
     exit 1
   }
 }
 
-test_main_completion_mentions_init_and_dashboard() {
+test_ensure_local_postgres_role_and_database_generates_role_and_db_sql() {
+  local sql_calls=()
+
+  resolve_compose_cmd() {
+    echo ""
+  }
+  check_dependency() {
+    [[ "$1" == "psql" ]]
+  }
+  run_psql_sql() {
+    sql_calls+=("$1")
+    return 0
+  }
+
+  DATABASE_URL="postgres://otter:camp@localhost:5432/ottercamp?sslmode=disable"
+  DRY_RUN=0
+  ensure_local_postgres_role_and_database >/dev/null 2>&1
+
+  assert_equals "${#sql_calls[@]}" "2" "expected role and db bootstrap SQL calls"
+  [[ "${sql_calls[0]}" == *"CREATE ROLE"* ]] || {
+    echo "expected first SQL call to create role when missing" >&2
+    exit 1
+  }
+  [[ "${sql_calls[1]}" == *"CREATE DATABASE"* ]] || {
+    echo "expected second SQL call to create database when missing" >&2
+    exit 1
+  }
+}
+
+test_ensure_local_postgres_role_and_database_skips_when_compose_available() {
+  local sql_calls=0
+
+  resolve_compose_cmd() {
+    echo "docker compose"
+  }
+  check_dependency() {
+    [[ "$1" == "psql" ]]
+  }
+  run_psql_sql() {
+    sql_calls=$((sql_calls + 1))
+    return 0
+  }
+
+  DATABASE_URL="postgres://otter:camp@localhost:5432/ottercamp?sslmode=disable"
+  DRY_RUN=0
+  ensure_local_postgres_role_and_database >/dev/null 2>&1
+
+  assert_equals "$sql_calls" "0" "skip local psql bootstrap when compose is available"
+}
+
+test_run_bootstrap_steps_dry_run_bootstraps_local_postgres_before_migrate() {
+  local output
+  output="$(
+    DRY_RUN=1
+    resolve_compose_cmd() { echo ""; }
+    check_dependency() { [[ "$1" == "psql" ]]; }
+    start_postgres_if_needed() { return 0; }
+    write_cli_config() { return 0; }
+    write_bridge_env_if_missing() { return 0; }
+    pull_ollama_model() { return 0; }
+    DATABASE_URL="postgres://otter:camp@localhost:5432/ottercamp?sslmode=disable"
+    run_bootstrap_steps 2>&1
+  )"
+
+  [[ "$output" == *"↪ psql postgres"* ]] || {
+    echo "expected local psql bootstrap command output before migrations" >&2
+    exit 1
+  }
+  [[ "$output" == *"↪ psql postgres"*$'\n'"Running database migrations..."*$'\n'"↪ go run ./cmd/migrate up"* ]] || {
+    echo "expected local psql bootstrap to run before migrations in dry-run output" >&2
+    exit 1
+  }
+}
+
+test_main_completion_mentions_start_and_dashboard() {
   local output
   output="$(
     detect_platform() { echo "linux"; }
@@ -302,11 +376,11 @@ test_main_completion_mentions_init_and_dashboard() {
     setup_main --dry-run --yes 2>&1 || true
   )"
 
-  [[ "$output" == *"Run: otter init"* ]] || {
-    echo "expected setup completion to mention otter init" >&2
+  [[ "$output" == *"make start"* ]] || {
+    echo "expected setup completion to mention make start" >&2
     exit 1
   }
-  [[ "$output" == *"Dashboard: http://localhost:4200"* ]] || {
+  [[ "$output" == *"Dashboard:         http://localhost:4200"* ]] || {
     echo "expected setup completion to mention localhost:4200 dashboard" >&2
     exit 1
   }
@@ -322,8 +396,11 @@ run_tests() {
   test_generate_secret_falls_back_without_openssl
   test_load_env_treats_values_as_literals
   test_load_env_rejects_invalid_entries
+  test_ensure_local_postgres_role_and_database_generates_role_and_db_sql
+  test_ensure_local_postgres_role_and_database_skips_when_compose_available
   test_run_bootstrap_steps_dry_run_lists_core_commands
-  test_main_completion_mentions_init_and_dashboard
+  test_run_bootstrap_steps_dry_run_bootstraps_local_postgres_before_migrate
+  test_main_completion_mentions_start_and_dashboard
   echo "setup.sh tests passed"
 }
 
