@@ -34,6 +34,7 @@ type WorkspaceMember struct {
 
 type WorkspaceResponse struct {
 	Name    string            `json:"name"`
+	Slug    string            `json:"slug"`
 	Members []WorkspaceMember `json:"members"`
 }
 
@@ -574,13 +575,14 @@ func validateNotificationPrefs(prefs NotificationPreferences) error {
 
 func fetchWorkspace(ctx context.Context, db *sql.DB, orgID string) (WorkspaceResponse, error) {
 	var name string
+	var slug string
 	if err := db.QueryRowContext(
 		ctx,
-		`SELECT name
+		`SELECT name, slug
 		 FROM organizations
 		 WHERE id = $1`,
 		orgID,
-	).Scan(&name); err != nil {
+	).Scan(&name, &slug); err != nil {
 		return WorkspaceResponse{}, err
 	}
 
@@ -623,7 +625,7 @@ func fetchWorkspace(ctx context.Context, db *sql.DB, orgID string) (WorkspaceRes
 		return WorkspaceResponse{}, err
 	}
 
-	return WorkspaceResponse{Name: name, Members: members}, nil
+	return WorkspaceResponse{Name: name, Slug: slug, Members: members}, nil
 }
 
 func updateWorkspaceName(ctx context.Context, db *sql.DB, orgID, name string) (WorkspaceResponse, error) {
