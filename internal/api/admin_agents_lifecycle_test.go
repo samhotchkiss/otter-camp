@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAdminAgentsLifecycleRetireMovesFilesAndDispatchesDisable(t *testing.T) {
+func TestAdminAgentsLifecycleRetireMovesFilesWithoutOpenClawPatch(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-agents-retire")
 	_, err := db.Exec(
@@ -43,9 +43,12 @@ func TestAdminAgentsLifecycleRetireMovesFilesAndDispatchesDisable(t *testing.T) 
 	handler.Retire(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	var payload adminCommandDispatchResponse
+	var payload map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.Equal(t, adminCommandActionConfigPatch, payload.Action)
+	require.Equal(t, true, payload["ok"])
+	require.Equal(t, "main", payload["agent"])
+	require.Equal(t, "retired", payload["status"])
+	require.Equal(t, false, payload["openclaw_config_modified"])
 
 	_, err = os.Stat(filepath.Join(repoPath, "agents", "main"))
 	require.Error(t, err)
@@ -57,13 +60,10 @@ func TestAdminAgentsLifecycleRetireMovesFilesAndDispatchesDisable(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "retired", status)
 
-	require.Len(t, dispatcher.calls, 1)
-	event, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
-	require.True(t, ok)
-	require.JSONEq(t, `{"agents":{"main":{"enabled":false}}}`, string(event.Data.ConfigPatch))
+	require.Empty(t, dispatcher.calls)
 }
 
-func TestAdminAgentsLifecycleReactivateRestoresFilesAndDispatchesEnable(t *testing.T) {
+func TestAdminAgentsLifecycleReactivateRestoresFilesWithoutOpenClawPatch(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-agents-reactivate")
 	_, err := db.Exec(
@@ -100,9 +100,12 @@ func TestAdminAgentsLifecycleReactivateRestoresFilesAndDispatchesEnable(t *testi
 	handler.Reactivate(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	var payload adminCommandDispatchResponse
+	var payload map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.Equal(t, adminCommandActionConfigPatch, payload.Action)
+	require.Equal(t, true, payload["ok"])
+	require.Equal(t, "main", payload["agent"])
+	require.Equal(t, "active", payload["status"])
+	require.Equal(t, false, payload["openclaw_config_modified"])
 
 	_, err = os.Stat(filepath.Join(repoPath, "agents", "main"))
 	require.NoError(t, err)
@@ -114,10 +117,7 @@ func TestAdminAgentsLifecycleReactivateRestoresFilesAndDispatchesEnable(t *testi
 	require.NoError(t, err)
 	require.Equal(t, "active", status)
 
-	require.Len(t, dispatcher.calls, 1)
-	event, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
-	require.True(t, ok)
-	require.JSONEq(t, `{"agents":{"main":{"enabled":true}}}`, string(event.Data.ConfigPatch))
+	require.Empty(t, dispatcher.calls)
 }
 
 func TestAdminAgentsLifecycleRetireRejectsMissingAgent(t *testing.T) {

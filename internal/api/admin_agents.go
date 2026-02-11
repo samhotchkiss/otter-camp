@@ -128,6 +128,8 @@ var (
 
 const agentFilesProjectName = "Agent Files"
 const resolveAvailableAgentSlotMaxAttempts = 100
+const openClawSystemAgentChameleon = "chameleon"
+const openClawSystemAgentElephant = "elephant"
 
 var builtInAgentProfiles = map[string]builtInAgentProfileTemplate{
 	"marcus": {
@@ -583,10 +585,10 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// Agent created in DB + files written to Agent Files repo.
 	// Chameleon handles identity routing at runtime — no openclaw.json patch needed.
 	sendJSON(w, http.StatusCreated, map[string]interface{}{
-		"ok":    true,
+		"ok": true,
 		"agent": adminAgentSummary{
-			ID:   createdAgent.ID,
-			Name: createdAgent.DisplayName,
+			ID:     createdAgent.ID,
+			Name:   createdAgent.DisplayName,
 			Status: createdAgent.Status,
 		},
 	})
@@ -620,6 +622,15 @@ func (h *AdminAgentsHandler) Retire(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update agent status"})
 		return
 	}
+	if !shouldDispatchOpenClawAgentConfigMutation(row.Slug) {
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"ok":                       true,
+			"agent":                    row.Slug,
+			"status":                   "retired",
+			"openclaw_config_modified": false,
+		})
+		return
+	}
 	h.dispatchAgentEnablePatch(w, r, row.Slug, false)
 }
 
@@ -649,6 +660,15 @@ func (h *AdminAgentsHandler) Reactivate(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := h.updateAgentStatus(r.Context(), workspaceID, row.Slug, "active"); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update agent status"})
+		return
+	}
+	if !shouldDispatchOpenClawAgentConfigMutation(row.Slug) {
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"ok":                       true,
+			"agent":                    row.Slug,
+			"status":                   "active",
+			"openclaw_config_modified": false,
+		})
 		return
 	}
 	h.dispatchAgentEnablePatch(w, r, row.Slug, true)
@@ -1647,5 +1667,14 @@ func (h *AdminAgentsHandler) writeLifecycleMoveError(w http.ResponseWriter, err 
 		sendJSON(w, http.StatusConflict, errorResponse{Error: "retired agent archive already exists"})
 	default:
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to update agent lifecycle"})
+	}
+}
+
+func shouldDispatchOpenClawAgentConfigMutation(slug string) bool {
+	switch strings.ToLower(strings.TrimSpace(slug)) {
+	case openClawSystemAgentChameleon, openClawSystemAgentElephant:
+		return true
+	default:
+		return false
 	}
 }

@@ -52,13 +52,7 @@ func TestAdminAgentsCreateGeneratesSlotFromDisplayNameAndCreatesTemplates(t *tes
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
 	handler.Create(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	var payload adminCommandDispatchResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.True(t, payload.OK)
-	require.False(t, payload.Queued)
-	require.Equal(t, adminCommandActionConfigPatch, payload.Action)
+	require.Equal(t, http.StatusCreated, rec.Code)
 
 	createdAgent, err := handler.Store.GetBySlug(
 		context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
@@ -79,15 +73,7 @@ func TestAdminAgentsCreateGeneratesSlotFromDisplayNameAndCreatesTemplates(t *tes
 	require.NoError(t, err)
 	require.Contains(t, string(identityBytes), "**Name:** Riley")
 
-	require.Len(t, dispatcher.calls, 1)
-	event, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
-	require.True(t, ok)
-	require.Equal(t, adminCommandActionConfigPatch, event.Data.Action)
-	require.JSONEq(
-		t,
-		`{"agents":{"riley":{"enabled":true,"model":{"primary":"gpt-5.2-codex"}}}}`,
-		string(event.Data.ConfigPatch),
-	)
+	require.Empty(t, dispatcher.calls)
 }
 
 func TestAdminAgentsCreateCollisionSuffixesGeneratedSlot(t *testing.T) {
@@ -119,7 +105,7 @@ func TestAdminAgentsCreateCollisionSuffixesGeneratedSlot(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
 	handler.Create(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusCreated, rec.Code)
 
 	createdAgent, getErr := handler.Store.GetBySlug(
 		context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
@@ -128,14 +114,7 @@ func TestAdminAgentsCreateCollisionSuffixesGeneratedSlot(t *testing.T) {
 	require.NoError(t, getErr)
 	require.Equal(t, "Riley", createdAgent.DisplayName)
 
-	require.Len(t, dispatcher.calls, 1)
-	event, ok := dispatcher.calls[0].(openClawAdminCommandEvent)
-	require.True(t, ok)
-	require.JSONEq(
-		t,
-		`{"agents":{"riley-2":{"enabled":true,"model":{"primary":"gpt-5.2-codex"}}}}`,
-		string(event.Data.ConfigPatch),
-	)
+	require.Empty(t, dispatcher.calls)
 }
 
 func TestAdminAgentsCreateAcceptsPreviouslyMissingBuiltInProfiles(t *testing.T) {
@@ -175,7 +154,7 @@ func TestAdminAgentsCreateAcceptsPreviouslyMissingBuiltInProfiles(t *testing.T) 
 			req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 			rec := httptest.NewRecorder()
 			handler.Create(rec, req)
-			require.Equal(t, http.StatusOK, rec.Code)
+			require.Equal(t, http.StatusCreated, rec.Code)
 
 			createdAgent, err := handler.Store.GetBySlug(
 				context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
@@ -185,12 +164,12 @@ func TestAdminAgentsCreateAcceptsPreviouslyMissingBuiltInProfiles(t *testing.T) 
 			require.Equal(t, tc.displayName, createdAgent.DisplayName)
 			require.FileExists(t, filepath.Join(repoPath, "agents", tc.profileID, "SOUL.md"))
 			require.FileExists(t, filepath.Join(repoPath, "agents", tc.profileID, "IDENTITY.md"))
-			require.Len(t, dispatcher.calls, 1)
+			require.Empty(t, dispatcher.calls)
 		})
 	}
 }
 
-func TestAdminAgentsCreateQueuesConfigMutationWhenBridgeUnavailable(t *testing.T) {
+func TestAdminAgentsCreateDoesNotRequireBridgeAvailability(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-agents-create-queued")
 	projectID := seedAdminAgentFilesProjectFixture(t, db, orgID, "main")
@@ -214,13 +193,7 @@ func TestAdminAgentsCreateQueuesConfigMutationWhenBridgeUnavailable(t *testing.T
 	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
 	rec := httptest.NewRecorder()
 	handler.Create(rec, req)
-	require.Equal(t, http.StatusAccepted, rec.Code)
-
-	var payload adminCommandDispatchResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
-	require.True(t, payload.OK)
-	require.True(t, payload.Queued)
-	require.Equal(t, adminCommandActionConfigPatch, payload.Action)
+	require.Equal(t, http.StatusCreated, rec.Code)
 
 	_, err := handler.Store.GetBySlug(
 		context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
@@ -229,6 +202,7 @@ func TestAdminAgentsCreateQueuesConfigMutationWhenBridgeUnavailable(t *testing.T
 	require.NoError(t, err)
 	_, err = os.Stat(filepath.Join(repoPath, "agents", "ops-agent", "IDENTITY.md"))
 	require.NoError(t, err)
+	require.Empty(t, dispatcher.calls)
 }
 
 func TestAdminAgentsCreateRequiresDisplayName(t *testing.T) {
@@ -284,7 +258,7 @@ func TestAdminAgentsCreateAutoCreatesAgentFilesProjectWhenMissing(t *testing.T) 
 	firstReq = firstReq.WithContext(context.WithValue(firstReq.Context(), middleware.WorkspaceIDKey, orgID))
 	firstRec := httptest.NewRecorder()
 	handler.Create(firstRec, firstReq)
-	require.Equal(t, http.StatusOK, firstRec.Code)
+	require.Equal(t, http.StatusCreated, firstRec.Code)
 
 	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
 	agentFilesProject, err := handler.ProjectStore.GetByName(ctx, agentFilesProjectName)
@@ -308,7 +282,7 @@ func TestAdminAgentsCreateAutoCreatesAgentFilesProjectWhenMissing(t *testing.T) 
 	secondReq = secondReq.WithContext(context.WithValue(secondReq.Context(), middleware.WorkspaceIDKey, orgID))
 	secondRec := httptest.NewRecorder()
 	handler.Create(secondRec, secondReq)
-	require.Equal(t, http.StatusOK, secondRec.Code)
+	require.Equal(t, http.StatusCreated, secondRec.Code)
 	require.FileExists(t, filepath.Join(repoPath, "agents", "sage", "SOUL.md"))
 	require.FileExists(t, filepath.Join(repoPath, "agents", "sage", "IDENTITY.md"))
 
