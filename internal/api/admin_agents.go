@@ -580,27 +580,16 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	configPatch, err := buildCreateAgentConfigPatch(slot, req.Model)
-	if err != nil {
-		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to build config patch"})
-		return
-	}
-
-	dispatcher := &AdminConnectionsHandler{
-		DB:              h.DB,
-		OpenClawHandler: h.OpenClawHandler,
-		EventStore:      h.EventStore,
-	}
-	dispatcher.dispatchAdminCommand(
-		w,
-		r,
-		adminCommandActionConfigPatch,
-		adminCommandDispatchInput{
-			ConfigPatch: configPatch,
-			Confirm:     true,
-			DryRun:      false,
+	// Agent created in DB + files written to Agent Files repo.
+	// Chameleon handles identity routing at runtime — no openclaw.json patch needed.
+	sendJSON(w, http.StatusCreated, map[string]interface{}{
+		"ok":    true,
+		"agent": adminAgentSummary{
+			ID:   createdAgent.ID,
+			Name: createdAgent.DisplayName,
+			Status: createdAgent.Status,
 		},
-	)
+	})
 }
 
 func (h *AdminAgentsHandler) Retire(w http.ResponseWriter, r *http.Request) {
