@@ -112,12 +112,65 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // Initialize auth state from localStorage or magic link
   useEffect(() => {
+    let cancelled = false;
+
+    const setUserIfActive = (value: User | null) => {
+      if (!cancelled) {
+        setUser(value);
+      }
+    };
+
+    const setLoadingIfActive = (value: boolean) => {
+      if (!cancelled) {
+        setIsLoading(value);
+      }
+    };
+
+    const clearStoredAuth = () => {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(TOKEN_EXP_KEY);
+      localStorage.removeItem(ORG_KEY);
+      setUserIfActive(null);
+    };
+
+    const removeAuthParam = (params: URLSearchParams) => {
+      params.delete("auth");
+      const newUrl = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
+      window.history.replaceState({}, "", newUrl);
+    };
+
     const applyValidatedSession = (data: unknown, fallbackToken: string): string | null => {
       const payload = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+      const payloadUser =
+        payload.user && typeof payload.user === "object"
+          ? (payload.user as Record<string, unknown>)
+          : undefined;
+      const userID =
+        typeof payload.user_id === "string"
+          ? payload.user_id.trim()
+          : typeof payloadUser?.id === "string"
+            ? payloadUser.id.trim()
+            : "";
+      if (!userID) {
+        return null;
+      }
+      const email =
+        typeof payload.email === "string"
+          ? payload.email
+          : typeof payloadUser?.email === "string"
+            ? payloadUser.email
+            : "";
+      const name =
+        typeof payload.name === "string"
+          ? payload.name
+          : typeof payloadUser?.name === "string"
+            ? payloadUser.name
+            : "";
       const validatedUser: User = {
-        id: String(payload.user_id || (payload.user as Record<string, unknown> | undefined)?.id || "user"),
-        email: String(payload.email || (payload.user as Record<string, unknown> | undefined)?.email || ""),
-        name: String(payload.name || (payload.user as Record<string, unknown> | undefined)?.name || "User"),
+        id: userID,
+        email,
+        name: name || "User",
       };
       const orgId = typeof payload.org_id === "string" ? payload.org_id.trim() : "";
       const sessionToken =
@@ -142,102 +195,95 @@ export function AuthProvider({ children }: AuthProviderProps) {
       } else {
         localStorage.removeItem(TOKEN_EXP_KEY);
       }
-      setUser(validatedUser);
+      setUserIfActive(validatedUser);
       return sessionToken;
     };
 
-    // Check for magic link auth param FIRST
-    const params = new URLSearchParams(window.location.search);
-    const magicToken = params.get('auth');
-    
-    if (magicToken) {
-      // Validate magic link token via API
-      fetch(`${API_URL}/api/auth/validate?token=${encodeURIComponent(magicToken)}`)
-        .then(res => {
-          if (!res.ok) throw new Error('Invalid token');
-          return res.json();
-        })
-        .then(data => {
-          const sessionToken = applyValidatedSession(data, magicToken);
+    const validateSessionToken = async (candidateToken: string): Promise<string | null> => {
+      const response = await fetch(
+        `${API_URL}/api/auth/validate?token=${encodeURIComponent(candidateToken)}`,
+      );
+      if (!response.ok) {
+        return null;
+      }
+      const data = await response.json().catch(() => null);
+      return applyValidatedSession(data, candidateToken);
+    };
+
+    const bootstrap = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const magicToken = (params.get("auth") ?? "").trim();
+
+      if (magicToken) {
+        try {
+          const sessionToken = await validateSessionToken(magicToken);
           if (sessionToken) {
             void reconcileWorkspaceOrg(sessionToken);
+          } else {
+            clearStoredAuth();
           }
+        } catch {
+          clearStoredAuth();
+        } finally {
+          removeAuthParam(params);
+          setLoadingIfActive(false);
+        }
+        return;
+      }
 
-          // Remove auth param from URL
-          params.delete('auth');
-          const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
-          window.history.replaceState({}, '', newUrl);
-          setIsLoading(false);
-        })
-        .catch(() => {
-          // Remove auth param from URL
-          params.delete('auth');
-          const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
-          window.history.replaceState({}, '', newUrl);
-          setIsLoading(false);
-        });
-      return;
-    }
-
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    const token = (localStorage.getItem(TOKEN_KEY) ?? '').trim();
-    const storedUser = localStorage.getItem(USER_KEY);
-    const shouldBootstrapLocalToken = isLocal && (!token || token.startsWith('oc_magic_'));
-
-    if (shouldBootstrapLocalToken) {
-      fetch(`${API_URL}/api/auth/magic`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Admin', email: 'admin@localhost' }),
-      })
-        .then(res => res.json())
-        .then(data => {
-          const authToken = typeof data?.token === "string" ? data.token.trim() : '';
-          if (!authToken) {
-            throw new Error('missing token');
+      const token = (localStorage.getItem(TOKEN_KEY) ?? "").trim();
+      if (token) {
+        if (isTokenExpired()) {
+          clearStoredAuth();
+          setLoadingIfActive(false);
+          return;
+        }
+        try {
+          const sessionToken = await validateSessionToken(token);
+          if (sessionToken) {
+            void reconcileWorkspaceOrg(sessionToken);
+          } else {
+            clearStoredAuth();
           }
-          return fetch(`${API_URL}/api/auth/validate?token=${encodeURIComponent(authToken)}`)
-            .then(vRes => vRes.ok ? vRes.json() : Promise.reject('invalid'))
-            .then(vData => {
-              const sessionToken = applyValidatedSession(vData, authToken);
+        } catch {
+          clearStoredAuth();
+        } finally {
+          setLoadingIfActive(false);
+        }
+        return;
+      }
+
+      const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+      if (isLocal) {
+        try {
+          const magicResponse = await fetch(`${API_URL}/api/auth/magic`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: "Admin", email: "admin@localhost" }),
+          });
+          if (magicResponse.ok) {
+            const payload = await magicResponse.json().catch(() => null);
+            const authToken = typeof payload?.token === "string" ? payload.token.trim() : "";
+            if (authToken) {
+              const sessionToken = await validateSessionToken(authToken);
               if (sessionToken) {
                 void reconcileWorkspaceOrg(sessionToken);
               }
-              setIsLoading(false);
-            });
-        })
-        .catch(() => {
-          if (!token) {
-            localStorage.removeItem(TOKEN_KEY);
-            localStorage.removeItem(USER_KEY);
-            localStorage.removeItem(TOKEN_EXP_KEY);
-            localStorage.removeItem(ORG_KEY);
-            setUser(null);
+            }
           }
-          setIsLoading(false);
-        });
-      return;
-    }
-
-    if (token && storedUser && !isTokenExpired()) {
-      try {
-        setUser(JSON.parse(storedUser));
-        void reconcileWorkspaceOrg(token);
-      } catch {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(USER_KEY);
-        localStorage.removeItem(TOKEN_EXP_KEY);
-        localStorage.removeItem(ORG_KEY);
+        } catch {
+          // Leave auth unauthenticated on bootstrap errors.
+        }
       }
-    } else if (token) {
-      // Token expired, clean up
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(USER_KEY);
-      localStorage.removeItem(TOKEN_EXP_KEY);
-      localStorage.removeItem(ORG_KEY);
-    }
 
-    setIsLoading(false);
+      setLoadingIfActive(false);
+    };
+
+    void bootstrap();
+
+    return () => {
+      cancelled = true;
+    };
   }, [reconcileWorkspaceOrg]);
 
   const requestLogin = useCallback(async (orgId: string) => {
