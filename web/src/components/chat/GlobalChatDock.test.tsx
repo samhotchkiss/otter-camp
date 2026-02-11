@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import GlobalChatDock from "./GlobalChatDock";
 import type { GlobalChatConversation } from "../../contexts/GlobalChatContext";
 
@@ -16,6 +17,7 @@ const globalChatState = {
   selectConversation: vi.fn(),
   markConversationRead: vi.fn(),
   removeConversation: vi.fn(),
+  archiveConversation: vi.fn(async () => true),
 };
 
 vi.mock("../../contexts/GlobalChatContext", () => ({
@@ -60,7 +62,11 @@ describe("GlobalChatDock", () => {
     globalChatState.selectedConversation = globalChatState.conversations[0];
     globalChatState.selectedKey = globalChatState.conversations[0].key;
 
-    render(<GlobalChatDock />);
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
 
     expect(screen.getByTestId("chat-initials-dm:dm_avatar-design")).toHaveTextContent("JG");
     expect(screen.getAllByText("Jeff G").length).toBeGreaterThan(0);

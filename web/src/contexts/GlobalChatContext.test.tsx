@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GlobalChatProvider,
@@ -30,6 +31,18 @@ function ResolverProbe() {
     <div data-testid="resolver-probe">
       {resolveAgentName("agent:avatar-design")}|{resolveAgentName("dm_avatar-design")}|
       {resolveAgentName("avatar-design")}|{agentNamesByID.size}
+    </div>
+  );
+}
+
+function ArchiveProbe() {
+  const { conversations, archiveConversation } = useGlobalChat();
+  return (
+    <div>
+      <button type="button" onClick={() => { void archiveConversation("chat-1"); }}>
+        Archive chat
+      </button>
+      <span data-testid="conversation-count">{conversations.length}</span>
     </div>
   );
 }
@@ -147,6 +160,114 @@ describe("GlobalChatContext", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("resolver-probe")).toHaveTextContent("Jeff G|Jeff G|Jeff G|1");
+    });
+  });
+
+  it("loads active chats from /api/chats on mount", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/chats")) {
+          return {
+            ok: true,
+            json: async () => ({
+              chats: [
+                {
+                  id: "chat-1",
+                  thread_key: "project:project-1",
+                  thread_type: "project",
+                  project_id: "project-1",
+                  title: "Server project chat",
+                  last_message_preview: "Server preview",
+                  last_message_at: "2026-02-10T10:00:00Z",
+                },
+              ],
+            }),
+          };
+        }
+        if (url.includes("/api/projects?")) {
+          return {
+            ok: true,
+            json: async () => ({
+              projects: [
+                { id: "project-1", name: "Otter Camp" },
+              ],
+            }),
+          };
+        }
+        if (url.includes("/api/sync/agents") || url.includes("/api/agents?")) {
+          return { ok: true, json: async () => ({ agents: [] }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      }),
+    );
+
+    render(
+      <GlobalChatProvider>
+        <ConversationTitles />
+      </GlobalChatProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Otter Camp")).toBeInTheDocument();
+    });
+  });
+
+  it("archives a server-backed chat and removes it from active conversations", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/chats") && !url.includes("/archive")) {
+          return {
+            ok: true,
+            json: async () => ({
+              chats: [
+                {
+                  id: "chat-1",
+                  thread_key: "project:project-1",
+                  thread_type: "project",
+                  project_id: "project-1",
+                  title: "Server project chat",
+                  last_message_preview: "Server preview",
+                  last_message_at: "2026-02-10T10:00:00Z",
+                },
+              ],
+            }),
+          };
+        }
+        if (url.includes("/api/chats/chat-1/archive")) {
+          return {
+            ok: init?.method === "POST",
+            json: async () => ({ chat: { id: "chat-1" } }),
+          };
+        }
+        if (url.includes("/api/projects?")) {
+          return { ok: true, json: async () => ({ projects: [] }) };
+        }
+        if (url.includes("/api/sync/agents") || url.includes("/api/agents?")) {
+          return { ok: true, json: async () => ({ agents: [] }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      }),
+    );
+
+    render(
+      <GlobalChatProvider>
+        <ArchiveProbe />
+      </GlobalChatProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("conversation-count")).toHaveTextContent("1");
+    });
+
+    await user.click(screen.getByRole("button", { name: "Archive chat" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("conversation-count")).toHaveTextContent("0");
     });
   });
 });

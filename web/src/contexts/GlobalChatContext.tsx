@@ -18,6 +18,7 @@ const SYSTEM_SESSION_AUTHOR = "__otter_session__";
 type ConversationType = "dm" | "project" | "issue";
 
 type BaseConversation = {
+  chatId?: string;
   key: string;
   type: ConversationType;
   title: string;
@@ -90,6 +91,7 @@ type GlobalChatContextValue = {
   selectConversation: (key: string) => void;
   markConversationRead: (key: string) => void;
   removeConversation: (key: string) => void;
+  archiveConversation: (chatId: string) => Promise<boolean>;
   openConversation: (
     input: OpenConversationInput,
     options?: OpenConversationOptions,
@@ -101,6 +103,18 @@ type StoredState = {
   isOpen: boolean;
   selectedKey: string | null;
   conversations: GlobalChatConversation[];
+};
+
+type ChatThreadRecord = {
+  id: string;
+  thread_key: string;
+  thread_type: "dm" | "project" | "issue";
+  title: string;
+  last_message_preview: string;
+  last_message_at: string;
+  agent_id?: string;
+  project_id?: string;
+  issue_id?: string;
 };
 
 type IncomingEvent = {
@@ -388,6 +402,7 @@ function normalizeConversation(raw: unknown): GlobalChatConversation | null {
   }
 
   const type = asString(raw.type);
+  const chatId = asString(raw.chatId) || asString(raw.chat_id) || undefined;
   const key = asString(raw.key);
   const title = asString(raw.title);
   const contextLabel = asString(raw.contextLabel);
@@ -410,6 +425,7 @@ function normalizeConversation(raw: unknown): GlobalChatConversation | null {
       return null;
     }
     return {
+      chatId,
       key,
       type: "dm",
       threadId,
@@ -428,6 +444,7 @@ function normalizeConversation(raw: unknown): GlobalChatConversation | null {
       return null;
     }
     return {
+      chatId,
       key,
       type: "project",
       projectId,
@@ -445,6 +462,7 @@ function normalizeConversation(raw: unknown): GlobalChatConversation | null {
       return null;
     }
     return {
+      chatId,
       key,
       type: "issue",
       issueId,
@@ -457,6 +475,114 @@ function normalizeConversation(raw: unknown): GlobalChatConversation | null {
   }
 
   return null;
+}
+
+function parseChatThreadRecords(payload: unknown): ChatThreadRecord[] {
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+  const root = payload as Record<string, unknown>;
+  const rawChats = Array.isArray(root.chats) ? root.chats : [];
+  const records: ChatThreadRecord[] = [];
+
+  for (const entry of rawChats) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const id = asString(entry.id);
+    const threadKey = asString(entry.thread_key);
+    const threadType = asString(entry.thread_type).toLowerCase();
+    if (!id || !threadKey) {
+      continue;
+    }
+    if (threadType !== "dm" && threadType !== "project" && threadType !== "issue") {
+      continue;
+    }
+
+    records.push({
+      id,
+      thread_key: threadKey,
+      thread_type: threadType as ChatThreadRecord["thread_type"],
+      title: asString(entry.title) || "Untitled chat",
+      last_message_preview: asString(entry.last_message_preview),
+      last_message_at: asString(entry.last_message_at) || new Date().toISOString(),
+      agent_id: asString(entry.agent_id) || undefined,
+      project_id: asString(entry.project_id) || undefined,
+      issue_id: asString(entry.issue_id) || undefined,
+    });
+  }
+
+  return records;
+}
+
+function toConversationFromThreadRecord(record: ChatThreadRecord): GlobalChatConversation | null {
+  const updatedAt = record.last_message_at || new Date().toISOString();
+
+  if (record.thread_type === "dm") {
+    const threadId = record.thread_key.startsWith("dm:")
+      ? record.thread_key.slice("dm:".length).trim()
+      : "";
+    if (!threadId) {
+      return null;
+    }
+    const parsedAgentID = parseDMThreadAgentID(threadId);
+    const agentID = record.agent_id || parsedAgentID || `agent-${threadId}`;
+    const displayName = record.title || "Agent";
+    return {
+      chatId: record.id,
+      key: buildDMKey(threadId),
+      type: "dm",
+      threadId,
+      agent: {
+        id: agentID,
+        name: displayName,
+        status: "offline",
+      },
+      title: displayName,
+      contextLabel: "Direct message",
+      subtitle: record.last_message_preview || "Agent chat",
+      unreadCount: 0,
+      updatedAt,
+    };
+  }
+
+  if (record.thread_type === "project") {
+    const projectId = record.project_id || (record.thread_key.startsWith("project:")
+      ? record.thread_key.slice("project:".length).trim()
+      : "");
+    if (!projectId) {
+      return null;
+    }
+    return {
+      chatId: record.id,
+      key: buildProjectKey(projectId),
+      type: "project",
+      projectId,
+      title: record.title || "Project chat",
+      contextLabel: "Project",
+      subtitle: record.last_message_preview || "Project chat",
+      unreadCount: 0,
+      updatedAt,
+    };
+  }
+
+  const issueId = record.issue_id || (record.thread_key.startsWith("issue:")
+    ? record.thread_key.slice("issue:".length).trim()
+    : "");
+  if (!issueId) {
+    return null;
+  }
+  return {
+    chatId: record.id,
+    key: buildIssueKey(issueId),
+    type: "issue",
+    issueId,
+    title: record.title || "Issue thread",
+    contextLabel: "Issue",
+    subtitle: record.last_message_preview || "Issue conversation",
+    unreadCount: 0,
+    updatedAt,
+  };
 }
 
 function loadInitialState(): StoredState {
@@ -762,6 +888,71 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadActiveChats = async () => {
+      const orgID = getStoredOrgID();
+      if (!orgID) {
+        return;
+      }
+
+      const token = getStoredAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      try {
+        const url = new URL(`${API_URL}/api/chats`);
+        url.searchParams.set("org_id", orgID);
+        const response = await fetch(url.toString(), {
+          headers,
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = await response.json().catch(() => null);
+        const records = parseChatThreadRecords(payload);
+        const fromServer = records
+          .map((record) => toConversationFromThreadRecord(record))
+          .filter((entry): entry is GlobalChatConversation => entry !== null);
+
+        if (cancelled) {
+          return;
+        }
+
+        setConversations((prev) => {
+          const prevByKey = new Map(prev.map((entry) => [entry.key, entry]));
+          const serverKeys = new Set(fromServer.map((entry) => entry.key));
+          const mergedServer = fromServer.map((entry) => {
+            const existing = prevByKey.get(entry.key);
+            if (!existing) {
+              return entry;
+            }
+            return {
+              ...existing,
+              ...entry,
+              unreadCount: existing.unreadCount,
+            };
+          });
+          const localOnly = prev.filter((entry) => !entry.chatId && !serverKeys.has(entry.key));
+          return sortConversations([...mergedServer, ...localOnly]);
+        });
+      } catch {
+        // Ignore chat bootstrap failures; runtime upserts and websocket events still populate state.
+      }
+    };
+
+    void loadActiveChats();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (agentNamesByID.size === 0 && projectNamesByID.size === 0) {
       return;
     }
@@ -944,6 +1135,49 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     setSelectedKey((current) => (current === key ? null : current));
   }, []);
 
+  const archiveConversation = useCallback(async (chatId: string): Promise<boolean> => {
+    const trimmedChatID = chatId.trim();
+    if (!trimmedChatID) {
+      return false;
+    }
+    const orgID = getStoredOrgID();
+    if (!orgID) {
+      return false;
+    }
+
+    const token = getStoredAuthToken();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    try {
+      const url = new URL(`${API_URL}/api/chats/${encodeURIComponent(trimmedChatID)}/archive`);
+      url.searchParams.set("org_id", orgID);
+      const response = await fetch(url.toString(), {
+        method: "POST",
+        headers,
+      });
+      if (!response.ok) {
+        return false;
+      }
+
+      const archivedConversation = conversations.find((entry) => entry.chatId === trimmedChatID);
+      setConversations((prev) => prev.filter((entry) => entry.chatId !== trimmedChatID));
+      setSelectedKey((current) => {
+        if (!current || !archivedConversation) {
+          return current;
+        }
+        return current === archivedConversation.key ? null : current;
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [conversations]);
+
   useEffect(() => {
     if (!lastMessage) {
       return;
@@ -1037,6 +1271,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       selectConversation: setSelectedKey,
       markConversationRead,
       removeConversation,
+      archiveConversation,
       openConversation,
       upsertConversation,
     }),
@@ -1046,6 +1281,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       isOpen,
       markConversationRead,
       removeConversation,
+      archiveConversation,
       openConversation,
       resolveAgentName,
       selectedConversation,
