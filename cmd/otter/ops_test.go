@@ -1,9 +1,13 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestParseLaunchctlState(t *testing.T) {
@@ -60,5 +64,23 @@ func TestParseLocalControlOptions(t *testing.T) {
 	_, _, err = parseLocalControlOptions("start", []string{"--deep"})
 	if err == nil {
 		t.Fatalf("expected error for --deep with start")
+	}
+}
+
+func TestCheckLocalHealthEventually(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	ok := checkLocalHealthEventually(srv.URL, 5, 5*time.Millisecond, 200*time.Millisecond)
+	if !ok {
+		t.Fatalf("expected health check to eventually succeed")
 	}
 }

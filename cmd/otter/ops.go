@@ -156,7 +156,7 @@ func runAutostart(args []string, out io.Writer, errOut io.Writer) error {
 	case "disable":
 		return disableAutostart(out, errOut)
 	case "status":
-		return autostartStatus(out, errOut)
+		return autostartStatus(out, errOut, false)
 	default:
 		return errors.New("usage: otter autostart <enable|disable|status> [--root <path>]")
 	}
@@ -199,7 +199,7 @@ func enableAutostart(repoRoot string, out io.Writer, errOut io.Writer) error {
 		fmt.Fprintln(errOut, "warning: bridge/.env missing, bridge autostart not enabled")
 	}
 
-	return autostartStatus(out, errOut)
+	return autostartStatus(out, errOut, true)
 }
 
 func disableAutostart(out io.Writer, errOut io.Writer) error {
@@ -220,7 +220,7 @@ func disableAutostart(out io.Writer, errOut io.Writer) error {
 	return nil
 }
 
-func autostartStatus(out io.Writer, errOut io.Writer) error {
+func autostartStatus(out io.Writer, errOut io.Writer, waitForHealth bool) error {
 	target := launchctlTarget()
 	printOne := func(label string) {
 		cmd := exec.Command("launchctl", "print", target+"/"+label)
@@ -242,10 +242,20 @@ func autostartStatus(out io.Writer, errOut io.Writer) error {
 	printOne(launchLabelServer)
 	printOne(launchLabelBridge)
 
-	if !checkLocalHealth(localServerHealthURL, 2*time.Second) {
+	serverHealthy := false
+	bridgeHealthy := false
+	if waitForHealth {
+		serverHealthy = checkLocalHealthEventually(localServerHealthURL, 8, 500*time.Millisecond, 2*time.Second)
+		bridgeHealthy = checkLocalHealthEventually(localBridgeHealthURL, 8, 500*time.Millisecond, 2*time.Second)
+	} else {
+		serverHealthy = checkLocalHealth(localServerHealthURL, 2*time.Second)
+		bridgeHealthy = checkLocalHealth(localBridgeHealthURL, 2*time.Second)
+	}
+
+	if !serverHealthy {
 		fmt.Fprintf(errOut, "warning: server health endpoint not responding (%s)\n", localServerHealthURL)
 	}
-	if !checkLocalHealth(localBridgeHealthURL, 2*time.Second) {
+	if !bridgeHealthy {
 		fmt.Fprintf(errOut, "warning: bridge health endpoint not responding (%s)\n", localBridgeHealthURL)
 	}
 	return nil
@@ -453,6 +463,24 @@ func checkLocalHealth(url string, timeout time.Duration) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+func checkLocalHealthEventually(url string, attempts int, delay time.Duration, timeout time.Duration) bool {
+	if attempts <= 0 {
+		attempts = 1
+	}
+	if delay < 0 {
+		delay = 0
+	}
+	for i := 0; i < attempts; i++ {
+		if checkLocalHealth(url, timeout) {
+			return true
+		}
+		if i < attempts-1 && delay > 0 {
+			time.Sleep(delay)
+		}
+	}
+	return false
 }
 
 func tailFile(path string, maxBytes int) string {
