@@ -115,6 +115,42 @@ describe("SettingsPage label management", () => {
     ).toBe(true);
   });
 
+  it("loads git access tokens from API", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/settings/")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/git/tokens")) {
+        return jsonResponse({
+          tokens: [
+            {
+              id: "token-1",
+              name: "Bootstrap token",
+              token_prefix: "oc_git_abcd",
+              created_at: "2026-02-11T18:00:00Z",
+              projects: [],
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/labels?org_id=org-123&seed=true")) {
+        return jsonResponse({ labels: [] });
+      }
+      return jsonResponse({ error: "unexpected request" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<SettingsPage />);
+
+    expect(await screen.findByRole("heading", { name: "Git Access Tokens" })).toBeInTheDocument();
+    expect(screen.getByText("Bootstrap token")).toBeInTheDocument();
+    expect(screen.getByText(/oc_git_abcd/)).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("/api/git/tokens")),
+    ).toBe(true);
+  });
+
   it("uses theme token classes for section shell and shared controls", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

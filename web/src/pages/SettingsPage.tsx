@@ -629,14 +629,14 @@ function IntegrationsSection({
         <div>
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium text-[var(--text)]">
-              API Keys
+              Git Access Tokens
             </h3>
             <Button
               variant="secondary"
               onClick={handleGenerateKey}
               loading={generatingKey}
             >
-              Generate New Key
+              Generate Git Token
             </Button>
           </div>
 
@@ -671,10 +671,10 @@ function IntegrationsSection({
           ) : (
             <div className="mt-3 rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface-alt)] px-6 py-8 text-center">
               <p className="text-sm text-[var(--text-muted)]">
-                No API keys yet
+                No git tokens yet
               </p>
               <p className="mt-1 text-xs text-[var(--text-muted)]">
-                Generate a key to access the API programmatically
+                Generate a token to access git and API workflows
               </p>
             </div>
           )}
@@ -946,12 +946,13 @@ export default function SettingsPage() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const [profileRes, notificationsRes, workspaceRes, integrationsRes] =
+        const [profileRes, notificationsRes, workspaceRes, integrationsRes, gitTokensRes] =
           await Promise.all([
             fetch("/api/settings/profile"),
             fetch("/api/settings/notifications"),
             fetch("/api/settings/workspace"),
             fetch("/api/settings/integrations"),
+            fetch("/api/git/tokens"),
           ]);
 
         if (profileRes.ok) {
@@ -969,16 +970,35 @@ export default function SettingsPage() {
           setWorkspace(data);
         }
 
+        let openclawWebhookUrl = "";
+        let apiKeys: Integrations["apiKeys"] = [];
         if (integrationsRes.ok) {
           const data = await integrationsRes.json();
-          setIntegrations({
-            ...data,
-            apiKeys: data.apiKeys.map((key: { createdAt: string }) => ({
-              ...key,
+          openclawWebhookUrl = data.openclawWebhookUrl ?? "";
+          apiKeys = Array.isArray(data.apiKeys)
+            ? data.apiKeys.map((key: { id: string; name: string; prefix: string; createdAt: string }) => ({
+              id: key.id,
+              name: key.name,
+              prefix: key.prefix,
               createdAt: new Date(key.createdAt),
-            })),
-          });
+            }))
+            : [];
         }
+        if (gitTokensRes.ok) {
+          const data = await gitTokensRes.json();
+          apiKeys = Array.isArray(data.tokens)
+            ? data.tokens.map((token: { id: string; name: string; token_prefix: string; created_at: string }) => ({
+              id: token.id,
+              name: token.name,
+              prefix: token.token_prefix,
+              createdAt: new Date(token.created_at),
+            }))
+            : [];
+        }
+        setIntegrations({
+          openclawWebhookUrl,
+          apiKeys,
+        });
 
         // Load theme from localStorage
         const savedTheme = localStorage.getItem("otter-camp-theme") as ThemeMode;
