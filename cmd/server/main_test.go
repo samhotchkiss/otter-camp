@@ -116,8 +116,8 @@ func TestLocalRuntimeDefaults(t *testing.T) {
 	setup := string(setupBytes)
 	for _, snippet := range []string{
 		"PORT=4200",
-		"OTTERCAMP_URL=http://localhost:4200",
-		"Dashboard: http://localhost:4200",
+		"OTTERCAMP_URL=http://localhost:${PORT:-4200}",
+		"Dashboard:         http://localhost:${PORT:-4200}",
 	} {
 		if !strings.Contains(setup, snippet) {
 			t.Fatalf("expected scripts/setup.sh to contain %q", snippet)

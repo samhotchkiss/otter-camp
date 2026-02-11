@@ -27,9 +27,9 @@ describe("App", () => {
     expect(container).toBeTruthy();
   });
 
-  it("shows login branding", () => {
+  it("shows login branding", async () => {
     render(<App />);
-    expect(screen.getByText(/otter\.camp/i)).toBeTruthy();
+    expect(await screen.findByText(/otter\.camp/i)).toBeTruthy();
   });
 
   it("registers memory evaluation dashboard route", () => {
