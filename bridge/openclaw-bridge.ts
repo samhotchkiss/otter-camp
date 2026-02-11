@@ -2817,9 +2817,8 @@ async function resolveSessionExecutionContext(
 
   try {
     await fs.promises.mkdir(projectRoot, { recursive: true });
-    // NOTE: v1 enforcement is policy-level only. Without OpenClaw file-write interception
-    // hooks, we cannot mechanically enforce per-write path guard checks here.
-    // TODO(spec-110-hardening): Wire isPathWithinProjectRoot into write/edit/apply_patch hooks.
+    // Runtime mutation enforcement is active via tool-event interception.
+    // projectRoot seeds write_guard_root context and target validation checks.
     return {
       mode: 'project',
       projectRoot,
@@ -2844,15 +2843,13 @@ function buildExecutionPolicyBlock(params: {
     lines.push(`- cwd: ${params.projectRoot}`);
     lines.push(`- write_guard_root: ${params.projectRoot}`);
     lines.push('- write policy: writes allowed only within write_guard_root');
-    lines.push('- enforcement: policy-level only (prompt contract, no write hooks in v1)');
-    lines.push('- TODO: enforce write/edit/apply_patch paths via OpenClaw file-write hooks');
-    lines.push('- security: path traversal and symlink escape SHOULD NOT be used');
+    lines.push('- enforcement: hard runtime guard (tool-event interception + path/symlink validation)');
+    lines.push('- security: path traversal and symlink escape are blocked at runtime');
   } else {
     lines.push('- mode: conversation');
     lines.push('- project_id: none');
     lines.push('- write policy: deny write/edit/apply_patch and any filesystem mutation');
-    lines.push('- enforcement: policy-level only (prompt contract, no write hooks in v1)');
-    lines.push('- TODO: enforce mutation denial via OpenClaw tool/write interception hooks');
+    lines.push('- enforcement: hard runtime deny (mutation tool calls are aborted)');
     lines.push('- workspaceAccess: none');
   }
   lines.push('[/OTTERCAMP_EXECUTION_MODE]');

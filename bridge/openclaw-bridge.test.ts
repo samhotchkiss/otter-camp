@@ -666,8 +666,9 @@ describe("bridge execution mode + path guard helpers", () => {
     assert.ok(contextual.includes("[OTTERCAMP_EXECUTION_MODE]"));
     assert.ok(contextual.includes("- mode: conversation"));
     assert.ok(contextual.includes("deny write/edit/apply_patch"));
-    assert.ok(contextual.includes("- enforcement: policy-level only (prompt contract, no write hooks in v1)"));
-    assert.ok(contextual.includes("- TODO: enforce mutation denial via OpenClaw tool/write interception hooks"));
+    assert.ok(contextual.includes("- enforcement: hard runtime deny (mutation tool calls are aborted)"));
+    assert.equal(contextual.includes("policy-level only"), false);
+    assert.equal(contextual.includes("TODO: enforce"), false);
     assert.ok(contextual.includes("- workspaceAccess: none"));
     assert.ok(contextual.includes("include a clickable UI jump link"));
     assert.ok(contextual.includes("`/projects/<project-id>/issues/<issue-id>`"));
@@ -701,9 +702,10 @@ describe("bridge execution mode + path guard helpers", () => {
       assert.ok(contextual.includes(`- cwd: ${expectedRoot}`));
       assert.ok(contextual.includes(`- write_guard_root: ${expectedRoot}`));
       assert.ok(contextual.includes("- write policy: writes allowed only within write_guard_root"));
-      assert.ok(contextual.includes("- enforcement: policy-level only (prompt contract, no write hooks in v1)"));
-      assert.ok(contextual.includes("- TODO: enforce write/edit/apply_patch paths via OpenClaw file-write hooks"));
-      assert.ok(contextual.includes("- security: path traversal and symlink escape SHOULD NOT be used"));
+      assert.ok(contextual.includes("- enforcement: hard runtime guard (tool-event interception + path/symlink validation)"));
+      assert.ok(contextual.includes("- security: path traversal and symlink escape are blocked at runtime"));
+      assert.equal(contextual.includes("policy-level only"), false);
+      assert.equal(contextual.includes("TODO: enforce"), false);
       assert.ok(contextual.includes(`- Project jump link template: \`/projects/${projectID}\`.`));
       assert.ok(contextual.includes(`- Issue jump link template: \`/projects/${projectID}/issues/<issue-id>\`.`));
       assert.ok(contextual.includes("- After creating/updating an issue, include a direct jump link in your reply."));
