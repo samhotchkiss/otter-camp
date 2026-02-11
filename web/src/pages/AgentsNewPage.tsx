@@ -20,7 +20,11 @@ type CreatedAgentState = {
   roleDescription: string;
 };
 
-export default function AgentsNewPage() {
+type AgentsNewPageProps = {
+  onStartChatNavigate?: () => void;
+};
+
+export default function AgentsNewPage({ onStartChatNavigate }: AgentsNewPageProps) {
   const [step, setStep] = useState<FlowStep>("browse");
   const [searchQuery, setSearchQuery] = useState("");
   const [roleCategory, setRoleCategory] = useState<AgentRoleCategory | "all">("all");
@@ -70,7 +74,13 @@ export default function AgentsNewPage() {
       });
       setStep("welcome");
     } catch (submitErr) {
-      setError(submitErr instanceof Error ? submitErr.message : "Failed to create agent");
+      const rawMessage = submitErr instanceof Error ? submitErr.message : "Failed to create agent";
+      const normalized = rawMessage.toLowerCase();
+      if (normalized.includes("agent files project is not configured")) {
+        setError("Setting up Agent Files workspace. Please try again in a moment.");
+      } else {
+        setError(rawMessage);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -84,6 +94,10 @@ export default function AgentsNewPage() {
           avatar={createdAgent.avatar}
           roleDescription={createdAgent.roleDescription}
           onStartChat={() => {
+            if (onStartChatNavigate) {
+              onStartChatNavigate();
+              return;
+            }
             window.location.assign("/agents");
           }}
           onCreateAnother={() => {

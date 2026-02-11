@@ -58,4 +58,40 @@ describe("AgentsNewPage", () => {
     expect(await screen.findByText("boom")).toBeInTheDocument();
     expect(screen.getByText("Customize Marcus")).toBeInTheDocument();
   });
+
+  it("replaces raw Agent Files provisioning errors with friendly guidance", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: "Agent Files project is not configured" }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<AgentsNewPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Marcus/i }));
+    expect(await screen.findByText("Customize Marcus")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Agent" }));
+
+    expect(await screen.findByText("Setting up Agent Files workspace. Please try again in a moment.")).toBeInTheDocument();
+    expect(screen.queryByText("Agent Files project is not configured")).not.toBeInTheDocument();
+  });
+
+  it("routes Send First Message CTA to agents chat landing", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const navigateMock = vi.fn();
+
+    render(<AgentsNewPage onStartChatNavigate={navigateMock} />);
+    fireEvent.click(screen.getByRole("button", { name: /Marcus/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create Agent" }));
+
+    await screen.findByText("Marcus is ready to go");
+    fireEvent.click(screen.getByRole("button", { name: "Send First Message" }));
+
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+  });
 });
