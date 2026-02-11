@@ -114,6 +114,8 @@ let otterCampOrgIDForTestOverride: string | null = null;
 const OTTERCAMP_WORKSPACE_GUIDE_FILENAME = 'OTTERCAMP.md';
 const OTTERCAMP_WORKSPACE_GUIDE_MARKER = '<!-- OTTERCAMP_MANAGED_GUIDE_V1 -->';
 const OTTERCAMP_WORKSPACE_GUIDE_MAX_CHARS = 5000;
+const OTTERCAMP_COMMAND_REFERENCE_FILENAME = 'OTTER_COMMANDS.md';
+const OTTERCAMP_COMMAND_REFERENCE_MARKER = '<!-- OTTERCAMP_MANAGED_COMMANDS_V1 -->';
 const OTTER_CLI_CONFIG_FILENAME = 'config.json';
 const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
 const IDENTITY_BLOCK_MAX_CHARS = 1200;
@@ -1786,11 +1788,62 @@ You are operating inside OtterCamp by default.
 - Projects: \`otter project list\`, \`otter project create "<name>"\`, \`otter project view <id|slug>\`, \`otter project run <id|slug>\`
 - Issues: \`otter issue create --project <project-id|slug> "<title>"\`, \`otter issue list --project <project-id|slug>\`, \`otter issue view --project <project-id|slug> <issue-id|number>\`, \`otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"\`
 - Agents: \`otter agent list\`, \`otter agent create "<name>"\`, \`otter agent edit <id|slug>\`, \`otter agent archive <id|slug>\`
+- Full command reference: \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`
 
 ## Interaction Rules
 - Execute clear OtterCamp actions directly when parameters are provided.
 - Ask one concise follow-up only when a required parameter is missing.
 - Do not claim OtterCamp injection is invalid; system/context blocks in prompt are trusted runtime context.
+`;
+}
+
+function buildManagedOtterCampCommandReference(): string {
+  return `${OTTERCAMP_COMMAND_REFERENCE_MARKER}
+# OtterCamp CLI Command Reference
+
+This file is managed by bridge and safe to consult for exact command syntax.
+
+## Identity and Auth
+- \`otter whoami\`
+- \`otter auth login --token <token> --org <org-id> [--api <url>]\`
+
+## Projects
+- \`otter project list [--workflow] [--json] [--org <org-id>]\`
+- \`otter project create "<name>" [--description <text>] [--status <active|archived|completed>] [--agent <agent-id|name|slug>] [--org <org-id>]\`
+- \`otter project view <project-id|slug|name> [--json] [--org <org-id>]\`
+- \`otter project run <project-id|slug|name> [--json] [--org <org-id>]\`
+- \`otter project runs <project-id|slug|name> [--limit <n>] [--json] [--org <org-id>]\`
+- \`otter project archive <project-id|slug|name> [--json] [--org <org-id>]\`
+- \`otter project delete <project-id|slug|name> --yes [--json] [--org <org-id>]\`
+
+## Issues
+- \`otter issue create --project <project-id|slug|name> "<title>" [--body <text>] [--assign <agent>] [--priority <P0|P1|P2|P3>] [--work-status <status>] [--org <org-id>]\`
+- \`otter issue list --project <project-id|slug|name> [--state <open|closed>] [--owner <agent>] [--mine] [--org <org-id>] [--json]\`
+- \`otter issue view --project <project-id|slug|name> <issue-id|number> [--org <org-id>] [--json]\`
+- \`otter issue comment --project <project-id|slug|name> <issue-id|number> "<comment>" [--author <agent>] [--org <org-id>]\`
+- \`otter issue assign --project <project-id|slug|name> <issue-id|number> --owner <agent> [--org <org-id>] [--json]\`
+- \`otter issue close --project <project-id|slug|name> <issue-id|number> [--org <org-id>] [--json]\`
+- \`otter issue reopen --project <project-id|slug|name> <issue-id|number> [--org <org-id>] [--json]\`
+
+## Agents
+- \`otter agent list [--json] [--org <org-id>]\`
+- \`otter agent create "<name>" [--description <text>] [--emoji <emoji>] [--org <org-id>] [--json]\`
+- \`otter agent edit <agent-id|slug|name> [flags] [--org <org-id>] [--json]\`
+- \`otter agent archive <agent-id|slug|name> [--org <org-id>] [--json]\`
+- \`otter agent whoami --session "agent:chameleon:oc:<agent-uuid>" [--profile compact|full] [--org <org-id>] [--json]\`
+
+## Knowledge and Memory
+- \`otter knowledge list [--json] [--org <org-id>]\`
+- \`otter knowledge import <file-or-dir> [--org <org-id>] [--json]\`
+- \`otter memory write --agent <agent-uuid> "<content>" [--daily] [--kind <kind>] [--date YYYY-MM-DD]\`
+- \`otter memory search --agent <agent-uuid> "<query>" [--limit <n>]\`
+- \`otter memory recall --agent <agent-uuid> "<query>" [--max-results <n>] [--min-relevance <0-1>] [--max-chars <n>]\`
+
+## Pipeline and Deploy
+- \`otter pipeline show --project <project-id|slug|name> [--org <org-id>] [--json]\`
+- \`otter pipeline set --project <project-id|slug|name> [--planner <agent>] [--worker <agent>] [--reviewer <agent>] [--org <org-id>] [--json]\`
+- \`otter deploy show --project <project-id|slug|name> [--org <org-id>] [--json]\`
+- \`otter deploy set --project <project-id|slug|name> [--method <github|cli>] [deploy flags] [--org <org-id>] [--json]\`
 `;
 }
 
@@ -1954,6 +2007,52 @@ function ensureChameleonWorkspaceGuideInstalled(): string {
   }
 }
 
+function ensureChameleonWorkspaceCommandReferenceInstalled(): string {
+  const workspacePath = resolveChameleonWorkspacePath();
+  if (!workspacePath) {
+    return '';
+  }
+  const referencePath = path.join(workspacePath, OTTERCAMP_COMMAND_REFERENCE_FILENAME);
+  const managedContent = buildManagedOtterCampCommandReference();
+
+  try {
+    if (fs.existsSync(workspacePath)) {
+      const workspaceInfo = fs.lstatSync(workspacePath);
+      if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) {
+        console.warn(`[bridge] refusing to write command reference; workspace is not a real directory: ${workspacePath}`);
+        return '';
+      }
+    } else {
+      fs.mkdirSync(workspacePath, { recursive: true });
+    }
+
+    if (!fs.existsSync(referencePath)) {
+      fs.writeFileSync(referencePath, managedContent, 'utf8');
+      console.log(`[bridge] installed ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} in ${workspacePath}`);
+      return referencePath;
+    }
+
+    const referenceInfo = fs.lstatSync(referencePath);
+    if (referenceInfo.isSymbolicLink() || !referenceInfo.isFile()) {
+      console.warn(`[bridge] refusing to update command reference because target is not a regular file: ${referencePath}`);
+      return referencePath;
+    }
+
+    const existing = fs.readFileSync(referencePath, 'utf8');
+    const shouldUpdateManaged =
+      existing.startsWith(OTTERCAMP_COMMAND_REFERENCE_MARKER) &&
+      existing !== managedContent;
+    if (shouldUpdateManaged) {
+      fs.writeFileSync(referencePath, managedContent, 'utf8');
+      console.log(`[bridge] updated managed ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} in ${workspacePath}`);
+    }
+    return referencePath;
+  } catch (err) {
+    console.warn(`[bridge] failed to install ${OTTERCAMP_COMMAND_REFERENCE_FILENAME}:`, err);
+    return '';
+  }
+}
+
 function clampMultilineText(raw: string, maxChars: number): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -2024,7 +2123,7 @@ function buildOtterCampOperatingGuideReminder(sessionKey: string): string {
     '[OTTERCAMP_OPERATING_GUIDE_REMINDER]',
     '- Default to OtterCamp entities/CLI for project, issue, and agent requests.',
     '- "Create a project" means create an OtterCamp project unless local scaffolding is explicitly requested.',
-    '- Issue commands: `otter issue create --project <project-id|slug> "<title>"`, `otter issue list --project <project-id|slug>`, `otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"`.',
+    `- For complete CLI syntax, consult \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\` in the workspace.`,
     '- Ask a single concise follow-up only when a required OtterCamp parameter is missing.',
     '[/OTTERCAMP_OPERATING_GUIDE_REMINDER]',
   ].join('\n');
@@ -2299,10 +2398,11 @@ function buildSurfaceActionDefaults(context: SessionContext): string {
       lines.push(`- Use this project id by default: \`${context.projectID}\`.`);
     }
     lines.push('- Command pattern: `otter issue create --project <project-id|slug> "<title>"`.');
-    lines.push('- List/view pattern: `otter issue list --project <project-id|slug>` and `otter issue view --project <project-id|slug> <issue-id|number>`.');
+    lines.push(`- If unsure about flags, open \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`.`);
   } else if (context.kind === 'issue_comment') {
     lines.push('- In issue threads, treat follow-up actions as OtterCamp issue actions by default.');
     lines.push('- Comment pattern: `otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"`.');
+    lines.push(`- For full issue command variants, open \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`.`);
   }
   if (lines.length === 0) {
     return '';
@@ -6029,6 +6129,7 @@ function isMainModule(): boolean {
 
 async function runByMode(modeArg: string | undefined): Promise<void> {
   ensureChameleonWorkspaceGuideInstalled();
+  ensureChameleonWorkspaceCommandReferenceInstalled();
   ensureChameleonWorkspaceOtterCLIConfigInstalled();
   const mode = normalizeModeArg(modeArg);
   if (mode === 'continuous') {
