@@ -18,6 +18,9 @@ const (
 
 	ChatThreadArchiveReasonIssueClosed     = "issue_closed"
 	ChatThreadArchiveReasonProjectArchived = "project_archived"
+
+	maxChatThreadKeyLength     = 512
+	maxChatThreadPreviewLength = 500
 )
 
 type ChatThread struct {
@@ -102,6 +105,9 @@ func (s *ChatThreadStore) TouchThread(ctx context.Context, input TouchChatThread
 	if threadKey == "" {
 		return nil, fmt.Errorf("thread_key is required")
 	}
+	if len([]rune(threadKey)) > maxChatThreadKeyLength {
+		return nil, fmt.Errorf("thread_key exceeds %d characters", maxChatThreadKeyLength)
+	}
 	threadType := normalizeChatThreadType(input.ThreadType)
 	if !isValidChatThreadType(threadType) {
 		return nil, fmt.Errorf("invalid thread_type")
@@ -122,6 +128,9 @@ func (s *ChatThreadStore) TouchThread(ctx context.Context, input TouchChatThread
 
 	title := strings.TrimSpace(input.Title)
 	lastPreview := strings.TrimSpace(input.LastMessagePreview)
+	if len([]rune(lastPreview)) > maxChatThreadPreviewLength {
+		lastPreview = string([]rune(lastPreview)[:maxChatThreadPreviewLength])
+	}
 	lastMessageAt := input.LastMessageAt.UTC()
 	if lastMessageAt.IsZero() {
 		lastMessageAt = time.Now().UTC()

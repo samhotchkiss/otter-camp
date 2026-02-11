@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,6 +182,39 @@ func TestChatThreadStore_WorkspaceIsolation(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Empty(t, threadsB)
+}
+
+func TestChatThreadStoreTruncatesLongPreview(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "chat-thread-preview-limit-org")
+	userID := insertChatThreadTestUser(t, db, orgID, "chat-thread-preview-limit-user")
+	ctx := ctxWithWorkspace(orgID)
+	store := NewChatThreadStore(db)
+
+	thread, err := store.TouchThread(ctx, TouchChatThreadInput{
+		UserID:             userID,
+		ThreadKey:          "dm:dm_preview_limit",
+		ThreadType:         ChatThreadTypeDM,
+		Title:              "Preview Limit",
+		LastMessagePreview: strings.Repeat("x", 1000),
+		LastMessageAt:      time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	require.Len(t, []rune(thread.LastMessagePreview), 500)
+
+	var storedPreview string
+	err = db.QueryRow(
+		`SELECT last_message_preview
+		 FROM chat_threads
+		 WHERE org_id = $1 AND user_id = $2 AND id = $3`,
+		orgID,
+		userID,
+		thread.ID,
+	).Scan(&storedPreview)
+	require.NoError(t, err)
+	require.Len(t, []rune(storedPreview), 500)
 }
 
 func TestChatThreadStore_AutoArchiveByIssueAndProject(t *testing.T) {

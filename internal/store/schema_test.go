@@ -239,6 +239,59 @@ func TestSchemaChatThreadsRLSAndIndexes(t *testing.T) {
 	require.True(t, rlsEnabled)
 }
 
+func TestMigration061ChatThreadsLengthLimitFilesExistAndContainConstraints(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"061_chat_threads_length_limits.up.sql",
+		"061_chat_threads_length_limits.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "061_chat_threads_length_limits.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "chat_threads_thread_key_length_chk")
+	require.Contains(t, upContent, "length(thread_key) <= 512")
+	require.Contains(t, upContent, "chat_threads_last_message_preview_length_chk")
+	require.Contains(t, upContent, "length(last_message_preview) <= 500")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "061_chat_threads_length_limits.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop constraint if exists chat_threads_last_message_preview_length_chk")
+	require.Contains(t, downContent, "drop constraint if exists chat_threads_thread_key_length_chk")
+}
+
+func TestSchemaChatThreadsLengthConstraints(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var threadKeyConstraint bool
+	err := db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1
+			FROM pg_constraint
+			WHERE conname = 'chat_threads_thread_key_length_chk'
+		)`,
+	).Scan(&threadKeyConstraint)
+	require.NoError(t, err)
+	require.True(t, threadKeyConstraint)
+
+	var previewConstraint bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1
+			FROM pg_constraint
+			WHERE conname = 'chat_threads_last_message_preview_length_chk'
+		)`,
+	).Scan(&previewConstraint)
+	require.NoError(t, err)
+	require.True(t, previewConstraint)
+}
+
 func TestSchemaWorkflowAgentDeleteSetsProjectFieldNull(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
