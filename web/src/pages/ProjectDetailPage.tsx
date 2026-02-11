@@ -428,6 +428,14 @@ export default function ProjectDetailPage() {
     issueId: issueId ?? undefined,
     limit: 20,
   });
+  const issueChatTitle = useMemo(() => {
+    if (!issueId) {
+      return "Issue thread";
+    }
+    const matchingIssue = tasks.find((task) => task.id === issueId);
+    const normalizedTitle = matchingIssue?.title?.trim() ?? "";
+    return normalizedTitle || "Issue thread";
+  }, [issueId, tasks]);
 
   const refreshProjectIssues = useCallback(async (projectID: string) => {
     const orgId = localStorage.getItem("otter-camp-org-id");
@@ -652,11 +660,12 @@ export default function ProjectDetailPage() {
     upsertConversation({
       type: "issue",
       issueId,
-      title: `Issue ${issueId.slice(0, 8)}`,
+      projectId: project.id,
+      title: issueChatTitle,
       contextLabel: `Issue • ${project.name}`,
       subtitle: "Issue conversation",
     });
-  }, [issueId, project, upsertConversation]);
+  }, [issueChatTitle, issueId, project, upsertConversation]);
 
   useEffect(() => {
     if (!project || !issueId || activeTab !== "issues") {
@@ -666,13 +675,14 @@ export default function ProjectDetailPage() {
       {
         type: "issue",
         issueId,
-        title: `Issue ${issueId.slice(0, 8)}`,
+        projectId: project.id,
+        title: issueChatTitle,
         contextLabel: `Issue • ${project.name}`,
         subtitle: "Issue conversation",
       },
       { focus: true, openDock: true },
     );
-  }, [activeTab, issueId, openConversation, project]);
+  }, [activeTab, issueChatTitle, issueId, openConversation, project]);
 
   const tasksByColumn = useMemo(() => {
     const activeIssueIDs = new Set<string>();

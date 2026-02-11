@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useGlobalChat } from "../../contexts/GlobalChatContext";
+import { useGlobalChat, type GlobalChatConversation } from "../../contexts/GlobalChatContext";
 import { API_URL } from "../../lib/api";
 import GlobalChatSurface from "./GlobalChatSurface";
 import { getInitials } from "../messaging/utils";
@@ -43,14 +43,61 @@ export default function GlobalChatDock() {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const visibleConversations = useMemo(() => {
+    const byRecent = (items: GlobalChatConversation[]): GlobalChatConversation[] =>
+      [...items].sort((a, b) => {
+        const aMs = Date.parse(a.updatedAt);
+        const bMs = Date.parse(b.updatedAt);
+        const aScore = Number.isFinite(aMs) ? aMs : 0;
+        const bScore = Number.isFinite(bMs) ? bMs : 0;
+        if (aScore === bScore) {
+          return 0;
+        }
+        return bScore - aScore;
+      });
+
     if (conversations.length > 0) {
-      return conversations;
+      return byRecent(conversations);
     }
     if (selectedConversation) {
-      return [selectedConversation];
+      return byRecent([selectedConversation]);
     }
     return [];
   }, [conversations, selectedConversation]);
+
+  const routeProjectID = useMemo(() => {
+    const issueRouteMatch = /^\/projects\/([^/]+)\/issues\/[^/]+$/.exec(location.pathname);
+    if (issueRouteMatch?.[1]) {
+      return decodeURIComponent(issueRouteMatch[1]);
+    }
+    const projectRouteMatch = /^\/projects\/([^/]+)$/.exec(location.pathname);
+    if (projectRouteMatch?.[1]) {
+      return decodeURIComponent(projectRouteMatch[1]);
+    }
+    return "";
+  }, [location.pathname]);
+
+  const selectedJumpTarget = useMemo(() => {
+    if (!selectedConversation) {
+      return null;
+    }
+    if (selectedConversation.type === "project") {
+      return {
+        label: "Open project",
+        href: `/projects/${encodeURIComponent(selectedConversation.projectId)}`,
+      };
+    }
+    if (selectedConversation.type === "issue") {
+      const projectID = selectedConversation.projectId?.trim() || routeProjectID;
+      if (!projectID) {
+        return null;
+      }
+      return {
+        label: "Open issue",
+        href: `/projects/${encodeURIComponent(projectID)}/issues/${encodeURIComponent(selectedConversation.issueId)}`,
+      };
+    }
+    return null;
+  }, [routeProjectID, selectedConversation]);
 
   useEffect(() => {
     if (isOpen && selectedKey) {
@@ -390,9 +437,10 @@ export default function GlobalChatDock() {
                   const active = selectedKey === conversation.key;
                   const displayTitle = resolveConversationTitle(conversation);
                   return (
-                    <button
+                    <div
                       key={conversation.key}
-                      type="button"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
                         selectConversation(conversation.key);
                         markConversationRead(conversation.key);
@@ -400,10 +448,22 @@ export default function GlobalChatDock() {
                           navigate(`/chats/${encodeURIComponent(conversation.chatId)}`);
                         }
                       }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          selectConversation(conversation.key);
+                          markConversationRead(conversation.key);
+                          if (conversation.chatId) {
+                            navigate(`/chats/${encodeURIComponent(conversation.chatId)}`);
+                          }
+                        }
+                      }}
                       className={`mb-1 w-full rounded-xl border px-3 py-2 text-left transition ${
                         active
                           ? "border-[var(--accent)] bg-[var(--surface)]"
-                          : "border-transparent hover:border-[var(--border)] hover:bg-[var(--surface)]/80"
+                          : conversation.unreadCount > 0
+                            ? "border-[var(--accent)]/60 bg-[var(--surface)]/80 hover:border-[var(--accent)]"
+                            : "border-transparent hover:border-[var(--border)] hover:bg-[var(--surface)]/80"
                       }`}
                     >
                       <div className="mb-1 flex items-center justify-between gap-2">
@@ -454,7 +514,7 @@ export default function GlobalChatDock() {
                           </button>
                         </div>
                       ) : null}
-                    </button>
+                    </div>
                   );
                 })
               )}
@@ -474,6 +534,18 @@ export default function GlobalChatDock() {
                         </h3>
                         <p className="text-xs text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedJumpTarget) {
+                            navigate(selectedJumpTarget.href);
+                          }
+                        }}
+                        disabled={!selectedJumpTarget}
+                        className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {selectedJumpTarget?.label || "Open context"}
+                      </button>
                       <button
                         type="button"
                         onClick={() => {

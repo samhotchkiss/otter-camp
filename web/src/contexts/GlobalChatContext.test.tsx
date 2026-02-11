@@ -25,6 +25,19 @@ function ConversationTitles() {
   );
 }
 
+function ConversationDetails() {
+  const { conversations } = useGlobalChat();
+  return (
+    <ul>
+      {conversations.map((conversation) => (
+        <li key={conversation.key}>
+          {conversation.key}|{conversation.title}|{conversation.contextLabel}|{conversation.unreadCount}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function ResolverProbe() {
   const { resolveAgentName, agentNamesByID } = useGlobalChat();
   return (
@@ -94,6 +107,14 @@ describe("GlobalChatContext", () => {
               agents: [
                 { id: "avatar-design", name: "Jeff G" },
               ],
+            }),
+          };
+        }
+        if (url.includes("/api/issues?")) {
+          return {
+            ok: true,
+            json: async () => ({
+              items: [],
             }),
           };
         }
@@ -304,6 +325,121 @@ describe("GlobalChatContext", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("conversation-count")).toHaveTextContent("0");
+    });
+  });
+
+  it("relabels issue conversations with canonical issue titles from metadata", async () => {
+    window.localStorage.setItem(
+      "otter-camp-global-chat:v1",
+      JSON.stringify({
+        isOpen: false,
+        selectedKey: "issue:issue-1",
+        conversations: [
+          {
+            key: "issue:issue-1",
+            type: "issue",
+            issueId: "issue-1",
+            title: "Issue 1a2b3c4d",
+            contextLabel: "Issue",
+            subtitle: "Issue conversation",
+            unreadCount: 0,
+            updatedAt: "2026-02-11T10:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/projects?")) {
+          return {
+            ok: true,
+            json: async () => ({
+              projects: [{ id: "project-1", name: "Otter Camp" }],
+            }),
+          };
+        }
+        if (url.includes("/api/issues?")) {
+          return {
+            ok: true,
+            json: async () => ({
+              items: [
+                { id: "issue-1", title: "Write a poem about testing OtterCamp", project_id: "project-1" },
+              ],
+            }),
+          };
+        }
+        if (url.includes("/api/sync/agents") || url.includes("/api/agents?")) {
+          return { ok: true, json: async () => ({ agents: [] }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      }),
+    );
+
+    render(
+      <GlobalChatProvider>
+        <ConversationDetails />
+      </GlobalChatProvider>,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "issue:issue-1|Write a poem about testing OtterCamp|Issue • Otter Camp|0",
+        ),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("increments unread counts for project events without explicit author metadata", async () => {
+    window.localStorage.setItem(
+      "otter-camp-global-chat:v1",
+      JSON.stringify({
+        isOpen: true,
+        selectedKey: "dm:dm_avatar-design",
+        conversations: [
+          {
+            key: "project:project-1",
+            type: "project",
+            projectId: "project-1",
+            title: "Otter Camp",
+            contextLabel: "Project • Otter Camp",
+            subtitle: "Project chat",
+            unreadCount: 0,
+            updatedAt: "2026-02-11T10:00:00.000Z",
+          },
+          {
+            key: "dm:dm_avatar-design",
+            type: "dm",
+            threadId: "dm_avatar-design",
+            agent: { id: "avatar-design", name: "Jeff G", status: "online" },
+            title: "Jeff G",
+            contextLabel: "Direct message",
+            subtitle: "Agent chat",
+            unreadCount: 0,
+            updatedAt: "2026-02-11T10:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    wsState.lastMessage = {
+      type: "ProjectChatMessageCreated",
+      data: {
+        project_id: "project-1",
+      },
+    };
+
+    render(
+      <GlobalChatProvider>
+        <ConversationDetails />
+      </GlobalChatProvider>,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("project:project-1|Otter Camp|Project • Otter Camp|1"),
+      ).toBeInTheDocument();
     });
   });
 });

@@ -44,6 +44,7 @@ export type GlobalProjectConversation = BaseConversation & {
 export type GlobalIssueConversation = BaseConversation & {
   type: "issue";
   issueId: string;
+  projectId?: string;
 };
 
 export type GlobalChatConversation =
@@ -71,6 +72,7 @@ export type OpenConversationInput =
       type: "issue";
       issueId: string;
       title: string;
+      projectId?: string;
       contextLabel?: string;
       subtitle?: string;
     };
@@ -128,6 +130,8 @@ type IncomingEvent = {
 type IncomingEventResolution = {
   agentNamesByID?: Map<string, string>;
   projectNamesByID?: Map<string, string>;
+  issueTitlesByID?: Map<string, string>;
+  issueProjectIDsByIssueID?: Map<string, string>;
 };
 
 const GlobalChatContext = createContext<GlobalChatContextValue | undefined>(
@@ -294,6 +298,17 @@ function looksLikeProjectIdentifierTitle(title: string): boolean {
   return /^project\s+[a-f0-9-]{6,}$/i.test(title.trim());
 }
 
+function looksLikeIssueIdentifierTitle(title: string): boolean {
+  const trimmed = title.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.toLowerCase() === "issue thread") {
+    return true;
+  }
+  return /^issue\s+[a-f0-9-]{6,}$/i.test(trimmed);
+}
+
 function looksLikeAgentSlotName(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -359,18 +374,140 @@ function normalizeProjectDirectory(payload: unknown): Map<string, string> {
   return result;
 }
 
+type IssueDirectory = {
+  issueTitlesByID: Map<string, string>;
+  issueProjectIDsByIssueID: Map<string, string>;
+};
+
+function normalizeIssueDirectory(payload: unknown): IssueDirectory {
+  const records =
+    payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).items)
+      ? ((payload as Record<string, unknown>).items as unknown[])
+      : Array.isArray(payload)
+        ? payload
+        : [];
+
+  const issueTitlesByID = new Map<string, string>();
+  const issueProjectIDsByIssueID = new Map<string, string>();
+
+  for (const raw of records) {
+    if (!isRecord(raw)) {
+      continue;
+    }
+    const issueID = asString(raw.id) || asString(raw.issue_id) || asString(raw.issueId);
+    if (!issueID) {
+      continue;
+    }
+
+    const issueTitle = asString(raw.title);
+    if (issueTitle) {
+      issueTitlesByID.set(issueID, issueTitle);
+      if (issueID.toLowerCase() !== issueID) {
+        issueTitlesByID.set(issueID.toLowerCase(), issueTitle);
+      }
+    }
+
+    const projectID = asString(raw.project_id) || asString(raw.projectId);
+    if (projectID) {
+      issueProjectIDsByIssueID.set(issueID, projectID);
+      if (issueID.toLowerCase() !== issueID) {
+        issueProjectIDsByIssueID.set(issueID.toLowerCase(), projectID);
+      }
+    }
+  }
+
+  return {
+    issueTitlesByID,
+    issueProjectIDsByIssueID,
+  };
+}
+
 function sortConversations(items: GlobalChatConversation[]): GlobalChatConversation[] {
   return [...items].sort((a, b) => {
     const aMs = Date.parse(a.updatedAt);
     const bMs = Date.parse(b.updatedAt);
-    if (Number.isNaN(aMs) || Number.isNaN(bMs)) {
-      return b.title.localeCompare(a.title);
+    const aScore = Number.isFinite(aMs) ? aMs : 0;
+    const bScore = Number.isFinite(bMs) ? bMs : 0;
+    if (aScore === bScore) {
+      return 0;
     }
-    if (aMs === bMs) {
-      return a.title.localeCompare(b.title);
-    }
-    return bMs - aMs;
+    return bScore - aScore;
   });
+}
+
+function lookupIssueTitle(
+  issueTitlesByID: Map<string, string> | undefined,
+  issueID: string,
+): string {
+  if (!issueTitlesByID || issueTitlesByID.size === 0) {
+    return "";
+  }
+  return issueTitlesByID.get(issueID) || issueTitlesByID.get(issueID.toLowerCase()) || "";
+}
+
+function lookupIssueProjectID(
+  issueProjectIDsByIssueID: Map<string, string> | undefined,
+  issueID: string,
+): string {
+  if (!issueProjectIDsByIssueID || issueProjectIDsByIssueID.size === 0) {
+    return "";
+  }
+  return issueProjectIDsByIssueID.get(issueID) || issueProjectIDsByIssueID.get(issueID.toLowerCase()) || "";
+}
+
+function shouldPreferIncomingTitle(
+  existing: GlobalChatConversation,
+  incoming: GlobalChatConversation,
+): boolean {
+  const existingTitle = existing.title.trim();
+  const incomingTitle = incoming.title.trim();
+  if (!incomingTitle) {
+    return false;
+  }
+  if (!existingTitle) {
+    return true;
+  }
+  if (existing.type === "project" && incoming.type === "project") {
+    return looksLikeProjectIdentifierTitle(existingTitle) && !looksLikeProjectIdentifierTitle(incomingTitle);
+  }
+  if (existing.type === "issue" && incoming.type === "issue") {
+    return looksLikeIssueIdentifierTitle(existingTitle) && !looksLikeIssueIdentifierTitle(incomingTitle);
+  }
+  if (existing.type === "dm" && incoming.type === "dm") {
+    return looksLikeAgentSlotName(existingTitle) && !looksLikeAgentSlotName(incomingTitle);
+  }
+  return false;
+}
+
+function shouldPreferIncomingContextLabel(
+  existing: GlobalChatConversation,
+  incoming: GlobalChatConversation,
+): boolean {
+  const existingLabel = existing.contextLabel.trim();
+  const incomingLabel = incoming.contextLabel.trim();
+  if (!incomingLabel) {
+    return false;
+  }
+  if (!existingLabel) {
+    return true;
+  }
+  if (
+    existing.type === "project" &&
+    incoming.type === "project" &&
+    existingLabel === "Project" &&
+    incomingLabel.includes("•")
+  ) {
+    return true;
+  }
+  if (
+    existing.type === "issue" &&
+    incoming.type === "issue" &&
+    existingLabel === "Issue" &&
+    incomingLabel.includes("•")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function normalizeAgent(raw: unknown): Agent | null {
@@ -460,6 +597,7 @@ function normalizeConversation(raw: unknown): GlobalChatConversation | null {
 
   if (type === "issue") {
     const issueId = asString(raw.issueId);
+    const projectId = asString(raw.projectId) || undefined;
     if (!issueId) {
       return null;
     }
@@ -468,6 +606,7 @@ function normalizeConversation(raw: unknown): GlobalChatConversation | null {
       key,
       type: "issue",
       issueId,
+      projectId,
       title,
       contextLabel,
       subtitle,
@@ -579,6 +718,7 @@ function toConversationFromThreadRecord(record: ChatThreadRecord): GlobalChatCon
     key: buildIssueKey(issueId),
     type: "issue",
     issueId,
+    projectId: record.project_id,
     title: record.title || "Issue thread",
     contextLabel: "Issue",
     subtitle: record.last_message_preview || "Issue conversation",
@@ -670,6 +810,7 @@ function toConversation(input: OpenConversationInput): GlobalChatConversation {
     key: buildIssueKey(input.issueId),
     type: "issue",
     issueId: input.issueId,
+    projectId: input.projectId,
     title: asString(input.title) || "Issue thread",
     contextLabel: asString(input.contextLabel) || "Issue",
     subtitle: asString(input.subtitle) || "Issue conversation",
@@ -757,10 +898,13 @@ function parseIncomingEvent(lastMessage: {
 
     const currentAuthor =
       asString(window.localStorage.getItem("otter-camp-user-name")) || "you";
+    const normalizedAuthor = author.toLowerCase();
+    const normalizedCurrentAuthor = currentAuthor.toLowerCase();
     const incoming =
-      author !== "" &&
-      author.toLowerCase() !== currentAuthor.toLowerCase() &&
-      author !== SYSTEM_SESSION_AUTHOR;
+      normalizedAuthor === ""
+        ? true
+        : normalizedAuthor !== normalizedCurrentAuthor &&
+          normalizedAuthor !== SYSTEM_SESSION_AUTHOR.toLowerCase();
 
     return {
       key: buildProjectKey(projectId),
@@ -787,6 +931,21 @@ function parseIncomingEvent(lastMessage: {
     if (!issueId) {
       return null;
     }
+    const payloadProjectID = asString(issuePayload.project_id) || asString(issuePayload.projectId);
+    const projectId =
+      payloadProjectID ||
+      lookupIssueProjectID(resolution?.issueProjectIDsByIssueID, issueId);
+    const projectName = projectId
+      ? (resolution?.projectNamesByID?.get(projectId) ?? "")
+      : "";
+    const payloadIssueTitle =
+      asString(issuePayload.issue_title) ||
+      asString(issuePayload.issueTitle) ||
+      asString(issuePayload.title);
+    const issueTitle =
+      lookupIssueTitle(resolution?.issueTitlesByID, issueId) ||
+      payloadIssueTitle ||
+      "Issue thread";
 
     return {
       key: buildIssueKey(issueId),
@@ -795,8 +954,9 @@ function parseIncomingEvent(lastMessage: {
         key: buildIssueKey(issueId),
         type: "issue",
         issueId,
-        title: `Issue ${issueId.slice(0, 8)}`,
-        contextLabel: "Issue",
+        projectId: projectId || undefined,
+        title: issueTitle,
+        contextLabel: projectName ? `Issue • ${projectName}` : "Issue",
         subtitle: "Issue thread",
         unreadCount: 0,
         updatedAt: new Date().toISOString(),
@@ -820,6 +980,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     () => new Map(),
   );
   const [projectNamesByID, setProjectNamesByID] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+  const [issueTitlesByID, setIssueTitlesByID] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+  const [issueProjectIDsByIssueID, setIssueProjectIDsByIssueID] = useState<Map<string, string>>(
     () => new Map(),
   );
 
@@ -888,6 +1054,26 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       } catch {
         // Ignore metadata fetch failures; chat still functions with existing labels.
       }
+
+      try {
+        const issuesURL = new URL(`${API_URL}/api/issues`);
+        issuesURL.searchParams.set("org_id", orgID);
+        issuesURL.searchParams.set("limit", "500");
+        const issuesResponse = await fetch(issuesURL.toString(), {
+          headers,
+          cache: "no-store",
+        });
+        const issuesPayload = issuesResponse.ok
+          ? await issuesResponse.json().catch(() => null)
+          : null;
+        const issueDirectory = normalizeIssueDirectory(issuesPayload);
+        if (!cancelled) {
+          setIssueTitlesByID(issueDirectory.issueTitlesByID);
+          setIssueProjectIDsByIssueID(issueDirectory.issueProjectIDsByIssueID);
+        }
+      } catch {
+        // Ignore metadata fetch failures; chat still functions with existing labels.
+      }
     };
 
     void loadConversationMetadata();
@@ -941,9 +1127,19 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
             if (!existing) {
               return entry;
             }
+            const mergedTitle = shouldPreferIncomingTitle(existing, entry)
+              ? entry.title
+              : existing.title || entry.title;
+            const mergedContextLabel = shouldPreferIncomingContextLabel(existing, entry)
+              ? entry.contextLabel
+              : existing.contextLabel || entry.contextLabel;
+            const mergedSubtitle = existing.subtitle || entry.subtitle;
             return {
               ...existing,
               ...entry,
+              title: mergedTitle,
+              contextLabel: mergedContextLabel,
+              subtitle: mergedSubtitle,
               unreadCount: existing.unreadCount,
             };
           });
@@ -963,7 +1159,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (agentNamesByID.size === 0 && projectNamesByID.size === 0) {
+    if (
+      agentNamesByID.size === 0 &&
+      projectNamesByID.size === 0 &&
+      issueTitlesByID.size === 0 &&
+      issueProjectIDsByIssueID.size === 0
+    ) {
       return;
     }
 
@@ -1029,12 +1230,43 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
           };
         }
 
+        if (conversation.type === "issue") {
+          const resolvedIssueTitle = lookupIssueTitle(issueTitlesByID, conversation.issueId);
+          const resolvedProjectId =
+            conversation.projectId ||
+            lookupIssueProjectID(issueProjectIDsByIssueID, conversation.issueId) ||
+            "";
+          const projectName = resolvedProjectId
+            ? (projectNamesByID.get(resolvedProjectId) ?? "")
+            : "";
+          const nextContextLabel = projectName ? `Issue • ${projectName}` : "Issue";
+          const nextTitle =
+            resolvedIssueTitle && looksLikeIssueIdentifierTitle(conversation.title)
+              ? resolvedIssueTitle
+              : conversation.title;
+          if (
+            nextTitle !== conversation.title ||
+            nextContextLabel !== conversation.contextLabel ||
+            (!!resolvedProjectId && resolvedProjectId !== conversation.projectId)
+          ) {
+            changed = true;
+            return {
+              ...conversation,
+              title: nextTitle,
+              contextLabel: nextContextLabel,
+              projectId: resolvedProjectId || conversation.projectId,
+              subtitle: conversation.subtitle || "Issue conversation",
+            };
+          }
+          return conversation;
+        }
+
         return conversation;
       });
 
       return changed ? sortConversations(next) : prev;
     });
-  }, [agentNamesByID, projectNamesByID]);
+  }, [agentNamesByID, issueProjectIDsByIssueID, issueTitlesByID, projectNamesByID]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1195,6 +1427,8 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
     const incomingEvent = parseIncomingEvent(lastMessage, {
       agentNamesByID,
+      issueProjectIDsByIssueID,
+      issueTitlesByID,
       projectNamesByID,
     });
     if (!incomingEvent) {
@@ -1219,8 +1453,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       }
 
       const existing = prev[index];
-      const mergedTitle = existing.title || conversation.title;
-      const mergedContextLabel = existing.contextLabel || conversation.contextLabel;
+      const mergedTitle = shouldPreferIncomingTitle(existing, conversation)
+        ? conversation.title
+        : existing.title || conversation.title;
+      const mergedContextLabel = shouldPreferIncomingContextLabel(existing, conversation)
+        ? conversation.contextLabel
+        : existing.contextLabel || conversation.contextLabel;
       const mergedSubtitle = existing.subtitle || conversation.subtitle;
       const merged: GlobalChatConversation = {
         ...existing,
@@ -1239,7 +1477,15 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         ...prev.filter((entry) => entry.key !== key),
       ]);
     });
-  }, [agentNamesByID, isOpen, lastMessage, projectNamesByID, selectedKey]);
+  }, [
+    agentNamesByID,
+    isOpen,
+    issueProjectIDsByIssueID,
+    issueTitlesByID,
+    lastMessage,
+    projectNamesByID,
+    selectedKey,
+  ]);
 
   const selectedConversation = useMemo(
     () =>

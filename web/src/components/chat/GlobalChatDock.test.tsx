@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import GlobalChatDock from "./GlobalChatDock";
 import type { GlobalChatConversation } from "../../contexts/GlobalChatContext";
 
@@ -28,6 +28,11 @@ vi.mock("../../contexts/GlobalChatContext", () => ({
 vi.mock("./GlobalChatSurface", () => ({
   default: () => <div data-testid="global-chat-surface" />,
 }));
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}</div>;
+}
 
 describe("GlobalChatDock", () => {
   beforeEach(() => {
@@ -181,7 +186,11 @@ describe("GlobalChatDock", () => {
       },
     );
 
-    render(<GlobalChatDock />);
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
 
     const clearButtons = screen.getAllByRole("button", { name: /clear session/i });
     fireEvent.click(clearButtons[0]);
@@ -200,5 +209,44 @@ describe("GlobalChatDock", () => {
     const secondBody = JSON.parse(String(secondInit?.body ?? "{}")) as Record<string, unknown>;
     expect(secondBody.thread_id).toBe(`dm_${agentID}`);
     expect(String(secondBody.content || "")).toContain("chat_session_reset:");
+  });
+
+  it("offers an issue jump action for selected issue chats", async () => {
+    const user = userEvent.setup();
+    globalChatState.conversations = [
+      {
+        key: "issue:issue-1",
+        type: "issue",
+        issueId: "issue-1",
+        projectId: "project-1",
+        title: "Write a poem about testing OtterCamp",
+        contextLabel: "Issue • Testerooni",
+        subtitle: "Issue conversation",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T10:00:00.000Z",
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    render(
+      <MemoryRouter initialEntries={["/chats"]}>
+        <Routes>
+          <Route
+            path="*"
+            element={(
+              <>
+                <GlobalChatDock />
+                <LocationProbe />
+              </>
+            )}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("button", { name: "Open issue" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Open issue" }));
+    expect(screen.getByTestId("location-probe")).toHaveTextContent("/projects/project-1/issues/issue-1");
   });
 });
