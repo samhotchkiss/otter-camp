@@ -7,7 +7,7 @@ import { useGlobalChat } from "../contexts/GlobalChatContext";
 import { useAgentActivity } from "../hooks/useAgentActivity";
 import { isDemoMode } from "../lib/demo";
 import useEmissions from "../hooks/useEmissions";
-import { API_URL } from "../lib/api";
+import { API_URL, apiFetch } from "../lib/api";
 
 /**
  * Status filter options including "all".
@@ -248,7 +248,7 @@ function buildIdleFallbackText(agent: AgentCardData): string {
 function AgentsPageComponent({
   apiEndpoint = isDemoMode() 
     ? `${API_URL}/api/agents?demo=true`
-    : `${API_URL}/api/sync/agents`,
+    : `${API_URL}/api/agents`,
 }: AgentsPageProps) {
   const [agents, setAgents] = useState<AgentCardData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -331,11 +331,7 @@ function AgentsPageComponent({
 
   const fetchAdminRoster = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/api/admin/agents`);
-      if (!response.ok) {
-        throw new Error("Failed to fetch admin roster");
-      }
-      const payload = (await response.json()) as { agents?: Array<Record<string, unknown>> };
+      const payload = (await apiFetch<{ agents?: Array<Record<string, unknown>> }>(`/api/admin/agents`));
       const next = (payload.agents || []).map((agent) => ({
         id: String(agent.id || "").trim(),
         name: String(agent.name || agent.id || "unknown").trim(),
@@ -354,11 +350,8 @@ function AgentsPageComponent({
   // Fetch agents from API
   const fetchAgents = useCallback(async () => {
     try {
-      const response = await fetch(apiEndpoint);
-      if (!response.ok) {
-        throw new Error("Failed to fetch agents");
-      }
-      const data = await response.json();
+      const endpoint = apiEndpoint.replace(API_URL, '');
+      const data = await apiFetch<Record<string, unknown>>(endpoint);
       const agents = data.agents || data || [];
       return agents.map(mapAgentData);
     } catch (err) {
