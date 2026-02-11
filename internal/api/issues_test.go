@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -422,6 +423,66 @@ func TestIssuesHandlerPatchIssueUpdatesAndClearsWorkTrackingFields(t *testing.T)
 	require.Nil(t, cleared.DueAt)
 	require.Nil(t, cleared.NextStep)
 	require.Nil(t, cleared.NextStepDueAt)
+}
+
+func TestIssuesHandlerPatchIssueAutoArchivesChatsOnCloseTransition(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-auto-archive-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Auto Archive Project")
+	userID := insertTestUser(t, db, orgID, "issues-auto-archive-user")
+
+	issueStore := store.NewProjectIssueStore(db)
+	chatThreadStore := store.NewChatThreadStore(db)
+	ctx := issueTestCtx(orgID)
+
+	issue, err := issueStore.CreateIssue(ctx, store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Auto archive issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	_, err = chatThreadStore.TouchThread(ctx, store.TouchChatThreadInput{
+		UserID:             userID,
+		ProjectID:          &projectID,
+		IssueID:            &issue.ID,
+		ThreadKey:          "issue:" + issue.ID,
+		ThreadType:         store.ChatThreadTypeIssue,
+		Title:              "Issue thread",
+		LastMessagePreview: "Issue content",
+		LastMessageAt:      time.Now().UTC(),
+	})
+	require.NoError(t, err)
+
+	handler := &IssuesHandler{
+		IssueStore:      issueStore,
+		ChatThreadStore: chatThreadStore,
+	}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"state":"closed"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var archivedAt sql.NullTime
+	var autoReason sql.NullString
+	err = db.QueryRow(
+		`SELECT archived_at, auto_archived_reason
+		 FROM chat_threads
+		 WHERE org_id = $1 AND user_id = $2 AND issue_id = $3`,
+		orgID,
+		userID,
+		issue.ID,
+	).Scan(&archivedAt, &autoReason)
+	require.NoError(t, err)
+	require.True(t, archivedAt.Valid)
+	require.True(t, autoReason.Valid)
+	require.Equal(t, store.ChatThreadArchiveReasonIssueClosed, autoReason.String)
 }
 
 func TestIssuesHandlerPatchIssueRejectsInvalidTransitionsAndValues(t *testing.T) {

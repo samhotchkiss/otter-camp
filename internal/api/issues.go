@@ -799,10 +799,23 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		input.NextStepDueAt = nextStepDueAt
 	}
 
+	beforeIssue, err := h.IssueStore.GetIssueByID(r.Context(), issueID)
+	if err != nil {
+		handleIssueStoreError(w, err)
+		return
+	}
+
 	updated, err := h.IssueStore.UpdateIssueWorkTracking(r.Context(), input)
 	if err != nil {
 		handleIssueStoreError(w, err)
 		return
+	}
+	if h.ChatThreadStore != nil &&
+		!strings.EqualFold(strings.TrimSpace(beforeIssue.State), "closed") &&
+		strings.EqualFold(strings.TrimSpace(updated.State), "closed") {
+		if _, archiveErr := h.ChatThreadStore.AutoArchiveByIssue(r.Context(), issueID); archiveErr != nil {
+			log.Printf("issues: failed auto-archive for closed issue %s: %v", issueID, archiveErr)
+		}
 	}
 
 	participants, err := h.IssueStore.ListParticipants(r.Context(), issueID, false)

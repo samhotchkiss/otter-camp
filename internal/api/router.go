@@ -169,7 +169,7 @@ func NewRouter() http.Handler {
 		memoryHandler.Store = store.NewMemoryStore(db)
 		memoryEventsHandler.Store = store.NewMemoryEventsStore(db)
 	}
-	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db}
+	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db, ChatThreadStore: chatThreadStore}
 	workflowsHandler.ProjectStore = projectStore
 	workflowsHandler.ProjectsHandler = projectsHandler
 	projectChatHandler.ProjectStore = projectStore

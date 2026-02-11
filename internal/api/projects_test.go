@@ -360,6 +360,54 @@ func TestProjectsHandlerPatchUpdatesProjectFields(t *testing.T) {
 	require.True(t, resp.RequireHumanReview)
 }
 
+func TestProjectsHandlerPatchAutoArchivesChatsOnProjectArchiveTransition(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "projects-auto-archive-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Auto Archive")
+	userID := insertTestUser(t, db, orgID, "projects-auto-archive-user")
+
+	chatThreadStore := store.NewChatThreadStore(db)
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	_, err := chatThreadStore.TouchThread(ctx, store.TouchChatThreadInput{
+		UserID:             userID,
+		ProjectID:          &projectID,
+		ThreadKey:          "project:" + projectID,
+		ThreadType:         store.ChatThreadTypeProject,
+		Title:              "Project chat",
+		LastMessagePreview: "project message",
+		LastMessageAt:      time.Now().UTC(),
+	})
+	require.NoError(t, err)
+
+	handler := &ProjectsHandler{
+		DB:              db,
+		Store:           store.NewProjectStore(db),
+		ChatThreadStore: chatThreadStore,
+	}
+	body := []byte(`{"status":"archived"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/projects/"+projectID+"?org_id="+orgID, bytes.NewReader(body))
+	req = addRouteParam(req, "id", projectID)
+	rec := httptest.NewRecorder()
+
+	handler.Patch(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var archivedAt sql.NullTime
+	var autoReason sql.NullString
+	err = db.QueryRow(
+		`SELECT archived_at, auto_archived_reason
+		 FROM chat_threads
+		 WHERE org_id = $1 AND user_id = $2 AND project_id = $3`,
+		orgID,
+		userID,
+		projectID,
+	).Scan(&archivedAt, &autoReason)
+	require.NoError(t, err)
+	require.True(t, archivedAt.Valid)
+	require.True(t, autoReason.Valid)
+	require.Equal(t, store.ChatThreadArchiveReasonProjectArchived, autoReason.String)
+}
+
 func TestProjectsHandlerPatchRequireHumanReviewJSONCasing(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "projects-patch-casing-org")
