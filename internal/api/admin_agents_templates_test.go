@@ -94,3 +94,13 @@ func TestBuildCreateAgentConfigPatchOmitsChannelAndHeartbeat(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"agents":{"riley":{"enabled":true,"model":{"primary":"gpt-5.2-codex"}}}}`, string(patch))
 }
+
+func TestShouldDispatchOpenClawAgentConfigMutation(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, shouldDispatchOpenClawAgentConfigMutation("chameleon"))
+	require.True(t, shouldDispatchOpenClawAgentConfigMutation("elephant"))
+	require.True(t, shouldDispatchOpenClawAgentConfigMutation(" CHAMELEON "))
+	require.False(t, shouldDispatchOpenClawAgentConfigMutation("main"))
+	require.False(t, shouldDispatchOpenClawAgentConfigMutation("writer"))
+}

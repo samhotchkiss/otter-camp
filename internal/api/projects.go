@@ -372,6 +372,7 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Description       *string          `json:"description"`
 		Status            string           `json:"status"`
 		RepoURL           *string          `json:"repo_url"`
+		PrimaryAgentID    *string          `json:"primary_agent_id"`
 		WorkflowEnabled   bool             `json:"workflow_enabled"`
 		WorkflowSchedule  *json.RawMessage `json:"workflow_schedule"`
 		WorkflowTemplate  *json.RawMessage `json:"workflow_template"`
@@ -446,6 +447,41 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	primaryAgentID := input.PrimaryAgentID
+	if primaryAgentID != nil {
+		trimmed := strings.TrimSpace(*primaryAgentID)
+		if trimmed == "" {
+			primaryAgentID = nil
+		} else {
+			primaryAgentID = &trimmed
+		}
+	}
+	if err := validateOptionalUUID(primaryAgentID, "primary_agent_id"); err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	if primaryAgentID != nil {
+		if !supportsProjectPrimaryAgentColumn(r.Context(), h.DB) {
+			sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "project settings migration pending; primary agent not available yet"})
+			return
+		}
+		var exists bool
+		err := h.DB.QueryRowContext(
+			r.Context(),
+			"SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1 AND org_id = $2)",
+			*primaryAgentID,
+			workspaceID,
+		).Scan(&exists)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate primary agent"})
+			return
+		}
+		if !exists {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "primary_agent_id not found in workspace"})
+			return
+		}
+	}
+
 	workflowLastRunAt, err := parseProjectOptionalRFC3339(input.WorkflowLastRunAt, "workflow_last_run_at")
 	if err != nil {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
@@ -497,6 +533,20 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		} else {
 			project.RepoURL = &gitURL
 		}
+	}
+
+	if primaryAgentID != nil {
+		if _, updateErr := h.DB.ExecContext(
+			ctx,
+			`UPDATE projects SET primary_agent_id = $1 WHERE id = $2 AND org_id = $3`,
+			*primaryAgentID,
+			project.ID,
+			workspaceID,
+		); updateErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to assign primary agent"})
+			return
+		}
+		project.PrimaryAgentID = primaryAgentID
 	}
 
 	sendJSON(w, http.StatusCreated, project)

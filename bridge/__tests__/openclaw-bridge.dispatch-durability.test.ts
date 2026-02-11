@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  dispatchInboundEventForTest,
   getDispatchReplayQueueStateForTest,
   queueDispatchEventForReplay,
   replayQueuedDispatchEventsForTest,
@@ -75,5 +76,18 @@ describe('dispatch durability queue', () => {
     expect(getDispatchReplayQueueStateForTest().depth).toBe(0);
 
     expect(queueDispatchEventForReplay('dm.message', buildDMDispatchPayload('msg-1'))).toBe(false);
+  });
+
+  it('ignores non-dispatch websocket events without enqueuing replay', async () => {
+    await expect(
+      dispatchInboundEventForTest('connected', { type: 'connected', message: 'welcome' }, 'socket'),
+    ).resolves.toBeUndefined();
+    await expect(
+      dispatchInboundEventForTest('bridge.status', { type: 'bridge.status' }, 'socket'),
+    ).resolves.toBeUndefined();
+
+    const state = getDispatchReplayQueueStateForTest();
+    expect(state.depth).toBe(0);
+    expect(state.ids).toEqual([]);
   });
 });

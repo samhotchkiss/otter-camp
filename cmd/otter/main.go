@@ -26,8 +26,8 @@ var chameleonSessionKeyPattern = regexp.MustCompile(
 )
 
 const (
-	authSetupCommand = "otter auth login --token <your-token> --org <org-id>"
-	authTokenHelpURL = "https://otter.camp/settings"
+	authSetupCommand                  = "otter auth login --token <your-token> --org <org-id>"
+	authTokenHelpURL                  = "https://otter.camp/settings"
 	knowledgeImportMaxFileBytes int64 = 10 << 20
 )
 
@@ -818,7 +818,8 @@ func handleProject(args []string) {
 		workflow := flags.Bool("workflow", false, "mark project as recurring workflow")
 		schedule := flags.String("schedule", "", "workflow schedule (cron expression or duration like 15m)")
 		tz := flags.String("tz", "", "workflow timezone for cron schedules")
-		agent := flags.String("agent", "", "workflow agent id/name/slug")
+		primaryAgent := flags.String("agent", "", "primary project agent id/name/slug (defaults to OTTER_AGENT_ID)")
+		workflowAgent := flags.String("workflow-agent", "", "workflow agent id/name/slug (defaults to --agent)")
 		templateTitle := flags.String("template-title", "", "workflow issue title pattern")
 		templateBody := flags.String("template-body", "", "workflow issue body")
 		autoClose := flags.Bool("auto-close", false, "set workflow pipeline to auto_close")
@@ -842,6 +843,17 @@ func handleProject(args []string) {
 		client, _ := ottercli.NewClient(cfg, *org)
 
 		payload := map[string]interface{}{"name": name}
+		primaryAgentRef := strings.TrimSpace(*primaryAgent)
+		if primaryAgentRef == "" {
+			primaryAgentRef = strings.TrimSpace(os.Getenv("OTTER_AGENT_ID"))
+		}
+		resolvedPrimaryAgentID := ""
+		if primaryAgentRef != "" {
+			resolvedAgent, resolveErr := client.ResolveAgent(primaryAgentRef)
+			dieIf(resolveErr)
+			resolvedPrimaryAgentID = resolvedAgent.ID
+			payload["primary_agent_id"] = resolvedAgent.ID
+		}
 		if strings.TrimSpace(*slug) != "" {
 			payload["slug"] = *slug
 		}
@@ -875,10 +887,18 @@ func handleProject(args []string) {
 				"auto_close":    *autoClose,
 				"pipeline":      pipeline,
 			}
-			if strings.TrimSpace(*agent) != "" {
-				resolvedAgent, resolveErr := client.ResolveAgent(*agent)
-				dieIf(resolveErr)
-				payload["workflow_agent_id"] = resolvedAgent.ID
+			workflowAgentRef := strings.TrimSpace(*workflowAgent)
+			if workflowAgentRef == "" {
+				workflowAgentRef = primaryAgentRef
+			}
+			if workflowAgentRef != "" {
+				if resolvedPrimaryAgentID != "" && strings.EqualFold(workflowAgentRef, primaryAgentRef) {
+					payload["workflow_agent_id"] = resolvedPrimaryAgentID
+				} else {
+					resolvedAgent, resolveErr := client.ResolveAgent(workflowAgentRef)
+					dieIf(resolveErr)
+					payload["workflow_agent_id"] = resolvedAgent.ID
+				}
 			}
 		}
 
@@ -1059,6 +1079,7 @@ func splitProjectCreateArgs(args []string) ([]string, []string, error) {
 		"--schedule":       {},
 		"--tz":             {},
 		"--agent":          {},
+		"--workflow-agent": {},
 		"--template-title": {},
 		"--template-body":  {},
 		"--org":            {},

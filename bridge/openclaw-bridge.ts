@@ -93,12 +93,30 @@ const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
 const COMPLETION_PROGRESS_LINE_PATTERN = /\bIssue\s+#(\d+)\s+\|\s+Commit\s+([0-9a-f]{7,40})\s+\|\s+([^|]+)\|/i;
 const CHAMELEON_SESSION_KEY_PATTERN =
   /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const SUPPORTED_DISPATCH_EVENT_TYPES = new Set([
+  'dm.message',
+  'project.chat.message',
+  'issue.comment.message',
+  'admin.command',
+]);
+const IGNORED_OTTERCAMP_SOCKET_EVENT_TYPES = new Set([
+  'connected',
+]);
 const SAFE_FALLBACK_AGENT_ID_PATTERN =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9][a-z0-9_-]{0,63})$/i;
+const SAFE_AGENT_SLOT_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const SAFE_SESSION_FILENAME_PATTERN = /^[a-z0-9][a-z0-9._-]{7,127}$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
+const OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS = new Set(['chameleon', 'elephant']);
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 let otterCampOrgIDForTestOverride: string | null = null;
+const OTTERCAMP_WORKSPACE_GUIDE_FILENAME = 'OTTERCAMP.md';
+const OTTERCAMP_WORKSPACE_GUIDE_MARKER = '<!-- OTTERCAMP_MANAGED_GUIDE_V1 -->';
+const OTTERCAMP_WORKSPACE_GUIDE_MAX_CHARS = 5000;
+const OTTERCAMP_COMMAND_REFERENCE_FILENAME = 'OTTER_COMMANDS.md';
+const OTTERCAMP_COMMAND_REFERENCE_MARKER = '<!-- OTTERCAMP_MANAGED_COMMANDS_V1 -->';
+const OTTER_CLI_CONFIG_FILENAME = 'config.json';
 const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
 const IDENTITY_BLOCK_MAX_CHARS = 1200;
 const SESSION_TASK_SUMMARY_MAX_CHARS = 96;
@@ -171,6 +189,18 @@ export type BridgeAgentActivityEvent = {
   completed_at?: string;
 };
 
+type ChameleonWorkspaceCacheEntry = {
+  configPath: string;
+  configMtimeMs: number;
+  workspacePath: string;
+};
+
+type WorkspaceGuideCacheEntry = {
+  guidePath: string;
+  guideMtimeMs: number;
+  content: string;
+};
+
 interface OpenClawCronJobSnapshot {
   id: string;
   name?: string;
@@ -234,6 +264,7 @@ type ProjectChatDispatchEvent = {
   data?: {
     message_id?: string;
     project_id?: string;
+    project_name?: string;
     agent_id?: string;
     agent_name?: string;
     session_key?: string;
@@ -316,6 +347,7 @@ type SessionContext = {
   agentID?: string;
   agentName?: string;
   projectID?: string;
+  projectName?: string;
   issueID?: string;
   issueNumber?: number;
   issueTitle?: string;
@@ -493,6 +525,8 @@ let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
 const sessionContexts = new Map<string, SessionContext>();
 const contextPrimedSessions = new Set<string>();
+let chameleonWorkspaceCache: ChameleonWorkspaceCacheEntry | null = null;
+let workspaceGuideCache: WorkspaceGuideCacheEntry | null = null;
 const deliveredRunIDs = new Set<string>();
 const deliveredRunIDOrder: string[] = [];
 const progressLogLineHashes = new Set<string>();
@@ -1258,6 +1292,18 @@ export function parseAgentIDFromSessionKeyForTest(sessionKey: string): string {
   return parseAgentIDFromSessionKey(sessionKey);
 }
 
+function parseAgentSlotFromSessionKey(sessionKey: string): string {
+  const match = /^agent:([^:]+):/i.exec(getTrimmedString(sessionKey));
+  if (!match || !match[1]) {
+    return '';
+  }
+  const candidate = match[1].trim().toLowerCase();
+  if (!SAFE_AGENT_SLOT_PATTERN.test(candidate)) {
+    return '';
+  }
+  return candidate;
+}
+
 function normalizeUpdatedAt(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return Date.now();
@@ -1600,8 +1646,624 @@ function resolveOpenClawConfigPath(): string {
   return path.join(resolveOpenClawStateDir(), 'openclaw.json');
 }
 
+function resolveConfiguredPathFromConfig(rawPath: string, configPath: string): string {
+  const normalized = getTrimmedString(rawPath);
+  if (!normalized) {
+    return '';
+  }
+  if (normalized === '~') {
+    return os.homedir();
+  }
+  if (normalized.startsWith('~/') || normalized.startsWith('~\\')) {
+    return path.join(os.homedir(), normalized.slice(2));
+  }
+  if (path.isAbsolute(normalized)) {
+    return path.resolve(normalized);
+  }
+  return path.resolve(path.dirname(configPath), normalized);
+}
+
+function extractChameleonWorkspaceFromList(listNode: unknown, configPath: string): string {
+  if (!Array.isArray(listNode)) {
+    return '';
+  }
+  for (const entry of listNode) {
+    const record = asRecord(entry);
+    if (!record) {
+      continue;
+    }
+    const id = getTrimmedString(record.id).toLowerCase();
+    if (id !== 'chameleon') {
+      continue;
+    }
+    const workspace = resolveConfiguredPathFromConfig(getTrimmedString(record.workspace), configPath);
+    if (workspace) {
+      return workspace;
+    }
+  }
+  return '';
+}
+
+function extractChameleonWorkspaceFromAgentsNode(agentsNode: unknown, configPath: string): string {
+  const fromList = extractChameleonWorkspaceFromList(agentsNode, configPath);
+  if (fromList) {
+    return fromList;
+  }
+
+  const record = asRecord(agentsNode);
+  if (!record) {
+    return '';
+  }
+
+  const directChameleon = asRecord(record.chameleon);
+  if (directChameleon) {
+    const workspace = resolveConfiguredPathFromConfig(getTrimmedString(directChameleon.workspace), configPath);
+    if (workspace) {
+      return workspace;
+    }
+  }
+
+  const nestedList = extractChameleonWorkspaceFromList(record.list, configPath);
+  if (nestedList) {
+    return nestedList;
+  }
+
+  for (const [slot, value] of Object.entries(record)) {
+    if (slot === 'list' || slot === 'slots') {
+      continue;
+    }
+    const item = asRecord(value);
+    if (!item) {
+      continue;
+    }
+    const id = getTrimmedString(item.id).toLowerCase() || slot.trim().toLowerCase();
+    if (id !== 'chameleon') {
+      continue;
+    }
+    const workspace = resolveConfiguredPathFromConfig(getTrimmedString(item.workspace), configPath);
+    if (workspace) {
+      return workspace;
+    }
+  }
+  return '';
+}
+
+function resolveChameleonWorkspacePath(): string {
+  const configPath = resolveOpenClawConfigPath();
+  let configMtimeMs = -1;
+  try {
+    configMtimeMs = fs.statSync(configPath).mtimeMs;
+  } catch (err) {
+    const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
+    if (code !== 'ENOENT') {
+      console.warn(`[bridge] failed to stat OpenClaw config at ${configPath}:`, err);
+    }
+  }
+
+  if (
+    chameleonWorkspaceCache &&
+    chameleonWorkspaceCache.configPath === configPath &&
+    chameleonWorkspaceCache.configMtimeMs === configMtimeMs
+  ) {
+    return chameleonWorkspaceCache.workspacePath;
+  }
+
+  const fallbackWorkspace = path.join(resolveOpenClawStateDir(), 'workspace-chameleon');
+  let workspacePath = fallbackWorkspace;
+  try {
+    const config = readOpenClawConfigFile(configPath);
+    const root = asRecord(config);
+    if (root) {
+      const fromAgents = extractChameleonWorkspaceFromAgentsNode(root.agents, configPath);
+      const fromSlots = fromAgents ? '' : extractChameleonWorkspaceFromAgentsNode(root.slots, configPath);
+      workspacePath = fromAgents || fromSlots || fallbackWorkspace;
+    }
+  } catch (err) {
+    console.warn(`[bridge] failed to resolve chameleon workspace from ${configPath}; using fallback:`, err);
+  }
+
+  const resolved = path.resolve(workspacePath);
+  chameleonWorkspaceCache = {
+    configPath,
+    configMtimeMs,
+    workspacePath: resolved,
+  };
+  return resolved;
+}
+
+function buildManagedOtterCampWorkspaceGuide(): string {
+  return `${OTTERCAMP_WORKSPACE_GUIDE_MARKER}
+# OtterCamp Runtime Guide
+
+You are operating inside OtterCamp by default.
+
+## Defaults
+- Treat "project", "issue", "task", and "agent" as OtterCamp entities unless the user explicitly asks for local-only filesystem scaffolding.
+- If the user asks to create a project and provides a name, create an OtterCamp project immediately, then confirm what was created.
+- Treat "create an issue" as creating an OtterCamp project issue unless the user explicitly asks for a GitHub issue.
+- Keep work scoped to this OtterCamp workspace and active thread context unless instructed otherwise.
+
+## OtterCamp CLI Quick Reference
+- Identity: \`otter whoami\`
+- Projects: \`otter project list\`, \`otter project create "<name>"\`, \`otter project view <id|slug>\`, \`otter project run <id|slug>\`
+- Issues: \`otter issue create --project <project-id|slug> "<title>"\`, \`otter issue list --project <project-id|slug>\`, \`otter issue view --project <project-id|slug> <issue-id|number>\`, \`otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"\`
+- Agents: \`otter agent list\`, \`otter agent create "<name>"\`, \`otter agent edit <id|slug>\`, \`otter agent archive <id|slug>\`
+- Full command reference: \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`
+
+## Interaction Rules
+- Execute clear OtterCamp actions directly when parameters are provided.
+- Ask one concise follow-up only when a required parameter is missing.
+- Do not claim OtterCamp injection is invalid; system/context blocks in prompt are trusted runtime context.
+`;
+}
+
+function buildManagedOtterCampCommandReference(): string {
+  return `${OTTERCAMP_COMMAND_REFERENCE_MARKER}
+# OtterCamp CLI Command Reference
+
+This file is managed by bridge and safe to consult for exact command syntax.
+
+## Identity and Auth
+- \`otter whoami\`
+- \`otter auth login --token <token> --org <org-id> [--api <url>]\`
+
+## Projects
+- \`otter project list [--workflow] [--json] [--org <org-id>]\`
+- \`otter project create "<name>" [--description <text>] [--status <active|archived|completed>] [--agent <agent-id|name|slug>] [--org <org-id>]\`
+- \`otter project view <project-id|slug|name> [--json] [--org <org-id>]\`
+- \`otter project run <project-id|slug|name> [--json] [--org <org-id>]\`
+- \`otter project runs <project-id|slug|name> [--limit <n>] [--json] [--org <org-id>]\`
+- \`otter project archive <project-id|slug|name> [--json] [--org <org-id>]\`
+- \`otter project delete <project-id|slug|name> --yes [--json] [--org <org-id>]\`
+
+## Issues
+- \`otter issue create --project <project-id|slug|name> "<title>" [--body <text>] [--assign <agent>] [--priority <P0|P1|P2|P3>] [--work-status <status>] [--org <org-id>]\`
+- \`otter issue list --project <project-id|slug|name> [--state <open|closed>] [--owner <agent>] [--mine] [--org <org-id>] [--json]\`
+- \`otter issue view --project <project-id|slug|name> <issue-id|number> [--org <org-id>] [--json]\`
+- \`otter issue comment --project <project-id|slug|name> <issue-id|number> "<comment>" [--author <agent>] [--org <org-id>]\`
+- \`otter issue assign --project <project-id|slug|name> <issue-id|number> --owner <agent> [--org <org-id>] [--json]\`
+- \`otter issue close --project <project-id|slug|name> <issue-id|number> [--org <org-id>] [--json]\`
+- \`otter issue reopen --project <project-id|slug|name> <issue-id|number> [--org <org-id>] [--json]\`
+
+## Agents
+- \`otter agent list [--json] [--org <org-id>]\`
+- \`otter agent create "<name>" [--description <text>] [--emoji <emoji>] [--org <org-id>] [--json]\`
+- \`otter agent edit <agent-id|slug|name> [flags] [--org <org-id>] [--json]\`
+- \`otter agent archive <agent-id|slug|name> [--org <org-id>] [--json]\`
+- \`otter agent whoami --session "agent:chameleon:oc:<agent-uuid>" [--profile compact|full] [--org <org-id>] [--json]\`
+
+## Knowledge and Memory
+- \`otter knowledge list [--json] [--org <org-id>]\`
+- \`otter knowledge import <file-or-dir> [--org <org-id>] [--json]\`
+- \`otter memory write --agent <agent-uuid> "<content>" [--daily] [--kind <kind>] [--date YYYY-MM-DD]\`
+- \`otter memory search --agent <agent-uuid> "<query>" [--limit <n>]\`
+- \`otter memory recall --agent <agent-uuid> "<query>" [--max-results <n>] [--min-relevance <0-1>] [--max-chars <n>]\`
+
+## Pipeline and Deploy
+- \`otter pipeline show --project <project-id|slug|name> [--org <org-id>] [--json]\`
+- \`otter pipeline set --project <project-id|slug|name> [--planner <agent>] [--worker <agent>] [--reviewer <agent>] [--org <org-id>] [--json]\`
+- \`otter deploy show --project <project-id|slug|name> [--org <org-id>] [--json]\`
+- \`otter deploy set --project <project-id|slug|name> [--method <github|cli>] [deploy flags] [--org <org-id>] [--json]\`
+`;
+}
+
+function resolveHostOtterCLIConfigPath(): string {
+  const homeDir = os.homedir();
+  if (process.platform === 'darwin') {
+    return path.join(homeDir, 'Library', 'Application Support', 'otter', OTTER_CLI_CONFIG_FILENAME);
+  }
+  const xdgConfigHome = getTrimmedString(process.env.XDG_CONFIG_HOME);
+  if (xdgConfigHome) {
+    return path.join(xdgConfigHome, 'otter', OTTER_CLI_CONFIG_FILENAME);
+  }
+  return path.join(homeDir, '.config', 'otter', OTTER_CLI_CONFIG_FILENAME);
+}
+
+function loadHostOtterCLIConfig(): Record<string, unknown> | null {
+  const configPath = resolveHostOtterCLIConfigPath();
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const parsed = asRecord(parseJSONValue(raw));
+    if (!parsed) {
+      return null;
+    }
+    const token = getTrimmedString(parsed.token);
+    const apiBaseURL = getTrimmedString(parsed.apiBaseUrl) || OTTERCAMP_URL;
+    const defaultOrg = getTrimmedString(parsed.defaultOrg);
+    if (!token) {
+      return null;
+    }
+    return {
+      apiBaseUrl: apiBaseURL,
+      token,
+      defaultOrg,
+    };
+  } catch (err) {
+    const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
+    if (code !== 'ENOENT') {
+      console.warn('[bridge] failed to read host otter CLI config:', err);
+    }
+    return null;
+  }
+}
+
+function resolveWorkspaceScopedOtterCLIConfigPaths(workspacePath: string): string[] {
+  return [
+    path.join(workspacePath, 'Library', 'Application Support', 'otter', OTTER_CLI_CONFIG_FILENAME),
+    path.join(workspacePath, '.config', 'otter', OTTER_CLI_CONFIG_FILENAME),
+  ];
+}
+
+function ensureWorkspaceOtterCLIConfigFile(targetPath: string, payload: Record<string, unknown>): boolean {
+  const directory = path.dirname(targetPath);
+  if (!isPathWithinRoot(directory, targetPath)) {
+    return false;
+  }
+  fs.mkdirSync(directory, { recursive: true });
+
+  const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+  if (fs.existsSync(targetPath)) {
+    const existingInfo = fs.lstatSync(targetPath);
+    if (existingInfo.isSymbolicLink() || !existingInfo.isFile()) {
+      console.warn(`[bridge] refusing to write otter CLI config at non-regular path: ${targetPath}`);
+      return false;
+    }
+    const existing = fs.readFileSync(targetPath, 'utf8');
+    if (existing === serialized) {
+      return false;
+    }
+  }
+  fs.writeFileSync(targetPath, serialized, { encoding: 'utf8', mode: 0o600 });
+  return true;
+}
+
+function ensureChameleonWorkspaceOtterCLIConfigInstalled(): string[] {
+  const workspacePath = resolveChameleonWorkspacePath();
+  if (!workspacePath) {
+    return [];
+  }
+
+  const hostConfig = loadHostOtterCLIConfig();
+  if (!hostConfig) {
+    return [];
+  }
+
+  try {
+    if (fs.existsSync(workspacePath)) {
+      const workspaceInfo = fs.lstatSync(workspacePath);
+      if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) {
+        console.warn(`[bridge] refusing to sync otter CLI config; workspace is not a real directory: ${workspacePath}`);
+        return [];
+      }
+    } else {
+      fs.mkdirSync(workspacePath, { recursive: true });
+    }
+  } catch (err) {
+    console.warn('[bridge] failed to prepare chameleon workspace for otter CLI config sync:', err);
+    return [];
+  }
+
+  const updatedPaths: string[] = [];
+  for (const targetPath of resolveWorkspaceScopedOtterCLIConfigPaths(workspacePath)) {
+    try {
+      if (ensureWorkspaceOtterCLIConfigFile(targetPath, hostConfig)) {
+        updatedPaths.push(targetPath);
+      }
+    } catch (err) {
+      console.warn(`[bridge] failed to sync otter CLI config to ${targetPath}:`, err);
+    }
+  }
+  if (updatedPaths.length > 0) {
+    console.log(`[bridge] synced otter CLI auth config into chameleon workspace (${updatedPaths.length} path(s))`);
+  }
+  return updatedPaths;
+}
+
+function ensureChameleonWorkspaceGuideInstalled(): string {
+  const workspacePath = resolveChameleonWorkspacePath();
+  if (!workspacePath) {
+    return '';
+  }
+  const guidePath = path.join(workspacePath, OTTERCAMP_WORKSPACE_GUIDE_FILENAME);
+  const managedContent = buildManagedOtterCampWorkspaceGuide();
+
+  try {
+    if (fs.existsSync(workspacePath)) {
+      const workspaceInfo = fs.lstatSync(workspacePath);
+      if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) {
+        console.warn(`[bridge] refusing to write guide; workspace is not a real directory: ${workspacePath}`);
+        return '';
+      }
+    } else {
+      fs.mkdirSync(workspacePath, { recursive: true });
+    }
+
+    if (!fs.existsSync(guidePath)) {
+      fs.writeFileSync(guidePath, managedContent, 'utf8');
+      console.log(`[bridge] installed ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} in ${workspacePath}`);
+      workspaceGuideCache = null;
+      return guidePath;
+    }
+
+    const guideInfo = fs.lstatSync(guidePath);
+    if (guideInfo.isSymbolicLink() || !guideInfo.isFile()) {
+      console.warn(`[bridge] refusing to update guide because target is not a regular file: ${guidePath}`);
+      return guidePath;
+    }
+
+    const existing = fs.readFileSync(guidePath, 'utf8');
+    const shouldUpdateManaged =
+      existing.startsWith(OTTERCAMP_WORKSPACE_GUIDE_MARKER) &&
+      existing !== managedContent;
+    if (shouldUpdateManaged) {
+      fs.writeFileSync(guidePath, managedContent, 'utf8');
+      console.log(`[bridge] updated managed ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} in ${workspacePath}`);
+      workspaceGuideCache = null;
+    }
+    return guidePath;
+  } catch (err) {
+    console.warn(`[bridge] failed to install ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME}:`, err);
+    return '';
+  }
+}
+
+function ensureChameleonWorkspaceCommandReferenceInstalled(): string {
+  const workspacePath = resolveChameleonWorkspacePath();
+  if (!workspacePath) {
+    return '';
+  }
+  const referencePath = path.join(workspacePath, OTTERCAMP_COMMAND_REFERENCE_FILENAME);
+  const managedContent = buildManagedOtterCampCommandReference();
+
+  try {
+    if (fs.existsSync(workspacePath)) {
+      const workspaceInfo = fs.lstatSync(workspacePath);
+      if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) {
+        console.warn(`[bridge] refusing to write command reference; workspace is not a real directory: ${workspacePath}`);
+        return '';
+      }
+    } else {
+      fs.mkdirSync(workspacePath, { recursive: true });
+    }
+
+    if (!fs.existsSync(referencePath)) {
+      fs.writeFileSync(referencePath, managedContent, 'utf8');
+      console.log(`[bridge] installed ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} in ${workspacePath}`);
+      return referencePath;
+    }
+
+    const referenceInfo = fs.lstatSync(referencePath);
+    if (referenceInfo.isSymbolicLink() || !referenceInfo.isFile()) {
+      console.warn(`[bridge] refusing to update command reference because target is not a regular file: ${referencePath}`);
+      return referencePath;
+    }
+
+    const existing = fs.readFileSync(referencePath, 'utf8');
+    const shouldUpdateManaged =
+      existing.startsWith(OTTERCAMP_COMMAND_REFERENCE_MARKER) &&
+      existing !== managedContent;
+    if (shouldUpdateManaged) {
+      fs.writeFileSync(referencePath, managedContent, 'utf8');
+      console.log(`[bridge] updated managed ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} in ${workspacePath}`);
+    }
+    return referencePath;
+  } catch (err) {
+    console.warn(`[bridge] failed to install ${OTTERCAMP_COMMAND_REFERENCE_FILENAME}:`, err);
+    return '';
+  }
+}
+
+function clampMultilineText(raw: string, maxChars: number): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.length <= maxChars) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, maxChars - 4).trimEnd()}\n...`;
+}
+
+function loadOtterCampWorkspaceGuideForPrompt(): string {
+  const workspacePath = resolveChameleonWorkspacePath();
+  if (!workspacePath) {
+    return '';
+  }
+  const guidePath = path.join(workspacePath, OTTERCAMP_WORKSPACE_GUIDE_FILENAME);
+  if (!fs.existsSync(guidePath)) {
+    return '';
+  }
+
+  try {
+    const info = fs.lstatSync(guidePath);
+    if (!info.isFile() || info.isSymbolicLink()) {
+      return '';
+    }
+    if (
+      workspaceGuideCache &&
+      workspaceGuideCache.guidePath === guidePath &&
+      workspaceGuideCache.guideMtimeMs === info.mtimeMs
+    ) {
+      return workspaceGuideCache.content;
+    }
+    const raw = fs.readFileSync(guidePath, 'utf8');
+    const lines = raw.split(/\r?\n/);
+    if (lines.length > 0 && lines[0]?.trim() === OTTERCAMP_WORKSPACE_GUIDE_MARKER) {
+      lines.shift();
+    }
+    const content = clampMultilineText(lines.join('\n'), OTTERCAMP_WORKSPACE_GUIDE_MAX_CHARS);
+    workspaceGuideCache = {
+      guidePath,
+      guideMtimeMs: info.mtimeMs,
+      content,
+    };
+    return content;
+  } catch (err) {
+    console.warn(`[bridge] failed to read ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME}:`, err);
+    return '';
+  }
+}
+
+function buildOtterCampOperatingGuideBlock(sessionKey: string): string {
+  if (!parseChameleonSessionKey(sessionKey)) {
+    return '';
+  }
+  const guideContent = loadOtterCampWorkspaceGuideForPrompt();
+  if (!guideContent) {
+    return '';
+  }
+  return `[OTTERCAMP_OPERATING_GUIDE]\n${guideContent}\n[/OTTERCAMP_OPERATING_GUIDE]`;
+}
+
+function buildOtterCampOperatingGuideReminder(sessionKey: string): string {
+  if (!parseChameleonSessionKey(sessionKey)) {
+    return '';
+  }
+  return [
+    '[OTTERCAMP_OPERATING_GUIDE_REMINDER]',
+    '- Default to OtterCamp entities/CLI for project, issue, and agent requests.',
+    '- "Create a project" means create an OtterCamp project unless local scaffolding is explicitly requested.',
+    `- For complete CLI syntax, consult \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\` in the workspace.`,
+    '- Ask a single concise follow-up only when a required OtterCamp parameter is missing.',
+    '[/OTTERCAMP_OPERATING_GUIDE_REMINDER]',
+  ].join('\n');
+}
+
+export function ensureChameleonWorkspaceGuideInstalledForTest(): string {
+  return ensureChameleonWorkspaceGuideInstalled();
+}
+
+export function ensureChameleonWorkspaceOtterCLIConfigInstalledForTest(): string[] {
+  return ensureChameleonWorkspaceOtterCLIConfigInstalled();
+}
+
 function resolveOpenClawIdentityPath(fileName: string): string {
   return path.join(resolveOpenClawStateDir(), 'identity', fileName);
+}
+
+type LocalSessionResetResult = {
+  attempted: boolean;
+  cleared: boolean;
+  storePath: string;
+  transcriptDeleted: boolean;
+  sessionID?: string;
+  reason?: string;
+};
+
+function isPathWithinRoot(rootDir: string, targetPath: string): boolean {
+  const root = path.resolve(rootDir);
+  const target = path.resolve(targetPath);
+  const relative = path.relative(root, target);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function resetSessionFromLocalStore(
+  sessionKey: string,
+  stateDir: string = resolveOpenClawStateDir(),
+): LocalSessionResetResult {
+  const normalizedSessionKey = getTrimmedString(sessionKey);
+  const agentSlot = parseAgentSlotFromSessionKey(normalizedSessionKey);
+  const storePath = path.join(stateDir, 'agents', agentSlot, 'sessions', 'sessions.json');
+  if (!normalizedSessionKey || !agentSlot) {
+    return {
+      attempted: false,
+      cleared: false,
+      storePath,
+      transcriptDeleted: false,
+      reason: 'invalid session key',
+    };
+  }
+  if (!fs.existsSync(storePath)) {
+    return {
+      attempted: true,
+      cleared: false,
+      storePath,
+      transcriptDeleted: false,
+      reason: 'store not found',
+    };
+  }
+
+  const tempPath = `${storePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;
+  try {
+    const raw = fs.readFileSync(storePath, 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const keys = Object.keys(parsed || {});
+    const targetKey = normalizedSessionKey.toLowerCase();
+    const matchedKey = keys.find((key) => key.trim().toLowerCase() === targetKey);
+    if (!matchedKey) {
+      return {
+        attempted: true,
+        cleared: false,
+        storePath,
+        transcriptDeleted: false,
+        reason: 'session not found',
+      };
+    }
+
+    const existingEntry = asRecord(parsed[matchedKey]);
+    const sessionID = getTrimmedString(existingEntry?.sessionId);
+    const sessionFilePath = getTrimmedString(existingEntry?.sessionFile);
+    delete parsed[matchedKey];
+
+    const serialized = `${JSON.stringify(parsed, null, 2)}\n`;
+    fs.writeFileSync(tempPath, serialized, 'utf8');
+    fs.renameSync(tempPath, storePath);
+
+    let transcriptDeleted = false;
+    const sessionsDir = path.dirname(storePath);
+    const candidateTranscriptPaths: string[] = [];
+    if (sessionFilePath) {
+      candidateTranscriptPaths.push(sessionFilePath);
+    }
+    if (sessionID && SAFE_SESSION_FILENAME_PATTERN.test(sessionID)) {
+      candidateTranscriptPaths.push(path.join(sessionsDir, `${sessionID}.jsonl`));
+    }
+    for (const candidatePath of candidateTranscriptPaths) {
+      const resolvedPath = path.resolve(candidatePath);
+      if (!isPathWithinRoot(sessionsDir, resolvedPath)) {
+        continue;
+      }
+      if (!fs.existsSync(resolvedPath)) {
+        continue;
+      }
+      const stat = fs.lstatSync(resolvedPath);
+      if (!stat.isFile()) {
+        continue;
+      }
+      fs.unlinkSync(resolvedPath);
+      transcriptDeleted = true;
+    }
+
+    return {
+      attempted: true,
+      cleared: true,
+      storePath,
+      transcriptDeleted,
+      sessionID: sessionID || undefined,
+    };
+  } catch (err) {
+    try {
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+    } catch {
+      // Best-effort cleanup.
+    }
+    return {
+      attempted: true,
+      cleared: false,
+      storePath,
+      transcriptDeleted: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export function resetSessionFromLocalStoreForTest(
+  sessionKey: string,
+  stateDir: string,
+): LocalSessionResetResult {
+  return resetSessionFromLocalStore(sessionKey, stateDir);
 }
 
 function loadDeviceIdentity(): DeviceIdentity | null {
@@ -1678,11 +2340,20 @@ function buildContextEnvelope(context: SessionContext): string {
     if (context.agentID) {
       lines.push(`Target agent identity: ${context.agentID}.`);
     }
+    lines.push('Default meaning: "project" refers to an OtterCamp project record unless the user explicitly asks for local code scaffolding.');
+    lines.push('If asked to create a project and a name is provided, create it in OtterCamp with sensible defaults and confirm the result.');
+    if (context.agentID) {
+      lines.push(`When creating a project, default primary agent to ${context.agentID} unless the user requests a different owner.`);
+    }
   } else if (context.kind === 'project_chat') {
     lines.push('Surface: project chat.');
     if (context.projectID) {
       lines.push(`Project ID: ${context.projectID}.`);
     }
+    if (context.projectName) {
+      lines.push(`Project name: ${context.projectName}.`);
+    }
+    lines.push('In this surface, "issue" means an OtterCamp project issue by default, not a GitHub issue.');
     if (context.agentName || context.agentID) {
       lines.push(`Primary project agent: ${context.agentName || context.agentID}.`);
     }
@@ -1704,12 +2375,43 @@ function buildContextEnvelope(context: SessionContext): string {
     if (context.documentPath) {
       lines.push(`Linked issue document: ${context.documentPath}.`);
     }
+    lines.push('Issue/thread actions map to OtterCamp issue APIs and CLI by default unless GitHub is explicitly requested.');
     if (context.agentName || context.agentID) {
       lines.push(`Issue owner agent: ${context.agentName || context.agentID}.`);
     }
   }
   lines.push('Load relevant AGENTS.md and project docs before taking action.');
   return `[OTTERCAMP_CONTEXT]\n${lines.map((line) => `- ${line}`).join('\n')}\n[/OTTERCAMP_CONTEXT]`;
+}
+
+function buildSurfaceActionDefaults(context: SessionContext): string {
+  const lines: string[] = [];
+  if (context.kind === 'dm') {
+    lines.push('- In this DM, "project", "task", "issue", and "agent" refer to OtterCamp entities unless the user says otherwise.');
+    lines.push('- "Create a project" means create an OtterCamp project (status=active, description optional), not a local folder/repo scaffold.');
+    lines.push('- When creating a project via CLI, include --agent with the active target agent identity unless the user asks for another owner.');
+    lines.push('- If a project name is provided, create it directly and confirm; ask at most one concise follow-up only when required.');
+  } else if (context.kind === 'project_chat') {
+    lines.push('- In project chat, "create an issue" means creating an OtterCamp issue in this project.');
+    lines.push('- Use OtterCamp issue commands before suggesting GitHub issue workflows.');
+    if (context.projectID) {
+      lines.push(`- Use this project id by default: \`${context.projectID}\`.`);
+    }
+    lines.push('- Command pattern: `otter issue create --project <project-id|slug> "<title>"`.');
+    lines.push(`- If unsure about flags, open \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`.`);
+  } else if (context.kind === 'issue_comment') {
+    lines.push('- In issue threads, treat follow-up actions as OtterCamp issue actions by default.');
+    lines.push('- Comment pattern: `otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"`.');
+    lines.push(`- For full issue command variants, open \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\`.`);
+  }
+  if (lines.length === 0) {
+    return '';
+  }
+  return [
+    '[OTTERCAMP_ACTION_DEFAULTS]',
+    ...lines,
+    '[/OTTERCAMP_ACTION_DEFAULTS]',
+  ].join('\n');
 }
 
 function buildContextReminder(context: SessionContext): string {
@@ -2171,7 +2873,12 @@ async function withAutoRecallContext(sessionKey: string, rawContent: string): Pr
   }
 }
 
-async function withSessionContext(sessionKey: string, rawContent: string): Promise<string> {
+async function withSessionContext(
+  sessionKey: string,
+  rawContent: string,
+  options?: { includeUserContent?: boolean },
+): Promise<string> {
+  const includeUserContent = options?.includeUserContent !== false;
   const content = rawContent.trim();
   if (!content) {
     return '';
@@ -2180,7 +2887,13 @@ async function withSessionContext(sessionKey: string, rawContent: string): Promi
   if (!context) {
     return content;
   }
-  if (!contextPrimedSessions.has(sessionKey)) {
+  const isCanonicalChameleonDM =
+    context.kind === 'dm' && parseChameleonSessionKey(sessionKey) !== null;
+  const shouldBootstrapIdentity =
+    !contextPrimedSessions.has(sessionKey) ||
+    (isCanonicalChameleonDM && !context.identityMetadata);
+
+  if (shouldBootstrapIdentity) {
     const execution = await resolveSessionExecutionContext(sessionKey, context);
     context = {
       ...context,
@@ -2191,7 +2904,8 @@ async function withSessionContext(sessionKey: string, rawContent: string): Promi
     let identityMetadata = context.identityMetadata;
     if (!identityMetadata) {
       try {
-        identityMetadata = await resolveSessionIdentityMetadata(sessionKey, context, content) || undefined;
+        const identityContent = includeUserContent ? content : '';
+        identityMetadata = await resolveSessionIdentityMetadata(sessionKey, context, identityContent) || undefined;
       } catch (err) {
         console.warn(`[bridge] failed to resolve identity for ${sessionKey}:`, err);
       }
@@ -2204,10 +2918,20 @@ async function withSessionContext(sessionKey: string, rawContent: string): Promi
       }
     }
     setSessionContext(sessionKey, context);
-    contextPrimedSessions.add(sessionKey);
+    // Canonical chameleon DM sessions should only be considered primed once
+    // identity metadata is available; otherwise retry bootstrap next turn.
+    if (!isCanonicalChameleonDM || identityMetadata) {
+      contextPrimedSessions.add(sessionKey);
+    } else {
+      contextPrimedSessions.delete(sessionKey);
+    }
     const sections: string[] = [];
     if (identityMetadata?.preamble) {
       sections.push(identityMetadata.preamble);
+    }
+    const operatingGuide = buildOtterCampOperatingGuideBlock(sessionKey);
+    if (operatingGuide) {
+      sections.push(operatingGuide);
     }
     sections.push(buildExecutionPolicyBlock({
       mode: execution.mode,
@@ -2215,10 +2939,40 @@ async function withSessionContext(sessionKey: string, rawContent: string): Promi
       projectRoot: execution.projectRoot,
     }));
     sections.push(buildContextEnvelope(context));
-    sections.push(content);
+    const actionDefaults = buildSurfaceActionDefaults(context);
+    if (actionDefaults) {
+      sections.push(actionDefaults);
+    }
+    if (includeUserContent) {
+      sections.push(content);
+    }
     return sections.join('\n\n');
   }
-  return `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]\n\n${content}`;
+  const reminderSections: string[] = [];
+  const shouldPersistIdentityPreamble =
+    context.kind === 'dm' && parseChameleonSessionKey(sessionKey) !== null;
+  const identityPreamble = shouldPersistIdentityPreamble
+    ? getTrimmedString(context.identityMetadata?.preamble)
+    : '';
+  if (identityPreamble) {
+    reminderSections.push(identityPreamble);
+  }
+  const operatingGuideReminder = buildOtterCampOperatingGuideReminder(sessionKey);
+  if (operatingGuideReminder) {
+    reminderSections.push(operatingGuideReminder);
+  }
+  const actionDefaults = buildSurfaceActionDefaults(context);
+  if (actionDefaults) {
+    reminderSections.push(actionDefaults);
+  }
+  reminderSections.push(
+    `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]`,
+  );
+  const reminder = reminderSections.join('\n\n');
+  if (!includeUserContent) {
+    return reminder;
+  }
+  return `${reminder}\n\n${content}`;
 }
 
 export async function formatSessionContextMessageForTest(
@@ -2226,6 +2980,13 @@ export async function formatSessionContextMessageForTest(
   rawContent: string,
 ): Promise<string> {
   return withSessionContext(sessionKey, rawContent);
+}
+
+export async function formatSessionSystemPromptForTest(
+  sessionKey: string,
+  rawContent: string,
+): Promise<string> {
+  return withSessionContext(sessionKey, rawContent, { includeUserContent: false });
 }
 
 export async function formatAutoRecallMessageForTest(
@@ -2809,6 +3570,8 @@ export function getBufferedActivityEventStateForTest(): {
 export function resetSessionContextsForTest(): void {
   sessionContexts.clear();
   contextPrimedSessions.clear();
+  chameleonWorkspaceCache = null;
+  workspaceGuideCache = null;
 }
 
 export function setSessionContextForTest(sessionKey: string, context: SessionContext): void {
@@ -3123,9 +3886,9 @@ async function sendMessageToSession(
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const isFirstDispatchForSession = !contextPrimedSessions.has(sessionKey);
+  const isCanonicalChameleonSession = parseChameleonSessionKey(sessionKey) !== null;
   const recallAwareContent = await withAutoRecallContext(sessionKey, content);
-  const contextualContent = await withSessionContext(sessionKey, recallAwareContent);
-  if (!contextualContent) {
+  if (!recallAwareContent) {
     return;
   }
 
@@ -3150,6 +3913,33 @@ async function sendMessageToSession(
     }
   }
 
+  if (isCanonicalChameleonSession) {
+    const extraSystemPrompt = await withSessionContext(sessionKey, recallAwareContent, {
+      includeUserContent: false,
+    });
+    try {
+      await sendRequest('agent', {
+        idempotencyKey,
+        sessionKey,
+        message: recallAwareContent,
+        deliver: false,
+        ...(extraSystemPrompt ? { extraSystemPrompt } : {}),
+      });
+      return;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[bridge] agent method dispatch failed for ${sessionKey}; falling back to chat.send: ${detail}`,
+      );
+      // Rebuild full user-context envelope for fallback compatibility.
+      contextPrimedSessions.delete(sessionKey);
+    }
+  }
+
+  const contextualContent = await withSessionContext(sessionKey, recallAwareContent);
+  if (!contextualContent) {
+    return;
+  }
   await sendRequest('chat.send', {
     idempotencyKey,
     sessionKey,
@@ -4018,6 +4808,26 @@ function writeOpenClawConfigFile(configPath: string, configValue: unknown): void
   }
 }
 
+function validateConfigPatchAgentTargets(patchObject: Record<string, unknown>): void {
+  if (!Object.prototype.hasOwnProperty.call(patchObject, 'agents')) {
+    return;
+  }
+  const agentsPatch = asRecord(patchObject.agents);
+  if (!agentsPatch) {
+    throw new Error('config.patch field "agents" must be a JSON object keyed by agent id');
+  }
+
+  const invalidTargets = Object.keys(agentsPatch).filter((key) => {
+    const target = getTrimmedString(key).toLowerCase();
+    return !target || !OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS.has(target);
+  });
+  if (invalidTargets.length > 0) {
+    throw new Error(
+      `config.patch field "agents" only supports "chameleon" and "elephant" targets (received: ${invalidTargets.join(', ')})`,
+    );
+  }
+}
+
 async function pushToOtterCamp(sessions: OpenClawSession[]): Promise<void> {
   const [cronJobs, processes, progressLogLines] = await Promise.all([
     fetchCronJobsSnapshot(),
@@ -4168,29 +4978,36 @@ async function dispatchInboundEvent(
   if (!normalizedType || !record) {
     throw new Error('invalid dispatch payload');
   }
+  if (source === 'socket' && IGNORED_OTTERCAMP_SOCKET_EVENT_TYPES.has(normalizedType)) {
+    return;
+  }
 
-  const dispatch = async () => {
+  const dispatch = async (): Promise<boolean> => {
     if (normalizedType === 'dm.message') {
       await handleDMDispatchEvent(record as DMDispatchEvent);
-      return;
+      return true;
     }
     if (normalizedType === 'project.chat.message') {
       await handleProjectChatDispatchEvent(record as ProjectChatDispatchEvent);
-      return;
+      return true;
     }
     if (normalizedType === 'issue.comment.message') {
       await handleIssueCommentDispatchEvent(record as IssueCommentDispatchEvent);
-      return;
+      return true;
     }
     if (normalizedType === 'admin.command') {
       await handleAdminCommandDispatchEvent(record as AdminCommandDispatchEvent);
-      return;
+      return true;
     }
-    throw new Error(`unsupported event type: ${normalizedType}`);
+    return false;
   };
 
   try {
-    await dispatch();
+    const handled = await dispatch();
+    if (!handled) {
+      console.warn(`[bridge] ignoring unsupported ${source} event type: ${normalizedType}`);
+      return;
+    }
   } catch (err) {
     if (source === 'replay') {
       throw err;
@@ -4206,6 +5023,14 @@ async function dispatchInboundEvent(
     }
     throw err;
   }
+}
+
+export async function dispatchInboundEventForTest(
+  eventType: string,
+  payload: Record<string, unknown>,
+  source: 'socket' | 'replay' = 'socket',
+): Promise<void> {
+  await dispatchInboundEvent(eventType, payload, source);
 }
 
 async function flushDispatchReplayQueue(reason: string): Promise<number> {
@@ -4286,11 +5111,13 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
     return;
   }
 
+  const existingContext = sessionContexts.get(sessionKey);
   setSessionContext(sessionKey, {
+    ...existingContext,
     kind: 'dm',
-    orgID,
-    threadID,
-    agentID,
+    orgID: orgID || existingContext?.orgID,
+    threadID: threadID || existingContext?.threadID,
+    agentID: agentID || existingContext?.agentID,
   });
 
   try {
@@ -4326,6 +5153,7 @@ async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
 
 async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): Promise<void> {
   const projectID = getTrimmedString(event.data?.project_id);
+  const projectName = getTrimmedString(event.data?.project_name);
   const agentID = getTrimmedString(event.data?.agent_id);
   const agentName = getTrimmedString(event.data?.agent_name);
   const content = getTrimmedString(event.data?.content);
@@ -4352,6 +5180,7 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
     agentID,
     agentName,
     projectID,
+    projectName,
     pendingQuestionnaire: questionnaire || undefined,
   });
 
@@ -4995,11 +5824,28 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
     if (!sessionKey) {
       throw new Error('agent.reset missing session_key/agent_id');
     }
-    // Prefer targeted reset if supported; fall back to gateway restart for known bridge recovery path.
     try {
-      await runOpenClawCommand(['sessions', 'reset', '--session', sessionKey]);
+      await sendRequest('sessions.reset', { sessionKey });
+      console.log(`[bridge] reset session via gateway RPC (${sessionKey})`);
     } catch (err) {
-      console.warn(`[bridge] targeted reset failed for ${sessionKey}; falling back to gateway restart:`, err);
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[bridge] sessions.reset RPC unavailable for ${sessionKey}; falling back to local store reset + gateway restart: ${detail}`,
+      );
+      const localReset = resetSessionFromLocalStore(sessionKey);
+      if (localReset.cleared) {
+        console.log(
+          `[bridge] cleared local session store for ${sessionKey} (${localReset.storePath})${
+            localReset.transcriptDeleted ? ' and deleted transcript' : ''
+          }`,
+        );
+      } else {
+        console.warn(
+          `[bridge] local session reset skipped for ${sessionKey}: ${
+            localReset.reason || 'unknown'
+          } (store=${localReset.storePath})`,
+        );
+      }
       await runOpenClawCommand(['gateway', 'restart']);
     }
     contextPrimedSessions.delete(sessionKey);
@@ -5063,6 +5909,7 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
     if (!patchObject) {
       throw new Error('config.patch missing config_patch object');
     }
+    validateConfigPatchAgentTargets(patchObject);
     if (dryRun) {
       console.log(`[bridge] validated admin.command config.patch dry-run (${commandID})`);
       return;
@@ -5281,6 +6128,9 @@ function isMainModule(): boolean {
 }
 
 async function runByMode(modeArg: string | undefined): Promise<void> {
+  ensureChameleonWorkspaceGuideInstalled();
+  ensureChameleonWorkspaceCommandReferenceInstalled();
+  ensureChameleonWorkspaceOtterCLIConfigInstalled();
   const mode = normalizeModeArg(modeArg);
   if (mode === 'continuous') {
     await runContinuous();

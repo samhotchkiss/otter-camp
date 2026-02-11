@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -544,6 +545,32 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 		req.Email = "sam@otter.camp"
 	}
 
+	db, err := getAuthDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	// In local development, prefer the shared LOCAL_AUTH_TOKEN session when available.
+	// This keeps the web app and otter CLI on the same workspace/org context.
+	if strings.TrimSpace(req.Org) == "" {
+		if localToken := strings.TrimSpace(os.Getenv("LOCAL_AUTH_TOKEN")); localToken != "" {
+			if expiresAt, ok := lookupActiveSessionExpiry(r.Context(), db, localToken); ok {
+				baseURL := getPublicBaseURL(r)
+				if strings.Contains(baseURL, "api.otter.camp") {
+					baseURL = "https://sam.otter.camp"
+				}
+				magicURL := baseURL + "/?auth=" + localToken
+				sendJSON(w, http.StatusOK, MagicLinkResponse{
+					URL:       magicURL,
+					Token:     localToken,
+					ExpiresAt: expiresAt,
+				})
+				return
+			}
+		}
+	}
+
 	// Generate a simple token
 	token, err := generateRandomToken(32)
 	if err != nil {
@@ -552,12 +579,6 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	}
 	authToken := "oc_magic_" + token
 	expiresAt := time.Now().UTC().Add(sessionTTL())
-
-	db, err := getAuthDB()
-	if err != nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
-		return
-	}
 
 	// Create org (default to user's name if not provided)
 	orgName := strings.TrimSpace(req.Org)
@@ -629,6 +650,31 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func lookupActiveSessionExpiry(ctx context.Context, db *sql.DB, token string) (time.Time, bool) {
+	if db == nil {
+		return time.Time{}, false
+	}
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+
+	var expiresAt time.Time
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT expires_at
+		 FROM sessions
+		 WHERE token = $1
+		   AND revoked_at IS NULL
+		   AND expires_at > NOW()`,
+		trimmed,
+	).Scan(&expiresAt)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return expiresAt.UTC(), true
+}
+
 // HandleValidateToken validates a magic link token and sets a session cookie.
 // GET /api/auth/validate?token=xxx
 func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
@@ -683,6 +729,14 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if shouldReconcileLocalAuthAgents(token) {
+		if copied, err := reconcileLocalAuthAgents(r.Context(), db, orgID, userEmail); err != nil {
+			log.Printf("local auth agent reconcile failed: %v", err)
+		} else if copied > 0 {
+			log.Printf("local auth reconciled %d agent(s) into org %s", copied, orgID)
+		}
+	}
+
 	// Set the auth cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "otter_auth",
@@ -708,6 +762,80 @@ func HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 			Email: userEmail,
 		},
 	})
+}
+
+func shouldReconcileLocalAuthAgents(sessionToken string) bool {
+	configured := strings.TrimSpace(os.Getenv("LOCAL_AUTH_TOKEN"))
+	if configured == "" {
+		return false
+	}
+	return strings.TrimSpace(sessionToken) == configured
+}
+
+func reconcileLocalAuthAgents(ctx context.Context, db *sql.DB, targetOrgID, userEmail string) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	targetOrgID = strings.TrimSpace(targetOrgID)
+	email := strings.ToLower(strings.TrimSpace(userEmail))
+	if targetOrgID == "" || email == "" {
+		return 0, nil
+	}
+
+	result, err := db.ExecContext(
+		ctx,
+		`WITH source_orgs AS (
+			SELECT DISTINCT u.org_id
+			FROM users u
+			WHERE LOWER(COALESCE(u.email, '')) = $2
+			  AND u.org_id <> $1::uuid
+		)
+		INSERT INTO agents (
+			org_id,
+			slug,
+			display_name,
+			avatar_url,
+			webhook_url,
+			status,
+			session_pattern,
+			role,
+			emoji,
+			soul_md,
+			identity_md,
+			instructions_md
+		)
+		SELECT
+			$1::uuid,
+			a.slug,
+			a.display_name,
+			a.avatar_url,
+			a.webhook_url,
+			a.status,
+			a.session_pattern,
+			a.role,
+			a.emoji,
+			a.soul_md,
+			a.identity_md,
+			a.instructions_md
+		FROM agents a
+		INNER JOIN source_orgs s
+			ON s.org_id = a.org_id
+		LEFT JOIN agents existing
+			ON existing.org_id = $1::uuid
+		   AND existing.slug = a.slug
+		WHERE existing.id IS NULL
+		ON CONFLICT (org_id, slug) DO NOTHING`,
+		targetOrgID,
+		email,
+	)
+	if err != nil {
+		return 0, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return rowsAffected, nil
 }
 
 func allowInsecureMagicTokenValidation() bool {

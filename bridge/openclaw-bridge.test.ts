@@ -7,7 +7,10 @@ import {
   buildOtterCampWSURL,
   buildCompletionActivityEventFromProgressLineForTest,
   buildIdentityPreamble,
+  ensureChameleonWorkspaceGuideInstalledForTest,
+  ensureChameleonWorkspaceOtterCLIConfigInstalledForTest,
   formatSessionContextMessageForTest,
+  formatSessionSystemPromptForTest,
   formatSessionDisplayLabel,
   getSessionContextForTest,
   isPathWithinProjectRoot,
@@ -24,6 +27,7 @@ import {
   resetBufferedActivityEventsForTest,
   resolveExecutionMode,
   resolveProjectWorktreeRoot,
+  resetSessionFromLocalStoreForTest,
   resetPeriodicSyncGuardForTest,
   resetReconnectStateForTest,
   resolveOtterCampWSSecret,
@@ -122,6 +126,53 @@ describe("bridge chameleon session key helpers", () => {
   });
 });
 
+describe("bridge local session reset helpers", () => {
+  it("clears a canonical chameleon session key from local store", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "oc-session-reset-"));
+    const sessionsDir = path.join(tempRoot, "agents", "chameleon", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const sessionKey = "agent:chameleon:oc:28d27f83-5518-468a-83bf-750f7ec1c9f5";
+    const sessionID = "2f6f15dd-32d0-496b-9c0d-db1a2804ee64";
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const transcriptPath = path.join(sessionsDir, `${sessionID}.jsonl`);
+    fs.writeFileSync(
+      storePath,
+      `${JSON.stringify({
+        [sessionKey]: {
+          sessionId: sessionID,
+          updatedAt: Date.now(),
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(transcriptPath, `{"type":"session","id":"${sessionID}"}` + "\n", "utf8");
+
+    const result = resetSessionFromLocalStoreForTest(sessionKey, tempRoot);
+    assert.equal(result.cleared, true);
+    assert.equal(result.transcriptDeleted, true);
+    assert.equal(result.storePath, storePath);
+
+    const parsed = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, unknown>;
+    assert.equal(Object.keys(parsed).length, 0);
+    assert.equal(fs.existsSync(transcriptPath), false);
+  });
+
+  it("returns a non-cleared result when the session key is absent", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "oc-session-reset-miss-"));
+    const sessionsDir = path.join(tempRoot, "agents", "chameleon", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    fs.writeFileSync(storePath, `${JSON.stringify({}, null, 2)}\n`, "utf8");
+
+    const result = resetSessionFromLocalStoreForTest(
+      "agent:chameleon:oc:28d27f83-5518-468a-83bf-750f7ec1c9f5",
+      tempRoot,
+    );
+    assert.equal(result.cleared, false);
+    assert.match(result.reason || "", /session not found|store not found|invalid session key/i);
+  });
+});
+
 describe("bridge identity preamble helpers", () => {
   const originalFetch = globalThis.fetch;
   const agentID = "a1b2c3d4-5678-90ab-cdef-1234567890ab";
@@ -166,6 +217,169 @@ describe("bridge identity preamble helpers", () => {
     assert.ok(contextual.includes("[OtterCamp Identity Injection]"));
     assert.ok(contextual.includes("Identity profile: compact"));
     assert.ok(contextual.indexOf("[OtterCamp Identity Injection]") < contextual.indexOf(content));
+  });
+
+  it("builds a system prompt envelope without echoing user content", async () => {
+    setSessionContextForTest(sessionKey, {
+      kind: "dm",
+      orgID: "org-1",
+      threadID: "dm_sys",
+      agentID,
+    });
+
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          profile: "compact",
+          agent: {
+            id: agentID,
+            name: "Marcus",
+            role: "Operator",
+          },
+          soul_summary: "Grounded and direct.",
+          identity_summary: "Execution-focused.",
+          instructions_summary: "Be explicit and pragmatic.",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      )) as typeof fetch;
+
+    const userText = "are you sure you don't know your name?";
+    const systemPrompt = await formatSessionSystemPromptForTest(sessionKey, userText);
+    assert.ok(systemPrompt.includes("[OtterCamp Identity Injection]"));
+    assert.ok(systemPrompt.includes("[OTTERCAMP_CONTEXT]"));
+    assert.ok(systemPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"));
+    assert.ok(systemPrompt.includes('Default meaning: "project" refers to an OtterCamp project record'));
+    assert.equal(systemPrompt.includes(userText), false);
+
+    const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
+    assert.ok(secondPrompt.includes("[OtterCamp Identity Injection]"));
+    assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
+    assert.ok(secondPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"));
+    assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
+    assert.equal(secondPrompt.includes("next turn"), false);
+  });
+
+  it("installs and injects the OtterCamp guide from the chameleon workspace", async () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "oc-guide-"));
+    const workspacePath = path.join(tempRoot, "workspace-chameleon");
+    const configPath = path.join(tempRoot, "openclaw.json");
+
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({ agents: { chameleon: { workspace: workspacePath } } }, null, 2)}\n`,
+      "utf8",
+    );
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    try {
+      const installedPath = ensureChameleonWorkspaceGuideInstalledForTest();
+      assert.equal(installedPath, path.join(workspacePath, "OTTERCAMP.md"));
+      assert.equal(fs.existsSync(installedPath), true);
+
+      setSessionContextForTest(sessionKey, {
+        kind: "dm",
+        orgID: "org-1",
+        threadID: "dm_guide",
+        agentID,
+      });
+
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            profile: "compact",
+            agent: {
+              id: agentID,
+              name: "Marcus",
+              role: "Operator",
+            },
+            soul_summary: "Grounded and direct.",
+            identity_summary: "Execution-focused.",
+            instructions_summary: "Be explicit and pragmatic.",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        )) as typeof fetch;
+
+      const firstPrompt = await formatSessionSystemPromptForTest(sessionKey, "create project Testerooni");
+      assert.ok(firstPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"));
+      assert.ok(firstPrompt.includes('otter project create "<name>"'));
+
+      const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
+      assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
+      assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"), false);
+    } finally {
+      if (originalConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("syncs otter CLI auth config into the chameleon workspace home paths", () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const originalHome = process.env.HOME;
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "oc-cli-config-sync-"));
+    const hostHome = path.join(tempRoot, "host-home");
+    const workspacePath = path.join(tempRoot, "workspace-chameleon");
+    const configPath = path.join(tempRoot, "openclaw.json");
+
+    fs.mkdirSync(path.join(hostHome, "Library", "Application Support", "otter"), { recursive: true });
+    fs.writeFileSync(
+      path.join(hostHome, "Library", "Application Support", "otter", "config.json"),
+      `${JSON.stringify({
+        apiBaseUrl: "http://localhost:4200",
+        token: "oc_local_test_token",
+        defaultOrg: "146ca0fd-cf4c-4ed8-9f54-552d862e9a51",
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({ agents: { chameleon: { workspace: workspacePath } } }, null, 2)}\n`,
+      "utf8",
+    );
+    process.env.HOME = hostHome;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    try {
+      const updated = ensureChameleonWorkspaceOtterCLIConfigInstalledForTest();
+      assert.ok(updated.length >= 1);
+
+      const workspaceDarwinPath = path.join(
+        workspacePath,
+        "Library",
+        "Application Support",
+        "otter",
+        "config.json",
+      );
+      const workspaceUnixPath = path.join(workspacePath, ".config", "otter", "config.json");
+      assert.equal(fs.existsSync(workspaceDarwinPath), true);
+      assert.equal(fs.existsSync(workspaceUnixPath), true);
+
+      const darwinConfig = JSON.parse(fs.readFileSync(workspaceDarwinPath, "utf8")) as Record<string, unknown>;
+      assert.equal(darwinConfig.token, "oc_local_test_token");
+      assert.equal(darwinConfig.defaultOrg, "146ca0fd-cf4c-4ed8-9f54-552d862e9a51");
+    } finally {
+      if (originalConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("falls back from compact to full profile when compact context is insufficient", async () => {
@@ -213,6 +427,51 @@ describe("bridge identity preamble helpers", () => {
     assert.equal(fetchCalls, 2);
     assert.ok(contextual.includes("Identity profile: full"));
     assert.ok(contextual.includes("Full soul context with deeply specific guidance."));
+  });
+
+  it("retries identity bootstrap when whoami is temporarily unavailable", async () => {
+    setSessionContextForTest(sessionKey, {
+      kind: "dm",
+      orgID: "org-1",
+      threadID: "dm_3",
+      agentID,
+    });
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      if (fetchCalls === 1) {
+        return new Response("temporary failure", {
+          status: 403,
+          statusText: "Forbidden",
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          profile: "compact",
+          agent: {
+            id: agentID,
+            name: "Marcus",
+            role: "Operator",
+          },
+          soul_summary: "Grounded and direct.",
+          identity_summary: "Leads execution and closes loops.",
+          instructions_summary: "State assumptions and confirm outcomes.",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+
+    const first = await formatSessionContextMessageForTest(sessionKey, "Status check.");
+    assert.equal(first.includes("[OtterCamp Identity Injection]"), false);
+
+    const second = await formatSessionContextMessageForTest(sessionKey, "Status check (retry).");
+    assert.ok(second.includes("[OtterCamp Identity Injection]"));
+    assert.ok(second.includes("You are Marcus, Operator."));
+    assert.ok(fetchCalls >= 2);
   });
 
   it("uses deterministic compact insufficiency checks and label formatting", () => {

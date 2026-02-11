@@ -486,7 +486,12 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 	// Check if we should serve the frontend
 	staticDir := os.Getenv("STATIC_DIR")
 	if staticDir == "" {
-		staticDir = "./static"
+		for _, candidate := range []string{"./web/dist", "./static"} {
+			if _, err := os.Stat(candidate); err == nil {
+				staticDir = candidate
+				break
+			}
+		}
 	}
 
 	// Check if static directory exists

@@ -99,13 +99,14 @@ type openClawProjectChatDispatchEvent struct {
 }
 
 type openClawProjectChatDispatchData struct {
-	MessageID  string `json:"message_id"`
-	ProjectID  string `json:"project_id"`
-	AgentID    string `json:"agent_id"`
-	AgentName  string `json:"agent_name,omitempty"`
-	SessionKey string `json:"session_key"`
-	Content    string `json:"content"`
-	Author     string `json:"author,omitempty"`
+	MessageID   string `json:"message_id"`
+	ProjectID   string `json:"project_id"`
+	ProjectName string `json:"project_name,omitempty"`
+	AgentID     string `json:"agent_id"`
+	AgentName   string `json:"agent_name,omitempty"`
+	SessionKey  string `json:"session_key"`
+	Content     string `json:"content"`
+	Author      string `json:"author,omitempty"`
 }
 
 type projectChatDispatchTarget struct {
@@ -653,22 +654,52 @@ func (h *ProjectChatHandler) buildProjectChatDispatchEvent(
 		return openClawProjectChatDispatchEvent{}, fmt.Errorf("missing workspace")
 	}
 
+	projectName := ""
+	if h.DB != nil {
+		resolvedName, resolveErr := h.resolveProjectName(ctx, message.ProjectID)
+		if resolveErr != nil {
+			log.Printf("[project-chat] failed to resolve project name for %s: %v", message.ProjectID, resolveErr)
+		} else {
+			projectName = resolvedName
+		}
+	}
+
 	event := openClawProjectChatDispatchEvent{
 		Type:      "project.chat.message",
 		Timestamp: time.Now().UTC(),
 		OrgID:     workspaceID,
 		Data: openClawProjectChatDispatchData{
-			MessageID:  message.ID,
-			ProjectID:  message.ProjectID,
-			AgentID:    target.AgentID,
-			AgentName:  target.AgentName,
-			SessionKey: target.SessionKey,
-			Content:    message.Body,
-			Author:     message.Author,
+			MessageID:   message.ID,
+			ProjectID:   message.ProjectID,
+			ProjectName: projectName,
+			AgentID:     target.AgentID,
+			AgentName:   target.AgentName,
+			SessionKey:  target.SessionKey,
+			Content:     message.Body,
+			Author:      message.Author,
 		},
 	}
 
 	return event, nil
+}
+
+func (h *ProjectChatHandler) resolveProjectName(ctx context.Context, projectID string) (string, error) {
+	if h.DB == nil {
+		return "", nil
+	}
+	var name string
+	err := h.DB.QueryRowContext(
+		ctx,
+		`SELECT name FROM projects WHERE id = $1`,
+		strings.TrimSpace(projectID),
+	).Scan(&name)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(name), nil
 }
 
 func (h *ProjectChatHandler) dispatchProjectChatMessageToOpenClaw(
@@ -803,6 +834,33 @@ func (h *ProjectChatHandler) resolveProjectLeadAgent(
 	`, projectID).Scan(&assigneeSlug, &assigneeName)
 	if err == nil {
 		return strings.TrimSpace(assigneeSlug), strings.TrimSpace(assigneeName), nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return "", "", err
+	}
+
+	// 3) Final fallback for new/empty projects: pick any active workspace agent.
+	// Prefer known router agents first so project chat remains usable out of the box.
+	var fallbackSlug, fallbackName string
+	err = h.DB.QueryRowContext(ctx, `
+		SELECT a.slug, a.display_name
+		FROM projects p
+		INNER JOIN agents a ON a.org_id = p.org_id
+		WHERE p.id = $1
+		  AND a.status = 'active'
+		ORDER BY
+			CASE LOWER(a.slug)
+				WHEN 'chameleon' THEN 0
+				WHEN 'marcus' THEN 1
+				WHEN 'elephant' THEN 2
+				ELSE 10
+			END,
+			a.updated_at DESC,
+			a.display_name ASC
+		LIMIT 1
+	`, projectID).Scan(&fallbackSlug, &fallbackName)
+	if err == nil {
+		return strings.TrimSpace(fallbackSlug), strings.TrimSpace(fallbackName), nil
 	}
 	if err == sql.ErrNoRows {
 		return "", "", nil

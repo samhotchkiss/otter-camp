@@ -140,6 +140,37 @@ test_write_bridge_env_if_missing_targets_4200() {
   )
 }
 
+test_write_cli_config_uses_detected_org() {
+  local tmp cfg_path
+  tmp="$(track_tmp_dir)"
+
+  (
+    HOME="$tmp/home"
+    mkdir -p "$HOME"
+    LOCAL_AUTH_TOKEN="oc_local_test_token"
+    detect_default_org_id() {
+      echo "146ca0fd-cf4c-4ed8-9f54-552d862e9a51"
+    }
+
+    write_cli_config
+
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      cfg_path="$HOME/Library/Application Support/otter/config.json"
+    else
+      cfg_path="$HOME/.config/otter/config.json"
+    fi
+
+    [[ -f "$cfg_path" ]] || {
+      echo "expected CLI config to be created at $cfg_path" >&2
+      exit 1
+    }
+    grep -q '"defaultOrg": "146ca0fd-cf4c-4ed8-9f54-552d862e9a51"' "$cfg_path" || {
+      echo "expected CLI config to include detected default org id" >&2
+      exit 1
+    }
+  )
+}
+
 test_install_dependency_brew_dry_run_avoids_network_eval() {
   local tmp marker
   tmp="$(track_tmp_dir)"
@@ -289,6 +320,10 @@ test_run_bootstrap_steps_dry_run_lists_core_commands() {
     echo "expected dry-run build command output" >&2
     exit 1
   }
+  [[ "$output" == *"ln -sf"* ]] || {
+    echo "expected dry-run otter install command output" >&2
+    exit 1
+  }
 }
 
 test_ensure_local_postgres_role_and_database_generates_role_and_db_sql() {
@@ -365,6 +400,35 @@ test_run_bootstrap_steps_dry_run_bootstraps_local_postgres_before_migrate() {
   }
 }
 
+test_install_otter_cli_binary_uses_override_dir() {
+  local tmp source_bin install_dir
+  tmp="$(track_tmp_dir)"
+  source_bin="$tmp/bin/otter"
+  install_dir="$tmp/install"
+
+  mkdir -p "$(dirname "$source_bin")"
+  cat > "$source_bin" <<'EOF'
+#!/usr/bin/env bash
+echo "otter"
+EOF
+  chmod +x "$source_bin"
+
+  (
+    OTTER_CLI_INSTALL_DIR="$install_dir"
+    DRY_RUN=0
+    install_otter_cli_binary "$source_bin"
+  )
+
+  [[ -L "$install_dir/otter" ]] || {
+    echo "expected otter symlink to be installed" >&2
+    exit 1
+  }
+  [[ "$(readlink "$install_dir/otter")" == "$source_bin" ]] || {
+    echo "expected otter symlink to point to built binary" >&2
+    exit 1
+  }
+}
+
 test_main_completion_mentions_start_and_dashboard() {
   local output
   output="$(
@@ -376,7 +440,7 @@ test_main_completion_mentions_start_and_dashboard() {
     setup_main --dry-run --yes 2>&1 || true
   )"
 
-  [[ "$output" == *"make start"* ]] || {
+  [[ "$output" == *"Start Otter Camp:  make start"* ]] || {
     echo "expected setup completion to mention make start" >&2
     exit 1
   }
@@ -392,6 +456,7 @@ run_tests() {
   test_ensure_dependency_fails_when_user_declines_install
   test_write_env_if_missing_sets_4200_defaults
   test_write_bridge_env_if_missing_targets_4200
+  test_write_cli_config_uses_detected_org
   test_install_dependency_brew_dry_run_avoids_network_eval
   test_generate_secret_falls_back_without_openssl
   test_load_env_treats_values_as_literals
@@ -400,6 +465,7 @@ run_tests() {
   test_ensure_local_postgres_role_and_database_skips_when_compose_available
   test_run_bootstrap_steps_dry_run_lists_core_commands
   test_run_bootstrap_steps_dry_run_bootstraps_local_postgres_before_migrate
+  test_install_otter_cli_binary_uses_override_dir
   test_main_completion_mentions_start_and_dashboard
   echo "setup.sh tests passed"
 }

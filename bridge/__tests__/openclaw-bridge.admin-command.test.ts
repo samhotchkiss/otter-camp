@@ -67,7 +67,7 @@ describe('admin.command config patch/cutover/rollback', () => {
       JSON.stringify(
         {
           gateway: { port: 18791, host: '127.0.0.1' },
-          agents: { main: { enabled: true, model: { primary: 'claude-opus-4-6' } } },
+          agents: { chameleon: { enabled: true, model: { primary: 'claude-opus-4-6' } } },
         },
         null,
         2,
@@ -82,7 +82,7 @@ describe('admin.command config patch/cutover/rollback', () => {
         confirm: true,
         config_patch: {
           gateway: { port: 18888 },
-          agents: { main: { model: { primary: 'gpt-5.2-codex' } } },
+          agents: { chameleon: { model: { primary: 'gpt-5.2-codex' } } },
         },
       },
     });
@@ -90,10 +90,33 @@ describe('admin.command config patch/cutover/rollback', () => {
     const updated = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
     assert.deepEqual(updated.gateway, { port: 18888, host: '127.0.0.1' });
     assert.deepEqual(updated.agents, {
-      main: { enabled: true, model: { primary: 'gpt-5.2-codex' } },
+      chameleon: { enabled: true, model: { primary: 'gpt-5.2-codex' } },
     });
     assert.equal(execCalls.length, 1);
     assert.deepEqual(execCalls[0]?.args, ['gateway', 'restart']);
+  });
+
+  it('rejects config patches targeting non-system agents', async () => {
+    fs.writeFileSync(configPath, JSON.stringify({ agents: { main: { enabled: true } } }, null, 2));
+
+    await assert.rejects(
+      handleAdminCommandDispatchEvent({
+        type: 'admin.command',
+        data: {
+          command_id: 'cmd-non-system-agent',
+          action: 'config.patch',
+          confirm: true,
+          config_patch: {
+            agents: { main: { model: { primary: 'gpt-5.2-codex' } } },
+          },
+        },
+      }),
+      /only supports "chameleon" and "elephant"/,
+    );
+
+    const current = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual(current, { agents: { main: { enabled: true } } });
+    assert.equal(execCalls.length, 0);
   });
 
   it('supports dry-run validation without file mutation', async () => {

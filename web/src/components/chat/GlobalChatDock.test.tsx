@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import GlobalChatDock from "./GlobalChatDock";
 import type { GlobalChatConversation } from "../../contexts/GlobalChatContext";
@@ -30,6 +30,16 @@ vi.mock("./GlobalChatSurface", () => ({
 }));
 
 describe("GlobalChatDock", () => {
+  beforeEach(() => {
+    globalChatState.resolveAgentName = (raw: string) => raw;
+    globalChatState.conversations = [];
+    globalChatState.selectedConversation = null;
+    globalChatState.selectedKey = null;
+    globalChatState.totalUnread = 0;
+    window.localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
   it("renders initials from display names in chat list rows", () => {
     globalChatState.resolveAgentName = (raw: string) =>
       raw === "avatar-design" ? "Jeff G" : raw;
@@ -110,5 +120,85 @@ describe("GlobalChatDock", () => {
 
     expect(await screen.findByText("Failed to archive chat")).toBeInTheDocument();
     expect(globalChatState.archiveConversation).toHaveBeenCalledWith("chat-archive-failure");
+  });
+
+  it("resets DM sessions before inserting reset marker", async () => {
+    const agentID = "550e8400-e29b-41d4-a716-446655440111";
+    globalChatState.conversations = [
+      {
+        key: `dm:dm_${agentID}`,
+        type: "dm",
+        threadId: `dm_${agentID}`,
+        title: "Marcus",
+        contextLabel: "Chameleon-routed chat",
+        subtitle: "Agent chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-08T00:00:00.000Z",
+        agent: {
+          id: "session-reset",
+          name: "Marcus",
+          status: "online",
+        },
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    window.localStorage.setItem("otter-camp-org-id", "org-1");
+    window.localStorage.setItem("otter_camp_token", "tok");
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes(`/api/admin/agents/${encodeURIComponent(agentID)}/reset`)) {
+          return new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("/api/messages") && init?.method === "POST") {
+          return new Response(
+            JSON.stringify({
+              message: {
+                id: "msg-1",
+                thread_id: `dm_${agentID}`,
+                sender_type: "agent",
+                sender_name: "Session",
+                content: "chat_session_reset:test",
+                created_at: "2026-02-08T00:00:00.000Z",
+              },
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        return new Response(JSON.stringify({ error: "unexpected request" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    );
+
+    render(<GlobalChatDock />);
+
+    const clearButtons = screen.getAllByRole("button", { name: /clear session/i });
+    fireEvent.click(clearButtons[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    const firstURL = String(fetchMock.mock.calls[0]?.[0] ?? "");
+    expect(firstURL).toContain(`/api/admin/agents/${encodeURIComponent(agentID)}/reset`);
+
+    const secondURL = String(fetchMock.mock.calls[1]?.[0] ?? "");
+    expect(secondURL).toContain("/api/messages");
+
+    const secondInit = fetchMock.mock.calls[1]?.[1] as RequestInit | undefined;
+    const secondBody = JSON.parse(String(secondInit?.body ?? "{}")) as Record<string, unknown>;
+    expect(secondBody.thread_id).toBe(`dm_${agentID}`);
+    expect(String(secondBody.content || "")).toContain("chat_session_reset:");
   });
 });

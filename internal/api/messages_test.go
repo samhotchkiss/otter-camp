@@ -402,6 +402,82 @@ func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestCreateMessageDMUsesChameleonFallbackWhenSyncStateMissingByUUID(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-uuid-org")
+	agentID := "28d27f83-5518-468a-83bf-750f7ec1c9f5"
+	_, err := db.Exec(
+		`INSERT INTO agents (id, org_id, slug, display_name, status)
+		 VALUES ($1, $2, $3, $4, 'active')`,
+		agentID,
+		orgID,
+		"marcus",
+		"Marcus",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_" + agentID,
+		"content":     "Hey Marcus",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, "agent:chameleon:oc:"+agentID, event.Data.SessionKey)
+}
+
+func TestCreateMessageDMUsesChameleonFallbackWhenSyncStateMissingBySlug(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-slug-org")
+	agentID := "28d27f83-5518-468a-83bf-750f7ec1c9f5"
+	_, err := db.Exec(
+		`INSERT INTO agents (id, org_id, slug, display_name, status)
+		 VALUES ($1, $2, $3, $4, 'active')`,
+		agentID,
+		orgID,
+		"marcus",
+		"Marcus",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_marcus",
+		"content":     "Hey Marcus",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, "agent:chameleon:oc:"+agentID, event.Data.SessionKey)
+}
+
 func TestCreateMessageDMDispatchFailurePersistsMessageWithDeliveryWarning(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-failure-org")

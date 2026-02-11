@@ -47,6 +47,15 @@ function ArchiveProbe() {
   );
 }
 
+function DMAgentIDProbe() {
+  const { conversations } = useGlobalChat();
+  const dmConversation = conversations.find((conversation) => conversation.type === "dm");
+  const agentID = dmConversation && dmConversation.type === "dm"
+    ? dmConversation.agent.id
+    : "";
+  return <div data-testid="dm-agent-id-probe">{agentID}</div>;
+}
+
 describe("GlobalChatContext", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -148,6 +157,33 @@ describe("GlobalChatContext", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Jeff G")).toBeInTheDocument();
+    });
+  });
+
+  it("keeps DM routing agent id anchored to thread id on session reset markers", async () => {
+    wsState.lastMessage = {
+      type: "DMMessageReceived",
+      data: {
+        thread_id: "dm_avatar-design",
+        message: {
+          sender_type: "agent",
+          sender_id: "session-reset",
+          sender_name: "Session",
+          content: "chat_session_reset:test",
+        },
+      },
+    };
+
+    render(
+      <GlobalChatProvider>
+        <ConversationTitles />
+        <DMAgentIDProbe />
+      </GlobalChatProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Jeff G")).toBeInTheDocument();
+      expect(screen.getByTestId("dm-agent-id-probe")).toHaveTextContent("avatar-design");
     });
   });
 

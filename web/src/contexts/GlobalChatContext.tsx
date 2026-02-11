@@ -14,6 +14,8 @@ import { API_URL } from "../lib/api";
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const STORAGE_KEY = "otter-camp-global-chat:v1";
 const SYSTEM_SESSION_AUTHOR = "__otter_session__";
+const DM_SESSION_RESET_PREFIX = "chat_session_reset:";
+const DM_SESSION_RESET_SENDER_ID = "session-reset";
 
 type ConversationType = "dm" | "project" | "issue";
 
@@ -698,17 +700,25 @@ function parseIncomingEvent(lastMessage: {
     const senderId = asString(messagePayload.senderId) || asString(messagePayload.sender_id);
     const senderName =
       asString(messagePayload.senderName) || asString(messagePayload.sender_name) || "Agent";
+    const messageContent = asString(messagePayload.content);
+    const isSessionResetMarker =
+      senderId === DM_SESSION_RESET_SENDER_ID ||
+      (messageContent !== "" && messageContent.startsWith(DM_SESSION_RESET_PREFIX));
+    const threadAgentID = parseDMThreadAgentID(threadId);
 
     const normalizedSenderType = senderType.toLowerCase();
-    const incoming = normalizedSenderType === "agent" || normalizedSenderType === "assistant";
+    const incoming =
+      !isSessionResetMarker &&
+      (normalizedSenderType === "agent" || normalizedSenderType === "assistant");
     const agentId =
-      senderId ||
-      parseDMThreadAgentID(threadId) ||
+      threadAgentID ||
+      (isSessionResetMarker ? "" : senderId) ||
       `agent-${threadId}`;
     const resolvedAgentName =
       lookupAgentDisplayName(resolution?.agentNamesByID, agentId) ||
-      lookupAgentDisplayName(resolution?.agentNamesByID, senderName) ||
+      lookupAgentDisplayName(resolution?.agentNamesByID, threadAgentID) ||
       lookupAgentDisplayName(resolution?.agentNamesByID, threadId) ||
+      (isSessionResetMarker ? threadAgentID : senderName) ||
       senderName;
 
     return {
