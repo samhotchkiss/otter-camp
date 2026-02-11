@@ -87,7 +87,7 @@ describe("AuthContext", () => {
     });
   });
 
-  it("reconciles stale org selection from /api/orgs on startup", async () => {
+  it("reconciles stale org selection from validated session org on startup", async () => {
     const mockUser: User = { id: "user-1", email: "", name: "OpenClaw User" };
     localStorageMock.setItem("otter_camp_token", "oc_sess_token");
     localStorageMock.setItem("otter_camp_user", JSON.stringify(mockUser));
@@ -99,10 +99,7 @@ describe("AuthContext", () => {
 
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: () =>
-        Promise.resolve({
-          orgs: [{ id: "org-123", name: "Workspace", slug: "workspace" }],
-        }),
+      json: () => Promise.resolve({ org_id: "org-123" }),
     });
 
     render(
@@ -118,6 +115,63 @@ describe("AuthContext", () => {
     await waitFor(() => {
       expect(localStorageMock.setItem).toHaveBeenCalledWith("otter-camp-org-id", "org-123");
     });
+  });
+
+  it("migrates local magic token sessions to canonical local auth token", async () => {
+    const staleUser: User = { id: "stale-user", email: "admin@localhost", name: "Admin" };
+    localStorageMock.setItem("otter_camp_token", "oc_magic_stale");
+    localStorageMock.setItem("otter_camp_user", JSON.stringify(staleUser));
+    localStorageMock.setItem(
+      "otter_camp_token_expires_at",
+      new Date(Date.now() + 3600 * 1000).toISOString(),
+    );
+    localStorageMock.setItem("otter-camp-org-id", "stale-org");
+
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/magic")) {
+        return {
+          ok: true,
+          json: async () => ({ token: "oc_local_shared" }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      if (url.includes("/api/auth/validate?token=oc_local_shared")) {
+        return {
+          ok: true,
+          json: async () => ({
+            session_token: "oc_local_shared",
+            org_id: "org-146",
+            user_id: "user-1",
+            name: "Admin",
+            email: "admin@localhost",
+            expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+          }),
+          headers: { get: () => null },
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({}),
+        headers: { get: () => null },
+      } as Response;
+    });
+
+    render(
+      <AuthProvider>
+        <TestComponent />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Welcome, Admin")).toBeInTheDocument();
+    });
+
+    expect(localStorageMock.setItem).toHaveBeenCalledWith("otter_camp_token", "oc_local_shared");
+    expect(localStorageMock.setItem).toHaveBeenCalledWith("otter-camp-org-id", "org-146");
+    expect(
+      mockFetch.mock.calls.some(([request]) => String(request).includes("/api/auth/magic")),
+    ).toBe(true);
   });
 
   it("clears expired token on mount", async () => {

@@ -65,16 +65,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const token = sessionToken.trim();
     if (!token) return;
     try {
-      const response = await fetch(`${API_URL}/api/orgs`, {
+      const validateResponse = await fetch(
+        `${API_URL}/api/auth/validate?token=${encodeURIComponent(token)}`,
+      );
+      if (validateResponse.ok) {
+        const validatePayload = await validateResponse.json().catch(() => null);
+        const validatedOrgID =
+          typeof validatePayload?.org_id === "string" ? validatePayload.org_id.trim() : "";
+        if (validatedOrgID) {
+          localStorage.setItem(ORG_KEY, validatedOrgID);
+          return;
+        }
+      }
+
+      const orgsResponse = await fetch(`${API_URL}/api/orgs`, {
         headers: {
           Authorization: `Bearer ${token}`,
           "X-Session-Token": token,
         },
       });
-      if (!response.ok) {
+      if (!orgsResponse.ok) {
         return;
       }
-      const payload = await response.json().catch(() => null);
+      const payload = await orgsResponse.json().catch(() => null);
       const orgs = Array.isArray(payload?.orgs) ? payload.orgs : [];
       const normalized = orgs
         .map((entry: unknown) => (entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null))
@@ -95,6 +108,40 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // Initialize auth state from localStorage or magic link
   useEffect(() => {
+    const applyValidatedSession = (data: unknown, fallbackToken: string): string | null => {
+      const payload = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+      const validatedUser: User = {
+        id: String(payload.user_id || (payload.user as Record<string, unknown> | undefined)?.id || "user"),
+        email: String(payload.email || (payload.user as Record<string, unknown> | undefined)?.email || ""),
+        name: String(payload.name || (payload.user as Record<string, unknown> | undefined)?.name || "User"),
+      };
+      const orgId = typeof payload.org_id === "string" ? payload.org_id.trim() : "";
+      const sessionToken =
+        typeof payload.session_token === "string" && payload.session_token.trim()
+          ? payload.session_token.trim()
+          : fallbackToken;
+      const expiresAt = typeof payload.expires_at === "string" ? payload.expires_at.trim() : "";
+
+      if (!sessionToken) {
+        return null;
+      }
+
+      localStorage.setItem(TOKEN_KEY, sessionToken);
+      localStorage.setItem(USER_KEY, JSON.stringify(validatedUser));
+      if (orgId) {
+        localStorage.setItem(ORG_KEY, orgId);
+      } else {
+        localStorage.removeItem(ORG_KEY);
+      }
+      if (expiresAt) {
+        localStorage.setItem(TOKEN_EXP_KEY, expiresAt);
+      } else {
+        localStorage.removeItem(TOKEN_EXP_KEY);
+      }
+      setUser(validatedUser);
+      return sessionToken;
+    };
+
     // Check for magic link auth param FIRST
     const params = new URLSearchParams(window.location.search);
     const magicToken = params.get('auth');
@@ -107,21 +154,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
           return res.json();
         })
         .then(data => {
-          const validatedUser: User = {
-            id: data.user_id || data.user?.id || 'user',
-            email: data.email || data.user?.email || '',
-            name: data.name || data.user?.name || 'User',
-          };
-          const orgId = data.org_id || '';
-          const sessionToken = data.session_token || magicToken;
-          const expiresAt = data.expires_at || '';
-
-          localStorage.setItem(TOKEN_KEY, sessionToken);
-          localStorage.setItem(USER_KEY, JSON.stringify(validatedUser));
-          if (orgId) localStorage.setItem(ORG_KEY, orgId);
-          if (expiresAt) localStorage.setItem(TOKEN_EXP_KEY, expiresAt);
-          setUser(validatedUser);
-          void reconcileWorkspaceOrg(sessionToken);
+          const sessionToken = applyValidatedSession(data, magicToken);
+          if (sessionToken) {
+            void reconcileWorkspaceOrg(sessionToken);
+          }
 
           // Remove auth param from URL
           params.delete('auth');
@@ -138,9 +174,46 @@ export function AuthProvider({ children }: AuthProviderProps) {
         });
       return;
     }
-    
-    const token = localStorage.getItem(TOKEN_KEY);
+
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const token = (localStorage.getItem(TOKEN_KEY) ?? '').trim();
     const storedUser = localStorage.getItem(USER_KEY);
+    const shouldBootstrapLocalToken = isLocal && (!token || token.startsWith('oc_magic_'));
+
+    if (shouldBootstrapLocalToken) {
+      fetch(`${API_URL}/api/auth/magic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Admin', email: 'admin@localhost' }),
+      })
+        .then(res => res.json())
+        .then(data => {
+          const authToken = typeof data?.token === "string" ? data.token.trim() : '';
+          if (!authToken) {
+            throw new Error('missing token');
+          }
+          return fetch(`${API_URL}/api/auth/validate?token=${encodeURIComponent(authToken)}`)
+            .then(vRes => vRes.ok ? vRes.json() : Promise.reject('invalid'))
+            .then(vData => {
+              const sessionToken = applyValidatedSession(vData, authToken);
+              if (sessionToken) {
+                void reconcileWorkspaceOrg(sessionToken);
+              }
+              setIsLoading(false);
+            });
+        })
+        .catch(() => {
+          if (!token) {
+            localStorage.removeItem(TOKEN_KEY);
+            localStorage.removeItem(USER_KEY);
+            localStorage.removeItem(TOKEN_EXP_KEY);
+            localStorage.removeItem(ORG_KEY);
+            setUser(null);
+          }
+          setIsLoading(false);
+        });
+      return;
+    }
 
     if (token && storedUser && !isTokenExpired()) {
       try {
@@ -150,51 +223,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
         localStorage.removeItem(TOKEN_EXP_KEY);
+        localStorage.removeItem(ORG_KEY);
       }
     } else if (token) {
       // Token expired, clean up
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
       localStorage.removeItem(TOKEN_EXP_KEY);
-    }
-
-    // Auto-login in local mode (localhost) — no credentials needed
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    if (!localStorage.getItem(TOKEN_KEY) && isLocal) {
-      fetch(`${API_URL}/api/auth/magic`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Admin', email: 'admin@localhost' }),
-      })
-        .then(res => res.json())
-        .then(data => {
-          const authToken = data?.token;
-          if (authToken) {
-            // Apply token directly — don't redirect (avoids port mismatch in dev)
-            // Validate the token to get user info
-            return fetch(`${API_URL}/api/auth/validate?token=${encodeURIComponent(authToken)}`)
-              .then(vRes => vRes.ok ? vRes.json() : Promise.reject('invalid'))
-              .then(vData => {
-                const autoUser: User = {
-                  id: vData.user_id || vData.user?.id || 'local-admin',
-                  email: vData.email || vData.user?.email || 'admin@localhost',
-                  name: vData.name || vData.user?.name || 'Admin',
-                };
-                const orgId = vData.org_id || '';
-                const expiresAt = vData.expires_at || '';
-                localStorage.setItem(TOKEN_KEY, authToken);
-                localStorage.setItem(USER_KEY, JSON.stringify(autoUser));
-                if (orgId) localStorage.setItem(ORG_KEY, orgId);
-                if (expiresAt) localStorage.setItem(TOKEN_EXP_KEY, expiresAt);
-                setUser(autoUser);
-                void reconcileWorkspaceOrg(authToken);
-                setIsLoading(false);
-              });
-          }
-          setIsLoading(false);
-        })
-        .catch(() => setIsLoading(false));
-      return;
+      localStorage.removeItem(ORG_KEY);
     }
 
     setIsLoading(false);
@@ -247,6 +283,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     localStorage.removeItem(TOKEN_EXP_KEY);
+    localStorage.removeItem(ORG_KEY);
     setUser(null);
   }, []);
 
