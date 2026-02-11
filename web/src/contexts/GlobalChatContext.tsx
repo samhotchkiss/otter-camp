@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -372,54 +373,6 @@ function normalizeProjectDirectory(payload: unknown): Map<string, string> {
     result.set(id, name);
   }
   return result;
-}
-
-type IssueDirectory = {
-  issueTitlesByID: Map<string, string>;
-  issueProjectIDsByIssueID: Map<string, string>;
-};
-
-function normalizeIssueDirectory(payload: unknown): IssueDirectory {
-  const records =
-    payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).items)
-      ? ((payload as Record<string, unknown>).items as unknown[])
-      : Array.isArray(payload)
-        ? payload
-        : [];
-
-  const issueTitlesByID = new Map<string, string>();
-  const issueProjectIDsByIssueID = new Map<string, string>();
-
-  for (const raw of records) {
-    if (!isRecord(raw)) {
-      continue;
-    }
-    const issueID = asString(raw.id) || asString(raw.issue_id) || asString(raw.issueId);
-    if (!issueID) {
-      continue;
-    }
-
-    const issueTitle = asString(raw.title);
-    if (issueTitle) {
-      issueTitlesByID.set(issueID, issueTitle);
-      if (issueID.toLowerCase() !== issueID) {
-        issueTitlesByID.set(issueID.toLowerCase(), issueTitle);
-      }
-    }
-
-    const projectID = asString(raw.project_id) || asString(raw.projectId);
-    if (projectID) {
-      issueProjectIDsByIssueID.set(issueID, projectID);
-      if (issueID.toLowerCase() !== issueID) {
-        issueProjectIDsByIssueID.set(issueID.toLowerCase(), projectID);
-      }
-    }
-  }
-
-  return {
-    issueTitlesByID,
-    issueProjectIDsByIssueID,
-  };
 }
 
 function sortConversations(items: GlobalChatConversation[]): GlobalChatConversation[] {
@@ -988,6 +941,8 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const [issueProjectIDsByIssueID, setIssueProjectIDsByIssueID] = useState<Map<string, string>>(
     () => new Map(),
   );
+  const issueMetadataInFlightRef = useRef<Set<string>>(new Set());
+  const issueMetadataResolvedRef = useRef<Set<string>>(new Set());
 
   const { lastMessage } = useWS();
 
@@ -1055,25 +1010,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         // Ignore metadata fetch failures; chat still functions with existing labels.
       }
 
-      try {
-        const issuesURL = new URL(`${API_URL}/api/issues`);
-        issuesURL.searchParams.set("org_id", orgID);
-        issuesURL.searchParams.set("limit", "500");
-        const issuesResponse = await fetch(issuesURL.toString(), {
-          headers,
-          cache: "no-store",
-        });
-        const issuesPayload = issuesResponse.ok
-          ? await issuesResponse.json().catch(() => null)
-          : null;
-        const issueDirectory = normalizeIssueDirectory(issuesPayload);
-        if (!cancelled) {
-          setIssueTitlesByID(issueDirectory.issueTitlesByID);
-          setIssueProjectIDsByIssueID(issueDirectory.issueProjectIDsByIssueID);
-        }
-      } catch {
-        // Ignore metadata fetch failures; chat still functions with existing labels.
-      }
     };
 
     void loadConversationMetadata();
@@ -1082,6 +1018,123 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const orgID = getStoredOrgID();
+    if (!orgID) {
+      return;
+    }
+
+    const issueIDsToHydrate = new Set<string>();
+    for (const conversation of conversations) {
+      if (conversation.type !== "issue") {
+        continue;
+      }
+      const issueID = conversation.issueId.trim();
+      if (!issueID) {
+        continue;
+      }
+      const issueKey = issueID.toLowerCase();
+      if (issueMetadataResolvedRef.current.has(issueKey) || issueMetadataInFlightRef.current.has(issueKey)) {
+        continue;
+      }
+      const hasTitle = lookupIssueTitle(issueTitlesByID, issueID) !== "";
+      const hasProject = lookupIssueProjectID(issueProjectIDsByIssueID, issueID) !== "";
+      if (hasTitle && hasProject) {
+        issueMetadataResolvedRef.current.add(issueKey);
+        continue;
+      }
+      issueMetadataInFlightRef.current.add(issueKey);
+      issueIDsToHydrate.add(issueID);
+    }
+
+    if (issueIDsToHydrate.size === 0) {
+      return;
+    }
+
+    const token = getStoredAuthToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const titleUpdates = new Map<string, string>();
+      const projectUpdates = new Map<string, string>();
+
+      for (const issueID of issueIDsToHydrate) {
+        const issueKey = issueID.toLowerCase();
+        try {
+          const issueURL = new URL(`${API_URL}/api/issues/${encodeURIComponent(issueID)}`);
+          issueURL.searchParams.set("org_id", orgID);
+          const response = await fetch(issueURL.toString(), {
+            headers,
+            cache: "no-store",
+          });
+          if (!response.ok) {
+            continue;
+          }
+          const payload = await response.json().catch(() => null);
+          const issueRecord =
+            payload &&
+            typeof payload === "object" &&
+            (payload as Record<string, unknown>).issue &&
+            typeof (payload as Record<string, unknown>).issue === "object"
+              ? ((payload as Record<string, unknown>).issue as Record<string, unknown>)
+              : null;
+          if (!issueRecord) {
+            continue;
+          }
+          const title = asString(issueRecord.title);
+          const projectID = asString(issueRecord.project_id) || asString(issueRecord.projectId);
+          if (title) {
+            titleUpdates.set(issueID, title);
+            titleUpdates.set(issueKey, title);
+          }
+          if (projectID) {
+            projectUpdates.set(issueID, projectID);
+            projectUpdates.set(issueKey, projectID);
+          }
+          if (title || projectID) {
+            issueMetadataResolvedRef.current.add(issueKey);
+          }
+        } catch {
+          // Ignore metadata fetch failures for individual issue lookups.
+        } finally {
+          issueMetadataInFlightRef.current.delete(issueKey);
+        }
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      if (titleUpdates.size > 0) {
+        setIssueTitlesByID((prev) => {
+          const next = new Map(prev);
+          for (const [issueID, title] of titleUpdates.entries()) {
+            next.set(issueID, title);
+          }
+          return next;
+        });
+      }
+
+      if (projectUpdates.size > 0) {
+        setIssueProjectIDsByIssueID((prev) => {
+          const next = new Map(prev);
+          for (const [issueID, projectID] of projectUpdates.entries()) {
+            next.set(issueID, projectID);
+          }
+          return next;
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [conversations, issueProjectIDsByIssueID, issueTitlesByID]);
 
   useEffect(() => {
     let cancelled = false;

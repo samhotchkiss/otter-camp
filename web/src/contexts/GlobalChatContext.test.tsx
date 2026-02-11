@@ -110,12 +110,10 @@ describe("GlobalChatContext", () => {
             }),
           };
         }
-        if (url.includes("/api/issues?")) {
+        if (url.includes("/api/issues/")) {
           return {
-            ok: true,
-            json: async () => ({
-              items: [],
-            }),
+            ok: false,
+            json: async () => ({}),
           };
         }
         return {
@@ -360,13 +358,11 @@ describe("GlobalChatContext", () => {
             }),
           };
         }
-        if (url.includes("/api/issues?")) {
+        if (url.includes("/api/issues/issue-1")) {
           return {
             ok: true,
             json: async () => ({
-              items: [
-                { id: "issue-1", title: "Write a poem about testing OtterCamp", project_id: "project-1" },
-              ],
+              issue: { id: "issue-1", title: "Write a poem about testing OtterCamp", project_id: "project-1" },
             }),
           };
         }
