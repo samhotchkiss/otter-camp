@@ -1,6 +1,6 @@
-# Leon Mbeki
+# Leon Rydberg
 
-- **Name:** Leon Mbeki
+- **Name:** Leon Rydberg
 - **Pronouns:** they/them
 - **Role:** Privacy & Security Advisor
 - **Emoji:** 🔐

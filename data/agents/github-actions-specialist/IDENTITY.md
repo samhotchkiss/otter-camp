@@ -1,6 +1,6 @@
-# Kwame Asante
+# Kwame Archer
 
-- **Name:** Kwame Asante
+- **Name:** Kwame Archer
 - **Pronouns:** he/him
 - **Role:** GitHub Actions Specialist
 - **Emoji:** ⚙️

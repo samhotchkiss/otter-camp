@@ -1,6 +1,6 @@
-# Sage Okonkwo
+# Liam Henriksen
 
-- **Name:** Sage Okonkwo
+- **Name:** Liam Henriksen
 - **Pronouns:** they/them
 - **Role:** AI & Automation Generalist
 - **Emoji:** 🤖

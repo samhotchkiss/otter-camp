@@ -1,6 +1,6 @@
-# Zara Okonkwo
+# Zara Whitmore
 
-- **Name:** Zara Okonkwo
+- **Name:** Zara Whitmore
 - **Pronouns:** she/her
 - **Role:** Airtable Builder
 - **Emoji:** 🗂️

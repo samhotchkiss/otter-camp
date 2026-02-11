@@ -1,6 +1,6 @@
-# Wren Oduya
+# Wren Gallagher
 
-- **Name:** Wren Oduya
+- **Name:** Wren Gallagher
 - **Pronouns:** he/him
 - **Role:** Deployment Engineer
 - **Emoji:** 🚀

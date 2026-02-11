@@ -1,6 +1,6 @@
-# Amara Okafor
+# Clara Pedersen
 
-- **Name:** Amara Okafor
+- **Name:** Clara Pedersen
 - **Pronouns:** she/her
 - **Role:** Course Curriculum Planner
 - **Emoji:** 🗺️

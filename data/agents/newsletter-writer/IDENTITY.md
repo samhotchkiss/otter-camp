@@ -1,6 +1,6 @@
-# Yael Okonkwo
+# Yael Shimoni
 
-- **Name:** Yael Okonkwo
+- **Name:** Yael Shimoni
 - **Pronouns:** she/her
 - **Role:** Newsletter Writer
 - **Emoji:** 📬

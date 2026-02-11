@@ -1,6 +1,6 @@
-# Tanya Obi
+# Tanya Rowe
 
-- **Name:** Tanya Obi
+- **Name:** Tanya Rowe
 - **Pronouns:** he/him
 - **Role:** Pet Care Manager
 - **Emoji:** 🐾

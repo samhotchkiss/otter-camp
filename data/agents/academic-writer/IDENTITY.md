@@ -1,6 +1,6 @@
-# Dr. Nadia Osei-Mensah
+# Dr. Nadia Ehrenberg
 
-- **Name:** Dr. Nadia Osei-Mensah
+- **Name:** Dr. Nadia Ehrenberg
 - **Pronouns:** she/her
 - **Role:** Academic Writer
 - **Emoji:** 🎓

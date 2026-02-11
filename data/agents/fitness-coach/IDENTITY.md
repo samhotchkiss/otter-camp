@@ -1,6 +1,6 @@
-# Marcus Okafor
+# Marcus Hale
 
-- **Name:** Marcus Okafor
+- **Name:** Marcus Hale
 - **Pronouns:** he/him
 - **Role:** Fitness Coach
 - **Emoji:** 💪

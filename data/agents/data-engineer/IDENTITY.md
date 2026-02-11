@@ -1,6 +1,6 @@
-# Kofi Mensah
+# Matías Contreras
 
-- **Name:** Kofi Mensah
+- **Name:** Matías Contreras
 - **Pronouns:** he/him
 - **Role:** Data Engineer
 - **Emoji:** 🔧

@@ -1,6 +1,6 @@
-# Amara Okafor-Wells
+# Juliette Moreau
 
-- **Name:** Amara Okafor-Wells
+- **Name:** Juliette Moreau
 - **Pronouns:** she/her
 - **Role:** LinkedIn Content Creator
 - **Emoji:** 💼

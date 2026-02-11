@@ -1,6 +1,6 @@
-# Amara Okonkwo
+# Hanna Bergström
 
-- **Name:** Amara Okonkwo
+- **Name:** Hanna Bergström
 - **Pronouns:** she/her
 - **Role:** Email Server Admin
 - **Emoji:** 📬

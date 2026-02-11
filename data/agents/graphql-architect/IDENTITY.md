@@ -1,6 +1,6 @@
-# Emeka Adeyemi
+# Niklas Bergman
 
-- **Name:** Emeka Adeyemi
+- **Name:** Niklas Bergman
 - **Pronouns:** he/him
 - **Role:** GraphQL Architect
 - **Emoji:** 🕸️

@@ -1,6 +1,6 @@
-# Jordan Okafor-Reeves
+# Jordan Lindberg
 
-- **Name:** Jordan Okafor-Reeves
+- **Name:** Jordan Lindberg
 - **Pronouns:** they/them
 - **Role:** Research & Analysis Generalist
 - **Emoji:** 🔎

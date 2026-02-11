@@ -1,6 +1,6 @@
-# Olamide Adeyemi
+# Olamide Cartwright
 
-- **Name:** Olamide Adeyemi
+- **Name:** Olamide Cartwright
 - **Pronouns:** he/him
 - **Role:** Database Administrator
 - **Emoji:** 🗄️

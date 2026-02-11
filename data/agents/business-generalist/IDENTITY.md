@@ -1,6 +1,6 @@
-# Jordan Achebe
+# Jordan Calloway
 
-- **Name:** Jordan Achebe
+- **Name:** Jordan Calloway
 - **Pronouns:** they/them
 - **Role:** Business Generalist
 - **Emoji:** 💼

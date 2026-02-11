@@ -1,6 +1,6 @@
-# Dr. Amara Osei-Mensah
+# Dr. Amara Rodríguez
 
-- **Name:** Dr. Amara Osei-Mensah
+- **Name:** Dr. Amara Rodríguez
 - **Pronouns:** she/her
 - **Role:** Academic Researcher
 - **Emoji:** 🎓

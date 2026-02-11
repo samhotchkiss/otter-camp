@@ -5,6 +5,23 @@ This file defines the **exact generation prompt template** and the **QA checklis
 
 ---
 
+## **CRITICAL: Spawning Sub-Agents**
+
+**ALWAYS embed the full prompt template + QA checklist directly in the spawn task text.**
+
+**DO NOT** tell sub-agents to "read AVATAR-RULES.md" — they won't follow it properly. Quality collapses when rules are referenced instead of embedded.
+
+**Every spawn must include:**
+1. Complete prompt template with all variables filled in
+2. Full 9-item QA checklist
+3. Explicit nano-banana-pro generation command
+4. Regeneration rules
+5. Posting instructions
+
+This is non-negotiable. Inline embedding ensures compliance.
+
+---
+
 ## Canonical Avatar Generation Prompt (Template)
 
 Use this exact template, replacing the placeholders:
@@ -19,8 +36,10 @@ STYLE:
 - Natural warm fur tones (tan/brown/cream), never monochrome color wash
 
 COMPOSITION:
-- Square 1:1 image
-- Solid background color: {BACKGROUND_HEX}
+- **CRITICAL: Square 1:1 image — width MUST equal height exactly**
+- Background base color: {BACKGROUND_HEX}
+- Background may include subtle role-themed elements, patterns, or scene hints that enhance context
+- Base color must remain clearly dominant and visible
 - Background must be full bleed to all edges
 - No border, no frame, no inset rectangle, no matte, no vignette
 - Tight crop: head/shoulders should reach image edges
@@ -79,17 +98,23 @@ Category color map:
 
 For each generated avatar, validate all items:
 
+0. **SQUARE DIMENSIONS (CHECK FIRST)**
+   - Image width MUST equal image height exactly (e.g., 1024×1024)
+   - Verify with `identify` or `sips` before proceeding
+   - If not square, regenerate immediately — do not proceed with other checks
+
 1. **No border/frame**
    - No black/white frame lines
    - No inset panel
    - No paper edge effect
 
 2. **Background to edges**
-   - Solid category color reaches all 4 edges of the final image
+   - Base category color must be clearly visible and dominant
+   - Background (with or without role-themed elements) reaches all 4 edges of the final image
 
 3. **Edge-touch crop**
    - Subject reaches/touches edges (tight crop)
-   - No tiny, centered “floating” character with large margins
+   - No tiny, centered "floating" character with large margins
 
 4. **Single-face integrity**
    - Exactly one face
@@ -114,6 +139,8 @@ For each generated avatar, validate all items:
 
 ## Regeneration Rule
 
+**Dimension check happens FIRST.** If not square, regenerate before running other QA items.
+
 If any single checklist item fails:
 - Regenerate immediately
 - Re-run QA
@@ -128,60 +155,3 @@ When a new avatar passes QA:
    - `data/agents/{role-id}/avatar.png`
 2. Post to Slack channel immediately
 3. Check Slack for stop/update message before generating next avatar
-
----
-
-## Quick Runbook (Copy/Paste)
-
-### 1) Generate one avatar (single role)
-
-```bash
-# Example vars
-ROLE_ID="api-designer"
-DISPLAY_NAME="Pedro Santiago"
-ROLE_NAME="API Designer"
-BACKGROUND_HEX="#E8723A"
-GENDER_CUE="feminine-coded"
-ACCESSORY_SET="wireframe glasses, collared shirt, vest"
-OUT="2026-02-11-${ROLE_ID}-avatar.png"
-
-PROMPT="Create a square avatar of an anthropomorphic otter in classic woodcut style matching the approved aesthetic. Hand-inked linocut look, bold black linework, crosshatching, warm natural fur tones. Solid ${BACKGROUND_HEX} background full bleed to all edges. No border/frame/inset/matte/vignette/text/logo. Tight crop so head/shoulders reach edges. Exactly one coherent face. Expression neutral or friendly, never angry/scary/mean. Avoid stereotypes/caricatures. Name: ${DISPLAY_NAME}. Role: ${ROLE_NAME}. ${GENDER_CUE}. Distinctive features: ${ACCESSORY_SET}."
-
-uv run /Users/sam/.npm-global/lib/node_modules/openclaw/skills/nano-banana-pro/scripts/generate_image.py \
-  --prompt "$PROMPT" \
-  --filename "$OUT" \
-  --resolution 1K
-```
-
-### 2) Save to agent folder
-
-```bash
-cp "/Users/sam/.openclaw/workspace-avatar-design/avatars/batch20/${OUT}" \
-   "/Users/sam/Documents/Dev/otter-camp/data/agents/${ROLE_ID}/avatar.png"
-```
-
-### 3) QA check before posting (manual gate)
-
-```text
-PASS required on all:
-- no border/frame
-- background reaches all edges
-- subject touches edges (tight crop)
-- single coherent face (no duplicate features)
-- neutral/friendly expression
-- warm fur tones distinct from background
-- no text/logo/symbols
-- readable at small thumbnail size
-```
-
-### 4) Post to Slack after PASS
-
-Use OpenClaw `message` tool with:
-- `action=send`
-- `channel=slack`
-- `target=<DM or channel id>`
-- `filePath=/Users/sam/Documents/Dev/otter-camp/data/agents/${ROLE_ID}/avatar.png`
-
-### 5) Stop-check between each generation
-
-Before generating the next avatar, check Slack for any new instruction (especially stop/pause/change requests).

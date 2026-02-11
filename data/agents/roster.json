@@ -172,161 +172,6 @@
       }
     },
     {
-      "role_id": "course-curriculum-planner",
-      "display_name": "Amara Okafor",
-      "pronouns": "she/her",
-      "role_name": "Course Curriculum Planner",
-      "emoji": "🗺️",
-      "role_type": "ic",
-      "category": "personal",
-      "subcategory": "education-learning",
-      "tagline": "Learning paths, skill gap analysis, and resource curation that turn goals into structured plans",
-      "difficulty_tier": "intermediate",
-      "solo_or_team": "solo",
-      "pairs_well_with": [
-        "tutor",
-        "language-learning-coach",
-        "reading-list-curator",
-        "kids-activity-planner"
-      ],
-      "pros": [
-        "Backwards-from-goal curriculum design",
-        "Skill gap analysis that avoids redundant learning",
-        "Quality resource curation across formats",
-        "Realistic timeline estimation with built-in flexibility"
-      ],
-      "cons": [
-        "Plans the path, doesn't teach the content",
-        "Needs clear goals to be effective — struggles with vague exploration",
-        "Resource curation quality depends on what's available in the field"
-      ],
-      "model_recommendations": {
-        "tier": "structured-routine",
-        "best_overall": "claude-haiku-4",
-        "anthropic": {
-          "model": "claude-haiku-4"
-        },
-        "openai": {
-          "model": "gpt-4o"
-        },
-        "google": {
-          "model": "gemini-2.5-flash"
-        },
-        "kimi": {
-          "model": "kimi-k2"
-        },
-        "ollama": {
-          "model": "qwen3-32b",
-          "alt": "llama-4-scout"
-        },
-        "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
-      }
-    },
-    {
-      "role_id": "linkedin-content-creator",
-      "display_name": "Amara Okafor-Wells",
-      "pronouns": "she/her",
-      "role_name": "LinkedIn Content Creator",
-      "emoji": "💼",
-      "role_type": "ic",
-      "category": "content",
-      "subcategory": "social",
-      "tagline": "LinkedIn posts people actually stop scrolling to read — thought leadership that sounds human",
-      "difficulty_tier": "intermediate",
-      "solo_or_team": "both",
-      "pairs_well_with": [
-        "social-media-manager",
-        "twitter-x-strategist",
-        "resume-cv-writer",
-        "content-strategist"
-      ],
-      "pros": [
-        "Hook writing that earns the 'see more' click",
-        "Executive voice coaching for LinkedIn",
-        "Algorithm-aware formatting and posting strategy",
-        "B2B lead generation through content"
-      ],
-      "cons": [
-        "LinkedIn-only specialist",
-        "Needs executive access for thought leadership work",
-        "Post-publish engagement window requires time commitment"
-      ],
-      "model_recommendations": {
-        "tier": "creative-writing",
-        "best_overall": "claude-sonnet-5",
-        "anthropic": {
-          "model": "claude-sonnet-5",
-          "thinking": "low"
-        },
-        "openai": {
-          "model": "gpt-5.3",
-          "reasoning": "off"
-        },
-        "google": {
-          "model": "gemini-2.5-pro"
-        },
-        "kimi": {
-          "model": "kimi-k2.5"
-        },
-        "ollama": {
-          "model": "llama-4-maverick",
-          "alt": "mistral-large"
-        },
-        "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output — keep low or off."
-      }
-    },
-    {
-      "role_id": "email-server-admin",
-      "display_name": "Amara Okonkwo",
-      "pronouns": "she/her",
-      "role_name": "Email Server Admin",
-      "emoji": "📬",
-      "role_type": "ic",
-      "category": "it",
-      "subcategory": "sysadmin",
-      "tagline": "Email deliverability, SPF/DKIM/DMARC, spam filtering, and mail server management",
-      "difficulty_tier": "intermediate",
-      "solo_or_team": "solo",
-      "pairs_well_with": [
-        "dns-admin",
-        "security-engineer",
-        "privacy-security-advisor",
-        "devops-engineer"
-      ],
-      "pros": [
-        "Deep expertise in email authentication — SPF, DKIM, DMARC from setup through enforcement",
-        "Methodical deliverability troubleshooting using headers, logs, and reputation tools",
-        "Patient educator who demystifies email protocols for non-technical stakeholders",
-        "Experience across Postfix, Exchange, M365, Google Workspace, and transactional services"
-      ],
-      "cons": [
-        "Narrowly focused on email infrastructure — won't help with content or marketing strategy",
-        "Conservative approach to DMARC enforcement can feel slow",
-        "Email-specific DNS expertise doesn't extend to general DNS architecture"
-      ],
-      "model_recommendations": {
-        "tier": "structured-routine",
-        "best_overall": "claude-haiku-4",
-        "anthropic": {
-          "model": "claude-haiku-4"
-        },
-        "openai": {
-          "model": "gpt-4o"
-        },
-        "google": {
-          "model": "gemini-2.5-flash"
-        },
-        "kimi": {
-          "model": "kimi-k2"
-        },
-        "ollama": {
-          "model": "qwen3-32b",
-          "alt": "llama-4-scout"
-        },
-        "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
-      }
-    },
-    {
       "role_id": "angular-developer",
       "display_name": "Amara Osei",
       "pronouns": "she/her",
@@ -1228,6 +1073,57 @@
           "alt": "qwen3-32b"
         },
         "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+      }
+    },
+    {
+      "role_id": "course-curriculum-planner",
+      "display_name": "Clara Pedersen",
+      "pronouns": "she/her",
+      "role_name": "Course Curriculum Planner",
+      "emoji": "🗺️",
+      "role_type": "ic",
+      "category": "personal",
+      "subcategory": "education-learning",
+      "tagline": "Learning paths, skill gap analysis, and resource curation that turn goals into structured plans",
+      "difficulty_tier": "intermediate",
+      "solo_or_team": "solo",
+      "pairs_well_with": [
+        "tutor",
+        "language-learning-coach",
+        "reading-list-curator",
+        "kids-activity-planner"
+      ],
+      "pros": [
+        "Backwards-from-goal curriculum design",
+        "Skill gap analysis that avoids redundant learning",
+        "Quality resource curation across formats",
+        "Realistic timeline estimation with built-in flexibility"
+      ],
+      "cons": [
+        "Plans the path, doesn't teach the content",
+        "Needs clear goals to be effective — struggles with vague exploration",
+        "Resource curation quality depends on what's available in the field"
+      ],
+      "model_recommendations": {
+        "tier": "structured-routine",
+        "best_overall": "claude-haiku-4",
+        "anthropic": {
+          "model": "claude-haiku-4"
+        },
+        "openai": {
+          "model": "gpt-4o"
+        },
+        "google": {
+          "model": "gemini-2.5-flash"
+        },
+        "kimi": {
+          "model": "kimi-k2"
+        },
+        "ollama": {
+          "model": "qwen3-32b",
+          "alt": "llama-4-scout"
+        },
+        "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
       }
     },
     {
@@ -2301,7 +2197,7 @@
     },
     {
       "role_id": "academic-researcher",
-      "display_name": "Dr. Amara Osei-Mensah",
+      "display_name": "Dr. Amara Rodríguez",
       "pronouns": "she/her",
       "role_name": "Academic Researcher",
       "emoji": "🎓",
@@ -2355,7 +2251,7 @@
     },
     {
       "role_id": "academic-writer",
-      "display_name": "Dr. Nadia Osei-Mensah",
+      "display_name": "Dr. Nadia Ehrenberg",
       "pronouns": "she/her",
       "role_name": "Academic Writer",
       "emoji": "🎓",
@@ -2562,60 +2458,6 @@
           "alt": "mistral-large"
         },
         "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output — keep low or off."
-      }
-    },
-    {
-      "role_id": "graphql-architect",
-      "display_name": "Emeka Adeyemi",
-      "pronouns": "he/him",
-      "role_name": "GraphQL Architect",
-      "emoji": "🕸️",
-      "role_type": "ic",
-      "category": "engineering",
-      "subcategory": "core-development",
-      "tagline": "Designs GraphQL schemas as products — self-documenting, consumer-friendly, built to evolve",
-      "difficulty_tier": "advanced",
-      "solo_or_team": "both",
-      "pairs_well_with": [
-        "frontend-developer",
-        "backend-architect",
-        "api-designer",
-        "typescript-architect"
-      ],
-      "pros": [
-        "Schema-first design that serves clients without mirroring the database",
-        "Deep expertise in federation, DataLoader patterns, and query optimization",
-        "Schema evolution strategies that don't break existing clients",
-        "Strong focus on naming and documentation as API quality"
-      ],
-      "cons": [
-        "Schema perfectionism can slow delivery when pragmatism would suffice",
-        "GraphQL-centric thinking may over-apply GraphQL where REST is simpler",
-        "Less effective on projects with simple CRUD and no relational query needs"
-      ],
-      "model_recommendations": {
-        "tier": "heavy-reasoning",
-        "best_overall": "claude-opus-4-6",
-        "anthropic": {
-          "model": "claude-opus-4-6",
-          "thinking": "high"
-        },
-        "openai": {
-          "model": "o3",
-          "reasoning": "high"
-        },
-        "google": {
-          "model": "gemini-2.5-pro",
-          "thinking": "enabled"
-        },
-        "kimi": {
-          "model": "kimi-k2.5"
-        },
-        "ollama": {
-          "model": "deepseek-r1",
-          "alt": "qwen3-235b"
-        },
-        "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
       }
     },
     {
@@ -3152,7 +2994,7 @@
     },
     {
       "role_id": "java-kotlin-engineer",
-      "display_name": "Habiba Oumar",
+      "display_name": "Habiba Sarkis",
       "pronouns": "she/her",
       "role_name": "Java/Kotlin Engineer",
       "emoji": "☕",
@@ -3202,6 +3044,57 @@
           "alt": "qwen3-32b"
         },
         "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+      }
+    },
+    {
+      "role_id": "email-server-admin",
+      "display_name": "Hanna Bergström",
+      "pronouns": "she/her",
+      "role_name": "Email Server Admin",
+      "emoji": "📬",
+      "role_type": "ic",
+      "category": "it",
+      "subcategory": "sysadmin",
+      "tagline": "Email deliverability, SPF/DKIM/DMARC, spam filtering, and mail server management",
+      "difficulty_tier": "intermediate",
+      "solo_or_team": "solo",
+      "pairs_well_with": [
+        "dns-admin",
+        "security-engineer",
+        "privacy-security-advisor",
+        "devops-engineer"
+      ],
+      "pros": [
+        "Deep expertise in email authentication — SPF, DKIM, DMARC from setup through enforcement",
+        "Methodical deliverability troubleshooting using headers, logs, and reputation tools",
+        "Patient educator who demystifies email protocols for non-technical stakeholders",
+        "Experience across Postfix, Exchange, M365, Google Workspace, and transactional services"
+      ],
+      "cons": [
+        "Narrowly focused on email infrastructure — won't help with content or marketing strategy",
+        "Conservative approach to DMARC enforcement can feel slow",
+        "Email-specific DNS expertise doesn't extend to general DNS architecture"
+      ],
+      "model_recommendations": {
+        "tier": "structured-routine",
+        "best_overall": "claude-haiku-4",
+        "anthropic": {
+          "model": "claude-haiku-4"
+        },
+        "openai": {
+          "model": "gpt-4o"
+        },
+        "google": {
+          "model": "gemini-2.5-flash"
+        },
+        "kimi": {
+          "model": "kimi-k2"
+        },
+        "ollama": {
+          "model": "qwen3-32b",
+          "alt": "llama-4-scout"
+        },
+        "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
       }
     },
     {
@@ -3730,59 +3623,6 @@
       }
     },
     {
-      "role_id": "business-generalist",
-      "display_name": "Jordan Achebe",
-      "pronouns": "they/them",
-      "role_name": "Business Generalist",
-      "emoji": "💼",
-      "role_type": "ic",
-      "category": "business",
-      "subcategory": "finance-legal",
-      "tagline": "Cross-functional business support spanning finance, legal, strategy, and operations",
-      "difficulty_tier": "intermediate",
-      "solo_or_team": "both",
-      "pairs_well_with": [
-        "financial-analyst",
-        "ip-patent-researcher",
-        "fundraising-strategist",
-        "strategy-consultant"
-      ],
-      "pros": [
-        "Cross-domain fluency across finance, legal, and operations",
-        "Fast triage and specialist routing",
-        "Clean documentation of decisions and rationale",
-        "Effective at 80% answers when speed matters"
-      ],
-      "cons": [
-        "Jack of all trades, master of none — deep questions need specialists",
-        "May over-generalize in domains that require precision",
-        "Not a substitute for legal counsel or certified financial analysis"
-      ],
-      "model_recommendations": {
-        "tier": "creative-writing",
-        "best_overall": "claude-sonnet-5",
-        "anthropic": {
-          "model": "claude-sonnet-5",
-          "thinking": "low"
-        },
-        "openai": {
-          "model": "gpt-5.3",
-          "reasoning": "off"
-        },
-        "google": {
-          "model": "gemini-2.5-pro"
-        },
-        "kimi": {
-          "model": "kimi-k2.5"
-        },
-        "ollama": {
-          "model": "llama-4-maverick",
-          "alt": "mistral-large"
-        },
-        "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output — keep low or off."
-      }
-    },
-    {
       "role_id": "cloud-architect-azure",
       "display_name": "Jordan Avery",
       "pronouns": "they/them",
@@ -3837,8 +3677,61 @@
       }
     },
     {
+      "role_id": "business-generalist",
+      "display_name": "Jordan Calloway",
+      "pronouns": "they/them",
+      "role_name": "Business Generalist",
+      "emoji": "💼",
+      "role_type": "ic",
+      "category": "business",
+      "subcategory": "finance-legal",
+      "tagline": "Cross-functional business support spanning finance, legal, strategy, and operations",
+      "difficulty_tier": "intermediate",
+      "solo_or_team": "both",
+      "pairs_well_with": [
+        "financial-analyst",
+        "ip-patent-researcher",
+        "fundraising-strategist",
+        "strategy-consultant"
+      ],
+      "pros": [
+        "Cross-domain fluency across finance, legal, and operations",
+        "Fast triage and specialist routing",
+        "Clean documentation of decisions and rationale",
+        "Effective at 80% answers when speed matters"
+      ],
+      "cons": [
+        "Jack of all trades, master of none — deep questions need specialists",
+        "May over-generalize in domains that require precision",
+        "Not a substitute for legal counsel or certified financial analysis"
+      ],
+      "model_recommendations": {
+        "tier": "creative-writing",
+        "best_overall": "claude-sonnet-5",
+        "anthropic": {
+          "model": "claude-sonnet-5",
+          "thinking": "low"
+        },
+        "openai": {
+          "model": "gpt-5.3",
+          "reasoning": "off"
+        },
+        "google": {
+          "model": "gemini-2.5-pro"
+        },
+        "kimi": {
+          "model": "kimi-k2.5"
+        },
+        "ollama": {
+          "model": "llama-4-maverick",
+          "alt": "mistral-large"
+        },
+        "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output — keep low or off."
+      }
+    },
+    {
       "role_id": "research-generalist",
-      "display_name": "Jordan Okafor-Reeves",
+      "display_name": "Jordan Lindberg",
       "pronouns": "they/them",
       "role_name": "Research & Analysis Generalist",
       "emoji": "🔎",
@@ -3942,6 +3835,59 @@
           "alt": "qwen3-32b"
         },
         "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+      }
+    },
+    {
+      "role_id": "linkedin-content-creator",
+      "display_name": "Juliette Moreau",
+      "pronouns": "she/her",
+      "role_name": "LinkedIn Content Creator",
+      "emoji": "💼",
+      "role_type": "ic",
+      "category": "content",
+      "subcategory": "social",
+      "tagline": "LinkedIn posts people actually stop scrolling to read — thought leadership that sounds human",
+      "difficulty_tier": "intermediate",
+      "solo_or_team": "both",
+      "pairs_well_with": [
+        "social-media-manager",
+        "twitter-x-strategist",
+        "resume-cv-writer",
+        "content-strategist"
+      ],
+      "pros": [
+        "Hook writing that earns the 'see more' click",
+        "Executive voice coaching for LinkedIn",
+        "Algorithm-aware formatting and posting strategy",
+        "B2B lead generation through content"
+      ],
+      "cons": [
+        "LinkedIn-only specialist",
+        "Needs executive access for thought leadership work",
+        "Post-publish engagement window requires time commitment"
+      ],
+      "model_recommendations": {
+        "tier": "creative-writing",
+        "best_overall": "claude-sonnet-5",
+        "anthropic": {
+          "model": "claude-sonnet-5",
+          "thinking": "low"
+        },
+        "openai": {
+          "model": "gpt-5.3",
+          "reasoning": "off"
+        },
+        "google": {
+          "model": "gemini-2.5-pro"
+        },
+        "kimi": {
+          "model": "kimi-k2.5"
+        },
+        "ollama": {
+          "model": "llama-4-maverick",
+          "alt": "mistral-large"
+        },
+        "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output — keep low or off."
       }
     },
     {
@@ -4317,60 +4263,6 @@
       }
     },
     {
-      "role_id": "data-engineer",
-      "display_name": "Kofi Mensah",
-      "pronouns": "he/him",
-      "role_name": "Data Engineer",
-      "emoji": "🔧",
-      "role_type": "ic",
-      "category": "engineering",
-      "subcategory": "data-ai-ml",
-      "tagline": "Reliable data pipelines, warehouse architecture, and quality infrastructure that runs flawlessly at 3am",
-      "difficulty_tier": "intermediate",
-      "solo_or_team": "both",
-      "pairs_well_with": [
-        "data-analyst",
-        "data-scientist",
-        "ml-engineer",
-        "devops-engineer"
-      ],
-      "pros": [
-        "Pipeline architecture across batch (Airflow, dbt) and streaming (Kafka, Flink, Spark)",
-        "Data quality obsessive — validation, monitoring, and alerting built into every pipeline",
-        "Cloud warehouse expertise: Snowflake, BigQuery, Redshift, Databricks",
-        "Schema design that serves consumers — models data for how it's actually used"
-      ],
-      "cons": [
-        "Doesn't build dashboards, train models, or write application code",
-        "Needs access to data sources and cloud infrastructure to be effective",
-        "Data modeling opinions can slow things down when quick-and-dirty would suffice"
-      ],
-      "model_recommendations": {
-        "tier": "heavy-reasoning",
-        "best_overall": "claude-opus-4-6",
-        "anthropic": {
-          "model": "claude-opus-4-6",
-          "thinking": "high"
-        },
-        "openai": {
-          "model": "o3",
-          "reasoning": "high"
-        },
-        "google": {
-          "model": "gemini-2.5-pro",
-          "thinking": "enabled"
-        },
-        "kimi": {
-          "model": "kimi-k2.5"
-        },
-        "ollama": {
-          "model": "deepseek-r1",
-          "alt": "qwen3-235b"
-        },
-        "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
-      }
-    },
-    {
       "role_id": "training-developer",
       "display_name": "Kwame Adjei",
       "pronouns": "he/him",
@@ -4425,7 +4317,7 @@
     },
     {
       "role_id": "github-actions-specialist",
-      "display_name": "Kwame Asante",
+      "display_name": "Kwame Archer",
       "pronouns": "he/him",
       "role_name": "GitHub Actions Specialist",
       "emoji": "⚙️",
@@ -4689,7 +4581,7 @@
     },
     {
       "role_id": "privacy-security-advisor",
-      "display_name": "Leon Mbeki",
+      "display_name": "Leon Rydberg",
       "pronouns": "they/them",
       "role_name": "Privacy & Security Advisor",
       "emoji": "🔐",
@@ -4790,6 +4682,60 @@
           "alt": "qwen3-235b"
         },
         "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+      }
+    },
+    {
+      "role_id": "ai-generalist",
+      "display_name": "Liam Henriksen",
+      "pronouns": "they/them",
+      "role_name": "AI & Automation Generalist",
+      "emoji": "🤖",
+      "role_type": "ic",
+      "category": "ai",
+      "subcategory": "generalist",
+      "tagline": "Matches the right AI technique to the right problem — and knows when the answer isn't AI",
+      "difficulty_tier": "intermediate",
+      "solo_or_team": "both",
+      "pairs_well_with": [
+        "ai-workflow-designer",
+        "ai-llm-specialist",
+        "chatbot-designer",
+        "data-engineer"
+      ],
+      "pros": [
+        "Broad fluency across prompting, RAG, chatbots, ethics, and MCP",
+        "Evaluation-driven — measures before optimizing",
+        "Cost-conscious model selection",
+        "Translates AI concepts into plain language"
+      ],
+      "cons": [
+        "Breadth over depth — specialists go deeper on any single technique",
+        "May over-index on 'do we even need AI?' when the answer is yes",
+        "Not a frontend builder"
+      ],
+      "model_recommendations": {
+        "tier": "strong-general",
+        "best_overall": "claude-sonnet-5",
+        "anthropic": {
+          "model": "claude-sonnet-5",
+          "thinking": "medium"
+        },
+        "openai": {
+          "model": "gpt-5.3",
+          "reasoning": "medium"
+        },
+        "google": {
+          "model": "gemini-2.5-pro",
+          "thinking": "enabled"
+        },
+        "kimi": {
+          "model": "kimi-k2.5"
+        },
+        "ollama": {
+          "model": "llama-4-maverick",
+          "alt": "qwen3-32b"
+        },
+        "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
       }
     },
     {
@@ -5642,7 +5588,7 @@
     },
     {
       "role_id": "fitness-coach",
-      "display_name": "Marcus Okafor",
+      "display_name": "Marcus Hale",
       "pronouns": "he/him",
       "role_name": "Fitness Coach",
       "emoji": "💪",
@@ -5692,62 +5638,8 @@
       }
     },
     {
-      "role_id": "senior-code-reviewer",
-      "display_name": "Marcus Okonkwo",
-      "pronouns": "he/him",
-      "role_name": "Senior Code Reviewer",
-      "emoji": "🔍",
-      "role_type": "ic",
-      "category": "engineering",
-      "subcategory": "quality-security",
-      "tagline": "Thorough, fair code review that catches bugs and raises the bar for the whole team",
-      "difficulty_tier": "advanced",
-      "solo_or_team": "team",
-      "pairs_well_with": [
-        "security-auditor",
-        "test-automation-engineer",
-        "performance-engineer",
-        "backend-developer"
-      ],
-      "pros": [
-        "Catches subtle bugs — race conditions, null refs, resource leaks — that automated tools miss",
-        "Categorized feedback (blocker/suggestion/nit) so authors know exactly what to fix",
-        "Cross-language fluency across Python, TypeScript, Go, Rust, Java, and Ruby",
-        "Turns reviews into teaching moments that level up the whole team"
-      ],
-      "cons": [
-        "Focused on review — won't write features or design systems from scratch",
-        "Thoroughness can feel slow on massive PRs — will push to decompose them first",
-        "Needs codebase context to give good architectural feedback — less effective cold"
-      ],
-      "model_recommendations": {
-        "tier": "strong-general",
-        "best_overall": "claude-sonnet-5",
-        "anthropic": {
-          "model": "claude-sonnet-5",
-          "thinking": "medium"
-        },
-        "openai": {
-          "model": "gpt-5.3",
-          "reasoning": "medium"
-        },
-        "google": {
-          "model": "gemini-2.5-pro",
-          "thinking": "enabled"
-        },
-        "kimi": {
-          "model": "kimi-k2.5"
-        },
-        "ollama": {
-          "model": "llama-4-maverick",
-          "alt": "qwen3-32b"
-        },
-        "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
-      }
-    },
-    {
       "role_id": "competitive-intelligence-analyst",
-      "display_name": "Marcus Oyelaran",
+      "display_name": "Marcus Holbrook",
       "pronouns": "he/him",
       "role_name": "Competitive Intelligence Analyst",
       "emoji": "🎯",
@@ -6172,6 +6064,60 @@
           "alt": "qwen3-32b"
         },
         "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+      }
+    },
+    {
+      "role_id": "data-engineer",
+      "display_name": "Matías Contreras",
+      "pronouns": "he/him",
+      "role_name": "Data Engineer",
+      "emoji": "🔧",
+      "role_type": "ic",
+      "category": "engineering",
+      "subcategory": "data-ai-ml",
+      "tagline": "Reliable data pipelines, warehouse architecture, and quality infrastructure that runs flawlessly at 3am",
+      "difficulty_tier": "intermediate",
+      "solo_or_team": "both",
+      "pairs_well_with": [
+        "data-analyst",
+        "data-scientist",
+        "ml-engineer",
+        "devops-engineer"
+      ],
+      "pros": [
+        "Pipeline architecture across batch (Airflow, dbt) and streaming (Kafka, Flink, Spark)",
+        "Data quality obsessive — validation, monitoring, and alerting built into every pipeline",
+        "Cloud warehouse expertise: Snowflake, BigQuery, Redshift, Databricks",
+        "Schema design that serves consumers — models data for how it's actually used"
+      ],
+      "cons": [
+        "Doesn't build dashboards, train models, or write application code",
+        "Needs access to data sources and cloud infrastructure to be effective",
+        "Data modeling opinions can slow things down when quick-and-dirty would suffice"
+      ],
+      "model_recommendations": {
+        "tier": "heavy-reasoning",
+        "best_overall": "claude-opus-4-6",
+        "anthropic": {
+          "model": "claude-opus-4-6",
+          "thinking": "high"
+        },
+        "openai": {
+          "model": "o3",
+          "reasoning": "high"
+        },
+        "google": {
+          "model": "gemini-2.5-pro",
+          "thinking": "enabled"
+        },
+        "kimi": {
+          "model": "kimi-k2.5"
+        },
+        "ollama": {
+          "model": "deepseek-r1",
+          "alt": "qwen3-235b"
+        },
+        "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
       }
     },
     {
@@ -7170,6 +7116,60 @@
       }
     },
     {
+      "role_id": "graphql-architect",
+      "display_name": "Niklas Bergman",
+      "pronouns": "he/him",
+      "role_name": "GraphQL Architect",
+      "emoji": "🕸️",
+      "role_type": "ic",
+      "category": "engineering",
+      "subcategory": "core-development",
+      "tagline": "Designs GraphQL schemas as products — self-documenting, consumer-friendly, built to evolve",
+      "difficulty_tier": "advanced",
+      "solo_or_team": "both",
+      "pairs_well_with": [
+        "frontend-developer",
+        "backend-architect",
+        "api-designer",
+        "typescript-architect"
+      ],
+      "pros": [
+        "Schema-first design that serves clients without mirroring the database",
+        "Deep expertise in federation, DataLoader patterns, and query optimization",
+        "Schema evolution strategies that don't break existing clients",
+        "Strong focus on naming and documentation as API quality"
+      ],
+      "cons": [
+        "Schema perfectionism can slow delivery when pragmatism would suffice",
+        "GraphQL-centric thinking may over-apply GraphQL where REST is simpler",
+        "Less effective on projects with simple CRUD and no relational query needs"
+      ],
+      "model_recommendations": {
+        "tier": "heavy-reasoning",
+        "best_overall": "claude-opus-4-6",
+        "anthropic": {
+          "model": "claude-opus-4-6",
+          "thinking": "high"
+        },
+        "openai": {
+          "model": "o3",
+          "reasoning": "high"
+        },
+        "google": {
+          "model": "gemini-2.5-pro",
+          "thinking": "enabled"
+        },
+        "kimi": {
+          "model": "kimi-k2.5"
+        },
+        "ollama": {
+          "model": "deepseek-r1",
+          "alt": "qwen3-235b"
+        },
+        "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+      }
+    },
+    {
       "role_id": "sleep-optimizer",
       "display_name": "Nikolai Petrov",
       "pronouns": "he/him",
@@ -7380,7 +7380,7 @@
     },
     {
       "role_id": "database-administrator",
-      "display_name": "Olamide Adeyemi",
+      "display_name": "Olamide Cartwright",
       "pronouns": "he/him",
       "role_name": "Database Administrator",
       "emoji": "🗄️",
@@ -7775,6 +7775,60 @@
         "Not the right fit for greenfield feature development",
         "Metrics-first approach can feel slow when teams want immediate action",
         "May over-prioritize measurable debt over structural debt"
+      ],
+      "model_recommendations": {
+        "tier": "strong-general",
+        "best_overall": "claude-sonnet-5",
+        "anthropic": {
+          "model": "claude-sonnet-5",
+          "thinking": "medium"
+        },
+        "openai": {
+          "model": "gpt-5.3",
+          "reasoning": "medium"
+        },
+        "google": {
+          "model": "gemini-2.5-pro",
+          "thinking": "enabled"
+        },
+        "kimi": {
+          "model": "kimi-k2.5"
+        },
+        "ollama": {
+          "model": "llama-4-maverick",
+          "alt": "qwen3-32b"
+        },
+        "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+      }
+    },
+    {
+      "role_id": "senior-code-reviewer",
+      "display_name": "Pavel Novotný",
+      "pronouns": "he/him",
+      "role_name": "Senior Code Reviewer",
+      "emoji": "🔍",
+      "role_type": "ic",
+      "category": "engineering",
+      "subcategory": "quality-security",
+      "tagline": "Thorough, fair code review that catches bugs and raises the bar for the whole team",
+      "difficulty_tier": "advanced",
+      "solo_or_team": "team",
+      "pairs_well_with": [
+        "security-auditor",
+        "test-automation-engineer",
+        "performance-engineer",
+        "backend-developer"
+      ],
+      "pros": [
+        "Catches subtle bugs — race conditions, null refs, resource leaks — that automated tools miss",
+        "Categorized feedback (blocker/suggestion/nit) so authors know exactly what to fix",
+        "Cross-language fluency across Python, TypeScript, Go, Rust, Java, and Ruby",
+        "Turns reviews into teaching moments that level up the whole team"
+      ],
+      "cons": [
+        "Focused on review — won't write features or design systems from scratch",
+        "Thoroughness can feel slow on massive PRs — will push to decompose them first",
+        "Needs codebase context to give good architectural feedback — less effective cold"
       ],
       "model_recommendations": {
         "tier": "strong-general",
@@ -9907,60 +9961,6 @@
       }
     },
     {
-      "role_id": "ai-generalist",
-      "display_name": "Sage Okonkwo",
-      "pronouns": "they/them",
-      "role_name": "AI & Automation Generalist",
-      "emoji": "🤖",
-      "role_type": "ic",
-      "category": "ai",
-      "subcategory": "generalist",
-      "tagline": "Matches the right AI technique to the right problem — and knows when the answer isn't AI",
-      "difficulty_tier": "intermediate",
-      "solo_or_team": "both",
-      "pairs_well_with": [
-        "ai-workflow-designer",
-        "ai-llm-specialist",
-        "chatbot-designer",
-        "data-engineer"
-      ],
-      "pros": [
-        "Broad fluency across prompting, RAG, chatbots, ethics, and MCP",
-        "Evaluation-driven — measures before optimizing",
-        "Cost-conscious model selection",
-        "Translates AI concepts into plain language"
-      ],
-      "cons": [
-        "Breadth over depth — specialists go deeper on any single technique",
-        "May over-index on 'do we even need AI?' when the answer is yes",
-        "Not a frontend builder"
-      ],
-      "model_recommendations": {
-        "tier": "strong-general",
-        "best_overall": "claude-sonnet-5",
-        "anthropic": {
-          "model": "claude-sonnet-5",
-          "thinking": "medium"
-        },
-        "openai": {
-          "model": "gpt-5.3",
-          "reasoning": "medium"
-        },
-        "google": {
-          "model": "gemini-2.5-pro",
-          "thinking": "enabled"
-        },
-        "kimi": {
-          "model": "kimi-k2.5"
-        },
-        "ollama": {
-          "model": "llama-4-maverick",
-          "alt": "qwen3-32b"
-        },
-        "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
-      }
-    },
-    {
       "role_id": "calendar-optimizer",
       "display_name": "Sana Abbasi",
       "pronouns": "she/her",
@@ -10013,7 +10013,7 @@
     },
     {
       "role_id": "ui-ux-engineer",
-      "display_name": "Sana Okafor",
+      "display_name": "Sana Khatri",
       "pronouns": "she/her",
       "role_name": "UI/UX Engineer",
       "emoji": "✨",
@@ -10541,7 +10541,7 @@
     },
     {
       "role_id": "pet-care-manager",
-      "display_name": "Tanya Obi",
+      "display_name": "Tanya Rowe",
       "pronouns": "he/him",
       "role_name": "Pet Care Manager",
       "emoji": "🐾",
@@ -11749,7 +11749,7 @@
     },
     {
       "role_id": "deployment-engineer",
-      "display_name": "Wren Oduya",
+      "display_name": "Wren Gallagher",
       "pronouns": "he/him",
       "role_name": "Deployment Engineer",
       "emoji": "🚀",
@@ -11906,7 +11906,7 @@
     },
     {
       "role_id": "newsletter-writer",
-      "display_name": "Yael Okonkwo",
+      "display_name": "Yael Shimoni",
       "pronouns": "she/her",
       "role_name": "Newsletter Writer",
       "emoji": "📬",
@@ -12542,7 +12542,7 @@
     },
     {
       "role_id": "airtable-builder",
-      "display_name": "Zara Okonkwo",
+      "display_name": "Zara Whitmore",
       "pronouns": "she/her",
       "role_name": "Airtable Builder",
       "emoji": "🗂️",

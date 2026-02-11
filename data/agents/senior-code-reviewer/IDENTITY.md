@@ -1,6 +1,6 @@
-# Marcus Okonkwo
+# Pavel Novotný
 
-- **Name:** Marcus Okonkwo
+- **Name:** Pavel Novotný
 - **Pronouns:** he/him
 - **Role:** Senior Code Reviewer
 - **Emoji:** 🔍

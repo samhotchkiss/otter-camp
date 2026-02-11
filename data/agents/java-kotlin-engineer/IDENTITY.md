@@ -1,6 +1,6 @@
-# Habiba Oumar
+# Habiba Sarkis
 
-- **Name:** Habiba Oumar
+- **Name:** Habiba Sarkis
 - **Pronouns:** she/her
 - **Role:** Java/Kotlin Engineer
 - **Emoji:** ☕

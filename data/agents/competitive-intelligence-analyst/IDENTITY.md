@@ -1,6 +1,6 @@
-# Marcus Oyelaran
+# Marcus Holbrook
 
-- **Name:** Marcus Oyelaran
+- **Name:** Marcus Holbrook
 - **Pronouns:** he/him
 - **Role:** Competitive Intelligence Analyst
 - **Emoji:** 🎯

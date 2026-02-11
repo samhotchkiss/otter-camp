@@ -1,6 +1,6 @@
-# Sana Okafor
+# Sana Khatri
 
-- **Name:** Sana Okafor
+- **Name:** Sana Khatri
 - **Pronouns:** she/her
 - **Role:** UI/UX Engineer
 - **Emoji:** ✨
