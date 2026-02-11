@@ -2386,7 +2386,19 @@ async function withSessionContext(
     }
     return sections.join('\n\n');
   }
-  const reminder = `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]`;
+  const reminderSections: string[] = [];
+  const shouldPersistIdentityPreamble =
+    context.kind === 'dm' && parseChameleonSessionKey(sessionKey) !== null;
+  const identityPreamble = shouldPersistIdentityPreamble
+    ? getTrimmedString(context.identityMetadata?.preamble)
+    : '';
+  if (identityPreamble) {
+    reminderSections.push(identityPreamble);
+  }
+  reminderSections.push(
+    `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]`,
+  );
+  const reminder = reminderSections.join('\n\n');
   if (!includeUserContent) {
     return reminder;
   }
