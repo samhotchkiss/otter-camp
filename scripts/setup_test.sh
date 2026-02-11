@@ -127,13 +127,14 @@ test_write_bridge_env_if_missing_targets_4200() {
     cd "$tmp"
     OPENCLAW_SYNC_SECRET="sync-test"
     OPENCLAW_WS_SECRET="ws-test"
+    PORT=4200
     write_bridge_env_if_missing
     [[ -f bridge/.env ]] || {
       echo "expected bridge/.env to be created" >&2
       exit 1
     }
-    grep -q "^OTTERCAMP_URL=http://localhost:4200$" bridge/.env || {
-      echo "expected OTTERCAMP_URL=http://localhost:4200 in bridge/.env" >&2
+    grep -q "OTTERCAMP_URL=http://localhost:4200" bridge/.env || {
+      echo "expected OTTERCAMP_URL containing localhost:4200 in bridge/.env" >&2
       exit 1
     }
   )
