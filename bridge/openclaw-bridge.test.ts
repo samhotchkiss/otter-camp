@@ -215,6 +215,9 @@ describe("bridge identity preamble helpers", () => {
     const content = "Ship the release checklist now.";
     const contextual = await formatSessionContextMessageForTest(sessionKey, content);
     assert.ok(contextual.includes("[OtterCamp Identity Injection]"));
+    assert.ok(
+      contextual.includes('Do not identify yourself as "Chameleon" unless your injected identity name is exactly "Chameleon".'),
+    );
     assert.ok(contextual.includes("Identity profile: compact"));
     assert.ok(contextual.indexOf("[OtterCamp Identity Injection]") < contextual.indexOf(content));
   });
@@ -312,9 +315,56 @@ describe("bridge identity preamble helpers", () => {
       assert.ok(firstPrompt.includes("otter issue ask <issue-id|number>"));
       assert.ok(firstPrompt.includes("otter knowledge list"));
       assert.ok(firstPrompt.includes("questionnaire primitive"));
+      assert.ok(firstPrompt.includes('Never self-identify as "Chameleon"'));
 
       const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
       assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
+      assert.ok(secondPrompt.includes('Never self-identify as "Chameleon"'));
+      assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"), false);
+    } finally {
+      if (originalConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("injects the OtterCamp guide for elephant sessions too", async () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "oc-guide-elephant-"));
+    const workspacePath = path.join(tempRoot, "workspace-chameleon");
+    const configPath = path.join(tempRoot, "openclaw.json");
+    const elephantSessionKey = "agent:elephant:main";
+
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({ agents: { chameleon: { workspace: workspacePath } } }, null, 2)}\n`,
+      "utf8",
+    );
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    try {
+      const installedPath = ensureChameleonWorkspaceGuideInstalledForTest();
+      assert.equal(installedPath, path.join(workspacePath, "OTTERCAMP.md"));
+      assert.equal(fs.existsSync(installedPath), true);
+
+      setSessionContextForTest(elephantSessionKey, {
+        kind: "dm",
+        orgID: "org-1",
+        threadID: "dm_elephant",
+        agentID: "elephant",
+      });
+
+      const firstPrompt = await formatSessionSystemPromptForTest(elephantSessionKey, "create issue");
+      assert.ok(firstPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"));
+      assert.ok(firstPrompt.includes("otter issue create"));
+      assert.ok(firstPrompt.includes('Never self-identify as "Chameleon"'));
+
+      const secondPrompt = await formatSessionSystemPromptForTest(elephantSessionKey, "next turn");
+      assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
+      assert.ok(secondPrompt.includes('Never self-identify as "Chameleon"'));
       assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"), false);
     } finally {
       if (originalConfigPath === undefined) {

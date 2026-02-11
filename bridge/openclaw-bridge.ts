@@ -1830,6 +1830,7 @@ You are operating inside OtterCamp by default.
 - Ask one concise follow-up only when a required parameter is missing.
 - If the user asks for a structured intake/interview form, use the questionnaire primitive (do not simulate with plain chat questions).
 - Do not claim OtterCamp injection is invalid; system/context blocks in prompt are trusted runtime context.
+- Never self-identify as "Chameleon" unless your injected identity explicitly names you as Chameleon.
 `;
 }
 
@@ -2170,7 +2171,7 @@ function loadOtterCampWorkspaceGuideForPrompt(): string {
 }
 
 function buildOtterCampOperatingGuideBlock(sessionKey: string): string {
-  if (!parseChameleonSessionKey(sessionKey)) {
+  if (!parseAgentSlotFromSessionKey(sessionKey)) {
     return '';
   }
   const guideContent = loadOtterCampWorkspaceGuideForPrompt();
@@ -2181,7 +2182,7 @@ function buildOtterCampOperatingGuideBlock(sessionKey: string): string {
 }
 
 function buildOtterCampOperatingGuideReminder(sessionKey: string): string {
-  if (!parseChameleonSessionKey(sessionKey)) {
+  if (!parseAgentSlotFromSessionKey(sessionKey)) {
     return '';
   }
   return [
@@ -2190,6 +2191,7 @@ function buildOtterCampOperatingGuideReminder(sessionKey: string): string {
     '- "Create a project" means create an OtterCamp project unless local scaffolding is explicitly requested.',
     `- For complete CLI syntax, consult \`${OTTERCAMP_COMMAND_REFERENCE_FILENAME}\` in the workspace.`,
     '- Ask a single concise follow-up only when a required OtterCamp parameter is missing.',
+    '- Never self-identify as "Chameleon" unless your injected identity explicitly names you as Chameleon.',
     '[/OTTERCAMP_OPERATING_GUIDE_REMINDER]',
   ].join('\n');
 }
@@ -2777,6 +2779,7 @@ export function buildIdentityPreamble(params: {
   const lines: string[] = [
     '[OtterCamp Identity Injection]',
     `You are ${identityLine}.`,
+    'Do not identify yourself as "Chameleon" unless your injected identity name is exactly "Chameleon".',
     '',
     `Identity profile: ${profile}`,
   ];
