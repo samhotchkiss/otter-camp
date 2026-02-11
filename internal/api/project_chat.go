@@ -759,6 +759,33 @@ func (h *ProjectChatHandler) resolveProjectLeadAgent(
 	if err == nil {
 		return strings.TrimSpace(assigneeSlug), strings.TrimSpace(assigneeName), nil
 	}
+	if err != nil && err != sql.ErrNoRows {
+		return "", "", err
+	}
+
+	// 3) Final fallback for new/empty projects: pick any active workspace agent.
+	// Prefer known router agents first so project chat remains usable out of the box.
+	var fallbackSlug, fallbackName string
+	err = h.DB.QueryRowContext(ctx, `
+		SELECT a.slug, a.display_name
+		FROM projects p
+		INNER JOIN agents a ON a.org_id = p.org_id
+		WHERE p.id = $1
+		  AND a.status = 'active'
+		ORDER BY
+			CASE LOWER(a.slug)
+				WHEN 'chameleon' THEN 0
+				WHEN 'marcus' THEN 1
+				WHEN 'elephant' THEN 2
+				ELSE 10
+			END,
+			a.updated_at DESC,
+			a.display_name ASC
+		LIMIT 1
+	`, projectID).Scan(&fallbackSlug, &fallbackName)
+	if err == nil {
+		return strings.TrimSpace(fallbackSlug), strings.TrimSpace(fallbackName), nil
+	}
 	if err == sql.ErrNoRows {
 		return "", "", nil
 	}

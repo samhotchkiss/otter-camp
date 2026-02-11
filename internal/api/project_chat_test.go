@@ -638,6 +638,37 @@ func TestProjectChatHandlerCreateDispatchesToPrimaryProjectAgent(t *testing.T) {
 	require.Equal(t, projectChatSessionKey("stone-primary", projectID, ""), event.Data.SessionKey)
 }
 
+func TestProjectChatHandlerCreateFallsBackToAnyActiveWorkspaceAgent(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-fallback-active-agent-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Fallback Agent")
+	insertMessageTestAgent(t, db, orgID, "marcus")
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &ProjectChatHandler{
+		ProjectStore:       store.NewProjectStore(db),
+		ChatStore:          store.NewProjectChatStore(db),
+		DB:                 db,
+		OpenClawDispatcher: dispatcher,
+	}
+	router := newProjectChatTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader([]byte(`{"author":"Sam","body":"Hello fallback"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawProjectChatDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, "marcus", event.Data.AgentID)
+	require.Equal(t, projectChatSessionKey("marcus", projectID, ""), event.Data.SessionKey)
+}
+
 func TestProjectChatHandlerSearchSupportsFilters(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "project-chat-search-api-org")
