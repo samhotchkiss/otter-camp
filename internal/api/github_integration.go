@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/url"
@@ -40,6 +41,8 @@ var allowedGitHubEvents = map[string]struct{}{
 	"issue_comment": {},
 	"pull_request":  {},
 }
+
+var errGitHubInstallURLNotConfigured = errors.New("GITHUB_APP_SLUG or GITHUB_APP_INSTALL_URL is required")
 
 type GitHubIntegrationHandler struct {
 	DB                *sql.DB
@@ -405,6 +408,24 @@ func (h *GitHubIntegrationHandler) ConnectStart(w http.ResponseWriter, r *http.R
 
 	installURL, err := githubInstallURL(state)
 	if err != nil {
+		if errors.Is(err, errGitHubInstallURLNotConfigured) && allowLocalGitHubConnectFallback() {
+			installation, fallbackErr := h.connectStartLocalFallback(r.Context(), orgID)
+			if fallbackErr != nil {
+				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create local github connection"})
+				return
+			}
+			sendJSON(w, http.StatusOK, map[string]any{
+				"install_url":        "",
+				"state":              state,
+				"expires_in_seconds": int(time.Until(expiresAt).Seconds()),
+				"connected":          true,
+				"installation_id":    installation.InstallationID,
+				"account_login":      installation.AccountLogin,
+				"account_type":       installation.AccountType,
+				"mode":               "local_fallback",
+			})
+			return
+		}
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
 		return
 	}
@@ -413,6 +434,72 @@ func (h *GitHubIntegrationHandler) ConnectStart(w http.ResponseWriter, r *http.R
 		InstallURL:      installURL,
 		State:           state,
 		ExpiresInSecond: int(time.Until(expiresAt).Seconds()),
+	})
+}
+
+func allowLocalGitHubConnectFallback() bool {
+	if raw := strings.TrimSpace(os.Getenv("GITHUB_LOCAL_CONNECT_FALLBACK")); raw != "" {
+		switch strings.ToLower(raw) {
+		case "1", "true", "yes", "on":
+			return true
+		default:
+			return false
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV"))) {
+	case "", "development", "dev", "local", "test":
+		return true
+	default:
+		return false
+	}
+}
+
+func localFallbackGitHubAccountLogin() string {
+	candidates := []string{
+		strings.TrimSpace(os.Getenv("GITHUB_LOCAL_ACCOUNT_LOGIN")),
+		strings.TrimSpace(os.Getenv("GITHUB_ACCOUNT_LOGIN")),
+		strings.TrimSpace(os.Getenv("GITHUB_USER")),
+		strings.TrimSpace(os.Getenv("USER")),
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		candidate = strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				return r
+			}
+			return -1
+		}, candidate)
+		if candidate != "" {
+			return candidate
+		}
+	}
+	return "local-github"
+}
+
+func localFallbackGitHubInstallationID(orgID, accountLogin string) int64 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(strings.ToLower(strings.TrimSpace(orgID))))
+	_, _ = hasher.Write([]byte{':'})
+	_, _ = hasher.Write([]byte(strings.ToLower(strings.TrimSpace(accountLogin))))
+	id := int64(hasher.Sum64() & 0x7fffffffffffffff)
+	if id <= 0 {
+		return 1
+	}
+	return id
+}
+
+func (h *GitHubIntegrationHandler) connectStartLocalFallback(ctx context.Context, orgID string) (*store.GitHubInstallation, error) {
+	accountLogin := localFallbackGitHubAccountLogin()
+	installationID := localFallbackGitHubInstallationID(orgID, accountLogin)
+	workspaceCtx := context.WithValue(ctx, middleware.WorkspaceIDKey, orgID)
+	return h.Installations.Upsert(workspaceCtx, store.UpsertGitHubInstallationInput{
+		InstallationID: installationID,
+		AccountLogin:   accountLogin,
+		AccountType:    "User",
+		Permissions:    json.RawMessage("{}"),
 	})
 }
 
@@ -2004,7 +2091,7 @@ func githubInstallURL(state string) (string, error) {
 	if base == "" {
 		slug := strings.TrimSpace(os.Getenv("GITHUB_APP_SLUG"))
 		if slug == "" {
-			return "", fmt.Errorf("GITHUB_APP_SLUG or GITHUB_APP_INSTALL_URL is required")
+			return "", errGitHubInstallURLNotConfigured
 		}
 		base = fmt.Sprintf("https://github.com/apps/%s/installations/new", slug)
 	}

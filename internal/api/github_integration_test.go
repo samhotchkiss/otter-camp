@@ -89,6 +89,58 @@ func TestGitHubIntegrationConnectStartAndCallback(t *testing.T) {
 	require.Equal(t, "the-trawl", installation.AccountLogin)
 }
 
+func TestGitHubIntegrationConnectStartUsesLocalFallbackWhenAppInstallURLMissing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-connect-local-fallback-org")
+	handler := NewGitHubIntegrationHandler(db)
+
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("GITHUB_APP_SLUG", "")
+	t.Setenv("GITHUB_APP_INSTALL_URL", "")
+	t.Setenv("GITHUB_LOCAL_ACCOUNT_LOGIN", "sam-local")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/github/connect/start", nil)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.ConnectStart(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "", strings.TrimSpace(payload["install_url"].(string)))
+	require.Equal(t, true, payload["connected"])
+	require.Equal(t, "sam-local", payload["account_login"])
+	require.Equal(t, "local_fallback", payload["mode"])
+
+	installationStore := store.NewGitHubInstallationStore(db)
+	ctx := context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+	installation, err := installationStore.GetByOrg(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "sam-local", installation.AccountLogin)
+	require.Greater(t, installation.InstallationID, int64(0))
+}
+
+func TestGitHubIntegrationConnectStartRequiresAppInstallConfigOutsideLocalFallback(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "github-connect-no-fallback-org")
+	handler := NewGitHubIntegrationHandler(db)
+
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("GITHUB_LOCAL_CONNECT_FALLBACK", "false")
+	t.Setenv("GITHUB_APP_SLUG", "")
+	t.Setenv("GITHUB_APP_INSTALL_URL", "")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/github/connect/start", nil)
+	req = withWorkspaceContext(req, orgID)
+	rec := httptest.NewRecorder()
+	handler.ConnectStart(rec, req)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "GITHUB_APP_SLUG or GITHUB_APP_INSTALL_URL is required", payload.Error)
+}
+
 func TestGitHubIntegrationSettingsBranchesAndManualSync(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "github-settings-org")
