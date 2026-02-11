@@ -1,4 +1,4 @@
-.PHONY: dev run setup seed prod-local build build-otter install test release-gate migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean uninstall
+.PHONY: dev run setup seed prod-build prod-local start build build-otter install test release-gate migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean uninstall
 
 # Development
 dev:
@@ -19,9 +19,21 @@ setup:
 seed:
 	go run ./scripts/seed/seed.go
 
-prod-local:
+prod-build:
 	cd web && VITE_API_URL= npm run build
-	STATIC_DIR=./web/dist go run ./cmd/server
+	go build -o bin/server ./cmd/server
+
+prod-local: prod-build
+	STATIC_DIR=./web/dist ./bin/server
+
+start: prod-build
+	@echo "🦦 Starting Otter Camp on http://localhost:$${PORT:-4200}"
+	@if [ -f bridge/.env ]; then \
+		echo "🌉 Starting bridge..."; \
+		npx tsx bridge/openclaw-bridge.ts continuous &> /tmp/ottercamp-bridge.log & \
+		echo "   Bridge PID: $$!"; \
+	fi
+	@STATIC_DIR=./web/dist ./bin/server
 
 # Build
 build:

@@ -700,9 +700,9 @@ run_bootstrap_steps() {
 
   echo "Building local production assets..."
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "↪ make prod-local"
+    echo "↪ make prod-build"
   else
-    make prod-local >/dev/null
+    make prod-build >/dev/null
   fi
   log_success "Build complete."
 
@@ -782,9 +782,10 @@ main() {
   echo
   echo -e "${bold}Setup complete.${reset}"
   echo
-  echo "Start the server:  make dev"
-  echo "Start the bridge:  npx tsx bridge/openclaw-bridge.ts continuous"
+  echo "Start Otter Camp:  make start"
   echo "Dashboard:         http://localhost:${PORT:-4200}"
+  echo
+  echo "For development (hot reload):  make dev"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
