@@ -13,8 +13,8 @@ export type PipelineStatusResolution = {
 };
 
 export const PIPELINE_STAGES: PipelineStageDefinition[] = [
-  { key: "queued", label: "Queued" },
   { key: "planning", label: "Planning" },
+  { key: "queued", label: "Queued" },
   { key: "in_progress", label: "Active" },
   { key: "review", label: "Review" },
   { key: "done", label: "Done" },
@@ -67,8 +67,8 @@ export function pipelineStageStates(currentStage: PipelineStageKey): Record<Pipe
     accumulator[stage.key] = "future";
     return accumulator;
   }, {
-    queued: "future",
     planning: "future",
+    queued: "future",
     in_progress: "future",
     review: "future",
     done: "future",
@@ -98,4 +98,3 @@ export function formatTimeInStage(stageUpdatedAt: string | null | undefined): st
   const elapsedDays = Math.floor(elapsedHours / 24);
   return `${elapsedDays}d in stage`;
 }
-

@@ -89,15 +89,16 @@ type UpsertProjectIssueFromGitHubInput struct {
 }
 
 type ProjectIssueFilter struct {
-	ProjectID    string
-	State        *string
-	Origin       *string
-	Kind         *string
-	IssueNumber  *int64
-	OwnerAgentID *string
-	WorkStatus   *string
-	Priority     *string
-	Limit        int
+	ProjectID     string
+	ParentIssueID *string
+	State         *string
+	Origin        *string
+	Kind          *string
+	IssueNumber   *int64
+	OwnerAgentID  *string
+	WorkStatus    *string
+	Priority      *string
+	Limit         int
 }
 
 type ProjectIssueGitHubLink struct {
@@ -1091,6 +1092,15 @@ func (s *ProjectIssueStore) ListIssues(ctx context.Context, filter ProjectIssueF
 		}
 		query += fmt.Sprintf(" AND i.state = $%d", argPos)
 		args = append(args, state)
+		argPos++
+	}
+	if filter.ParentIssueID != nil && strings.TrimSpace(*filter.ParentIssueID) != "" {
+		parentIssueID := strings.TrimSpace(*filter.ParentIssueID)
+		if !uuidRegex.MatchString(parentIssueID) {
+			return nil, fmt.Errorf("invalid parent_issue_id filter")
+		}
+		query += fmt.Sprintf(" AND i.parent_issue_id = $%d", argPos)
+		args = append(args, parentIssueID)
 		argPos++
 	}
 	if filter.Origin != nil && strings.TrimSpace(*filter.Origin) != "" {

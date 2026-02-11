@@ -167,6 +167,10 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("state")); raw != "" {
 		state = &raw
 	}
+	var parentIssueID *string
+	if raw := strings.TrimSpace(r.URL.Query().Get("parent_issue_id")); raw != "" {
+		parentIssueID = &raw
+	}
 	var origin *string
 	if raw := strings.TrimSpace(r.URL.Query().Get("origin")); raw != "" {
 		origin = &raw
@@ -208,15 +212,16 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	issues, err := h.IssueStore.ListIssues(r.Context(), store.ProjectIssueFilter{
-		ProjectID:    projectID,
-		State:        state,
-		Origin:       origin,
-		Kind:         kind,
-		IssueNumber:  issueNumber,
-		OwnerAgentID: ownerAgentID,
-		WorkStatus:   workStatus,
-		Priority:     priority,
-		Limit:        limit,
+		ProjectID:     projectID,
+		ParentIssueID: parentIssueID,
+		State:         state,
+		Origin:        origin,
+		Kind:          kind,
+		IssueNumber:   issueNumber,
+		OwnerAgentID:  ownerAgentID,
+		WorkStatus:    workStatus,
+		Priority:      priority,
+		Limit:         limit,
 	})
 	if err != nil {
 		handleIssueStoreError(w, err)
@@ -322,6 +327,7 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
+	issue = h.maybeAutoReadyForReviewFromWorkStatus(r.Context(), issue)
 
 	if issue.OwnerAgentID != nil {
 		if _, err := h.IssueStore.AddParticipant(r.Context(), store.AddProjectIssueParticipantInput{
@@ -341,6 +347,7 @@ func (h *IssuesHandler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	createdPayload := toIssueSummaryPayload(*issue, participants, nil)
+	h.dispatchIssueKickoffBestEffort(r.Context(), *issue)
 	h.broadcastIssueCreated(r.Context(), createdPayload)
 	sendJSON(w, http.StatusCreated, createdPayload)
 }
@@ -398,6 +405,7 @@ func (h *IssuesHandler) CreateLinkedIssue(w http.ResponseWriter, r *http.Request
 		handleIssueStoreError(w, err)
 		return
 	}
+	issue = h.maybeAutoReadyForReviewFromWorkStatus(r.Context(), issue)
 
 	if issue.OwnerAgentID != nil {
 		if _, err := h.IssueStore.AddParticipant(r.Context(), store.AddProjectIssueParticipantInput{
@@ -417,6 +425,7 @@ func (h *IssuesHandler) CreateLinkedIssue(w http.ResponseWriter, r *http.Request
 	}
 
 	createdPayload := toIssueSummaryPayload(*issue, participants, nil)
+	h.dispatchIssueKickoffBestEffort(r.Context(), *issue)
 	h.broadcastIssueCreated(r.Context(), createdPayload)
 	sendJSON(w, http.StatusCreated, createdPayload)
 }
@@ -844,6 +853,7 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 		handleIssueStoreError(w, err)
 		return
 	}
+	updated = h.maybeAutoReadyForReviewFromWorkStatus(r.Context(), updated)
 	if h.ChatThreadStore != nil &&
 		!strings.EqualFold(strings.TrimSpace(beforeIssue.State), "closed") &&
 		strings.EqualFold(strings.TrimSpace(updated.State), "closed") {
@@ -1062,6 +1072,109 @@ func (h *IssuesHandler) resolveDefaultIssueOwnerAgentID(ctx context.Context, pro
 		return nil
 	}
 	return &trimmed
+}
+
+func shouldAutoReadyForReview(workStatus string, approvalState string) bool {
+	normalizedWorkStatus := strings.TrimSpace(strings.ToLower(workStatus))
+	if normalizedWorkStatus != store.IssueWorkStatusReview && normalizedWorkStatus != store.IssueWorkStatusDone {
+		return false
+	}
+	normalizedApprovalState := strings.TrimSpace(strings.ToLower(approvalState))
+	return normalizedApprovalState == store.IssueApprovalStateDraft ||
+		normalizedApprovalState == store.IssueApprovalStateNeedsChanges
+}
+
+func (h *IssuesHandler) maybeAutoReadyForReviewFromWorkStatus(
+	ctx context.Context,
+	issue *store.ProjectIssue,
+) *store.ProjectIssue {
+	if issue == nil || h.IssueStore == nil {
+		return issue
+	}
+	if !shouldAutoReadyForReview(issue.WorkStatus, issue.ApprovalState) {
+		return issue
+	}
+	updated, err := h.IssueStore.TransitionApprovalState(ctx, issue.ID, store.IssueApprovalStateReadyForReview)
+	if err != nil {
+		return issue
+	}
+	return updated
+}
+
+func buildIssueKickoffMessage(issue store.ProjectIssue) string {
+	title := strings.TrimSpace(issue.Title)
+	if title == "" {
+		return ""
+	}
+	lines := []string{
+		fmt.Sprintf("New issue assigned: #%d %s", issue.IssueNumber, title),
+	}
+	if issue.Body != nil {
+		body := strings.TrimSpace(*issue.Body)
+		if body != "" {
+			lines = append(lines, "", body)
+		}
+	}
+	lines = append(
+		lines,
+		"",
+		"Start this now. Keep issue status updated as work progresses.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+func (h *IssuesHandler) dispatchIssueKickoffBestEffort(
+	ctx context.Context,
+	issue store.ProjectIssue,
+) {
+	message := buildIssueKickoffMessage(issue)
+	if strings.TrimSpace(message) == "" {
+		return
+	}
+
+	target, shouldDispatch, _, err := h.resolveIssueCommentDispatchTarget(ctx, issue.ID, "user")
+	if err != nil || !shouldDispatch {
+		return
+	}
+
+	authorAgentID := strings.TrimSpace(target.ResponderAgentID)
+	if issue.OwnerAgentID != nil {
+		if owner := strings.TrimSpace(*issue.OwnerAgentID); owner != "" {
+			authorAgentID = owner
+		}
+	}
+	commentID := fmt.Sprintf("issue-kickoff:%s", issue.ID)
+	now := time.Now().UTC().Format(time.RFC3339)
+	event, err := h.buildIssueCommentDispatchEvent(
+		ctx,
+		issue.ID,
+		issueCommentPayload{
+			ID:            commentID,
+			AuthorAgentID: authorAgentID,
+			Body:          message,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		"user",
+		target,
+	)
+	if err != nil {
+		return
+	}
+
+	dedupeKey := fmt.Sprintf("issue.kickoff:%s", issue.ID)
+	queuedForRetry := false
+	if queued, queueErr := enqueueOpenClawDispatchEvent(ctx, h.DB, event.OrgID, event.Type, dedupeKey, event); queueErr == nil {
+		queuedForRetry = queued
+	}
+
+	if err := h.dispatchIssueCommentToOpenClaw(event); err != nil {
+		return
+	}
+
+	if queuedForRetry {
+		_ = markOpenClawDispatchDeliveredByKey(ctx, h.DB, dedupeKey)
+	}
 }
 
 func (h *IssuesHandler) broadcastIssueCreated(

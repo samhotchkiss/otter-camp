@@ -299,24 +299,14 @@ type ApprovalAction = {
 function nextApprovalActions(state: IssueApprovalState): ApprovalAction[] {
   switch (state) {
     case "draft":
-      return [{
-        label: "Mark Ready for Review",
-        toState: "ready_for_review",
-        style: "neutral",
-        endpoint: "transition",
-      }];
+      return [];
     case "ready_for_review":
       return [
         { label: "Request Changes", toState: "needs_changes", style: "warn", endpoint: "transition" },
         { label: "Approve", toState: "approved", style: "success", endpoint: "approve" },
       ];
     case "needs_changes":
-      return [{
-        label: "Mark Ready for Review",
-        toState: "ready_for_review",
-        style: "neutral",
-        endpoint: "transition",
-      }];
+      return [];
     case "approved":
     default:
       return [];
@@ -425,11 +415,9 @@ function buildTransitionPath(
   }
 
   const currentStage = mapIssueStatusToPipeline(currentWorkStatus).currentStage;
-  const linearStages: PipelineStageKey[] = ["queued", "in_progress", "review", "done"];
-  const normalizedCurrentStage = currentStage === "planning" ? "queued" : currentStage;
-  const normalizedTargetStage = targetStage === "planning" ? "queued" : targetStage;
-  const currentIndex = linearStages.indexOf(normalizedCurrentStage);
-  const targetIndex = linearStages.indexOf(normalizedTargetStage);
+  const linearStages: PipelineStageKey[] = ["planning", "queued", "in_progress", "review", "done"];
+  const currentIndex = linearStages.indexOf(currentStage);
+  const targetIndex = linearStages.indexOf(targetStage);
   if (currentIndex >= 0 && targetIndex > currentIndex) {
     const forwardStatuses = linearStages
       .slice(currentIndex + 1, targetIndex + 1)
@@ -653,6 +641,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
         }
         return payload.items.filter((entry) =>
           typeof entry?.id === "string" &&
+          entry.id !== currentIssueID &&
           typeof entry?.issue_number === "number" &&
           typeof entry?.title === "string"
         );
