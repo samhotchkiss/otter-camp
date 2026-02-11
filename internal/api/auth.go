@@ -544,6 +544,32 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 		req.Email = "sam@otter.camp"
 	}
 
+	db, err := getAuthDB()
+	if err != nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+
+	// In local development, prefer the shared LOCAL_AUTH_TOKEN session when available.
+	// This keeps the web app and otter CLI on the same workspace/org context.
+	if strings.TrimSpace(req.Org) == "" {
+		if localToken := strings.TrimSpace(os.Getenv("LOCAL_AUTH_TOKEN")); localToken != "" {
+			if expiresAt, ok := lookupActiveSessionExpiry(r.Context(), db, localToken); ok {
+				baseURL := getPublicBaseURL(r)
+				if strings.Contains(baseURL, "api.otter.camp") {
+					baseURL = "https://sam.otter.camp"
+				}
+				magicURL := baseURL + "/?auth=" + localToken
+				sendJSON(w, http.StatusOK, MagicLinkResponse{
+					URL:       magicURL,
+					Token:     localToken,
+					ExpiresAt: expiresAt,
+				})
+				return
+			}
+		}
+	}
+
 	// Generate a simple token
 	token, err := generateRandomToken(32)
 	if err != nil {
@@ -552,12 +578,6 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	}
 	authToken := "oc_magic_" + token
 	expiresAt := time.Now().UTC().Add(sessionTTL())
-
-	db, err := getAuthDB()
-	if err != nil {
-		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
-		return
-	}
 
 	// Create org (default to user's name if not provided)
 	orgName := strings.TrimSpace(req.Org)
@@ -627,6 +647,31 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 		Token:     authToken,
 		ExpiresAt: expiresAt,
 	})
+}
+
+func lookupActiveSessionExpiry(ctx context.Context, db *sql.DB, token string) (time.Time, bool) {
+	if db == nil {
+		return time.Time{}, false
+	}
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+
+	var expiresAt time.Time
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT expires_at
+		 FROM sessions
+		 WHERE token = $1
+		   AND revoked_at IS NULL
+		   AND expires_at > NOW()`,
+		trimmed,
+	).Scan(&expiresAt)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return expiresAt.UTC(), true
 }
 
 // HandleValidateToken validates a magic link token and sets a session cookie.
