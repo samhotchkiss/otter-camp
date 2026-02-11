@@ -104,3 +104,13 @@ func TestShouldDispatchOpenClawAgentConfigMutation(t *testing.T) {
 	require.False(t, shouldDispatchOpenClawAgentConfigMutation("main"))
 	require.False(t, shouldDispatchOpenClawAgentConfigMutation("writer"))
 }
+
+func TestRenderNewAgentToolsTemplateIncludesOtterCampCommands(t *testing.T) {
+	t.Parallel()
+
+	tools := renderNewAgentToolsTemplate()
+	require.Contains(t, tools, "otter project create")
+	require.Contains(t, tools, "otter issue create")
+	require.Contains(t, tools, "otter issue ask")
+	require.Contains(t, tools, "otter issue respond")
+}

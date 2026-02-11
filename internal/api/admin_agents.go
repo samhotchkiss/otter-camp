@@ -1641,7 +1641,32 @@ func renderNewAgentIdentityTemplate(displayName string, avatar string) string {
 }
 
 func renderNewAgentToolsTemplate() string {
-	return "# TOOLS.md\n\n- Add local tool notes, credentials, and integration constraints here.\n"
+	return "# TOOLS.md\n\n" +
+		"## OtterCamp CLI\n\n" +
+		"Always execute project work inside OtterCamp project repositories.\n\n" +
+		"### Core project flow\n" +
+		"- Discover/select project context:\n" +
+		"  - `otter project list`\n" +
+		"  - `otter project view <project-id-or-name>`\n" +
+		"- Create project when needed:\n" +
+		"  - `otter project create \"<name>\" --description \"<desc>\"`\n" +
+		"- Create and manage issues:\n" +
+		"  - `otter issue create <project-id-or-name> \"<title>\" --body \"<details>\"`\n" +
+		"  - `otter issue list <project-id-or-name>`\n" +
+		"  - `otter issue assign <issue-id-or-number> <agent>`\n" +
+		"  - `otter issue comment <issue-id-or-number> \"<comment>\"`\n" +
+		"  - `otter issue close <issue-id-or-number>`\n\n" +
+		"### Questionnaire primitive\n" +
+		"- Ask structured questions on an issue:\n" +
+		"  - `otter issue ask <issue-id-or-number> --title \"Clarify requirements\" --question '{\"id\":\"q1\",\"text\":\"...\",\"type\":\"text\"}'`\n" +
+		"- Submit responses:\n" +
+		"  - `otter issue respond <questionnaire-id> --response q1='\"answer\"'`\n\n" +
+		"### Rules\n" +
+		"- If no project context exists, create/select one before writing deliverables.\n" +
+		"- Keep final artifacts in the project repo, not in legacy agent workspace files.\n" +
+		"- Record outcomes on the issue (status, comments, links) as you work.\n\n" +
+		"## Local notes\n\n" +
+		"- Add credentials, environment assumptions, and integration constraints here.\n"
 }
 
 func renderNewAgentMemoryTemplate(displayName string) string {
