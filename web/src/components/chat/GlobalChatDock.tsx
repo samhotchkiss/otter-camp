@@ -554,6 +554,17 @@ export default function GlobalChatDock() {
                         <button
                           type="button"
                           onClick={() => {
+                            setIsFullscreen(false);
+                            setDockOpen(false);
+                          }}
+                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
+                          aria-label="Minimize global chat"
+                        >
+                          Minimize
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
                             if (selectedJumpTarget) {
                               navigate(selectedJumpTarget.href);
                             }

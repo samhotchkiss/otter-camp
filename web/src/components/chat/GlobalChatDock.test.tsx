@@ -287,4 +287,36 @@ describe("GlobalChatDock", () => {
     await user.click(screen.getByRole("button", { name: "Open issue" }));
     expect(screen.getByTestId("location-probe")).toHaveTextContent("/projects/project-1/issues/issue-1");
   });
+
+  it("provides a minimize action in the selected chat header", async () => {
+    const user = userEvent.setup();
+    globalChatState.conversations = [
+      {
+        key: "dm:dm_marcus",
+        type: "dm",
+        threadId: "dm_marcus",
+        title: "Marcus",
+        contextLabel: "Chameleon-routed chat",
+        subtitle: "Agent chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T10:00:00.000Z",
+        agent: {
+          id: "marcus",
+          name: "Marcus",
+          status: "online",
+        },
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    render(
+      <MemoryRouter initialEntries={["/chats"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Minimize global chat" }));
+    expect(globalChatState.setDockOpen).toHaveBeenCalledWith(false);
+  });
 });
