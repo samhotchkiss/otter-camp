@@ -108,6 +108,42 @@ func TestMessagesRouteIsRegistered(t *testing.T) {
 	}
 }
 
+func TestRouterRegistersChatsRoutes(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	orgID := "00000000-0000-0000-0000-000000000001"
+	chatID := "00000000-0000-0000-0000-000000000002"
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/chats?org_id="+orgID, nil)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/chats route to be registered, got status %d", listRec.Code)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/chats/"+chatID+"?org_id="+orgID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/chats/{id} route to be registered, got status %d", getRec.Code)
+	}
+
+	archiveReq := httptest.NewRequest(http.MethodPost, "/api/chats/"+chatID+"/archive?org_id="+orgID, nil)
+	archiveRec := httptest.NewRecorder()
+	router.ServeHTTP(archiveRec, archiveReq)
+	if archiveRec.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/chats/{id}/archive route to be registered, got status %d", archiveRec.Code)
+	}
+
+	unarchiveReq := httptest.NewRequest(http.MethodPost, "/api/chats/"+chatID+"/unarchive?org_id="+orgID, nil)
+	unarchiveRec := httptest.NewRecorder()
+	router.ServeHTTP(unarchiveRec, unarchiveReq)
+	if unarchiveRec.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/chats/{id}/unarchive route to be registered, got status %d", unarchiveRec.Code)
+	}
+}
+
 func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 	t.Parallel()
 
@@ -340,10 +376,10 @@ func TestWorkflowRoutesUseOptionalWorkspaceMiddleware(t *testing.T) {
 		`r.With(middleware.OptionalWorkspace).Patch("/workflows/{id}", workflowsHandler.Toggle)`,
 		`r.With(middleware.OptionalWorkspace).Post("/workflows/{id}/run", workflowsHandler.Run)`,
 	}
-		for _, line := range requiredLines {
-			if !strings.Contains(source, line) {
-				t.Fatalf("expected workflow route to include OptionalWorkspace middleware: %s", line)
-			}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected workflow route to include OptionalWorkspace middleware: %s", line)
+		}
 	}
 }
 

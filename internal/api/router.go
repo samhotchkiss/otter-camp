@@ -85,6 +85,7 @@ func NewRouter() http.Handler {
 	messageHandler := &MessageHandler{OpenClawDispatcher: openClawWSHandler, Hub: hub}
 	attachmentsHandler := &AttachmentsHandler{}
 	agentsHandler := &AgentsHandler{Store: agentStore, MemoryStore: agentMemoryStore, DB: db}
+	chatsHandler := &ChatsHandler{DB: db}
 	var workflowsHandler *WorkflowsHandler // initialized below after adminConnectionsHandler
 	openclawSyncHandler := &OpenClawSyncHandler{Hub: hub, DB: db, EmissionBuffer: emissionBuffer}
 	adminConnectionsHandler := &AdminConnectionsHandler{DB: db, OpenClawHandler: openClawWSHandler}
@@ -123,6 +124,7 @@ func NewRouter() http.Handler {
 		projectRepoStore = store.NewProjectRepoStore(db)
 		activityStore = store.NewActivityStore(db)
 		chatThreadStore = store.NewChatThreadStore(db)
+		chatsHandler.ChatThreadStore = chatThreadStore
 		adminConnectionsHandler.EventStore = store.NewConnectionEventStore(db)
 		adminConfigHandler.EventStore = adminConnectionsHandler.EventStore
 		githubSyncDeadLettersHandler.Store = githubSyncJobStore
@@ -293,6 +295,10 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Delete("/issues/{id}/participants/{agentID}", issuesHandler.RemoveParticipant)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues", issuesHandler.CreateIssue)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/issues/link", issuesHandler.CreateLinkedIssue)
+		r.With(middleware.OptionalWorkspace).Get("/chats", chatsHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/chats/{id}", chatsHandler.Get)
+		r.With(middleware.OptionalWorkspace).Post("/chats/{id}/archive", chatsHandler.Archive)
+		r.With(middleware.OptionalWorkspace).Post("/chats/{id}/unarchive", chatsHandler.Unarchive)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/projects/{id}/issues/import", projectIssueSyncHandler.ManualImport)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/issues/status", projectIssueSyncHandler.Status)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/projects/{id}/repo/branches", githubIntegrationHandler.GetProjectBranches)
