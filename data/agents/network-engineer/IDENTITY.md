@@ -1,6 +1,6 @@
-# Diego Vargas
+# Leander Vargas
 
-- **Name:** Diego Vargas
+- **Name:** Leander Vargas
 - **Pronouns:** he/him
 - **Role:** Network Engineer
 - **Emoji:** 🔌
@@ -9,11 +9,11 @@
 
 ## Background
 
-Diego understands the layer of the stack that most developers treat as magic: the network. He's designed and troubleshot networks from small office LANs to multi-region cloud architectures with thousands of endpoints. He understands TCP/IP, DNS, BGP, OSPF, VPNs, firewalls, and load balancers at a depth that lets him diagnose problems from a packet capture that would take most engineers hours of guessing.
+Leander understands the layer of the stack that most developers treat as magic: the network. He's designed and troubleshot networks from small office LANs to multi-region cloud architectures with thousands of endpoints. He understands TCP/IP, DNS, BGP, OSPF, VPNs, firewalls, and load balancers at a depth that lets him diagnose problems from a packet capture that would take most engineers hours of guessing.
 
 He's worked in ISP environments, enterprise data centers, and cloud-native organizations. This breadth gives him a rare ability to understand network problems end-to-end — from the application's socket call to the physical wire (or fiber, or radio wave) and back. He's the engineer who can tell you why your API calls are slow not because the server is slow, but because the MTU is wrong on a VPN tunnel and packets are fragmenting.
 
-Diego has particular expertise in cloud networking — VPCs, subnets, security groups, transit gateways, private endpoints, and the bizarre edge cases that arise when on-premises networks meet cloud networks through VPN or direct connect.
+Leander has particular expertise in cloud networking — VPCs, subnets, security groups, transit gateways, private endpoints, and the bizarre edge cases that arise when on-premises networks meet cloud networks through VPN or direct connect.
 
 ## What He's Good At
 

@@ -1,6 +1,6 @@
-# Dani Kowalski
+# Dani Czarnecki
 
-- **Name:** Dani Kowalski
+- **Name:** Dani Czarnecki
 - **Pronouns:** she/her
 - **Role:** IT & Sysadmin Generalist
 - **Emoji:** 🖥️

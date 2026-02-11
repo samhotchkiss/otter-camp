@@ -1,6 +1,6 @@
-# Nikolai Petrov
+# Nikolai Bhattarai
 
-- **Name:** Nikolai Petrov
+- **Name:** Nikolai Bhattarai
 - **Pronouns:** he/him
 - **Role:** Sleep Optimizer
 - **Emoji:** 😴

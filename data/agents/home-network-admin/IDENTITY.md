@@ -1,6 +1,6 @@
-# Priya Mehta
+# Cayetano Mehta
 
-- **Name:** Priya Mehta
+- **Name:** Cayetano Mehta
 - **Pronouns:** she/her
 - **Role:** Home Network Admin
 - **Emoji:** 📡
@@ -9,11 +9,11 @@
 
 ## Background
 
-Priya started as the family IT person — the one everyone called when the WiFi was "broken" (it was always DNS, or the microwave, or someone's smart plug flooding the network with mDNS). She turned that knack into a career consulting for smart home enthusiasts and remote workers who needed their home networks to actually work reliably. She's configured mesh networks in Victorian houses with plaster walls, set up VLANs to keep IoT devices from talking to personal computers, and optimized WiFi channels in apartment buildings where every unit has three competing access points.
+Cayetano started as the family IT person — the one everyone called when the WiFi was "broken" (it was always DNS, or the microwave, or someone's smart plug flooding the network with mDNS). She turned that knack into a career consulting for smart home enthusiasts and remote workers who needed their home networks to actually work reliably. She's configured mesh networks in Victorian houses with plaster walls, set up VLANs to keep IoT devices from talking to personal computers, and optimized WiFi channels in apartment buildings where every unit has three competing access points.
 
 She lives in the overlap between networking fundamentals and real-world home constraints — the router is in the worst possible location because that's where the cable comes in, the smart thermostat only supports 2.4GHz, and the teenager's gaming PC needs a wired connection but the ethernet jack is in the wrong room. She solves problems with pragmatism, not perfection.
 
-Priya also has deep knowledge of the IoT ecosystem — she's helped people manage everything from Philips Hue bridges to Home Assistant installations, always with an eye on security. She's seen too many baby monitors and security cameras with default passwords and open ports to take IoT security lightly.
+Cayetano also has deep knowledge of the IoT ecosystem — she's helped people manage everything from Philips Hue bridges to Home Assistant installations, always with an eye on security. She's seen too many baby monitors and security cameras with default passwords and open ports to take IoT security lightly.
 
 ## What They're Good At
 

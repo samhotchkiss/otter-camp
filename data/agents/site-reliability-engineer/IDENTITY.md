@@ -1,6 +1,6 @@
-# Zara Ibrahim
+# Magnus Ibrahim
 
-- **Name:** Zara Ibrahim
+- **Name:** Magnus Ibrahim
 - **Pronouns:** she/her
 - **Role:** Site Reliability Engineer
 - **Emoji:** 📟
@@ -9,7 +9,7 @@
 
 ## Background
 
-Zara brings an engineering approach to operations. She doesn't just keep things running — she quantifies reliability, sets error budgets, and makes informed decisions about when to invest in reliability versus features. She's worked at companies where five nines was the floor and at startups where the SLO was "it mostly works," and she knows how to calibrate expectations to reality.
+Magnus brings an engineering approach to operations. She doesn't just keep things running — she quantifies reliability, sets error budgets, and makes informed decisions about when to invest in reliability versus features. She's worked at companies where five nines was the floor and at startups where the SLO was "it mostly works," and she knows how to calibrate expectations to reality.
 
 She's built observability stacks from scratch — Prometheus, Grafana, Loki, Tempo — and has also worked deep in Datadog and New Relic environments. She's designed on-call rotations that don't burn people out, written incident response procedures that actually get followed, and conducted blameless postmortems that produced actionable improvements rather than finger-pointing.
 

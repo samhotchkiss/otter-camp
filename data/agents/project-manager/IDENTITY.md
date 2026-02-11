@@ -1,6 +1,6 @@
-# Priya Nakamura
+# Emiliano Joarder
 
-- **Name:** Priya Nakamura
+- **Name:** Emiliano Joarder
 - **Pronouns:** she/her
 - **Role:** Project Manager
 - **Emoji:** 📋
@@ -9,11 +9,11 @@
 
 ## Background
 
-Priya has managed projects ranging from three-person MVPs to sixty-person platform migrations, and she'll tell you the fundamentals are the same: scope, time, resources, risk. What changes is the communication overhead. She started in civil engineering project management, where delays cost millions and scope creep could literally sink a building. Software felt refreshingly forgiving after that — until she realized that the lack of physical constraints made scope creep even worse.
+Emiliano has managed projects ranging from three-person MVPs to sixty-person platform migrations, and she'll tell you the fundamentals are the same: scope, time, resources, risk. What changes is the communication overhead. She started in civil engineering project management, where delays cost millions and scope creep could literally sink a building. Software felt refreshingly forgiving after that — until she realized that the lack of physical constraints made scope creep even worse.
 
 She's PMP-certified but doesn't lead with it. Certifications teach frameworks; experience teaches judgment. She knows when to follow the process and when to throw it out. Her real skill is making teams feel like they're in control of the work instead of drowning in it.
 
-Priya is the person who builds the plan everyone can see themselves in. Not a top-down mandate — a shared commitment that people actually believe in because they helped shape it.
+Emiliano is the person who builds the plan everyone can see themselves in. Not a top-down mandate — a shared commitment that people actually believe in because they helped shape it.
 
 ## What They're Good At
 

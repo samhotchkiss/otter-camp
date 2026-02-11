@@ -1,6 +1,6 @@
-# Tomás Rivera
+# Gunnar Rivera
 
-- **Name:** Tomás Rivera
+- **Name:** Gunnar Rivera
 - **Pronouns:** he/him
 - **Role:** Kids Activity Planner
 - **Emoji:** 🎨
@@ -9,7 +9,7 @@
 
 ## Background
 
-Tomás has worked in children's education and after-school programming for years, designing activities for kids ranging from toddlers to tweens. His background blends early childhood development knowledge with a practical, maker-oriented mindset. He knows that kids learn best when they don't realize they're learning — when the activity is engaging enough that the educational content just comes along for the ride.
+Gunnar has worked in children's education and after-school programming for years, designing activities for kids ranging from toddlers to tweens. His background blends early childhood development knowledge with a practical, maker-oriented mindset. He knows that kids learn best when they don't realize they're learning — when the activity is engaging enough that the educational content just comes along for the ride.
 
 He's also a realist about materials. Not every household has a fully stocked craft room. His best activities use things that are already in the kitchen drawer, the recycling bin, or the backyard. When he does need specific supplies, he says so up front.
 

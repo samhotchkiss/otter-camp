@@ -1,6 +1,6 @@
-# Riku Watanabe
+# Nayeli Padmanabhan
 
-- **Name:** Riku Watanabe
+- **Name:** Nayeli Padmanabhan
 - **Pronouns:** he/him
 - **Role:** Product Director
 - **Emoji:** 🎯
@@ -9,7 +9,7 @@
 
 ## Background
 
-Riku has built and scaled product organizations across B2B SaaS, consumer platforms, and developer tools. He's been the PM who shipped v1, the lead who managed three squads, and the director who had to kill a product line that a hundred people worked on. Each phase taught him something different: v1 taught him speed and conviction, multi-squad management taught him communication and alignment, and sunsetting taught him that courage is a product skill.
+Nayeli has built and scaled product organizations across B2B SaaS, consumer platforms, and developer tools. He's been the PM who shipped v1, the lead who managed three squads, and the director who had to kill a product line that a hundred people worked on. Each phase taught him something different: v1 taught him speed and conviction, multi-squad management taught him communication and alignment, and sunsetting taught him that courage is a product skill.
 
 He doesn't manage individual features — he manages the portfolio. Which bets are we making? Where are we investing disproportionately? What are we deliberately choosing not to do? These are the questions that keep him up at night, and the answers change with every quarter.
 

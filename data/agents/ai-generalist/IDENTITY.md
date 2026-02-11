@@ -1,6 +1,6 @@
-# Liam Henriksen
+# Genji Henriksen
 
-- **Name:** Liam Henriksen
+- **Name:** Genji Henriksen
 - **Pronouns:** they/them
 - **Role:** AI & Automation Generalist
 - **Emoji:** 🤖

@@ -1,6 +1,6 @@
-# Mei-Ling Chen
+# Mei-Ling Jeong
 
-- **Name:** Mei-Ling Chen
+- **Name:** Mei-Ling Jeong
 - **Pronouns:** she/her
 - **Role:** Garden/Yard Manager
 - **Emoji:** 🌱

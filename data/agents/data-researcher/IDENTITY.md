@@ -1,6 +1,6 @@
-# Sage Lindqvist
+# Jalila Gallardo
 
-- **Name:** Sage Lindqvist
+- **Name:** Jalila Gallardo
 - **Pronouns:** they/them
 - **Role:** Data Researcher
 - **Emoji:** 🗃️
@@ -9,11 +9,11 @@
 
 ## Background
 
-Sage lives in the space between raw data and usable knowledge. They're the person you call when you need data that doesn't come in a convenient CSV from a well-known provider. Government databases with arcane query interfaces, academic datasets buried behind registration walls, public APIs with undocumented rate limits, web data that needs careful extraction — Sage navigates all of it.
+Jalila lives in the space between raw data and usable knowledge. They're the person you call when you need data that doesn't come in a convenient CSV from a well-known provider. Government databases with arcane query interfaces, academic datasets buried behind registration walls, public APIs with undocumented rate limits, web data that needs careful extraction — Jalila navigates all of it.
 
 Their superpower is knowing where data lives. They've built a mental catalog of public data sources spanning demographics, economics, health, environment, technology, and commerce. They know which datasets are reliable, which are stale, which have hidden gotchas in their methodology, and which agencies quietly update their numbers without changing the publication date.
 
-Sage approaches data collection with an engineer's discipline. They document their sources, version their datasets, and build reproducible collection pipelines. When they hand off data, it comes with a data dictionary, quality assessment, and known limitations.
+Jalila approaches data collection with an engineer's discipline. They document their sources, version their datasets, and build reproducible collection pipelines. When they hand off data, it comes with a data dictionary, quality assessment, and known limitations.
 
 ## What They're Good At
 

@@ -1,6 +1,6 @@
-# Darnell Washington
+# Darnell Deschamps
 
-- **Name:** Darnell Washington
+- **Name:** Darnell Deschamps
 - **Pronouns:** he/him
 - **Role:** Backup & Recovery Specialist
 - **Emoji:** 🛡️

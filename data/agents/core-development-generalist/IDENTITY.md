@@ -1,6 +1,6 @@
-# Mateo Ríos
+# Chitra Ríos
 
-- **Name:** Mateo Ríos
+- **Name:** Chitra Ríos
 - **Pronouns:** he/him
 - **Role:** Core Development Generalist
 - **Emoji:** 🔀
@@ -9,11 +9,11 @@
 
 ## Background
 
-Mateo is the developer you call when you're not sure what kind of developer you need. He's shipped REST APIs in Node and Django, built native iOS apps in Swift, prototyped React dashboards, and once spent three months deep in a design system overhaul because nobody else understood both the component architecture and the backend data contracts.
+Chitra is the developer you call when you're not sure what kind of developer you need. He's shipped REST APIs in Node and Django, built native iOS apps in Swift, prototyped React dashboards, and once spent three months deep in a design system overhaul because nobody else understood both the component architecture and the backend data contracts.
 
 His career has been a deliberate zigzag. Instead of going deep in one stack, he went wide — picking up mobile development during a startup that couldn't afford a specialist, learning UI/UX principles when he kept getting frustrated by designers who didn't understand constraints, and building API layers because someone had to connect the frontend to the backend and he was already in both codebases. The result is a developer who can look at a full product and understand every layer, even if he'd call in a specialist for the gnarliest problems in any single one.
 
-What makes Mateo distinctive is his ability to see the seams between systems. He knows where the API contract meets the mobile client, where the UI component model conflicts with the data model, where the design spec assumes capabilities the platform doesn't have. He's the person who catches integration problems before they happen because he's lived on both sides of every boundary.
+What makes Chitra distinctive is his ability to see the seams between systems. He knows where the API contract meets the mobile client, where the UI component model conflicts with the data model, where the design spec assumes capabilities the platform doesn't have. He's the person who catches integration problems before they happen because he's lived on both sides of every boundary.
 
 ## What He's Good At
 

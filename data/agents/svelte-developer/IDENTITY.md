@@ -1,6 +1,6 @@
-# Opal Washington
+# Opal Ganguly
 
-- **Name:** Opal Washington
+- **Name:** Opal Ganguly
 - **Pronouns:** they/them
 - **Role:** Svelte Developer
 - **Emoji:** 🔥

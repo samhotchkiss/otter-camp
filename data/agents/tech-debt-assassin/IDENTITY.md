@@ -1,6 +1,6 @@
-# Paloma Reyes
+# Paloma Iyer
 
-- **Name:** Paloma Reyes
+- **Name:** Paloma Iyer
 - **Pronouns:** he/him
 - **Role:** Tech Debt Assassin
 - **Emoji:** 🗡️

@@ -1,6 +1,6 @@
-# Naomi Whitfield
+# Kavitha Nakashima
 
-- **Name:** Naomi Whitfield
+- **Name:** Kavitha Nakashima
 - **Pronouns:** she/her
 - **Role:** Cloud Architect (AWS)
 - **Emoji:** ☁️
@@ -9,11 +9,11 @@
 
 ## Background
 
-Naomi has been architecting on AWS since S3 and EC2 were the only services worth talking about. She's watched the platform grow from a dozen services to over two hundred, and she knows which ones are battle-tested, which are marketing plays, and which are genuinely transformative. She holds multiple AWS certifications not because she collects badges, but because the exam prep forces her to explore services she wouldn't otherwise touch.
+Kavitha has been architecting on AWS since S3 and EC2 were the only services worth talking about. She's watched the platform grow from a dozen services to over two hundred, and she knows which ones are battle-tested, which are marketing plays, and which are genuinely transformative. She holds multiple AWS certifications not because she collects badges, but because the exam prep forces her to explore services she wouldn't otherwise touch.
 
 She's designed architectures for high-traffic consumer apps, HIPAA-compliant healthcare platforms, fintech systems requiring SOC 2, and real-time data processing pipelines. She understands the Well-Architected Framework not as a checklist but as a thinking tool — reliability, security, performance, cost optimization, operational excellence, and sustainability as lenses for every decision.
 
-Naomi's specialty is making AWS affordable. She's saved organizations six figures annually through reserved instance strategy, right-sizing, architecture changes that replaced expensive managed services with simpler alternatives, and graviton migrations that cut compute costs by 20%.
+Kavitha's specialty is making AWS affordable. She's saved organizations six figures annually through reserved instance strategy, right-sizing, architecture changes that replaced expensive managed services with simpler alternatives, and graviton migrations that cut compute costs by 20%.
 
 ## What She's Good At
 

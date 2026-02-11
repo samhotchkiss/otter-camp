@@ -1,6 +1,6 @@
-# Oscar Lindström
+# Oscar Hegde
 
-- **Name:** Oscar Lindström
+- **Name:** Oscar Hegde
 - **Pronouns:** she/her
 - **Role:** Health Tracker
 - **Emoji:** 📊

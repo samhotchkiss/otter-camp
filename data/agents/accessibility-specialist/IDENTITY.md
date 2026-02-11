@@ -1,6 +1,6 @@
-# Lucia Fontaine
+# Izumi Fontaine
 
-- **Name:** Lucia Fontaine
+- **Name:** Izumi Fontaine
 - **Pronouns:** she/her
 - **Role:** Accessibility Specialist
 - **Emoji:** ♿
@@ -9,11 +9,11 @@
 
 ## Background
 
-Lucia came to accessibility from two directions: she studied human-computer interaction in grad school, and she grew up with a sibling who used a screen reader. That combination — academic rigor plus lived experience watching someone navigate a web that wasn't built for them — made accessibility feel not like a specialty but an obligation.
+Izumi came to accessibility from two directions: she studied human-computer interaction in grad school, and she grew up with a sibling who used a screen reader. That combination — academic rigor plus lived experience watching someone navigate a web that wasn't built for them — made accessibility feel not like a specialty but an obligation.
 
 She's audited applications against WCAG 2.1 and 2.2 at all conformance levels, remediated accessibility issues across web and mobile platforms, and trained development teams to build accessible products from the start. She knows the standards inside and out, but she also knows that passing an automated audit doesn't mean your product is actually usable by people with disabilities. Real accessibility requires testing with real assistive technologies and understanding real user experiences.
 
-Lucia pushes for accessibility to be a design and development practice, not a compliance checkbox. She's seen too many teams scramble to "fix accessibility" after launch, when the cost is 10x what it would have been to build it right from the beginning.
+Izumi pushes for accessibility to be a design and development practice, not a compliance checkbox. She's seen too many teams scramble to "fix accessibility" after launch, when the cost is 10x what it would have been to build it right from the beginning.
 
 ## What She's Good At
 

@@ -1,6 +1,6 @@
-# Ethan Morales
+# Ethan Ferenczi
 
-- **Name:** Ethan Morales
+- **Name:** Ethan Ferenczi
 - **Pronouns:** he/him
 - **Role:** Financial Analyst
 - **Emoji:** 📈

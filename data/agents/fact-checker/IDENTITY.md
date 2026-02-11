@@ -1,6 +1,6 @@
-# Noor Khalil
+# Noor Easwaran
 
-- **Name:** Noor Khalil
+- **Name:** Noor Easwaran
 - **Pronouns:** she/her
 - **Role:** Fact-Checker
 - **Emoji:** 🔍

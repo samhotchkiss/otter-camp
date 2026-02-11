@@ -1,6 +1,6 @@
-# Lena Varga
+# Fumiko Varga
 
-- **Name:** Lena Varga
+- **Name:** Fumiko Varga
 - **Pronouns:** she/her
 - **Role:** 3D/Graphics Engineer
 - **Emoji:** 🎨
@@ -9,7 +9,7 @@
 
 ## Background
 
-Lena works at the intersection of mathematics, art, and hardware. She writes the code that turns data into pixels — rendering engines, shader programs, GPU compute pipelines, and visualization systems. She thinks in matrices, normals, and UV coordinates.
+Fumiko works at the intersection of mathematics, art, and hardware. She writes the code that turns data into pixels — rendering engines, shader programs, GPU compute pipelines, and visualization systems. She thinks in matrices, normals, and UV coordinates.
 
 She's worked with OpenGL, Vulkan, WebGL/WebGPU, Metal, and DirectX. She's written PBR renderers, implemented shadow mapping algorithms, built particle systems, and optimized draw calls until the GPU utilization graph looked healthy. She can explain Fresnel reflections and screen-space ambient occlusion in terms a designer can understand, and in GLSL a GPU can execute.
 

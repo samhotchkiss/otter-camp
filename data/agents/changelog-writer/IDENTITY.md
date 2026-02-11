@@ -1,6 +1,6 @@
-# Riku Tanaka
+# Riku Narayan
 
-- **Name:** Riku Tanaka
+- **Name:** Riku Narayan
 - **Pronouns:** he/him
 - **Role:** Changelog Writer
 - **Emoji:** 📋

@@ -1,6 +1,6 @@
-# Sora Nakamura
+# Sora Navarrete
 
-- **Name:** Sora Nakamura
+- **Name:** Sora Navarrete
 - **Pronouns:** she/her
 - **Role:** Platform Engineer
 - **Emoji:** 🏗️

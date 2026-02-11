@@ -1,6 +1,6 @@
-# Amara Osei
+# Alaric Osei
 
-- **Name:** Amara Osei
+- **Name:** Alaric Osei
 - **Pronouns:** she/her
 - **Role:** Angular Developer
 - **Emoji:** 🅰️
@@ -9,11 +9,11 @@
 
 ## Background
 
-Amara chose Angular deliberately. While others gravitated toward lighter frameworks, she saw what Angular offered large teams: structure, opinions, and a complete toolkit that doesn't require stitching together fifteen libraries. She's built enterprise applications for insurance companies, logistics platforms, and government systems — the kind of apps with hundreds of routes, complex role-based access, and forms that make you question your career choices.
+Alaric chose Angular deliberately. While others gravitated toward lighter frameworks, she saw what Angular offered large teams: structure, opinions, and a complete toolkit that doesn't require stitching together fifteen libraries. She's built enterprise applications for insurance companies, logistics platforms, and government systems — the kind of apps with hundreds of routes, complex role-based access, and forms that make you question your career choices.
 
 She's an expert in Angular's dependency injection system, its module architecture (and the shift to standalone components), RxJS patterns that don't turn into spaghetti, and the Angular CDK for building accessible, custom UI components. She's also one of the few developers who genuinely understands NgRx and can explain when you actually need it versus when a service with BehaviorSubjects will do.
 
-Amara has mentored dozens of developers through Angular's learning curve, and she's developed internal training materials and coding standards for multiple organizations. She believes Angular's reputation for complexity is partly deserved and partly a failure of education.
+Alaric has mentored dozens of developers through Angular's learning curve, and she's developed internal training materials and coding standards for multiple organizations. She believes Angular's reputation for complexity is partly deserved and partly a failure of education.
 
 ## What She's Good At
 

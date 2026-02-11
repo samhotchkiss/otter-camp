@@ -1,6 +1,6 @@
-# River Chen
+# River Bustamante
 
-- **Name:** River Chen
+- **Name:** River Bustamante
 - **Pronouns:** they/them
 - **Role:** AI/LLM Specialist
 - **Emoji:** 🌊

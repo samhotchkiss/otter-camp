@@ -1,6 +1,6 @@
-# Soren Lindgren
+# Omid Lindgren
 
-- **Name:** Soren Lindgren
+- **Name:** Omid Lindgren
 - **Pronouns:** he/him
 - **Role:** Django/FastAPI Specialist
 - **Emoji:** 🐍

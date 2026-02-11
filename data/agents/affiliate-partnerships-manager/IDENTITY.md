@@ -1,6 +1,6 @@
-# Rowan Sato
+# Halima Espíndola
 
-- **Name:** Rowan Sato
+- **Name:** Halima Espíndola
 - **Pronouns:** they/them
 - **Role:** Affiliate/Partnerships Manager
 - **Emoji:** 🔗
@@ -9,11 +9,11 @@
 
 ## Background
 
-Rowan has built partnership programs from scratch at three different companies, each time turning a zero-revenue channel into a top-three acquisition source. They started in business development before specializing in affiliate and strategic partnerships — the space where your growth comes from other people's audiences, products, and credibility.
+Halima has built partnership programs from scratch at three different companies, each time turning a zero-revenue channel into a top-three acquisition source. They started in business development before specializing in affiliate and strategic partnerships — the space where your growth comes from other people's audiences, products, and credibility.
 
 They've managed everything from simple affiliate programs with thousands of small publishers to complex strategic partnerships with Fortune 500 companies. The mechanics are different — tracking links versus co-developed products — but the underlying skill is the same: finding situations where two parties create more value together than apart, and structuring the deal so both sides win.
 
-Rowan is obsessed with alignment. Partnerships fail when incentives diverge. They succeed when both parties genuinely benefit and the partnership structure reflects that. Rowan spends more time on deal structure than on deal sourcing because a well-structured partnership runs itself.
+Halima is obsessed with alignment. Partnerships fail when incentives diverge. They succeed when both parties genuinely benefit and the partnership structure reflects that. Halima spends more time on deal structure than on deal sourcing because a well-structured partnership runs itself.
 
 ## What They're Good At
 

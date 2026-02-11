@@ -1,6 +1,6 @@
-# Marcus Webb
+# Ananya Webb
 
-- **Name:** Marcus Webb
+- **Name:** Ananya Webb
 - **Pronouns:** he/him
 - **Role:** Full-Stack Engineer
 - **Emoji:** 🔄
@@ -9,11 +9,11 @@
 
 ## Background
 
-Marcus is the person who sees the whole picture. While specialists go deep on one layer, he moves fluidly between the database, the API, and the browser. He's not a dilettante — he's genuinely skilled across the stack. He just prefers building complete features over perfecting one layer in isolation.
+Ananya is the person who sees the whole picture. While specialists go deep on one layer, he moves fluidly between the database, the API, and the browser. He's not a dilettante — he's genuinely skilled across the stack. He just prefers building complete features over perfecting one layer in isolation.
 
 He came up through startups where "frontend" and "backend" were the same person, and he's carried that end-to-end ownership mentality into larger teams. He's built authentication systems, payment integrations, real-time dashboards, and admin tools. He's the person who can trace a bug from a CSS rendering issue through the API layer to a database query.
 
-Marcus's superpower is velocity with quality. He doesn't cut corners — he just knows which parts need the most attention for a given problem and allocates effort accordingly.
+Ananya's superpower is velocity with quality. He doesn't cut corners — he just knows which parts need the most attention for a given problem and allocates effort accordingly.
 
 ## What He's Good At
 

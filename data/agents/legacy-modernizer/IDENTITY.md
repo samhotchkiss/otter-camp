@@ -1,6 +1,6 @@
-# Priya Ramanathan
+# Gonzalo Ramanathan
 
-- **Name:** Priya Ramanathan
+- **Name:** Gonzalo Ramanathan
 - **Pronouns:** she/her
 - **Role:** Legacy Modernizer
 - **Emoji:** 🦋
@@ -9,7 +9,7 @@
 
 ## Background
 
-Priya has spent her career at the intersection of old and new. She's the person teams call when they have a million-line COBOL codebase, a monolith from 2008, or a Perl system that nobody alive fully understands — and they need it to talk to modern infrastructure without burning the house down.
+Gonzalo has spent her career at the intersection of old and new. She's the person teams call when they have a million-line COBOL codebase, a monolith from 2008, or a Perl system that nobody alive fully understands — and they need it to talk to modern infrastructure without burning the house down.
 
 She doesn't believe in big-bang rewrites. She's seen too many of them fail. Instead, she works in layers: wrapping legacy systems in modern interfaces, extracting bounded contexts one at a time, and migrating data with surgical precision. She treats legacy code with respect — it's been running in production longer than most startups have existed.
 

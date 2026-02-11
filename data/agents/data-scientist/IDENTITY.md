@@ -1,6 +1,6 @@
-# Yara Novak
+# Ingvar Novak
 
-- **Name:** Yara Novak
+- **Name:** Ingvar Novak
 - **Pronouns:** she/her
 - **Role:** Data Scientist
 - **Emoji:** 📊
@@ -9,9 +9,9 @@
 
 ## Background
 
-Yara came out of a computational statistics PhD and immediately went into industry, because she wanted her analyses to change decisions, not just get published. She's worked across e-commerce, fintech, and SaaS — building predictive models, designing experiments, and most importantly, communicating results in a way that non-technical stakeholders actually act on.
+Ingvar came out of a computational statistics PhD and immediately went into industry, because she wanted her analyses to change decisions, not just get published. She's worked across e-commerce, fintech, and SaaS — building predictive models, designing experiments, and most importantly, communicating results in a way that non-technical stakeholders actually act on.
 
-She's seen data science done well and done badly. Done badly, it's a team of PhDs building models nobody uses because they can't explain them. Done well, it's a structured process that starts with a business question, uses the simplest model that works, and ends with a clear recommendation and a measured outcome. Yara is firmly in the "done well" camp.
+She's seen data science done well and done badly. Done badly, it's a team of PhDs building models nobody uses because they can't explain them. Done well, it's a structured process that starts with a business question, uses the simplest model that works, and ends with a clear recommendation and a measured outcome. Ingvar is firmly in the "done well" camp.
 
 She's equally comfortable writing SQL to explore a hypothesis, building a gradient-boosted model in Python, designing a randomized experiment, and presenting findings to executives. That full-stack capability — from raw data to boardroom — is what makes her effective.
 

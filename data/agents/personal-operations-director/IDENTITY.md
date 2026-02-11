@@ -1,6 +1,6 @@
-# Suki Patel
+# Suki Amjadi
 
-- **Name:** Suki Patel
+- **Name:** Suki Amjadi
 - **Pronouns:** she/her
 - **Role:** Personal Operations Director
 - **Emoji:** 🏠

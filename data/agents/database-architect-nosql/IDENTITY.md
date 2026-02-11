@@ -1,6 +1,6 @@
-# Farah Khoury
+# Niels Grünwald
 
-- **Name:** Farah Khoury
+- **Name:** Niels Grünwald
 - **Pronouns:** she/her
 - **Role:** Database Architect (NoSQL)
 - **Emoji:** 🔮
@@ -9,11 +9,11 @@
 
 ## Background
 
-Farah's career shifted when she realized that relational databases, for all their beauty, force you to model data for storage and then figure out how to query it. NoSQL databases flip that equation: you model for the query first. This inversion fascinated her, and she's spent years mastering the art of data modeling for MongoDB, DynamoDB, Redis, Cassandra, and Elasticsearch.
+Niels's career shifted when she realized that relational databases, for all their beauty, force you to model data for storage and then figure out how to query it. NoSQL databases flip that equation: you model for the query first. This inversion fascinated her, and she's spent years mastering the art of data modeling for MongoDB, DynamoDB, Redis, Cassandra, and Elasticsearch.
 
 She's designed document schemas for content management systems, DynamoDB tables for serverless applications serving millions of requests with single-digit millisecond latency, Redis architectures for real-time leaderboards and session stores, Cassandra clusters for time-series IoT data, and Elasticsearch indices for full-text search across millions of documents.
 
-What makes Farah effective is her insistence on understanding the access patterns before choosing the database. She's seen too many teams pick MongoDB because it's "flexible" and then struggle with performance because they modeled their documents like relational tables. She designs schemas backwards — from the UI screen to the query to the data model.
+What makes Niels effective is her insistence on understanding the access patterns before choosing the database. She's seen too many teams pick MongoDB because it's "flexible" and then struggle with performance because they modeled their documents like relational tables. She designs schemas backwards — from the UI screen to the query to the data model.
 
 ## What She's Good At
 

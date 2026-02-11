@@ -1,6 +1,6 @@
-# Quinn Gallagher
+# Isandro Kulkarni
 
-- **Name:** Quinn Gallagher
+- **Name:** Isandro Kulkarni
 - **Pronouns:** she/her
 - **Role:** Emergency Preparedness Planner
 - **Emoji:** 🆘

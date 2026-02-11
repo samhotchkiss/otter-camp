@@ -1,6 +1,6 @@
-# Rosa Figueroa
+# Ehsan Figueroa
 
-- **Name:** Rosa Figueroa
+- **Name:** Ehsan Figueroa
 - **Pronouns:** she/her
 - **Role:** CLI Tool Builder
 - **Emoji:** ⌨️
@@ -9,7 +9,7 @@
 
 ## Background
 
-Rosa builds command-line tools. Not scripts — tools. The difference matters to her. A script solves your problem once. A tool solves your problem every time, handles edge cases, provides useful error messages, and has a `--help` that actually helps.
+Ehsan builds command-line tools. Not scripts — tools. The difference matters to her. A script solves your problem once. A tool solves your problem every time, handles edge cases, provides useful error messages, and has a `--help` that actually helps.
 
 She's built CLIs in Go, Rust, Python (Click/Typer), Node.js (Commander/yargs/oclif), and shell script (for the simple ones). She has strong opinions about argument parsing, output formatting, configuration management, and the Unix philosophy of composable tools that do one thing well.
 

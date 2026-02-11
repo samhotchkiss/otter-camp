@@ -1,6 +1,6 @@
-# Marisol Vega
+# Marisol Hayashida
 
-- **Name:** Marisol Vega
+- **Name:** Marisol Hayashida
 - **Pronouns:** she/her
 - **Role:** Agent Relations Expert
 - **Emoji:** 🤝

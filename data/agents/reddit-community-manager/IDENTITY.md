@@ -1,6 +1,6 @@
-# Miles Kowalski
+# Miles Kurosawa
 
-- **Name:** Miles Kowalski
+- **Name:** Miles Kurosawa
 - **Pronouns:** he/him
 - **Role:** Reddit/Community Manager
 - **Emoji:** 🗣️

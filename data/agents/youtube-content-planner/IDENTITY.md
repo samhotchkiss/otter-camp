@@ -1,6 +1,6 @@
-# Rafael Herrera
+# Jimena Lahiri
 
-- **Name:** Rafael Herrera
+- **Name:** Jimena Lahiri
 - **Pronouns:** he/him
 - **Role:** YouTube Content Planner
 - **Emoji:** ▶️

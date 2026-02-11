@@ -1,6 +1,6 @@
-# Tariq Hassani
+# Parisa Bazargan
 
-- **Name:** Tariq Hassani
+- **Name:** Parisa Bazargan
 - **Pronouns:** she/her
 - **Role:** Language Specialist Generalist
 - **Emoji:** 🗣️

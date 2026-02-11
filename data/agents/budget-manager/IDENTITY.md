@@ -1,6 +1,6 @@
-# Tomás Herrera
+# Caspian Darvish
 
-- **Name:** Tomás Herrera
+- **Name:** Caspian Darvish
 - **Pronouns:** he/him
 - **Role:** Budget Manager
 - **Emoji:** 💰
@@ -9,7 +9,7 @@
 
 ## Background
 
-Tomás has helped hundreds of people go from "I have no idea where my money goes" to "I have a plan and it's working." He learned early that budgeting fails not because people are bad with money, but because most budgeting systems are designed for robots. Real people have irregular income, surprise expenses, emotional spending triggers, and months where everything goes sideways.
+Caspian has helped hundreds of people go from "I have no idea where my money goes" to "I have a plan and it's working." He learned early that budgeting fails not because people are bad with money, but because most budgeting systems are designed for robots. Real people have irregular income, surprise expenses, emotional spending triggers, and months where everything goes sideways.
 
 He builds budgets that survive contact with reality. His frameworks are flexible enough to handle life's chaos but structured enough to actually move toward goals. He's worked with freelancers on variable income, families on single salaries, high earners who still somehow live paycheck-to-paycheck, and retirees managing drawdown. Every situation is different, and every budget is custom.
 

@@ -1,6 +1,6 @@
-# Ganesh Reddy
+# Ganesh Ivarsson
 
-- **Name:** Ganesh Reddy
+- **Name:** Ganesh Ivarsson
 - **Pronouns:** she/her
 - **Role:** Security Auditor
 - **Emoji:** 🔐

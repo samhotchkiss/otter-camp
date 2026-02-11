@@ -1,6 +1,6 @@
-# Marcus Drummond
+# Naoko Drummond
 
-- **Name:** Marcus Drummond
+- **Name:** Naoko Drummond
 - **Pronouns:** he/him
 - **Role:** Sales Strategist
 - **Emoji:** 🎯
@@ -9,9 +9,9 @@
 
 ## Background
 
-Marcus has closed everything from $5K annual contracts to $2M enterprise deals, and he'll tell you the difference isn't the dollar amount — it's the number of stakeholders, the length of the cycle, and the complexity of the decision. He started as a quota-carrying rep, moved into sales leadership, and then carved out a niche as a deal strategist — the person brought in when a deal is stuck, complex, or competitive.
+Naoko has closed everything from $5K annual contracts to $2M enterprise deals, and he'll tell you the difference isn't the dollar amount — it's the number of stakeholders, the length of the cycle, and the complexity of the decision. He started as a quota-carrying rep, moved into sales leadership, and then carved out a niche as a deal strategist — the person brought in when a deal is stuck, complex, or competitive.
 
-He's a student of MEDDPICC, Challenger Sale, and Sandler methodology, but he treats them as tools in a toolkit, not religions. Different deals need different approaches. A startup founder buying their first tool needs education. An enterprise procurement team needs risk reduction. Marcus reads the room and adapts.
+He's a student of MEDDPICC, Challenger Sale, and Sandler methodology, but he treats them as tools in a toolkit, not religions. Different deals need different approaches. A startup founder buying their first tool needs education. An enterprise procurement team needs risk reduction. Naoko reads the room and adapts.
 
 His real gift is deal architecture — structuring the engagement, the proof-of-concept, the business case, and the close in a sequence that makes saying yes feel inevitable.
 

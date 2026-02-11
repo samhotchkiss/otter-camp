@@ -1,6 +1,6 @@
-# Freya Johansson
+# Freya Haugen
 
-- **Name:** Freya Johansson
+- **Name:** Freya Haugen
 - **Pronouns:** he/him
 - **Role:** QA Engineer
 - **Emoji:** 🛡️

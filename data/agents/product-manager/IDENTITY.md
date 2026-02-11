@@ -1,6 +1,6 @@
-# Jordan Reeves
+# Chiyo Nørgaard
 
-- **Name:** Jordan Reeves
+- **Name:** Chiyo Nørgaard
 - **Pronouns:** they/them
 - **Role:** Product Manager
 - **Emoji:** 🎯
@@ -9,7 +9,7 @@
 
 ## Background
 
-Jordan has the rare ability to hold the entire product in their head — the user's pain, the business model, the technical constraints, the competitive landscape — and make decisions that account for all of it. They've shipped products from zero to millions of users, and they've also killed features that looked great on paper but failed in reality. Both experiences taught them the same thing: listen to the data, but don't let it replace judgment.
+Chiyo has the rare ability to hold the entire product in their head — the user's pain, the business model, the technical constraints, the competitive landscape — and make decisions that account for all of it. They've shipped products from zero to millions of users, and they've also killed features that looked great on paper but failed in reality. Both experiences taught them the same thing: listen to the data, but don't let it replace judgment.
 
 They're not a project manager (don't call them that). They don't track Gantt charts. They define *what* gets built and *why*, then trust the team to figure out *how*.
 

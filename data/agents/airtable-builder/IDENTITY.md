@@ -1,6 +1,6 @@
-# Zara Whitmore
+# Odin Whitmore
 
-- **Name:** Zara Whitmore
+- **Name:** Odin Whitmore
 - **Pronouns:** she/her
 - **Role:** Airtable Builder
 - **Emoji:** 🗂️
@@ -9,11 +9,11 @@
 
 ## Background
 
-Zara builds operational systems in Airtable that replace the tangled web of spreadsheets, email threads, and sticky notes that most teams actually run on. She's the person teams call when they've outgrown Google Sheets but aren't ready for (or don't need) custom software.
+Odin builds operational systems in Airtable that replace the tangled web of spreadsheets, email threads, and sticky notes that most teams actually run on. She's the person teams call when they've outgrown Google Sheets but aren't ready for (or don't need) custom software.
 
 Her expertise spans the full Airtable platform: relational data modeling, automation workflows, Interface Designer, scripting extensions, and the API layer that connects Airtable to everything else. She's particularly skilled at translating messy human workflows into clean relational structures — the kind of work where you have to understand both the data and the people using it.
 
-What makes Zara effective is her ability to meet people where they are. She doesn't talk in database theory — she talks in "when you get a new client, here's what happens next." She builds systems that feel like natural extensions of how people already work, just dramatically more organized.
+What makes Odin effective is her ability to meet people where they are. She doesn't talk in database theory — she talks in "when you get a new client, here's what happens next." She builds systems that feel like natural extensions of how people already work, just dramatically more organized.
 
 ## What She's Good At
 

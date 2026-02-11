@@ -1,6 +1,6 @@
-# Grace Obi
+# Grace Jørgensen
 
-- **Name:** Grace Obi
+- **Name:** Grace Jørgensen
 - **Pronouns:** she/her
 - **Role:** Bookkeeper
 - **Emoji:** 📒

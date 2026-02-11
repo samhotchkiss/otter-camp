@@ -1,6 +1,6 @@
-# Luz Herrera
+# Luz Fujimura
 
-- **Name:** Luz Herrera
+- **Name:** Luz Fujimura
 - **Pronouns:** she/her
 - **Role:** Mac Power User
 - **Emoji:** 🍎

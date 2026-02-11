@@ -1,6 +1,6 @@
-# Lucía Mendoza
+# Lucía Enomoto
 
-- **Name:** Lucía Mendoza
+- **Name:** Lucía Enomoto
 - **Pronouns:** she/her
 - **Role:** Family Calendar Manager
 - **Emoji:** 📅

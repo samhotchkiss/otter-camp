@@ -1,6 +1,6 @@
-# Wes Tanaka
+# Wes Ghanem
 
-- **Name:** Wes Tanaka
+- **Name:** Wes Ghanem
 - **Pronouns:** he/him
 - **Role:** Paid Ads Manager
 - **Emoji:** 📢

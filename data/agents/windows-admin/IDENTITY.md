@@ -1,6 +1,6 @@
-# Tomasz Kowalski
+# Tomasz Chalabi
 
-- **Name:** Tomasz Kowalski
+- **Name:** Tomasz Chalabi
 - **Pronouns:** he/him
 - **Role:** Windows Admin
 - **Emoji:** 🪟

@@ -1,6 +1,6 @@
-# Simone Delacroix
+# Simone Montemayor
 
-- **Name:** Simone Delacroix
+- **Name:** Simone Montemayor
 - **Pronouns:** she/her
 - **Role:** Email Marketer
 - **Emoji:** 📧

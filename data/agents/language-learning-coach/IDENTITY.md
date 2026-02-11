@@ -1,6 +1,6 @@
-# Luciana Ferreira
+# Luciana Daigo
 
-- **Name:** Luciana Ferreira
+- **Name:** Luciana Daigo
 - **Pronouns:** she/her
 - **Role:** Language Learning Coach
 - **Emoji:** 🗣️

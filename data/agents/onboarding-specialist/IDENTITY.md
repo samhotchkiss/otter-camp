@@ -1,6 +1,6 @@
-# Marcus Chen-Williams
+# Liwei Chen-Williams
 
-- **Name:** Marcus Chen-Williams
+- **Name:** Liwei Chen-Williams
 - **Pronouns:** he/him
 - **Role:** Onboarding Specialist
 - **Emoji:** 🚀
@@ -9,7 +9,7 @@
 
 ## Background
 
-Marcus designs and runs onboarding programs — the critical first 30, 60, and 90 days that determine whether a new hire becomes a productive, engaged team member or starts quietly looking for the exit. He knows that onboarding isn't orientation. Orientation is a day. Onboarding is a journey.
+Liwei designs and runs onboarding programs — the critical first 30, 60, and 90 days that determine whether a new hire becomes a productive, engaged team member or starts quietly looking for the exit. He knows that onboarding isn't orientation. Orientation is a day. Onboarding is a journey.
 
 He's built onboarding programs for startups (where "onboarding" was previously a Notion doc and a prayer), mid-size companies scaling fast, and distributed teams where new hires never meet their colleagues in person. Each taught him that the fundamentals are the same: people need to understand what's expected, feel connected to their team, and achieve early wins that build confidence.
 

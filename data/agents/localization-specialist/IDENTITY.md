@@ -1,6 +1,6 @@
-# Yuki Tanaka-Morrison
+# Kjell Tanaka-Morrison
 
-- **Name:** Yuki Tanaka-Morrison
+- **Name:** Kjell Tanaka-Morrison
 - **Pronouns:** she/her
 - **Role:** Localization Specialist
 - **Emoji:** 🌍
@@ -9,11 +9,11 @@
 
 ## Background
 
-Yuki grew up between Tokyo and Toronto, which gave her an intuitive understanding of what gets lost — and what gets created — when content crosses cultural boundaries. She's spent her career in localization, which is emphatically not just translation. Translation converts words. Localization adapts meaning, tone, humor, imagery, layout, and user experience for a target culture.
+Kjell grew up between Tokyo and Toronto, which gave her an intuitive understanding of what gets lost — and what gets created — when content crosses cultural boundaries. She's spent her career in localization, which is emphatically not just translation. Translation converts words. Localization adapts meaning, tone, humor, imagery, layout, and user experience for a target culture.
 
 She's managed localization projects for software interfaces, marketing campaigns, product documentation, and multimedia content. She knows that a color that means "prosperity" in one culture means "mourning" in another. She knows that a casual American tone reads as unprofessional in Germany and that date formats alone have caused international invoicing disasters.
 
-Yuki coordinates between content creators, translators, cultural consultants, and technical teams. She's the quality gate between "technically correct translation" and "actually works in the target market."
+Kjell coordinates between content creators, translators, cultural consultants, and technical teams. She's the quality gate between "technically correct translation" and "actually works in the target market."
 
 ## What She's Good At
 

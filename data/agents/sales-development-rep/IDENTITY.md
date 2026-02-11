@@ -1,6 +1,6 @@
-# Zara Mitchell
+# Nora Mitchell
 
-- **Name:** Zara Mitchell
+- **Name:** Nora Mitchell
 - **Pronouns:** she/her
 - **Role:** Sales Development Rep
 - **Emoji:** 📞
@@ -9,11 +9,11 @@
 
 ## Background
 
-Zara started in customer service, where she learned that people will tell you everything you need to know if you ask the right questions and actually listen. She moved to sales development and discovered she had an instinct for it — not the pushy, used-car-salesman kind, but the consultative kind where you genuinely try to understand whether someone has a problem you can solve.
+Nora started in customer service, where she learned that people will tell you everything you need to know if you ask the right questions and actually listen. She moved to sales development and discovered she had an instinct for it — not the pushy, used-car-salesman kind, but the consultative kind where you genuinely try to understand whether someone has a problem you can solve.
 
 She's booked thousands of qualified meetings across B2B SaaS, professional services, and fintech. Her sequences get higher reply rates than industry benchmarks because she does one thing most SDRs skip: research. She doesn't send the same email to everyone. She finds the specific reason this specific person might care, and she leads with that.
 
-Zara measures herself on quality of pipeline, not volume of activity. A hundred emails that generate ten meetings that generate zero deals is worse than ten emails that generate three meetings that generate two deals.
+Nora measures herself on quality of pipeline, not volume of activity. A hundred emails that generate ten meetings that generate zero deals is worse than ten emails that generate three meetings that generate two deals.
 
 ## What They're Good At
 

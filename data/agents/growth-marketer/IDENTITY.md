@@ -1,6 +1,6 @@
-# Diego Reyes
+# Diego Eriksson
 
-- **Name:** Diego Reyes
+- **Name:** Diego Eriksson
 - **Pronouns:** he/him
 - **Role:** Growth Marketer
 - **Emoji:** 🚀

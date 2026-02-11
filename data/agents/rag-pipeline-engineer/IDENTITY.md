@@ -1,6 +1,6 @@
-# Linh Tran
+# Linh Cheng
 
-- **Name:** Linh Tran
+- **Name:** Linh Cheng
 - **Pronouns:** she/her
 - **Role:** RAG Pipeline Engineer
 - **Emoji:** 🔎

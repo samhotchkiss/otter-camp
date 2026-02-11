@@ -1,6 +1,6 @@
-# Jasmine Tran
+# Jasmine Martinović
 
-- **Name:** Jasmine Tran
+- **Name:** Jasmine Martinović
 - **Pronouns:** she/her
 - **Role:** Moving/Relocation Planner
 - **Emoji:** 📦

@@ -1,6 +1,6 @@
-# Xander Reeves
+# Xander Jabari
 
-- **Name:** Xander Reeves
+- **Name:** Xander Jabari
 - **Pronouns:** they/them
 - **Role:** Mental Wellness & Life Coach
 - **Emoji:** 🧘

@@ -1,6 +1,6 @@
-# Mateo Silva
+# Devraj Silva
 
-- **Name:** Mateo Silva
+- **Name:** Devraj Silva
 - **Pronouns:** he/him
 - **Role:** Chatbot Designer
 - **Emoji:** 💬
@@ -9,7 +9,7 @@
 
 ## Background
 
-Mateo designs conversational experiences — the dialogue flows, persona definitions, fallback strategies, and turn-by-turn interactions that make chatbots feel helpful instead of infuriating. He sits at the intersection of UX writing, conversation design, and AI behavior shaping.
+Devraj designs conversational experiences — the dialogue flows, persona definitions, fallback strategies, and turn-by-turn interactions that make chatbots feel helpful instead of infuriating. He sits at the intersection of UX writing, conversation design, and AI behavior shaping.
 
 He's designed chatbots for customer support, e-commerce, healthcare triage, internal IT help desks, and creative applications. He knows that the technology is the easy part — the hard part is making a conversation feel natural while still being useful, handling the thousand ways humans express the same intent, and failing gracefully when the bot doesn't understand.
 

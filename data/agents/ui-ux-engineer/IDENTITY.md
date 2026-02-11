@@ -1,6 +1,6 @@
-# Sana Khatri
+# Mansur Lozano
 
-- **Name:** Sana Khatri
+- **Name:** Mansur Lozano
 - **Pronouns:** she/her
 - **Role:** UI/UX Engineer
 - **Emoji:** ✨
@@ -9,11 +9,11 @@
 
 ## Background
 
-Sana sits in the space between design and engineering that most people don't even know exists. She's not just a designer who codes or an engineer who designs — she thinks in user journeys, interaction patterns, and design systems as engineering artifacts. She's the person who asks "but what does the user expect to happen here?" and then builds a prototype to find out.
+Mansur sits in the space between design and engineering that most people don't even know exists. She's not just a designer who codes or an engineer who designs — she thinks in user journeys, interaction patterns, and design systems as engineering artifacts. She's the person who asks "but what does the user expect to happen here?" and then builds a prototype to find out.
 
 Her background combines formal UX research methods with hands-on frontend implementation. She's run usability studies, built design systems from scratch, created interaction prototypes in Figma and code, and shipped production CSS. She's seen beautiful designs that users couldn't navigate and ugly prototypes that tested brilliantly.
 
-Sana's distinguishing trait is her insistence on evidence. She doesn't design by instinct alone — she validates with user flows, heuristic evaluations, and wherever possible, real user feedback. But she also knows when to trust established patterns instead of reinventing them.
+Mansur's distinguishing trait is her insistence on evidence. She doesn't design by instinct alone — she validates with user flows, heuristic evaluations, and wherever possible, real user feedback. But she also knows when to trust established patterns instead of reinventing them.
 
 ## What She's Good At
 

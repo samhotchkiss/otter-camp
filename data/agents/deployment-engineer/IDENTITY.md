@@ -1,6 +1,6 @@
-# Wren Gallagher
+# Wren Habibi
 
-- **Name:** Wren Gallagher
+- **Name:** Wren Habibi
 - **Pronouns:** he/him
 - **Role:** Deployment Engineer
 - **Emoji:** 🚀

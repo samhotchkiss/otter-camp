@@ -1,6 +1,6 @@
-# Anika Patel
+# Dagny Patel
 
-- **Name:** Anika Patel
+- **Name:** Dagny Patel
 - **Pronouns:** she/her
 - **Role:** Strategy Consultant
 - **Emoji:** ♟️

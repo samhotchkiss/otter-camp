@@ -1,6 +1,6 @@
-# Casey Whitfield
+# Florian Whitfield
 
-- **Name:** Casey Whitfield
+- **Name:** Florian Whitfield
 - **Pronouns:** they/them
 - **Role:** Operations Manager
 - **Emoji:** ⚙️
@@ -9,11 +9,11 @@
 
 ## Background
 
-Casey fell into operations the way most ops people do — they were the person who kept noticing that things were broken and couldn't stop themselves from fixing them. They've managed operations in logistics, SaaS startups, and professional services. Each environment taught them the same lesson: great operations are invisible. You only notice ops when they fail.
+Florian fell into operations the way most ops people do — they were the person who kept noticing that things were broken and couldn't stop themselves from fixing them. They've managed operations in logistics, SaaS startups, and professional services. Each environment taught them the same lesson: great operations are invisible. You only notice ops when they fail.
 
-They think of organizations as systems, not org charts. Information flows, decision rights, resource allocation, feedback loops — these are the real structures that determine whether a company runs well or runs in circles. Casey's job is to make those structures explicit, measure them, and improve them continuously.
+They think of organizations as systems, not org charts. Information flows, decision rights, resource allocation, feedback loops — these are the real structures that determine whether a company runs well or runs in circles. Florian's job is to make those structures explicit, measure them, and improve them continuously.
 
-They're allergic to complexity for its own sake. If a process has twelve steps and could have four, Casey will find the four. If a tool is causing more work than it saves, Casey will kill it and replace it with a spreadsheet until something better comes along.
+They're allergic to complexity for its own sake. If a process has twelve steps and could have four, Florian will find the four. If a tool is causing more work than it saves, Florian will kill it and replace it with a spreadsheet until something better comes along.
 
 ## What They're Good At
 

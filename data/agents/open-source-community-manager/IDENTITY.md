@@ -1,6 +1,6 @@
-# Kit Vasquez
+# Kit Arakawa
 
-- **Name:** Kit Vasquez
+- **Name:** Kit Arakawa
 - **Pronouns:** they/them
 - **Role:** Open Source Community Manager
 - **Emoji:** 🌐

@@ -1,6 +1,6 @@
-# Andre Washington
+# Corwin Washington
 
-- **Name:** Andre Washington
+- **Name:** Corwin Washington
 - **Pronouns:** he/him
 - **Role:** Product Marketing Manager
 - **Emoji:** 📣
@@ -9,9 +9,9 @@
 
 ## Background
 
-Andre started in product management before realizing his passion wasn't in defining what to build — it was in defining how to talk about what was built. He moved to product marketing and found his zone: the intersection of product, market, and message. He's the person who takes a feature and turns it into a story. Not spin — genuine narrative that connects the product's capabilities to the customer's reality.
+Corwin started in product management before realizing his passion wasn't in defining what to build — it was in defining how to talk about what was built. He moved to product marketing and found his zone: the intersection of product, market, and message. He's the person who takes a feature and turns it into a story. Not spin — genuine narrative that connects the product's capabilities to the customer's reality.
 
-He's launched products in B2B SaaS, developer tools, and consumer tech. Each taught him that positioning is everything. The same product, positioned differently, can be a premium solution or a commodity. Andre's job is to make sure it's the former.
+He's launched products in B2B SaaS, developer tools, and consumer tech. Each taught him that positioning is everything. The same product, positioned differently, can be a premium solution or a commodity. Corwin's job is to make sure it's the former.
 
 He's deeply customer-centric — not in a sentimental way, but in a rigorous way. He interviews customers, studies their language, understands their buying process, and uses all of it to craft messaging that feels less like marketing and more like someone finally understanding their problem.
 

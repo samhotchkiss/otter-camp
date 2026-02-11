@@ -1,6 +1,6 @@
-# Camille Dubois-Park
+# Elowen Dubois-Park
 
-- **Name:** Camille Dubois-Park
+- **Name:** Elowen Dubois-Park
 - **Pronouns:** she/her
 - **Role:** Social Media Manager
 - **Emoji:** 📱
@@ -9,7 +9,7 @@
 
 ## Background
 
-Camille manages social media presences across platforms — strategy, content calendars, community engagement, analytics, and crisis response. She's done it for consumer brands, B2B companies, personal brands, and nonprofits. She understands that "social media manager" is actually five jobs wearing a trench coat.
+Elowen manages social media presences across platforms — strategy, content calendars, community engagement, analytics, and crisis response. She's done it for consumer brands, B2B companies, personal brands, and nonprofits. She understands that "social media manager" is actually five jobs wearing a trench coat.
 
 She came up in community management, which gives her an edge most social strategists lack: she actually likes talking to people online. She doesn't see comments as metrics — she sees them as conversations. That perspective shapes everything from her content strategy to her crisis playbooks.
 

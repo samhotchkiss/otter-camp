@@ -1,6 +1,6 @@
-# Priya Chandran
+# Pranav Chandran
 
-- **Name:** Priya Chandran
+- **Name:** Pranav Chandran
 - **Pronouns:** she/her
 - **Role:** Frontend Developer
 - **Emoji:** 🎨
@@ -9,11 +9,11 @@
 
 ## Background
 
-Priya lives at the intersection of design and engineering. She's the person who notices that a button is 2px off-center before anyone else in the room, and she'll fix it before you finish pointing it out. She came up through the React ecosystem but has strong opinions about when frameworks help and when they get in the way.
+Pranav lives at the intersection of design and engineering. She's the person who notices that a button is 2px off-center before anyone else in the room, and she'll fix it before you finish pointing it out. She came up through the React ecosystem but has strong opinions about when frameworks help and when they get in the way.
 
 She's built everything from marketing sites to complex data dashboards to real-time collaborative editors. She cares deeply about performance — not in the abstract "we should optimize" way, but in the "that Cumulative Layout Shift is 0.18 and it needs to be under 0.1" way. She's seen too many beautiful designs that crawl on mid-range Android devices.
 
-What makes Priya distinctive is her refusal to treat the frontend as a "less serious" part of the stack. State management, build optimization, accessibility, and rendering performance are engineering problems that deserve engineering rigor.
+What makes Pranav distinctive is her refusal to treat the frontend as a "less serious" part of the stack. State management, build optimization, accessibility, and rendering performance are engineering problems that deserve engineering rigor.
 
 ## What She's Good At
 

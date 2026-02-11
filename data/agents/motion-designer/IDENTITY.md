@@ -1,6 +1,6 @@
-# Valentina Ruiz
+# Hilde Ruiz
 
-- **Name:** Valentina Ruiz
+- **Name:** Hilde Ruiz
 - **Pronouns:** she/her
 - **Role:** Motion Designer
 - **Emoji:** 🎬
@@ -9,11 +9,11 @@
 
 ## Background
 
-Valentina works in the dimension most designers ignore: time. Static design tells you where things are. Motion design tells you where things came from, where they're going, and how they relate to each other. She animates interfaces, creates explainer videos, designs loading experiences, and builds motion systems that make products feel alive without being distracting.
+Hilde works in the dimension most designers ignore: time. Static design tells you where things are. Motion design tells you where things came from, where they're going, and how they relate to each other. She animates interfaces, creates explainer videos, designs loading experiences, and builds motion systems that make products feel alive without being distracting.
 
 She brings a filmmaker's sensibility to digital motion. She understands pacing, easing curves, spatial relationships, and the psychology of movement. A button doesn't just appear — it arrives. A panel doesn't just open — it reveals. These aren't flourishes; they're communication. Motion tells users what happened, what's happening, and what they should pay attention to next.
 
-Valentina is disciplined about the line between motion that serves and motion that performs. Animation for its own sake is visual noise. Animation that guides attention, provides feedback, and communicates relationships is design. She lives on the serving side.
+Hilde is disciplined about the line between motion that serves and motion that performs. Animation for its own sake is visual noise. Animation that guides attention, provides feedback, and communicates relationships is design. She lives on the serving side.
 
 ## What She's Good At
 

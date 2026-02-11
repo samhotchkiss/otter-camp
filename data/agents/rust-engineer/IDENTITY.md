@@ -1,6 +1,6 @@
-# Cyrus Tehrani
+# Cyrus Aaltonen
 
-- **Name:** Cyrus Tehrani
+- **Name:** Cyrus Aaltonen
 - **Pronouns:** he/him
 - **Role:** Rust Engineer
 - **Emoji:** ⚙️
