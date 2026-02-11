@@ -104,6 +104,8 @@ const IGNORED_OTTERCAMP_SOCKET_EVENT_TYPES = new Set([
 ]);
 const SAFE_FALLBACK_AGENT_ID_PATTERN =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9][a-z0-9_-]{0,63})$/i;
+const SAFE_AGENT_SLOT_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const SAFE_SESSION_FILENAME_PATTERN = /^[a-z0-9][a-z0-9._-]{7,127}$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
@@ -1267,6 +1269,18 @@ export function parseAgentIDFromSessionKeyForTest(sessionKey: string): string {
   return parseAgentIDFromSessionKey(sessionKey);
 }
 
+function parseAgentSlotFromSessionKey(sessionKey: string): string {
+  const match = /^agent:([^:]+):/i.exec(getTrimmedString(sessionKey));
+  if (!match || !match[1]) {
+    return '';
+  }
+  const candidate = match[1].trim().toLowerCase();
+  if (!SAFE_AGENT_SLOT_PATTERN.test(candidate)) {
+    return '';
+  }
+  return candidate;
+}
+
 function normalizeUpdatedAt(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return Date.now();
@@ -1611,6 +1625,131 @@ function resolveOpenClawConfigPath(): string {
 
 function resolveOpenClawIdentityPath(fileName: string): string {
   return path.join(resolveOpenClawStateDir(), 'identity', fileName);
+}
+
+type LocalSessionResetResult = {
+  attempted: boolean;
+  cleared: boolean;
+  storePath: string;
+  transcriptDeleted: boolean;
+  sessionID?: string;
+  reason?: string;
+};
+
+function isPathWithinRoot(rootDir: string, targetPath: string): boolean {
+  const root = path.resolve(rootDir);
+  const target = path.resolve(targetPath);
+  const relative = path.relative(root, target);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function resetSessionFromLocalStore(
+  sessionKey: string,
+  stateDir: string = resolveOpenClawStateDir(),
+): LocalSessionResetResult {
+  const normalizedSessionKey = getTrimmedString(sessionKey);
+  const agentSlot = parseAgentSlotFromSessionKey(normalizedSessionKey);
+  const storePath = path.join(stateDir, 'agents', agentSlot, 'sessions', 'sessions.json');
+  if (!normalizedSessionKey || !agentSlot) {
+    return {
+      attempted: false,
+      cleared: false,
+      storePath,
+      transcriptDeleted: false,
+      reason: 'invalid session key',
+    };
+  }
+  if (!fs.existsSync(storePath)) {
+    return {
+      attempted: true,
+      cleared: false,
+      storePath,
+      transcriptDeleted: false,
+      reason: 'store not found',
+    };
+  }
+
+  const tempPath = `${storePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;
+  try {
+    const raw = fs.readFileSync(storePath, 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const keys = Object.keys(parsed || {});
+    const targetKey = normalizedSessionKey.toLowerCase();
+    const matchedKey = keys.find((key) => key.trim().toLowerCase() === targetKey);
+    if (!matchedKey) {
+      return {
+        attempted: true,
+        cleared: false,
+        storePath,
+        transcriptDeleted: false,
+        reason: 'session not found',
+      };
+    }
+
+    const existingEntry = asRecord(parsed[matchedKey]);
+    const sessionID = getTrimmedString(existingEntry?.sessionId);
+    const sessionFilePath = getTrimmedString(existingEntry?.sessionFile);
+    delete parsed[matchedKey];
+
+    const serialized = `${JSON.stringify(parsed, null, 2)}\n`;
+    fs.writeFileSync(tempPath, serialized, 'utf8');
+    fs.renameSync(tempPath, storePath);
+
+    let transcriptDeleted = false;
+    const sessionsDir = path.dirname(storePath);
+    const candidateTranscriptPaths: string[] = [];
+    if (sessionFilePath) {
+      candidateTranscriptPaths.push(sessionFilePath);
+    }
+    if (sessionID && SAFE_SESSION_FILENAME_PATTERN.test(sessionID)) {
+      candidateTranscriptPaths.push(path.join(sessionsDir, `${sessionID}.jsonl`));
+    }
+    for (const candidatePath of candidateTranscriptPaths) {
+      const resolvedPath = path.resolve(candidatePath);
+      if (!isPathWithinRoot(sessionsDir, resolvedPath)) {
+        continue;
+      }
+      if (!fs.existsSync(resolvedPath)) {
+        continue;
+      }
+      const stat = fs.lstatSync(resolvedPath);
+      if (!stat.isFile()) {
+        continue;
+      }
+      fs.unlinkSync(resolvedPath);
+      transcriptDeleted = true;
+    }
+
+    return {
+      attempted: true,
+      cleared: true,
+      storePath,
+      transcriptDeleted,
+      sessionID: sessionID || undefined,
+    };
+  } catch (err) {
+    try {
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+    } catch {
+      // Best-effort cleanup.
+    }
+    return {
+      attempted: true,
+      cleared: false,
+      storePath,
+      transcriptDeleted: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export function resetSessionFromLocalStoreForTest(
+  sessionKey: string,
+  stateDir: string,
+): LocalSessionResetResult {
+  return resetSessionFromLocalStore(sessionKey, stateDir);
 }
 
 function loadDeviceIdentity(): DeviceIdentity | null {
@@ -5079,11 +5218,28 @@ export async function handleAdminCommandDispatchEvent(event: AdminCommandDispatc
     if (!sessionKey) {
       throw new Error('agent.reset missing session_key/agent_id');
     }
-    // Prefer targeted reset if supported; fall back to gateway restart for known bridge recovery path.
     try {
-      await runOpenClawCommand(['sessions', 'reset', '--session', sessionKey]);
+      await sendRequest('sessions.reset', { sessionKey });
+      console.log(`[bridge] reset session via gateway RPC (${sessionKey})`);
     } catch (err) {
-      console.warn(`[bridge] targeted reset failed for ${sessionKey}; falling back to gateway restart:`, err);
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[bridge] sessions.reset RPC unavailable for ${sessionKey}; falling back to local store reset + gateway restart: ${detail}`,
+      );
+      const localReset = resetSessionFromLocalStore(sessionKey);
+      if (localReset.cleared) {
+        console.log(
+          `[bridge] cleared local session store for ${sessionKey} (${localReset.storePath})${
+            localReset.transcriptDeleted ? ' and deleted transcript' : ''
+          }`,
+        );
+      } else {
+        console.warn(
+          `[bridge] local session reset skipped for ${sessionKey}: ${
+            localReset.reason || 'unknown'
+          } (store=${localReset.storePath})`,
+        );
+      }
       await runOpenClawCommand(['gateway', 'restart']);
     }
     contextPrimedSessions.delete(sessionKey);

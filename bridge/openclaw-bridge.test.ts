@@ -25,6 +25,7 @@ import {
   resetBufferedActivityEventsForTest,
   resolveExecutionMode,
   resolveProjectWorktreeRoot,
+  resetSessionFromLocalStoreForTest,
   resetPeriodicSyncGuardForTest,
   resetReconnectStateForTest,
   resolveOtterCampWSSecret,
@@ -120,6 +121,53 @@ describe("bridge chameleon session key helpers", () => {
     );
     assert.equal(parseAgentIDFromSessionKeyForTest("agent:../../etc:main"), "");
     assert.equal(parseAgentIDFromSessionKeyForTest("agent:foo/bar:main"), "");
+  });
+});
+
+describe("bridge local session reset helpers", () => {
+  it("clears a canonical chameleon session key from local store", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "oc-session-reset-"));
+    const sessionsDir = path.join(tempRoot, "agents", "chameleon", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const sessionKey = "agent:chameleon:oc:28d27f83-5518-468a-83bf-750f7ec1c9f5";
+    const sessionID = "2f6f15dd-32d0-496b-9c0d-db1a2804ee64";
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const transcriptPath = path.join(sessionsDir, `${sessionID}.jsonl`);
+    fs.writeFileSync(
+      storePath,
+      `${JSON.stringify({
+        [sessionKey]: {
+          sessionId: sessionID,
+          updatedAt: Date.now(),
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(transcriptPath, `{"type":"session","id":"${sessionID}"}` + "\n", "utf8");
+
+    const result = resetSessionFromLocalStoreForTest(sessionKey, tempRoot);
+    assert.equal(result.cleared, true);
+    assert.equal(result.transcriptDeleted, true);
+    assert.equal(result.storePath, storePath);
+
+    const parsed = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, unknown>;
+    assert.equal(Object.keys(parsed).length, 0);
+    assert.equal(fs.existsSync(transcriptPath), false);
+  });
+
+  it("returns a non-cleared result when the session key is absent", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "oc-session-reset-miss-"));
+    const sessionsDir = path.join(tempRoot, "agents", "chameleon", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    fs.writeFileSync(storePath, `${JSON.stringify({}, null, 2)}\n`, "utf8");
+
+    const result = resetSessionFromLocalStoreForTest(
+      "agent:chameleon:oc:28d27f83-5518-468a-83bf-750f7ec1c9f5",
+      tempRoot,
+    );
+    assert.equal(result.cleared, false);
+    assert.match(result.reason || "", /session not found|store not found|invalid session key/i);
   });
 });
 
