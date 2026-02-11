@@ -201,6 +201,133 @@ type RecentFormattingContext = {
   agentNamesByAlias: Map<string, string>;
 };
 
+type FeedFormattingContext = RecentFormattingContext;
+
+function resolveAgentAliasToName(alias: string, context: FeedFormattingContext): string {
+  const aliasTrimmed = alias.trim();
+  if (!aliasTrimmed) {
+    return "";
+  }
+  return context.agentNamesByAlias.get(aliasTrimmed) || context.agentNamesByAlias.get(aliasTrimmed.toLowerCase()) || "";
+}
+
+function resolveProjectIDFromMetadata(metadata: Record<string, unknown>): string {
+  const candidates = [
+    metadata["project_id"],
+    metadata["projectId"],
+    metadata["project"],
+  ];
+  for (const raw of candidates) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const value = raw.trim();
+    if (!value) {
+      continue;
+    }
+    if (value.startsWith("project:")) {
+      const parts = value.split(":");
+      const last = parts[parts.length - 1]?.trim() || "";
+      if (last) {
+        return last;
+      }
+    }
+    return value;
+  }
+  return "";
+}
+
+function resolveProjectLabelFromMetadata(metadata: Record<string, unknown>, context: FeedFormattingContext): string {
+  const explicitName = metadataActorCandidate(metadata, "project_name");
+  if (explicitName) {
+    return explicitName;
+  }
+  const projectID = resolveProjectIDFromMetadata(metadata);
+  if (!projectID) {
+    return "";
+  }
+  return context.projectNamesByID.get(projectID) || context.projectNamesByID.get(projectID.toLowerCase()) || "";
+}
+
+function sanitizeFallbackFeedText(
+  input: string,
+  options: {
+    trigger: string;
+    projectID?: string;
+    projectLabel?: string;
+  },
+  context: FeedFormattingContext,
+): string {
+  let output = input.trim();
+  if (!output) {
+    return "";
+  }
+
+  output = output.replace(/agent:([^:\s)]+):project:([^)\s]+)/gi, (_match, agentPart: string) => {
+    const alias = String(agentPart || "").trim();
+    const actor =
+      resolveAgentAliasToName(alias, context) ||
+      titleCaseFromSlug(alias) ||
+      "Agent";
+    const scope = options.projectLabel ? `Project ${options.projectLabel}` : "Project";
+    return `${actor} • ${scope}`;
+  });
+
+  if (options.projectID && options.projectLabel) {
+    output = output.replace(new RegExp(options.projectID, "ig"), options.projectLabel);
+  }
+
+  const fallbackLabel =
+    options.trigger.toLowerCase().includes("issue")
+      ? "issue"
+      : options.trigger.toLowerCase().includes("project")
+        ? "project"
+        : "item";
+  output = output.replace(UUID_PATTERN, `this ${fallbackLabel}`);
+  return output.replace(/\s+/g, " ").trim();
+}
+
+function buildFallbackFeedDescription(
+  item: FeedApiItem,
+  metadata: Record<string, unknown>,
+  context: FeedFormattingContext,
+): string {
+  const trigger = (item.type || "").trim();
+  const triggerLower = trigger.toLowerCase();
+  const projectID = resolveProjectIDFromMetadata(metadata);
+  const projectLabel = resolveProjectLabelFromMetadata(metadata, context);
+  const summary = sanitizeFallbackFeedText(item.summary || "", { trigger, projectID, projectLabel }, context);
+
+  if (triggerLower === "dispatch.project_chat") {
+    if (projectLabel) {
+      return `dispatched project chat for ${projectLabel}`;
+    }
+    return "dispatched project chat";
+  }
+
+  if (triggerLower === "system.event") {
+    if (/^session activity\b/i.test(summary)) {
+      return projectLabel ? `recorded session activity for ${projectLabel}` : "recorded session activity";
+    }
+    if (summary && !summary.toLowerCase().includes("system.event")) {
+      return summary;
+    }
+    return projectLabel ? `recorded system event for ${projectLabel}` : "recorded system event";
+  }
+
+  if (summary) {
+    return summary;
+  }
+
+  return getActivityDescription({
+    type: trigger,
+    actorName: "",
+    taskTitle: item.task_title || undefined,
+    summary: summary || undefined,
+    metadata,
+  });
+}
+
 function buildProjectNameMap(projects: Project[]): Map<string, string> {
   const out = new Map<string, string>();
   for (const project of projects) {
@@ -257,12 +384,30 @@ function buildAgentAliasNameMap(rawAgents: unknown): Map<string, string> {
   return out;
 }
 
-function resolveFeedActorName(item: FeedApiItem): string {
-  if (item.agent_name?.trim()) {
-    return item.agent_name.trim();
+function resolveFeedActorName(item: FeedApiItem, context: FeedFormattingContext): string {
+  const explicitName = item.agent_name?.trim();
+  const directAgentID = (item.agent_id || "").trim();
+  if (explicitName) {
+    const mapped = resolveAgentAliasToName(explicitName, context);
+    if (mapped) {
+      return mapped;
+    }
+    if (looksLikeUUID(explicitName)) {
+      return "Agent";
+    }
+    if (directAgentID && explicitName.toLowerCase() === directAgentID.toLowerCase()) {
+      return titleCaseFromSlug(explicitName) || explicitName;
+    }
+    return explicitName;
   }
 
   const metadata = normalizeMetadata(item.metadata);
+  if (directAgentID) {
+    const mapped = resolveAgentAliasToName(directAgentID, context);
+    if (mapped) {
+      return mapped;
+    }
+  }
   const actorCandidates = [
     metadataActorCandidate(metadata, "actor"),
     metadataActorCandidate(metadata, "user"),
@@ -279,26 +424,33 @@ function resolveFeedActorName(item: FeedApiItem): string {
 
   for (const candidate of actorCandidates) {
     if (candidate && candidate.toLowerCase() !== "unknown") {
+      const mapped = resolveAgentAliasToName(candidate, context);
+      if (mapped) {
+        return mapped;
+      }
+      if (looksLikeUUID(candidate)) {
+        return "Agent";
+      }
       return candidate;
     }
   }
 
+  if (directAgentID) {
+    if (looksLikeUUID(directAgentID)) {
+      return "Agent";
+    }
+    return titleCaseFromSlug(directAgentID) || "Agent";
+  }
   return "System";
 }
 
-function mapActivityToFeedItems(items: FeedApiItem[]): FeedItem[] {
+function mapActivityToFeedItems(items: FeedApiItem[], context: FeedFormattingContext): FeedItem[] {
   return items.map((item) => {
-    const actorName = resolveFeedActorName(item);
+    const actorName = resolveFeedActorName(item, context);
     const type = item.type || "activity";
     const typeConfig = getTypeConfig(type);
     const metadata = normalizeMetadata(item.metadata);
-    const description = getActivityDescription({
-      type,
-      actorName,
-      taskTitle: item.task_title || undefined,
-      summary: item.summary || undefined,
-      metadata,
-    });
+    const description = buildFallbackFeedDescription(item, metadata, context);
 
     return {
       id: item.id,
@@ -629,7 +781,12 @@ export default function Dashboard() {
               setFeedItems(feedValue.feedItems || []);
             } else {
               setActionItems([]);
-              setFeedItems(mapActivityToFeedItems(feedValue.items || []));
+              setFeedItems(
+                mapActivityToFeedItems(feedValue.items || [], {
+                  projectNamesByID,
+                  agentNamesByAlias: nextAgentNamesByAlias,
+                }),
+              );
             }
           } else if (!isDemoMode()) {
             feedFallbackFailed = true;

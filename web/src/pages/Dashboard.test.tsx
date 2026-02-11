@@ -218,4 +218,37 @@ describe("Dashboard", () => {
     expect(screen.queryByText(new RegExp(projectID, "i"))).not.toBeInTheDocument();
     expect(screen.queryByText(/agent:marcus:project:/i)).not.toBeInTheDocument();
   });
+
+  it("sanitizes UUID-heavy summaries in /api/feed fallback mode", async () => {
+    const projectID = "72035dfa-a4b9-4046-b56d-7a5968104090";
+    vi.mocked(api.projects).mockResolvedValueOnce({
+      projects: [
+        { id: projectID, name: "Testerooni", status: "active" },
+      ],
+    } as Awaited<ReturnType<typeof api.projects>>);
+    vi.mocked(api.activityRecent).mockRejectedValueOnce(new Error("404"));
+    vi.mocked(api.feed).mockResolvedValueOnce({
+      org_id: "org-1",
+      items: [
+        {
+          id: "feed-uuid-1",
+          org_id: "org-1",
+          agent_id: "marcus",
+          type: "system.event",
+          summary: `Session activity (agent:marcus:project:${projectID})`,
+          created_at: "2026-02-10T12:00:00Z",
+          metadata: {
+            project_id: projectID,
+          },
+        },
+      ],
+    } as Awaited<ReturnType<typeof api.feed>>);
+
+    render(<Dashboard />);
+
+    expect(await screen.findByText("Marcus")).toBeInTheDocument();
+    expect(screen.getByText(/recorded session activity for Testerooni/i)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(projectID, "i"))).not.toBeInTheDocument();
+    expect(screen.queryByText(/agent:marcus:project:/i)).not.toBeInTheDocument();
+  });
 });
