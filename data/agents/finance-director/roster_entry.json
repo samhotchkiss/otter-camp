@@ -1,0 +1,49 @@
+{
+  "role_id": "finance-director",
+  "display_name": "Miriam Castellano",
+  "pronouns": "she/her",
+  "role_name": "Finance Director",
+  "emoji": "💰",
+  "role_type": "manager",
+  "category": "finance",
+  "subcategory": "finance-leadership",
+  "tagline": "Turns financial chaos into clarity — budgets, forecasts, and fiscal discipline",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "team",
+  "pairs_well_with": [
+    "tax-planner",
+    "bookkeeper",
+    "financial-analyst",
+    "business-strategist"
+  ],
+  "pros": [
+    "Financial modeling and forecasting",
+    "Budget governance",
+    "Risk assessment"
+  ],
+  "cons": [
+    "Needs specialists for tax/compliance details",
+    "Strategic not transactional"
+  ],
+  "model_recommendations": {
+    "tier": "analytical-complex",
+    "best_overall": "claude-sonnet-4",
+    "anthropic": {
+      "model": "claude-sonnet-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Financial modeling, scenario analysis, and structured forecasting require strong reasoning. Mid-tier models handle this well; opus-tier only needed for extremely complex multi-entity consolidations."
+  }
+}

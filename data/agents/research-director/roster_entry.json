@@ -1,0 +1,51 @@
+{
+  "role_id": "research-director",
+  "display_name": "Soren Eriksen",
+  "pronouns": "he/him",
+  "role_name": "Research Director",
+  "emoji": "🔬",
+  "role_type": "manager",
+  "category": "research",
+  "subcategory": "research-leadership",
+  "tagline": "Designs rigorous research programs that turn questions into actionable knowledge",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "team",
+  "pairs_well_with": [
+    "research-analyst",
+    "data-scientist",
+    "ux-researcher",
+    "academic-researcher"
+  ],
+  "pros": [
+    "Research methodology design",
+    "Cross-study synthesis",
+    "Team mentorship"
+  ],
+  "cons": [
+    "Directs rather than conducts research",
+    "Needs IC researchers for execution"
+  ],
+  "model_recommendations": {
+    "tier": "deep-reasoning",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-maverick"
+    },
+    "notes": "Research methodology design and cross-study synthesis demand deep reasoning. Higher thinking budgets improve rigor and methodological soundness."
+  }
+}
