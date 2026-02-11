@@ -495,11 +495,22 @@ export default function ProjectDetailPage() {
     setTasks(transformedTasks);
   }, []);
 
-  const refreshProjectActivity = useCallback(async () => {
-    const orgId = localStorage.getItem("otter-camp-org-id");
-    const activityUrl = orgId
-      ? `${API_URL}/api/feed?org_id=${orgId}&limit=10`
-      : `${API_URL}/api/feed?limit=10`;
+  const refreshProjectActivity = useCallback(async (opts?: { orgId?: string; projectId?: string }) => {
+    const storedOrgId = localStorage.getItem("otter-camp-org-id") || "";
+    const resolvedOrgId = (opts?.orgId || storedOrgId || project?.org_id || "").trim();
+    const resolvedProjectId = (opts?.projectId || id || "").trim();
+    if (!resolvedOrgId) {
+      setActivity([]);
+      return;
+    }
+    const params = new URLSearchParams({
+      org_id: resolvedOrgId,
+      limit: "10",
+    });
+    if (resolvedProjectId) {
+      params.set("project_id", resolvedProjectId);
+    }
+    const activityUrl = `${API_URL}/api/feed?${params.toString()}`;
     const activityRes = await fetch(activityUrl);
     if (!activityRes.ok) {
       return;
@@ -534,7 +545,7 @@ export default function ProjectDetailPage() {
       };
     });
     setActivity(transformedActivity);
-  }, []);
+  }, [id, project?.org_id]);
 
   // Fetch project and issue work items
   useEffect(() => {
@@ -557,13 +568,21 @@ export default function ProjectDetailPage() {
           throw new Error('Project not found');
         }
         const projectData = await projectRes.json();
+        const resolvedOrgId = (
+          (orgId && orgId.trim()) ||
+          (typeof projectData.org_id === "string" ? projectData.org_id.trim() : "")
+        );
+        if (!orgId && resolvedOrgId) {
+          localStorage.setItem("otter-camp-org-id", resolvedOrgId);
+        }
+
         setProject(projectData);
         setSelectedPrimaryAgentID(projectData.primary_agent_id || "");
         setWorkflowConfig(workflowConfigFromProject(projectData));
         
         // Fetch canonical workspace agents (UUID-backed) for mapping and settings.
-        const agentsUrl = orgId
-          ? `${API_URL}/api/agents?org_id=${encodeURIComponent(orgId)}`
+        const agentsUrl = resolvedOrgId
+          ? `${API_URL}/api/agents?org_id=${encodeURIComponent(resolvedOrgId)}`
           : `${API_URL}/api/agents`;
         const agentsRes = await fetch(agentsUrl);
         if (agentsRes.ok) {
@@ -586,7 +605,7 @@ export default function ProjectDetailPage() {
         }
         await Promise.all([
           refreshProjectIssues(id),
-          refreshProjectActivity(),
+          refreshProjectActivity({ orgId: resolvedOrgId, projectId: id }),
         ]);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load project');
@@ -615,7 +634,7 @@ export default function ProjectDetailPage() {
         "";
       if (eventProjectID === id) {
         void refreshProjectIssues(id);
-        void refreshProjectActivity();
+        void refreshProjectActivity({ orgId: project?.org_id, projectId: id });
       }
       return;
     }
@@ -630,15 +649,15 @@ export default function ProjectDetailPage() {
         (typeof messageRecord.projectId === "string" && messageRecord.projectId.trim()) ||
         "";
       if (eventProjectID === id) {
-        void refreshProjectActivity();
+        void refreshProjectActivity({ orgId: project?.org_id, projectId: id });
       }
       return;
     }
 
     if (lastMessage.type === "ActivityEventReceived") {
-      void refreshProjectActivity();
+      void refreshProjectActivity({ orgId: project?.org_id, projectId: id });
     }
-  }, [id, lastMessage, refreshProjectActivity, refreshProjectIssues]);
+  }, [id, lastMessage, project?.org_id, refreshProjectActivity, refreshProjectIssues]);
 
   useEffect(() => {
     if (!project) {

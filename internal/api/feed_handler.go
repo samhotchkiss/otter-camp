@@ -169,6 +169,13 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Parse project_id (optional)
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID != "" && !uuidRegex.MatchString(projectID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid project_id"})
+		return
+	}
+
 	// Parse types (comma-separated, optional)
 	typesParam := strings.TrimSpace(r.URL.Query().Get("types"))
 	if typesParam == "" {
@@ -247,7 +254,7 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	// Get total count
-	countQuery, countArgs := buildFeedCountQuery(orgID, types, from, to)
+	countQuery, countArgs := buildFeedCountQuery(orgID, projectID, types, from, to)
 	var total int
 	if err := conn.QueryRowContext(r.Context(), countQuery, countArgs...).Scan(&total); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to count feed items"})
@@ -262,7 +269,7 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get feed items with related entities
-	query, args := buildEnrichedFeedQuery(orgID, types, from, to, fetchLimit, 0)
+	query, args := buildEnrichedFeedQuery(orgID, projectID, types, from, to, fetchLimit, 0)
 	rows, err := conn.QueryContext(r.Context(), query, args...)
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load feed"})
@@ -370,12 +377,17 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildFeedCountQuery builds a COUNT query for pagination.
-func buildFeedCountQuery(orgID string, types []string, from, to *time.Time) (string, []interface{}) {
+func buildFeedCountQuery(orgID string, projectID string, types []string, from, to *time.Time) (string, []interface{}) {
 	conditions := []string{
 		"org_id = $1",
 		"action NOT LIKE 'project_chat.%'",
 	}
 	args := []interface{}{orgID}
+
+	if strings.TrimSpace(projectID) != "" {
+		args = append(args, projectID)
+		conditions = append(conditions, fmt.Sprintf("(metadata->>'project_id') = $%d", len(args)))
+	}
 
 	if len(types) == 1 {
 		args = append(args, types[0])
@@ -403,12 +415,17 @@ func buildFeedCountQuery(orgID string, types []string, from, to *time.Time) (str
 }
 
 // buildEnrichedFeedQuery builds a query that joins with tasks and agents tables.
-func buildEnrichedFeedQuery(orgID string, types []string, from, to *time.Time, limit, offset int) (string, []interface{}) {
+func buildEnrichedFeedQuery(orgID string, projectID string, types []string, from, to *time.Time, limit, offset int) (string, []interface{}) {
 	conditions := []string{
 		"a.org_id = $1",
 		"a.action NOT LIKE 'project_chat.%'",
 	}
 	args := []interface{}{orgID}
+
+	if strings.TrimSpace(projectID) != "" {
+		args = append(args, projectID)
+		conditions = append(conditions, fmt.Sprintf("(a.metadata->>'project_id') = $%d", len(args)))
+	}
 
 	if len(types) == 1 {
 		args = append(args, types[0])

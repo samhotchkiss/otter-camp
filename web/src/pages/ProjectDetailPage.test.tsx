@@ -956,4 +956,50 @@ describe("ProjectDetailPage files tab", () => {
       requests.some((request) => request.method === "PATCH" && request.url.includes("/api/projects/project-1?")),
     ).toBe(true);
   });
+
+  it("loads activity with project org_id when local org storage is empty", async () => {
+    localStorage.clear();
+
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/projects/project-1")) {
+        return Promise.resolve(
+          mockJSONResponse({
+            id: "project-1",
+            org_id: "org-from-project",
+            name: "Technonymous",
+            status: "active",
+          }),
+        );
+      }
+      if (url.includes("/api/agents")) {
+        return Promise.resolve(mockJSONResponse({ agents: [] }));
+      }
+      if (url.includes("/api/issues")) {
+        return Promise.resolve(mockJSONResponse({ items: [] }));
+      }
+      if (url.includes("/api/feed")) {
+        return Promise.resolve(mockJSONResponse({ items: [] }));
+      }
+      return Promise.resolve(mockJSONResponse({}, false));
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+
+    await waitFor(() => {
+      const fetchedURLs = fetchMock.mock.calls.map(([input]: [unknown]) => String(input));
+      const activityURL = fetchedURLs.find((url) => url.includes("/api/feed?"));
+      expect(activityURL).toBeDefined();
+      expect(activityURL).toContain("org_id=org-from-project");
+      expect(activityURL).toContain("project_id=project-1");
+    });
+  });
 });

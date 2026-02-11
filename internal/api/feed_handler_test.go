@@ -240,6 +240,69 @@ func TestFeedHandlerV2FilterByTypes(t *testing.T) {
 	require.Len(t, resp.Items, 3)
 }
 
+func TestFeedHandlerV2FilterByProjectID(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	orgID := insertFeedOrganization(t, db, "feed-project-filter-org")
+	projectA := "11111111-1111-1111-1111-111111111111"
+	projectB := "22222222-2222-2222-2222-222222222222"
+	base := time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+
+	insertFeedActivity(
+		t,
+		db,
+		orgID,
+		"issue.approved",
+		json.RawMessage(fmt.Sprintf(`{"project_id":"%s","issue_id":"a"}`, projectA)),
+		base.Add(-1*time.Minute),
+	)
+	insertFeedActivity(
+		t,
+		db,
+		orgID,
+		"issue.approved",
+		json.RawMessage(fmt.Sprintf(`{"project_id":"%s","issue_id":"b"}`, projectB)),
+		base,
+	)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/feed?org_id="+orgID+"&project_id="+projectA,
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp PaginatedFeedResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, 1, resp.Total)
+	require.Len(t, resp.Items, 1)
+	require.Contains(t, string(resp.Items[0].Metadata), projectA)
+}
+
+func TestFeedHandlerV2RejectsInvalidProjectID(t *testing.T) {
+	orgID := "00000000-0000-0000-0000-000000000000"
+	req := httptest.NewRequest(http.MethodGet, "/api/feed?org_id="+orgID+"&project_id=bad-project-id", nil)
+	rec := httptest.NewRecorder()
+
+	FeedHandlerV2(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Contains(t, resp.Error, "project_id")
+}
+
 func TestFeedHandlerV2SuppressesProjectChatEvents(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)
