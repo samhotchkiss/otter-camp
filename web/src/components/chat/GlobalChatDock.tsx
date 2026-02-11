@@ -144,6 +144,26 @@ export default function GlobalChatDock() {
           throw new Error(payload?.error ?? "Failed to clear chat session");
         }
       } else if (selectedConversation.type === "dm") {
+        const threadAgentID = selectedConversation.threadId.startsWith("dm_")
+          ? selectedConversation.threadId.slice(3).trim()
+          : "";
+        const resetAgentID = selectedConversation.agent.id.trim() || threadAgentID;
+        if (!resetAgentID) {
+          throw new Error("Failed to resolve DM agent for reset");
+        }
+
+        const resetResponse = await fetch(
+          `${API_URL}/api/admin/agents/${encodeURIComponent(resetAgentID)}/reset`,
+          {
+            method: "POST",
+            headers,
+          },
+        );
+        if (!resetResponse.ok) {
+          const payload = await resetResponse.json().catch(() => null);
+          throw new Error(payload?.error ?? "Failed to clear chat session");
+        }
+
         const response = await fetch(`${API_URL}/api/messages`, {
           method: "POST",
           headers,

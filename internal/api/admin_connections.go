@@ -147,6 +147,76 @@ type adminCommandDispatchInput struct {
 	DryRun      bool
 }
 
+func resolveAdminCommandAgentTarget(
+	ctx context.Context,
+	db *sql.DB,
+	workspaceID string,
+	agentID string,
+) (resolvedAgentID string, sessionKey string, err error) {
+	trimmedAgentID := strings.TrimSpace(agentID)
+	if trimmedAgentID == "" {
+		return "", "", nil
+	}
+	defaultSessionKey := fmt.Sprintf("agent:%s:main", trimmedAgentID)
+	if db == nil || strings.TrimSpace(workspaceID) == "" {
+		return trimmedAgentID, defaultSessionKey, nil
+	}
+
+	var syncAgentID string
+	var syncSessionKey string
+	err = db.QueryRowContext(
+		ctx,
+		`SELECT id, COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
+		workspaceID,
+		trimmedAgentID,
+	).Scan(&syncAgentID, &syncSessionKey)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+	if err == nil {
+		syncAgentID = strings.TrimSpace(syncAgentID)
+		if syncAgentID == "" {
+			syncAgentID = trimmedAgentID
+		}
+		syncSessionKey = strings.TrimSpace(syncSessionKey)
+		if syncSessionKey != "" {
+			return syncAgentID, syncSessionKey, nil
+		}
+		resolvedDMID, resolveErr := resolveDMThreadWorkspaceAgentID(ctx, db, workspaceID, syncAgentID)
+		if resolveErr != nil {
+			return "", "", resolveErr
+		}
+		if resolvedDMID != "" {
+			return resolvedDMID, canonicalChameleonSessionKey(resolvedDMID), nil
+		}
+		return syncAgentID, fmt.Sprintf("agent:%s:main", syncAgentID), nil
+	}
+
+	resolvedDMID, resolveErr := resolveDMThreadWorkspaceAgentID(ctx, db, workspaceID, trimmedAgentID)
+	if resolveErr != nil {
+		return "", "", resolveErr
+	}
+	if resolvedDMID != "" {
+		var existingSessionKey string
+		err = db.QueryRowContext(
+			ctx,
+			`SELECT COALESCE(session_key, '') FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
+			workspaceID,
+			resolvedDMID,
+		).Scan(&existingSessionKey)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", "", err
+		}
+		existingSessionKey = strings.TrimSpace(existingSessionKey)
+		if existingSessionKey != "" {
+			return resolvedDMID, existingSessionKey, nil
+		}
+		return resolvedDMID, canonicalChameleonSessionKey(resolvedDMID), nil
+	}
+
+	return trimmedAgentID, defaultSessionKey, nil
+}
+
 type adminCommandDispatchResponse struct {
 	OK        bool   `json:"ok"`
 	Queued    bool   `json:"queued"`
@@ -589,7 +659,18 @@ func (h *AdminConnectionsHandler) dispatchAdminCommand(
 		},
 	}
 	if event.Data.AgentID != "" {
-		event.Data.SessionKey = fmt.Sprintf("agent:%s:main", event.Data.AgentID)
+		resolvedAgentID, resolvedSessionKey, resolveErr := resolveAdminCommandAgentTarget(
+			r.Context(),
+			h.DB,
+			workspaceID,
+			event.Data.AgentID,
+		)
+		if resolveErr != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to resolve agent session"})
+			return
+		}
+		event.Data.AgentID = resolvedAgentID
+		event.Data.SessionKey = resolvedSessionKey
 	}
 	metadata := map[string]interface{}{
 		"command_id": commandID,
