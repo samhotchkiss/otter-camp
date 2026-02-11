@@ -599,13 +599,24 @@ detect_openclaw_gateway() {
   DETECTED_OC_PORT=""
   DETECTED_OC_TOKEN=""
 
-  if [[ -n "$oc_config" ]] && command -v node >/dev/null 2>&1; then
-    DETECTED_OC_PORT=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('$oc_config','utf8'));console.log(c.gateway?.port||'')}catch{}" 2>/dev/null || true)
-    DETECTED_OC_TOKEN=$(node -e "try{const c=JSON.parse(require('fs').readFileSync('$oc_config','utf8'));console.log(c.gateway?.token||'')}catch{}" 2>/dev/null || true)
+  # Find node — may not be in PATH for non-interactive shells
+  local node_bin=""
+  if command -v node >/dev/null 2>&1; then
+    node_bin="node"
+  elif [[ -x /opt/homebrew/bin/node ]]; then
+    node_bin="/opt/homebrew/bin/node"
+  elif [[ -x /usr/local/bin/node ]]; then
+    node_bin="/usr/local/bin/node"
+  fi
+
+  if [[ -n "$oc_config" ]] && [[ -n "$node_bin" ]]; then
+    DETECTED_OC_PORT=$($node_bin -e "try{const c=JSON.parse(require('fs').readFileSync('$oc_config','utf8'));console.log(c.gateway?.port||'')}catch{}" 2>/dev/null || true)
+    # Token can be at gateway.token or gateway.auth.token depending on config version
+    DETECTED_OC_TOKEN=$($node_bin -e "try{const c=JSON.parse(require('fs').readFileSync('$oc_config','utf8'));console.log(c.gateway?.auth?.token||c.gateway?.token||'')}catch{}" 2>/dev/null || true)
   fi
 
   if [[ -z "$DETECTED_OC_PORT" ]]; then
-    DETECTED_OC_PORT="18791"
+    DETECTED_OC_PORT="18789"
   fi
 }
 
@@ -638,7 +649,7 @@ EOF
 
   if [[ "$needs_manual_token" -eq 1 ]]; then
     log_warn "Created bridge/.env — set OPENCLAW_TOKEN to your gateway token."
-    echo "  Find it in ~/.openclaw/openclaw.json under gateway.token"
+    echo "  Find it in ~/.openclaw/openclaw.json under gateway.auth.token"
   else
     log_success "Created bridge/.env (auto-configured from OpenClaw)"
   fi
