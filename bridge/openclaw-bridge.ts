@@ -109,6 +109,7 @@ const SAFE_SESSION_FILENAME_PATTERN = /^[a-z0-9][a-z0-9._-]{7,127}$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS = new Set(['chameleon', 'elephant']);
+const OPENCLAW_TOOL_EVENT_CAP = 'tool-events';
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 let otterCampOrgIDForTestOverride: string | null = null;
 const OTTERCAMP_WORKSPACE_GUIDE_FILENAME = 'OTTERCAMP.md';
@@ -362,6 +363,14 @@ type SessionContext = {
 
 type ExecutionMode = 'conversation' | 'project';
 
+type OpenClawToolEvent = {
+  sessionKey: string;
+  tool: string;
+  phase: string;
+  toolCallID?: string;
+  args?: Record<string, unknown>;
+};
+
 type WhoAmITaskPointer = {
   project?: string;
   issue?: string;
@@ -552,8 +561,16 @@ let lastSuccessfulSyncAtMs = 0;
 let gitCompletionDefaultsResolved = false;
 let gitCompletionBranch = '';
 let gitCompletionRemote = '';
+let ingestedToolEventCountForTest = 0;
+let lastIngestedToolEventForTest: OpenClawToolEvent | null = null;
 
 const genId = () => `req-${++requestId}`;
+function buildGatewayConnectCaps(): string[] {
+  return [OPENCLAW_TOOL_EVENT_CAP];
+}
+export function buildGatewayConnectCapsForTest(): string[] {
+  return [...buildGatewayConnectCaps()];
+}
 const defaultExecFileAsync = promisify(execFile);
 let execFileAsync = defaultExecFileAsync;
 const defaultProcessExit = (code: number): never => process.exit(code);
@@ -3668,6 +3685,26 @@ export function resetSessionContextsForTest(): void {
   workspaceGuideCache = null;
 }
 
+export function resetIngestedToolEventsForTest(): void {
+  ingestedToolEventCountForTest = 0;
+  lastIngestedToolEventForTest = null;
+}
+
+export function getIngestedToolEventsStateForTest(): {
+  count: number;
+  last: OpenClawToolEvent | null;
+} {
+  return {
+    count: ingestedToolEventCountForTest,
+    last: lastIngestedToolEventForTest
+      ? {
+        ...lastIngestedToolEventForTest,
+        ...(lastIngestedToolEventForTest.args ? { args: { ...lastIngestedToolEventForTest.args } } : {}),
+      }
+      : null,
+  };
+}
+
 export function setSessionContextForTest(sessionKey: string, context: SessionContext): void {
   setSessionContext(sessionKey, context);
 }
@@ -3862,7 +3899,7 @@ async function connectToOpenClaw(): Promise<void> {
               },
               role,
               scopes,
-              caps: [],
+              caps: buildGatewayConnectCaps(),
               commands: [],
               permissions: {},
               auth: authToken ? { token: authToken } : undefined,
@@ -4495,10 +4532,54 @@ export function resetCompactionRecoveryStateForTest(): void {
   recentCompactionRecoveryByKey.clear();
 }
 
+function extractOpenClawToolEvent(
+  eventName: string,
+  payload: Record<string, unknown>,
+): OpenClawToolEvent | null {
+  if (eventName !== 'agent') {
+    return null;
+  }
+  const stream = getTrimmedString(payload.stream).toLowerCase();
+  if (stream !== 'tool') {
+    return null;
+  }
+
+  const sessionKey = getTrimmedString(payload.sessionKey) || getTrimmedString(payload.session_key);
+  const tool = getTrimmedString(payload.tool) || getTrimmedString(payload.tool_name);
+  if (!sessionKey || !tool) {
+    return null;
+  }
+
+  const phase = getTrimmedString(payload.phase).toLowerCase() || 'unknown';
+  const toolCallID = getTrimmedString(payload.toolCallId) || getTrimmedString(payload.tool_call_id);
+  const args = asRecord(payload.args) || asRecord(payload.input) || undefined;
+  return {
+    sessionKey,
+    tool,
+    phase,
+    ...(toolCallID ? { toolCallID } : {}),
+    ...(args ? { args } : {}),
+  };
+}
+
+async function handleOpenClawToolEvent(event: OpenClawToolEvent): Promise<void> {
+  ingestedToolEventCountForTest += 1;
+  lastIngestedToolEventForTest = {
+    ...event,
+    ...(event.args ? { args: { ...event.args } } : {}),
+  };
+}
+
 async function handleOpenClawEvent(message: Record<string, unknown>): Promise<void> {
   const eventName = getTrimmedString(message.event).toLowerCase();
   const payload = asRecord(message.payload) || asRecord(message.data);
   if (!payload) {
+    return;
+  }
+
+  const toolEvent = extractOpenClawToolEvent(eventName, payload);
+  if (toolEvent) {
+    await handleOpenClawToolEvent(toolEvent);
     return;
   }
 
@@ -4578,6 +4659,10 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
   } catch (err) {
     console.error(`[bridge] failed to persist assistant reply for ${sessionKey}:`, err);
   }
+}
+
+export async function handleOpenClawEventForTest(message: Record<string, unknown>): Promise<void> {
+  await handleOpenClawEvent(message);
 }
 
 async function fetchSessions(): Promise<OpenClawSession[]> {

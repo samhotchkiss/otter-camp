@@ -5,6 +5,7 @@ import path from "node:path";
 import { beforeEach, describe, it } from "node:test";
 import {
   buildOtterCampWSURL,
+  buildGatewayConnectCapsForTest,
   buildCompletionActivityEventFromProgressLineForTest,
   buildIdentityPreamble,
   ensureChameleonWorkspaceGuideInstalledForTest,
@@ -25,6 +26,7 @@ import {
   parseNumberedQuestionnaireResponse,
   parseQuestionnaireAnswer,
   resetBufferedActivityEventsForTest,
+  resetIngestedToolEventsForTest,
   resolveExecutionMode,
   resolveProjectWorktreeRoot,
   resetSessionFromLocalStoreForTest,
@@ -37,6 +39,8 @@ import {
   sanitizeWebSocketURLForLog,
   setSessionContextForTest,
   triggerOpenClawCloseForTest,
+  handleOpenClawEventForTest,
+  getIngestedToolEventsStateForTest,
   type QuestionnairePayload,
   type QuestionnaireQuestion,
 } from "./openclaw-bridge";
@@ -88,6 +92,54 @@ describe("bridge completion metadata helpers", () => {
     assert.equal(event?.commit_sha, "758bcc8");
     assert.equal(event?.push_status, "succeeded");
     assert.equal(event?.status, "completed");
+  });
+});
+
+describe("bridge tool-event ingestion helpers", () => {
+  beforeEach(() => {
+    resetIngestedToolEventsForTest();
+  });
+
+  it("includes tool-events capability in gateway connect handshake caps", () => {
+    const caps = buildGatewayConnectCapsForTest();
+    assert.ok(caps.includes("tool-events"));
+  });
+
+  it("ingests agent tool-stream events for downstream enforcement", async () => {
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "tool",
+        phase: "start",
+        sessionKey: "agent:main:project:11111111-2222-3333-4444-555555555555",
+        tool: "write",
+        toolCallId: "toolcall-1",
+        args: {
+          path: "notes/today.md",
+        },
+      },
+    });
+
+    const state = getIngestedToolEventsStateForTest();
+    assert.equal(state.count, 1);
+    assert.equal(state.last?.sessionKey, "agent:main:project:11111111-2222-3333-4444-555555555555");
+    assert.equal(state.last?.tool, "write");
+    assert.equal(state.last?.phase, "start");
+  });
+
+  it("ignores non-tool agent stream events", async () => {
+    await handleOpenClawEventForTest({
+      event: "agent",
+      payload: {
+        stream: "message",
+        phase: "final",
+        sessionKey: "agent:main:slack",
+      },
+    });
+
+    const state = getIngestedToolEventsStateForTest();
+    assert.equal(state.count, 0);
+    assert.equal(state.last, null);
   });
 });
 
