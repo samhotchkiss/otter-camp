@@ -1778,12 +1778,13 @@ You are operating inside OtterCamp by default.
 ## Defaults
 - Treat "project", "issue", "task", and "agent" as OtterCamp entities unless the user explicitly asks for local-only filesystem scaffolding.
 - If the user asks to create a project and provides a name, create an OtterCamp project immediately, then confirm what was created.
+- Treat "create an issue" as creating an OtterCamp project issue unless the user explicitly asks for a GitHub issue.
 - Keep work scoped to this OtterCamp workspace and active thread context unless instructed otherwise.
 
 ## OtterCamp CLI Quick Reference
 - Identity: \`otter whoami\`
 - Projects: \`otter project list\`, \`otter project create "<name>"\`, \`otter project view <id|slug>\`, \`otter project run <id|slug>\`
-- Issues: \`otter issue create <project-id|slug> "<title>"\`, \`otter issue list <project-id|slug>\`, \`otter issue view <project-id|slug> <issue-number>\`, \`otter issue comment <project-id|slug> <issue-number> "<comment>"\`
+- Issues: \`otter issue create --project <project-id|slug> "<title>"\`, \`otter issue list --project <project-id|slug>\`, \`otter issue view --project <project-id|slug> <issue-id|number>\`, \`otter issue comment --project <project-id|slug> <issue-id|number> "<comment>"\`
 - Agents: \`otter agent list\`, \`otter agent create "<name>"\`, \`otter agent edit <id|slug>\`, \`otter agent archive <id|slug>\`
 
 ## Interaction Rules
@@ -2252,6 +2253,7 @@ function buildContextEnvelope(context: SessionContext): string {
     if (context.projectName) {
       lines.push(`Project name: ${context.projectName}.`);
     }
+    lines.push('In this surface, "issue" means an OtterCamp project issue by default, not a GitHub issue.');
     if (context.agentName || context.agentID) {
       lines.push(`Primary project agent: ${context.agentName || context.agentID}.`);
     }
@@ -2273,6 +2275,7 @@ function buildContextEnvelope(context: SessionContext): string {
     if (context.documentPath) {
       lines.push(`Linked issue document: ${context.documentPath}.`);
     }
+    lines.push('Issue/thread actions map to OtterCamp issue APIs and CLI by default unless GitHub is explicitly requested.');
     if (context.agentName || context.agentID) {
       lines.push(`Issue owner agent: ${context.agentName || context.agentID}.`);
     }
@@ -2282,15 +2285,24 @@ function buildContextEnvelope(context: SessionContext): string {
 }
 
 function buildSurfaceActionDefaults(context: SessionContext): string {
-  if (context.kind !== 'dm') {
+  const lines: string[] = [];
+  if (context.kind === 'dm') {
+    lines.push('- In this DM, "project", "task", "issue", and "agent" refer to OtterCamp entities unless the user says otherwise.');
+    lines.push('- "Create a project" means create an OtterCamp project (status=active, description optional), not a local folder/repo scaffold.');
+    lines.push('- When creating a project via CLI, include --agent with the active target agent identity unless the user asks for another owner.');
+    lines.push('- If a project name is provided, create it directly and confirm; ask at most one concise follow-up only when required.');
+  } else if (context.kind === 'project_chat') {
+    lines.push('- In project chat, "create an issue" means creating an OtterCamp issue in this project.');
+    lines.push('- Use OtterCamp issue commands before suggesting GitHub issue workflows.');
+  } else if (context.kind === 'issue_comment') {
+    lines.push('- In issue threads, treat follow-up actions as OtterCamp issue actions by default.');
+  }
+  if (lines.length === 0) {
     return '';
   }
   return [
     '[OTTERCAMP_ACTION_DEFAULTS]',
-    '- In this DM, "project", "task", "issue", and "agent" refer to OtterCamp entities unless the user says otherwise.',
-    '- "Create a project" means create an OtterCamp project (status=active, description optional), not a local folder/repo scaffold.',
-    '- When creating a project via CLI, include --agent with the active target agent identity unless the user asks for another owner.',
-    '- If a project name is provided, create it directly and confirm; ask at most one concise follow-up only when required.',
+    ...lines,
     '[/OTTERCAMP_ACTION_DEFAULTS]',
   ].join('\n');
 }
