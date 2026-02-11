@@ -5,6 +5,8 @@ import Dashboard from "./Dashboard";
 import { api } from "../lib/api";
 import useEmissions from "../hooks/useEmissions";
 
+let wsLastMessage: { type: string; data?: unknown } | null = null;
+
 vi.mock("../components/CommandPalette", () => ({
   default: () => null,
 }));
@@ -37,6 +39,12 @@ vi.mock("../hooks/useEmissions", () => ({
   default: vi.fn(),
 }));
 
+vi.mock("../contexts/WebSocketContext", () => ({
+  useOptionalWS: () => ({
+    lastMessage: wsLastMessage,
+  }),
+}));
+
 vi.mock("../lib/demo", () => ({
   isDemoMode: () => false,
 }));
@@ -58,6 +66,7 @@ vi.mock("../lib/api", async () => {
 describe("Dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    wsLastMessage = null;
 
     vi.mocked(useEmissions).mockReturnValue({
       emissions: [
@@ -147,5 +156,36 @@ describe("Dashboard", () => {
     expect(await screen.findByText("marcus")).toBeInTheDocument();
     expect(screen.getByText(/Dispatched project chat for Testerooni/i)).toBeInTheDocument();
     expect(api.feed).not.toHaveBeenCalled();
+  });
+
+  it("prepends realtime activity websocket events to the feed", async () => {
+    vi.mocked(api.activityRecent).mockResolvedValueOnce({
+      items: [],
+    } as Awaited<ReturnType<typeof api.activityRecent>>);
+    vi.mocked(api.feed).mockResolvedValueOnce({
+      org_id: "org-1",
+      items: [],
+    } as Awaited<ReturnType<typeof api.feed>>);
+
+    const { rerender } = render(<Dashboard />);
+    await screen.findByText("No activity yet.");
+
+    wsLastMessage = {
+      type: "ActivityEventReceived",
+      data: {
+        event: {
+          id: "event-live-1",
+          org_id: "org-1",
+          agent_id: "marcus",
+          trigger: "dispatch.project_chat",
+          summary: "Realtime dispatch from websocket",
+          created_at: "2026-02-10T23:59:00Z",
+        },
+      },
+    };
+    rerender(<Dashboard />);
+
+    expect(await screen.findByText("marcus")).toBeInTheDocument();
+    expect(screen.getByText(/Realtime dispatch from websocket/i)).toBeInTheDocument();
   });
 });

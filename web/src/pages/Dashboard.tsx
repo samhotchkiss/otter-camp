@@ -19,6 +19,7 @@ import { getInitials } from "../components/messaging/utils";
 import { isDemoMode } from "../lib/demo";
 import useEmissions from "../hooks/useEmissions";
 import EmissionTicker from "../components/EmissionTicker";
+import { useOptionalWS } from "../contexts/WebSocketContext";
 
 /**
  * Dashboard - Two-column layout matching Jeff G's mockups
@@ -230,6 +231,45 @@ function mapRecentActivityToFeedItems(items: RecentActivityApiItem[]): FeedItem[
   });
 }
 
+function parseRealtimeActivityEvent(payload: unknown): RecentActivityApiItem | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const envelope = payload as Record<string, unknown>;
+  const record =
+    envelope.event && typeof envelope.event === "object"
+      ? (envelope.event as Record<string, unknown>)
+      : envelope;
+
+  const summary = typeof record.summary === "string" ? record.summary.trim() : "";
+  const trigger = typeof record.trigger === "string" ? record.trigger.trim() : "";
+  if (!summary || !trigger) {
+    return null;
+  }
+
+  const idRaw = typeof record.id === "string" ? record.id.trim() : "";
+  const createdAtRaw = typeof record.created_at === "string" ? record.created_at.trim() : "";
+  const createdAt = createdAtRaw || new Date().toISOString();
+  const agentID = typeof record.agent_id === "string" ? record.agent_id.trim() : "";
+  const orgID = typeof record.org_id === "string" ? record.org_id.trim() : "";
+
+  return {
+    id: idRaw || `realtime-${trigger}-${createdAt}`,
+    org_id: orgID,
+    agent_id: agentID || "System",
+    trigger,
+    summary,
+    detail: typeof record.detail === "string" ? record.detail : undefined,
+    channel: typeof record.channel === "string" ? record.channel : undefined,
+    session_key: typeof record.session_key === "string" ? record.session_key : undefined,
+    project_id: typeof record.project_id === "string" ? record.project_id : undefined,
+    issue_id: typeof record.issue_id === "string" ? record.issue_id : undefined,
+    thread_id: typeof record.thread_id === "string" ? record.thread_id : undefined,
+    status: typeof record.status === "string" ? record.status : undefined,
+    created_at: createdAt,
+  };
+}
+
 export default function Dashboard() {
   const {
     isCommandPaletteOpen,
@@ -249,6 +289,8 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { emissions } = useEmissions({ limit: 30 });
+  const ws = useOptionalWS();
+  const lastMessage = ws?.lastMessage ?? null;
 
   const liveProjectStatus = useMemo(() => {
     const now = Date.now();
@@ -364,6 +406,29 @@ export default function Dashboard() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!lastMessage || lastMessage.type !== "ActivityEventReceived") {
+      return;
+    }
+
+    const realtimeEvent = parseRealtimeActivityEvent(lastMessage.data);
+    if (!realtimeEvent) {
+      return;
+    }
+
+    const nextFeedItem = mapRecentActivityToFeedItems([realtimeEvent])[0];
+    if (!nextFeedItem) {
+      return;
+    }
+
+    setFeedItems((prev) => {
+      const withoutExisting = prev.filter((entry) => entry.id !== nextFeedItem.id);
+      return [nextFeedItem, ...withoutExisting].slice(0, 100);
+    });
+    setLastSync(new Date(realtimeEvent.created_at));
+    setError(null);
+  }, [lastMessage]);
 
   const commands = useMemo<Command[]>(
     () => [
