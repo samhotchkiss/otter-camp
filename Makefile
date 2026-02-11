@@ -1,4 +1,4 @@
-.PHONY: dev run setup seed prod-build prod-local start stop status build build-otter install test release-gate migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean uninstall
+.PHONY: dev run setup bootstrap seed prod-build prod-local start stop status build build-otter install test release-gate migrate migrate-up migrate-down migrate-status migrate-version migrate-dry-run migrate-create clean uninstall
 
 # Development
 dev:
@@ -15,6 +15,9 @@ dev-web:
 
 setup:
 	@bash scripts/setup.sh
+
+bootstrap:
+	@bash scripts/bootstrap.sh
 
 seed:
 	go run ./scripts/seed/seed.go

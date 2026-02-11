@@ -41,16 +41,13 @@ Otter Camp layers on top of [OpenClaw](https://github.com/openclaw/openclaw). Cl
 ```bash
 git clone https://github.com/samhotchkiss/otter-camp
 cd otter-camp
-make setup    # dependencies, DB bootstrap, local build
+bash scripts/bootstrap.sh   # one-command local install + start (http://localhost:4200)
+```
 
-# Terminal A
-make dev      # API + frontend on http://localhost:4200
+Optional development mode:
 
-# Terminal B
-otter init    # local/hosted onboarding wizard
-
-# Connect to your OpenClaw instance
-make bridge
+```bash
+make dev      # API + frontend with hot reload
 ```
 
 We ship curated agent profiles — engineering, content, design, research, personal ops. Pick one, tweak it, go.
