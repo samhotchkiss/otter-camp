@@ -189,7 +189,7 @@ export type BridgeAgentActivityEvent = {
   completed_at?: string;
 };
 
-type ChameleonWorkspaceCacheEntry = {
+type AgentWorkspaceCacheEntry = {
   configPath: string;
   configMtimeMs: number;
   workspacePath: string;
@@ -525,7 +525,7 @@ let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
 const sessionContexts = new Map<string, SessionContext>();
 const contextPrimedSessions = new Set<string>();
-let chameleonWorkspaceCache: ChameleonWorkspaceCacheEntry | null = null;
+const workspaceCacheByAgentSlot = new Map<string, AgentWorkspaceCacheEntry>();
 let workspaceGuideCache: WorkspaceGuideCacheEntry | null = null;
 const deliveredRunIDs = new Set<string>();
 const deliveredRunIDOrder: string[] = [];
@@ -1696,7 +1696,15 @@ function resolveConfiguredPathFromConfig(rawPath: string, configPath: string): s
   return path.resolve(path.dirname(configPath), normalized);
 }
 
-function extractChameleonWorkspaceFromList(listNode: unknown, configPath: string): string {
+function normalizeAgentSlot(value: string): string {
+  const normalized = getTrimmedString(value).toLowerCase();
+  if (!normalized || !SAFE_AGENT_SLOT_PATTERN.test(normalized)) {
+    return '';
+  }
+  return normalized;
+}
+
+function extractAgentWorkspaceFromList(listNode: unknown, configPath: string, targetSlot: string): string {
   if (!Array.isArray(listNode)) {
     return '';
   }
@@ -1705,8 +1713,13 @@ function extractChameleonWorkspaceFromList(listNode: unknown, configPath: string
     if (!record) {
       continue;
     }
-    const id = getTrimmedString(record.id).toLowerCase();
-    if (id !== 'chameleon') {
+    const id = normalizeAgentSlot(
+      getTrimmedString(record.id) ||
+      getTrimmedString(record.slug) ||
+      getTrimmedString(record.agent_id) ||
+      getTrimmedString(record.agent),
+    );
+    if (id !== targetSlot) {
       continue;
     }
     const workspace = resolveConfiguredPathFromConfig(getTrimmedString(record.workspace), configPath);
@@ -1717,8 +1730,8 @@ function extractChameleonWorkspaceFromList(listNode: unknown, configPath: string
   return '';
 }
 
-function extractChameleonWorkspaceFromAgentsNode(agentsNode: unknown, configPath: string): string {
-  const fromList = extractChameleonWorkspaceFromList(agentsNode, configPath);
+function extractAgentWorkspaceFromAgentsNode(agentsNode: unknown, configPath: string, targetSlot: string): string {
+  const fromList = extractAgentWorkspaceFromList(agentsNode, configPath, targetSlot);
   if (fromList) {
     return fromList;
   }
@@ -1728,15 +1741,15 @@ function extractChameleonWorkspaceFromAgentsNode(agentsNode: unknown, configPath
     return '';
   }
 
-  const directChameleon = asRecord(record.chameleon);
-  if (directChameleon) {
-    const workspace = resolveConfiguredPathFromConfig(getTrimmedString(directChameleon.workspace), configPath);
+  const directSlot = asRecord(record[targetSlot]);
+  if (directSlot) {
+    const workspace = resolveConfiguredPathFromConfig(getTrimmedString(directSlot.workspace), configPath);
     if (workspace) {
       return workspace;
     }
   }
 
-  const nestedList = extractChameleonWorkspaceFromList(record.list, configPath);
+  const nestedList = extractAgentWorkspaceFromList(record.list, configPath, targetSlot);
   if (nestedList) {
     return nestedList;
   }
@@ -1749,8 +1762,8 @@ function extractChameleonWorkspaceFromAgentsNode(agentsNode: unknown, configPath
     if (!item) {
       continue;
     }
-    const id = getTrimmedString(item.id).toLowerCase() || slot.trim().toLowerCase();
-    if (id !== 'chameleon') {
+    const id = normalizeAgentSlot(getTrimmedString(item.id) || slot);
+    if (id !== targetSlot) {
       continue;
     }
     const workspace = resolveConfiguredPathFromConfig(getTrimmedString(item.workspace), configPath);
@@ -1761,7 +1774,11 @@ function extractChameleonWorkspaceFromAgentsNode(agentsNode: unknown, configPath
   return '';
 }
 
-function resolveChameleonWorkspacePath(): string {
+function resolveAgentWorkspacePath(agentSlot: string): string {
+  const normalizedSlot = normalizeAgentSlot(agentSlot);
+  if (!normalizedSlot) {
+    return '';
+  }
   const configPath = resolveOpenClawConfigPath();
   let configMtimeMs = -1;
   try {
@@ -1773,35 +1790,40 @@ function resolveChameleonWorkspacePath(): string {
     }
   }
 
+  const cached = workspaceCacheByAgentSlot.get(normalizedSlot);
   if (
-    chameleonWorkspaceCache &&
-    chameleonWorkspaceCache.configPath === configPath &&
-    chameleonWorkspaceCache.configMtimeMs === configMtimeMs
+    cached &&
+    cached.configPath === configPath &&
+    cached.configMtimeMs === configMtimeMs
   ) {
-    return chameleonWorkspaceCache.workspacePath;
+    return cached.workspacePath;
   }
 
-  const fallbackWorkspace = path.join(resolveOpenClawStateDir(), 'workspace-chameleon');
+  const fallbackWorkspace = path.join(resolveOpenClawStateDir(), `workspace-${normalizedSlot}`);
   let workspacePath = fallbackWorkspace;
   try {
     const config = readOpenClawConfigFile(configPath);
     const root = asRecord(config);
     if (root) {
-      const fromAgents = extractChameleonWorkspaceFromAgentsNode(root.agents, configPath);
-      const fromSlots = fromAgents ? '' : extractChameleonWorkspaceFromAgentsNode(root.slots, configPath);
+      const fromAgents = extractAgentWorkspaceFromAgentsNode(root.agents, configPath, normalizedSlot);
+      const fromSlots = fromAgents ? '' : extractAgentWorkspaceFromAgentsNode(root.slots, configPath, normalizedSlot);
       workspacePath = fromAgents || fromSlots || fallbackWorkspace;
     }
   } catch (err) {
-    console.warn(`[bridge] failed to resolve chameleon workspace from ${configPath}; using fallback:`, err);
+    console.warn(`[bridge] failed to resolve ${normalizedSlot} workspace from ${configPath}; using fallback:`, err);
   }
 
   const resolved = path.resolve(workspacePath);
-  chameleonWorkspaceCache = {
+  workspaceCacheByAgentSlot.set(normalizedSlot, {
     configPath,
     configMtimeMs,
     workspacePath: resolved,
-  };
+  });
   return resolved;
+}
+
+function resolveChameleonWorkspacePath(): string {
+  return resolveAgentWorkspacePath('chameleon');
 }
 
 function buildManagedOtterCampWorkspaceGuide(): string {
@@ -1956,14 +1978,17 @@ function resolveWorkspaceScopedOtterCLIConfigPaths(workspacePath: string): strin
 }
 
 function loadWorkspaceOtterCLIConfig(): Record<string, unknown> | null {
-  const workspacePath = resolveChameleonWorkspacePath();
-  if (!workspacePath) {
-    return null;
-  }
-  for (const configPath of resolveWorkspaceScopedOtterCLIConfigPaths(workspacePath)) {
-    const parsed = loadOtterCLIConfigFromPath(configPath);
-    if (parsed) {
-      return parsed;
+  const slots = ['chameleon', 'elephant'];
+  for (const slot of slots) {
+    const workspacePath = resolveAgentWorkspacePath(slot);
+    if (!workspacePath) {
+      continue;
+    }
+    for (const configPath of resolveWorkspaceScopedOtterCLIConfigPaths(workspacePath)) {
+      const parsed = loadOtterCLIConfigFromPath(configPath);
+      if (parsed) {
+        return parsed;
+      }
     }
   }
   return null;
@@ -1992,8 +2017,12 @@ function ensureWorkspaceOtterCLIConfigFile(targetPath: string, payload: Record<s
   return true;
 }
 
-function ensureChameleonWorkspaceOtterCLIConfigInstalled(): string[] {
-  const workspacePath = resolveChameleonWorkspacePath();
+function ensureWorkspaceOtterCLIConfigInstalled(agentSlot: string): string[] {
+  const normalizedSlot = normalizeAgentSlot(agentSlot);
+  if (!normalizedSlot) {
+    return [];
+  }
+  const workspacePath = resolveAgentWorkspacePath(normalizedSlot);
   if (!workspacePath) {
     return [];
   }
@@ -2007,14 +2036,14 @@ function ensureChameleonWorkspaceOtterCLIConfigInstalled(): string[] {
     if (fs.existsSync(workspacePath)) {
       const workspaceInfo = fs.lstatSync(workspacePath);
       if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) {
-        console.warn(`[bridge] refusing to sync otter CLI config; workspace is not a real directory: ${workspacePath}`);
+        console.warn(`[bridge] refusing to sync otter CLI config; ${normalizedSlot} workspace is not a real directory: ${workspacePath}`);
         return [];
       }
     } else {
       fs.mkdirSync(workspacePath, { recursive: true });
     }
   } catch (err) {
-    console.warn('[bridge] failed to prepare chameleon workspace for otter CLI config sync:', err);
+    console.warn(`[bridge] failed to prepare ${normalizedSlot} workspace for otter CLI config sync:`, err);
     return [];
   }
 
@@ -2029,13 +2058,21 @@ function ensureChameleonWorkspaceOtterCLIConfigInstalled(): string[] {
     }
   }
   if (updatedPaths.length > 0) {
-    console.log(`[bridge] synced otter CLI auth config into chameleon workspace (${updatedPaths.length} path(s))`);
+    console.log(`[bridge] synced otter CLI auth config into ${normalizedSlot} workspace (${updatedPaths.length} path(s))`);
   }
   return updatedPaths;
 }
 
-function ensureChameleonWorkspaceGuideInstalled(): string {
-  const workspacePath = resolveChameleonWorkspacePath();
+function ensureChameleonWorkspaceOtterCLIConfigInstalled(): string[] {
+  return ensureWorkspaceOtterCLIConfigInstalled('chameleon');
+}
+
+function ensureWorkspaceGuideInstalled(agentSlot: string): string {
+  const normalizedSlot = normalizeAgentSlot(agentSlot);
+  if (!normalizedSlot) {
+    return '';
+  }
+  const workspacePath = resolveAgentWorkspacePath(normalizedSlot);
   if (!workspacePath) {
     return '';
   }
@@ -2046,7 +2083,7 @@ function ensureChameleonWorkspaceGuideInstalled(): string {
     if (fs.existsSync(workspacePath)) {
       const workspaceInfo = fs.lstatSync(workspacePath);
       if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) {
-        console.warn(`[bridge] refusing to write guide; workspace is not a real directory: ${workspacePath}`);
+        console.warn(`[bridge] refusing to write guide; ${normalizedSlot} workspace is not a real directory: ${workspacePath}`);
         return '';
       }
     } else {
@@ -2055,7 +2092,7 @@ function ensureChameleonWorkspaceGuideInstalled(): string {
 
     if (!fs.existsSync(guidePath)) {
       fs.writeFileSync(guidePath, managedContent, 'utf8');
-      console.log(`[bridge] installed ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} in ${workspacePath}`);
+      console.log(`[bridge] installed ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} in ${normalizedSlot} workspace (${workspacePath})`);
       workspaceGuideCache = null;
       return guidePath;
     }
@@ -2082,8 +2119,16 @@ function ensureChameleonWorkspaceGuideInstalled(): string {
   }
 }
 
-function ensureChameleonWorkspaceCommandReferenceInstalled(): string {
-  const workspacePath = resolveChameleonWorkspacePath();
+function ensureChameleonWorkspaceGuideInstalled(): string {
+  return ensureWorkspaceGuideInstalled('chameleon');
+}
+
+function ensureWorkspaceCommandReferenceInstalled(agentSlot: string): string {
+  const normalizedSlot = normalizeAgentSlot(agentSlot);
+  if (!normalizedSlot) {
+    return '';
+  }
+  const workspacePath = resolveAgentWorkspacePath(normalizedSlot);
   if (!workspacePath) {
     return '';
   }
@@ -2094,7 +2139,7 @@ function ensureChameleonWorkspaceCommandReferenceInstalled(): string {
     if (fs.existsSync(workspacePath)) {
       const workspaceInfo = fs.lstatSync(workspacePath);
       if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) {
-        console.warn(`[bridge] refusing to write command reference; workspace is not a real directory: ${workspacePath}`);
+        console.warn(`[bridge] refusing to write command reference; ${normalizedSlot} workspace is not a real directory: ${workspacePath}`);
         return '';
       }
     } else {
@@ -2103,7 +2148,7 @@ function ensureChameleonWorkspaceCommandReferenceInstalled(): string {
 
     if (!fs.existsSync(referencePath)) {
       fs.writeFileSync(referencePath, managedContent, 'utf8');
-      console.log(`[bridge] installed ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} in ${workspacePath}`);
+      console.log(`[bridge] installed ${OTTERCAMP_COMMAND_REFERENCE_FILENAME} in ${normalizedSlot} workspace (${workspacePath})`);
       return referencePath;
     }
 
@@ -2128,6 +2173,10 @@ function ensureChameleonWorkspaceCommandReferenceInstalled(): string {
   }
 }
 
+function ensureChameleonWorkspaceCommandReferenceInstalled(): string {
+  return ensureWorkspaceCommandReferenceInstalled('chameleon');
+}
+
 function clampMultilineText(raw: string, maxChars: number): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -2139,51 +2188,62 @@ function clampMultilineText(raw: string, maxChars: number): string {
   return `${trimmed.slice(0, maxChars - 4).trimEnd()}\n...`;
 }
 
-function loadOtterCampWorkspaceGuideForPrompt(): string {
-  const workspacePath = resolveChameleonWorkspacePath();
-  if (!workspacePath) {
+function loadOtterCampWorkspaceGuideForPrompt(sessionKey: string): string {
+  const slot = parseAgentSlotFromSessionKey(sessionKey);
+  if (!slot) {
     return '';
   }
-  const guidePath = path.join(workspacePath, OTTERCAMP_WORKSPACE_GUIDE_FILENAME);
-  if (!fs.existsSync(guidePath)) {
-    return '';
+  const candidateSlots = [slot];
+  if (slot !== 'chameleon') {
+    candidateSlots.push('chameleon');
   }
 
-  try {
-    const info = fs.lstatSync(guidePath);
-    if (!info.isFile() || info.isSymbolicLink()) {
-      return '';
+  for (const candidateSlot of candidateSlots) {
+    const workspacePath = resolveAgentWorkspacePath(candidateSlot);
+    if (!workspacePath) {
+      continue;
     }
-    if (
-      workspaceGuideCache &&
-      workspaceGuideCache.guidePath === guidePath &&
-      workspaceGuideCache.guideMtimeMs === info.mtimeMs
-    ) {
-      return workspaceGuideCache.content;
+    const guidePath = path.join(workspacePath, OTTERCAMP_WORKSPACE_GUIDE_FILENAME);
+    if (!fs.existsSync(guidePath)) {
+      continue;
     }
-    const raw = fs.readFileSync(guidePath, 'utf8');
-    const lines = raw.split(/\r?\n/);
-    if (lines.length > 0 && lines[0]?.trim() === OTTERCAMP_WORKSPACE_GUIDE_MARKER) {
-      lines.shift();
+
+    try {
+      const info = fs.lstatSync(guidePath);
+      if (!info.isFile() || info.isSymbolicLink()) {
+        continue;
+      }
+      if (
+        workspaceGuideCache &&
+        workspaceGuideCache.guidePath === guidePath &&
+        workspaceGuideCache.guideMtimeMs === info.mtimeMs
+      ) {
+        return workspaceGuideCache.content;
+      }
+      const raw = fs.readFileSync(guidePath, 'utf8');
+      const lines = raw.split(/\r?\n/);
+      if (lines.length > 0 && lines[0]?.trim() === OTTERCAMP_WORKSPACE_GUIDE_MARKER) {
+        lines.shift();
+      }
+      const content = clampMultilineText(lines.join('\n'), OTTERCAMP_WORKSPACE_GUIDE_MAX_CHARS);
+      workspaceGuideCache = {
+        guidePath,
+        guideMtimeMs: info.mtimeMs,
+        content,
+      };
+      return content;
+    } catch (err) {
+      console.warn(`[bridge] failed to read ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME}:`, err);
     }
-    const content = clampMultilineText(lines.join('\n'), OTTERCAMP_WORKSPACE_GUIDE_MAX_CHARS);
-    workspaceGuideCache = {
-      guidePath,
-      guideMtimeMs: info.mtimeMs,
-      content,
-    };
-    return content;
-  } catch (err) {
-    console.warn(`[bridge] failed to read ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME}:`, err);
-    return '';
   }
+  return '';
 }
 
 function buildOtterCampOperatingGuideBlock(sessionKey: string): string {
   if (!parseAgentSlotFromSessionKey(sessionKey)) {
     return '';
   }
-  const guideContent = loadOtterCampWorkspaceGuideForPrompt();
+  const guideContent = loadOtterCampWorkspaceGuideForPrompt(sessionKey);
   if (!guideContent) {
     return '';
   }
@@ -2827,12 +2887,14 @@ export function buildIdentityPreamble(params: {
 
 async function fetchWhoAmIProfile(
   agentID: string,
-  sessionKey: string,
+  sessionKey: string | undefined,
   orgID: string,
   profile: 'compact' | 'full',
 ): Promise<Record<string, unknown> | null> {
   const url = new URL(`/api/agents/${encodeURIComponent(agentID)}/whoami`, OTTERCAMP_URL);
-  url.searchParams.set('session_key', sessionKey);
+  if (getTrimmedString(sessionKey)) {
+    url.searchParams.set('session_key', getTrimmedString(sessionKey));
+  }
   url.searchParams.set('profile', profile);
   if (orgID) {
     url.searchParams.set('org_id', orgID);
@@ -2862,14 +2924,26 @@ async function resolveSessionIdentityMetadata(
   context: SessionContext,
   content: string,
 ): Promise<SessionIdentityMetadata | null> {
-  const chameleonAgentID = parseChameleonSessionKey(sessionKey);
-  if (!chameleonAgentID) {
+  const canonicalChameleonAgentID = parseChameleonSessionKey(sessionKey);
+  const normalizedContextAgentID =
+    getTrimmedString(context.agentID) ||
+    getTrimmedString(context.responderAgentID);
+  const fallbackAgentID = parseAgentIDFromSessionKey(sessionKey);
+  const agentID = (
+    canonicalChameleonAgentID ||
+    normalizedContextAgentID ||
+    fallbackAgentID
+  ).trim().toLowerCase();
+  if (!agentID || !SAFE_FALLBACK_AGENT_ID_PATTERN.test(agentID)) {
     return null;
   }
   const orgID = getTrimmedString(context.orgID) || OTTERCAMP_ORG_ID;
   const taskSummary = deriveTaskSummary(context, content);
+  const whoAmISessionKey = canonicalChameleonAgentID
+    ? sessionKey
+    : (context.kind === 'dm' ? sessionKey : undefined);
 
-  const compactPayload = await fetchWhoAmIProfile(chameleonAgentID, sessionKey, orgID, 'compact');
+  const compactPayload = await fetchWhoAmIProfile(agentID, whoAmISessionKey, orgID, 'compact');
   if (!compactPayload) {
     return null;
   }
@@ -2877,7 +2951,7 @@ async function resolveSessionIdentityMetadata(
   let selectedProfile: 'compact' | 'full' = 'compact';
   let selectedPayload = compactPayload;
   if (isCompactWhoAmIInsufficient(compactPayload)) {
-    const fullPayload = await fetchWhoAmIProfile(chameleonAgentID, sessionKey, orgID, 'full');
+    const fullPayload = await fetchWhoAmIProfile(agentID, whoAmISessionKey, orgID, 'full');
     const fullProfile = getTrimmedString(fullPayload?.profile).toLowerCase();
     const hasFullIdentityFields =
       Boolean(getTrimmedString(fullPayload?.soul)) ||
@@ -2981,11 +3055,10 @@ async function withSessionContext(
   if (!context) {
     return content;
   }
-  const isCanonicalChameleonDM =
-    context.kind === 'dm' && parseChameleonSessionKey(sessionKey) !== null;
+  const isDirectMessage = context.kind === 'dm';
   const shouldBootstrapIdentity =
     !contextPrimedSessions.has(sessionKey) ||
-    (isCanonicalChameleonDM && !context.identityMetadata);
+    (isDirectMessage && !context.identityMetadata);
 
   if (shouldBootstrapIdentity) {
     const execution = await resolveSessionExecutionContext(sessionKey, context);
@@ -3012,9 +3085,7 @@ async function withSessionContext(
       }
     }
     setSessionContext(sessionKey, context);
-    // Canonical chameleon DM sessions should only be considered primed once
-    // identity metadata is available; otherwise retry bootstrap next turn.
-    if (!isCanonicalChameleonDM || identityMetadata) {
+    if (!isDirectMessage || identityMetadata) {
       contextPrimedSessions.add(sessionKey);
     } else {
       contextPrimedSessions.delete(sessionKey);
@@ -3043,8 +3114,7 @@ async function withSessionContext(
     return sections.join('\n\n');
   }
   const reminderSections: string[] = [];
-  const shouldPersistIdentityPreamble =
-    context.kind === 'dm' && parseChameleonSessionKey(sessionKey) !== null;
+  const shouldPersistIdentityPreamble = context.kind === 'dm';
   const identityPreamble = shouldPersistIdentityPreamble
     ? getTrimmedString(context.identityMetadata?.preamble)
     : '';
@@ -3664,7 +3734,7 @@ export function getBufferedActivityEventStateForTest(): {
 export function resetSessionContextsForTest(): void {
   sessionContexts.clear();
   contextPrimedSessions.clear();
-  chameleonWorkspaceCache = null;
+  workspaceCacheByAgentSlot.clear();
   workspaceGuideCache = null;
 }
 
@@ -6281,10 +6351,17 @@ function isMainModule(): boolean {
   }
 }
 
+function ensureSystemAgentWorkspaceArtifactsInstalled(): void {
+  const systemSlots = ['chameleon', 'elephant'];
+  for (const slot of systemSlots) {
+    ensureWorkspaceGuideInstalled(slot);
+    ensureWorkspaceCommandReferenceInstalled(slot);
+    ensureWorkspaceOtterCLIConfigInstalled(slot);
+  }
+}
+
 async function runByMode(modeArg: string | undefined): Promise<void> {
-  ensureChameleonWorkspaceGuideInstalled();
-  ensureChameleonWorkspaceCommandReferenceInstalled();
-  ensureChameleonWorkspaceOtterCLIConfigInstalled();
+  ensureSystemAgentWorkspaceArtifactsInstalled();
   const mode = normalizeModeArg(modeArg);
   if (mode === 'continuous') {
     await runContinuous();

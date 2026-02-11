@@ -134,6 +134,17 @@ const SLACK_THREAD_GROUP_HINTS: Record<string, string> = {
   "g-c0abhd38u05": "essie",
 };
 
+function isElephantAgentCard(agent: AgentCardData): boolean {
+  const normalizedID = normalizeAgentId(agent.id);
+  const normalizedName = agent.name.trim().toLowerCase();
+  const normalizedRole = (agent.role || "").trim().toLowerCase();
+  return (
+    normalizedID === "elephant" ||
+    normalizedName === "elephant" ||
+    normalizedRole.includes("memory archivist")
+  );
+}
+
 function normalizeAgentStatus(value: unknown): AgentStatus | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -755,6 +766,7 @@ function AgentsPageComponent({
 
   // Handle card click - memoized
   const handleAgentClick = useCallback((agent: AgentCardData) => {
+    const elephantConversation = isElephantAgentCard(agent);
     openConversation({
       type: "dm",
       agent: {
@@ -765,8 +777,10 @@ function AgentsPageComponent({
         role: agent.role,
       },
       title: agent.name,
-      contextLabel: "Chameleon-routed chat",
-      subtitle: "Identity injected on open. Project required for writable tasks.",
+      contextLabel: elephantConversation ? "Elephant memory chat" : "Direct agent chat",
+      subtitle: elephantConversation
+        ? "Dedicated memory archivist session."
+        : "Identity injected on open. Project required for writable tasks.",
     });
   }, [openConversation]);
 
@@ -853,7 +867,7 @@ function AgentsPageComponent({
 
         {/* Status filters */}
         <p className="mt-4 text-xs text-[var(--text-muted)]">
-          Chats are routed through Chameleon identity injection.
+          Chats are routed through OpenClaw with OtterCamp identity injection.
         </p>
         <div className="mt-6 flex flex-wrap gap-2">
           <StatusFilterButton

@@ -189,9 +189,9 @@ func (h *AgentsHandler) WhoAmI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentID := strings.TrimSpace(chi.URLParam(r, "id"))
-	if !uuidRegex.MatchString(agentID) {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id must be a UUID"})
+	agentRef := strings.TrimSpace(chi.URLParam(r, "id"))
+	if agentRef == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "agent id is required"})
 		return
 	}
 
@@ -204,20 +204,15 @@ func (h *AgentsHandler) WhoAmI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionKey := strings.TrimSpace(r.URL.Query().Get("session_key"))
-	if sessionKey != "" {
-		sessionAgentID, ok := ExtractChameleonSessionAgentID(sessionKey)
-		if !ok {
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "session_key must match canonical chameleon format"})
-			return
-		}
-		if !strings.EqualFold(sessionAgentID, agentID) {
-			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "session agent does not match requested agent"})
-			return
-		}
+	var (
+		agent *store.Agent
+		err   error
+	)
+	if uuidRegex.MatchString(agentRef) {
+		agent, err = h.Store.GetByID(r.Context(), agentRef)
+	} else {
+		agent, err = h.Store.GetBySlug(r.Context(), strings.ToLower(agentRef))
 	}
-
-	agent, err := h.Store.GetByID(r.Context(), agentID)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -228,6 +223,27 @@ func (h *AgentsHandler) WhoAmI(w http.ResponseWriter, r *http.Request) {
 			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load agent"})
 		}
 		return
+	}
+	agentID := strings.TrimSpace(agent.ID)
+
+	sessionKey := strings.TrimSpace(r.URL.Query().Get("session_key"))
+	if sessionKey != "" {
+		if sessionAgentID, ok := ExtractChameleonSessionAgentID(sessionKey); ok {
+			if !strings.EqualFold(sessionAgentID, agentID) {
+				sendJSON(w, http.StatusBadRequest, errorResponse{Error: "session agent does not match requested agent"})
+				return
+			}
+		} else {
+			sessionAgentIdentity := strings.ToLower(strings.TrimSpace(ExtractSessionAgentIdentity(sessionKey)))
+			if sessionAgentIdentity == "" {
+				sendJSON(w, http.StatusBadRequest, errorResponse{Error: "session_key is invalid"})
+				return
+			}
+			if !strings.EqualFold(sessionAgentIdentity, agentID) && !strings.EqualFold(sessionAgentIdentity, agent.Slug) {
+				sendJSON(w, http.StatusBadRequest, errorResponse{Error: "session agent does not match requested agent"})
+				return
+			}
+		}
 	}
 
 	identity, err := h.loadWhoAmIIdentityFields(r, workspaceID, agentID)

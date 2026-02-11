@@ -97,7 +97,7 @@ func TestAgentWhoAmIFullProfileIncludesRawIdentity(t *testing.T) {
 	require.NotEmpty(t, payload.Instructions)
 }
 
-func TestAgentWhoAmIRejectsMalformedSessionKey(t *testing.T) {
+func TestAgentWhoAmIRejectsInvalidSessionKey(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "agents-whoami-invalid")
 	agentID := insertWhoAmITestAgent(t, db, orgID, "stone", "Stone")
@@ -105,7 +105,7 @@ func TestAgentWhoAmIRejectsMalformedSessionKey(t *testing.T) {
 	handler := &AgentsHandler{Store: store.NewAgentStore(db), DB: db}
 	req := httptest.NewRequest(
 		http.MethodGet,
-		fmt.Sprintf("/api/agents/%s/whoami?org_id=%s&session_key=agent:main:slack", agentID, orgID),
+		fmt.Sprintf("/api/agents/%s/whoami?org_id=%s&session_key=not-a-session-key", agentID, orgID),
 		nil,
 	)
 	req = addWhoAmIRouteParam(req, "id", agentID)
@@ -113,7 +113,25 @@ func TestAgentWhoAmIRejectsMalformedSessionKey(t *testing.T) {
 
 	handler.WhoAmI(rec, req)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
-	require.Contains(t, rec.Body.String(), "session_key must match canonical")
+	require.Contains(t, rec.Body.String(), "session_key is invalid")
+}
+
+func TestAgentWhoAmIAcceptsNonCanonicalSessionKeyForMatchingSlug(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "agents-whoami-elephant-session")
+	_ = insertWhoAmITestAgent(t, db, orgID, "elephant", "Elephant")
+
+	handler := &AgentsHandler{Store: store.NewAgentStore(db), DB: db}
+	req := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/agents/elephant/whoami?org_id=%s&session_key=agent:elephant:main", orgID),
+		nil,
+	)
+	req = addWhoAmIRouteParam(req, "id", "elephant")
+	rec := httptest.NewRecorder()
+
+	handler.WhoAmI(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestAgentWhoAmIRejectsMismatchedSessionAgent(t *testing.T) {

@@ -99,14 +99,14 @@ describe("AgentsPage", () => {
     expect(await screen.findByText("Active in #engineering")).toBeInTheDocument();
     expect(await screen.findByText("Responded to Sam in #leadership")).toBeInTheDocument();
     expect(screen.getByText("Slack")).toBeInTheDocument();
-    expect(screen.getByText("Chats are routed through Chameleon identity injection.")).toBeInTheDocument();
+    expect(screen.getByText("Chats are routed through OpenClaw with OtterCamp identity injection.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View timeline" })).toHaveAttribute("href", "/agents/main");
 
     fireEvent.click(screen.getByText("Frank"));
     expect(openConversationMock).toHaveBeenCalledTimes(1);
     expect(openConversationMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        contextLabel: "Chameleon-routed chat",
+        contextLabel: "Direct agent chat",
         subtitle: "Identity injected on open. Project required for writable tasks.",
       }),
     );
@@ -140,6 +140,38 @@ describe("AgentsPage", () => {
     await waitFor(() => {
       expect(screen.getByText(/^Idle/)).toBeInTheDocument();
     });
+  });
+
+  it("opens elephant DMs with an elephant-specific context label", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/sync/agents")) {
+        return new Response(
+          JSON.stringify({ agents: [{ id: "elephant", name: "Elephant", status: "online", role: "Memory Archivist" }] }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/activity/recent")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      if (url.includes("/api/admin/agents")) {
+        return new Response(JSON.stringify({ agents: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    render(<AgentsPage apiEndpoint="https://api.otter.camp/api/sync/agents" />);
+
+    expect(await screen.findByText("Elephant")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Elephant"));
+
+    expect(openConversationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextLabel: "Elephant memory chat",
+        subtitle: "Dedicated memory archivist session.",
+      }),
+    );
   });
 
   it("renders management roster and links add-agent action to /agents/new", async () => {

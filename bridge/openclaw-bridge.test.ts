@@ -348,6 +348,24 @@ describe("bridge identity preamble helpers", () => {
     process.env.OPENCLAW_CONFIG_PATH = configPath;
 
     try {
+      global.fetch = (async () => new Response(
+        JSON.stringify({
+          profile: "compact",
+          agent: {
+            id: "elephant",
+            name: "Elephant",
+            role: "Memory Archivist",
+          },
+          soul_summary: "Signal over noise.",
+          identity_summary: "Organization memory specialist.",
+          instructions_summary: "Extract durable context and share only high-signal entries.",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      )) as typeof fetch;
+
       const installedPath = ensureChameleonWorkspaceGuideInstalledForTest();
       assert.equal(installedPath, path.join(workspacePath, "OTTERCAMP.md"));
       assert.equal(fs.existsSync(installedPath), true);
