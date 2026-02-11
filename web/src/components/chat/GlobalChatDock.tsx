@@ -256,7 +256,7 @@ export default function GlobalChatDock() {
   return (
     <div className={isFullscreen
       ? "fixed inset-0 top-[var(--topbar-height,56px)] z-50"
-      : "fixed bottom-4 right-4 z-50 w-[min(960px,calc(100vw-2rem))]"
+      : "fixed bottom-4 right-4 z-50 w-[calc(100vw-2rem)] max-w-[960px]"
     }>
       <section className={`overflow-hidden border border-[var(--border)] bg-[var(--surface)] shadow-2xl ${isFullscreen ? "h-full" : "rounded-2xl"}`}>
         <header className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5">
