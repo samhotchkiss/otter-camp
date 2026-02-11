@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
@@ -58,6 +60,7 @@ type messageRow struct {
 type MessageHandler struct {
 	OpenClawDispatcher openClawMessageDispatcher
 	Hub                *ws.Hub
+	ChatThreadStore    *store.ChatThreadStore
 }
 
 type openClawMessageDispatcher interface {
@@ -278,6 +281,7 @@ func (h *MessageHandler) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load message"})
 		return
 	}
+	h.touchDMChatThreadBestEffort(r.Context(), db, r, orgID, req, message)
 	h.broadcastDMMessage(orgID, message)
 
 	sendJSON(w, http.StatusOK, map[string]interface{}{
@@ -962,6 +966,84 @@ func buildDMMessageBroadcastEvent(message Message) (map[string]interface{}, bool
 		"type": "DMMessageReceived",
 		"data": data,
 	}, true
+}
+
+func (h *MessageHandler) touchDMChatThreadBestEffort(
+	ctx context.Context,
+	db *sql.DB,
+	r *http.Request,
+	orgID string,
+	req createMessageRequest,
+	message Message,
+) {
+	if h.ChatThreadStore == nil || db == nil || req.ThreadID == nil {
+		return
+	}
+
+	threadID := strings.TrimSpace(*req.ThreadID)
+	if threadID == "" || !strings.HasPrefix(threadID, "dm_") {
+		return
+	}
+
+	identity, err := requireSessionIdentity(ctx, db, r)
+	if err != nil {
+		return
+	}
+	if identity.OrgID != orgID {
+		return
+	}
+
+	var agentID *string
+	if parsed := parseDMThreadAgentID(threadID); uuidRegex.MatchString(parsed) {
+		agentID = &parsed
+	}
+
+	workspaceCtx := context.WithValue(ctx, middleware.WorkspaceIDKey, identity.OrgID)
+	title := resolveDMChatThreadTitle(ctx, db, identity.OrgID, agentID, req.SenderName)
+
+	if _, err := h.ChatThreadStore.TouchThread(workspaceCtx, store.TouchChatThreadInput{
+		UserID:             identity.UserID,
+		AgentID:            agentID,
+		ThreadKey:          "dm:" + threadID,
+		ThreadType:         store.ChatThreadTypeDM,
+		Title:              title,
+		LastMessagePreview: strings.TrimSpace(message.Content),
+		LastMessageAt:      message.CreatedAt,
+	}); err != nil {
+		log.Printf("messages: failed to touch DM chat thread for %s: %v", threadID, err)
+	}
+}
+
+func resolveDMChatThreadTitle(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+	agentID *string,
+	senderName *string,
+) string {
+	title := "Direct message"
+	if senderName != nil {
+		if trimmed := strings.TrimSpace(*senderName); trimmed != "" {
+			title = trimmed
+		}
+	}
+	if db == nil || agentID == nil {
+		return title
+	}
+
+	var displayName string
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT display_name FROM agents WHERE org_id = $1 AND id = $2`,
+		orgID,
+		*agentID,
+	).Scan(&displayName); err != nil {
+		return title
+	}
+	if trimmed := strings.TrimSpace(displayName); trimmed != "" {
+		return trimmed
+	}
+	return title
 }
 
 func loadMessageByID(ctx context.Context, db *sql.DB, messageID string) (Message, error) {

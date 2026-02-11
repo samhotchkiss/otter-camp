@@ -74,6 +74,49 @@ func TestProjectChatHandlerCreateAndList(t *testing.T) {
 	require.False(t, listResp.HasMore)
 }
 
+func TestProjectChatHandlerCreateTouchesChatThreadForAuthenticatedUser(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-thread-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Chat Thread Project")
+	userID := insertTestUser(t, db, orgID, "project-chat-thread-user")
+	token := "oc_sess_project_chat_thread_user"
+	insertTestSession(t, db, orgID, userID, token, time.Now().UTC().Add(1*time.Hour))
+
+	handler := &ProjectChatHandler{
+		ProjectStore:    store.NewProjectStore(db),
+		ChatStore:       store.NewProjectChatStore(db),
+		ChatThreadStore: store.NewChatThreadStore(db),
+	}
+	router := newProjectChatTestRouter(handler)
+
+	createBody := []byte(`{"author":"Sam","body":"Project thread touch message"}`)
+	createReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+projectID+"/chat/messages?org_id="+orgID,
+		bytes.NewReader(createBody),
+	)
+	createReq.Header.Set("Authorization", "Bearer "+token)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code)
+
+	var (
+		threadType string
+		preview    string
+	)
+	err := db.QueryRow(
+		`SELECT thread_type, last_message_preview
+		 FROM chat_threads
+		 WHERE org_id = $1 AND user_id = $2 AND thread_key = $3`,
+		orgID,
+		userID,
+		"project:"+projectID,
+	).Scan(&threadType, &preview)
+	require.NoError(t, err)
+	require.Equal(t, store.ChatThreadTypeProject, threadType)
+	require.Equal(t, "Project thread touch message", preview)
+}
+
 func TestProjectChatHandlerListIncludesQuestionnaires(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "project-chat-questionnaire-org")

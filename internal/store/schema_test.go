@@ -171,6 +171,127 @@ func TestMigration058MemoryInfrastructureFilesExistAndContainCoreDDL(t *testing.
 	require.Contains(t, downContent, "drop extension if exists vector")
 }
 
+func TestMigration060ChatThreadsFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"060_create_chat_threads.up.sql",
+		"060_create_chat_threads.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "060_create_chat_threads.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists chat_threads")
+	require.Contains(t, upContent, "thread_key text not null")
+	require.Contains(t, upContent, "thread_type text not null")
+	require.Contains(t, upContent, "archived_at timestamptz")
+	require.Contains(t, upContent, "auto_archived_reason text")
+	require.Contains(t, upContent, "last_message_at timestamptz not null")
+	require.Contains(t, upContent, "enable row level security")
+	require.Contains(t, upContent, "chat_threads_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "060_create_chat_threads.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop table if exists chat_threads")
+}
+
+func TestSchemaChatThreadsRLSAndIndexes(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var tableRegClass sql.NullString
+	err := db.QueryRow(`SELECT to_regclass('public.chat_threads')::text`).Scan(&tableRegClass)
+	require.NoError(t, err)
+	require.True(t, tableRegClass.Valid)
+
+	var activeIdx sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.chat_threads_user_active_idx')::text`).Scan(&activeIdx)
+	require.NoError(t, err)
+	require.True(t, activeIdx.Valid)
+
+	var archivedIdx sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.chat_threads_user_archived_idx')::text`).Scan(&archivedIdx)
+	require.NoError(t, err)
+	require.True(t, archivedIdx.Valid)
+
+	var issueIdx sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.chat_threads_issue_idx')::text`).Scan(&issueIdx)
+	require.NoError(t, err)
+	require.True(t, issueIdx.Valid)
+
+	var projectIdx sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.chat_threads_project_idx')::text`).Scan(&projectIdx)
+	require.NoError(t, err)
+	require.True(t, projectIdx.Valid)
+
+	var rlsEnabled bool
+	err = db.QueryRow(
+		`SELECT relrowsecurity
+		 FROM pg_class
+		 WHERE relname = 'chat_threads'`,
+	).Scan(&rlsEnabled)
+	require.NoError(t, err)
+	require.True(t, rlsEnabled)
+}
+
+func TestMigration061ChatThreadsLengthLimitFilesExistAndContainConstraints(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"061_chat_threads_length_limits.up.sql",
+		"061_chat_threads_length_limits.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "061_chat_threads_length_limits.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "chat_threads_thread_key_length_chk")
+	require.Contains(t, upContent, "length(thread_key) <= 512")
+	require.Contains(t, upContent, "chat_threads_last_message_preview_length_chk")
+	require.Contains(t, upContent, "length(last_message_preview) <= 500")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "061_chat_threads_length_limits.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop constraint if exists chat_threads_last_message_preview_length_chk")
+	require.Contains(t, downContent, "drop constraint if exists chat_threads_thread_key_length_chk")
+}
+
+func TestSchemaChatThreadsLengthConstraints(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var threadKeyConstraint bool
+	err := db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1
+			FROM pg_constraint
+			WHERE conname = 'chat_threads_thread_key_length_chk'
+		)`,
+	).Scan(&threadKeyConstraint)
+	require.NoError(t, err)
+	require.True(t, threadKeyConstraint)
+
+	var previewConstraint bool
+	err = db.QueryRow(
+		`SELECT EXISTS (
+			SELECT 1
+			FROM pg_constraint
+			WHERE conname = 'chat_threads_last_message_preview_length_chk'
+		)`,
+	).Scan(&previewConstraint)
+	require.NoError(t, err)
+	require.True(t, previewConstraint)
+}
+
 func TestSchemaWorkflowAgentDeleteSetsProjectFieldNull(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

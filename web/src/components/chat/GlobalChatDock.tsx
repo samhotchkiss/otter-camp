@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useGlobalChat } from "../../contexts/GlobalChatContext";
 import { API_URL } from "../../lib/api";
 import GlobalChatSurface from "./GlobalChatSurface";
@@ -30,10 +31,15 @@ export default function GlobalChatDock() {
     selectConversation,
     markConversationRead,
     removeConversation,
+    archiveConversation,
   } = useGlobalChat();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [resettingProjectSession, setResettingProjectSession] = useState(false);
   const [resetProjectError, setResetProjectError] = useState<string | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [archivingChatID, setArchivingChatID] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const visibleConversations = useMemo(() => {
@@ -53,6 +59,22 @@ export default function GlobalChatDock() {
   }, [isOpen, markConversationRead, selectedKey]);
 
   useEffect(() => {
+    const match = /^\/chats\/([^/]+)$/.exec(location.pathname);
+    if (!match?.[1]) {
+      return;
+    }
+    const chatID = decodeURIComponent(match[1]);
+    const chatFromURL = conversations.find((conversation) => conversation.chatId === chatID);
+    if (!chatFromURL) {
+      return;
+    }
+    if (selectedKey !== chatFromURL.key) {
+      selectConversation(chatFromURL.key);
+    }
+    setDockOpen(true);
+  }, [conversations, location.pathname, selectConversation, selectedKey, setDockOpen]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && isOpen) {
         if (isFullscreen) {
@@ -68,6 +90,10 @@ export default function GlobalChatDock() {
 
   useEffect(() => {
     setResetProjectError(null);
+  }, [selectedKey]);
+
+  useEffect(() => {
+    setArchiveError(null);
   }, [selectedKey]);
 
   const unreadBadge = useMemo(() => {
@@ -109,6 +135,36 @@ export default function GlobalChatDock() {
     },
     [resolveAgentName],
   );
+
+  const formatConversationTimestamp = useCallback((value: string): string => {
+    const parsed = Date.parse(value);
+    if (!Number.isFinite(parsed)) {
+      return "";
+    }
+    const date = new Date(parsed);
+    const now = new Date();
+    const sameDay = date.toDateString() === now.toDateString();
+    if (sameDay) {
+      return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    }
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  }, []);
+
+  const handleArchiveConversation = useCallback(async (chatID: string) => {
+    const trimmedChatID = chatID.trim();
+    if (!trimmedChatID) {
+      return;
+    }
+    setArchiveError(null);
+    setArchivingChatID(trimmedChatID);
+    const success = await archiveConversation(trimmedChatID);
+    if (!success) {
+      setArchiveError("Failed to archive chat");
+    } else if (location.pathname.startsWith("/chats/")) {
+      navigate("/chats");
+    }
+    setArchivingChatID(null);
+  }, [archiveConversation, location.pathname, navigate]);
 
   const handleClearSession = useCallback(async () => {
     if (!selectedConversation) {
@@ -286,9 +342,24 @@ export default function GlobalChatDock() {
             <p className="text-xs text-[var(--red)]">{resetProjectError}</p>
           </div>
         ) : null}
+        {archiveError ? (
+          <div className="border-b border-[var(--red)]/40 bg-[var(--red)]/15 px-4 py-2">
+            <p className="text-xs text-[var(--red)]">{archiveError}</p>
+          </div>
+        ) : null}
 
         <div className={`grid grid-cols-[260px_1fr] ${isFullscreen ? "h-[calc(100%-44px)]" : "h-[min(72vh,620px)] max-h-[calc(100vh-2rem)]"}`}>
           <aside className="min-h-0 border-r border-[var(--border)] bg-[var(--surface-alt)]/50">
+            <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2 text-[11px]">
+              <span className="font-semibold text-[var(--text)]">Active chats</span>
+              <button
+                type="button"
+                onClick={() => navigate("/chats/archived")}
+                className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
+              >
+                Archived
+              </button>
+            </div>
             <div className="h-full overflow-y-auto p-2">
               {visibleConversations.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-[var(--border)] p-4 text-xs text-[var(--text-muted)]">
@@ -305,6 +376,9 @@ export default function GlobalChatDock() {
                       onClick={() => {
                         selectConversation(conversation.key);
                         markConversationRead(conversation.key);
+                        if (conversation.chatId) {
+                          navigate(`/chats/${encodeURIComponent(conversation.chatId)}`);
+                        }
                       }}
                       className={`mb-1 w-full rounded-xl border px-3 py-2 text-left transition ${
                         active
@@ -324,11 +398,16 @@ export default function GlobalChatDock() {
                             {displayTitle || "Untitled chat"}
                           </span>
                         </div>
-                        {conversation.unreadCount > 0 ? (
-                          <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[var(--red)] px-1 text-[10px] font-semibold text-white">
-                            {conversation.unreadCount > 9 ? "9+" : conversation.unreadCount}
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-[var(--text-muted)]">
+                            {formatConversationTimestamp(conversation.updatedAt)}
                           </span>
-                        ) : null}
+                          {conversation.unreadCount > 0 ? (
+                            <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[var(--red)] px-1 text-[10px] font-semibold text-white">
+                              {conversation.unreadCount > 9 ? "9+" : conversation.unreadCount}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)]">
                         <span className="rounded-full border border-[var(--border)] px-1.5 py-0.5 uppercase tracking-wide">
@@ -338,6 +417,22 @@ export default function GlobalChatDock() {
                       </div>
                       {conversation.subtitle ? (
                         <p className="mt-1 truncate text-[11px] text-[var(--text-muted)]">{conversation.subtitle}</p>
+                      ) : null}
+                      {conversation.chatId ? (
+                        <div className="mt-2 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void handleArchiveConversation(conversation.chatId ?? "");
+                            }}
+                            disabled={archivingChatID === conversation.chatId}
+                            className="rounded border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {archivingChatID === conversation.chatId ? "Archiving..." : "Archive"}
+                          </button>
+                        </div>
                       ) : null}
                     </button>
                   );
