@@ -341,6 +341,37 @@ func TestProjectTreeHandlerReturnsNoRepoConfiguredWhenBindingMissing(t *testing.
 	require.Equal(t, "No repository configured for this project", payload.Error)
 }
 
+func TestProjectTreeHandlerFallsBackToProjectLocalRepoPathWhenBindingMissing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-tree-local-fallback-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Tree Local Fallback")
+	fixture := newPublishRepoFixture(t)
+	seedProjectTreeFixtureRepo(t, fixture.LocalPath)
+
+	_, err := db.Exec(`UPDATE projects SET local_repo_path = $1 WHERE id = $2`, fixture.LocalPath, projectID)
+	require.NoError(t, err)
+
+	handler := &ProjectTreeHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ProjectRepos: store.NewProjectRepoStore(db),
+	}
+	router := newProjectTreeTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/projects/"+projectID+"/tree?org_id="+orgID+"&path=/",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload projectTreeResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "/", payload.Path)
+	require.Contains(t, payload.Entries, projectTreeEntry{Name: "posts", Type: "dir", Path: "posts/"})
+}
+
 func TestProjectTreeHandlerRouteIsRegistered(t *testing.T) {
 	router := newProjectTreeTestRouter(&ProjectTreeHandler{})
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/project-1/tree?org_id=org-1", nil)

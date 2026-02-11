@@ -204,28 +204,23 @@ func (h *ProjectTreeHandler) resolveBrowseRepository(
 		return "", "", "", err
 	}
 
-	repoPath := ""
+	repoPath := optionalStringValue(project.LocalRepoPath)
 	defaultRef := "HEAD"
 
 	if h.ProjectRepos != nil {
 		binding, bindErr := h.ProjectRepos.GetBinding(ctx, projectID)
 		if bindErr != nil {
-			if errors.Is(bindErr, store.ErrNotFound) {
-				return "", "", "", errProjectRepoNotConfigured
+			if !errors.Is(bindErr, store.ErrNotFound) {
+				return "", "", "", bindErr
 			}
-			return "", "", "", bindErr
+		} else if binding != nil && binding.Enabled {
+			if binding.LocalRepoPath != nil && strings.TrimSpace(*binding.LocalRepoPath) != "" {
+				repoPath = strings.TrimSpace(*binding.LocalRepoPath)
+			}
+			if strings.TrimSpace(binding.DefaultBranch) != "" {
+				defaultRef = strings.TrimSpace(binding.DefaultBranch)
+			}
 		}
-		if binding == nil || !binding.Enabled {
-			return "", "", "", errProjectRepoNotConfigured
-		}
-		if binding.LocalRepoPath != nil && strings.TrimSpace(*binding.LocalRepoPath) != "" {
-			repoPath = strings.TrimSpace(*binding.LocalRepoPath)
-		}
-		if strings.TrimSpace(binding.DefaultBranch) != "" {
-			defaultRef = strings.TrimSpace(binding.DefaultBranch)
-		}
-	} else {
-		repoPath = optionalStringValue(project.LocalRepoPath)
 	}
 
 	if strings.TrimSpace(repoPath) == "" {
