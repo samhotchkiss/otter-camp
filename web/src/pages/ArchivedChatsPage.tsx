@@ -65,6 +65,7 @@ function toTypeLabel(type: ArchivedChatRecord["thread_type"]): string {
 
 export default function ArchivedChatsPage() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [archivedChats, setArchivedChats] = useState<ArchivedChatRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -120,10 +121,17 @@ export default function ArchivedChatsPage() {
   }, [orgID]);
 
   useEffect(() => {
+    const timeoutID = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 250);
+    return () => window.clearTimeout(timeoutID);
+  }, [searchQuery]);
+
+  useEffect(() => {
     const controller = new AbortController();
-    void loadArchivedChats(searchQuery, controller.signal);
+    void loadArchivedChats(debouncedSearchQuery, controller.signal);
     return () => controller.abort();
-  }, [loadArchivedChats, reloadToken, searchQuery]);
+  }, [debouncedSearchQuery, loadArchivedChats, reloadToken]);
 
   const handleUnarchive = useCallback(async (chatID: string) => {
     const trimmedChatID = chatID.trim();

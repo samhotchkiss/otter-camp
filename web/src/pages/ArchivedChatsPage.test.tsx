@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ArchivedChatsPage from "./ArchivedChatsPage";
 
 type ChatPayload = {
@@ -35,6 +35,10 @@ describe("ArchivedChatsPage", () => {
     window.localStorage.clear();
     window.localStorage.setItem("otter-camp-org-id", "org-1");
     window.localStorage.setItem("otter_camp_token", "test-token");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("loads archived chats on mount", async () => {
@@ -115,6 +119,65 @@ describe("ArchivedChatsPage", () => {
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).includes("q=ops")),
     ).toBe(true);
+  });
+
+  it("debounces archived chat search requests", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const requestURL = new URL(String(input));
+      if (requestURL.pathname.endsWith("/api/chats")) {
+        const query = (requestURL.searchParams.get("q") ?? "").trim().toLowerCase();
+        if (query === "ops") {
+          return makeResponse([
+            {
+              id: "chat-2",
+              thread_type: "project",
+              thread_key: "project:project-2",
+              title: "Ops incident recap",
+              last_message_preview: "Postmortem done",
+              last_message_at: "2026-02-10T11:00:00Z",
+            },
+          ]);
+        }
+        return makeResponse([
+          {
+            id: "chat-1",
+            thread_type: "project",
+            thread_key: "project:project-1",
+            title: "Design standup",
+            last_message_preview: "Need follow-up",
+            last_message_at: "2026-02-10T10:00:00Z",
+          },
+        ]);
+      }
+      throw new Error(`unexpected url: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    renderArchivedChatsPage();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockClear();
+    const searchInput = screen.getByRole("searchbox", { name: "Search archived chats" });
+    fireEvent.change(searchInput, { target: { value: "o" } });
+    fireEvent.change(searchInput, { target: { value: "op" } });
+    fireEvent.change(searchInput, { target: { value: "ops" } });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(249);
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0] ?? "")).toContain("q=ops");
   });
 
   it("unarchives a chat and removes it from the archived list", async () => {
