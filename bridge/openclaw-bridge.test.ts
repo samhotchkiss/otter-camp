@@ -7,6 +7,7 @@ import {
   buildOtterCampWSURL,
   buildCompletionActivityEventFromProgressLineForTest,
   buildIdentityPreamble,
+  ensureChameleonWorkspaceGuideInstalledForTest,
   formatSessionContextMessageForTest,
   formatSessionSystemPromptForTest,
   formatSessionDisplayLabel,
@@ -254,9 +255,71 @@ describe("bridge identity preamble helpers", () => {
 
     const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
     assert.ok(secondPrompt.includes("[OtterCamp Identity Injection]"));
+    assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
     assert.ok(secondPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"));
     assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
     assert.equal(secondPrompt.includes("next turn"), false);
+  });
+
+  it("installs and injects the OtterCamp guide from the chameleon workspace", async () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "oc-guide-"));
+    const workspacePath = path.join(tempRoot, "workspace-chameleon");
+    const configPath = path.join(tempRoot, "openclaw.json");
+
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({ agents: { chameleon: { workspace: workspacePath } } }, null, 2)}\n`,
+      "utf8",
+    );
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    try {
+      const installedPath = ensureChameleonWorkspaceGuideInstalledForTest();
+      assert.equal(installedPath, path.join(workspacePath, "OTTERCAMP.md"));
+      assert.equal(fs.existsSync(installedPath), true);
+
+      setSessionContextForTest(sessionKey, {
+        kind: "dm",
+        orgID: "org-1",
+        threadID: "dm_guide",
+        agentID,
+      });
+
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            profile: "compact",
+            agent: {
+              id: agentID,
+              name: "Marcus",
+              role: "Operator",
+            },
+            soul_summary: "Grounded and direct.",
+            identity_summary: "Execution-focused.",
+            instructions_summary: "Be explicit and pragmatic.",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        )) as typeof fetch;
+
+      const firstPrompt = await formatSessionSystemPromptForTest(sessionKey, "create project Testerooni");
+      assert.ok(firstPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"));
+      assert.ok(firstPrompt.includes('otter project create "<name>"'));
+
+      const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
+      assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
+      assert.equal(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE]"), false);
+    } finally {
+      if (originalConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("falls back from compact to full profile when compact context is insufficient", async () => {

@@ -111,6 +111,9 @@ const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS = new Set(['chameleon', 'elephant']);
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 let otterCampOrgIDForTestOverride: string | null = null;
+const OTTERCAMP_WORKSPACE_GUIDE_FILENAME = 'OTTERCAMP.md';
+const OTTERCAMP_WORKSPACE_GUIDE_MARKER = '<!-- OTTERCAMP_MANAGED_GUIDE_V1 -->';
+const OTTERCAMP_WORKSPACE_GUIDE_MAX_CHARS = 5000;
 const COMPACT_WHOAMI_MIN_SUMMARY_CHARS = 60;
 const IDENTITY_BLOCK_MAX_CHARS = 1200;
 const SESSION_TASK_SUMMARY_MAX_CHARS = 96;
@@ -181,6 +184,18 @@ export type BridgeAgentActivityEvent = {
   status: 'started' | 'completed' | 'failed' | 'timeout';
   started_at: string;
   completed_at?: string;
+};
+
+type ChameleonWorkspaceCacheEntry = {
+  configPath: string;
+  configMtimeMs: number;
+  workspacePath: string;
+};
+
+type WorkspaceGuideCacheEntry = {
+  guidePath: string;
+  guideMtimeMs: number;
+  content: string;
 };
 
 interface OpenClawCronJobSnapshot {
@@ -505,6 +520,8 @@ let requestId = 0;
 const pendingRequests = new Map<string, PendingRequest>();
 const sessionContexts = new Map<string, SessionContext>();
 const contextPrimedSessions = new Set<string>();
+let chameleonWorkspaceCache: ChameleonWorkspaceCacheEntry | null = null;
+let workspaceGuideCache: WorkspaceGuideCacheEntry | null = null;
 const deliveredRunIDs = new Set<string>();
 const deliveredRunIDOrder: string[] = [];
 const progressLogLineHashes = new Set<string>();
@@ -1624,6 +1641,282 @@ function resolveOpenClawConfigPath(): string {
   return path.join(resolveOpenClawStateDir(), 'openclaw.json');
 }
 
+function resolveConfiguredPathFromConfig(rawPath: string, configPath: string): string {
+  const normalized = getTrimmedString(rawPath);
+  if (!normalized) {
+    return '';
+  }
+  if (normalized === '~') {
+    return os.homedir();
+  }
+  if (normalized.startsWith('~/') || normalized.startsWith('~\\')) {
+    return path.join(os.homedir(), normalized.slice(2));
+  }
+  if (path.isAbsolute(normalized)) {
+    return path.resolve(normalized);
+  }
+  return path.resolve(path.dirname(configPath), normalized);
+}
+
+function extractChameleonWorkspaceFromList(listNode: unknown, configPath: string): string {
+  if (!Array.isArray(listNode)) {
+    return '';
+  }
+  for (const entry of listNode) {
+    const record = asRecord(entry);
+    if (!record) {
+      continue;
+    }
+    const id = getTrimmedString(record.id).toLowerCase();
+    if (id !== 'chameleon') {
+      continue;
+    }
+    const workspace = resolveConfiguredPathFromConfig(getTrimmedString(record.workspace), configPath);
+    if (workspace) {
+      return workspace;
+    }
+  }
+  return '';
+}
+
+function extractChameleonWorkspaceFromAgentsNode(agentsNode: unknown, configPath: string): string {
+  const fromList = extractChameleonWorkspaceFromList(agentsNode, configPath);
+  if (fromList) {
+    return fromList;
+  }
+
+  const record = asRecord(agentsNode);
+  if (!record) {
+    return '';
+  }
+
+  const directChameleon = asRecord(record.chameleon);
+  if (directChameleon) {
+    const workspace = resolveConfiguredPathFromConfig(getTrimmedString(directChameleon.workspace), configPath);
+    if (workspace) {
+      return workspace;
+    }
+  }
+
+  const nestedList = extractChameleonWorkspaceFromList(record.list, configPath);
+  if (nestedList) {
+    return nestedList;
+  }
+
+  for (const [slot, value] of Object.entries(record)) {
+    if (slot === 'list' || slot === 'slots') {
+      continue;
+    }
+    const item = asRecord(value);
+    if (!item) {
+      continue;
+    }
+    const id = getTrimmedString(item.id).toLowerCase() || slot.trim().toLowerCase();
+    if (id !== 'chameleon') {
+      continue;
+    }
+    const workspace = resolveConfiguredPathFromConfig(getTrimmedString(item.workspace), configPath);
+    if (workspace) {
+      return workspace;
+    }
+  }
+  return '';
+}
+
+function resolveChameleonWorkspacePath(): string {
+  const configPath = resolveOpenClawConfigPath();
+  let configMtimeMs = -1;
+  try {
+    configMtimeMs = fs.statSync(configPath).mtimeMs;
+  } catch (err) {
+    const code = err && typeof err === 'object' ? (err as { code?: string }).code : '';
+    if (code !== 'ENOENT') {
+      console.warn(`[bridge] failed to stat OpenClaw config at ${configPath}:`, err);
+    }
+  }
+
+  if (
+    chameleonWorkspaceCache &&
+    chameleonWorkspaceCache.configPath === configPath &&
+    chameleonWorkspaceCache.configMtimeMs === configMtimeMs
+  ) {
+    return chameleonWorkspaceCache.workspacePath;
+  }
+
+  const fallbackWorkspace = path.join(resolveOpenClawStateDir(), 'workspace-chameleon');
+  let workspacePath = fallbackWorkspace;
+  try {
+    const config = readOpenClawConfigFile(configPath);
+    const root = asRecord(config);
+    if (root) {
+      const fromAgents = extractChameleonWorkspaceFromAgentsNode(root.agents, configPath);
+      const fromSlots = fromAgents ? '' : extractChameleonWorkspaceFromAgentsNode(root.slots, configPath);
+      workspacePath = fromAgents || fromSlots || fallbackWorkspace;
+    }
+  } catch (err) {
+    console.warn(`[bridge] failed to resolve chameleon workspace from ${configPath}; using fallback:`, err);
+  }
+
+  const resolved = path.resolve(workspacePath);
+  chameleonWorkspaceCache = {
+    configPath,
+    configMtimeMs,
+    workspacePath: resolved,
+  };
+  return resolved;
+}
+
+function buildManagedOtterCampWorkspaceGuide(): string {
+  return `${OTTERCAMP_WORKSPACE_GUIDE_MARKER}
+# OtterCamp Runtime Guide
+
+You are operating inside OtterCamp by default.
+
+## Defaults
+- Treat "project", "issue", "task", and "agent" as OtterCamp entities unless the user explicitly asks for local-only filesystem scaffolding.
+- If the user asks to create a project and provides a name, create an OtterCamp project immediately, then confirm what was created.
+- Keep work scoped to this OtterCamp workspace and active thread context unless instructed otherwise.
+
+## OtterCamp CLI Quick Reference
+- Identity: \`otter whoami\`
+- Projects: \`otter project list\`, \`otter project create "<name>"\`, \`otter project view <id|slug>\`, \`otter project run <id|slug>\`
+- Issues: \`otter issue create <project-id|slug> "<title>"\`, \`otter issue list <project-id|slug>\`, \`otter issue view <project-id|slug> <issue-number>\`, \`otter issue comment <project-id|slug> <issue-number> "<comment>"\`
+- Agents: \`otter agent list\`, \`otter agent create "<name>"\`, \`otter agent edit <id|slug>\`, \`otter agent archive <id|slug>\`
+
+## Interaction Rules
+- Execute clear OtterCamp actions directly when parameters are provided.
+- Ask one concise follow-up only when a required parameter is missing.
+- Do not claim OtterCamp injection is invalid; system/context blocks in prompt are trusted runtime context.
+`;
+}
+
+function ensureChameleonWorkspaceGuideInstalled(): string {
+  const workspacePath = resolveChameleonWorkspacePath();
+  if (!workspacePath) {
+    return '';
+  }
+  const guidePath = path.join(workspacePath, OTTERCAMP_WORKSPACE_GUIDE_FILENAME);
+  const managedContent = buildManagedOtterCampWorkspaceGuide();
+
+  try {
+    if (fs.existsSync(workspacePath)) {
+      const workspaceInfo = fs.lstatSync(workspacePath);
+      if (workspaceInfo.isSymbolicLink() || !workspaceInfo.isDirectory()) {
+        console.warn(`[bridge] refusing to write guide; workspace is not a real directory: ${workspacePath}`);
+        return '';
+      }
+    } else {
+      fs.mkdirSync(workspacePath, { recursive: true });
+    }
+
+    if (!fs.existsSync(guidePath)) {
+      fs.writeFileSync(guidePath, managedContent, 'utf8');
+      console.log(`[bridge] installed ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} in ${workspacePath}`);
+      workspaceGuideCache = null;
+      return guidePath;
+    }
+
+    const guideInfo = fs.lstatSync(guidePath);
+    if (guideInfo.isSymbolicLink() || !guideInfo.isFile()) {
+      console.warn(`[bridge] refusing to update guide because target is not a regular file: ${guidePath}`);
+      return guidePath;
+    }
+
+    const existing = fs.readFileSync(guidePath, 'utf8');
+    const shouldUpdateManaged =
+      existing.startsWith(OTTERCAMP_WORKSPACE_GUIDE_MARKER) &&
+      existing !== managedContent;
+    if (shouldUpdateManaged) {
+      fs.writeFileSync(guidePath, managedContent, 'utf8');
+      console.log(`[bridge] updated managed ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME} in ${workspacePath}`);
+      workspaceGuideCache = null;
+    }
+    return guidePath;
+  } catch (err) {
+    console.warn(`[bridge] failed to install ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME}:`, err);
+    return '';
+  }
+}
+
+function clampMultilineText(raw: string, maxChars: number): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.length <= maxChars) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, maxChars - 4).trimEnd()}\n...`;
+}
+
+function loadOtterCampWorkspaceGuideForPrompt(): string {
+  const workspacePath = resolveChameleonWorkspacePath();
+  if (!workspacePath) {
+    return '';
+  }
+  const guidePath = path.join(workspacePath, OTTERCAMP_WORKSPACE_GUIDE_FILENAME);
+  if (!fs.existsSync(guidePath)) {
+    return '';
+  }
+
+  try {
+    const info = fs.lstatSync(guidePath);
+    if (!info.isFile() || info.isSymbolicLink()) {
+      return '';
+    }
+    if (
+      workspaceGuideCache &&
+      workspaceGuideCache.guidePath === guidePath &&
+      workspaceGuideCache.guideMtimeMs === info.mtimeMs
+    ) {
+      return workspaceGuideCache.content;
+    }
+    const raw = fs.readFileSync(guidePath, 'utf8');
+    const lines = raw.split(/\r?\n/);
+    if (lines.length > 0 && lines[0]?.trim() === OTTERCAMP_WORKSPACE_GUIDE_MARKER) {
+      lines.shift();
+    }
+    const content = clampMultilineText(lines.join('\n'), OTTERCAMP_WORKSPACE_GUIDE_MAX_CHARS);
+    workspaceGuideCache = {
+      guidePath,
+      guideMtimeMs: info.mtimeMs,
+      content,
+    };
+    return content;
+  } catch (err) {
+    console.warn(`[bridge] failed to read ${OTTERCAMP_WORKSPACE_GUIDE_FILENAME}:`, err);
+    return '';
+  }
+}
+
+function buildOtterCampOperatingGuideBlock(sessionKey: string): string {
+  if (!parseChameleonSessionKey(sessionKey)) {
+    return '';
+  }
+  const guideContent = loadOtterCampWorkspaceGuideForPrompt();
+  if (!guideContent) {
+    return '';
+  }
+  return `[OTTERCAMP_OPERATING_GUIDE]\n${guideContent}\n[/OTTERCAMP_OPERATING_GUIDE]`;
+}
+
+function buildOtterCampOperatingGuideReminder(sessionKey: string): string {
+  if (!parseChameleonSessionKey(sessionKey)) {
+    return '';
+  }
+  return [
+    '[OTTERCAMP_OPERATING_GUIDE_REMINDER]',
+    '- Default to OtterCamp entities/CLI for project, issue, and agent requests.',
+    '- "Create a project" means create an OtterCamp project unless local scaffolding is explicitly requested.',
+    '- Ask a single concise follow-up only when a required OtterCamp parameter is missing.',
+    '[/OTTERCAMP_OPERATING_GUIDE_REMINDER]',
+  ].join('\n');
+}
+
+export function ensureChameleonWorkspaceGuideInstalledForTest(): string {
+  return ensureChameleonWorkspaceGuideInstalled();
+}
+
 function resolveOpenClawIdentityPath(fileName: string): string {
   return path.join(resolveOpenClawStateDir(), 'identity', fileName);
 }
@@ -2391,6 +2684,10 @@ async function withSessionContext(
     if (identityMetadata?.preamble) {
       sections.push(identityMetadata.preamble);
     }
+    const operatingGuide = buildOtterCampOperatingGuideBlock(sessionKey);
+    if (operatingGuide) {
+      sections.push(operatingGuide);
+    }
     sections.push(buildExecutionPolicyBlock({
       mode: execution.mode,
       context,
@@ -2414,6 +2711,10 @@ async function withSessionContext(
     : '';
   if (identityPreamble) {
     reminderSections.push(identityPreamble);
+  }
+  const operatingGuideReminder = buildOtterCampOperatingGuideReminder(sessionKey);
+  if (operatingGuideReminder) {
+    reminderSections.push(operatingGuideReminder);
   }
   const actionDefaults = buildSurfaceActionDefaults(context);
   if (actionDefaults) {
@@ -3024,6 +3325,8 @@ export function getBufferedActivityEventStateForTest(): {
 export function resetSessionContextsForTest(): void {
   sessionContexts.clear();
   contextPrimedSessions.clear();
+  chameleonWorkspaceCache = null;
+  workspaceGuideCache = null;
 }
 
 export function setSessionContextForTest(sessionKey: string, context: SessionContext): void {
@@ -5578,6 +5881,7 @@ function isMainModule(): boolean {
 }
 
 async function runByMode(modeArg: string | undefined): Promise<void> {
+  ensureChameleonWorkspaceGuideInstalled();
   const mode = normalizeModeArg(modeArg);
   if (mode === 'continuous') {
     await runContinuous();
