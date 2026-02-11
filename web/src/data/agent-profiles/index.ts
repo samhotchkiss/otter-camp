@@ -46,7 +46,7 @@ function withSearch(seed: AgentProfileSeed): AgentProfile {
 }
 
 export function renderProfileTemplate(template: string, name: string): string {
-  return template.replaceAll("{{name}}", name.trim());
+  return template.split("{{name}}").join(name.trim());
 }
 
 export const AGENT_PROFILES: AgentProfile[] = [

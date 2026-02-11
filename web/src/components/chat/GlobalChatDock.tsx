@@ -30,7 +30,6 @@ export default function GlobalChatDock() {
     toggleDock,
     selectConversation,
     markConversationRead,
-    removeConversation,
     archiveConversation,
   } = useGlobalChat();
   const navigate = useNavigate();
@@ -565,9 +564,6 @@ export default function GlobalChatDock() {
                     refreshVersion={refreshVersion}
                     agentNamesByID={agentNamesByID}
                     resolveAgentName={resolveAgentName}
-                    onRemoveConversation={() => {
-                      removeConversation(selectedConversation.key);
-                    }}
                     onConversationTouched={() => {
                       if (selectedConversation.unreadCount > 0) {
                         markConversationRead(selectedConversation.key);

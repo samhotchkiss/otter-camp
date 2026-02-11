@@ -90,9 +90,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const payload = await orgsResponse.json().catch(() => null);
       const orgs = Array.isArray(payload?.orgs) ? payload.orgs : [];
       const normalized = orgs
-        .map((entry: unknown) => (entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null))
-        .map((entry) => (entry && typeof entry.id === "string" ? entry.id.trim() : ""))
-        .filter((value) => value.length > 0);
+        .map((entry: unknown): Record<string, unknown> | null =>
+          entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null,
+        )
+        .map((entry: Record<string, unknown> | null): string =>
+          entry && typeof entry.id === "string" ? entry.id.trim() : "",
+        )
+        .filter((value: string) => value.length > 0);
       if (normalized.length === 0) {
         return;
       }

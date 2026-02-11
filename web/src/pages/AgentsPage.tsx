@@ -355,9 +355,14 @@ function AgentsPageComponent({
   const fetchAgents = useCallback(async () => {
     try {
       const endpoint = apiEndpoint.replace(API_URL, '');
-      const data = await apiFetch<Record<string, unknown>>(endpoint);
-      const agents = data.agents || data || [];
-      return agents.map(mapAgentData);
+      const data = await apiFetch<unknown>(endpoint);
+      const payload = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+      const rawAgents = Array.isArray(payload?.agents)
+        ? payload.agents
+        : Array.isArray(data)
+          ? data
+          : [];
+      return rawAgents.map((agent) => mapAgentData(agent as Record<string, unknown>));
     } catch (err) {
       throw err instanceof Error ? err : new Error("Failed to load agents");
     }

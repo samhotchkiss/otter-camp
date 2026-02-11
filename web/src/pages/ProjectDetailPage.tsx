@@ -45,6 +45,7 @@ const projectEmojis: Record<string, string> = {
 
 type Project = {
   id: string;
+  org_id?: string;
   name: string;
   description?: string;
   status?: string;

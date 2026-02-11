@@ -1125,10 +1125,6 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
   }, [issue?.priority]);
 
   const issueWorkStatusLabel = useMemo(() => formatWorkStatus(issue?.work_status), [issue?.work_status]);
-  const issuePipelineStage = useMemo(
-    () => mapIssueStatusToPipeline(issue?.work_status).currentStage,
-    [issue?.work_status],
-  );
 
   const backToProjectPath = useMemo(() => {
     const resolvedProjectID = issue?.project_id?.trim() || projectID?.trim();

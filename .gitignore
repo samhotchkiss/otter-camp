@@ -46,7 +46,7 @@ web/test-results/
 web/playwright-report/
 web/playwright/.cache/
 bridge/.env
-otter
+/otter
 
 # Codex duplicate artifacts (spaces in filenames)
 *\ 2.*
@@ -55,6 +55,6 @@ otter
 *\ 2
 *\ 3
 *\ 4
-seed
-server
-otter
+/seed
+/server
+/otter

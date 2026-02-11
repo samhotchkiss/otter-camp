@@ -136,7 +136,8 @@ export default function AgentDetailPage() {
   const overviewContextTokens = agentDetail?.sync?.context_tokens ?? 0;
   const overviewTotalTokens = agentDetail?.sync?.total_tokens ?? 0;
   const isRetired = overviewStatus.toLowerCase() === "retired";
-  const isProtectedSystemAgent = id.trim().toLowerCase() === "elephant";
+  const normalizedAgentID = (id ?? "").trim().toLowerCase();
+  const isProtectedSystemAgent = normalizedAgentID === "elephant";
 
   if (!id) {
     return (
