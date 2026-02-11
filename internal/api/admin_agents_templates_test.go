@@ -65,6 +65,8 @@ func TestBuildCreateAgentTemplateInput(t *testing.T) {
 			{name: "Kit", profileID: "kit"},
 			{name: "Jules", profileID: "jules"},
 			{name: "Avery", profileID: "avery"},
+			{name: "Sloane", profileID: "sloane"},
+			{name: "Rowan", profileID: "rowan"},
 		}
 
 		for _, tc := range cases {

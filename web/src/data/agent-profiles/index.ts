@@ -183,6 +183,18 @@ export const AGENT_PROFILES: AgentProfile[] = [
     defaultIdentity: "# IDENTITY\n- Name: {{name}}\n- Role: Customer Support",
   }),
   withSearch({
+    id: "sloane",
+    name: "Sloane",
+    tagline: "Sharp, polished, executive-ready messaging.",
+    roleCategory: "Content",
+    roleDescription: "Executive Comms",
+    personalityPreview: "Turns rough notes into crisp updates with confident, high-trust tone.",
+    defaultModel: "claude-opus-4-6",
+    defaultAvatar: "/assets/agent-profiles/sloane.webp",
+    defaultSoul: "# SOUL\n{{name}} writes executive communication with precision and polish.",
+    defaultIdentity: "# IDENTITY\n- Name: {{name}}\n- Role: Executive Comms",
+  }),
+  withSearch({
     id: "emery",
     name: "Emery",
     tagline: "Opinionated, user-obsessed, scope-cutter.",
@@ -205,6 +217,18 @@ export const AGENT_PROFILES: AgentProfile[] = [
     defaultAvatar: "/assets/agent-profiles/finley.webp",
     defaultSoul: "# SOUL\n{{name}} closes security gaps before they become incidents.",
     defaultIdentity: "# IDENTITY\n- Name: {{name}}\n- Role: Security / Compliance",
+  }),
+  withSearch({
+    id: "rowan",
+    name: "Rowan",
+    tagline: "Patient, Socratic, adapts to your level.",
+    roleCategory: "Personal",
+    roleDescription: "Learning / Tutor",
+    personalityPreview: "Breaks down hard topics in steps, checks understanding, and adjusts pace.",
+    defaultModel: "claude-opus-4-6",
+    defaultAvatar: "/assets/agent-profiles/rowan.webp",
+    defaultSoul: "# SOUL\n{{name}} teaches through patient questions and clear scaffolding.",
+    defaultIdentity: "# IDENTITY\n- Name: {{name}}\n- Role: Learning / Tutor",
   }),
 ];
 

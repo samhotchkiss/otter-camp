@@ -7,8 +7,11 @@ import {
 } from "./index";
 
 describe("agent profile data", () => {
-  it("ships 10+ starter profiles", () => {
-    expect(AGENT_PROFILES.length).toBeGreaterThanOrEqual(10);
+  it("ships the full 15-profile starter set", () => {
+    expect(AGENT_PROFILES.length).toBe(15);
+    const ids = AGENT_PROFILES.map((profile) => profile.id);
+    expect(ids).toContain("sloane");
+    expect(ids).toContain("rowan");
   });
 
   it("has unique profile ids", () => {
