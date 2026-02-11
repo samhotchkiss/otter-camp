@@ -53,6 +53,14 @@ func (f *fakeSeedStore) CreateSession(_ context.Context, _ string, _ string, tok
 	return f.createSessionErr
 }
 
+func (f *fakeSeedStore) CreateProject(context.Context, string, string, string) (string, error) {
+	return "project-1", nil
+}
+
+func (f *fakeSeedStore) SetProjectRepoPath(context.Context, string, string) error {
+	return nil
+}
+
 func TestSeedDefaultWorkspaceSkipsWhenOrgAlreadyExists(t *testing.T) {
 	store := &fakeSeedStore{countResult: 1}
 
