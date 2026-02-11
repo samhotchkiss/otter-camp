@@ -32,7 +32,7 @@ type AdminAgentsHandler struct {
 	OpenClawHandler openClawConnectionStatus
 	EventStore      *store.ConnectionEventStore
 
-	writeTemplatesFn func(ctx context.Context, repoPath, slot, displayName string) error
+	writeTemplatesFn func(ctx context.Context, repoPath, slot string, input adminAgentTemplateInput) error
 }
 
 type adminAgentSummary struct {
@@ -82,6 +82,20 @@ type adminAgentCreateRequest struct {
 	Avatar            string `json:"avatar,omitempty"`
 }
 
+type adminAgentTemplateInput struct {
+	DisplayName string
+	Soul        string
+	Identity    string
+	Avatar      string
+}
+
+type builtInAgentProfileTemplate struct {
+	ID       string
+	Soul     string
+	Identity string
+	Avatar   string
+}
+
 type adminAgentRow struct {
 	WorkspaceAgentID string
 	Slug             string
@@ -113,6 +127,66 @@ var (
 )
 
 const agentFilesProjectName = "Agent Files"
+
+var builtInAgentProfiles = map[string]builtInAgentProfileTemplate{
+	"marcus": {
+		ID: "marcus",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Calm, structured, and decisive.
+- Values: Clarity, ownership, and momentum.
+- Working style: Turns ambiguity into plans and keeps priorities moving.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Chief of Staff
+- **Vibe:** Calm operator, detail-aware, strategic.
+- **Avatar:** /assets/agent-profiles/marcus.webp
+`),
+		Avatar: "/assets/agent-profiles/marcus.webp",
+	},
+	"rory": {
+		ID: "rory",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Direct, precise, and evidence-first.
+- Values: Correctness, readability, and long-term maintainability.
+- Working style: Finds edge cases, demands test coverage, and removes ambiguity.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Code Reviewer
+- **Vibe:** Opinionated, sharp, and quality obsessed.
+- **Avatar:** /assets/agent-profiles/rory.webp
+`),
+		Avatar: "/assets/agent-profiles/rory.webp",
+	},
+	"sage": {
+		ID: "sage",
+		Soul: strings.TrimSpace(`
+# SOUL.md - {{name}}
+
+- Voice: Curious, methodical, and grounded.
+- Values: Truth-seeking, source quality, and synthesis.
+- Working style: Explores deeply and cites what matters.
+`),
+		Identity: strings.TrimSpace(`
+# IDENTITY.md - {{name}}
+
+- **Name:** {{name}}
+- **Role:** Research Analyst
+- **Vibe:** Thorough, calm, and insight-driven.
+- **Avatar:** /assets/agent-profiles/sage.webp
+`),
+		Avatar: "/assets/agent-profiles/sage.webp",
+	},
+}
 
 func (h *AdminAgentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
@@ -266,7 +340,12 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if writeTemplates == nil {
 		writeTemplates = h.writeAgentTemplates
 	}
-	if err := writeTemplates(r.Context(), repoPath, slot, req.DisplayName); err != nil {
+	templateInput, err := buildCreateAgentTemplateInput(req)
+	if err != nil {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	if err := writeTemplates(r.Context(), repoPath, slot, templateInput); err != nil {
 		_ = h.Store.Delete(r.Context(), createdAgent.ID)
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to scaffold agent files"})
 		return
@@ -945,7 +1024,7 @@ func (h *AdminAgentsHandler) writeAgentTemplates(
 	ctx context.Context,
 	repoPath string,
 	slot string,
-	displayName string,
+	input adminAgentTemplateInput,
 ) error {
 	if err := ensureGitRepoPath(repoPath); err != nil {
 		return err
@@ -964,11 +1043,20 @@ func (h *AdminAgentsHandler) writeAgentTemplates(
 		return err
 	}
 
+	soul := strings.TrimSpace(input.Soul)
+	if soul == "" {
+		soul = renderNewAgentSoulTemplate("New Agent")
+	}
+	identity := strings.TrimSpace(input.Identity)
+	if identity == "" {
+		identity = renderNewAgentIdentityTemplate("New Agent", strings.TrimSpace(input.Avatar))
+	}
+
 	files := map[string]string{
-		filepath.Join("agents", slot, "SOUL.md"):     renderNewAgentSoulTemplate(displayName),
-		filepath.Join("agents", slot, "IDENTITY.md"): renderNewAgentIdentityTemplate(displayName),
+		filepath.Join("agents", slot, "SOUL.md"):     soul,
+		filepath.Join("agents", slot, "IDENTITY.md"): identity,
 		filepath.Join("agents", slot, "TOOLS.md"):    renderNewAgentToolsTemplate(),
-		filepath.Join("agents", slot, "MEMORY.md"):   renderNewAgentMemoryTemplate(displayName),
+		filepath.Join("agents", slot, "MEMORY.md"):   renderNewAgentMemoryTemplate(strings.TrimSpace(input.DisplayName)),
 	}
 	for relativePath, content := range files {
 		absolutePath := filepath.Join(repoPath, relativePath)
@@ -1004,6 +1092,62 @@ func (h *AdminAgentsHandler) writeAgentTemplates(
 		return err
 	}
 	return nil
+}
+
+func buildCreateAgentTemplateInput(req adminAgentCreateRequest) (adminAgentTemplateInput, error) {
+	displayName := strings.TrimSpace(req.DisplayName)
+	profileID := strings.ToLower(strings.TrimSpace(req.ProfileID))
+
+	profile := builtInAgentProfileTemplate{}
+	hasProfile := false
+	if profileID != "" {
+		resolved, ok := builtInAgentProfiles[profileID]
+		if !ok {
+			return adminAgentTemplateInput{}, fmt.Errorf("profileId %q is not recognized", req.ProfileID)
+		}
+		profile = resolved
+		hasProfile = true
+	}
+
+	avatar := strings.TrimSpace(req.Avatar)
+	if avatar == "" && hasProfile {
+		avatar = strings.TrimSpace(profile.Avatar)
+	}
+
+	soul := strings.TrimSpace(req.Soul)
+	if soul == "" {
+		if hasProfile && strings.TrimSpace(profile.Soul) != "" {
+			soul = renderAgentProfileTemplate(profile.Soul, displayName, avatar)
+		} else {
+			soul = renderNewAgentSoulTemplate(displayName)
+		}
+	}
+
+	identity := strings.TrimSpace(req.Identity)
+	if identity == "" {
+		if hasProfile && strings.TrimSpace(profile.Identity) != "" {
+			identity = renderAgentProfileTemplate(profile.Identity, displayName, avatar)
+		} else {
+			identity = renderNewAgentIdentityTemplate(displayName, avatar)
+		}
+	}
+
+	return adminAgentTemplateInput{
+		DisplayName: displayName,
+		Soul:        soul,
+		Identity:    identity,
+		Avatar:      avatar,
+	}, nil
+}
+
+func renderAgentProfileTemplate(templateBody string, displayName string, avatar string) string {
+	out := strings.TrimSpace(templateBody)
+	out = strings.ReplaceAll(out, "{{name}}", strings.TrimSpace(displayName))
+	out = strings.ReplaceAll(out, "{{avatar}}", strings.TrimSpace(avatar))
+	if out == "" {
+		return ""
+	}
+	return out + "\n"
 }
 
 func agentSlotFromDisplayName(displayName string) string {
@@ -1107,14 +1251,18 @@ func renderNewAgentSoulTemplate(displayName string) string {
 	)
 }
 
-func renderNewAgentIdentityTemplate(displayName string) string {
+func renderNewAgentIdentityTemplate(displayName string, avatar string) string {
 	name := strings.TrimSpace(displayName)
 	if name == "" {
 		name = "New Agent"
 	}
+	avatarValue := strings.TrimSpace(avatar)
+	if avatarValue == "" {
+		avatarValue = "*(workspace-relative path or URL)*"
+	}
 	return fmt.Sprintf(
-		"# IDENTITY.md - Who Am I?\n\n- **Name:** %s\n- **Creature:** *(to be determined)*\n- **Vibe:** *(to be determined)*\n- **Emoji:** *(pick one)*\n- **Avatar:** *(workspace-relative path or URL)*\n",
-		name,
+		"# IDENTITY.md - Who Am I?\n\n- **Name:** %s\n- **Creature:** *(to be determined)*\n- **Vibe:** *(to be determined)*\n- **Emoji:** *(pick one)*\n- **Avatar:** %s\n",
+		name, avatarValue,
 	)
 }
 

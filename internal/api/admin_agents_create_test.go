@@ -282,7 +282,7 @@ func TestAdminAgentsCreateRollsBackOnTemplateWriteFailure(t *testing.T) {
 		ProjectRepos:    store.NewProjectRepoStore(db),
 		OpenClawHandler: dispatcher,
 		EventStore:      store.NewConnectionEventStore(db),
-		writeTemplatesFn: func(context.Context, string, string, string) error {
+		writeTemplatesFn: func(context.Context, string, string, adminAgentTemplateInput) error {
 			return errors.New("synthetic template write failure")
 		},
 	}
