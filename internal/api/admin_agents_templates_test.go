@@ -54,6 +54,35 @@ func TestBuildCreateAgentTemplateInput(t *testing.T) {
 		require.Contains(t, templateInput.Soul, "Start From Scratch")
 		require.Contains(t, templateInput.Identity, "Start From Scratch")
 	})
+
+	t.Run("supports newly shipped frontend profile ids", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name      string
+			profileID string
+		}{
+			{name: "Kit", profileID: "kit"},
+			{name: "Jules", profileID: "jules"},
+			{name: "Avery", profileID: "avery"},
+		}
+
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.profileID, func(t *testing.T) {
+				t.Parallel()
+				req := adminAgentCreateRequest{
+					DisplayName: tc.name,
+					ProfileID:   tc.profileID,
+				}
+				templateInput, err := buildCreateAgentTemplateInput(req)
+				require.NoError(t, err)
+				require.Contains(t, templateInput.Soul, tc.name)
+				require.Contains(t, templateInput.Identity, tc.name)
+				require.NotEmpty(t, templateInput.Avatar)
+			})
+		}
+	})
 }
 
 func TestBuildCreateAgentConfigPatchOmitsChannelAndHeartbeat(t *testing.T) {

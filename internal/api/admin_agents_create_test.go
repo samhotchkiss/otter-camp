@@ -138,6 +138,44 @@ func TestAdminAgentsCreateCollisionSuffixesGeneratedSlot(t *testing.T) {
 	)
 }
 
+func TestAdminAgentsCreateAcceptsPreviouslyMissingBuiltInProfile(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-create-built-in-profile")
+	projectID := seedAdminAgentFilesProjectFixture(t, db, orgID, "main")
+	repoPath := agentFilesRepoPathForProject(t, db, orgID, projectID)
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+
+	handler := &AdminAgentsHandler{
+		DB:              db,
+		Store:           store.NewAgentStore(db),
+		ProjectStore:    store.NewProjectStore(db),
+		ProjectRepos:    store.NewProjectRepoStore(db),
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/agents",
+		strings.NewReader(`{"displayName":"Kit","profileId":"kit","model":"gpt-5.2-codex"}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Create(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	createdAgent, err := handler.Store.GetBySlug(
+		context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
+		"kit",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "Kit", createdAgent.DisplayName)
+	require.FileExists(t, filepath.Join(repoPath, "agents", "kit", "SOUL.md"))
+	require.FileExists(t, filepath.Join(repoPath, "agents", "kit", "IDENTITY.md"))
+
+	require.Len(t, dispatcher.calls, 1)
+}
+
 func TestAdminAgentsCreateQueuesConfigMutationWhenBridgeUnavailable(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-agents-create-queued")
