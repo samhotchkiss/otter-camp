@@ -8,6 +8,7 @@ import {
   buildCompletionActivityEventFromProgressLineForTest,
   buildIdentityPreamble,
   formatSessionContextMessageForTest,
+  formatSessionSystemPromptForTest,
   formatSessionDisplayLabel,
   getSessionContextForTest,
   isPathWithinProjectRoot,
@@ -166,6 +167,44 @@ describe("bridge identity preamble helpers", () => {
     assert.ok(contextual.includes("[OtterCamp Identity Injection]"));
     assert.ok(contextual.includes("Identity profile: compact"));
     assert.ok(contextual.indexOf("[OtterCamp Identity Injection]") < contextual.indexOf(content));
+  });
+
+  it("builds a system prompt envelope without echoing user content", async () => {
+    setSessionContextForTest(sessionKey, {
+      kind: "dm",
+      orgID: "org-1",
+      threadID: "dm_sys",
+      agentID,
+    });
+
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          profile: "compact",
+          agent: {
+            id: agentID,
+            name: "Marcus",
+            role: "Operator",
+          },
+          soul_summary: "Grounded and direct.",
+          identity_summary: "Execution-focused.",
+          instructions_summary: "Be explicit and pragmatic.",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      )) as typeof fetch;
+
+    const userText = "are you sure you don't know your name?";
+    const systemPrompt = await formatSessionSystemPromptForTest(sessionKey, userText);
+    assert.ok(systemPrompt.includes("[OtterCamp Identity Injection]"));
+    assert.ok(systemPrompt.includes("[OTTERCAMP_CONTEXT]"));
+    assert.equal(systemPrompt.includes(userText), false);
+
+    const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
+    assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
+    assert.equal(secondPrompt.includes("next turn"), false);
   });
 
   it("falls back from compact to full profile when compact context is insufficient", async () => {

@@ -2180,7 +2180,12 @@ async function withAutoRecallContext(sessionKey: string, rawContent: string): Pr
   }
 }
 
-async function withSessionContext(sessionKey: string, rawContent: string): Promise<string> {
+async function withSessionContext(
+  sessionKey: string,
+  rawContent: string,
+  options?: { includeUserContent?: boolean },
+): Promise<string> {
+  const includeUserContent = options?.includeUserContent !== false;
   const content = rawContent.trim();
   if (!content) {
     return '';
@@ -2206,7 +2211,8 @@ async function withSessionContext(sessionKey: string, rawContent: string): Promi
     let identityMetadata = context.identityMetadata;
     if (!identityMetadata) {
       try {
-        identityMetadata = await resolveSessionIdentityMetadata(sessionKey, context, content) || undefined;
+        const identityContent = includeUserContent ? content : '';
+        identityMetadata = await resolveSessionIdentityMetadata(sessionKey, context, identityContent) || undefined;
       } catch (err) {
         console.warn(`[bridge] failed to resolve identity for ${sessionKey}:`, err);
       }
@@ -2236,10 +2242,16 @@ async function withSessionContext(sessionKey: string, rawContent: string): Promi
       projectRoot: execution.projectRoot,
     }));
     sections.push(buildContextEnvelope(context));
-    sections.push(content);
+    if (includeUserContent) {
+      sections.push(content);
+    }
     return sections.join('\n\n');
   }
-  return `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]\n\n${content}`;
+  const reminder = `[OTTERCAMP_CONTEXT_REMINDER]\n- ${buildContextReminder(context)}\n[/OTTERCAMP_CONTEXT_REMINDER]`;
+  if (!includeUserContent) {
+    return reminder;
+  }
+  return `${reminder}\n\n${content}`;
 }
 
 export async function formatSessionContextMessageForTest(
@@ -2247,6 +2259,13 @@ export async function formatSessionContextMessageForTest(
   rawContent: string,
 ): Promise<string> {
   return withSessionContext(sessionKey, rawContent);
+}
+
+export async function formatSessionSystemPromptForTest(
+  sessionKey: string,
+  rawContent: string,
+): Promise<string> {
+  return withSessionContext(sessionKey, rawContent, { includeUserContent: false });
 }
 
 export async function formatAutoRecallMessageForTest(
@@ -3144,9 +3163,9 @@ async function sendMessageToSession(
   const idempotencyKey =
     (messageID || '').trim() || `dm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const isFirstDispatchForSession = !contextPrimedSessions.has(sessionKey);
+  const isCanonicalChameleonSession = parseChameleonSessionKey(sessionKey) !== null;
   const recallAwareContent = await withAutoRecallContext(sessionKey, content);
-  const contextualContent = await withSessionContext(sessionKey, recallAwareContent);
-  if (!contextualContent) {
+  if (!recallAwareContent) {
     return;
   }
 
@@ -3171,6 +3190,33 @@ async function sendMessageToSession(
     }
   }
 
+  if (isCanonicalChameleonSession) {
+    const extraSystemPrompt = await withSessionContext(sessionKey, recallAwareContent, {
+      includeUserContent: false,
+    });
+    try {
+      await sendRequest('agent', {
+        idempotencyKey,
+        sessionKey,
+        message: recallAwareContent,
+        deliver: false,
+        ...(extraSystemPrompt ? { extraSystemPrompt } : {}),
+      });
+      return;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[bridge] agent method dispatch failed for ${sessionKey}; falling back to chat.send: ${detail}`,
+      );
+      // Rebuild full user-context envelope for fallback compatibility.
+      contextPrimedSessions.delete(sessionKey);
+    }
+  }
+
+  const contextualContent = await withSessionContext(sessionKey, recallAwareContent);
+  if (!contextualContent) {
+    return;
+  }
   await sendRequest('chat.send', {
     idempotencyKey,
     sessionKey,
