@@ -519,6 +519,12 @@ type OnboardingBootstrapRequest struct {
 	OrganizationName string `json:"organization_name"`
 }
 
+type OnboardingAgent struct {
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	DisplayName string `json:"display_name"`
+}
+
 type OnboardingBootstrapResponse struct {
 	OrgID       string    `json:"org_id"`
 	OrgSlug     string    `json:"org_slug"`
@@ -530,6 +536,7 @@ type OnboardingBootstrapResponse struct {
 	IssueID     string    `json:"issue_id"`
 	IssueNumber int64     `json:"issue_number"`
 	IssueTitle  string    `json:"issue_title"`
+	Agents      []OnboardingAgent `json:"agents"`
 }
 
 func (c *Client) WhoAmI() (whoamiResponse, error) {

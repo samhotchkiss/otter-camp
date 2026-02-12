@@ -158,6 +158,41 @@ func TestClientOnboardingBootstrapParsesExpiresAtTime(t *testing.T) {
 	}
 }
 
+func TestClientOnboardingBootstrapParsesStarterAgents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"org_id":"org-1","org_slug":"my-team","user_id":"user-1","token":"oc_sess_abc","expires_at":"2026-02-11T00:00:00Z","project_id":"project-1","project_name":"Getting Started","issue_id":"issue-1","issue_number":1,"issue_title":"Welcome to Otter Camp","agents":[{"id":"agent-1","slug":"frank","display_name":"Frank"},{"id":"agent-2","slug":"lori","display_name":"Lori"},{"id":"agent-3","slug":"ellie","display_name":"Ellie"}]}`))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		HTTP:    srv.Client(),
+	}
+
+	resp, err := client.OnboardingBootstrap(OnboardingBootstrapRequest{
+		Name:             "Sam",
+		Email:            "sam@example.com",
+		OrganizationName: "My Team",
+	})
+	if err != nil {
+		t.Fatalf("OnboardingBootstrap() error = %v", err)
+	}
+
+	if len(resp.Agents) != 3 {
+		t.Fatalf("expected 3 starter agents, got %#v", resp.Agents)
+	}
+	if resp.Agents[0].Slug != "frank" || resp.Agents[0].DisplayName != "Frank" || resp.Agents[0].ID == "" {
+		t.Fatalf("unexpected first starter agent: %#v", resp.Agents[0])
+	}
+	if resp.Agents[1].Slug != "lori" || resp.Agents[1].DisplayName != "Lori" || resp.Agents[1].ID == "" {
+		t.Fatalf("unexpected second starter agent: %#v", resp.Agents[1])
+	}
+	if resp.Agents[2].Slug != "ellie" || resp.Agents[2].DisplayName != "Ellie" || resp.Agents[2].ID == "" {
+		t.Fatalf("unexpected third starter agent: %#v", resp.Agents[2])
+	}
+}
+
 func TestClientIssueMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 	var gotMethod string
 	var gotPath string

@@ -213,6 +213,35 @@ func TestInitBootstrapLocalConfigSaveFailureReturnsError(t *testing.T) {
 	}
 }
 
+func TestInitBootstrapLocalPrintsSeededStarterAgents(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+			Agents: []ottercli.OnboardingAgent{
+				{ID: "agent-frank", Slug: "frank", DisplayName: "Frank"},
+				{ID: "agent-lori", Slug: "lori", DisplayName: "Lori"},
+				{ID: "agent-ellie", Slug: "ellie", DisplayName: "Ellie"},
+			},
+		},
+	}
+	stubInitDeps(t, ottercli.Config{}, client, nil)
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader(""),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+
+	if !strings.Contains(out.String(), "Created agents: Frank, Lori, Ellie") {
+		t.Fatalf("expected seeded agents confirmation, got %q", out.String())
+	}
+}
+
 func TestInitImportAndBridgeApprovedFlowImportsAndStartsBridge(t *testing.T) {
 	client := &fakeInitClient{
 		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
