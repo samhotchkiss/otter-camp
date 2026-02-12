@@ -4,12 +4,14 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/automigrate"
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/github"
 	"github.com/samhotchkiss/otter-camp/internal/githubsync"
+	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
@@ -47,6 +49,42 @@ func main() {
 				)
 				go poller.Start(context.Background())
 				log.Printf("✅ GitHub drift poller started (interval=%s)", cfg.GitHub.PollInterval)
+			}
+		}
+	}
+
+	if cfg.ConversationEmbedding.Enabled {
+		db, err := store.DB()
+		if err != nil {
+			log.Printf("⚠️  Conversation embedding worker disabled; database unavailable: %v", err)
+		} else {
+			embedder, err := memory.NewEmbedder(memory.EmbedderConfig{
+				Provider:      memory.Provider(strings.ToLower(cfg.ConversationEmbedding.Provider)),
+				Model:         cfg.ConversationEmbedding.Model,
+				Dimension:     cfg.ConversationEmbedding.Dimension,
+				OllamaURL:     cfg.ConversationEmbedding.OllamaURL,
+				OpenAIBaseURL: cfg.ConversationEmbedding.OpenAIBaseURL,
+				OpenAIAPIKey:  cfg.ConversationEmbedding.OpenAIAPIKey,
+			}, nil)
+			if err != nil {
+				log.Printf("⚠️  Conversation embedding worker disabled; embedder init failed: %v", err)
+			} else {
+				worker := memory.NewConversationEmbeddingWorker(
+					store.NewConversationEmbeddingStore(db),
+					embedder,
+					memory.ConversationEmbeddingWorkerConfig{
+						BatchSize:    cfg.ConversationEmbedding.BatchSize,
+						PollInterval: cfg.ConversationEmbedding.PollInterval,
+					},
+				)
+				go worker.Start(context.Background())
+				log.Printf(
+					"✅ Conversation embedding worker started (provider=%s model=%s batch=%d interval=%s)",
+					cfg.ConversationEmbedding.Provider,
+					cfg.ConversationEmbedding.Model,
+					cfg.ConversationEmbedding.BatchSize,
+					cfg.ConversationEmbedding.PollInterval,
+				)
 			}
 		}
 	}

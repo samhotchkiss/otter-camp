@@ -21,6 +21,15 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("GITHUB_APP_PRIVATE_KEY_PEM", "")
 	t.Setenv("GITHUB_APP_PRIVATE_KEY_PATH", "")
 	t.Setenv("GITHUB_WEBHOOK_SECRET", "")
+	t.Setenv("CONVERSATION_EMBEDDING_WORKER_ENABLED", "")
+	t.Setenv("CONVERSATION_EMBEDDING_POLL_INTERVAL", "")
+	t.Setenv("CONVERSATION_EMBEDDING_BATCH_SIZE", "")
+	t.Setenv("CONVERSATION_EMBEDDER_PROVIDER", "")
+	t.Setenv("CONVERSATION_EMBEDDER_MODEL", "")
+	t.Setenv("CONVERSATION_EMBEDDER_DIMENSION", "")
+	t.Setenv("CONVERSATION_EMBEDDER_OLLAMA_URL", "")
+	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_BASE_URL", "")
+	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -52,6 +61,25 @@ func TestLoadDefaults(t *testing.T) {
 
 	if cfg.GitHub.APIBaseURL != defaultGitHubAPIBaseURL {
 		t.Fatalf("expected default API base URL %q, got %q", defaultGitHubAPIBaseURL, cfg.GitHub.APIBaseURL)
+	}
+
+	if !cfg.ConversationEmbedding.Enabled {
+		t.Fatalf("expected conversation embedding worker enabled by default")
+	}
+	if cfg.ConversationEmbedding.PollInterval != defaultConversationEmbeddingPollInterval {
+		t.Fatalf("expected default conversation embedding poll interval %v, got %v", defaultConversationEmbeddingPollInterval, cfg.ConversationEmbedding.PollInterval)
+	}
+	if cfg.ConversationEmbedding.BatchSize != defaultConversationEmbeddingBatchSize {
+		t.Fatalf("expected default conversation embedding batch size %d, got %d", defaultConversationEmbeddingBatchSize, cfg.ConversationEmbedding.BatchSize)
+	}
+	if cfg.ConversationEmbedding.Provider != defaultConversationEmbeddingProvider {
+		t.Fatalf("expected default conversation embedding provider %q, got %q", defaultConversationEmbeddingProvider, cfg.ConversationEmbedding.Provider)
+	}
+	if cfg.ConversationEmbedding.Model != defaultConversationEmbeddingModel {
+		t.Fatalf("expected default conversation embedding model %q, got %q", defaultConversationEmbeddingModel, cfg.ConversationEmbedding.Model)
+	}
+	if cfg.ConversationEmbedding.Dimension != defaultConversationEmbeddingDimension {
+		t.Fatalf("expected default conversation embedding dimension %d, got %d", defaultConversationEmbeddingDimension, cfg.ConversationEmbedding.Dimension)
 	}
 }
 
@@ -154,5 +182,54 @@ func TestLoadRejectsInvalidGitHubEnabledFlag(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "GITHUB_INTEGRATION_ENABLED") {
 		t.Fatalf("expected error to mention GITHUB_INTEGRATION_ENABLED, got %v", err)
+	}
+}
+
+func TestLoadParsesConversationEmbeddingSettings(t *testing.T) {
+	t.Setenv("CONVERSATION_EMBEDDING_WORKER_ENABLED", "true")
+	t.Setenv("CONVERSATION_EMBEDDING_POLL_INTERVAL", "7s")
+	t.Setenv("CONVERSATION_EMBEDDING_BATCH_SIZE", "12")
+	t.Setenv("CONVERSATION_EMBEDDER_PROVIDER", "openai")
+	t.Setenv("CONVERSATION_EMBEDDER_MODEL", "text-embedding-3-small")
+	t.Setenv("CONVERSATION_EMBEDDER_DIMENSION", "1536")
+	t.Setenv("CONVERSATION_EMBEDDER_OLLAMA_URL", "http://localhost:11435")
+	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_BASE_URL", "https://api.openai.com")
+	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY", "test-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if !cfg.ConversationEmbedding.Enabled {
+		t.Fatalf("expected conversation embedding worker enabled")
+	}
+	if cfg.ConversationEmbedding.PollInterval != 7*time.Second {
+		t.Fatalf("expected conversation embedding poll interval 7s, got %v", cfg.ConversationEmbedding.PollInterval)
+	}
+	if cfg.ConversationEmbedding.BatchSize != 12 {
+		t.Fatalf("expected conversation embedding batch size 12, got %d", cfg.ConversationEmbedding.BatchSize)
+	}
+	if cfg.ConversationEmbedding.Provider != "openai" {
+		t.Fatalf("expected conversation embedding provider openai, got %q", cfg.ConversationEmbedding.Provider)
+	}
+	if cfg.ConversationEmbedding.Model != "text-embedding-3-small" {
+		t.Fatalf("expected conversation embedding model text-embedding-3-small, got %q", cfg.ConversationEmbedding.Model)
+	}
+	if cfg.ConversationEmbedding.Dimension != 1536 {
+		t.Fatalf("expected conversation embedding dimension 1536, got %d", cfg.ConversationEmbedding.Dimension)
+	}
+}
+
+func TestLoadRejectsInvalidConversationEmbeddingBatchSize(t *testing.T) {
+	t.Setenv("CONVERSATION_EMBEDDING_BATCH_SIZE", "abc")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected error for invalid CONVERSATION_EMBEDDING_BATCH_SIZE")
+	}
+
+	if !strings.Contains(err.Error(), "CONVERSATION_EMBEDDING_BATCH_SIZE") {
+		t.Fatalf("expected error to mention CONVERSATION_EMBEDDING_BATCH_SIZE, got %v", err)
 	}
 }
