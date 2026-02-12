@@ -387,6 +387,265 @@ func TestSchemaConversationCoreRLSAndIndexes(t *testing.T) {
 	}
 }
 
+func TestSchemaProjectChatBackfillCreatesProjectRooms(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(63)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "project-chat-backfill-room-org")
+	projectID := createTestProject(t, db, orgID, "Project Chat Backfill Room Project")
+
+	_, err = db.Exec(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Sam', 'room bootstrap', '[]'::jsonb)`,
+		orgID,
+		projectID,
+	)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var roomCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM rooms
+		 WHERE org_id = $1
+		   AND type = 'project'
+		   AND context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&roomCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, roomCount)
+}
+
+func TestMigration064ProjectChatBackfillFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"064_backfill_project_chat_rooms_and_messages.up.sql",
+		"064_backfill_project_chat_rooms_and_messages.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "064_backfill_project_chat_rooms_and_messages.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "insert into rooms")
+	require.Contains(t, upContent, "insert into chat_messages")
+	require.Contains(t, upContent, "on conflict (id) do nothing")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "064_backfill_project_chat_rooms_and_messages.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "delete from chat_messages")
+}
+
+func TestSchemaProjectChatBackfillCopiesMessagesWithParity(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(63)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "project-chat-backfill-parity-org")
+	projectID := createTestProject(t, db, orgID, "Project Chat Backfill Parity Project")
+
+	var firstID string
+	err = db.QueryRow(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Sam', 'first body', '[{\"id\":\"file-1\"}]'::jsonb)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&firstID)
+	require.NoError(t, err)
+
+	var secondID string
+	err = db.QueryRow(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Frank', 'second body', '[]'::jsonb)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&secondID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var copiedCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.org_id = $1
+		   AND r.type = 'project'
+		   AND r.context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&copiedCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, copiedCount)
+
+	var firstBody, firstAttachments string
+	err = db.QueryRow(
+		`SELECT body, attachments::text
+		 FROM chat_messages
+		 WHERE id = $1`,
+		firstID,
+	).Scan(&firstBody, &firstAttachments)
+	require.NoError(t, err)
+	require.Equal(t, "first body", firstBody)
+	require.Contains(t, firstAttachments, `"id": "file-1"`)
+
+	var secondBody string
+	err = db.QueryRow(`SELECT body FROM chat_messages WHERE id = $1`, secondID).Scan(&secondBody)
+	require.NoError(t, err)
+	require.Equal(t, "second body", secondBody)
+}
+
+func TestSchemaProjectChatBackfillIsIdempotent(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(63)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "project-chat-backfill-idempotent-org")
+	projectID := createTestProject(t, db, orgID, "Project Chat Backfill Idempotent Project")
+
+	_, err = db.Exec(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Sam', 'idempotent body', '[{\"id\":\"doc\"}]'::jsonb)`,
+		orgID,
+		projectID,
+	)
+	require.NoError(t, err)
+
+	upRaw, err := os.ReadFile(filepath.Join(getMigrationsDir(t), "064_backfill_project_chat_rooms_and_messages.up.sql"))
+	require.NoError(t, err)
+	upSQL := string(upRaw)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var firstMessageCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.org_id = $1
+		   AND r.type = 'project'
+		   AND r.context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&firstMessageCount)
+	require.NoError(t, err)
+
+	var firstRoomCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM rooms
+		 WHERE org_id = $1
+		   AND type = 'project'
+		   AND context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&firstRoomCount)
+	require.NoError(t, err)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var secondMessageCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.org_id = $1
+		   AND r.type = 'project'
+		   AND r.context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&secondMessageCount)
+	require.NoError(t, err)
+
+	var secondRoomCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM rooms
+		 WHERE org_id = $1
+		   AND type = 'project'
+		   AND context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&secondRoomCount)
+	require.NoError(t, err)
+
+	require.Equal(t, firstMessageCount, secondMessageCount)
+	require.Equal(t, firstRoomCount, secondRoomCount)
+}
+
 func TestSchemaChatThreadsLengthConstraints(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
