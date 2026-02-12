@@ -5,12 +5,12 @@ test.describe("Settings Page", () => {
   test.beforeEach(async ({ page }) => {
     await bootstrapAuthenticatedSession(page);
 
-    let gitTokens = [
+    let apiKeys = [
       {
-        id: "token-1",
-        name: "Git Token 1",
-        token_prefix: "oc_git_",
-        created_at: new Date().toISOString(),
+        id: "key-1",
+        name: "API Key 1",
+        prefix: "oc_live_",
+        createdAt: new Date().toISOString(),
       },
     ];
 
@@ -94,48 +94,33 @@ test.describe("Settings Page", () => {
         contentType: "application/json",
         body: JSON.stringify({
           openclawWebhookUrl: "https://example.com/webhook",
-          apiKeys: [],
+          apiKeys,
         }),
       });
     });
 
-    await page.route("**/api/git/tokens", async (route) => {
-      const method = route.request().method();
-      if (method === "POST") {
-        const nextToken = {
-          id: "token-2",
-          name: "Git Token 2",
-          token_prefix: "oc_git_",
-          token: "oc_git_secret_value",
-          created_at: new Date().toISOString(),
-        };
-        gitTokens = [nextToken, ...gitTokens];
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify(nextToken),
-        });
-        return;
-      }
-
+    await page.route("**/api/settings/integrations/api-keys", async (route) => {
+      const newKey = {
+        id: "key-2",
+        name: "API Key 2",
+        prefix: "oc_live_",
+        createdAt: new Date().toISOString(),
+      };
+      apiKeys = [...apiKeys, newKey];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ tokens: gitTokens }),
+        body: JSON.stringify(newKey),
       });
     });
 
-    await page.route("**/api/git/tokens/*/revoke", async (route) => {
-      const tokenID = route.request().url().split("/").at(-2) ?? "";
-      gitTokens = gitTokens.filter((token) => token.id !== tokenID);
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true }) });
-    });
-
-    await page.route("**/api/projects", async (route) => {
+    await page.route("**/api/settings/integrations/api-keys/*", async (route) => {
+      const keyID = route.request().url().split("/").at(-1) ?? "";
+      apiKeys = apiKeys.filter((key) => key.id !== keyID);
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ projects: [{ id: "project-1" }, { id: "project-2" }] }),
+        body: JSON.stringify({ success: true }),
       });
     });
 
@@ -170,33 +155,27 @@ test.describe("Settings Page", () => {
     await expect(page.getByRole("heading", { name: "Integrations" })).toBeVisible();
   });
 
-  test("shows workspace name and member roles", async ({ page }) => {
+  test("shows workspace slug and member roles", async ({ page }) => {
+    await expect(page.getByLabel("Organization Slug")).toHaveValue("otter-camp");
     await expect(page.getByLabel("Workspace Name")).toHaveValue("Otter Camp Workspace");
     await expect(page.locator("span", { hasText: /^Owner$/ }).first()).toBeVisible();
     await expect(page.locator("span", { hasText: /^Member$/ }).first()).toBeVisible();
   });
 
-  test("generates git token and reveals one-time secret", async ({ page }) => {
-    await page.getByRole("button", { name: /generate git token/i }).click();
-
-    await expect(page.getByText(/copy this token now/i)).toBeVisible();
-    await expect(page.getByText("oc_git_secret_value")).toBeVisible();
-    await expect(page.getByText("Git Token 2")).toBeVisible();
+  test("shows existing API keys", async ({ page }) => {
+    await expect(page.getByText("API Key 1")).toBeVisible();
+    await expect(page.getByText(/oc_live_/i)).toBeVisible();
   });
 
-  test("shows actionable guidance when no projects exist", async ({ page }) => {
-    await page.route("**/api/projects", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
-    });
-
-    await page.getByRole("button", { name: /generate git token/i }).click();
-    await expect(page.getByText(/create a project before generating a git token/i)).toBeVisible();
+  test("generates a new API key", async ({ page }) => {
+    await page.getByRole("button", { name: /generate new key/i }).click();
+    await expect(page.getByText("API Key 2")).toBeVisible();
   });
 
-  test("revokes git token from list", async ({ page }) => {
-    await expect(page.getByText("Git Token 1")).toBeVisible();
+  test("revokes API key from list", async ({ page }) => {
+    await expect(page.getByText("API Key 1")).toBeVisible();
 
     await page.getByRole("button", { name: "Revoke" }).first().click();
-    await expect(page.getByText("Git Token 1")).not.toBeVisible();
+    await expect(page.getByText("API Key 1")).not.toBeVisible();
   });
 });

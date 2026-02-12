@@ -12,6 +12,16 @@ async function openGlobalSearchWithButton(page: Page) {
   await expect(page.getByRole("dialog", { name: /global search/i })).toBeVisible();
 }
 
+async function waitForSearchQuery(page: Page, query: string) {
+  await page.waitForResponse((response) => {
+    if (!response.url().includes("/api/search")) {
+      return false;
+    }
+    const requestURL = new URL(response.url());
+    return (requestURL.searchParams.get("q") ?? "").toLowerCase() === query.toLowerCase();
+  });
+}
+
 test.describe("Global Search", () => {
   test.beforeEach(async ({ page }) => {
     await bootstrapAuthenticatedSession(page);
@@ -87,6 +97,7 @@ test.describe("Global Search", () => {
 
     const input = page.getByRole("textbox", { name: /^Search$/i });
     await input.fill("project");
+    await waitForSearchQuery(page, "project");
 
     await expect(page.getByRole("button", { name: /otter camp project/i })).toBeVisible();
     await expect(page.getByRole("button", { name: /camp ranger/i })).not.toBeVisible();
@@ -97,6 +108,7 @@ test.describe("Global Search", () => {
 
     const input = page.getByRole("textbox", { name: /^Search$/i });
     await input.fill("project");
+    await waitForSearchQuery(page, "project");
 
     await page.getByRole("button", { name: /otter camp project/i }).click();
     await expect(page).toHaveURL(/\/projects\/project-1$/);
@@ -107,6 +119,7 @@ test.describe("Global Search", () => {
 
     const input = page.getByRole("textbox", { name: /^Search$/i });
     await input.fill("task");
+    await waitForSearchQuery(page, "task");
 
     await page.getByRole("button", { name: /set up camp perimeter/i }).click();
     await expect(page).toHaveURL(/\/tasks\/task-1$/);
