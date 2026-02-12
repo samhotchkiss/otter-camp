@@ -65,7 +65,9 @@ func (p *EllieRetrievalPlanner) BuildPlan(ctx context.Context, input EllieRetrie
 	if strategy != nil {
 		version = strategy.Version
 		if len(strategy.Rules) > 0 {
-			_ = json.Unmarshal(strategy.Rules, &rules)
+			if err := json.Unmarshal(strategy.Rules, &rules); err != nil {
+				return EllieRetrievalPlan{}, fmt.Errorf("invalid strategy rules: %w", err)
+			}
 		}
 	}
 	if rules.TopicExpansions == nil {

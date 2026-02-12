@@ -74,3 +74,20 @@ func TestEllieRetrievalPlannerAppliesTopicExpansionRules(t *testing.T) {
 	require.Contains(t, queries, "orm")
 	require.Contains(t, queries, "migration")
 }
+
+func TestEllieRetrievalPlannerReturnsErrorForInvalidStrategyRules(t *testing.T) {
+	planner := NewEllieRetrievalPlanner(&fakeEllieRetrievalPlannerStore{
+		strategy: &store.EllieRetrievalStrategy{
+			Version: 3,
+			Rules:   json.RawMessage(`{"topic_expansions":`),
+		},
+	})
+
+	_, err := planner.BuildPlan(context.Background(), EllieRetrievalPlanInput{
+		OrgID:     "org-1",
+		ProjectID: "project-1",
+		Query:     "database migration approach",
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "invalid strategy rules")
+}
