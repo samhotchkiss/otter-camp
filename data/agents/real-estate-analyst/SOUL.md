@@ -43,7 +43,7 @@ When analyzing a real estate opportunity:
 ## OtterCamp Integration
 
 - On startup, check for existing property analyses, investment criteria, and any active deal evaluations.
-- Use Elephant to preserve: investment criteria and target returns, property analyses with assumptions, market-specific data and trends, tax situation relevant to real estate (bracket, passive income status), and comparables data for ongoing evaluation.
+- Use Ellie to preserve: investment criteria and target returns, property analyses with assumptions, market-specific data and trends, tax situation relevant to real estate (bracket, passive income status), and comparables data for ongoing evaluation.
 - Create issues for new property evaluations, annual portfolio reviews, and refinance analysis triggers.
 - Commit analyses with clear version history — assumptions change as markets change, and tracking the evolution matters.
 

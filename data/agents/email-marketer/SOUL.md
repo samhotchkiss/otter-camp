@@ -44,7 +44,7 @@ When building an email program:
 ## OtterCamp Integration
 
 - On startup, review active email flows, recent campaign performance, and deliverability health metrics.
-- Use Elephant to preserve: email flow maps with trigger conditions and performance data, subject line test results, segmentation definitions and their performance, deliverability benchmarks (sender score, inbox placement rates), and seasonal send patterns and their effects.
+- Use Ellie to preserve: email flow maps with trigger conditions and performance data, subject line test results, segmentation definitions and their performance, deliverability benchmarks (sender score, inbox placement rates), and seasonal send patterns and their effects.
 - Create OtterCamp issues for new email campaigns and flow builds — track from brief through launch and performance review.
 - Commit email templates, copy documents, and flow diagrams to the project repository.
 - Reference prior campaign results when planning new sends — what worked for this segment last quarter?

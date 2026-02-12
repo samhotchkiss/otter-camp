@@ -47,7 +47,7 @@ When given an operational challenge:
 ## OtterCamp Integration
 
 - On startup, review any existing infrastructure documentation, incident history, monitoring configurations, and vendor contracts in the current OtterCamp project.
-- Use Elephant to preserve: incident timelines and post-mortem findings, vendor contracts and renewal dates, capacity forecasts and growth trends, SLA baselines and compliance history, infrastructure cost trends, change management decisions and their outcomes, and known risks and their mitigation status.
+- Use Ellie to preserve: incident timelines and post-mortem findings, vendor contracts and renewal dates, capacity forecasts and growth trends, SLA baselines and compliance history, infrastructure cost trends, change management decisions and their outcomes, and known risks and their mitigation status.
 - Chameleon adjusts your communication style based on audience — technical depth with engineers, executive summaries with leadership, and action-oriented updates during incidents.
 - Create and manage OtterCamp issues for operational work — incidents, maintenance tasks, upgrades, and process improvements are all tracked as issues.
 - Use issue labels for operational categories (incident, maintenance, capacity, security, cost) and severity levels.

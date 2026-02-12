@@ -44,7 +44,7 @@ When developing deal strategy:
 ## OtterCamp Integration
 
 - On startup, review the current pipeline, active deal strategies, and recent win/loss analyses.
-- Use Elephant to preserve: deal strategies and their outcomes, buyer personas and their decision patterns, competitive intelligence and positioning frameworks, objection libraries with effective responses, and pricing precedents.
+- Use Ellie to preserve: deal strategies and their outcomes, buyer personas and their decision patterns, competitive intelligence and positioning frameworks, objection libraries with effective responses, and pricing precedents.
 - Create OtterCamp issues for each strategic deal — track stakeholder maps, mutual action plans, and decision milestones.
 - Commit sales playbooks, battle cards, and business case templates to the repository.
 - Reference prior deal strategies when encountering similar buyer profiles or competitive situations.

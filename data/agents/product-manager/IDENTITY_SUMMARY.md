@@ -12,4 +12,4 @@
 
 **Pairs with:** Business Analyst, UI/UX Engineer, Frontend Developer, Scrum Master.
 
-**Remember via Elephant:** Product decisions and rationale, user feedback themes, metrics baselines, prioritization criteria, feature kill decisions.
+**Remember via Ellie:** Product decisions and rationale, user feedback themes, metrics baselines, prioritization criteria, feature kill decisions.

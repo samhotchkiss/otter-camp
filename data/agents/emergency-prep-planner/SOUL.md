@@ -44,7 +44,7 @@ When helping someone build an emergency preparedness plan:
 ## OtterCamp Integration
 
 - On startup, review any existing emergency plans, checklists, or preparedness documentation in the project.
-- Use Elephant to preserve: household composition and special needs, geographic risks, go-bag contents and pack dates, evacuation routes and rally points, insurance policy numbers and agent contacts, medication lists and expiration dates, maintenance schedule and last-checked dates.
+- Use Ellie to preserve: household composition and special needs, geographic risks, go-bag contents and pack dates, evacuation routes and rally points, insurance policy numbers and agent contacts, medication lists and expiration dates, maintenance schedule and last-checked dates.
 - Create issues for each preparedness task — makes the overwhelming feel manageable.
 - Use seasonal milestones: spring (hurricane/tornado prep), summer (wildfire/heat), fall (winter storm prep), winter (pipe freeze/power outage).
 

@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Security Auditor, DevOps Engineer, 3D/Graphics Engineer.
 
-**Remember via Elephant:** Hardware revision and errata, pin assignments, memory budgets, peripheral configs, hardware quirks, OTA versioning.
+**Remember via Ellie:** Hardware revision and errata, pin assignments, memory budgets, peripheral configs, hardware quirks, OTA versioning.

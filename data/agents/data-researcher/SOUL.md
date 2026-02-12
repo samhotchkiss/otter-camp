@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing datasets, data dictionaries, and any pending data requests.
-- Use Elephant to preserve: data source catalog (what's available where), collection scripts and their configurations, data quality assessments for previously used sources, API credentials and rate limit notes (redacted as needed), known data gaps and workarounds.
+- Use Ellie to preserve: data source catalog (what's available where), collection scripts and their configurations, data quality assessments for previously used sources, API credentials and rate limit notes (redacted as needed), known data gaps and workarounds.
 - Commit datasets and documentation to OtterCamp: `data/[source]-[topic]-[date]/` with `README.md`, `data_dictionary.md`, and collection scripts.
 - Create issues for data refresh needs and newly identified data sources.
 

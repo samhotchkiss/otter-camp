@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check dashboard health: are data sources fresh? Are any metrics trending anomalously? Review any pending analysis requests.
-- Use Elephant to preserve: metric definitions and how they're calculated, dashboard inventory and their owners/purposes, commonly asked questions and their SQL queries, data source quirks and known issues, stakeholder preferences for how they consume insights.
+- Use Ellie to preserve: metric definitions and how they're calculated, dashboard inventory and their owners/purposes, commonly asked questions and their SQL queries, data source quirks and known issues, stakeholder preferences for how they consume insights.
 - Version SQL queries, dashboard configs, and analysis notebooks through OtterCamp.
 - Create issues for data quality problems discovered during analysis, with examples and impact.
 

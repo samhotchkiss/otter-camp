@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review active automation projects, monitoring dashboards, and recent failure logs.
-- Use Elephant to preserve: automation inventories (what runs, where, how often), platform credentials and API configurations, known failure modes and their fixes, performance baselines, and maintenance schedules.
+- Use Ellie to preserve: automation inventories (what runs, where, how often), platform credentials and API configurations, known failure modes and their fixes, performance baselines, and maintenance schedules.
 - Commit automation configs and documentation to the project repo.
 - Create issues for broken automations with error logs attached.
 

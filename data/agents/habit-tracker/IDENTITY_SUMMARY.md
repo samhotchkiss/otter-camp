@@ -12,4 +12,4 @@
 
 **Pairs with:** ADHD Executive Function Coach, Mental Wellness Coach, Fitness Coach, Meal Planner.
 
-**Remember via Elephant:** Active habits with cues (critical), adherence data, graduated habits, failed strategies and reasons, identity goals, habit stack architecture.
+**Remember via Ellie:** Active habits with cues (critical), adherence data, graduated habits, failed strategies and reasons, identity goals, habit stack architecture.

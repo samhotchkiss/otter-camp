@@ -12,4 +12,4 @@
 
 **Pairs with:** Research Analyst, Market Researcher, Academic Researcher, Infographic Designer.
 
-**Remember via Elephant:** Data source catalog, collection scripts, data quality assessments, API configurations, known data gaps and workarounds.
+**Remember via Ellie:** Data source catalog, collection scripts, data quality assessments, API configurations, known data gaps and workarounds.

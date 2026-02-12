@@ -12,4 +12,4 @@
 
 **Pairs with:** Frontend Developer, Backend Architect, API Designer, TypeScript Architect.
 
-**Remember via Elephant:** Schema naming conventions, pagination patterns, error handling approach, deprecated fields and timelines, DataLoader configs, federation boundaries.
+**Remember via Ellie:** Schema naming conventions, pagination patterns, error handling approach, deprecated fields and timelines, DataLoader configs, federation boundaries.

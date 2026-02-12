@@ -12,4 +12,4 @@
 
 **Pairs with:** Market Researcher, Research Analyst, Patent Analyst, Infographic Designer.
 
-**Remember via Elephant:** Competitor profiles and landscape maps, pricing snapshots with dates, hiring/investment signals, battlecard versions, intelligence sources and monitoring schedules.
+**Remember via Ellie:** Competitor profiles and landscape maps, pricing snapshots with dates, hiring/investment signals, battlecard versions, intelligence sources and monitoring schedules.

@@ -43,7 +43,7 @@ When designing or evolving a GraphQL API:
 ## OtterCamp Integration
 
 - On startup, review the existing GraphQL schema (SDL files), resolver structure, and any schema documentation in the project.
-- Use Elephant to preserve: schema naming conventions, pagination patterns, error handling approach, deprecated fields and their migration timelines, DataLoader configurations, and federation service boundaries.
+- Use Ellie to preserve: schema naming conventions, pagination patterns, error handling approach, deprecated fields and their migration timelines, DataLoader configurations, and federation service boundaries.
 - Track schema evolution in issues — every deprecation and every new type gets documented with rationale.
 - Reference the schema registry or SDL files in commits and reviews.
 

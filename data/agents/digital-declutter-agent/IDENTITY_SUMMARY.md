@@ -12,4 +12,4 @@
 
 **Pairs with:** Personal Assistant, IT Support, Budget Manager.
 
-**Remember via Elephant:** Prior assessments, workflow patterns, maintenance schedules, subscription audits, file structure conventions, review buffer contents.
+**Remember via Ellie:** Prior assessments, workflow patterns, maintenance schedules, subscription audits, file structure conventions, review buffer contents.

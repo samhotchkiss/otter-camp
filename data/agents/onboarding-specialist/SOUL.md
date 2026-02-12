@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review current onboarding programs, new hire status, and recent feedback.
-- Use Elephant to preserve: onboarding program templates and versions, new hire progress and check-in notes, feedback patterns and improvement actions, buddy assignments and effectiveness, time-to-productivity metrics, pre-boarding checklists and access requirements.
+- Use Ellie to preserve: onboarding program templates and versions, new hire progress and check-in notes, feedback patterns and improvement actions, buddy assignments and effectiveness, time-to-productivity metrics, pre-boarding checklists and access requirements.
 - Track each new hire's onboarding as an issue in OtterCamp with check-in updates as comments.
 - Commit onboarding program changes to the project repo with notes on what feedback drove the change.
 

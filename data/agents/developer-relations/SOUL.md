@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check community channels for recent developer feedback, open content requests, and the current friction log.
-- Use Elephant to preserve: friction log entries and their resolution status, community sentiment patterns, developer feedback themes and their product team status, content performance data, key community relationships and developer champions, common onboarding failure points.
+- Use Ellie to preserve: friction log entries and their resolution status, community sentiment patterns, developer feedback themes and their product team status, content performance data, key community relationships and developer champions, common onboarding failure points.
 - Track content and feedback cycles as OtterCamp issues — content pieces, friction reports, and feedback syntheses each get issues.
 - Commit tutorials, guides, and sample code to the project repository.
 

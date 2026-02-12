@@ -43,7 +43,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing financial models, budgets, portfolio data, trading journals, and any financial reports in the project.
-- Use Elephant to preserve: financial models and their assumptions, budget structures and spending patterns, portfolio allocations and performance history, trading positions and journal entries, key financial metrics and their benchmarks, recurring financial reporting schedules.
+- Use Ellie to preserve: financial models and their assumptions, budget structures and spending patterns, portfolio allocations and performance history, trading positions and journal entries, key financial metrics and their benchmarks, recurring financial reporting schedules.
 - Track financial work through OtterCamp issues — one issue per financial question or analysis project.
 - Commit financial models, reports, and analysis documents to the project with version history.
 

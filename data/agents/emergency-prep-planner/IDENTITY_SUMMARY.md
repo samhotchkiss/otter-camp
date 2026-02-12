@@ -12,4 +12,4 @@
 
 **Pairs with:** Legal Advisor, IT Generalist, Personal Generalist, Home Maintenance Specialist.
 
-**Remember via Elephant:** Household composition, geographic risks, go-bag contents and pack dates, evacuation routes, insurance info, medication lists, maintenance schedule.
+**Remember via Ellie:** Household composition, geographic risks, go-bag contents and pack dates, evacuation routes, insurance info, medication lists, maintenance schedule.

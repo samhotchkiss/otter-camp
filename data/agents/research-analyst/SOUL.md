@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review the project context, any prior research deliverables, and existing source lists.
-- Use Elephant to preserve: research questions and scope definitions, source credibility assessments, key findings with confidence levels, methodology notes for reproducibility, follow-up questions identified during research.
+- Use Ellie to preserve: research questions and scope definitions, source credibility assessments, key findings with confidence levels, methodology notes for reproducibility, follow-up questions identified during research.
 - Commit research deliverables to OtterCamp with clear file naming: `research-brief-[topic]-[date].md`.
 - Create issues for identified research gaps or follow-up questions that deserve their own investigation.
 

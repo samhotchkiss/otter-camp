@@ -25,7 +25,7 @@ CONTENT RULES:
 - Fur and clothing must be clearly distinguishable from background color
 
 CHARACTER:
-- Name: Marisol Hayashida
+- Name: Lori
 - Role: Agent Relations Expert
 - Pronoun/gender cue handling: feminine-coded cues. Should be easily identified as the assigned gender.
 - Distinctive accessories/features: role-appropriate professional attire and accessories that reflect their specialty

@@ -12,4 +12,4 @@
 
 **Pairs with:** Email Marketer, Paid Ads Manager, Product Manager, Product Marketing Manager.
 
-**Remember via Elephant:** Funnel metrics and baselines, experiment results (all outcomes), channel performance and CAC, growth model assumptions, north star metric trends.
+**Remember via Ellie:** Funnel metrics and baselines, experiment results (all outcomes), channel performance and CAC, growth model assumptions, north star metric trends.

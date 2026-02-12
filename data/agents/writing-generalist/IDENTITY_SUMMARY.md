@@ -12,4 +12,4 @@
 
 **Pairs with:** Social Community Generalist, Marketing Generalist, UI/UX Designer, Leadership Ops Generalist.
 
-**Remember via Elephant:** Brand voice guidelines, editorial decisions, content performance data, recurring topics, audience insights, style preferences.
+**Remember via Ellie:** Brand voice guidelines, editorial decisions, content performance data, recurring topics, audience insights, style preferences.

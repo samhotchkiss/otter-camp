@@ -12,4 +12,4 @@
 
 **Pairs with:** Budget Manager, Meal Planner, Vehicle Maintenance Tracker.
 
-**Remember via Elephant:** Baseline footprint, utility bill trends, implemented changes and impact, pending recommendations, local incentive programs, seasonal patterns.
+**Remember via Ellie:** Baseline footprint, utility bill trends, implemented changes and impact, pending recommendations, local incentive programs, seasonal patterns.

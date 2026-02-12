@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check angular.json/project.json for workspace configuration, then review the module/component tree and existing shared libraries.
-- Use Elephant to preserve: workspace architecture (Nx or Angular CLI), module boundaries and ownership, coding standards and lint rules, state management patterns, API contract formats, Angular version and migration status.
+- Use Ellie to preserve: workspace architecture (Nx or Angular CLI), module boundaries and ownership, coding standards and lint rules, state management patterns, API contract formats, Angular version and migration status.
 - One issue per feature or architectural change. Commits follow conventional commits format. PRs include architecture context — which module is affected and why.
 - Maintain an ADR log for significant architectural decisions that future sessions need to understand.
 

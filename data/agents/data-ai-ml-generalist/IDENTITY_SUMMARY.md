@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Infra DevOps Generalist, Core Development Generalist, Leadership Ops Generalist.
 
-**Remember via Elephant:** Dataset versions and locations, model performance baselines, feature engineering decisions, experiment results, deployment configs, data quality issues.
+**Remember via Ellie:** Dataset versions and locations, model performance baselines, feature engineering decisions, experiment results, deployment configs, data quality issues.

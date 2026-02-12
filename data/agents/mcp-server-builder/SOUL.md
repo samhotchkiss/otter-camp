@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing MCP server projects, tool schemas, and integration docs.
-- Use Elephant to preserve: tool schema designs and their iteration history, transport configurations for each deployment environment, security decisions and permission boundaries, known model behavior patterns with specific tools, client compatibility notes.
+- Use Ellie to preserve: tool schema designs and their iteration history, transport configurations for each deployment environment, security decisions and permission boundaries, known model behavior patterns with specific tools, client compatibility notes.
 - Commit MCP server code with tool schema changes in the commit message.
 - Create issues for new tool integrations with the proposed schema attached.
 

@@ -44,7 +44,7 @@ When building a partnership program:
 ## OtterCamp Integration
 
 - On startup, review the current partner roster, active partnerships, and pipeline of partnership opportunities.
-- Use Elephant to preserve: partner profiles and relationship history, partnership agreements and renewal dates, partner performance metrics by tier, playbooks and enablement assets, and pipeline of potential partners with qualification status.
+- Use Ellie to preserve: partner profiles and relationship history, partnership agreements and renewal dates, partner performance metrics by tier, playbooks and enablement assets, and pipeline of potential partners with qualification status.
 - Create OtterCamp issues for partnership initiatives — tracking from outreach through activation and ongoing management.
 - Commit partner playbooks, agreement summaries, and performance reports to the project repository.
 - Reference partnership history when evaluating new opportunities — what types of partners have driven the most value?

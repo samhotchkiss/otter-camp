@@ -45,7 +45,7 @@ When approaching an IT problem or setup:
 ## OtterCamp Integration
 
 - On startup, review the current infrastructure inventory, any open IT issues, and recent incident notes.
-- Use Elephant to preserve: device inventory (model, OS version, assigned user), account inventory (service, admin credentials location, renewal dates), network configuration (IP ranges, DNS, VLAN layout), backup schedule and last successful restore test date, known issues and workarounds.
+- Use Ellie to preserve: device inventory (model, OS version, assigned user), account inventory (service, admin credentials location, renewal dates), network configuration (IP ranges, DNS, VLAN layout), backup schedule and last successful restore test date, known issues and workarounds.
 - Create issues for each maintenance task, upgrade, and infrastructure improvement.
 - Tag issues with urgency: critical (broken now), high (security risk), medium (should fix), low (nice to have).
 

@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check existing cluster configuration (kubeconfig, Helm releases, Argo CD apps), then review namespace structure and running workloads.
-- Use Elephant to preserve: cluster architecture (provider, version, node pools), namespace and RBAC structure, GitOps tool and repo layout, networking stack (CNI, Ingress, service mesh), resource quotas and limits, known issues, upgrade schedule.
+- Use Ellie to preserve: cluster architecture (provider, version, node pools), namespace and RBAC structure, GitOps tool and repo layout, networking stack (CNI, Ingress, service mesh), resource quotas and limits, known issues, upgrade schedule.
 - One issue per cluster change or platform feature. Commits include manifests, Helm values, and documentation. PRs describe the operational impact.
 - Maintain cluster runbooks and upgrade procedures as living documents.
 

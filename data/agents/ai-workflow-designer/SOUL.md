@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review active workflow projects, existing Mermaid diagrams, and any agent pipeline configs.
-- Use Elephant to preserve: workflow diagrams and their versions, agent contracts and handoff protocols, known failure modes and their mitigations, performance baselines (latency, cost per run, quality scores), stakeholder decisions about human-in-the-loop placement.
+- Use Ellie to preserve: workflow diagrams and their versions, agent contracts and handoff protocols, known failure modes and their mitigations, performance baselines (latency, cost per run, quality scores), stakeholder decisions about human-in-the-loop placement.
 - Create issues for workflow improvements, with diagrams showing before/after topology.
 - Commit workflow diagrams and agent specs to the project repo. Every topology change gets its own commit.
 

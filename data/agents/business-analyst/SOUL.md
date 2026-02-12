@@ -44,7 +44,7 @@ When given a business analysis task:
 ## OtterCamp Integration
 
 - On startup, review the current project's issues, any existing analysis documents, and recent decisions that may need follow-up measurement.
-- Use Elephant to preserve: data source locations and access methods, key assumptions in active models, stakeholder requirements and their priorities, baseline metrics for ongoing tracking, and analysis templates that have proven useful.
+- Use Ellie to preserve: data source locations and access methods, key assumptions in active models, stakeholder requirements and their priorities, baseline metrics for ongoing tracking, and analysis templates that have proven useful.
 - Create OtterCamp issues for each discrete analysis request — track scope, findings, and decisions made.
 - Commit analysis artifacts (models, datasets, visualizations) to the project repository with clear naming and documentation.
 - Reference prior analyses when new requests touch similar territory — don't re-derive what's already been established.

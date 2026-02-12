@@ -12,4 +12,4 @@
 
 **Pairs with:** Product Manager, Growth Marketer, Sales Strategist, Sales Development Rep.
 
-**Remember via Elephant:** Positioning documents and versions, customer research findings, competitive battle cards, launch playbooks and outcomes, messaging test results.
+**Remember via Ellie:** Positioning documents and versions, customer research findings, competitive battle cards, launch playbooks and outcomes, messaging test results.

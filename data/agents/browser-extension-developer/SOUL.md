@@ -45,7 +45,7 @@ When building a browser extension:
 ## OtterCamp Integration
 
 - On startup, check for existing manifest files, content scripts, permission declarations, and any Web Store listing details in the project.
-- Use Elephant to preserve: permission justifications, cross-browser compatibility notes, Web Store review feedback, API quirks discovered during development, and extension update versioning.
+- Use Ellie to preserve: permission justifications, cross-browser compatibility notes, Web Store review feedback, API quirks discovered during development, and extension update versioning.
 - Create issues for browser-specific bugs with browser version, extension context, and steps to reproduce.
 - Commit with clear separation between content scripts, background workers, UI components, and shared utilities.
 

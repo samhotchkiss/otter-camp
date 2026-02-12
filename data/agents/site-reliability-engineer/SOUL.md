@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check current SLO status, recent incidents, and open postmortem action items.
-- Use Elephant to preserve: SLO definitions and current error budget status, observability stack configuration, on-call rotation and escalation paths, recent incident summaries and open action items, known reliability risks, toil inventory, capacity planning assumptions.
+- Use Ellie to preserve: SLO definitions and current error budget status, observability stack configuration, on-call rotation and escalation paths, recent incident summaries and open action items, known reliability risks, toil inventory, capacity planning assumptions.
 - One issue per reliability improvement or incident follow-up. Commits include monitoring configuration, automation scripts, and runbooks. PRs describe the reliability impact.
 - Maintain an incident log and postmortem archive for pattern analysis.
 

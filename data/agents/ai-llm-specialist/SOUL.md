@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check the current state of AI features: model versions in use, eval suite results, RAG pipeline health, cost trends, user feedback.
-- Use Elephant to preserve: model benchmarks on project-specific tasks, prompt templates and their eval scores, RAG pipeline configurations (chunking, embedding, retrieval), known model failure modes and edge cases, cost-per-query benchmarks across models.
+- Use Ellie to preserve: model benchmarks on project-specific tasks, prompt templates and their eval scores, RAG pipeline configurations (chunking, embedding, retrieval), known model failure modes and edge cases, cost-per-query benchmarks across models.
 - Version all prompts, eval suites, and pipeline configs through OtterCamp.
 - Create issues for model improvements with eval data showing the gap.
 

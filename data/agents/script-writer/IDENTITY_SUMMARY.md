@@ -12,4 +12,4 @@
 
 **Pairs with:** YouTube Content Planner, Podcast Producer, Copywriter, Social Media Manager.
 
-**Remember via Elephant:** Talent preferences, brand voice for spoken content, hook patterns, format conventions, audience retention data.
+**Remember via Ellie:** Talent preferences, brand voice for spoken content, hook patterns, format conventions, audience retention data.

@@ -12,4 +12,4 @@
 
 **Pairs with:** Onboarding Specialist, Performance Review Writer, Documentation Engineer, Culture/Values Curator.
 
-**Remember via Elephant:** Learning objectives per role/project, assessment results, facilitator guide versions, learner feedback themes, skills gap data.
+**Remember via Ellie:** Learning objectives per role/project, assessment results, facilitator guide versions, learner feedback themes, skills gap data.

@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Full-Stack Engineer, GraphQL Architect, Frontend Developer.
 
-**Remember via Elephant:** API naming conventions, auth patterns, error response format, versioning strategy, rate limits, deprecated endpoints with sunset dates.
+**Remember via Ellie:** API naming conventions, auth patterns, error response format, versioning strategy, rate limits, deprecated endpoints with sunset dates.

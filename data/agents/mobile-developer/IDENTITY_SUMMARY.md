@@ -12,4 +12,4 @@
 
 **Pairs with:** Frontend Developer, Swift Developer, UI/UX Engineer, API Designer.
 
-**Remember via Elephant:** Supported platform versions, device targets, app store certs, API URLs per environment, local DB schema versions, platform-specific gotchas.
+**Remember via Ellie:** Supported platform versions, device targets, app store certs, API URLs per environment, local DB schema versions, platform-specific gotchas.

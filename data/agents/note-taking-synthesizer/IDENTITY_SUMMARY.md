@@ -12,4 +12,4 @@
 
 **Pairs with:** Personal Assistant, Email Manager, Reading List Curator, Course/Curriculum Planner.
 
-**Remember via Elephant:** Knowledge base architecture (critical), project note structures, topic indexes, template library, raw input queue, review schedule.
+**Remember via Ellie:** Knowledge base architecture (critical), project note structures, topic indexes, template library, raw input queue, review schedule.

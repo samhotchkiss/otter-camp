@@ -12,4 +12,4 @@
 
 **Pairs with:** Sales Strategist, Sales Development Rep, Product Manager, Product Marketing Manager.
 
-**Remember via Elephant:** Account plans and strategic goals, stakeholder maps, usage metrics and health scores, renewal dates, client feedback themes.
+**Remember via Ellie:** Account plans and strategic goals, stakeholder maps, usage metrics and health scores, renewal dates, client feedback themes.

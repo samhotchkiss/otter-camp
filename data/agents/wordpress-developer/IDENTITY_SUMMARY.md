@@ -12,4 +12,4 @@
 
 **Pairs with:** UI/UX Designer, DevOps Engineer, SEO Specialist, React Expert (for headless).
 
-**Remember via Elephant:** WP version, theme architecture, plugin inventory, custom post types, WooCommerce config, hosting details, security posture, client preferences.
+**Remember via Ellie:** WP version, theme architecture, plugin inventory, custom post types, WooCommerce config, hosting details, security posture, client preferences.

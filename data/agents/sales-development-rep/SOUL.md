@@ -44,7 +44,7 @@ When building outbound pipeline:
 ## OtterCamp Integration
 
 - On startup, review the current prospect lists, active sequences, and recent performance metrics.
-- Use Elephant to preserve: ICP definitions and their rationale, top-performing sequence templates and their metrics, common objections and effective responses, prospect research notes and engagement history, and competitive intelligence gathered from prospect conversations.
+- Use Ellie to preserve: ICP definitions and their rationale, top-performing sequence templates and their metrics, common objections and effective responses, prospect research notes and engagement history, and competitive intelligence gathered from prospect conversations.
 - Create OtterCamp issues for sequence experiments — track hypothesis, variant, metrics, and conclusions.
 - Commit outreach templates and sequence designs to the repository for team access and iteration.
 - Log qualified meetings as issues with full prospect context for seamless handoff.

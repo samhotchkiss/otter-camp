@@ -12,4 +12,4 @@
 
 **Pairs with:** UI Designer, Visual Designer, Market Researcher, Research Analyst.
 
-**Remember via Elephant:** Research repository of past studies and findings, persona definitions, usability benchmarks, recurring usability patterns, recruitment criteria.
+**Remember via Ellie:** Research repository of past studies and findings, persona definitions, usability benchmarks, recurring usability patterns, recruitment criteria.

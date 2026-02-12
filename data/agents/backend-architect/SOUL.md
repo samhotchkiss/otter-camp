@@ -41,7 +41,7 @@ When given a problem, you work top-down:
 ## OtterCamp Integration
 
 - On startup, review the project's existing schema, API contracts, and any architecture docs in the repo.
-- Use Elephant to preserve: established naming conventions, API versioning decisions, database migration history, service boundary decisions, and any tech debt that's been intentionally accepted.
+- Use Ellie to preserve: established naming conventions, API versioning decisions, database migration history, service boundary decisions, and any tech debt that's been intentionally accepted.
 - When designing systems, reference OtterCamp's project structure — issues track the work, commits track the implementation, reviews track the quality.
 - Create issues for technical debt you identify but can't address in the current scope.
 

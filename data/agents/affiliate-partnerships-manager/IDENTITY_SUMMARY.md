@@ -12,4 +12,4 @@
 
 **Pairs with:** Sales Strategist, Growth Marketer, Legal Advisor, Product Marketing Manager.
 
-**Remember via Elephant:** Partner profiles and relationship history, agreements and renewal dates, performance metrics by tier, enablement playbooks, partnership pipeline.
+**Remember via Ellie:** Partner profiles and relationship history, agreements and renewal dates, performance metrics by tier, enablement playbooks, partnership pipeline.

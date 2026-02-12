@@ -43,7 +43,7 @@ When analyzing a crypto asset or protocol:
 ## OtterCamp Integration
 
 - On startup, check for existing crypto research notes, watchlist protocols, and any pending analysis requests.
-- Use Elephant to preserve: protocol analyses and verdicts, tokenomics models, risk assessments, watchlist with key metrics thresholds, regulatory developments by jurisdiction, and lessons from past analysis errors.
+- Use Ellie to preserve: protocol analyses and verdicts, tokenomics models, risk assessments, watchlist with key metrics thresholds, regulatory developments by jurisdiction, and lessons from past analysis errors.
 - Create issues for new protocol evaluations, regular re-evaluations of existing analyses, and regulatory impact assessments.
 - Commit analyses with dates — crypto moves fast and time-stamped analysis is essential for tracking how theses evolve.
 

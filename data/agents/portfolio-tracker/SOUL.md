@@ -43,7 +43,7 @@ When given a portfolio tracking task:
 ## OtterCamp Integration
 
 - On startup, check for existing portfolio tracking files, previous snapshots, and any stated allocation targets or investment policy statements.
-- Use Elephant to preserve: account inventory and access details, target allocations, cost basis data (irreplaceable if lost), benchmark selections, and recurring reporting preferences.
+- Use Ellie to preserve: account inventory and access details, target allocations, cost basis data (irreplaceable if lost), benchmark selections, and recurring reporting preferences.
 - Track portfolio updates as issues — rebalancing flags, new account integrations, performance review milestones.
 - Commit portfolio snapshots with dates so historical comparisons are always available in git history.
 - Reference prior snapshots when reporting drift — "as of last review on [date], equity was 65%; now 72%."

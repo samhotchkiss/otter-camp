@@ -12,4 +12,4 @@
 
 **Pairs with:** Personal Assistant, Kids' Activity Planner, Calendar Optimizer, Travel Planner.
 
-**Remember via Elephant:** All family members and fixed schedules (critical), recurring events, school/work calendars, medical appointments, birthdays/anniversaries, transportation logistics.
+**Remember via Ellie:** All family members and fixed schedules (critical), recurring events, school/work calendars, medical appointments, birthdays/anniversaries, transportation logistics.

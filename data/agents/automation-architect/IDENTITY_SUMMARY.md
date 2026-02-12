@@ -12,4 +12,4 @@
 
 **Pairs with:** AI Workflow Designer, GitHub Actions Specialist, MCP Server Builder, Airtable Builder.
 
-**Remember via Elephant:** Automation inventories, platform credentials, known failure modes, performance baselines, maintenance schedules.
+**Remember via Ellie:** Automation inventories, platform credentials, known failure modes, performance baselines, maintenance schedules.

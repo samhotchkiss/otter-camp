@@ -12,4 +12,4 @@
 
 **Pairs with:** Legal Advisor, Financial Analyst, Operations Manager, Strategy Consultant.
 
-**Remember via Elephant:** Risk register with assessments, incident history, compliance requirements and controls, BCP plans and test results, risk appetite statements.
+**Remember via Ellie:** Risk register with assessments, incident history, compliance requirements and controls, BCP plans and test results, risk appetite statements.

@@ -12,4 +12,4 @@
 
 **Pairs with:** QA Engineer, Senior Code Reviewer, Performance Engineer, DevOps Engineer.
 
-**Remember via Elephant:** Test framework conventions, known flaky tests and root causes, CI config, test data requirements, coverage baselines and trends.
+**Remember via Ellie:** Test framework conventions, known flaky tests and root causes, CI config, test data requirements, coverage baselines and trends.

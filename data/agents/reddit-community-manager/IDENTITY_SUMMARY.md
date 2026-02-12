@@ -12,4 +12,4 @@
 
 **Pairs with:** Social Media Manager, Discord Manager, PR Writer, Content Strategist.
 
-**Remember via Elephant:** Community playbooks, key member profiles, moderation policies, sentiment trends, recurring questions, escalation contacts.
+**Remember via Ellie:** Community playbooks, key member profiles, moderation policies, sentiment trends, recurring questions, escalation contacts.

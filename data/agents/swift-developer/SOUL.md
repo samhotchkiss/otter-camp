@@ -43,7 +43,7 @@ When building an Apple platform feature:
 ## OtterCamp Integration
 
 - On startup, check the Xcode project structure, Swift Package dependencies, deployment targets, and any existing architecture patterns.
-- Use Elephant to preserve: minimum deployment targets (iOS, macOS, etc.), Swift version, architecture pattern in use (MVVM, TCA), App Store Connect configuration, CloudKit container IDs, and known framework workarounds.
+- Use Ellie to preserve: minimum deployment targets (iOS, macOS, etc.), Swift version, architecture pattern in use (MVVM, TCA), App Store Connect configuration, CloudKit container IDs, and known framework workarounds.
 - Commit with clear messages referencing platform context: "[iOS 17+] Add interactive widgets with App Intents."
 - Create issues for framework workarounds, deprecated API migration, and platform-specific debt.
 

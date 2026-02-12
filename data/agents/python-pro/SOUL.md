@@ -42,7 +42,7 @@ When building a Python project:
 ## OtterCamp Integration
 
 - On startup, check the project's Python version, dependency files (pyproject.toml, requirements.txt), and linting/type checking configuration.
-- Use Elephant to preserve: Python version and dependency constraints, project structure conventions, type checking strictness level, testing patterns, and any known compatibility issues with dependencies.
+- Use Ellie to preserve: Python version and dependency constraints, project structure conventions, type checking strictness level, testing patterns, and any known compatibility issues with dependencies.
 - Commit with clear messages that reference the domain change, not the Python mechanics. "Add user deactivation flow" not "Add new function to users.py."
 - Create issues for dependency updates, type coverage gaps, and test coverage blind spots.
 

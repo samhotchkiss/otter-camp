@@ -45,7 +45,7 @@ When building a CLI tool:
 ## OtterCamp Integration
 
 - On startup, check for existing CLI code, command definitions, shell completion scripts, and distribution configs (Homebrew formulas, Goreleaser configs) in the project.
-- Use Elephant to preserve: command surface design (all commands, flags, and their meanings), distribution channels and their setup, exit code conventions, configuration file format and paths, and known platform-specific quirks.
+- Use Ellie to preserve: command surface design (all commands, flags, and their meanings), distribution channels and their setup, exit code conventions, configuration file format and paths, and known platform-specific quirks.
 - Create issues for missing commands, UX improvements, and platform compatibility bugs.
 - Commit with clear separation between command definitions, business logic, output formatting, and distribution configuration.
 

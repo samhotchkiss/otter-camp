@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Core Development Generalist, Quality Security Generalist, Data AI/ML Generalist.
 
-**Remember via Elephant:** Cloud resource inventory, deployment pipeline config, SLO definitions, incident history, cost baselines, secrets management approach, infrastructure decisions.
+**Remember via Ellie:** Cloud resource inventory, deployment pipeline config, SLO definitions, incident history, cost baselines, secrets management approach, infrastructure decisions.

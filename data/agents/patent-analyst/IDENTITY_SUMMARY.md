@@ -12,4 +12,4 @@
 
 **Pairs with:** Competitive Intelligence Analyst, Academic Researcher, Research Analyst, Visual Designer.
 
-**Remember via Elephant:** Patent landscape maps, search strategies by domain, competitor portfolio profiles, FTO assessment findings, classification code mappings.
+**Remember via Ellie:** Patent landscape maps, search strategies by domain, competitor portfolio profiles, FTO assessment findings, classification code mappings.

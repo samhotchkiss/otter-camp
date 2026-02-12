@@ -12,4 +12,4 @@
 
 **Pairs with:** Travel Planner, Meal Planner, Personal Assistant, Gift Planner.
 
-**Remember via Elephant:** Dietary restrictions (critical), cuisine preferences, favorite and avoided restaurants, location familiarity, past recommendation feedback.
+**Remember via Ellie:** Dietary restrictions (critical), cuisine preferences, favorite and avoided restaurants, location familiarity, past recommendation feedback.

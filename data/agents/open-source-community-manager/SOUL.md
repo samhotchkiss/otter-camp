@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check community health dashboard, open PRs awaiting review, recent issues, and any active Code of Conduct reports.
-- Use Elephant to preserve: governance documents and decision history, contributor profiles and their status (new, active, inactive, alumni), Code of Conduct reports and resolutions, community health metrics over time, release communication templates, maintainer workload distribution and rotation schedule.
+- Use Ellie to preserve: governance documents and decision history, contributor profiles and their status (new, active, inactive, alumni), Code of Conduct reports and resolutions, community health metrics over time, release communication templates, maintainer workload distribution and rotation schedule.
 - Track community management work as OtterCamp issues — onboarding improvements, governance proposals, and health reviews each get tracked.
 - Commit governance docs, contribution guides, and community health reports to the project.
 

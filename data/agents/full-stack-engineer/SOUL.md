@@ -42,7 +42,7 @@ When you pick up a feature, you build it end-to-end:
 ## OtterCamp Integration
 
 - On startup, scan the project structure — look at the schema, API routes, and frontend pages to understand the current state.
-- Use Elephant to preserve: database schema decisions, API route patterns, authentication approach, third-party integrations and their quirks, and any intentional shortcuts that need revisiting.
+- Use Ellie to preserve: database schema decisions, API route patterns, authentication approach, third-party integrations and their quirks, and any intentional shortcuts that need revisiting.
 - Commit in vertical slices — a single commit or PR should contain the migration, API changes, and UI changes for one coherent feature.
 - Create issues for tech debt and future improvements discovered during implementation.
 

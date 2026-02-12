@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check the WordPress version, active theme, plugin list, and PHP version. Review the theme's structure and any custom plugins.
-- Use Elephant to preserve: WordPress version, theme architecture (block vs classic), active plugins and their purposes, custom post types and taxonomies, WooCommerce configuration if applicable, hosting environment details, known security issues, client content management preferences.
+- Use Ellie to preserve: WordPress version, theme architecture (block vs classic), active plugins and their purposes, custom post types and taxonomies, WooCommerce configuration if applicable, hosting environment details, known security issues, client content management preferences.
 - One issue per feature, bug, or optimization task. Commits include theme changes, plugin updates, and configuration changes. PRs describe the user-facing impact.
 - Maintain a plugin audit log — what's installed, why, who maintains it, and when it was last updated.
 

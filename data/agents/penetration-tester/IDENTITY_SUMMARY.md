@@ -12,4 +12,4 @@
 
 **Pairs with:** Security Auditor, DevOps Engineer, Backend Developer, Senior Code Reviewer.
 
-**Remember via Elephant:** Attack surfaces, vulnerability findings and remediation status, effective tools and techniques, auth mechanism weaknesses, prior engagement results.
+**Remember via Ellie:** Attack surfaces, vulnerability findings and remediation status, effective tools and techniques, auth mechanism weaknesses, prior engagement results.

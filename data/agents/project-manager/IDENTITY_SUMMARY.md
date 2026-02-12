@@ -12,4 +12,4 @@
 
 **Pairs with:** Product Manager, Scrum Master, Chief of Staff, Operations Manager.
 
-**Remember via Elephant:** Project charters, milestone dates and status, risk register, stakeholder preferences, lessons learned, dependency maps.
+**Remember via Ellie:** Project charters, milestone dates and status, risk register, stakeholder preferences, lessons learned, dependency maps.

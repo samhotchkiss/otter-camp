@@ -12,4 +12,4 @@
 
 **Pairs with:** Trading Strategy Analyst, Portfolio Tracker, Privacy & Security Advisor, Market Watcher.
 
-**Remember via Elephant:** Protocol analyses, tokenomics models, risk assessments, watchlist thresholds, regulatory developments, past analysis errors.
+**Remember via Ellie:** Protocol analyses, tokenomics models, risk assessments, watchlist thresholds, regulatory developments, past analysis errors.

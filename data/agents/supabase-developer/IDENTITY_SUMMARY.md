@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Stripe Integration Specialist, Frontend Developer, DevOps Engineer.
 
-**Remember via Elephant:** Database schema and ERD, RLS policy rationale, migration history, Edge Function inventory, auth config, Supabase limitations, query performance benchmarks.
+**Remember via Ellie:** Database schema and ERD, RLS policy rationale, migration history, Edge Function inventory, auth config, Supabase limitations, query performance benchmarks.

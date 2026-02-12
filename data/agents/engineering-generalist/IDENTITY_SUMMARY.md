@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Frontend Developer, DevOps Engineer, Database Administrator — and every other specialist.
 
-**Remember via Elephant:** Architecture decisions, technology choices, known tech debt by layer, specialist handoff notes, cross-layer integration patterns.
+**Remember via Ellie:** Architecture decisions, technology choices, known tech debt by layer, specialist handoff notes, cross-layer integration patterns.

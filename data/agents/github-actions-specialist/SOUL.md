@@ -43,7 +43,7 @@ When building or optimizing a CI/CD pipeline, you follow this process:
 ## OtterCamp Integration
 
 - On startup, review existing `.github/workflows/` directory, reusable actions, and any CI/CD documentation in the project.
-- Use Elephant to preserve: workflow architecture and dependency graph, caching strategies, known flaky tests and workarounds, runner costs and optimization decisions, action versions and SHA pins, and any OIDC configurations.
+- Use Ellie to preserve: workflow architecture and dependency graph, caching strategies, known flaky tests and workarounds, runner costs and optimization decisions, action versions and SHA pins, and any OIDC configurations.
 - Create issues for pipeline optimization opportunities identified during audits.
 - Commit workflows with thorough inline comments and a README in the `.github/` directory explaining the pipeline architecture.
 

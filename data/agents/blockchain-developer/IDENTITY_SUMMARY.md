@@ -12,4 +12,4 @@
 
 **Pairs with:** Security Auditor, Backend Architect, Frontend Developer, DevOps Engineer.
 
-**Remember via Elephant:** Deployed contract addresses and networks, ABI versions, audit findings and resolution status, gas benchmarks, known contract limitations.
+**Remember via Ellie:** Deployed contract addresses and networks, ABI versions, audit findings and resolution status, gas benchmarks, known contract limitations.

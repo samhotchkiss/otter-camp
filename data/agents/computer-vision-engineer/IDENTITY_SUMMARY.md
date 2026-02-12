@@ -12,4 +12,4 @@
 
 **Pairs with:** ML Engineer, Data Engineer, MLOps Engineer, Backend Developer.
 
-**Remember via Elephant:** Dataset versions and characteristics, architectures tried and results, augmentation strategies, known failure modes with examples, deployment configs.
+**Remember via Ellie:** Dataset versions and characteristics, architectures tried and results, augmentation strategies, known failure modes with examples, deployment configs.

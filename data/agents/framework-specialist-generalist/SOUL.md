@@ -43,7 +43,7 @@ When building with or selecting a framework:
 ## OtterCamp Integration
 
 - On startup, check the project's framework, version, package manager, and configuration files. Understand the existing setup before suggesting changes.
-- Use Elephant to preserve: framework version and configuration decisions, plugin/library choices and rationale, known framework-specific gotchas, migration status, and performance benchmarks.
+- Use Ellie to preserve: framework version and configuration decisions, plugin/library choices and rationale, known framework-specific gotchas, migration status, and performance benchmarks.
 - Create issues for framework version upgrades with migration impact assessments.
 - Commit framework configuration changes separately from feature code — makes rollback cleaner.
 

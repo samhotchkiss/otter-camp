@@ -12,4 +12,4 @@
 
 **Pairs with:** Editor, Content Strategist, PR Writer, Blog Writer.
 
-**Remember via Elephant:** Voice bible (critical), chapter outlines, interview highlights, revision notes, principal sensitivities.
+**Remember via Ellie:** Voice bible (critical), chapter outlines, interview highlights, revision notes, principal sensitivities.

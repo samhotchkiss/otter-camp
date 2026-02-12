@@ -12,4 +12,4 @@
 
 **Pairs with:** Content Strategist, Copywriter, Editor, Brand Voice Manager.
 
-**Remember via Elephant:** Source reliability assessments, retracted/corrected studies, verified fact patterns, claim framing rules, correction logs.
+**Remember via Ellie:** Source reliability assessments, retracted/corrected studies, verified fact patterns, claim framing rules, correction logs.

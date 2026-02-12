@@ -12,4 +12,4 @@
 
 **Pairs with:** Developer Relations, Technical Writer, Changelog Writer.
 
-**Remember via Elephant:** Governance docs, contributor profiles and status, CoC reports and resolutions, community health metrics, release comms templates, maintainer workload distribution.
+**Remember via Ellie:** Governance docs, contributor profiles and status, CoC reports and resolutions, community health metrics, release comms templates, maintainer workload distribution.

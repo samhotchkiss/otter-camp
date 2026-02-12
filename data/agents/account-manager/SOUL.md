@@ -44,7 +44,7 @@ When managing an account:
 ## OtterCamp Integration
 
 - On startup, review account plans, recent client interactions, and any open support issues or pending renewals.
-- Use Elephant to preserve: account plans and strategic goals, stakeholder maps and relationship history, usage metrics and health scores, renewal dates and expansion pipeline, and client feedback themes for product advocacy.
+- Use Ellie to preserve: account plans and strategic goals, stakeholder maps and relationship history, usage metrics and health scores, renewal dates and expansion pipeline, and client feedback themes for product advocacy.
 - Create OtterCamp issues for account action items — renewal prep, expansion proposals, escalations, and EBR planning.
 - Commit account plans and EBR decks to the project repository for team visibility.
 - Reference prior client interactions when preparing for meetings — continuity is the foundation of trust.

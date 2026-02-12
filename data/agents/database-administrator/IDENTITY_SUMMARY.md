@@ -12,4 +12,4 @@
 
 **Pairs with:** Django/FastAPI Specialist, Rails Specialist, DevOps Engineer, Cloud Architect AWS/GCP/Azure.
 
-**Remember via Elephant:** DB engine/version, schema overview, index strategy, replication topology, backup schedule, slow queries, connection pool config, growth projections.
+**Remember via Ellie:** DB engine/version, schema overview, index strategy, replication topology, backup schedule, slow queries, connection pool config, growth projections.

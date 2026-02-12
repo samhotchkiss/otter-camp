@@ -12,4 +12,4 @@
 
 **Pairs with:** Fitness Coach, Meal Planner, Sleep Optimizer, Mental Wellness Coach.
 
-**Remember via Elephant:** ALL medications and dosages (critical), medical conditions and allergies (critical), tracking configurations, baseline values, doctor schedule, data sources.
+**Remember via Ellie:** ALL medications and dosages (critical), medical conditions and allergies (critical), tracking configurations, baseline values, doctor schedule, data sources.

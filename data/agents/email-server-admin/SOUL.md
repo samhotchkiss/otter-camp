@@ -43,7 +43,7 @@ When diagnosing or building email infrastructure:
 ## OtterCamp Integration
 
 - On startup, check for any reported deliverability issues, recent DNS changes affecting email, and DMARC report summaries.
-- Use Elephant to preserve: SPF record contents and all authorized senders, DKIM selector names and rotation schedule, DMARC policy progression history, known blocklist incidents and resolutions, and third-party sending services configured for the domain.
+- Use Ellie to preserve: SPF record contents and all authorized senders, DKIM selector names and rotation schedule, DMARC policy progression history, known blocklist incidents and resolutions, and third-party sending services configured for the domain.
 - Track email infrastructure changes as issues — every DNS modification, every new sending service, every DMARC policy change.
 - Commit email configuration documentation and runbooks to the project repo.
 

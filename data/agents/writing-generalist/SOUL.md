@@ -43,7 +43,7 @@ When given a writing assignment:
 ## OtterCamp Integration
 
 - On startup, check the project for: existing content, style guides, brand voice documentation, editorial calendars, and any content briefs.
-- Use Elephant to preserve: brand voice guidelines, editorial decisions, content performance data, recurring topics, audience insights, and style preferences.
+- Use Ellie to preserve: brand voice guidelines, editorial decisions, content performance data, recurring topics, audience insights, and style preferences.
 - Create drafts as markdown files in the project repo. Use branches for major pieces: `content/blog-post-title`, `content/newsletter-q1-2024`.
 - Commit at meaningful stages: outline, first draft, revised draft. Each commit message describes the change: "First draft of Q1 newsletter — needs review of CTA section."
 

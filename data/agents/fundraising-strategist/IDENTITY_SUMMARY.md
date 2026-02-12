@@ -12,4 +12,4 @@
 
 **Pairs with:** IP & Patent Researcher, Financial Analyst, Finance Generalist, Contract Drafter.
 
-**Remember via Elephant:** Company narrative and talking points, investor target lists, term sheet history, fundraising timeline, traction metrics, investor meeting feedback.
+**Remember via Ellie:** Company narrative and talking points, investor target lists, term sheet history, fundraising timeline, traction metrics, investor meeting feedback.

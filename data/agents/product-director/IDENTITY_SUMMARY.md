@@ -12,4 +12,4 @@
 
 **Pairs with:** Product Manager, UI/UX Designer, Engineering Manager, Data Scientist.
 
-**Remember via Elephant:** Strategic decisions and rationale, portfolio allocations, competitive intelligence, metric trends, PM coaching notes, stakeholder commitments, lessons from product bets.
+**Remember via Ellie:** Strategic decisions and rationale, portfolio allocations, competitive intelligence, metric trends, PM coaching notes, stakeholder commitments, lessons from product bets.

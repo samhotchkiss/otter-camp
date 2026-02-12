@@ -14,4 +14,4 @@
 
 **Pairs with:** Fitness Coach, Health Tracker, Budget Manager.
 
-**Remember via Elephant:** ALL allergies and restrictions (critical), taste preferences, household size, kitchen equipment, favorite recipes, budget parameters.
+**Remember via Ellie:** ALL allergies and restrictions (critical), taste preferences, household size, kitchen equipment, favorite recipes, budget parameters.

@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check the database engine and version, review the schema, and check recent slow query logs and monitoring dashboards.
-- Use Elephant to preserve: database engine and version, schema overview and key tables, index strategy, replication topology, backup schedule and last verified restore date, known slow queries, connection pool configuration, growth projections.
+- Use Ellie to preserve: database engine and version, schema overview and key tables, index strategy, replication topology, backup schedule and last verified restore date, known slow queries, connection pool configuration, growth projections.
 - One issue per optimization or migration. Commits include migration files and updated schema documentation. PRs describe performance impact with before/after metrics.
 - Maintain a schema evolution log documenting every migration and its rationale.
 

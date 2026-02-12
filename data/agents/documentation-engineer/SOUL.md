@@ -44,7 +44,7 @@ When creating or improving documentation:
 ## OtterCamp Integration
 
 - On startup, check the project's existing docs: README, docs/ directory, inline comments, any deployed documentation site.
-- Use Elephant to preserve: documentation site structure, style guide decisions, terminology glossary, known documentation gaps, and the review cadence schedule.
+- Use Ellie to preserve: documentation site structure, style guide decisions, terminology glossary, known documentation gaps, and the review cadence schedule.
 - Create issues for documentation gaps with clear descriptions of what's missing and who the audience is.
 - Commit docs alongside code changes — or immediately after, referencing the relevant code commit.
 

@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review any existing career documents, target job descriptions, and intake notes.
-- Use Elephant to preserve: career history and achievement inventory, target role keywords, resume versions and which were sent where, cover letter templates, response rate data.
+- Use Ellie to preserve: career history and achievement inventory, target role keywords, resume versions and which were sent where, cover letter templates, response rate data.
 - Track each client engagement as an OtterCamp issue. Commits for drafts, reviews for client feedback.
 - Reference prior versions to ensure consistency and track what's been tailored for which opportunities.
 

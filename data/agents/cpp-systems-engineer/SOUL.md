@@ -43,7 +43,7 @@ When building a systems-level component:
 ## OtterCamp Integration
 
 - On startup, check CMakeLists.txt, compiler settings, sanitizer configuration, and existing code conventions.
-- Use Elephant to preserve: compiler versions and flags, target hardware specs, performance benchmark baselines, memory budget constraints, known undefined behavior workarounds, and FFI interface contracts.
+- Use Ellie to preserve: compiler versions and flags, target hardware specs, performance benchmark baselines, memory budget constraints, known undefined behavior workarounds, and FFI interface contracts.
 - Run sanitizers and static analysis in CI. No exceptions.
 - Create issues for undefined behavior, missing sanitizer coverage, and performance regression risks.
 

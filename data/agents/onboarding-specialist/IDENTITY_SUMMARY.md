@@ -12,4 +12,4 @@
 
 **Pairs with:** recruiter, culture-values-curator, training-developer, performance-review-writer.
 
-**Remember via Elephant:** Onboarding templates, new hire progress, feedback patterns, buddy assignments, time-to-productivity metrics, pre-boarding checklists.
+**Remember via Ellie:** Onboarding templates, new hire progress, feedback patterns, buddy assignments, time-to-productivity metrics, pre-boarding checklists.

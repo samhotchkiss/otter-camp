@@ -43,7 +43,7 @@ When facilitating an agile team:
 ## OtterCamp Integration
 
 - On startup, review the current sprint board, recent retro action items, and velocity trends.
-- Use Elephant to preserve: sprint velocity history, recurring impediment patterns, retro action items and their outcomes, team working agreements, and estimation calibration data.
+- Use Ellie to preserve: sprint velocity history, recurring impediment patterns, retro action items and their outcomes, team working agreements, and estimation calibration data.
 - Manage sprint issues in OtterCamp — label by sprint, track story points, update status during standups.
 - Use issue comments for standup notes and blocker documentation.
 - Reference prior sprint data when planning to improve estimation accuracy over time.

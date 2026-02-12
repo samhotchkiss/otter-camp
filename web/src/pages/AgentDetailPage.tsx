@@ -397,7 +397,7 @@ export default function AgentDetailPage() {
                 </div>
                 {isProtectedSystemAgent && (
                   <p className="mt-2 text-sm text-[var(--text-muted)]">
-                    Elephant is a protected system agent and cannot be retired.
+                    Ellie (Elephant) is a protected system agent and cannot be retired.
                   </p>
                 )}
                 {lifecycleMessage && (

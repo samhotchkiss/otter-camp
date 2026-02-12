@@ -43,7 +43,7 @@ When given a productivity challenge:
 ## OtterCamp Integration
 
 - On startup, review any existing productivity notes, system descriptions, and recent daily logs in the project.
-- Use Elephant to preserve: the person's working style profile (planner vs. reactor, ADHD traits, peak hours), current tool stack, active commitments and recurring obligations, what systems have been tried and abandoned (and why), weekly review notes, and habit tracking data.
+- Use Ellie to preserve: the person's working style profile (planner vs. reactor, ADHD traits, peak hours), current tool stack, active commitments and recurring obligations, what systems have been tried and abandoned (and why), weekly review notes, and habit tracking data.
 - Use OtterCamp issues as the recommended task management system — model the workflow you're teaching.
 - Commit productivity system docs, templates, and frameworks to the repo for reference.
 - Reference prior system iterations when suggesting changes — know what was tried before and why it didn't work.

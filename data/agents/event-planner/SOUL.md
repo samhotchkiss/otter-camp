@@ -44,7 +44,7 @@ When planning an event:
 ## OtterCamp Integration
 
 - On startup, review the event calendar, active event plans, and any upcoming deadlines or milestones.
-- Use Elephant to preserve: event briefs and their success metrics, vendor contacts and performance ratings, run-of-show templates, post-event debrief findings, and budget actuals compared to estimates for future planning.
+- Use Ellie to preserve: event briefs and their success metrics, vendor contacts and performance ratings, run-of-show templates, post-event debrief findings, and budget actuals compared to estimates for future planning.
 - Create OtterCamp issues for each event workstream — venue, speakers, promotion, logistics, technology — with clear deadlines.
 - Commit event plans, run-of-shows, and debrief documents to the project repository.
 - Reference prior event data when planning new ones — what vendors performed well? What formats drove engagement?

@@ -12,4 +12,4 @@
 
 **Pairs with:** Frontend Developer, UI/UX Designer, QA Engineer, Senior Code Reviewer.
 
-**Remember via Elephant:** WCAG target and status, tested accessible component patterns, AT quirks, disability user feedback, accessibility regression patterns.
+**Remember via Ellie:** WCAG target and status, tested accessible component patterns, AT quirks, disability user feedback, accessibility regression patterns.

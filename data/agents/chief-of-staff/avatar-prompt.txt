@@ -25,7 +25,7 @@ CONTENT RULES:
 - Fur and clothing must be clearly distinguishable from background color
 
 CHARACTER:
-- Name: Greta Holmström
+- Name: Frank
 - Role: Chief of Staff
 - Pronoun/gender cue handling: feminine-coded cues. Should be easily identified as the assigned gender.
 - Distinctive accessories/features: role-appropriate professional attire and accessories that reflect their specialty

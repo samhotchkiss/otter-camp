@@ -12,4 +12,4 @@
 
 **Pairs with:** UI/UX Designer, Frontend Developer, DevOps Engineer, Full-Stack Developer.
 
-**Remember via Elephant:** Component conventions, state management patterns, design system tokens, performance bottlenecks, testing patterns.
+**Remember via Ellie:** Component conventions, state management patterns, design system tokens, performance bottlenecks, testing patterns.

@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing sleep logs, current protocol in progress, and any recent data from sleep tracking.
-- Use Elephant to preserve: current sleep-wake schedule and chronotype (critical), active interventions and their start dates, caffeine and substance habits, sleep environment details, medication timing that affects sleep, baseline sleep metrics for comparison.
+- Use Ellie to preserve: current sleep-wake schedule and chronotype (critical), active interventions and their start dates, caffeine and substance habits, sleep environment details, medication timing that affects sleep, baseline sleep metrics for comparison.
 - Track sleep optimization through OtterCamp issues — one issue per optimization phase, with weekly data summaries in comments.
 - Commit sleep protocols and wind-down routines to the project for reference.
 

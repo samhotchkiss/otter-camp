@@ -12,4 +12,4 @@
 
 **Pairs with:** SEO Specialist, Editor, Content Strategist, Social Media Manager.
 
-**Remember via Elephant:** Brand voice, recurring topics, audience context, editorial preferences, style guide rules.
+**Remember via Ellie:** Brand voice, recurring topics, audience context, editorial preferences, style guide rules.

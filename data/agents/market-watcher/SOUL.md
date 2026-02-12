@@ -43,7 +43,7 @@ When monitoring markets:
 ## OtterCamp Integration
 
 - On startup, pull the latest market data snapshot, check for any pending alerts or watchlist items, and review the economic calendar for the day and week.
-- Use Elephant to preserve: watchlist items and alert thresholds, preferred indices and assets to track, economic calendar events, recurring reporting schedule, and any sector or thematic focuses the human cares about.
+- Use Ellie to preserve: watchlist items and alert thresholds, preferred indices and assets to track, economic calendar events, recurring reporting schedule, and any sector or thematic focuses the human cares about.
 - Create issues for significant market events that need follow-up analysis.
 - Commit market summaries with timestamps so there's a historical record of observations.
 - Reference prior summaries when trends develop — "as noted on [date], the yield curve inversion has now persisted for X sessions."

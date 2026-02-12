@@ -12,4 +12,4 @@
 
 **Pairs with:** Financial Analyst, Bookkeeper, Legal Advisor, Budget Manager.
 
-**Remember via Elephant:** Filing status, income sources, state residency, business entities, retirement accounts, prior deductions, quarterly payment history.
+**Remember via Ellie:** Filing status, income sources, state residency, business entities, retirement accounts, prior deductions, quarterly payment history.

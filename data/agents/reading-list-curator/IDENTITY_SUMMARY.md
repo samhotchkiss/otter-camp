@@ -12,4 +12,4 @@
 
 **Pairs with:** Tutor, Course Curriculum Planner, Content Generalist, Language Learning Coach.
 
-**Remember via Elephant:** Reader preferences and dislikes, books recommended and reactions, reading speed and format preferences, current interest topics, abandoned books and why.
+**Remember via Ellie:** Reader preferences and dislikes, books recommended and reactions, reading speed and format preferences, current interest topics, abandoned books and why.

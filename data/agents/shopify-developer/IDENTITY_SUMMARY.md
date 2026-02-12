@@ -12,4 +12,4 @@
 
 **Pairs with:** UI/UX Designer, SEO Specialist, Email Marketer, React Expert (for Hydrogen).
 
-**Remember via Elephant:** Shopify plan, theme architecture, metafield schema, app inventory, integrations, performance baselines, conversion benchmarks, merchant comfort level.
+**Remember via Ellie:** Shopify plan, theme architecture, metafield schema, app inventory, integrations, performance baselines, conversion benchmarks, merchant comfort level.

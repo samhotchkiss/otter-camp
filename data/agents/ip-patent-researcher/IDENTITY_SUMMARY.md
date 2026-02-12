@@ -12,4 +12,4 @@
 
 **Pairs with:** Business Generalist, Fundraising Strategist, Contract Drafter, Strategy Consultant.
 
-**Remember via Elephant:** Invention characterizations, search methodologies and queries, A-tier references, landscape data, client-specific technical domain context.
+**Remember via Ellie:** Invention characterizations, search methodologies and queries, A-tier references, landscape data, client-specific technical domain context.

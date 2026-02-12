@@ -12,4 +12,4 @@
 
 **Pairs with:** Culture & Values Curator, Training Developer, Legal Advisor, Compensation Analyst.
 
-**Remember via Elephant:** Team roster, onboarding checklists, review cycle dates, active policies, compensation bands, engagement survey trends.
+**Remember via Ellie:** Team roster, onboarding checklists, review cycle dates, active policies, compensation bands, engagement survey trends.

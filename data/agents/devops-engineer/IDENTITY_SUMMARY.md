@@ -12,4 +12,4 @@
 
 **Pairs with:** Cloud Architect AWS/GCP/Azure, Platform Engineer, Site Reliability Engineer, Database Administrator.
 
-**Remember via Elephant:** CI/CD structure, infra provider/resources, env vars/secrets, deploy procedures, monitoring/alerts, cost baselines, known issues.
+**Remember via Ellie:** CI/CD structure, infra provider/resources, env vars/secrets, deploy procedures, monitoring/alerts, cost baselines, known issues.

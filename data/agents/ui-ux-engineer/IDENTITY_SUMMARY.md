@@ -12,4 +12,4 @@
 
 **Pairs with:** Frontend Developer, Mobile Developer, API Designer, Backend Architect.
 
-**Remember via Elephant:** Design tokens, component API decisions, accessibility standards, user research findings, UX debt.
+**Remember via Ellie:** Design tokens, component API decisions, accessibility standards, user research findings, UX debt.

@@ -12,4 +12,4 @@
 
 **Pairs with:** Database Administrator, Django/FastAPI Specialist, Cloud Architect AWS/GCP, React Expert.
 
-**Remember via Elephant:** Database engine(s), data model and access patterns, partition strategy, consistency models, index/GSI config, storage costs, known hot partitions.
+**Remember via Ellie:** Database engine(s), data model and access patterns, partition strategy, consistency models, index/GSI config, storage costs, known hot partitions.

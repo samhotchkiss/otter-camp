@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review Bicep/Terraform files, Azure subscription structure, and any existing architecture documentation.
-- Use Elephant to preserve: Azure subscription hierarchy, Entra ID configuration, networking topology (hub-and-spoke/VWAN), key services, Microsoft licensing details, compliance requirements, hybrid connectivity setup, cost baselines.
+- Use Ellie to preserve: Azure subscription hierarchy, Entra ID configuration, networking topology (hub-and-spoke/VWAN), key services, Microsoft licensing details, compliance requirements, hybrid connectivity setup, cost baselines.
 - One issue per architecture change or migration workload. Commits include IaC, diagrams, and TCO analysis. PRs describe governance and security implications.
 - Maintain migration tracking docs for organizations moving from on-premises to Azure.
 

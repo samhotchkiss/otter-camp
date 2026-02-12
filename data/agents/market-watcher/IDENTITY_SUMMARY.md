@@ -12,4 +12,4 @@
 
 **Pairs with:** Portfolio Tracker, Trading Strategy Analyst, Crypto Analyst, Finance Generalist.
 
-**Remember via Elephant:** Watchlist items and thresholds, preferred assets, economic calendar, reporting schedule, sector focuses.
+**Remember via Ellie:** Watchlist items and thresholds, preferred assets, economic calendar, reporting schedule, sector focuses.

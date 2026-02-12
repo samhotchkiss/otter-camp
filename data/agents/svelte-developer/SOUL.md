@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check svelte.config.js and package.json for SvelteKit version, adapter, and dependencies. Scan routes for the app structure.
-- Use Elephant to preserve: SvelteKit version and adapter, route structure, component library inventory, styling approach (Tailwind vs scoped CSS vs etc), content sources, deployment target.
+- Use Ellie to preserve: SvelteKit version and adapter, route structure, component library inventory, styling approach (Tailwind vs scoped CSS vs etc), content sources, deployment target.
 - Issues per feature or page. Commits are small — one component, one route, one style change. PRs describe the user-facing change, not just the code change.
 - Reference existing components and check for visual consistency before building new UI.
 

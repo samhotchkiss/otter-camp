@@ -44,7 +44,7 @@ When building or refining a content strategy:
 ## OtterCamp Integration
 
 - On startup, review the current content pillars, editorial calendar, and recent content performance data.
-- Use Elephant to preserve: content pillar definitions, audience personas, editorial calendar and publication schedule, content performance benchmarks, brand voice guidelines, and content briefs for in-progress pieces.
+- Use Ellie to preserve: content pillar definitions, audience personas, editorial calendar and publication schedule, content performance benchmarks, brand voice guidelines, and content briefs for in-progress pieces.
 - Track content planning as issues — each content piece from brief to publication gets tracked.
 - Commit content strategy documents, editorial calendars, and brand voice guides to the project repo.
 

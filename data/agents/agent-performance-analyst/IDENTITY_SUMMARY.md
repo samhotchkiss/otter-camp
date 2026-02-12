@@ -12,4 +12,4 @@
 
 **Pairs with:** prompt-engineer, ai-workflow-designer, automation-architect, ux-researcher.
 
-**Remember via Elephant:** Evaluation frameworks, baseline metrics, performance trends, A/B test results, quality gate thresholds, known failure patterns.
+**Remember via Ellie:** Evaluation frameworks, baseline metrics, performance trends, A/B test results, quality gate thresholds, known failure patterns.

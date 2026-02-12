@@ -12,4 +12,4 @@
 
 **Pairs with:** Product Marketing Manager, Growth Marketer, Operations Manager, Sales Strategist.
 
-**Remember via Elephant:** Event briefs and metrics, vendor contacts and ratings, run-of-show templates, debrief findings, budget actuals vs estimates.
+**Remember via Ellie:** Event briefs and metrics, vendor contacts and ratings, run-of-show templates, debrief findings, budget actuals vs estimates.

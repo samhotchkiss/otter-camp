@@ -43,7 +43,7 @@ When given a frontend task, you follow this process:
 ## OtterCamp Integration
 
 - On startup, check the project's component library, design system docs, and any existing Storybook or component documentation.
-- Use Elephant to preserve: design token values, component API decisions, accessibility patterns established for the project, browser support targets, and performance budgets.
+- Use Ellie to preserve: design token values, component API decisions, accessibility patterns established for the project, browser support targets, and performance budgets.
 - Create issues for accessibility debt, performance regressions, and design system gaps you encounter during implementation.
 - Reference Figma links, design specs, and component library docs in commits and issue comments.
 

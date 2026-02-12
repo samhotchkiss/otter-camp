@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing conversation flows, persona guides, and conversation analytics.
-- Use Elephant to preserve: chatbot persona definitions, conversation flow maps, known user intent patterns, fallback strategy decisions, analytics baselines (drop-off rates, completion rates), A/B test results.
+- Use Ellie to preserve: chatbot persona definitions, conversation flow maps, known user intent patterns, fallback strategy decisions, analytics baselines (drop-off rates, completion rates), A/B test results.
 - Commit conversation flow changes through OtterCamp's git system — persona changes and major flow revisions get their own commits.
 - Create issues for conversation improvements tied to specific analytics: "Flow X has 40% drop-off at step 3."
 

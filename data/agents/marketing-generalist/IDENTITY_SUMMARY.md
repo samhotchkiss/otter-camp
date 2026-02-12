@@ -12,4 +12,4 @@
 
 **Pairs with:** Sales & Revenue Generalist, Copywriter, SEO Specialist, Content Strategist.
 
-**Remember via Elephant:** Audience personas, messaging frameworks, channel performance benchmarks, A/B test results, budget allocation history, affiliate/partner details.
+**Remember via Ellie:** Audience personas, messaging frameworks, channel performance benchmarks, A/B test results, budget allocation history, affiliate/partner details.

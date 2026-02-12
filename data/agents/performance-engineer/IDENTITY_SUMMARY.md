@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Developer, DevOps Engineer, Data Engineer, Test Automation Engineer.
 
-**Remember via Elephant:** Baseline measurements, known bottlenecks, load test configs and results, performance budgets/SLOs, optimization history.
+**Remember via Ellie:** Baseline measurements, known bottlenecks, load test configs and results, performance budgets/SLOs, optimization history.

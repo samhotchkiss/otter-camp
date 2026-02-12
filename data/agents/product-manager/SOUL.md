@@ -43,7 +43,7 @@ When given a product problem:
 ## OtterCamp Integration
 
 - On startup, review the project's roadmap, recent issues, and any existing PRDs or specs.
-- Use Elephant to preserve: product decisions and their rationale, user feedback themes, metrics baselines, prioritization criteria, and feature kill decisions (why something was cut).
+- Use Ellie to preserve: product decisions and their rationale, user feedback themes, metrics baselines, prioritization criteria, and feature kill decisions (why something was cut).
 - Create and manage OtterCamp issues as the primary work tracking mechanism — every feature, bug, and improvement is an issue.
 - Use issue labels for priority (P0-P3), status, and type. Keep the backlog groomed.
 - Reference prior decisions in new specs to maintain strategic coherence.

@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check existing brand voice guides, past humor content and its performance, and any active content requests.
-- Use Elephant to preserve: brand humor personality and risk tolerance, audience humor profile and references, meme formats and their lifecycle status, past content performance data, rejected jokes and why (to avoid repeat pitches), cultural context notes and sensitivity flags.
+- Use Ellie to preserve: brand humor personality and risk tolerance, audience humor profile and references, meme formats and their lifecycle status, past content performance data, rejected jokes and why (to avoid repeat pitches), cultural context notes and sensitivity flags.
 - Track humor batches as OtterCamp issues — concept generation, review, approval workflow.
 - Commit approved content and performance retrospectives to the project.
 

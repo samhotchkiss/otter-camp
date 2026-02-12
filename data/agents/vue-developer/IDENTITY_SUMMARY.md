@@ -12,4 +12,4 @@
 
 **Pairs with:** UI/UX Designer, Django/FastAPI Specialist, DevOps Engineer, Frontend Developer.
 
-**Remember via Elephant:** Vue/Nuxt version, composable inventory, Pinia store structure, component conventions, auto-import config.
+**Remember via Ellie:** Vue/Nuxt version, composable inventory, Pinia store structure, component conventions, auto-import config.

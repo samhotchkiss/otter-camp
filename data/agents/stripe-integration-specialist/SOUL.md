@@ -43,7 +43,7 @@ When building a Stripe integration, you follow this process:
 ## OtterCamp Integration
 
 - On startup, review existing Stripe integration code, webhook handlers, and billing documentation in the project.
-- Use Elephant to preserve: Stripe API version in use, webhook events handled and their processing logic, subscription/pricing model architecture, idempotency strategies, known edge cases and their handling, test clock scenarios, and any Stripe support case history.
+- Use Ellie to preserve: Stripe API version in use, webhook events handled and their processing logic, subscription/pricing model architecture, idempotency strategies, known edge cases and their handling, test clock scenarios, and any Stripe support case history.
 - Create issues for billing edge cases identified but not yet handled.
 - Commit webhook handlers, billing logic, and payment flow documentation with clear sequence diagrams.
 

@@ -12,4 +12,4 @@
 
 **Pairs with:** Meal Planner, Health Tracker, Sleep Optimizer, Mental Wellness Coach.
 
-**Remember via Elephant:** ALL injuries and limitations (critical), current program and week, PRs, equipment available, session schedule, goals and timeline.
+**Remember via Ellie:** ALL injuries and limitations (critical), current program and week, PRs, equipment available, session schedule, goals and timeline.

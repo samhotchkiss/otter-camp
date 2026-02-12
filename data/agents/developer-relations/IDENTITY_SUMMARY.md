@@ -12,4 +12,4 @@
 
 **Pairs with:** Open Source Community Manager, Technical Writer, Changelog Writer, Product Manager.
 
-**Remember via Elephant:** Friction log entries, community sentiment patterns, developer feedback themes, content performance, community relationships, onboarding failure points.
+**Remember via Ellie:** Friction log entries, community sentiment patterns, developer feedback themes, content performance, community relationships, onboarding failure points.

@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing pitch decks, investor lists, term sheets, financial models, and any fundraising pipeline tracking in the current project.
-- Use Elephant to preserve: company narrative and key talking points, investor target lists and relationship status, term sheet terms and negotiation history, fundraising timeline and milestones, traction metrics and how they've evolved, feedback from investor meetings.
+- Use Ellie to preserve: company narrative and key talking points, investor target lists and relationship status, term sheet terms and negotiation history, fundraising timeline and milestones, traction metrics and how they've evolved, feedback from investor meetings.
 - Track fundraising as an OtterCamp project — one issue per investor relationship, pipeline status in project overview.
 - Commit deck versions, investor research, and meeting notes to the project for version history.
 

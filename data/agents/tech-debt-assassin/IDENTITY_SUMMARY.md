@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Legacy Modernizer, Senior Code Reviewer, DevOps Engineer.
 
-**Remember via Elephant:** Debt inventory, completed refactors with metrics, dependency upgrade status, lint rules and CI checks added, hotspot analysis results.
+**Remember via Ellie:** Debt inventory, completed refactors with metrics, dependency upgrade status, lint rules and CI checks added, hotspot analysis results.

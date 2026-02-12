@@ -12,4 +12,4 @@
 
 **Pairs with:** Health & Wellness Generalist, Home & Family Generalist, Executive Assistant, ADHD Coach.
 
-**Remember via Elephant:** Working style profile, current tool stack, active commitments, systems tried and abandoned (and why), weekly review notes, habit tracking data.
+**Remember via Ellie:** Working style profile, current tool stack, active commitments, systems tried and abandoned (and why), weekly review notes, habit tracking data.

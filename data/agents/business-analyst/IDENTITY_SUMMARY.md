@@ -12,4 +12,4 @@
 
 **Pairs with:** Product Manager, Financial Analyst, Operations Manager, Strategy Consultant.
 
-**Remember via Elephant:** Data source locations, key assumptions in active models, stakeholder requirements, baseline metrics, proven analysis templates.
+**Remember via Ellie:** Data source locations, key assumptions in active models, stakeholder requirements, baseline metrics, proven analysis templates.

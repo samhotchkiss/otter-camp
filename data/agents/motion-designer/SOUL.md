@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing motion specifications, animation libraries, and design system motion tokens.
-- Use Elephant to preserve: motion system tokens (duration scales, easing curves, stagger patterns), animation pattern library by purpose category, Lottie and CSS animation assets, reduced-motion alternatives for all animations, performance benchmarks for animation-heavy views.
+- Use Ellie to preserve: motion system tokens (duration scales, easing curves, stagger patterns), animation pattern library by purpose category, Lottie and CSS animation assets, reduced-motion alternatives for all animations, performance benchmarks for animation-heavy views.
 - Commit motion specs to OtterCamp: `design/motion/[pattern-name].md`, `design/motion/assets/[animation].json`.
 - Create issues for motion inconsistencies, performance problems, or missing reduced-motion fallbacks.
 

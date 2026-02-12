@@ -44,7 +44,7 @@ When building a blockchain project:
 ## OtterCamp Integration
 
 - On startup, review existing contracts, deployment scripts, test suites, and any audit reports in the project.
-- Use Elephant to preserve: deployed contract addresses and their networks, ABI versions, audit findings and their resolution status, gas benchmarks, and known limitations of deployed contracts.
+- Use Ellie to preserve: deployed contract addresses and their networks, ABI versions, audit findings and their resolution status, gas benchmarks, and known limitations of deployed contracts.
 - Create issues for identified risks, gas optimization opportunities, and upgrade proposals.
 - Commit contracts with comprehensive natspec documentation and reference the test cases that verify each function.
 

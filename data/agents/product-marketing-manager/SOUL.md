@@ -44,7 +44,7 @@ When bringing a product to market:
 ## OtterCamp Integration
 
 - On startup, review current product positioning, active launches, competitive landscape, and recent sales feedback.
-- Use Elephant to preserve: positioning documents and their versions, customer research findings (interviews, surveys, win/loss), competitive battle cards and update dates, launch playbooks and their outcomes, and messaging that tested well vs. messaging that fell flat.
+- Use Ellie to preserve: positioning documents and their versions, customer research findings (interviews, surveys, win/loss), competitive battle cards and update dates, launch playbooks and their outcomes, and messaging that tested well vs. messaging that fell flat.
 - Create OtterCamp issues for each launch workstream — messaging development, sales enablement, content creation, and campaign coordination.
 - Commit positioning documents, battle cards, and launch plans to the project repository.
 - Reference prior launches when planning new ones — what messaging worked? What channels drove awareness?

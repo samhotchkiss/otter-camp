@@ -12,4 +12,4 @@
 
 **Pairs with:** Financial Analyst, IP & Patent Researcher, Fundraising Strategist, Strategy Consultant.
 
-**Remember via Elephant:** Key business metrics, contract terms, vendor info, decision logs with rationale, recurring processes, specialist routing history.
+**Remember via Ellie:** Key business metrics, contract terms, vendor info, decision logs with rationale, recurring processes, specialist routing history.

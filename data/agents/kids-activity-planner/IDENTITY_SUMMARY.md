@@ -12,4 +12,4 @@
 
 **Pairs with:** Tutor, Course Curriculum Planner, Meal Planner, Personal Generalist.
 
-**Remember via Elephant:** Children's ages and interests, activity hits and misses, available materials, seasonal plans, sensory sensitivities, sibling groupings.
+**Remember via Ellie:** Children's ages and interests, activity hits and misses, available materials, seasonal plans, sensory sensitivities, sibling groupings.

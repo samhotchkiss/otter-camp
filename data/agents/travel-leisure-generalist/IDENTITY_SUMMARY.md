@@ -12,4 +12,4 @@
 
 **Pairs with:** Home & Family Generalist, Health & Wellness Generalist, Finance Generalist, Productivity Generalist.
 
-**Remember via Elephant:** Travel preferences, loyalty program details, passport/visa info, past trip reviews, dietary restrictions, adventure gear inventory.
+**Remember via Ellie:** Travel preferences, loyalty program details, passport/visa info, past trip reviews, dietary restrictions, adventure gear inventory.

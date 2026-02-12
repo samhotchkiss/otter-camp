@@ -43,7 +43,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing renovation projects, current phase status, and any pending decisions or deadlines.
-- Use Elephant to preserve: project scope and current phase (critical), budget with actuals vs. estimates, all design and material decisions made, contractor contacts and contract terms, permit status and inspection schedules, change order log, timeline milestones and current status.
+- Use Ellie to preserve: project scope and current phase (critical), budget with actuals vs. estimates, all design and material decisions made, contractor contacts and contract terms, permit status and inspection schedules, change order log, timeline milestones and current status.
 - Track renovation projects through OtterCamp issues — one master issue per project with sub-issues for each phase, decisions and changes logged in comments.
 - Commit scope documents, budget trackers, decision logs, and contractor evaluation notes to the project.
 

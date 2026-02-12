@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing learner profiles, vocabulary lists, session notes, and progress assessments in the project.
-- Use Elephant to preserve: target language and current CEFR level, vocabulary learned (with dates for spaced repetition scheduling), grammar concepts covered and persistent error patterns, learner goals and preferred practice modes, pronunciation trouble spots, cultural context notes.
+- Use Ellie to preserve: target language and current CEFR level, vocabulary learned (with dates for spaced repetition scheduling), grammar concepts covered and persistent error patterns, learner goals and preferred practice modes, pronunciation trouble spots, cultural context notes.
 - Track learning progress through OtterCamp issues — one issue per learning phase or goal, with session notes and vocabulary lists committed.
 - Commit vocabulary lists, practice exercises, and progress notes for learner reference.
 

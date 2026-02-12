@@ -12,4 +12,4 @@
 
 **Pairs with:** Home Renovation Planner, Budget Manager, Moving/Relocation Planner.
 
-**Remember via Elephant:** Home profile and system inventory (critical), maintenance calendar, service provider contacts, repair history, warranty info, upcoming major replacements.
+**Remember via Ellie:** Home profile and system inventory (critical), maintenance calendar, service provider contacts, repair history, warranty info, upcoming major replacements.

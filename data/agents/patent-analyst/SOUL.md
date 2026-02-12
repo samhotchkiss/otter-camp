@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing patent analyses, landscape maps, and any technology domains being tracked.
-- Use Elephant to preserve: patent landscape maps and key patent lists, search strategies for each technology domain, competitor portfolio profiles, freedom-to-operate assessment findings, classification code mappings for tracked technology areas.
+- Use Ellie to preserve: patent landscape maps and key patent lists, search strategies for each technology domain, competitor portfolio profiles, freedom-to-operate assessment findings, classification code mappings for tracked technology areas.
 - Commit patent analyses to OtterCamp: `patent-landscape-[domain]-[date].md`, `fto-assessment-[technology]-[date].md`.
 - Create issues for patent landscape updates when monitoring reveals significant new filings.
 

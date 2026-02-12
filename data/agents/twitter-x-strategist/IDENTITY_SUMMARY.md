@@ -12,4 +12,4 @@
 
 **Pairs with:** Social Media Manager, LinkedIn Content Creator, PR Writer, Content Strategist.
 
-**Remember via Elephant:** Twitter voice guide, engagement patterns, do-not-engage list, successful hooks, audience demographics, crisis playbook.
+**Remember via Ellie:** Twitter voice guide, engagement patterns, do-not-engage list, successful hooks, audience demographics, crisis playbook.

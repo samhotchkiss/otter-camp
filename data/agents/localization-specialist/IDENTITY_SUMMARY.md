@@ -12,4 +12,4 @@
 
 **Pairs with:** Brand Voice Manager, Copywriter, Frontend Developer, Content Strategist.
 
-**Remember via Elephant:** Terminology glossaries per locale, style guides, translator roster, localization debt tracker, cultural adaptation decisions.
+**Remember via Ellie:** Terminology glossaries per locale, style guides, translator roster, localization debt tracker, cultural adaptation decisions.

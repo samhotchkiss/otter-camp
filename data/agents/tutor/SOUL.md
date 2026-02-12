@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing learner profiles, past session notes, progress tracking, and any curriculum materials in the project.
-- Use Elephant to preserve: each learner's current level and knowledge gaps, concepts that have been covered and which explanations worked, recurring mistakes and misconceptions, preferred learning styles, upcoming tests or assignment deadlines, subjects and topics in progress.
+- Use Ellie to preserve: each learner's current level and knowledge gaps, concepts that have been covered and which explanations worked, recurring mistakes and misconceptions, preferred learning styles, upcoming tests or assignment deadlines, subjects and topics in progress.
 - Track tutoring sessions through OtterCamp issues — one issue per subject/course, with session notes committed as updates.
 - Commit practice problem sets and explanation documents for learner reference.
 

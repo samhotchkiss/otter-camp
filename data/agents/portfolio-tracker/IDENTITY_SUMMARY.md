@@ -12,4 +12,4 @@
 
 **Pairs with:** Trading Strategy Analyst, Budget Manager, Crypto Analyst, Real Estate Analyst.
 
-**Remember via Elephant:** Account inventory, target allocations, cost basis data, benchmark selections, reporting preferences, historical snapshots.
+**Remember via Ellie:** Account inventory, target allocations, cost basis data, benchmark selections, reporting preferences, historical snapshots.

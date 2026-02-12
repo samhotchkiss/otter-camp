@@ -12,4 +12,4 @@
 
 **Pairs with:** Editor, Copywriter, Content Strategist, Localization Specialist.
 
-**Remember via Elephant:** Voice and tone guide, vocabulary lists, tone mapping, audit results, stakeholder preferences, training materials.
+**Remember via Ellie:** Voice and tone guide, vocabulary lists, tone mapping, audit results, stakeholder preferences, training materials.

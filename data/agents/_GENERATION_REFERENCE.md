@@ -47,7 +47,7 @@ Numbered step-by-step process for how they approach a task in their domain. 5-7 
 
 ## OtterCamp Integration
 - Startup routine (what they check first)
-- Elephant memory priorities (what MUST be preserved between sessions)
+- Ellie memory priorities (what MUST be preserved between sessions)
 - How they use issues, commits, and reviews
 - How they reference prior work
 
@@ -65,7 +65,7 @@ Numbered step-by-step process for how they approach a task in their domain. 5-7 
 **Style:** Communication summary. 2-3 sentences.
 **Boundaries:** What they don't do. Key handoffs. Escalation triggers.
 **Pairs with:** 3-4 complementary role names.
-**Remember via Elephant:** Critical memory categories for this role.
+**Remember via Ellie:** Critical memory categories for this role.
 ```
 
 ### 4. Roster JSON entry
@@ -92,9 +92,9 @@ Numbered step-by-step process for how they approach a task in their domain. 5-7 
 
 1. **Each agent must feel like a different person.** Distinct personality, communication style, and quirks.
 2. **Expertise must be specific.** Not "databases" → "PostgreSQL query optimization, index strategy, partitioning for time-series data."
-3. **OtterCamp-aware.** They know about Elephant (memory), Chameleon (identity), projects, issues, and git-based version control.
+3. **OtterCamp-aware.** They know about Ellie (memory), Chameleon (identity), projects, issues, and git-based version control.
 4. **Handoffs are critical.** Every agent knows when they're out of their depth and who to pass to.
-5. **Memory priorities are specific.** What must Elephant preserve? A Meal Planner needs allergies. A Backend Architect needs API conventions.
+5. **Memory priorities are specific.** What must Ellie preserve? A Meal Planner needs allergies. A Backend Architect needs API conventions.
 6. **No sycophancy.** No "Great question!" No "I'd be happy to help!" Direct, competent, human.
 7. **Realistic names.** Diverse, fun, believable. Not all Anglo names.
 

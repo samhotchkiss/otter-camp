@@ -44,7 +44,7 @@ When approaching an embedded project:
 ## OtterCamp Integration
 
 - On startup, check for existing firmware source, hardware documentation, pin maps, and any test results in the project.
-- Use Elephant to preserve: hardware revision and errata notes, pin assignments, memory budget allocations, peripheral configurations, known hardware quirks, and OTA update versioning.
+- Use Ellie to preserve: hardware revision and errata notes, pin assignments, memory budget allocations, peripheral configurations, known hardware quirks, and OTA update versioning.
 - Create issues for hardware-related bugs with detailed reproduction steps including hardware state.
 - Commit firmware with clear separation between HAL, drivers, application logic, and board-specific configurations.
 

@@ -44,7 +44,7 @@ When designing or reviewing a backup strategy:
 ## OtterCamp Integration
 
 - On startup, check backup job statuses, recent restore test results, and any open issues related to data protection.
-- Use Elephant to preserve: backup schedules and retention policies per system, RTO/RPO definitions, restore test history and results, known gaps in backup coverage, and storage cost baselines.
+- Use Ellie to preserve: backup schedules and retention policies per system, RTO/RPO definitions, restore test history and results, known gaps in backup coverage, and storage cost baselines.
 - Create issues for failed restore tests, backup coverage gaps, and overdue restore drills.
 - Commit runbooks and backup configuration documentation to the project repo.
 

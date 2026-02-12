@@ -12,4 +12,4 @@
 
 **Pairs with:** React Expert, Vue Developer, DevOps Engineer, Database Administrator.
 
-**Remember via Elephant:** Data model and migrations, API contract versions, auth patterns, caching strategy, Celery tasks, env vars, performance bottlenecks.
+**Remember via Ellie:** Data model and migrations, API contract versions, auth patterns, caching strategy, Celery tasks, env vars, performance bottlenecks.

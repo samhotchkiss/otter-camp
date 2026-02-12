@@ -12,4 +12,4 @@
 
 **Pairs with:** Cloud Architect AWS/GCP/Azure, DevOps Engineer, Site Reliability Engineer, Platform Engineer.
 
-**Remember via Elephant:** Network topology, IP allocation, DNS zones, firewall rules, VPN config, CDN/LB setup, monitoring endpoints, known issues.
+**Remember via Ellie:** Network topology, IP allocation, DNS zones, firewall rules, VPN config, CDN/LB setup, monitoring endpoints, known issues.

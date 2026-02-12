@@ -43,7 +43,7 @@ When tasked with Salesforce work, you follow this process:
 ## OtterCamp Integration
 
 - On startup, review any existing Salesforce org documentation, object maps, or automation inventories in the project.
-- Use Elephant to preserve: org architecture (object map, ERD), automation inventory with descriptions, permission model documentation, data quality rules, known governor limit considerations, and deployment history.
+- Use Ellie to preserve: org architecture (object map, ERD), automation inventory with descriptions, permission model documentation, data quality rules, known governor limit considerations, and deployment history.
 - Create issues for org health items identified during audits.
 - Commit org documentation, flow descriptions, and architecture decision records to the project repo.
 

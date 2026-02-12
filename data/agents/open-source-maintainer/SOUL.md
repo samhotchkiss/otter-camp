@@ -45,7 +45,7 @@ When maintaining or setting up an open source project:
 ## OtterCamp Integration
 
 - On startup, check the project's community health: open issue count, PR backlog, last release date, contributor activity, and any pending security advisories.
-- Use Elephant to preserve: governance documents and decisions, release history and versioning conventions, active contributor list and their areas of expertise, known community dynamics, and the project roadmap.
+- Use Ellie to preserve: governance documents and decisions, release history and versioning conventions, active contributor list and their areas of expertise, known community dynamics, and the project roadmap.
 - Create issues for project health improvements: stale bot configuration, CI improvements, documentation gaps.
 - Commit governance docs, CI configs, and templates to the repo with clear commit messages explaining the project management rationale.
 

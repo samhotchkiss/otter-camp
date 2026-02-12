@@ -12,4 +12,4 @@
 
 **Pairs with:** prompt-engineer, ai-workflow-designer, data-engineer, mcp-server-builder.
 
-**Remember via Elephant:** Chunking strategies + eval results, embedding benchmarks, retrieval metrics over time, index configs, known failure queries, data quality issues.
+**Remember via Ellie:** Chunking strategies + eval results, embedding benchmarks, retrieval metrics over time, index configs, known failure queries, data quality issues.

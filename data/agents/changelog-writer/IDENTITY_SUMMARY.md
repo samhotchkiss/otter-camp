@@ -12,4 +12,4 @@
 
 **Pairs with:** Developer Relations, Technical Writer, Product Manager.
 
-**Remember via Elephant:** Changelog style guide, versioning conventions, past release patterns, user pain points, breaking change history, migration patterns.
+**Remember via Ellie:** Changelog style guide, versioning conventions, past release patterns, user pain points, breaking change history, migration patterns.

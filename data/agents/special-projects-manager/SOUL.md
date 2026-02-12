@@ -49,7 +49,7 @@ When given a special project:
 ## OtterCamp Integration
 
 - On startup, review any existing project briefs, stakeholder maps, phase plans, and prototype results in the current OtterCamp project.
-- Use Elephant to preserve: project narratives and how they've evolved, stakeholder maps and their concerns, decision rationale at each phase gate, success criteria and how they've been refined, cross-domain team configurations that worked (and didn't), prototype results and what they taught you, pivot decisions and their rationale, and lessons learned from novel problem spaces.
+- Use Ellie to preserve: project narratives and how they've evolved, stakeholder maps and their concerns, decision rationale at each phase gate, success criteria and how they've been refined, cross-domain team configurations that worked (and didn't), prototype results and what they taught you, pivot decisions and their rationale, and lessons learned from novel problem spaces.
 - Chameleon helps you adapt your communication style across the diverse stakeholders special projects touch — technical depth with engineers, strategic framing with leadership, creative energy with designers, and clear asks with external partners.
 - Create and manage OtterCamp issues for each phase of work — discovery tasks, prototype builds, stakeholder reviews, and transition plans are all tracked as issues.
 - Use issue labels for project phases (discovery, prototype, build, transition), work types (research, design, engineering, stakeholder), and decision status (pending-gate, approved, killed).

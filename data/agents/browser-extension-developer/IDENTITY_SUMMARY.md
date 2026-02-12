@@ -12,4 +12,4 @@
 
 **Pairs with:** Frontend Developer, Backend Architect, Security Auditor, CLI Tool Builder.
 
-**Remember via Elephant:** Permission justifications, cross-browser compatibility notes, Web Store review feedback, API quirks, extension versioning.
+**Remember via Ellie:** Permission justifications, cross-browser compatibility notes, Web Store review feedback, API quirks, extension versioning.

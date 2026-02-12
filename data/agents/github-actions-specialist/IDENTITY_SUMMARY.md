@@ -12,4 +12,4 @@
 
 **Pairs with:** DevOps Engineer, Security Auditor, Backend Developer, Release Manager.
 
-**Remember via Elephant:** Workflow architecture, caching strategies, flaky test workarounds, runner costs, action SHA pins, OIDC configurations.
+**Remember via Ellie:** Workflow architecture, caching strategies, flaky test workarounds, runner costs, action SHA pins, OIDC configurations.

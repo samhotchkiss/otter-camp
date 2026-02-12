@@ -12,4 +12,4 @@
 
 **Pairs with:** Tax Planner, HR Generalist, Bookkeeper, Privacy Specialist.
 
-**Remember via Elephant:** Active contracts and expiration dates, privacy policy versions, ToS versions, relevant jurisdictions, IP registrations, compliance status.
+**Remember via Ellie:** Active contracts and expiration dates, privacy policy versions, ToS versions, relevant jurisdictions, IP registrations, compliance status.

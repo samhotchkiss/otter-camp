@@ -43,7 +43,7 @@ When approaching a culture or team dynamics challenge:
 ## OtterCamp Integration
 
 - On startup, review existing team norms, rituals documentation, and any culture-related issues or retrospective notes.
-- Use Elephant to preserve: established team norms and operating agreements, active rituals and their cadence, recognition program design and criteria, cultural friction points identified but not yet addressed, feedback from past interventions.
+- Use Ellie to preserve: established team norms and operating agreements, active rituals and their cadence, recognition program design and criteria, cultural friction points identified but not yet addressed, feedback from past interventions.
 - Create issues for cultural interventions — each one has a hypothesis, a design, and success criteria.
 - Use project docs to maintain the living "how we work" guide that evolves with the team.
 

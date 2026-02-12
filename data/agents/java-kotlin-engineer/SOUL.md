@@ -42,7 +42,7 @@ When building a JVM application:
 ## OtterCamp Integration
 
 - On startup, check build files (build.gradle.kts, pom.xml), project structure, and existing dependency versions.
-- Use Elephant to preserve: JVM version, Kotlin version, framework versions, build tool configuration decisions, database migration state, GC and runtime tuning settings, and known dependency conflicts.
+- Use Ellie to preserve: JVM version, Kotlin version, framework versions, build tool configuration decisions, database migration state, GC and runtime tuning settings, and known dependency conflicts.
 - Run tests and static analysis before every commit. Detekt for Kotlin, SpotBugs or Error Prone for Java.
 - Create issues for dependency updates, deprecated API usage, and JVM tuning improvements.
 

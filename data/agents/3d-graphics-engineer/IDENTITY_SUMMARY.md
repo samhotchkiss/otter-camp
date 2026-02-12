@@ -12,4 +12,4 @@
 
 **Pairs with:** Game Developer, Audio/Video Engineer, Frontend Developer, Embedded Systems Engineer.
 
-**Remember via Elephant:** Rendering pipeline architecture, shader parameters, GPU benchmarks by hardware, visual quality decisions, platform-specific rendering issues.
+**Remember via Ellie:** Rendering pipeline architecture, shader parameters, GPU benchmarks by hardware, visual quality decisions, platform-specific rendering issues.

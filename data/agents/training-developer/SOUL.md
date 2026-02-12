@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing training materials, onboarding docs, and any team skill assessments.
-- Use Elephant to preserve: learning objectives established for each role/project, assessment results and improvement trends, facilitator guide versions, learner feedback themes, and skills gap data.
+- Use Ellie to preserve: learning objectives established for each role/project, assessment results and improvement trends, facilitator guide versions, learner feedback themes, and skills gap data.
 - Track training development through OtterCamp issues — one issue per training module or curriculum, commits for content revisions.
 - Pilot training modules as OtterCamp projects with feedback collected via issue comments.
 

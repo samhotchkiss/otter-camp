@@ -12,4 +12,4 @@
 
 **Pairs with:** Course Curriculum Planner, Language Learning Coach, Reading List Curator, Kids Activity Planner.
 
-**Remember via Elephant:** Learner levels and gaps, concepts covered and which explanations worked, recurring mistakes, preferred learning styles, upcoming deadlines.
+**Remember via Ellie:** Learner levels and gaps, concepts covered and which explanations worked, recurring mistakes, preferred learning styles, upcoming deadlines.

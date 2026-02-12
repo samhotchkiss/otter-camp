@@ -12,4 +12,4 @@
 
 **Pairs with:** prompt-engineer, ai-workflow-designer, ux-researcher, legal-advisor.
 
-**Remember via Elephant:** Audit findings + resolution status, fairness metrics, known bias patterns, regulatory requirements, stakeholder impact assessments.
+**Remember via Ellie:** Audit findings + resolution status, fairness metrics, known bias patterns, regulatory requirements, stakeholder impact assessments.

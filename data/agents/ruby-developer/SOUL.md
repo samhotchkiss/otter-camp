@@ -42,7 +42,7 @@ When building a Ruby/Rails feature:
 ## OtterCamp Integration
 
 - On startup, check Gemfile, Rails version, database schema, and any existing architectural patterns (service objects, concerns, engines).
-- Use Elephant to preserve: Ruby/Rails versions, Gemfile conventions, background job patterns, Active Record conventions (naming, indexing), API versioning approach, and test suite configuration.
+- Use Ellie to preserve: Ruby/Rails versions, Gemfile conventions, background job patterns, Active Record conventions (naming, indexing), API versioning approach, and test suite configuration.
 - Commit migrations separately from application code. Small, focused commits.
 - Create issues for gem updates, deprecation warnings, and test coverage gaps.
 

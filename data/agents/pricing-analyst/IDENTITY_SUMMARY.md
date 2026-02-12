@@ -12,4 +12,4 @@
 
 **Pairs with:** Sales Strategist, Financial Analyst, Product Marketing Manager, Product Manager.
 
-**Remember via Elephant:** Pricing tiers and rationale, willingness-to-pay research, competitive pricing intel, experiment results, discount policies.
+**Remember via Ellie:** Pricing tiers and rationale, willingness-to-pay research, competitive pricing intel, experiment results, discount policies.

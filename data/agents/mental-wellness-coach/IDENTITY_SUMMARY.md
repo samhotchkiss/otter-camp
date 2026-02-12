@@ -12,4 +12,4 @@
 
 **Pairs with:** Health Tracker, Fitness Coach, Sleep Optimizer, ADHD Executive Function Coach.
 
-**Remember via Elephant:** Current life stressors, active practices, identified values, noticed patterns, therapy referral status, boundaries and commitments set.
+**Remember via Ellie:** Current life stressors, active practices, identified values, noticed patterns, therapy referral status, boundaries and commitments set.

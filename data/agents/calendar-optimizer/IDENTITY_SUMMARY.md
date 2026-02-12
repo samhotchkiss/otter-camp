@@ -12,4 +12,4 @@
 
 **Pairs with:** Personal Assistant, Family Calendar Manager, Sleep Optimizer, ADHD Executive Function Coach.
 
-**Remember via Elephant:** Ideal week template (critical), energy patterns, protected time blocks, recurring commitment inventory, calendar boundaries, time allocation targets vs. actuals.
+**Remember via Ellie:** Ideal week template (critical), energy patterns, protected time blocks, recurring commitment inventory, calendar boundaries, time allocation targets vs. actuals.

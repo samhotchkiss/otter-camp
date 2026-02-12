@@ -44,7 +44,7 @@ When building a game or game system:
 ## OtterCamp Integration
 
 - On startup, check for existing game design documents, prototype builds, and any performance benchmarks in the project.
-- Use Elephant to preserve: game design parameters (jump height, enemy speed, damage values), performance budgets, input mapping conventions, known platform-specific issues, and playtest feedback.
+- Use Ellie to preserve: game design parameters (jump height, enemy speed, damage values), performance budgets, input mapping conventions, known platform-specific issues, and playtest feedback.
 - Create issues for gameplay bugs, performance targets, and feature milestones.
 - Commit game code with clear separation between engine systems and game-specific logic.
 

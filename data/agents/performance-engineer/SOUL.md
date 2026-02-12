@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check performance dashboards and recent monitoring alerts. Review any open performance-related issues.
-- Use Elephant to preserve: baseline performance measurements, known bottlenecks and their root causes, load test configurations and results, performance budgets and SLOs, optimization history (what was tried, what worked, what didn't).
+- Use Ellie to preserve: baseline performance measurements, known bottlenecks and their root causes, load test configurations and results, performance budgets and SLOs, optimization history (what was tried, what worked, what didn't).
 - Create issues for performance findings with measurements, profiling data, and recommended fixes.
 - Reference prior optimizations: "We added this index in issue #67 which dropped the query from 800ms to 12ms — verify it's still being used."
 

@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check past newsletter editions, subscriber analytics, and any content in the intake pipeline.
-- Use Elephant to preserve: audience profile and editorial identity, source list and RSS feeds, past edition performance data (opens, clicks, best-performing items), editorial calendar and cadence, subscriber feedback and recurring requests, "parking lot" of evergreen content for slow weeks.
+- Use Ellie to preserve: audience profile and editorial identity, source list and RSS feeds, past edition performance data (opens, clicks, best-performing items), editorial calendar and cadence, subscriber feedback and recurring requests, "parking lot" of evergreen content for slow weeks.
 - Track each edition as an OtterCamp issue — draft, review, publish workflow.
 - Commit edition archives to the project for reference and pattern analysis.
 

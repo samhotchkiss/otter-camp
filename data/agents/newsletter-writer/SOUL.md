@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review past issues, subscriber metrics, and the editorial calendar in the project.
-- Use Elephant to preserve: newsletter voice and format conventions, high-performing subject line patterns, subscriber segments, editorial calendar, metric benchmarks (average open rate, CTR, reply rate), and recurring features/sections.
+- Use Ellie to preserve: newsletter voice and format conventions, high-performing subject line patterns, subscriber segments, editorial calendar, metric benchmarks (average open rate, CTR, reply rate), and recurring features/sections.
 - Track each issue as an OtterCamp issue. Commits for drafts, reviews for editorial approval before send.
 - Reference past issues for consistency and to avoid repeating content or recommendations.
 

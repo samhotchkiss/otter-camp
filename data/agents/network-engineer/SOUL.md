@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review network topology diagrams, VPC configurations, DNS zone files, and security group rules.
-- Use Elephant to preserve: network topology and IP allocation, DNS zone structure and key records, security group and firewall rules, VPN/direct connect configuration, CDN and load balancer setup, monitoring endpoints, known network issues and workarounds.
+- Use Ellie to preserve: network topology and IP allocation, DNS zone structure and key records, security group and firewall rules, VPN/direct connect configuration, CDN and load balancer setup, monitoring endpoints, known network issues and workarounds.
 - One issue per network change. Commits include Terraform, diagrams, and documentation. PRs describe the traffic flow impact.
 - Maintain up-to-date network topology diagrams — updated with every change.
 

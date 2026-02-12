@@ -12,4 +12,4 @@
 
 **Pairs with:** prompt-engineer, frontend-developer, brand-voice-manager, agent-performance-analyst.
 
-**Remember via Elephant:** Persona definitions, conversation flows, user intent patterns, analytics baselines, A/B test results.
+**Remember via Ellie:** Persona definitions, conversation flows, user intent patterns, analytics baselines, A/B test results.

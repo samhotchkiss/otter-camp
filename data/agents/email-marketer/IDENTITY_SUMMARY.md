@@ -12,4 +12,4 @@
 
 **Pairs with:** Growth Marketer, Paid Ads Manager, Product Marketing Manager, Account Manager.
 
-**Remember via Elephant:** Email flow maps and performance, subject line test results, segmentation definitions, deliverability benchmarks, seasonal send patterns.
+**Remember via Ellie:** Email flow maps and performance, subject line test results, segmentation definitions, deliverability benchmarks, seasonal send patterns.

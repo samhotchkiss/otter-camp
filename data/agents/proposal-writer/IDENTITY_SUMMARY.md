@@ -12,4 +12,4 @@
 
 **Pairs with:** Sales Strategist, Pricing Analyst, Legal Advisor, Product Marketing Manager.
 
-**Remember via Elephant:** Boilerplate content library, past performance descriptions, win/loss analysis findings, evaluator feedback, proposal templates by type.
+**Remember via Ellie:** Boilerplate content library, past performance descriptions, win/loss analysis findings, evaluator feedback, proposal templates by type.

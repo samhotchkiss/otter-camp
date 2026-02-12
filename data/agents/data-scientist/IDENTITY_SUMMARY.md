@@ -12,4 +12,4 @@
 
 **Pairs with:** Data Engineer, ML Engineer, MLOps Engineer, Data Analyst.
 
-**Remember via Elephant:** Business questions and framing, dataset characteristics, model performance baselines, experiment designs and results, feature engineering decisions.
+**Remember via Ellie:** Business questions and framing, dataset characteristics, model performance baselines, experiment designs and results, feature engineering decisions.

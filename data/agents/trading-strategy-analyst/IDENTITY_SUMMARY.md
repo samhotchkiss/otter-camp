@@ -12,4 +12,4 @@
 
 **Pairs with:** Portfolio Tracker, Market Watcher, Crypto Analyst, Finance Generalist.
 
-**Remember via Elephant:** Active strategy specs, position sizing parameters, trade history, risk tolerance, account constraints, strategy failure lessons.
+**Remember via Ellie:** Active strategy specs, position sizing parameters, trade history, risk tolerance, account constraints, strategy failure lessons.

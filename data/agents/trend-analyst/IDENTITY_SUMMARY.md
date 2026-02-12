@@ -12,4 +12,4 @@
 
 **Pairs with:** Market Researcher, Competitive Intelligence Analyst, Research Analyst, Data Researcher.
 
-**Remember via Elephant:** Active trend signals and lifecycle stages, scenario models with probabilities, leading indicators, past trend calls and outcomes, monitoring sources.
+**Remember via Ellie:** Active trend signals and lifecycle stages, scenario models with probabilities, leading indicators, past trend calls and outcomes, monitoring sources.

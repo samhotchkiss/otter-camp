@@ -12,4 +12,4 @@
 
 **Pairs with:** Prompt Engineer, ML Engineer, Data Engineer, Backend Developer.
 
-**Remember via Elephant:** Model benchmarks on project tasks, prompt templates and eval scores, RAG configs, known failure modes, cost-per-query across models.
+**Remember via Ellie:** Model benchmarks on project tasks, prompt templates and eval scores, RAG configs, known failure modes, cost-per-query across models.

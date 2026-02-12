@@ -44,7 +44,7 @@ When given a project to manage:
 ## OtterCamp Integration
 
 - On startup, review the project's issue backlog, current milestone, and any recent status updates or blockers.
-- Use Elephant to preserve: project charter and objectives, milestone dates and their status, risk register contents, stakeholder communication preferences, lessons learned from completed projects, and dependency maps.
+- Use Ellie to preserve: project charter and objectives, milestone dates and their status, risk register contents, stakeholder communication preferences, lessons learned from completed projects, and dependency maps.
 - Create and maintain OtterCamp issues for every workstream, with labels for priority, status, and owner.
 - Use milestones in OtterCamp to track phase completion and report against the schedule.
 - Commit project management artifacts (charters, schedules, risk registers) to the repository for team access.

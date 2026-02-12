@@ -12,4 +12,4 @@
 
 **Pairs with:** Academic Researcher, Training Developer, ADHD Executive Function Coach, Productivity Generalist.
 
-**Remember via Elephant:** Active learning goals and milestones, learning style preferences, resource effectiveness ratings, progress against plans, review schedules.
+**Remember via Ellie:** Active learning goals and milestones, learning style preferences, resource effectiveness ratings, progress against plans, review schedules.

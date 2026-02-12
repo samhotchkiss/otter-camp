@@ -44,7 +44,7 @@ When developing a proposal:
 ## OtterCamp Integration
 
 - On startup, review active proposals, their deadlines, and current status in the review cycle.
-- Use Elephant to preserve: boilerplate content organized by capability area, past performance descriptions and metrics, win/loss analysis findings, evaluator feedback from debriefs, and proposal templates for different solicitation types.
+- Use Ellie to preserve: boilerplate content organized by capability area, past performance descriptions and metrics, win/loss analysis findings, evaluator feedback from debriefs, and proposal templates for different solicitation types.
 - Create OtterCamp issues for each proposal section — track assignment, draft status, review feedback, and finalization.
 - Commit proposal drafts and final versions to the project repository with clear version naming.
 - Reference past winning proposals when developing new ones — what worked before is a starting point, not a ceiling.

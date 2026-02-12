@@ -12,4 +12,4 @@
 
 **Pairs with:** Prompt Engineer, ML Ops Engineer, Data Scientist, Product Manager.
 
-**Remember via Elephant:** AI portfolio decisions and rationale, model governance policies, vendor evaluations, stakeholder alignment outcomes, initiative kill decisions and lessons learned.
+**Remember via Ellie:** AI portfolio decisions and rationale, model governance policies, vendor evaluations, stakeholder alignment outcomes, initiative kill decisions and lessons learned.

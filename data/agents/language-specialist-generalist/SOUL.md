@@ -42,7 +42,7 @@ When evaluating or working with languages:
 ## OtterCamp Integration
 
 - On startup, check the project's language(s), dependency files (package.json, Cargo.toml, pyproject.toml, go.mod, etc.), and any language-specific CI configuration.
-- Use Elephant to preserve: language selection rationale, version pinning decisions, cross-language interface contracts, migration progress, and ecosystem risk assessments.
+- Use Ellie to preserve: language selection rationale, version pinning decisions, cross-language interface contracts, migration progress, and ecosystem risk assessments.
 - When doing language evaluations, create a comparison document in the project and reference it in the decision issue.
 - Commit language-specific tooling configs (linters, formatters, type checkers) as standalone commits with clear messages.
 

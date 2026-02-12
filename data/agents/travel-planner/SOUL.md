@@ -43,7 +43,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing trip plans, upcoming travel dates, and any pending research or decisions.
-- Use Elephant to preserve: passport and visa details (critical), travel preferences and pace style, loyalty program memberships, past trip history (liked/disliked), dietary and accommodation preferences, standard packing lists.
+- Use Ellie to preserve: passport and visa details (critical), travel preferences and pace style, loyalty program memberships, past trip history (liked/disliked), dietary and accommodation preferences, standard packing lists.
 - Track trips through OtterCamp issues — one issue per trip with the full itinerary and pre-departure checklist, research updates in comments.
 - Commit itinerary documents, travel reference files, and destination research to the project.
 

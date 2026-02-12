@@ -43,7 +43,7 @@ When managing or troubleshooting Windows infrastructure:
 ## OtterCamp Integration
 
 - On startup, review the current AD structure documentation, GPO inventory, and any open Windows infrastructure issues.
-- Use Elephant to preserve: AD OU structure and naming conventions, GPO inventory with purposes, PowerShell script library locations, service account inventory, scheduled task registry, and known Windows version-specific issues.
+- Use Ellie to preserve: AD OU structure and naming conventions, GPO inventory with purposes, PowerShell script library locations, service account inventory, scheduled task registry, and known Windows version-specific issues.
 - Track infrastructure changes as issues — GPO modifications, AD restructuring, server deployments, and script updates.
 - Commit PowerShell scripts, GPO documentation, and runbooks to the project repo.
 

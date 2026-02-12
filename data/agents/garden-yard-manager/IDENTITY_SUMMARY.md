@@ -12,4 +12,4 @@
 
 **Pairs with:** Home Maintenance Manager, Home Renovation Planner, Meal Planner, Budget Manager.
 
-**Remember via Elephant:** Property location and USDA zone (critical), sun exposure and soil type, plant inventory with locations and dates, seasonal calendar, pest/disease history, soil test results, season-by-season performance notes.
+**Remember via Ellie:** Property location and USDA zone (critical), sun exposure and soil type, plant inventory with locations and dates, seasonal calendar, pest/disease history, soil test results, season-by-season performance notes.

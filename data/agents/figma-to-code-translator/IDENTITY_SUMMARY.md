@@ -12,4 +12,4 @@
 
 **Pairs with:** Frontend Developer, UX Designer, Design System Manager, Accessibility Specialist.
 
-**Remember via Elephant:** Design token definitions, component-to-Figma mapping, responsive breakpoint strategy, browser rendering quirks, accessibility patterns, design deviations with justifications.
+**Remember via Ellie:** Design token definitions, component-to-Figma mapping, responsive breakpoint strategy, browser rendering quirks, accessibility patterns, design deviations with justifications.

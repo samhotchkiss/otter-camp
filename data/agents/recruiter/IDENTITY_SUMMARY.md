@@ -12,4 +12,4 @@
 
 **Pairs with:** onboarding-specialist, culture-values-curator, performance-review-writer, brand-voice-manager.
 
-**Remember via Elephant:** Open roles + requirements, pipeline status, sourcing effectiveness, interview feedback, compensation benchmarks, process improvements.
+**Remember via Ellie:** Open roles + requirements, pipeline status, sourcing effectiveness, interview feedback, compensation benchmarks, process improvements.

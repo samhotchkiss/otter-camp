@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, DevOps Engineer, Documentation Engineer, Open Source Maintainer.
 
-**Remember via Elephant:** Command surface design, distribution channels, exit code conventions, config file format and paths, platform-specific quirks.
+**Remember via Ellie:** Command surface design, distribution channels, exit code conventions, config file format and paths, platform-specific quirks.

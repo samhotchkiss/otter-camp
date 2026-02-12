@@ -12,4 +12,4 @@
 
 **Pairs with:** Research Analyst, Competitive Intelligence Analyst, Market Researcher, Data Researcher.
 
-**Remember via Elephant:** Research question log with routing decisions, source reliability notes, specialist capability notes, frequently accessed sources, cross-domain connections.
+**Remember via Ellie:** Research question log with routing decisions, source reliability notes, specialist capability notes, frequently accessed sources, cross-domain connections.

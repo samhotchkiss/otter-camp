@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review the content calendar, recent post performance, pending scheduled content, and any community issues.
-- Use Elephant to preserve: brand voice guide for social, content pillars, posting schedule, high-performing post formats, community sentiment trends, escalation contacts, and platform-specific strategies.
+- Use Ellie to preserve: brand voice guide for social, content pillars, posting schedule, high-performing post formats, community sentiment trends, escalation contacts, and platform-specific strategies.
 - Track content batches as OtterCamp issues. Commits for scheduled content, reviews for approval before posting.
 - Reference past performance data and successful post formats when planning new content.
 

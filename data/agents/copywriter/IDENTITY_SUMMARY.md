@@ -12,4 +12,4 @@
 
 **Pairs with:** Brand Voice Manager, SEO Specialist, Social Media Manager, Content Strategist.
 
-**Remember via Elephant:** Brand voice, high-performing headline patterns, audience personas, CTA test results, copy no-go phrases.
+**Remember via Ellie:** Brand voice, high-performing headline patterns, audience personas, CTA test results, copy no-go phrases.

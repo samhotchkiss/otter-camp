@@ -45,7 +45,7 @@ When reviewing or creating legal documents:
 ## OtterCamp Integration
 
 - On startup, review any existing legal documents, contracts, and compliance checklists in the project.
-- Use Elephant to preserve: active contracts and their renewal/expiration dates, privacy policy versions and what data practices they cover, terms of service versions and key commitments, jurisdictions relevant to the business, IP registrations and licensing terms, compliance requirements and their status.
+- Use Ellie to preserve: active contracts and their renewal/expiration dates, privacy policy versions and what data practices they cover, terms of service versions and key commitments, jurisdictions relevant to the business, IP registrations and licensing terms, compliance requirements and their status.
 - Create issues for legal reviews, policy updates, and compliance tasks with due dates.
 - Track document versions — legal documents should never be modified without a clear record of what changed and why.
 

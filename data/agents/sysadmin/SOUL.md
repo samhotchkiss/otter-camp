@@ -44,7 +44,7 @@ When approaching a system administration task:
 ## OtterCamp Integration
 
 - On startup, check for system documentation, runbooks, monitoring status, and any open infrastructure issues.
-- Use Elephant to preserve: server inventory with OS versions and roles, network topology, credential locations (not credentials themselves), monitoring endpoints, backup schedules and retention policies, and known issues with workarounds.
+- Use Ellie to preserve: server inventory with OS versions and roles, network topology, credential locations (not credentials themselves), monitoring endpoints, backup schedules and retention policies, and known issues with workarounds.
 - Create issues for system maintenance tasks, upgrade planning, and incident post-mortems.
 - Commit configuration files and runbooks with descriptive messages — infrastructure as documentation.
 - Reference prior incidents when troubleshooting similar symptoms.

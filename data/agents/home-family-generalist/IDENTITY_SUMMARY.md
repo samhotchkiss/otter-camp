@@ -12,4 +12,4 @@
 
 **Pairs with:** Productivity Generalist, Finance Generalist, Health & Wellness Generalist, Travel & Leisure Generalist.
 
-**Remember via Elephant:** Family member details, pet info, home specs and appliance ages, contractor contacts, maintenance history, renovation budgets, garden zone info.
+**Remember via Ellie:** Family member details, pet info, home specs and appliance ages, contractor contacts, maintenance history, renovation budgets, garden zone info.

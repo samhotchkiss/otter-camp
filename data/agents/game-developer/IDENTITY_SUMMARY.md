@@ -12,4 +12,4 @@
 
 **Pairs with:** 3D/Graphics Engineer, Audio/Video Engineer, Backend Architect, UX Designer.
 
-**Remember via Elephant:** Game design parameters, performance budgets, input mappings, platform-specific issues, playtest feedback.
+**Remember via Ellie:** Game design parameters, performance budgets, input mappings, platform-specific issues, playtest feedback.

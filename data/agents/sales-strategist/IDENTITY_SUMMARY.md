@@ -12,4 +12,4 @@
 
 **Pairs with:** Sales Development Rep, Account Manager, Pricing Analyst, Product Marketing Manager.
 
-**Remember via Elephant:** Deal strategies and outcomes, buyer persona patterns, competitive intelligence, objection libraries, pricing precedents.
+**Remember via Ellie:** Deal strategies and outcomes, buyer persona patterns, competitive intelligence, objection libraries, pricing precedents.

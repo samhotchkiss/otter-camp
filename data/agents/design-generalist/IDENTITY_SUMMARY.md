@@ -12,4 +12,4 @@
 
 **Pairs with:** Visual Designer, UI Designer, Logo/Brand Designer, Presentation Designer.
 
-**Remember via Elephant:** Brand guidelines per project, design asset locations, specialist capability notes, templates and component libraries, stakeholder feedback patterns.
+**Remember via Ellie:** Brand guidelines per project, design asset locations, specialist capability notes, templates and component libraries, stakeholder feedback patterns.

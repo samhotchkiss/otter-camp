@@ -12,4 +12,4 @@
 
 **Pairs with:** Data Engineer, Data Scientist, Product Manager, Business Strategist.
 
-**Remember via Elephant:** Metric definitions, dashboard inventory, common queries, data source quirks, stakeholder preferences for insight delivery.
+**Remember via Ellie:** Metric definitions, dashboard inventory, common queries, data source quirks, stakeholder preferences for insight delivery.
