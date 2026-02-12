@@ -15,6 +15,7 @@ const (
 	defaultEllieIngestionInterval   = 5 * time.Minute
 	defaultEllieIngestionBatchSize  = 100
 	defaultEllieIngestionMaxPerRoom = 200
+	ellieIngestionWindowGap         = 15 * time.Minute
 )
 
 type EllieIngestionStore interface {
@@ -127,20 +128,20 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 			continue
 		}
 
-		for _, message := range messages {
-			candidate, ok := deriveEllieMemoryCandidate(message)
+		windows := groupEllieIngestionMessagesByWindow(messages, ellieIngestionWindowGap)
+		for _, window := range windows {
+			candidate, ok := deriveEllieMemoryCandidateFromWindow(window)
+			processed += len(window)
 			if !ok {
-				processed += 1
 				continue
 			}
 			inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
 			if err != nil {
-				return processed, fmt.Errorf("insert ellie extracted memory for message %s: %w", message.ID, err)
+				return processed, fmt.Errorf("insert ellie extracted memory for room %s: %w", room.RoomID, err)
 			}
 			if inserted && w.Logf != nil {
-				w.Logf("ellie ingestion extracted memory kind=%s room=%s message=%s", candidate.Kind, message.RoomID, message.ID)
+				w.Logf("ellie ingestion extracted memory kind=%s room=%s", candidate.Kind, room.RoomID)
 			}
-			processed += 1
 		}
 
 		last := messages[len(messages)-1]
@@ -158,7 +159,15 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 }
 
 func deriveEllieMemoryCandidate(message store.EllieIngestionMessage) (store.CreateEllieExtractedMemoryInput, bool) {
-	body := strings.TrimSpace(message.Body)
+	return deriveEllieMemoryCandidateFromWindow([]store.EllieIngestionMessage{message})
+}
+
+func deriveEllieMemoryCandidateFromWindow(messages []store.EllieIngestionMessage) (store.CreateEllieExtractedMemoryInput, bool) {
+	if len(messages) == 0 {
+		return store.CreateEllieExtractedMemoryInput{}, false
+	}
+
+	body := strings.TrimSpace(joinEllieWindowBodies(messages))
 	if isEllieLowSignalMessage(body) {
 		return store.CreateEllieExtractedMemoryInput{}, false
 	}
@@ -170,27 +179,34 @@ func deriveEllieMemoryCandidate(message store.EllieIngestionMessage) (store.Crea
 	confidence := 0.7
 
 	switch {
-	case strings.Contains(lowerBody, "decide") || strings.Contains(lowerBody, "decision") || strings.Contains(lowerBody, "we will"):
+	case strings.Contains(lowerBody, "we decided") ||
+		strings.Contains(lowerBody, "decided to") ||
+		strings.Contains(lowerBody, "decision:") ||
+		strings.Contains(lowerBody, "we will use") ||
+		strings.Contains(lowerBody, "let's go with"):
 		kind = "technical_decision"
 		title = "Technical decision captured"
 		importance = 4
 		confidence = 0.9
-	case strings.Contains(lowerBody, "prefer") || strings.Contains(lowerBody, "preference"):
+	case strings.Contains(lowerBody, "we prefer") ||
+		strings.Contains(lowerBody, "prefer to use") ||
+		strings.Contains(lowerBody, "preference:"):
 		kind = "preference"
 		title = "Preference captured"
 		importance = 4
 		confidence = 0.9
-	case strings.Contains(lowerBody, "avoid") || strings.Contains(lowerBody, "do not") || strings.Contains(lowerBody, "don't"):
+	case (strings.Contains(lowerBody, "avoid") || strings.Contains(lowerBody, "do not") || strings.Contains(lowerBody, "don't")) &&
+		hasEllieOperationalContext(lowerBody):
 		kind = "anti_pattern"
 		title = "Anti-pattern captured"
 		importance = 4
 		confidence = 0.85
-	case strings.Contains(lowerBody, "lesson") || strings.Contains(lowerBody, "learned"):
+	case strings.Contains(lowerBody, "lesson learned") || strings.Contains(lowerBody, "we learned"):
 		kind = "lesson"
 		title = "Lesson captured"
 		importance = 4
 		confidence = 0.85
-	case strings.Contains(lowerBody, "fact") || strings.Contains(lowerBody, "is "):
+	case strings.Contains(lowerBody, "fact:") || strings.Contains(lowerBody, "confirmed that"):
 		kind = "fact"
 		title = "Fact captured"
 		importance = 3
@@ -198,10 +214,10 @@ func deriveEllieMemoryCandidate(message store.EllieIngestionMessage) (store.Crea
 	}
 
 	metadataRaw, _ := json.Marshal(map[string]any{
-		"source_table":      "chat_messages",
-		"source_message_id": message.ID,
-		"source_room_id":    message.RoomID,
-		"extraction_method": "heuristic",
+		"source_table":       "chat_messages",
+		"source_message_ids": ellieWindowMessageIDs(messages),
+		"source_room_id":     messages[0].RoomID,
+		"extraction_method":  "heuristic_windowed",
 	})
 
 	content := body
@@ -210,16 +226,106 @@ func deriveEllieMemoryCandidate(message store.EllieIngestionMessage) (store.Crea
 	}
 
 	return store.CreateEllieExtractedMemoryInput{
-		OrgID:                message.OrgID,
+		OrgID:                messages[0].OrgID,
 		Kind:                 kind,
 		Title:                title,
 		Content:              content,
 		Metadata:             metadataRaw,
 		Importance:           importance,
 		Confidence:           confidence,
-		SourceConversationID: message.ConversationID,
-		OccurredAt:           message.CreatedAt,
+		SourceConversationID: firstEllieConversationID(messages),
+		OccurredAt:           messages[len(messages)-1].CreatedAt,
 	}, true
+}
+
+func groupEllieIngestionMessagesByWindow(messages []store.EllieIngestionMessage, gap time.Duration) [][]store.EllieIngestionMessage {
+	if len(messages) == 0 {
+		return [][]store.EllieIngestionMessage{}
+	}
+	if gap <= 0 {
+		gap = ellieIngestionWindowGap
+	}
+
+	windows := make([][]store.EllieIngestionMessage, 0, len(messages))
+	current := make([]store.EllieIngestionMessage, 0, len(messages))
+	for _, message := range messages {
+		if len(current) == 0 {
+			current = append(current, message)
+			continue
+		}
+		last := current[len(current)-1]
+		if message.CreatedAt.Sub(last.CreatedAt) > gap {
+			windows = append(windows, current)
+			current = []store.EllieIngestionMessage{message}
+			continue
+		}
+		current = append(current, message)
+	}
+	if len(current) > 0 {
+		windows = append(windows, current)
+	}
+	return windows
+}
+
+func joinEllieWindowBodies(messages []store.EllieIngestionMessage) string {
+	parts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		body := strings.TrimSpace(message.Body)
+		if body == "" {
+			continue
+		}
+		parts = append(parts, body)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func ellieWindowMessageIDs(messages []store.EllieIngestionMessage) []string {
+	ids := make([]string, 0, len(messages))
+	for _, message := range messages {
+		id := strings.TrimSpace(message.ID)
+		if id == "" {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func firstEllieConversationID(messages []store.EllieIngestionMessage) *string {
+	for _, message := range messages {
+		if message.ConversationID == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(*message.ConversationID)
+		if trimmed == "" {
+			continue
+		}
+		return &trimmed
+	}
+	return nil
+}
+
+func hasEllieOperationalContext(body string) bool {
+	keywords := []string{
+		"api",
+		"build",
+		"code",
+		"config",
+		"database",
+		"deploy",
+		"feature",
+		"migration",
+		"pipeline",
+		"release",
+		"schema",
+		"test",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(body, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func isEllieLowSignalMessage(body string) bool {

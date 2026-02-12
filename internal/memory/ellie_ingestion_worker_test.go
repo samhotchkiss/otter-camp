@@ -134,3 +134,52 @@ func TestEllieIngestionWorkerAdvancesCursorAfterSuccessfulWrite(t *testing.T) {
 	require.Equal(t, "msg-2", cursor.LastMessageID)
 	require.Equal(t, second, cursor.LastMessageCreatedAt)
 }
+
+func TestEllieIngestionWorkerGroupsMessagesWithinTimeWindow(t *testing.T) {
+	fakeStore := newFakeEllieIngestionStore()
+	base := time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC)
+	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
+	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
+		{ID: "msg-1", OrgID: "org-1", RoomID: "room-1", Body: "During planning we reviewed the tradeoffs.", CreatedAt: base},
+		{ID: "msg-2", OrgID: "org-1", RoomID: "room-1", Body: "We decided to keep Postgres for consistency.", CreatedAt: base.Add(5 * time.Minute)},
+		{ID: "msg-3", OrgID: "org-1", RoomID: "room-1", Body: "This decision applies to the current migration work.", CreatedAt: base.Add(10 * time.Minute)},
+	}
+
+	worker := NewEllieIngestionWorker(fakeStore, EllieIngestionWorkerConfig{
+		BatchSize:  50,
+		Interval:   time.Second,
+		MaxPerRoom: 50,
+	})
+	worker.Logf = nil
+
+	processed, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 3, processed)
+	require.Len(t, fakeStore.created, 1)
+	require.Equal(t, "technical_decision", fakeStore.created[0].Kind)
+	require.Contains(t, fakeStore.created[0].Content, "We decided to keep Postgres")
+}
+
+func TestEllieIngestionWorkerAvoidsFalsePositiveDecisionAndFactClassification(t *testing.T) {
+	messageDecisionQuestion := store.EllieIngestionMessage{
+		ID:        "msg-1",
+		OrgID:     "org-1",
+		RoomID:    "room-1",
+		Body:      "Can we decide where to eat lunch?",
+		CreatedAt: time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC),
+	}
+	candidate, ok := deriveEllieMemoryCandidate(messageDecisionQuestion)
+	require.True(t, ok)
+	require.NotEqual(t, "technical_decision", candidate.Kind)
+
+	messageFactQuestion := store.EllieIngestionMessage{
+		ID:        "msg-2",
+		OrgID:     "org-1",
+		RoomID:    "room-1",
+		Body:      "Where is the bathroom in this building?",
+		CreatedAt: time.Date(2026, 2, 12, 12, 1, 0, 0, time.UTC),
+	}
+	candidate, ok = deriveEllieMemoryCandidate(messageFactQuestion)
+	require.True(t, ok)
+	require.NotEqual(t, "fact", candidate.Kind)
+}
