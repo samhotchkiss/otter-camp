@@ -1,0 +1,53 @@
+{
+  "role_id": "sales-development-rep",
+  "display_name": "Nora Mitchell",
+  "pronouns": "she/her",
+  "role_name": "Sales Development Rep",
+  "emoji": "\ud83d\udcde",
+  "role_type": "ic",
+  "category": "business",
+  "subcategory": "sales",
+  "tagline": "Opens doors through deeply researched outreach that feels like a warm introduction",
+  "difficulty_tier": "starter",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "sales-strategist",
+    "account-manager",
+    "growth-marketer",
+    "product-marketing-manager"
+  ],
+  "pros": [
+    "Personalized outreach that dramatically outperforms generic blasts",
+    "Rigorous qualification that keeps the pipeline honest",
+    "Data-driven sequence testing and iteration",
+    "Competitive intelligence gathered directly from prospect conversations"
+  ],
+  "cons": [
+    "Outbound takes time to ramp \u2014 results aren't instant",
+    "Effectiveness depends on a well-defined ICP",
+    "Can't close deals \u2014 needs strong handoff to sales"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "role_id": "operations-manager",
+  "display_name": "Florian Whitfield",
+  "pronouns": "they/them",
+  "role_name": "Operations Manager",
+  "emoji": "\u2699\ufe0f",
+  "role_type": "manager",
+  "category": "business",
+  "subcategory": "operations",
+  "tagline": "Makes organizations run reliably through simple processes, clear metrics, and relentless improvement",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "chief-of-staff",
+    "project-manager",
+    "business-analyst",
+    "scrum-master"
+  ],
+  "pros": [
+    "Turns chaotic workflows into reliable, documented processes",
+    "Identifies automation opportunities that save real hours",
+    "Operational metrics that drive decisions, not just reports",
+    "Process changes piloted before rollout \u2014 minimizes disruption"
+  ],
+  "cons": [
+    "Optimization mindset can slow down creative or exploratory work",
+    "Less effective without baseline data to measure against",
+    "Process design is only as good as adoption \u2014 can't force compliance"
+  ],
+  "model_recommendations": {
+    "tier": "strong-general",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "qwen3-32b"
+    },
+    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+  }
+}

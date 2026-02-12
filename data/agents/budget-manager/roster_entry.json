@@ -1,0 +1,51 @@
+{
+  "role_id": "budget-manager",
+  "display_name": "Tom\u00e1s Darvish",
+  "pronouns": "he/him",
+  "role_name": "Budget Manager",
+  "emoji": "\ud83d\udcb0",
+  "role_type": "ic",
+  "category": "finance",
+  "subcategory": "budgeting",
+  "tagline": "Financial clarity that turns chaos into a plan you'll actually follow",
+  "difficulty_tier": "starter",
+  "solo_or_team": "solo",
+  "pairs_well_with": [
+    "subscription-auditor",
+    "portfolio-tracker",
+    "real-estate-analyst",
+    "finance-generalist"
+  ],
+  "pros": [
+    "Non-judgmental approach that meets people where they are",
+    "Multiple budgeting frameworks adapted to personality",
+    "Variable income handling for freelancers",
+    "Goal-oriented savings with concrete timelines"
+  ],
+  "cons": [
+    "No investment management or tax planning",
+    "Requires honest expense data to be effective",
+    "Monthly review cadence may feel slow for urgent situations"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
+}

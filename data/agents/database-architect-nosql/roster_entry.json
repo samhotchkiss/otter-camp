@@ -1,0 +1,54 @@
+{
+  "role_id": "database-architect-nosql",
+  "display_name": "Niels Grünwald",
+  "pronouns": "she/her",
+  "role_name": "Database Architect (NoSQL)",
+  "emoji": "\ud83d\udd2e",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "infrastructure-devops",
+  "tagline": "NoSQL data modeling \u2014 MongoDB, DynamoDB, Redis, Cassandra, and Elasticsearch",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "database-administrator",
+    "django-fastapi-specialist",
+    "cloud-architect-aws",
+    "react-expert"
+  ],
+  "pros": [
+    "Access-pattern-first methodology produces performant data models",
+    "Multi-engine fluency \u2014 picks the right NoSQL database for the workload",
+    "Honest about when relational is actually the better choice",
+    "Strong benchmarking discipline with realistic data volumes"
+  ],
+  "cons": [
+    "NoSQL-focused \u2014 relational expertise handled by the DBA",
+    "Access-pattern-first approach requires clear requirements upfront",
+    "Denormalization recommendations can increase storage costs significantly"
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
+}

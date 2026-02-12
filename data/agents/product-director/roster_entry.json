@@ -1,0 +1,51 @@
+{
+  "role_id": "product-director",
+  "display_name": "Nayeli Padmanabhan",
+  "pronouns": "he/him",
+  "role_name": "Product Director",
+  "emoji": "🎯",
+  "role_type": "manager",
+  "category": "product",
+  "subcategory": "product-leadership",
+  "tagline": "Connects user needs to business outcomes — shapes product vision and drives execution",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "team",
+  "pairs_well_with": [
+    "product-manager",
+    "ui-ux-designer",
+    "engineering-manager",
+    "data-scientist"
+  ],
+  "pros": [
+    "Product strategy and vision",
+    "Roadmap prioritization",
+    "Stakeholder alignment"
+  ],
+  "cons": [
+    "Strategic not tactical",
+    "Needs PMs and engineers for execution"
+  ],
+  "model_recommendations": {
+    "tier": "strategic-reasoning",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "medium"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "medium"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-maverick"
+    },
+    "notes": "Strategic product thinking benefits from reasoning capabilities. Multi-stakeholder alignment and vision work need nuanced analysis."
+  }
+}

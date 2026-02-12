@@ -1,0 +1,53 @@
+{
+  "role_id": "creative-writer",
+  "display_name": "Soren Bakke",
+  "pronouns": "he/him",
+  "role_name": "Creative Writer",
+  "emoji": "\ud83e\udeb6",
+  "role_type": "ic",
+  "category": "content",
+  "subcategory": "writing",
+  "tagline": "Fiction, essays, and narrative content that makes readers feel something unexpected",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": [
+    "blog-writer",
+    "script-writer",
+    "editor",
+    "brand-voice-manager"
+  ],
+  "pros": [
+    "Literary sensibility applied to commercial work",
+    "Prose rhythm and voice craft",
+    "Brand narrative and origin stories",
+    "Creative rationale for every choice"
+  ],
+  "cons": [
+    "Exploratory process doesn't suit tight deadlines",
+    "Not built for conversion-focused copy",
+    "Needs creative briefs, not word-for-word direction"
+  ],
+  "model_recommendations": {
+    "tier": "creative-writing",
+    "best_overall": "claude-sonnet-5",
+    "anthropic": {
+      "model": "claude-sonnet-5",
+      "thinking": "low"
+    },
+    "openai": {
+      "model": "gpt-5.3",
+      "reasoning": "off"
+    },
+    "google": {
+      "model": "gemini-2.5-pro"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "llama-4-maverick",
+      "alt": "mistral-large"
+    },
+    "notes": "Prioritizes voice, tone, and creative quality over analytical depth. Thinking/reasoning can hurt creative output \u2014 keep low or off."
+  }
+}
