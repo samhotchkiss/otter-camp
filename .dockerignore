@@ -1,0 +1,11 @@
+.git
+data/agents/*/avatar*
+data/agents/*/*.md
+data/agents/_GENERATION_REFERENCE.md
+data/agents/review.html
+scripts/
+issues/
+node_modules/
+web/node_modules/
+*.png
+*.webp
