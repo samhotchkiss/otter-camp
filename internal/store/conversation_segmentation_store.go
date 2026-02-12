@@ -19,12 +19,13 @@ type PendingConversationSegmentationMessage struct {
 }
 
 type CreateConversationSegmentInput struct {
-	OrgID      string
-	RoomID     string
-	Topic      string
-	StartedAt  time.Time
-	EndedAt    time.Time
-	MessageIDs []string
+	OrgID       string
+	RoomID      string
+	Topic       string
+	StartedAt   time.Time
+	EndedAt     time.Time
+	MessageIDs  []string
+	Sensitivity string
 }
 
 type ConversationSegmentationStore struct {
@@ -111,6 +112,10 @@ func (s *ConversationSegmentationStore) CreateConversationSegment(ctx context.Co
 		endedAt = startedAt
 	}
 	topic := strings.TrimSpace(input.Topic)
+	sensitivity, err := normalizeEllieSensitivity(input.Sensitivity)
+	if err != nil {
+		return "", err
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -126,14 +131,15 @@ func (s *ConversationSegmentationStore) CreateConversationSegment(ctx context.Co
 	var conversationID string
 	err = tx.QueryRowContext(
 		ctx,
-		`INSERT INTO conversations (org_id, room_id, topic, started_at, ended_at)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO conversations (org_id, room_id, topic, started_at, ended_at, sensitivity)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id`,
 		orgID,
 		roomID,
 		topic,
 		startedAt,
 		endedAt,
+		sensitivity,
 	).Scan(&conversationID)
 	if err != nil {
 		return "", fmt.Errorf("failed to create conversation segment: %w", err)

@@ -288,3 +288,24 @@ func TestMainWorkersStopOnContextCancel(t *testing.T) {
 		t.Fatalf("expected cmd/server/main.go to start workers through startWorker, found direct background startup")
 	}
 }
+
+func TestMainStartsEllieContextInjectionWorkerWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	for _, snippet := range []string{
+		"cfg.EllieContextInjection.Enabled",
+		"memory.NewEllieContextInjectionWorker",
+		"Ellie context injection worker started",
+		"store.NewEllieContextInjectionStore",
+	} {
+		if !strings.Contains(mainContent, snippet) {
+			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
+		}
+	}
+}

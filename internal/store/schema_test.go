@@ -517,6 +517,35 @@ func TestMigration069ConversationSensitivityFilesExistAndContainConstraint(t *te
 	require.Contains(t, downContent, "drop column if exists sensitivity")
 }
 
+func TestMigration071MemoriesSensitivityFilesExistAndContainConstraint(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"071_add_memories_sensitivity.down.sql",
+		"071_add_memories_sensitivity.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "071_add_memories_sensitivity.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table memories")
+	require.Contains(t, upContent, "add column if not exists sensitivity")
+	require.Contains(t, upContent, "default 'normal'")
+	require.Contains(t, upContent, "'normal'")
+	require.Contains(t, upContent, "'sensitive'")
+	require.Contains(t, upContent, "create index if not exists memories_org_sensitivity_idx")
+	require.Contains(t, upContent, "where sensitivity = 'sensitive'")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "071_add_memories_sensitivity.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop index if exists memories_org_sensitivity_idx")
+	require.Contains(t, downContent, "drop column if exists sensitivity")
+}
+
 func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
@@ -550,6 +579,121 @@ func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
 	require.Contains(t, lowered, "sensitivity")
 	require.Contains(t, lowered, "'normal'")
 	require.Contains(t, lowered, "'sensitive'")
+}
+
+func TestMigration070ContextInjectionsFilesExistAndContainDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"070_create_context_injections.down.sql",
+		"070_create_context_injections.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "070_create_context_injections.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists context_injections")
+	require.Contains(t, upContent, "unique (room_id, memory_id)")
+	require.Contains(t, upContent, "create index if not exists idx_context_injections_room")
+	require.Contains(t, upContent, "enable row level security")
+	require.Contains(t, upContent, "context_injections_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "070_create_context_injections.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop policy if exists context_injections_org_isolation")
+	require.Contains(t, downContent, "drop index if exists idx_context_injections_room")
+	require.Contains(t, downContent, "drop table if exists context_injections")
+}
+
+func TestSchemaContextInjectionsTableAndConstraint(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var tableRegClass sql.NullString
+	err := db.QueryRow(`SELECT to_regclass('public.context_injections')::text`).Scan(&tableRegClass)
+	require.NoError(t, err)
+	require.True(t, tableRegClass.Valid)
+
+	var roomIdx sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.idx_context_injections_room')::text`).Scan(&roomIdx)
+	require.NoError(t, err)
+	require.True(t, roomIdx.Valid)
+
+	var rlsEnabled bool
+	err = db.QueryRow(
+		`SELECT relrowsecurity
+		 FROM pg_class
+		 WHERE relname = 'context_injections'`,
+	).Scan(&rlsEnabled)
+	require.NoError(t, err)
+	require.True(t, rlsEnabled)
+
+	var uniqueConstraintCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM pg_constraint
+		 WHERE conrelid = 'context_injections'::regclass
+		   AND contype = 'u'
+		   AND pg_get_constraintdef(oid) ILIKE '%(room_id, memory_id)%'`,
+	).Scan(&uniqueConstraintCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, uniqueConstraintCount)
+}
+
+func TestSchemaMemoriesAndConversationsSensitivityColumnsAndConstraints(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	for _, tableName := range []string{"memories", "conversations"} {
+		var isNullable string
+		var defaultExpr sql.NullString
+		err := db.QueryRow(
+			`SELECT is_nullable, column_default
+			 FROM information_schema.columns
+			 WHERE table_schema = 'public'
+			   AND table_name = $1
+			   AND column_name = 'sensitivity'`,
+			tableName,
+		).Scan(&isNullable, &defaultExpr)
+		require.NoError(t, err)
+		require.Equal(t, "NO", strings.ToUpper(strings.TrimSpace(isNullable)))
+		require.True(t, defaultExpr.Valid)
+		require.Contains(t, strings.ToLower(defaultExpr.String), "normal")
+
+		var constraintDef string
+		err = db.QueryRow(
+			`SELECT pg_get_constraintdef(oid)
+			 FROM pg_constraint
+			 WHERE conrelid = to_regclass('public.' || $1)
+			   AND contype = 'c'
+			   AND pg_get_constraintdef(oid) ILIKE '%sensitivity%'
+			 ORDER BY oid DESC
+			 LIMIT 1`,
+			tableName,
+		).Scan(&constraintDef)
+		require.NoError(t, err)
+		lowered := strings.ToLower(constraintDef)
+		require.Contains(t, lowered, "sensitivity")
+		require.Contains(t, lowered, "'normal'")
+		require.Contains(t, lowered, "'sensitive'")
+	}
+
+	var sensitivityIndexDef string
+	err := db.QueryRow(
+		`SELECT indexdef
+		 FROM pg_indexes
+		 WHERE schemaname = 'public'
+		   AND indexname = 'memories_org_sensitivity_idx'`,
+	).Scan(&sensitivityIndexDef)
+	require.NoError(t, err)
+	loweredIndexDef := strings.ToLower(sensitivityIndexDef)
+	require.Contains(t, loweredIndexDef, "where")
+	require.Contains(t, loweredIndexDef, "sensitivity")
+	require.Contains(t, loweredIndexDef, "sensitive")
 }
 
 func TestSchemaProjectChatBackfillCopiesMessagesWithParity(t *testing.T) {
