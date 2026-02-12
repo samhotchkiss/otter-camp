@@ -36,17 +36,19 @@ type AdminAgentsHandler struct {
 }
 
 type adminAgentSummary struct {
-	ID               string `json:"id"`
-	WorkspaceAgentID string `json:"workspace_agent_id"`
-	Name             string `json:"name"`
-	Status           string `json:"status"`
-	Model            string `json:"model,omitempty"`
-	ContextTokens    int    `json:"context_tokens,omitempty"`
-	TotalTokens      int    `json:"total_tokens,omitempty"`
-	HeartbeatEvery   string `json:"heartbeat_every,omitempty"`
-	Channel          string `json:"channel,omitempty"`
-	SessionKey       string `json:"session_key,omitempty"`
-	LastSeen         string `json:"last_seen,omitempty"`
+	ID               string  `json:"id"`
+	WorkspaceAgentID string  `json:"workspace_agent_id"`
+	Name             string  `json:"name"`
+	Status           string  `json:"status"`
+	IsEphemeral      bool    `json:"is_ephemeral"`
+	ProjectID        *string `json:"project_id,omitempty"`
+	Model            string  `json:"model,omitempty"`
+	ContextTokens    int     `json:"context_tokens,omitempty"`
+	TotalTokens      int     `json:"total_tokens,omitempty"`
+	HeartbeatEvery   string  `json:"heartbeat_every,omitempty"`
+	Channel          string  `json:"channel,omitempty"`
+	SessionKey       string  `json:"session_key,omitempty"`
+	LastSeen         string  `json:"last_seen,omitempty"`
 }
 
 type adminAgentSyncDetails struct {
@@ -82,6 +84,10 @@ type adminAgentCreateRequest struct {
 	Identity          string `json:"identity,omitempty"`
 	Model             string `json:"model"`
 	Avatar            string `json:"avatar,omitempty"`
+	IsEphemeral       bool   `json:"isEphemeral,omitempty"`
+	IsEphemeralLegacy *bool  `json:"is_ephemeral,omitempty"`
+	ProjectID         string `json:"projectId,omitempty"`
+	ProjectIDLegacy   string `json:"project_id,omitempty"`
 }
 
 type adminAgentTemplateInput struct {
@@ -103,6 +109,8 @@ type adminAgentRow struct {
 	Slug             string
 	DisplayName      string
 	WorkspaceStatus  string
+	IsEphemeral      bool
+	ProjectID        sql.NullString
 	HeartbeatEvery   sql.NullString
 	SyncName         sql.NullString
 	SyncModel        sql.NullString
@@ -545,6 +553,10 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	req.Soul = strings.TrimSpace(req.Soul)
 	req.Identity = strings.TrimSpace(req.Identity)
 	req.Avatar = strings.TrimSpace(req.Avatar)
+	req.ProjectID = strings.TrimSpace(firstNonEmpty(req.ProjectID, req.ProjectIDLegacy))
+	if req.IsEphemeralLegacy != nil {
+		req.IsEphemeral = *req.IsEphemeralLegacy
+	}
 
 	if req.DisplayName == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "displayName is required"})
@@ -553,6 +565,28 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.Model == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "model is required"})
 		return
+	}
+	if req.ProjectID != "" && !req.IsEphemeral {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "projectId requires isEphemeral=true"})
+		return
+	}
+
+	var projectID *string
+	if req.ProjectID != "" {
+		if err := validateOptionalUUID(&req.ProjectID, "projectId"); err != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			return
+		}
+		if _, err := h.ProjectStore.GetByID(r.Context(), req.ProjectID); err != nil {
+			switch {
+			case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrForbidden):
+				sendJSON(w, http.StatusBadRequest, errorResponse{Error: "projectId must belong to the current workspace"})
+			default:
+				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate projectId"})
+			}
+			return
+		}
+		projectID = &req.ProjectID
 	}
 
 	slot, err := resolveAvailableAgentSlot(agentSlotFromDisplayName(req.DisplayName), func(candidate string) (bool, error) {
@@ -583,6 +617,8 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Slug:        slot,
 		DisplayName: req.DisplayName,
 		Status:      "active",
+		IsEphemeral: req.IsEphemeral,
+		ProjectID:   projectID,
 	})
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create agent"})
@@ -609,9 +645,12 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusCreated, map[string]interface{}{
 		"ok": true,
 		"agent": adminAgentSummary{
-			ID:     createdAgent.ID,
-			Name:   createdAgent.DisplayName,
-			Status: createdAgent.Status,
+			ID:               createdAgent.Slug,
+			WorkspaceAgentID: createdAgent.ID,
+			Name:             createdAgent.DisplayName,
+			Status:           createdAgent.Status,
+			IsEphemeral:      createdAgent.IsEphemeral,
+			ProjectID:        createdAgent.ProjectID,
 		},
 	})
 }
@@ -918,6 +957,8 @@ func (h *AdminAgentsHandler) listRows(ctx context.Context, workspaceID string) (
 			a.slug,
 			COALESCE(a.display_name, '') AS display_name,
 			COALESCE(a.status, '') AS workspace_status,
+			COALESCE(a.is_ephemeral, false) AS is_ephemeral,
+			a.project_id::text AS project_id,
 			c.heartbeat_every,
 			s.name,
 			s.model,
@@ -978,6 +1019,8 @@ func (h *AdminAgentsHandler) getRow(ctx context.Context, workspaceID, identifier
 			a.slug,
 			COALESCE(a.display_name, '') AS display_name,
 			COALESCE(a.status, '') AS workspace_status,
+			COALESCE(a.is_ephemeral, false) AS is_ephemeral,
+			a.project_id::text AS project_id,
 			c.heartbeat_every,
 			s.name,
 			s.model,
@@ -1350,6 +1393,8 @@ func rowToAgentSummary(row adminAgentRow) adminAgentSummary {
 		WorkspaceAgentID: strings.TrimSpace(row.WorkspaceAgentID),
 		Name:             name,
 		Status:           status,
+		IsEphemeral:      row.IsEphemeral,
+		ProjectID:        nullableNullString(row.ProjectID),
 		Model:            strings.TrimSpace(row.SyncModel.String),
 		ContextTokens:    int(row.ContextTokens.Int64),
 		TotalTokens:      int(row.TotalTokens.Int64),
@@ -1378,6 +1423,8 @@ func scanAdminAgentRow(scanner interface{ Scan(...any) error }) (adminAgentRow, 
 		&row.Slug,
 		&row.DisplayName,
 		&row.WorkspaceStatus,
+		&row.IsEphemeral,
+		&row.ProjectID,
 		&row.HeartbeatEvery,
 		&row.SyncName,
 		&row.SyncModel,
@@ -1391,6 +1438,17 @@ func scanAdminAgentRow(scanner interface{ Scan(...any) error }) (adminAgentRow, 
 		&row.TotalTokens,
 	)
 	return row, err
+}
+
+func nullableNullString(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	trimmed := strings.TrimSpace(value.String)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func (h *AdminAgentsHandler) writeAgentTemplates(

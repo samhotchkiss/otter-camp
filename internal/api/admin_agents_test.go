@@ -294,3 +294,88 @@ func TestAdminAgentsGetCrossOrgForbidden(t *testing.T) {
 	handler.Get(rec, req)
 	require.Equal(t, http.StatusForbidden, rec.Code)
 }
+
+func TestAdminAgentsListIncludesLifecycleMetadata(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-list-lifecycle")
+
+	var projectID string
+	err := db.QueryRow(
+		`INSERT INTO projects (org_id, name, status) VALUES ($1, 'Lifecycle Project', 'active') RETURNING id`,
+		orgID,
+	).Scan(&projectID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO agents (org_id, slug, display_name, status, is_ephemeral, project_id)
+		 VALUES ($1, 'temp-1', 'Temp One', 'active', true, $2)`,
+		orgID,
+		projectID,
+	)
+	require.NoError(t, err)
+
+	handler := &AdminAgentsHandler{
+		DB:    db,
+		Store: store.NewAgentStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/agents", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.List(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminAgentsListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.GreaterOrEqual(t, len(payload.Agents), 2)
+
+	agentsByID := make(map[string]adminAgentSummary, len(payload.Agents))
+	for _, agent := range payload.Agents {
+		agentsByID[agent.ID] = agent
+	}
+	tempAgent, ok := agentsByID["temp-1"]
+	require.True(t, ok)
+	require.True(t, tempAgent.IsEphemeral)
+	require.NotNil(t, tempAgent.ProjectID)
+	require.Equal(t, projectID, *tempAgent.ProjectID)
+}
+
+func TestAdminAgentsGetIncludesLifecycleMetadata(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-get-lifecycle")
+
+	var projectID string
+	err := db.QueryRow(
+		`INSERT INTO projects (org_id, name, status) VALUES ($1, 'Lifecycle Project', 'active') RETURNING id`,
+		orgID,
+	).Scan(&projectID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO agents (org_id, slug, display_name, status, is_ephemeral, project_id)
+		 VALUES ($1, 'temp-2', 'Temp Two', 'active', true, $2)`,
+		orgID,
+		projectID,
+	)
+	require.NoError(t, err)
+
+	handler := &AdminAgentsHandler{
+		DB:    db,
+		Store: store.NewAgentStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/agents/temp-2", nil)
+	req = addRouteParam(req, "id", "temp-2")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+
+	rec := httptest.NewRecorder()
+	handler.Get(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload adminAgentDetailResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "temp-2", payload.Agent.ID)
+	require.True(t, payload.Agent.IsEphemeral)
+	require.NotNil(t, payload.Agent.ProjectID)
+	require.Equal(t, projectID, *payload.Agent.ProjectID)
+}
