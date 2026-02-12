@@ -190,6 +190,9 @@ func NewRouter() http.Handler {
 	if err := mcp.RegisterIssueTools(mcpServer); err != nil {
 		log.Printf("⚠️  MCP issue tool registration failed: %v", err)
 	}
+	if err := mcp.RegisterGitTools(mcpServer); err != nil {
+		log.Printf("⚠️  MCP git tool registration failed: %v", err)
+	}
 	mcpHandler := mcp.NewHTTPHandler(mcpServer, mcp.NewDBAuthenticator(db))
 	r.Method(http.MethodGet, "/mcp", mcpHandler)
 	r.Method(http.MethodPost, "/mcp", mcpHandler)
