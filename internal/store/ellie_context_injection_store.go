@@ -9,16 +9,16 @@ import (
 )
 
 type EllieContextInjectionPendingMessage struct {
-	MessageID       string
-	OrgID           string
-	RoomID          string
-	SenderID        string
-	SenderType      string
-	Body            string
-	MessageType     string
-	ConversationID  *string
-	CreatedAt       time.Time
-	HasEmbedding    bool
+	MessageID      string
+	OrgID          string
+	RoomID         string
+	SenderID       string
+	SenderType     string
+	Body           string
+	MessageType    string
+	ConversationID *string
+	CreatedAt      time.Time
+	HasEmbedding   bool
 }
 
 type EllieContextInjectionMemoryCandidate struct {
@@ -446,4 +446,55 @@ func (s *EllieContextInjectionStore) CreateInjectionMessage(
 	}
 
 	return messageID, nil
+}
+
+func (s *EllieContextInjectionStore) CountMessagesSinceLastContextInjection(
+	ctx context.Context,
+	orgID,
+	roomID string,
+) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("ellie context injection store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	roomID = strings.TrimSpace(roomID)
+	if !uuidRegex.MatchString(orgID) {
+		return 0, fmt.Errorf("invalid org_id")
+	}
+	if !uuidRegex.MatchString(roomID) {
+		return 0, fmt.Errorf("invalid room_id")
+	}
+
+	var count int
+	err := s.db.QueryRowContext(
+		ctx,
+		`WITH last_injection AS (
+			SELECT created_at, id
+			FROM chat_messages
+			WHERE org_id = $1
+			  AND room_id = $2
+			  AND type = 'context_injection'
+			ORDER BY created_at DESC, id DESC
+			LIMIT 1
+		)
+		SELECT CASE
+			WHEN EXISTS (SELECT 1 FROM last_injection) THEN (
+				SELECT COUNT(*)
+				FROM chat_messages cm
+				WHERE cm.org_id = $1
+				  AND cm.room_id = $2
+				  AND (cm.created_at, cm.id) > (
+					SELECT created_at, id FROM last_injection
+				  )
+			)
+			ELSE 2147483647
+		END`,
+		orgID,
+		roomID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count messages since last context injection: %w", err)
+	}
+
+	return count, nil
 }

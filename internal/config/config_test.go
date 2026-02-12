@@ -34,6 +34,12 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("CONVERSATION_SEGMENTATION_POLL_INTERVAL", "")
 	t.Setenv("CONVERSATION_SEGMENTATION_BATCH_SIZE", "")
 	t.Setenv("CONVERSATION_SEGMENTATION_GAP_THRESHOLD", "")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_WORKER_ENABLED", "")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_POLL_INTERVAL", "")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_BATCH_SIZE", "")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_THRESHOLD", "")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_COOLDOWN_MESSAGES", "")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_MAX_ITEMS", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -97,6 +103,25 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ConversationSegmentation.GapThreshold != defaultConversationSegmentationGapThreshold {
 		t.Fatalf("expected default conversation segmentation gap threshold %v, got %v", defaultConversationSegmentationGapThreshold, cfg.ConversationSegmentation.GapThreshold)
+	}
+
+	if !cfg.EllieContextInjection.Enabled {
+		t.Fatalf("expected ellie context injection worker enabled by default")
+	}
+	if cfg.EllieContextInjection.PollInterval != defaultEllieContextInjectionPollInterval {
+		t.Fatalf("expected default ellie context injection interval %v, got %v", defaultEllieContextInjectionPollInterval, cfg.EllieContextInjection.PollInterval)
+	}
+	if cfg.EllieContextInjection.BatchSize != defaultEllieContextInjectionBatchSize {
+		t.Fatalf("expected default ellie context injection batch size %d, got %d", defaultEllieContextInjectionBatchSize, cfg.EllieContextInjection.BatchSize)
+	}
+	if cfg.EllieContextInjection.Threshold != defaultEllieContextInjectionThreshold {
+		t.Fatalf("expected default ellie context injection threshold %.2f, got %.2f", defaultEllieContextInjectionThreshold, cfg.EllieContextInjection.Threshold)
+	}
+	if cfg.EllieContextInjection.CooldownMessages != defaultEllieContextInjectionCooldownMessages {
+		t.Fatalf("expected default ellie context injection cooldown %d, got %d", defaultEllieContextInjectionCooldownMessages, cfg.EllieContextInjection.CooldownMessages)
+	}
+	if cfg.EllieContextInjection.MaxItems != defaultEllieContextInjectionMaxItems {
+		t.Fatalf("expected default ellie context injection max items %d, got %d", defaultEllieContextInjectionMaxItems, cfg.EllieContextInjection.MaxItems)
 	}
 }
 
@@ -286,5 +311,38 @@ func TestLoadRejectsInvalidConversationSegmentationBatchSize(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "CONVERSATION_SEGMENTATION_BATCH_SIZE") {
 		t.Fatalf("expected error to mention CONVERSATION_SEGMENTATION_BATCH_SIZE, got %v", err)
+	}
+}
+
+func TestLoadIncludesEllieContextInjectionDefaults(t *testing.T) {
+	t.Setenv("ELLIE_CONTEXT_INJECTION_WORKER_ENABLED", "true")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_POLL_INTERVAL", "3s")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_BATCH_SIZE", "40")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_THRESHOLD", "0.72")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_COOLDOWN_MESSAGES", "7")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_MAX_ITEMS", "4")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if !cfg.EllieContextInjection.Enabled {
+		t.Fatalf("expected ellie context injection worker enabled")
+	}
+	if cfg.EllieContextInjection.PollInterval != 3*time.Second {
+		t.Fatalf("expected ellie context injection interval 3s, got %v", cfg.EllieContextInjection.PollInterval)
+	}
+	if cfg.EllieContextInjection.BatchSize != 40 {
+		t.Fatalf("expected ellie context injection batch size 40, got %d", cfg.EllieContextInjection.BatchSize)
+	}
+	if cfg.EllieContextInjection.Threshold != 0.72 {
+		t.Fatalf("expected ellie context injection threshold 0.72, got %.2f", cfg.EllieContextInjection.Threshold)
+	}
+	if cfg.EllieContextInjection.CooldownMessages != 7 {
+		t.Fatalf("expected ellie context injection cooldown 7, got %d", cfg.EllieContextInjection.CooldownMessages)
+	}
+	if cfg.EllieContextInjection.MaxItems != 4 {
+		t.Fatalf("expected ellie context injection max items 4, got %d", cfg.EllieContextInjection.MaxItems)
 	}
 }

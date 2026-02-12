@@ -72,6 +72,51 @@ func main() {
 		}
 	}
 
+	if cfg.EllieContextInjection.Enabled {
+		db, err := store.DB()
+		if err != nil {
+			log.Printf("⚠️  Ellie context injection worker disabled; database unavailable: %v", err)
+		} else {
+			embedder, err := memory.NewEmbedder(memory.EmbedderConfig{
+				Provider:      memory.Provider(strings.ToLower(cfg.ConversationEmbedding.Provider)),
+				Model:         cfg.ConversationEmbedding.Model,
+				Dimension:     cfg.ConversationEmbedding.Dimension,
+				OllamaURL:     cfg.ConversationEmbedding.OllamaURL,
+				OpenAIBaseURL: cfg.ConversationEmbedding.OpenAIBaseURL,
+				OpenAIAPIKey:  cfg.ConversationEmbedding.OpenAIAPIKey,
+			}, nil)
+			if err != nil {
+				log.Printf("⚠️  Ellie context injection worker disabled; embedder init failed: %v", err)
+			} else {
+				service := memory.NewEllieProactiveInjectionService(memory.EllieProactiveInjectionConfig{
+					Threshold: cfg.EllieContextInjection.Threshold,
+					MaxItems:  cfg.EllieContextInjection.MaxItems,
+				})
+				worker := memory.NewEllieContextInjectionWorker(
+					store.NewEllieContextInjectionStore(db),
+					embedder,
+					service,
+					memory.EllieContextInjectionWorkerConfig{
+						BatchSize:         cfg.EllieContextInjection.BatchSize,
+						PollInterval:      cfg.EllieContextInjection.PollInterval,
+						Threshold:         cfg.EllieContextInjection.Threshold,
+						MaxMemoriesPerMsg: cfg.EllieContextInjection.MaxItems,
+						CooldownMessages:  cfg.EllieContextInjection.CooldownMessages,
+					},
+				)
+				startWorker(worker.Start)
+				log.Printf(
+					"✅ Ellie context injection worker started (interval=%s batch=%d threshold=%.2f cooldown=%d max_items=%d)",
+					cfg.EllieContextInjection.PollInterval,
+					cfg.EllieContextInjection.BatchSize,
+					cfg.EllieContextInjection.Threshold,
+					cfg.EllieContextInjection.CooldownMessages,
+					cfg.EllieContextInjection.MaxItems,
+				)
+			}
+		}
+	}
+
 	if cfg.ConversationEmbedding.Enabled {
 		db, err := store.DB()
 		if err != nil {

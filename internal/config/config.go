@@ -63,6 +63,13 @@ const (
 	defaultConversationSegmentationPollInterval = 5 * time.Second
 	defaultConversationSegmentationBatchSize    = 200
 	defaultConversationSegmentationGapThreshold = 30 * time.Minute
+
+	defaultEllieContextInjectionEnabled          = true
+	defaultEllieContextInjectionPollInterval     = 3 * time.Second
+	defaultEllieContextInjectionBatchSize        = 50
+	defaultEllieContextInjectionThreshold        = 0.62
+	defaultEllieContextInjectionCooldownMessages = 4
+	defaultEllieContextInjectionMaxItems         = 3
 )
 
 type GitHubConfig struct {
@@ -83,6 +90,7 @@ type Config struct {
 	GitHub                   GitHubConfig
 	ConversationEmbedding    ConversationEmbeddingConfig
 	ConversationSegmentation ConversationSegmentationConfig
+	EllieContextInjection    EllieContextInjectionConfig
 }
 
 type ConversationEmbeddingConfig struct {
@@ -102,6 +110,15 @@ type ConversationSegmentationConfig struct {
 	PollInterval time.Duration
 	BatchSize    int
 	GapThreshold time.Duration
+}
+
+type EllieContextInjectionConfig struct {
+	Enabled          bool
+	PollInterval     time.Duration
+	BatchSize        int
+	Threshold        float64
+	CooldownMessages int
+	MaxItems         int
 }
 
 func Load() (Config, error) {
@@ -143,6 +160,7 @@ func Load() (Config, error) {
 			OpenAIAPIKey: strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY")),
 		},
 		ConversationSegmentation: ConversationSegmentationConfig{},
+		EllieContextInjection:    EllieContextInjectionConfig{},
 	}
 
 	githubEnabled, err := parseBool("GITHUB_INTEGRATION_ENABLED", false)
@@ -205,6 +223,42 @@ func Load() (Config, error) {
 	}
 	cfg.ConversationSegmentation.GapThreshold = conversationSegmentationGapThreshold
 
+	ellieContextInjectionEnabled, err := parseBool("ELLIE_CONTEXT_INJECTION_WORKER_ENABLED", defaultEllieContextInjectionEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.Enabled = ellieContextInjectionEnabled
+
+	ellieContextInjectionInterval, err := parseDuration("ELLIE_CONTEXT_INJECTION_POLL_INTERVAL", defaultEllieContextInjectionPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.PollInterval = ellieContextInjectionInterval
+
+	ellieContextInjectionBatchSize, err := parseInt("ELLIE_CONTEXT_INJECTION_BATCH_SIZE", defaultEllieContextInjectionBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.BatchSize = ellieContextInjectionBatchSize
+
+	ellieContextInjectionThreshold, err := parseFloat("ELLIE_CONTEXT_INJECTION_THRESHOLD", defaultEllieContextInjectionThreshold)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.Threshold = ellieContextInjectionThreshold
+
+	ellieContextInjectionCooldownMessages, err := parseInt("ELLIE_CONTEXT_INJECTION_COOLDOWN_MESSAGES", defaultEllieContextInjectionCooldownMessages)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.CooldownMessages = ellieContextInjectionCooldownMessages
+
+	ellieContextInjectionMaxItems, err := parseInt("ELLIE_CONTEXT_INJECTION_MAX_ITEMS", defaultEllieContextInjectionMaxItems)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieContextInjection.MaxItems = ellieContextInjectionMaxItems
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -240,6 +294,24 @@ func (c Config) Validate() error {
 		}
 		if c.ConversationSegmentation.GapThreshold <= 0 {
 			return fmt.Errorf("CONVERSATION_SEGMENTATION_GAP_THRESHOLD must be greater than zero")
+		}
+	}
+
+	if c.EllieContextInjection.Enabled {
+		if c.EllieContextInjection.PollInterval <= 0 {
+			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_POLL_INTERVAL must be greater than zero")
+		}
+		if c.EllieContextInjection.BatchSize <= 0 {
+			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_BATCH_SIZE must be greater than zero")
+		}
+		if c.EllieContextInjection.Threshold <= 0 || c.EllieContextInjection.Threshold > 1 {
+			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_THRESHOLD must be in (0,1]")
+		}
+		if c.EllieContextInjection.CooldownMessages < 0 {
+			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_COOLDOWN_MESSAGES must be greater than or equal to zero")
+		}
+		if c.EllieContextInjection.MaxItems <= 0 {
+			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_MAX_ITEMS must be greater than zero")
 		}
 	}
 
@@ -341,6 +413,20 @@ func parseInt(name string, defaultValue int) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a valid integer: %w", name, err)
 	}
+	return parsed, nil
+}
+
+func parseFloat(name string, defaultValue float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue, nil
+	}
+
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid float: %w", name, err)
+	}
+
 	return parsed, nil
 }
 
