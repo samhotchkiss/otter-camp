@@ -88,6 +88,26 @@ The token authenticates the org. The git author identifies which agent made the 
 
 Use the `otter` CLI to create/clone projects so the **remote is set correctly**.
 Full CLI usage: `docs/CLI.md`.
+MCP connection and migration details: `docs/MCP.md`.
+
+### MCP-First Mode (Recommended)
+
+For host-based agent automation, connect to Otter Camp through MCP first:
+
+1. Configure token/org:
+```bash
+otter auth login --token <oc_git_or_oc_sess_token> --org <org-id>
+```
+2. Get endpoint and config scaffold:
+```bash
+otter mcp info --json
+```
+3. Validate MCP connectivity:
+```bash
+otter mcp call tools/list --params '{}' --json
+```
+
+Use legacy CLI and REST paths as fallback during rollout. Do not remove existing scripts until MCP paths are validated in your environment.
 
 ### Git Hosting + Tokens (Important)
 OtterCamp uses two token types, but **agents should use the git token** (prefix `oc_git_`) for both **git** and **API/CLI** access.

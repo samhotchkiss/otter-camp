@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -57,6 +58,8 @@ func main() {
 		handleAutostart(os.Args[2:])
 	case "whoami":
 		handleWhoami(os.Args[2:])
+	case "mcp":
+		handleMCP(os.Args[2:])
 	case "release-gate":
 		handleReleaseGate(os.Args[2:])
 	case "project":
@@ -100,6 +103,7 @@ Commands:
   repair           Repair local Otter Camp runtime (build + restart)
   autostart        Manage launch-at-login service (macOS launchd)
   whoami           Validate token and show user
+  mcp              MCP endpoint info and thin client calls
   release-gate     Run Spec 110 release gate checks
   project          Manage projects
   agent            Manage agents
@@ -177,6 +181,111 @@ func handleWhoami(args []string) {
 	fmt.Printf("User: %s (%s)\n", resp.User.Name, resp.User.Email)
 	if cfg.DefaultOrg != "" {
 		fmt.Printf("Default org: %s\n", cfg.DefaultOrg)
+	}
+}
+
+func handleMCP(args []string) {
+	const usageText = "usage: otter mcp <info|call> ..."
+	if len(args) == 0 {
+		fmt.Println(usageText)
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "info":
+		flags := flag.NewFlagSet("mcp info", flag.ExitOnError)
+		jsonOut := flags.Bool("json", false, "JSON output")
+		showToken := flags.Bool("show-token", false, "include configured token in output")
+		_ = flags.Parse(args[1:])
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		endpoint := resolveMCPEndpoint(cfg.APIBaseURL)
+		if endpoint == "" {
+			die("invalid API base URL in config; run `otter auth login --api <url>`")
+		}
+
+		tokenValue := "<set via otter auth login>"
+		if strings.TrimSpace(cfg.Token) != "" {
+			if *showToken {
+				tokenValue = strings.TrimSpace(cfg.Token)
+			} else {
+				tokenValue = "<redacted>"
+			}
+		}
+
+		openClawSnippet := buildOpenClawMCPConfigSnippet(endpoint, tokenValue)
+		payload := map[string]interface{}{
+			"endpoint":       endpoint,
+			"authorization":  "Bearer " + tokenValue,
+			"openclawConfig": openClawSnippet,
+			"migrationNotes": []string{
+				"Keep existing otter CLI commands while incrementally moving automation to MCP tools.",
+				"Start by replacing read-only scripts with MCP tools/list and tools/call usage.",
+				"Use rollback by switching automation back to existing CLI/REST flows if needed.",
+			},
+		}
+
+		if *jsonOut {
+			printJSON(payload)
+			return
+		}
+
+		fmt.Printf("MCP endpoint: %s\n", endpoint)
+		fmt.Printf("Authorization: Bearer %s\n", tokenValue)
+		fmt.Println()
+		fmt.Println("OpenClaw config snippet:")
+		printJSON(openClawSnippet)
+		fmt.Println()
+		fmt.Println("Migration:")
+		fmt.Println("1. Keep existing otter CLI and REST workflows active while introducing MCP.")
+		fmt.Println("2. Move read paths first (tools/list, resources/list, resources/read), then write paths.")
+		fmt.Println("3. Roll back by switching automation to existing CLI/REST commands if MCP integration is blocked.")
+	case "call":
+		flags := flag.NewFlagSet("mcp call", flag.ExitOnError)
+		paramsRaw := flags.String("params", "{}", "JSON params payload")
+		id := flags.Int64("id", 1, "JSON-RPC id")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		remaining := flags.Args()
+		if len(remaining) < 1 {
+			die("usage: otter mcp call <method> [--params <json>] [--id <n>] [--json]")
+		}
+		method := strings.TrimSpace(remaining[0])
+		if method == "" {
+			die("method is required")
+		}
+		params, err := parseMCPParamsJSON(*paramsRaw)
+		if err != nil {
+			die(err.Error())
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		if strings.TrimSpace(cfg.Token) == "" {
+			dieIf(errors.New("missing auth token"))
+		}
+		endpoint := resolveMCPEndpoint(cfg.APIBaseURL)
+		if endpoint == "" {
+			die("invalid API base URL in config; run `otter auth login --api <url>`")
+		}
+
+		resp, err := executeMCPJSONRPC(http.DefaultClient, endpoint, strings.TrimSpace(cfg.Token), method, *id, params)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(resp)
+			return
+		}
+		if result, ok := resp["result"]; ok {
+			printJSON(result)
+			return
+		}
+		printJSON(resp)
+	default:
+		fmt.Println(usageText)
+		os.Exit(1)
 	}
 }
 
@@ -2459,4 +2568,114 @@ func deriveManagedRepoURL(apiBaseURL, orgID, projectID string) string {
 
 	root := strings.TrimRight(parsed.String(), "/")
 	return fmt.Sprintf("%s/git/%s/%s.git", root, url.PathEscape(orgID), url.PathEscape(projectID))
+}
+
+func resolveMCPEndpoint(apiBaseURL string) string {
+	base := strings.TrimSpace(apiBaseURL)
+	if base == "" {
+		return ""
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	root := strings.TrimRight(parsed.String(), "/")
+	return root + "/mcp"
+}
+
+func parseMCPParamsJSON(raw string) (json.RawMessage, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		trimmed = "{}"
+	}
+	if !json.Valid([]byte(trimmed)) {
+		return nil, errors.New("--params must be valid JSON")
+	}
+	return json.RawMessage(trimmed), nil
+}
+
+func buildOpenClawMCPConfigSnippet(endpoint, token string) map[string]interface{} {
+	return map[string]interface{}{
+		"mcpServers": map[string]interface{}{
+			"otter-camp": map[string]interface{}{
+				"transport": "streamable-http",
+				"url":       endpoint,
+				"headers": map[string]interface{}{
+					"Authorization": "Bearer " + token,
+				},
+			},
+		},
+	}
+}
+
+func executeMCPJSONRPC(client *http.Client, endpoint, token, method string, id int64, params json.RawMessage) (map[string]interface{}, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if strings.TrimSpace(endpoint) == "" {
+		return nil, errors.New("mcp endpoint is required")
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("missing auth token")
+	}
+	if strings.TrimSpace(method) == "" {
+		return nil, errors.New("method is required")
+	}
+
+	var paramsValue interface{}
+	if len(params) == 0 {
+		paramsValue = map[string]interface{}{}
+	} else if err := json.Unmarshal(params, &paramsValue); err != nil {
+		return nil, errors.New("--params must be valid JSON")
+	}
+
+	payload := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  method,
+		"params":  paramsValue,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	responseBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	parsed := map[string]interface{}{}
+	if len(strings.TrimSpace(string(responseBytes))) > 0 {
+		if err := json.Unmarshal(responseBytes, &parsed); err != nil {
+			return nil, fmt.Errorf("invalid MCP response: %w", err)
+		}
+	}
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		if rpcErr, ok := parsed["error"].(map[string]interface{}); ok {
+			if message := strings.TrimSpace(toString(rpcErr["message"])); message != "" {
+				return nil, fmt.Errorf("mcp request failed (%d): %s", resp.StatusCode, message)
+			}
+		}
+		return nil, fmt.Errorf("mcp request failed (%d)", resp.StatusCode)
+	}
+
+	return parsed, nil
 }

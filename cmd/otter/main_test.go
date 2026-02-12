@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -153,6 +154,115 @@ func TestFriendlyAuthErrorMessageFallback(t *testing.T) {
 	err := errors.New("request failed (500): boom")
 	if got := formatCLIError(err); got != err.Error() {
 		t.Fatalf("formatCLIError() = %q, want %q", got, err.Error())
+	}
+}
+
+func TestMCPResolveEndpoint(t *testing.T) {
+	tests := []struct {
+		name    string
+		apiBase string
+		want    string
+	}{
+		{
+			name:    "plain host",
+			apiBase: "https://api.otter.camp",
+			want:    "https://api.otter.camp/mcp",
+		},
+		{
+			name:    "api suffix removed",
+			apiBase: "https://api.otter.camp/api/v1",
+			want:    "https://api.otter.camp/mcp",
+		},
+		{
+			name:    "localhost with trailing slash",
+			apiBase: "http://localhost:4200/",
+			want:    "http://localhost:4200/mcp",
+		},
+		{
+			name:    "invalid URL",
+			apiBase: "://bad",
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		got := resolveMCPEndpoint(tt.apiBase)
+		if got != tt.want {
+			t.Fatalf("%s: got %q want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestMCPParseParamsJSON(t *testing.T) {
+	got, err := parseMCPParamsJSON(`{"project":"otter-camp"}`)
+	if err != nil {
+		t.Fatalf("parseMCPParamsJSON(valid) error = %v", err)
+	}
+	if string(got) != `{"project":"otter-camp"}` {
+		t.Fatalf("parseMCPParamsJSON(valid) = %s", string(got))
+	}
+
+	got, err = parseMCPParamsJSON("")
+	if err != nil {
+		t.Fatalf("parseMCPParamsJSON(empty) error = %v", err)
+	}
+	if string(got) != "{}" {
+		t.Fatalf("parseMCPParamsJSON(empty) = %s, want {}", string(got))
+	}
+
+	if _, err := parseMCPParamsJSON(`{"project":`); err == nil {
+		t.Fatalf("parseMCPParamsJSON(invalid) expected error")
+	}
+}
+
+func TestMCPExecuteJSONRPC(t *testing.T) {
+	var authHeader string
+	var method string
+	var id float64
+	var params map[string]interface{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader = r.Header.Get("Authorization")
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		method, _ = payload["method"].(string)
+		id, _ = payload["id"].(float64)
+		params, _ = payload["params"].(map[string]interface{})
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":7,"result":{"ok":true}}`))
+	}))
+	defer srv.Close()
+
+	resp, err := executeMCPJSONRPC(
+		srv.Client(),
+		srv.URL+"/mcp",
+		"oc_sess_test",
+		"tools/list",
+		7,
+		json.RawMessage(`{"limit":25}`),
+	)
+	if err != nil {
+		t.Fatalf("executeMCPJSONRPC() error = %v", err)
+	}
+	if authHeader != "Bearer oc_sess_test" {
+		t.Fatalf("Authorization = %q, want Bearer oc_sess_test", authHeader)
+	}
+	if method != "tools/list" {
+		t.Fatalf("method = %q, want tools/list", method)
+	}
+	if int(id) != 7 {
+		t.Fatalf("id = %v, want 7", id)
+	}
+	if got, _ := params["limit"].(float64); int(got) != 25 {
+		t.Fatalf("params.limit = %v, want 25", params["limit"])
+	}
+
+	result, _ := resp["result"].(map[string]interface{})
+	if ok, _ := result["ok"].(bool); !ok {
+		t.Fatalf("result.ok = %v, want true", result["ok"])
 	}
 }
 

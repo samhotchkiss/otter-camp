@@ -121,6 +121,39 @@ $ otter whoami --json
 
 ---
 
+## MCP Migration Commands
+
+The CLI now includes a thin MCP wrapper so existing shell workflows can migrate incrementally.
+Full host configuration and rollout guidance: `docs/MCP.md`.
+
+### `otter mcp info`
+
+Show derived MCP endpoint details and a starter OpenClaw config snippet.
+
+```bash
+otter mcp info
+otter mcp info --json
+otter mcp info --show-token   # includes configured token in output
+```
+
+### `otter mcp call`
+
+Send a JSON-RPC method call directly to the configured MCP endpoint.
+
+```bash
+otter mcp call tools/list --params '{}' --json
+otter mcp call tools/call --params '{"name":"project_list","arguments":{"limit":10}}' --json
+otter mcp call initialize --params '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"otter-cli","version":"dev"}}' --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--params <json>` | Raw JSON value used as `params` |
+| `--id <n>` | JSON-RPC request ID (default: `1`) |
+| `--json` | Print full JSON-RPC response |
+
+---
+
 ## Local Runtime Control
 
 These commands manage a local Otter Camp install from the repository checkout.
@@ -351,6 +384,8 @@ otter <command> [args]
 Commands:
   auth login       Store API token and default org
   whoami           Validate token and show current user
+  mcp info         Show MCP endpoint + config snippet
+  mcp call         Send raw MCP JSON-RPC method calls
   project create   Create a new project
   clone            Clone a project to local directory
   remote add       Add origin remote for a project

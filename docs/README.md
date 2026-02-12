@@ -37,6 +37,7 @@ Unlike GitHub (designed for human teams) or Linear (designed for human velocity)
 | [EDITOR-CAPABILITY-MATRIX.md](EDITOR-CAPABILITY-MATRIX.md) | MVP file-type editor behavior contract |
 | [PEARL-IMPLEMENTATION.md](PEARL-IMPLEMENTATION.md) | Implemented Pearl workflow, E2E coverage, and runbooks |
 | [OPENCLAW-SECRETS.md](OPENCLAW-SECRETS.md) | Required OpenClaw secrets and deployment verification steps |
+| [MCP.md](MCP.md) | MCP endpoint setup, OpenClaw config, and migration/rollback guidance |
 
 ---
 
