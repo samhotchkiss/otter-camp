@@ -102,12 +102,12 @@ func (s *EllieRetrievalStore) SearchRoomContext(ctx context.Context, orgID, room
 		 FROM chat_messages
 		 WHERE org_id = $1
 		   AND room_id = $2
-		   AND body ILIKE $3
+		   AND body ILIKE '%' || $3 || '%' ESCAPE '\\'
 		 ORDER BY created_at DESC, id DESC
 		 LIMIT $4`,
 		orgID,
 		roomID,
-		"%"+query+"%",
+		escapeILIKEPattern(query),
 		limit,
 	)
 	if err != nil {
@@ -188,7 +188,7 @@ func (s *EllieRetrievalStore) queryMemories(
 	extraPredicate string,
 	extraArgs ...any,
 ) ([]EllieMemorySearchResult, error) {
-	args := []any{orgID, "%" + query + "%"}
+	args := []any{orgID, escapeILIKEPattern(query)}
 	args = append(args, extraArgs...)
 	args = append(args, limit)
 	limitArg := fmt.Sprintf("$%d", len(args))
@@ -200,7 +200,7 @@ func (s *EllieRetrievalStore) queryMemories(
 	 WHERE org_id = $1
 	   AND status = 'active'
 	   AND (` + extraPredicate + `)
-	   AND ((title || ' ' || content) ILIKE $2)
+	   AND ((title || ' ' || content) ILIKE '%' || $2 || '%' ESCAPE '\\')
 	 ORDER BY occurred_at DESC, id DESC
 	 LIMIT ` + limitArg
 
@@ -263,11 +263,11 @@ func (s *EllieRetrievalStore) SearchChatHistory(ctx context.Context, orgID, quer
 		`SELECT id, room_id, body, conversation_id::text, created_at
 		 FROM chat_messages
 		 WHERE org_id = $1
-		   AND body ILIKE $2
+		   AND body ILIKE '%' || $2 || '%' ESCAPE '\\'
 		 ORDER BY created_at DESC, id DESC
 		 LIMIT $3`,
 		orgID,
-		"%"+query+"%",
+		escapeILIKEPattern(query),
 		limit,
 	)
 	if err != nil {
@@ -620,4 +620,12 @@ func nullStringPointer(value sql.NullString) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func escapeILIKEPattern(input string) string {
+	return strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	).Replace(input)
 }

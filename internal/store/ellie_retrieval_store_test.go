@@ -182,6 +182,68 @@ func TestEllieRetrievalStoreKeywordScaffoldBehavior(t *testing.T) {
 	require.Empty(t, results)
 }
 
+func TestEllieRetrievalStoreTreatsWildcardQueryCharsAsLiterals(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-retrieval-wildcard-org")
+	projectID := createTestProject(t, db, orgID, "Ellie Retrieval Wildcard Project")
+	agentID := insertSchemaAgent(t, db, orgID, "ellie-retrieval-wildcard-agent")
+
+	var roomID string
+	err := db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Wildcard Room', 'project', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&roomID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO memories (org_id, kind, title, content, status, source_project_id)
+		 VALUES
+		 ($1, 'fact', 'literal memory', 'needle %_ marker memory', 'active', $2),
+		 ($1, 'fact', 'wildcard memory', 'needle zz marker memory', 'active', $2)`,
+		orgID,
+		projectID,
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, type, attachments)
+		 VALUES
+		 ($1, $2, $3, 'agent', 'needle %_ marker message', 'message', '[]'::jsonb),
+		 ($1, $2, $3, 'agent', 'needle zz marker message', 'message', '[]'::jsonb)`,
+		orgID,
+		roomID,
+		agentID,
+	)
+	require.NoError(t, err)
+
+	store := NewEllieRetrievalStore(db)
+
+	roomResults, err := store.SearchRoomContext(context.Background(), orgID, roomID, "%_", 10)
+	require.NoError(t, err)
+	require.Len(t, roomResults, 1)
+	require.Contains(t, roomResults[0].Body, "%_")
+
+	projectMemoryResults, err := store.SearchMemoriesByProject(context.Background(), orgID, projectID, "%_", 10)
+	require.NoError(t, err)
+	require.Len(t, projectMemoryResults, 1)
+	require.Contains(t, projectMemoryResults[0].Content, "%_")
+
+	chatResults, err := store.SearchChatHistory(context.Background(), orgID, "%_", 10)
+	require.NoError(t, err)
+	require.Len(t, chatResults, 1)
+	require.Contains(t, chatResults[0].Body, "%_")
+}
+
+func TestEscapeILIKEPattern(t *testing.T) {
+	escaped := escapeILIKEPattern(`abc%_\path`)
+	require.Equal(t, `abc\%\_\\path`, escaped)
+}
+
 func TestEllieRetrievalStoreProjectAndOrgScopes(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
