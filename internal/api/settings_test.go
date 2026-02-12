@@ -63,6 +63,7 @@ func TestGetWorkspaceSettings(t *testing.T) {
 	var resp WorkspaceResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, "Org settings-workspace", resp.Name)
+	require.Equal(t, "settings-workspace", resp.Slug)
 	require.Len(t, resp.Members, 2)
 
 	membersByEmail := make(map[string]WorkspaceMember, len(resp.Members))
@@ -208,6 +209,7 @@ func TestPatchWorkspaceSettings(t *testing.T) {
 	var resp WorkspaceResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	require.Equal(t, "Ops Workspace", resp.Name)
+	require.Equal(t, "settings-workspace-patch", resp.Slug)
 
 	var orgName string
 	err := db.QueryRow(`SELECT name FROM organizations WHERE id = $1`, orgID).Scan(&orgName)
