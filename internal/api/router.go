@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/samhotchkiss/otter-camp/internal/automigrate"
 	"github.com/samhotchkiss/otter-camp/internal/gitserver"
+	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
@@ -65,7 +66,7 @@ func NewRouter() http.Handler {
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Set JSON content-type only for API routes
-			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" || r.URL.Path == "/health" || r.URL.Path == "/ws" {
+			if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" || r.URL.Path == "/health" || r.URL.Path == "/ws" || r.URL.Path == "/mcp" {
 				w.Header().Set("Content-Type", "application/json")
 			}
 			next.ServeHTTP(w, r)
@@ -73,6 +74,9 @@ func NewRouter() http.Handler {
 	})
 
 	r.Get("/health", handleHealthWithDB(db))
+	mcpHandler := mcp.NewHTTPHandler(mcp.NewServer(), mcp.NewDBAuthenticator(db))
+	r.Method(http.MethodGet, "/mcp", mcpHandler)
+	r.Method(http.MethodPost, "/mcp", mcpHandler)
 	r.Get("/api/feed", FeedHandlerV2)
 
 	webhookHandler := &WebhookHandler{Hub: hub}
