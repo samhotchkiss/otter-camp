@@ -11,6 +11,7 @@ type AuthOptions = {
   orgId?: string;
   user?: AuthUser;
   expiresAt?: string;
+  mockShellApis?: boolean;
 };
 
 const DEFAULT_TOKEN = "oc_sess_e2e_token";
@@ -31,6 +32,7 @@ export async function bootstrapAuthenticatedSession(
   const user = options.user ?? DEFAULT_USER;
   const expiresAt =
     options.expiresAt ?? new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const mockShellApis = options.mockShellApis ?? true;
 
   await page.route("**/api/auth/validate**", async (route) => {
     const requestURL = new URL(route.request().url());
@@ -74,4 +76,99 @@ export async function bootstrapAuthenticatedSession(
       onboardingCompleteKey: ONBOARDING_COMPLETE_KEY,
     },
   );
+
+  if (!mockShellApis) {
+    return;
+  }
+
+  // Keep app shell network calls deterministic for route-level E2E tests.
+  await page.route("**/api/inbox**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] }),
+    });
+  });
+
+  await page.route("**/api/admin/connections", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        bridge: { connected: true, sync_healthy: true, status: "healthy" },
+      }),
+    });
+  });
+
+  await page.route("**/api/feed**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ actionItems: [], feedItems: [] }),
+    });
+  });
+
+  await page.route("**/api/activity/recent**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] }),
+    });
+  });
+
+  await page.route("**/api/emissions/recent**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] }),
+    });
+  });
+
+  await page.route("**/api/projects**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ projects: [] }),
+    });
+  });
+
+  await page.route("**/api/chats**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ chats: [] }),
+    });
+  });
+
+  await page.route("**/api/sync/agents**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ bridge_status: "healthy", sync_healthy: true }),
+    });
+  });
+
+  await page.route("**/api/agents**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ agents: [] }),
+    });
+  });
+
+  await page.route("**/api/notifications**", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ success: true }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([]),
+    });
+  });
 }
