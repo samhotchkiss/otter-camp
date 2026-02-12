@@ -464,6 +464,24 @@ func TestMigration064ProjectChatBackfillFilesExistAndContainCoreDDL(t *testing.T
 	require.Contains(t, downContent, "delete from chat_messages")
 }
 
+func TestMigration066EllieIngestionCursorsDownIncludesPolicyDrop(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"066_create_ellie_ingestion_cursors.up.sql",
+		"066_create_ellie_ingestion_cursors.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "066_create_ellie_ingestion_cursors.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop policy if exists ellie_ingestion_cursors_org_isolation on ellie_ingestion_cursors")
+	require.Contains(t, downContent, "drop table if exists ellie_ingestion_cursors")
+}
+
 func TestMigration067EllieRetrievalStrategiesFilesExistAndContainCoreDDL(t *testing.T) {
 	migrationsDir := getMigrationsDir(t)
 	files := []string{
