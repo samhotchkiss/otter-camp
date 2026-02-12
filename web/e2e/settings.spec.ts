@@ -1,7 +1,10 @@
 import { test, expect } from "@playwright/test";
+import { bootstrapAuthenticatedSession } from "./helpers/auth";
 
 test.describe("Settings Page", () => {
   test.beforeEach(async ({ page }) => {
+    await bootstrapAuthenticatedSession(page);
+
     // Mock all settings APIs
     await page.route("**/api/settings/profile", async (route) => {
       if (route.request().method() === "PUT") {

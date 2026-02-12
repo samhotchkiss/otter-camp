@@ -1,7 +1,10 @@
 import { test, expect } from "@playwright/test";
+import { bootstrapAuthenticatedSession } from "./helpers/auth";
 
 test.describe("Agents Page", () => {
   test.beforeEach(async ({ page }) => {
+    await bootstrapAuthenticatedSession(page);
+
     // Mock the agents API
     await page.route("**/api/agents", async (route) => {
       await route.fulfill({

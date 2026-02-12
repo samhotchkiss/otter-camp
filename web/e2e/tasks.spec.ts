@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { bootstrapAuthenticatedSession } from "./helpers/auth";
 
 test.describe("Tasks Page - Task Detail View", () => {
   const mockTask = {
@@ -69,6 +70,8 @@ test.describe("Tasks Page - Task Detail View", () => {
   ];
 
   test.beforeEach(async ({ page }) => {
+    await bootstrapAuthenticatedSession(page);
+
     // Mock tasks list API
     await page.route("**/api/tasks", async (route) => {
       if (route.request().method() === "GET") {

@@ -1,15 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { bootstrapAuthenticatedSession } from "./helpers/auth";
 
 test.describe("Navigation", () => {
   test.beforeEach(async ({ page }) => {
-    // Set up authenticated state
-    await page.goto("/");
-    await page.evaluate(() => {
-      const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwiZW1haWwiOiJ0ZXN0QGV4YW1wbGUuY29tIiwibmFtZSI6IlRlc3QgVXNlciIsImV4cCI6OTk5OTk5OTk5OX0.test";
-      const user = { id: "1", email: "test@example.com", name: "Test User" };
-      localStorage.setItem("otter_camp_token", token);
-      localStorage.setItem("otter_camp_user", JSON.stringify(user));
-    });
+    await bootstrapAuthenticatedSession(page);
   });
 
   test.describe("Sidebar Navigation", () => {
