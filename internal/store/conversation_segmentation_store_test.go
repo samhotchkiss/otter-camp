@@ -79,6 +79,149 @@ func TestConversationSegmentationQueueListAndAssign(t *testing.T) {
 	require.Equal(t, conversationID, assignedConversationID)
 }
 
+func TestConversationSegmentationStoreDefaultsSensitivityToNormal(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "conversation-sensitivity-default-org")
+	projectID := createTestProject(t, db, orgID, "Conversation Sensitivity Default Project")
+	agentID := insertSchemaAgent(t, db, orgID, "conversation-sensitivity-default-agent")
+
+	var roomID string
+	err := db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Sensitivity Default Room', 'project', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&roomID)
+	require.NoError(t, err)
+
+	startedAt := time.Date(2026, 2, 12, 14, 0, 0, 0, time.UTC)
+	var messageID string
+	err = db.QueryRow(
+		`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, created_at, type)
+		 VALUES ($1, $2, $3, 'agent', 'sensitivity default message', $4, 'message')
+		 RETURNING id`,
+		orgID,
+		roomID,
+		agentID,
+		startedAt,
+	).Scan(&messageID)
+	require.NoError(t, err)
+
+	store := NewConversationSegmentationStore(db)
+	conversationID, err := store.CreateConversationSegment(context.Background(), CreateConversationSegmentInput{
+		OrgID:      orgID,
+		RoomID:     roomID,
+		Topic:      "Sensitivity Default Topic",
+		StartedAt:  startedAt,
+		EndedAt:    startedAt.Add(2 * time.Minute),
+		MessageIDs: []string{messageID},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, conversationID)
+
+	var sensitivity string
+	err = db.QueryRow(`SELECT sensitivity FROM conversations WHERE id = $1`, conversationID).Scan(&sensitivity)
+	require.NoError(t, err)
+	require.Equal(t, "normal", sensitivity)
+}
+
+func TestConversationSegmentationStorePersistsSensitiveConversations(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "conversation-sensitivity-sensitive-org")
+	projectID := createTestProject(t, db, orgID, "Conversation Sensitivity Sensitive Project")
+	agentID := insertSchemaAgent(t, db, orgID, "conversation-sensitivity-sensitive-agent")
+
+	var roomID string
+	err := db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Sensitivity Sensitive Room', 'project', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&roomID)
+	require.NoError(t, err)
+
+	startedAt := time.Date(2026, 2, 12, 16, 0, 0, 0, time.UTC)
+	var messageID string
+	err = db.QueryRow(
+		`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, created_at, type)
+		 VALUES ($1, $2, $3, 'agent', 'sensitivity sensitive message', $4, 'message')
+		 RETURNING id`,
+		orgID,
+		roomID,
+		agentID,
+		startedAt,
+	).Scan(&messageID)
+	require.NoError(t, err)
+
+	store := NewConversationSegmentationStore(db)
+	conversationID, err := store.CreateConversationSegment(context.Background(), CreateConversationSegmentInput{
+		OrgID:       orgID,
+		RoomID:      roomID,
+		Topic:       "Sensitivity Sensitive Topic",
+		StartedAt:   startedAt,
+		EndedAt:     startedAt.Add(2 * time.Minute),
+		MessageIDs:  []string{messageID},
+		Sensitivity: "sensitive",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, conversationID)
+
+	var sensitivity string
+	err = db.QueryRow(`SELECT sensitivity FROM conversations WHERE id = $1`, conversationID).Scan(&sensitivity)
+	require.NoError(t, err)
+	require.Equal(t, "sensitive", sensitivity)
+}
+
+func TestConversationSegmentationStoreRejectsInvalidSensitivity(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "conversation-sensitivity-invalid-org")
+	projectID := createTestProject(t, db, orgID, "Conversation Sensitivity Invalid Project")
+	agentID := insertSchemaAgent(t, db, orgID, "conversation-sensitivity-invalid-agent")
+
+	var roomID string
+	err := db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Sensitivity Invalid Room', 'project', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&roomID)
+	require.NoError(t, err)
+
+	startedAt := time.Date(2026, 2, 12, 17, 0, 0, 0, time.UTC)
+	var messageID string
+	err = db.QueryRow(
+		`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, created_at, type)
+		 VALUES ($1, $2, $3, 'agent', 'sensitivity invalid message', $4, 'message')
+		 RETURNING id`,
+		orgID,
+		roomID,
+		agentID,
+		startedAt,
+	).Scan(&messageID)
+	require.NoError(t, err)
+
+	store := NewConversationSegmentationStore(db)
+	_, err = store.CreateConversationSegment(context.Background(), CreateConversationSegmentInput{
+		OrgID:       orgID,
+		RoomID:      roomID,
+		Topic:       "Sensitivity Invalid Topic",
+		StartedAt:   startedAt,
+		EndedAt:     startedAt.Add(2 * time.Minute),
+		MessageIDs:  []string{messageID},
+		Sensitivity: "top-secret",
+	})
+	require.ErrorContains(t, err, "invalid sensitivity")
+}
+
 func TestConversationSegmentationQueueListPendingBalancesAcrossOrgs(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
