@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OtterCamp Agent Avatars — Review Grid</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    padding: 20px;
+  }
+  h1 { text-align: center; margin-bottom: 8px; font-size: 1.8em; color: #fff; }
+  .subtitle { text-align: center; color: #888; margin-bottom: 20px; font-size: 0.95em; }
+  .controls {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: #1a1a2e;
+    padding: 12px 0;
+    border-bottom: 1px solid #333;
+    margin-bottom: 20px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .controls .count {
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #f39c12;
+    min-width: 180px;
+  }
+  .controls button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9em;
+    font-weight: 600;
+  }
+  .btn-clear { background: #555; color: #fff; }
+  .btn-clear:hover { background: #777; }
+  .btn-select-all { background: #2c3e50; color: #fff; }
+  .btn-select-all:hover { background: #34495e; }
+  .btn-missing { background: #8e44ad; color: #fff; }
+  .btn-missing:hover { background: #9b59b6; }
+  .filter-input {
+    padding: 8px 12px;
+    border: 1px solid #444;
+    border-radius: 6px;
+    background: #2a2a3e;
+    color: #fff;
+    font-size: 0.9em;
+    width: 200px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .card {
+    position: relative;
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    background: #2a2a3e;
+    border: 3px solid transparent;
+  }
+  .card:hover { transform: scale(1.03); box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+  .card.selected { border-color: #e74c3c; }
+  .card.selected::after {
+    content: '✕';
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    background: #e74c3c;
+    color: #fff;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: bold;
+    z-index: 10;
+  }
+  .card img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    display: block;
+    background: #333;
+  }
+  .card .missing-img {
+    width: 100%;
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #333;
+    color: #666;
+    font-size: 2em;
+  }
+  .card .info {
+    padding: 6px 8px;
+    font-size: 0.75em;
+    line-height: 1.3;
+  }
+  .card .info .name { font-weight: 700; color: #fff; }
+  .card .info .role { color: #aaa; }
+  .card.missing { opacity: 0.6; }
+  .card.hidden { display: none; }
+  .output-section {
+    position: sticky;
+    bottom: 0;
+    background: #1a1a2e;
+    padding: 16px 0;
+    border-top: 1px solid #333;
+    margin-top: 20px;
+  }
+  .output-section textarea {
+    width: 100%;
+    height: 80px;
+    background: #2a2a3e;
+    color: #0f0;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 10px;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 0.85em;
+    resize: vertical;
+  }
+  .output-section .copy-btn {
+    margin-top: 8px;
+    padding: 8px 20px;
+    background: #27ae60;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .output-section .copy-btn:hover { background: #2ecc71; }
+  .category-header {
+    grid-column: 1 / -1;
+    font-size: 1.1em;
+    font-weight: 700;
+    color: #f39c12;
+    padding: 12px 0 4px;
+    border-bottom: 1px solid #333;
+    margin-top: 8px;
+    text-transform: capitalize;
+  }
+</style>
+</head>
+<body>
+
+<h1>🦦 Agent Avatar Review</h1>
+<p class="subtitle">Click avatars to mark for regeneration. Copy the list at the bottom.</p>
+
+<div class="controls">
+  <span class="count" id="count">0 selected</span>
+  <button class="btn-clear" onclick="clearSelection()">Clear All</button>
+  <button class="btn-select-all" onclick="selectAll()">Select All Visible</button>
+  <button class="btn-missing" onclick="selectMissing()">Select All Missing</button>
+  <input type="text" class="filter-input" id="filter" placeholder="Filter by name or role..." oninput="filterCards()">
+</div>
+
+<div class="grid" id="grid"></div>
+
+<div class="output-section">
+  <textarea id="output" readonly placeholder="Selected agents will appear here..."></textarea>
+  <button class="copy-btn" onclick="copyList()">📋 Copy to Clipboard</button>
+</div>
+
+<script>
+const selected = new Set();
+
+async function loadRoster() {
+  const resp = await fetch('./roster.json');
+  const data = await resp.json();
+  return data.agents;
+}
+
+function renderGrid(agents) {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+
+  // Group by category
+  const grouped = {};
+  for (const a of agents) {
+    if (!grouped[a.category]) grouped[a.category] = [];
+    grouped[a.category].push(a);
+  }
+
+  const catOrder = Object.keys(grouped).sort();
+  for (const cat of catOrder) {
+    const header = document.createElement('div');
+    header.className = 'category-header';
+    header.textContent = `${cat} (${grouped[cat].length})`;
+    grid.appendChild(header);
+
+    for (const a of grouped[cat].sort((x, y) => x.display_name.localeCompare(y.display_name))) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.dataset.roleId = a.role_id;
+      card.dataset.name = a.display_name.toLowerCase();
+      card.dataset.role = a.role_name.toLowerCase();
+
+      const imgPath = `./${a.role_id}/avatar.png`;
+      const img = new Image();
+      img.src = imgPath;
+      img.alt = a.display_name;
+      img.onerror = function() {
+        this.parentElement.innerHTML = `<div class="missing-img">🦦</div>` + this.parentElement.querySelector('.info').outerHTML;
+        card.classList.add('missing');
+      };
+
+      const info = document.createElement('div');
+      info.className = 'info';
+      info.innerHTML = `<div class="name">${a.emoji} ${a.display_name}</div><div class="role">${a.role_name}</div>`;
+
+      card.appendChild(img);
+      card.appendChild(info);
+
+      card.addEventListener('click', () => {
+        if (selected.has(a.role_id)) {
+          selected.delete(a.role_id);
+          card.classList.remove('selected');
+        } else {
+          selected.add(a.role_id);
+          card.classList.add('selected');
+        }
+        updateOutput();
+      });
+
+      if (selected.has(a.role_id)) card.classList.add('selected');
+      grid.appendChild(card);
+    }
+  }
+}
+
+function updateOutput() {
+  const list = [...selected].sort().join('\n');
+  document.getElementById('output').value = list;
+  document.getElementById('count').textContent = `${selected.size} selected`;
+}
+
+function clearSelection() {
+  selected.clear();
+  document.querySelectorAll('.card.selected').forEach(c => c.classList.remove('selected'));
+  updateOutput();
+}
+
+function selectAll() {
+  document.querySelectorAll('.card:not(.hidden)').forEach(c => {
+    selected.add(c.dataset.roleId);
+    c.classList.add('selected');
+  });
+  updateOutput();
+}
+
+function selectMissing() {
+  document.querySelectorAll('.card.missing').forEach(c => {
+    selected.add(c.dataset.roleId);
+    c.classList.add('selected');
+  });
+  updateOutput();
+}
+
+function filterCards() {
+  const q = document.getElementById('filter').value.toLowerCase();
+  document.querySelectorAll('.card').forEach(c => {
+    const match = c.dataset.name.includes(q) || c.dataset.role.includes(q) || c.dataset.roleId.includes(q);
+    c.classList.toggle('hidden', !match);
+  });
+}
+
+function copyList() {
+  const ta = document.getElementById('output');
+  ta.select();
+  navigator.clipboard.writeText(ta.value).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = '✅ Copied!';
+    setTimeout(() => btn.textContent = '📋 Copy to Clipboard', 2000);
+  });
+}
+
+loadRoster().then(renderGrid);
+</script>
+</body>
+</html>
