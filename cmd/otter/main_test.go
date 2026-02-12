@@ -493,6 +493,34 @@ func TestResolveAgentCreateProjectID(t *testing.T) {
 	}
 }
 
+func TestResolveAgentArchiveProjectID(t *testing.T) {
+	_, err := resolveAgentArchiveProjectID(fakeAgentCreateProjectLookup{}, "")
+	if err == nil || !strings.Contains(err.Error(), "project id or name is required") {
+		t.Fatalf("expected required project error, got %v", err)
+	}
+
+	projectID, err := resolveAgentArchiveProjectID(fakeAgentCreateProjectLookup{
+		project: ottercli.Project{ID: "project-7", Name: "Ops"},
+	}, "Ops")
+	if err != nil {
+		t.Fatalf("resolveAgentArchiveProjectID() unexpected error: %v", err)
+	}
+	if projectID != "project-7" {
+		t.Fatalf("project id = %q, want project-7", projectID)
+	}
+}
+
+func TestParseBulkArchiveCounts(t *testing.T) {
+	total, retired, failed := parseBulkArchiveCounts(map[string]any{
+		"total":   float64(5),
+		"retired": float64(4),
+		"failed":  float64(1),
+	})
+	if total != 5 || retired != 4 || failed != 1 {
+		t.Fatalf("counts = (%d,%d,%d), want (5,4,1)", total, retired, failed)
+	}
+}
+
 func TestMemoryResolveMemoryWriteKind(t *testing.T) {
 	tests := []struct {
 		name         string

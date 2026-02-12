@@ -417,30 +417,50 @@ func handleAgent(args []string) {
 		fmt.Printf("Updated agent: %s\n", agentID)
 	case "archive":
 		flags := flag.NewFlagSet("agent archive", flag.ExitOnError)
+		project := flags.String("project", "", "project id or name to bulk-retire ephemeral temp agents")
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
 		_ = flags.Parse(args[1:])
-		if len(flags.Args()) == 0 {
-			die("usage: otter agent archive <agent-id>")
+		agentArg := ""
+		if len(flags.Args()) > 0 {
+			agentArg = strings.TrimSpace(flags.Args()[0])
 		}
-		agentID := strings.TrimSpace(flags.Args()[0])
-		if agentID == "" {
-			die("agent id is required")
+		projectQuery := strings.TrimSpace(*project)
+		if agentArg == "" && projectQuery == "" {
+			die("usage: otter agent archive <agent-id> | --project <project-id-or-name>")
+		}
+		if agentArg != "" && projectQuery != "" {
+			die("pass either <agent-id> or --project, not both")
 		}
 
 		cfg, err := ottercli.LoadConfig()
 		dieIf(err)
 		client, _ := ottercli.NewClient(cfg, *org)
-		dieIf(client.ArchiveAgent(agentID))
+		if projectQuery != "" {
+			projectID, err := resolveAgentArchiveProjectID(client, projectQuery)
+			dieIf(err)
+			payload, err := client.ArchiveProjectEphemeralAgents(projectID)
+			dieIf(err)
+
+			if *jsonOut {
+				printJSON(payload)
+				return
+			}
+			total, retired, failed := parseBulkArchiveCounts(payload)
+			fmt.Printf("Bulk archived project temps for %s: retired %d/%d (failed %d)\n", projectID, retired, total, failed)
+			return
+		}
+
+		dieIf(client.ArchiveAgent(agentArg))
 
 		if *jsonOut {
 			printJSON(map[string]interface{}{
 				"ok":       true,
-				"agent_id": agentID,
+				"agent_id": agentArg,
 			})
 			return
 		}
-		fmt.Printf("Archived agent: %s\n", agentID)
+		fmt.Printf("Archived agent: %s\n", agentArg)
 	default:
 		fmt.Println(usageText)
 		os.Exit(1)
@@ -2378,6 +2398,52 @@ func resolveAgentCreateProjectID(resolver agentCreateProjectResolver, isEphemera
 		return "", errors.New("resolved project is missing id")
 	}
 	return projectID, nil
+}
+
+func resolveAgentArchiveProjectID(resolver agentCreateProjectResolver, projectQuery string) (string, error) {
+	trimmed := strings.TrimSpace(projectQuery)
+	if trimmed == "" {
+		return "", errors.New("project id or name is required")
+	}
+	if resolver == nil {
+		return "", errors.New("project resolver is required")
+	}
+	project, err := resolver.FindProject(trimmed)
+	if err != nil {
+		return "", err
+	}
+	projectID := strings.TrimSpace(project.ID)
+	if projectID == "" {
+		return "", errors.New("resolved project is missing id")
+	}
+	return projectID, nil
+}
+
+func parseBulkArchiveCounts(payload map[string]any) (int, int, int) {
+	if payload == nil {
+		return 0, 0, 0
+	}
+	total := parseAnyInt(payload["total"])
+	retired := parseAnyInt(payload["retired"])
+	failed := parseAnyInt(payload["failed"])
+	return total, retired, failed
+}
+
+func parseAnyInt(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	default:
+		return 0
+	}
 }
 
 func buildAgentCreatePayload(displayName, slot, model, role string, isEphemeral bool, projectID string) map[string]interface{} {

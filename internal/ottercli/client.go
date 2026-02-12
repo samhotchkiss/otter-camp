@@ -685,6 +685,25 @@ func (c *Client) ArchiveAgent(agentID string) error {
 	return c.do(req, nil)
 }
 
+func (c *Client) ArchiveProjectEphemeralAgents(projectID string) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/admin/agents/retire/project/"+url.PathEscape(projectID), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 func (c *Client) WriteAgentMemory(agentID string, input map[string]any) (map[string]any, error) {
 	if err := c.requireAuth(); err != nil {
 		return nil, err
