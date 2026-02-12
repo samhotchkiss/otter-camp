@@ -16,13 +16,13 @@ func TestComplianceRuleStoreCreateAndDisable(t *testing.T) {
 
 	store := NewComplianceRuleStore(db)
 	created, err := store.Create(context.Background(), CreateComplianceRuleInput{
-		OrgID:                orgID,
-		ProjectID:            &projectID,
-		Title:                "All PRs require tests",
-		Description:          "Every PR must include tests",
-		CheckInstruction:     "Verify added functionality has tests.",
-		Category:             ComplianceRuleCategoryCodeQuality,
-		Severity:             ComplianceRuleSeverityRequired,
+		OrgID:            orgID,
+		ProjectID:        &projectID,
+		Title:            "All PRs require tests",
+		Description:      "Every PR must include tests",
+		CheckInstruction: "Verify added functionality has tests.",
+		Category:         ComplianceRuleCategoryCodeQuality,
+		Severity:         ComplianceRuleSeverityRequired,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, created.ID)
@@ -143,4 +143,63 @@ func TestComplianceRuleStoreRejectsInvalidCategoryAndSeverity(t *testing.T) {
 		Severity:         "invalid",
 	})
 	require.ErrorContains(t, err, "invalid severity")
+}
+
+func TestComplianceRuleStoreUpdateAndGetByID(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "compliance-rule-update-org")
+	projectID := createTestProject(t, db, orgID, "Compliance Rule Update Project")
+	store := NewComplianceRuleStore(db)
+
+	created, err := store.Create(context.Background(), CreateComplianceRuleInput{
+		OrgID:            orgID,
+		ProjectID:        &projectID,
+		Title:            "Original title",
+		Description:      "Original description",
+		CheckInstruction: "Original instruction",
+		Category:         ComplianceRuleCategoryProcess,
+		Severity:         ComplianceRuleSeverityRequired,
+	})
+	require.NoError(t, err)
+
+	updated, err := store.Update(context.Background(), orgID, created.ID, UpdateComplianceRuleInput{
+		Description: complianceRuleStringPtr("Updated description"),
+		Severity:    complianceRuleStringPtr(ComplianceRuleSeverityRecommended),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "Updated description", updated.Description)
+	require.Equal(t, ComplianceRuleSeverityRecommended, updated.Severity)
+
+	loaded, err := store.GetByID(context.Background(), orgID, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, created.ID, loaded.ID)
+	require.Equal(t, "Updated description", loaded.Description)
+	require.Equal(t, ComplianceRuleSeverityRecommended, loaded.Severity)
+}
+
+func TestComplianceRuleStoreCreateRejectsCrossOrgProject(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgA := createTestOrganization(t, db, "compliance-rule-cross-project-org-a")
+	orgB := createTestOrganization(t, db, "compliance-rule-cross-project-org-b")
+	projectB := createTestProject(t, db, orgB, "Compliance Rule Cross Project B")
+	store := NewComplianceRuleStore(db)
+
+	_, err := store.Create(context.Background(), CreateComplianceRuleInput{
+		OrgID:            orgA,
+		ProjectID:        &projectB,
+		Title:            "Cross project scope",
+		Description:      "Should fail",
+		CheckInstruction: "Should fail",
+		Category:         ComplianceRuleCategoryScope,
+		Severity:         ComplianceRuleSeverityRequired,
+	})
+	require.ErrorContains(t, err, "project_id does not belong to org")
+}
+
+func complianceRuleStringPtr(value string) *string {
+	return &value
 }

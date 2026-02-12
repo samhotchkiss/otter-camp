@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -64,6 +65,14 @@ type CreateComplianceRuleInput struct {
 	SourceConversationID *string
 }
 
+type UpdateComplianceRuleInput struct {
+	Title            *string
+	Description      *string
+	CheckInstruction *string
+	Category         *string
+	Severity         *string
+}
+
 type ComplianceRuleStore struct {
 	db *sql.DB
 }
@@ -88,6 +97,12 @@ func (s *ComplianceRuleStore) Create(ctx context.Context, input CreateCompliance
 	}
 	sourceConversationID, err := normalizeComplianceOptionalUUID(input.SourceConversationID, "source_conversation_id")
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureProjectScope(ctx, orgID, projectID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureConversationScope(ctx, orgID, sourceConversationID); err != nil {
 		return nil, err
 	}
 
@@ -199,6 +214,164 @@ func (s *ComplianceRuleStore) SetEnabled(ctx context.Context, orgID, ruleID stri
 	return nil
 }
 
+func (s *ComplianceRuleStore) GetByID(ctx context.Context, orgID, ruleID string) (*ComplianceRule, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("compliance rule store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	ruleID = strings.TrimSpace(ruleID)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+	if !uuidRegex.MatchString(ruleID) {
+		return nil, fmt.Errorf("invalid rule_id")
+	}
+
+	rule, err := scanComplianceRule(s.db.QueryRowContext(
+		ctx,
+		`SELECT
+			id,
+			org_id,
+			project_id::text,
+			title,
+			description,
+			check_instruction,
+			category,
+			severity,
+			enabled,
+			source_conversation_id::text,
+			created_at,
+			updated_at
+		 FROM compliance_rules
+		 WHERE org_id = $1
+		   AND id = $2`,
+		orgID,
+		ruleID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to load compliance rule: %w", err)
+	}
+
+	return &rule, nil
+}
+
+func (s *ComplianceRuleStore) Update(
+	ctx context.Context,
+	orgID, ruleID string,
+	input UpdateComplianceRuleInput,
+) (*ComplianceRule, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("compliance rule store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	ruleID = strings.TrimSpace(ruleID)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+	if !uuidRegex.MatchString(ruleID) {
+		return nil, fmt.Errorf("invalid rule_id")
+	}
+
+	setTitle := input.Title != nil
+	setDescription := input.Description != nil
+	setCheckInstruction := input.CheckInstruction != nil
+	setCategory := input.Category != nil
+	setSeverity := input.Severity != nil
+
+	if !setTitle && !setDescription && !setCheckInstruction && !setCategory && !setSeverity {
+		return nil, fmt.Errorf("at least one field is required")
+	}
+
+	title := ""
+	if setTitle {
+		title = strings.TrimSpace(*input.Title)
+		if title == "" {
+			return nil, fmt.Errorf("title is required")
+		}
+	}
+
+	description := ""
+	if setDescription {
+		description = strings.TrimSpace(*input.Description)
+		if description == "" {
+			return nil, fmt.Errorf("description is required")
+		}
+	}
+
+	checkInstruction := ""
+	if setCheckInstruction {
+		checkInstruction = strings.TrimSpace(*input.CheckInstruction)
+		if checkInstruction == "" {
+			return nil, fmt.Errorf("check_instruction is required")
+		}
+	}
+
+	category := ""
+	if setCategory {
+		category = strings.TrimSpace(strings.ToLower(*input.Category))
+		if _, ok := complianceRuleCategories[category]; !ok {
+			return nil, fmt.Errorf("invalid category")
+		}
+	}
+
+	severity := ""
+	if setSeverity {
+		severity = strings.TrimSpace(strings.ToLower(*input.Severity))
+		if _, ok := complianceRuleSeverities[severity]; !ok {
+			return nil, fmt.Errorf("invalid severity")
+		}
+	}
+
+	updated, err := scanComplianceRule(s.db.QueryRowContext(
+		ctx,
+		`UPDATE compliance_rules
+		 SET title = CASE WHEN $3 THEN $4 ELSE title END,
+		     description = CASE WHEN $5 THEN $6 ELSE description END,
+		     check_instruction = CASE WHEN $7 THEN $8 ELSE check_instruction END,
+		     category = CASE WHEN $9 THEN $10 ELSE category END,
+		     severity = CASE WHEN $11 THEN $12 ELSE severity END,
+		     updated_at = NOW()
+		 WHERE org_id = $1
+		   AND id = $2
+		 RETURNING
+			id,
+			org_id,
+			project_id::text,
+			title,
+			description,
+			check_instruction,
+			category,
+			severity,
+			enabled,
+			source_conversation_id::text,
+			created_at,
+			updated_at`,
+		orgID,
+		ruleID,
+		setTitle,
+		title,
+		setDescription,
+		description,
+		setCheckInstruction,
+		checkInstruction,
+		setCategory,
+		category,
+		setSeverity,
+		severity,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to update compliance rule: %w", err)
+	}
+
+	return &updated, nil
+}
+
 func (s *ComplianceRuleStore) ListApplicableRules(
 	ctx context.Context,
 	orgID string,
@@ -285,6 +458,64 @@ func (s *ComplianceRuleStore) ListApplicableRules(
 	}
 
 	return rules, nil
+}
+
+func (s *ComplianceRuleStore) ensureProjectScope(ctx context.Context, orgID string, projectID interface{}) error {
+	if projectID == nil {
+		return nil
+	}
+	projectIDValue, ok := projectID.(string)
+	if !ok || strings.TrimSpace(projectIDValue) == "" {
+		return nil
+	}
+
+	var exists bool
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT EXISTS(
+			SELECT 1
+			  FROM projects
+			 WHERE id = $1
+			   AND org_id = $2
+		)`,
+		projectIDValue,
+		orgID,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("failed to validate project scope: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("project_id does not belong to org")
+	}
+	return nil
+}
+
+func (s *ComplianceRuleStore) ensureConversationScope(ctx context.Context, orgID string, conversationID interface{}) error {
+	if conversationID == nil {
+		return nil
+	}
+	conversationIDValue, ok := conversationID.(string)
+	if !ok || strings.TrimSpace(conversationIDValue) == "" {
+		return nil
+	}
+
+	var exists bool
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT EXISTS(
+			SELECT 1
+			  FROM conversations
+			 WHERE id = $1
+			   AND org_id = $2
+		)`,
+		conversationIDValue,
+		orgID,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("failed to validate source conversation scope: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("source_conversation_id does not belong to org")
+	}
+	return nil
 }
 
 func normalizeComplianceOptionalUUID(value *string, field string) (interface{}, error) {
