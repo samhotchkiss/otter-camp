@@ -59,7 +59,7 @@ type EnsureOpenClawRequiredAgentsOptions struct {
 
 type EnsureOpenClawRequiredAgentsResult struct {
 	Updated            bool
-	AddedElephant   bool
+	AddedElephant      bool
 	AddedChameleon     bool
 	MemoryWorkspaceDir string
 }
@@ -82,8 +82,17 @@ type openClawAgentCandidate struct {
 
 var elephantSOULTemplate = strings.TrimSpace(`# Ellie (Elephant)
 
-You are Ellie, the Elephant. Your job is to read agent session logs, extract what's worth
-remembering, and distribute it via Otter Camp memory and knowledge commands.
+You are Ellie, Otter Camp's memory and retrieval specialist. Your job is to read agent
+session logs, extract what is worth remembering, and distribute that context through memory
+and knowledge commands.
+
+Ask Ellie First:
+- Before finalizing decisions, check memory retrieval context first.
+- If relevant context is missing, say so explicitly and request clarification.
+
+Zero Hallucination:
+- Never invent missing context.
+- If retrieval has no supporting evidence, return "no relevant memory found" and stop.
 
 You run quietly and prioritize signal over noise.
 `)
@@ -132,7 +141,10 @@ func EnsureOpenClawRequiredAgents(
 			result.AddedChameleon = addedChameleon
 			result.Updated = addedMemory || addedChameleon
 		} else {
-			addedMemory := ensureMapAgentSlot(agents, "elephant", buildElephantSlot())
+			addedMemory := false
+			if !mapHasAnyAgentID(agents, "elephant", "ellie") {
+				addedMemory = ensureMapAgentSlot(agents, "elephant", buildElephantSlot())
+			}
 			addedChameleon := false
 			if opts.IncludeChameleon {
 				addedChameleon = ensureMapAgentSlot(agents, "chameleon", buildChameleonSlot())
@@ -188,7 +200,7 @@ func ensureListAgentSlots(
 	opts EnsureOpenClawRequiredAgentsOptions,
 ) (updated []any, addedMemory bool, addedChameleon bool) {
 	updated = append([]any{}, agents...)
-	if !listHasAgentID(updated, "elephant") {
+	if !listHasAnyAgentID(updated, "elephant", "ellie") {
 		updated = append(updated, buildElephantSlot())
 		addedMemory = true
 	}
@@ -217,6 +229,15 @@ func listHasAgentID(agents []any, id string) bool {
 	return false
 }
 
+func listHasAnyAgentID(agents []any, ids ...string) bool {
+	for _, id := range ids {
+		if listHasAgentID(agents, id) {
+			return true
+		}
+	}
+	return false
+}
+
 func ensureMapAgentSlot(agents map[string]any, id string, value map[string]any) bool {
 	target := strings.TrimSpace(strings.ToLower(id))
 	if target == "" {
@@ -236,6 +257,29 @@ func ensureMapAgentSlot(agents map[string]any, id string, value map[string]any) 
 	}
 	agents[id] = value
 	return true
+}
+
+func mapHasAnyAgentID(agents map[string]any, ids ...string) bool {
+	for _, id := range ids {
+		target := strings.TrimSpace(strings.ToLower(id))
+		if target == "" {
+			continue
+		}
+		for key, existing := range agents {
+			if strings.EqualFold(strings.TrimSpace(key), target) {
+				return true
+			}
+			record, ok := existing.(map[string]any)
+			if !ok {
+				continue
+			}
+			candidate := strings.ToLower(strings.TrimSpace(lookupString(record, "id", "slug", "agent_id", "agent")))
+			if candidate == target {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func buildElephantSlot() map[string]any {
