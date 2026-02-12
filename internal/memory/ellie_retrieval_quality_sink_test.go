@@ -90,6 +90,25 @@ func TestEllieRetrievalQualityStoreSinkRecordPropagatesStoreError(t *testing.T) 
 	require.ErrorContains(t, err, "write failed")
 }
 
+func TestEllieRetrievalQualityStoreSinkRecordEncodesNilSlicesAsArrays(t *testing.T) {
+	recorder := &fakeEllieRetrievalQualityRecorder{}
+	sink := NewEllieRetrievalQualityStoreSink(recorder)
+
+	err := sink.Record(context.Background(), EllieRetrievalQualitySignal{
+		OrgID: "00000000-0000-0000-0000-000000000001",
+		Query: "query",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, recorder.called)
+
+	var metadata map[string]json.RawMessage
+	err = json.Unmarshal(recorder.lastInput.Metadata, &metadata)
+	require.NoError(t, err)
+	require.Equal(t, "[]", string(metadata["injected_item_ids"]))
+	require.Equal(t, "[]", string(metadata["referenced_item_ids"]))
+	require.Equal(t, "[]", string(metadata["missed_item_ids"]))
+}
+
 func TestOptionalUUIDPtr(t *testing.T) {
 	require.Nil(t, optionalUUIDPtr(""))
 	require.Nil(t, optionalUUIDPtr("   "))

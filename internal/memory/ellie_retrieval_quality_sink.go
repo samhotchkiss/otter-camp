@@ -28,9 +28,9 @@ func (s *EllieRetrievalQualityStoreSink) Record(ctx context.Context, signal Elli
 	projectID := optionalUUIDPtr(signal.ProjectID)
 	roomID := optionalUUIDPtr(signal.RoomID)
 	metadata := map[string]any{
-		"injected_item_ids":   append([]string(nil), signal.InjectedItemIDs...),
-		"referenced_item_ids": append([]string(nil), signal.ReferencedItemIDs...),
-		"missed_item_ids":     append([]string(nil), signal.MissedItemIDs...),
+		"injected_item_ids":   nonNilStrings(signal.InjectedItemIDs),
+		"referenced_item_ids": nonNilStrings(signal.ReferencedItemIDs),
+		"missed_item_ids":     nonNilStrings(signal.MissedItemIDs),
 	}
 	encodedMetadata, err := json.Marshal(metadata)
 	if err != nil {
@@ -57,4 +57,11 @@ func optionalUUIDPtr(value string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func nonNilStrings(value []string) []string {
+	if value == nil {
+		return []string{}
+	}
+	return append([]string(nil), value...)
 }
