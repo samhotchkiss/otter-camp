@@ -131,3 +131,104 @@ func TestConversationSegmentationWorkerStopsOnContextCancel(t *testing.T) {
 		t.Fatal("segmentation worker did not stop after context cancellation")
 	}
 }
+
+func TestConversationSegmentationWorkerProcessesMultipleOrgsFairly(t *testing.T) {
+	db := setupEmbeddingWorkerTestDatabase(t)
+	queue := store.NewConversationSegmentationStore(db)
+
+	var orgA string
+	err := db.QueryRow(
+		`INSERT INTO organizations (name, slug, tier) VALUES ('Segmentation Fairness A', 'seg-fairness-a', 'free') RETURNING id`,
+	).Scan(&orgA)
+	require.NoError(t, err)
+	var orgB string
+	err = db.QueryRow(
+		`INSERT INTO organizations (name, slug, tier) VALUES ('Segmentation Fairness B', 'seg-fairness-b', 'free') RETURNING id`,
+	).Scan(&orgB)
+	require.NoError(t, err)
+
+	var projectA string
+	err = db.QueryRow(
+		`INSERT INTO projects (org_id, name, status) VALUES ($1, 'Seg Fairness Project A', 'active') RETURNING id`,
+		orgA,
+	).Scan(&projectA)
+	require.NoError(t, err)
+	var projectB string
+	err = db.QueryRow(
+		`INSERT INTO projects (org_id, name, status) VALUES ($1, 'Seg Fairness Project B', 'active') RETURNING id`,
+		orgB,
+	).Scan(&projectB)
+	require.NoError(t, err)
+
+	var agentA string
+	err = db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status) VALUES ($1, 'seg-fairness-a', 'Seg Fairness A', 'active') RETURNING id`,
+		orgA,
+	).Scan(&agentA)
+	require.NoError(t, err)
+	var agentB string
+	err = db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status) VALUES ($1, 'seg-fairness-b', 'Seg Fairness B', 'active') RETURNING id`,
+		orgB,
+	).Scan(&agentB)
+	require.NoError(t, err)
+
+	roomAID := "00000000-0000-0000-0000-0000000001a1"
+	_, err = db.Exec(
+		`INSERT INTO rooms (id, org_id, name, type, context_id)
+		 VALUES ($1, $2, 'Seg Fairness Room A', 'project', $3)`,
+		roomAID,
+		orgA,
+		projectA,
+	)
+	require.NoError(t, err)
+	roomBID := "00000000-0000-0000-0000-0000000001b1"
+	_, err = db.Exec(
+		`INSERT INTO rooms (id, org_id, name, type, context_id)
+		 VALUES ($1, $2, 'Seg Fairness Room B', 'project', $3)`,
+		roomBID,
+		orgB,
+		projectB,
+	)
+	require.NoError(t, err)
+
+	base := time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC)
+	var orgBMessageID string
+	for i := 0; i < 5; i += 1 {
+		_, err = db.Exec(
+			`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, type, created_at, attachments)
+			 VALUES ($1, $2, $3, 'agent', 'org-a segmentation pending', 'message', $4, '[]'::jsonb)`,
+			orgA,
+			roomAID,
+			agentA,
+			base.Add(time.Duration(i)*time.Minute),
+		)
+		require.NoError(t, err)
+	}
+	err = db.QueryRow(
+		`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, type, created_at, attachments)
+		 VALUES ($1, $2, $3, 'agent', 'org-b segmentation pending', 'message', $4, '[]'::jsonb)
+		 RETURNING id`,
+		orgB,
+		roomBID,
+		agentB,
+		base.Add(30*time.Minute),
+	).Scan(&orgBMessageID)
+	require.NoError(t, err)
+
+	worker := NewConversationSegmentationWorker(queue, ConversationSegmentationWorkerConfig{
+		BatchSize:    4,
+		PollInterval: time.Second,
+		GapThreshold: 20 * time.Minute,
+	})
+	worker.Logf = nil
+
+	processed, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 4, processed)
+
+	var assigned bool
+	err = db.QueryRow(`SELECT conversation_id IS NOT NULL FROM chat_messages WHERE id = $1`, orgBMessageID).Scan(&assigned)
+	require.NoError(t, err)
+	require.True(t, assigned)
+}

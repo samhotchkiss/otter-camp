@@ -48,10 +48,23 @@ func (s *ConversationSegmentationStore) ListPendingConversationMessages(ctx cont
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, org_id, room_id, body, created_at
-		 FROM chat_messages
-		 WHERE conversation_id IS NULL
-		 ORDER BY room_id ASC, created_at ASC, id ASC
+		`WITH ranked AS (
+			SELECT
+				id,
+				org_id,
+				room_id,
+				body,
+				created_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY org_id
+					ORDER BY room_id ASC, created_at ASC, id ASC
+				) AS org_rank
+			FROM chat_messages
+			WHERE conversation_id IS NULL
+		)
+		 SELECT id, org_id, room_id, body, created_at
+		 FROM ranked
+		 ORDER BY org_rank ASC, org_id ASC, room_id ASC, created_at ASC, id ASC
 		 LIMIT $1`,
 		limit,
 	)
