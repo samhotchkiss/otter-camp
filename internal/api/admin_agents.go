@@ -69,6 +69,21 @@ type adminAgentDetailResponse struct {
 	Sync  *adminAgentSyncDetails `json:"sync,omitempty"`
 }
 
+type adminAgentBulkRetireProjectResult struct {
+	Agent  string `json:"agent"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+type adminAgentBulkRetireProjectResponse struct {
+	OK        bool                                `json:"ok"`
+	ProjectID string                              `json:"project_id"`
+	Total     int                                 `json:"total"`
+	Retired   int                                 `json:"retired"`
+	Failed    int                                 `json:"failed"`
+	Results   []adminAgentBulkRetireProjectResult `json:"results"`
+}
+
 type adminAgentFilesListResponse struct {
 	ProjectID string             `json:"project_id,omitempty"`
 	Ref       string             `json:"ref"`
@@ -709,6 +724,125 @@ func (h *AdminAgentsHandler) Retire(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.dispatchAgentEnablePatch(w, r, row.Slug, false)
+}
+
+func (h *AdminAgentsHandler) RetireByProject(w http.ResponseWriter, r *http.Request) {
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
+		return
+	}
+	if h.DB == nil || h.Store == nil || h.ProjectStore == nil || h.ProjectRepos == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+	if !uuidRegex.MatchString(projectID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid project id"})
+		return
+	}
+
+	if _, err := h.ProjectStore.GetByID(r.Context(), projectID); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
+		case errors.Is(err, store.ErrForbidden):
+			sendJSON(w, http.StatusForbidden, errorResponse{Error: "project belongs to a different workspace"})
+		default:
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load project"})
+		}
+		return
+	}
+
+	repoPath, _, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	if err != nil {
+		h.writeAgentFilesResolveError(w, err)
+		return
+	}
+
+	rows, err := h.DB.QueryContext(
+		r.Context(),
+		`SELECT slug
+		   FROM agents
+		  WHERE org_id = $1
+		    AND project_id = $2
+		    AND is_ephemeral = TRUE
+		    AND status <> 'retired'
+		  ORDER BY slug ASC`,
+		workspaceID,
+		projectID,
+	)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to query project agents"})
+		return
+	}
+	defer rows.Close()
+
+	response := adminAgentBulkRetireProjectResponse{
+		OK:        true,
+		ProjectID: projectID,
+		Results:   make([]adminAgentBulkRetireProjectResult, 0, 8),
+	}
+
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read project agents"})
+			return
+		}
+
+		response.Total++
+		result := adminAgentBulkRetireProjectResult{Agent: slug}
+		if isProtectedSystemAgentNonRemovable(slug) {
+			result.Status = "failed"
+			result.Error = "protected system agents cannot be retired"
+			response.Failed++
+			response.OK = false
+			response.Results = append(response.Results, result)
+			continue
+		}
+
+		moveErr := h.moveAgentFilesAndCommit(
+			r.Context(),
+			repoPath,
+			path.Join("agents", slug),
+			path.Join("agents", "_retired", slug),
+			fmt.Sprintf("Retire agent %s", slug),
+			errAgentFilesDirMissing,
+			errRetiredAgentFilesDirExists,
+		)
+		if moveErr != nil {
+			result.Status = "failed"
+			result.Error = moveErr.Error()
+			response.Failed++
+			response.OK = false
+			response.Results = append(response.Results, result)
+			continue
+		}
+		if err := h.updateAgentStatus(r.Context(), workspaceID, slug, "retired"); err != nil {
+			result.Status = "failed"
+			result.Error = err.Error()
+			response.Failed++
+			response.OK = false
+			response.Results = append(response.Results, result)
+			continue
+		}
+
+		result.Status = "retired"
+		response.Retired++
+		response.Results = append(response.Results, result)
+	}
+	if err := rows.Err(); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to iterate project agents"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, response)
 }
 
 func (h *AdminAgentsHandler) Reactivate(w http.ResponseWriter, r *http.Request) {
