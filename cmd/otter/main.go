@@ -326,11 +326,13 @@ func handleAgent(args []string) {
 		role := flags.String("role", "", "agent role label")
 		slot := flags.String("slot", "", "agent slot override")
 		model := flags.String("model", "gpt-5.2-codex", "OpenClaw model")
+		ephemeral := flags.Bool("ephemeral", false, "mark agent as ephemeral temp")
+		project := flags.String("project", "", "project id or name to associate with the temp")
 		org := flags.String("org", "", "org id override")
 		jsonOut := flags.Bool("json", false, "JSON output")
 		_ = flags.Parse(args[1:])
 		if len(flags.Args()) == 0 {
-			die("usage: otter agent create \"Name\" [--role <role>] [--slot <slot>] [--model <model>]")
+			die("usage: otter agent create \"Name\" [--role <role>] [--slot <slot>] [--model <model>] [--ephemeral] [--project <project-id-or-name>]")
 		}
 		displayName := strings.TrimSpace(strings.Join(flags.Args(), " "))
 		if displayName == "" {
@@ -344,7 +346,16 @@ func handleAgent(args []string) {
 		cfg, err := ottercli.LoadConfig()
 		dieIf(err)
 		client, _ := ottercli.NewClient(cfg, *org)
-		payload := buildAgentCreatePayload(displayName, normalizedSlot, strings.TrimSpace(*model), strings.TrimSpace(*role))
+		projectID, err := resolveAgentCreateProjectID(client, *ephemeral, strings.TrimSpace(*project))
+		dieIf(err)
+		payload := buildAgentCreatePayload(
+			displayName,
+			normalizedSlot,
+			strings.TrimSpace(*model),
+			strings.TrimSpace(*role),
+			*ephemeral,
+			projectID,
+		)
 		response, err := client.CreateAgent(payload)
 		dieIf(err)
 
@@ -356,6 +367,12 @@ func handleAgent(args []string) {
 		fmt.Printf("Display name: %s\n", displayName)
 		if roleValue := strings.TrimSpace(*role); roleValue != "" {
 			fmt.Printf("Role requested: %s\n", roleValue)
+		}
+		if *ephemeral {
+			fmt.Println("Ephemeral: true")
+		}
+		if strings.TrimSpace(projectID) != "" {
+			fmt.Printf("Project: %s\n", strings.TrimSpace(projectID))
 		}
 	case "edit":
 		flags := flag.NewFlagSet("agent edit", flag.ExitOnError)
@@ -2337,14 +2354,46 @@ func slugifyAgentName(name string) string {
 	return normalized
 }
 
-func buildAgentCreatePayload(displayName, slot, model, role string) map[string]interface{} {
+type agentCreateProjectResolver interface {
+	FindProject(query string) (ottercli.Project, error)
+}
+
+func resolveAgentCreateProjectID(resolver agentCreateProjectResolver, isEphemeral bool, projectQuery string) (string, error) {
+	trimmed := strings.TrimSpace(projectQuery)
+	if trimmed == "" {
+		return "", nil
+	}
+	if !isEphemeral {
+		return "", errors.New("--project requires --ephemeral")
+	}
+	if resolver == nil {
+		return "", errors.New("project resolver is required")
+	}
+	project, err := resolver.FindProject(trimmed)
+	if err != nil {
+		return "", err
+	}
+	projectID := strings.TrimSpace(project.ID)
+	if projectID == "" {
+		return "", errors.New("resolved project is missing id")
+	}
+	return projectID, nil
+}
+
+func buildAgentCreatePayload(displayName, slot, model, role string, isEphemeral bool, projectID string) map[string]interface{} {
 	payload := map[string]interface{}{
-		"slot":         slot,
-		"display_name": displayName,
-		"model":        model,
+		"slot":        slot,
+		"displayName": displayName,
+		"model":       model,
 	}
 	if trimmedRole := strings.TrimSpace(role); trimmedRole != "" {
 		payload["role"] = trimmedRole
+	}
+	if isEphemeral {
+		payload["isEphemeral"] = true
+	}
+	if trimmedProjectID := strings.TrimSpace(projectID); trimmedProjectID != "" {
+		payload["projectId"] = trimmedProjectID
 	}
 	return payload
 }

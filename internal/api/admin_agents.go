@@ -84,6 +84,8 @@ type adminAgentCreateRequest struct {
 	Identity          string `json:"identity,omitempty"`
 	Model             string `json:"model"`
 	Avatar            string `json:"avatar,omitempty"`
+	Slot              string `json:"slot,omitempty"`
+	Role              string `json:"role,omitempty"`
 	IsEphemeral       bool   `json:"isEphemeral,omitempty"`
 	IsEphemeralLegacy *bool  `json:"is_ephemeral,omitempty"`
 	ProjectID         string `json:"projectId,omitempty"`
@@ -553,6 +555,8 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	req.Soul = strings.TrimSpace(req.Soul)
 	req.Identity = strings.TrimSpace(req.Identity)
 	req.Avatar = strings.TrimSpace(req.Avatar)
+	req.Slot = strings.ToLower(strings.TrimSpace(req.Slot))
+	req.Role = strings.TrimSpace(req.Role)
 	req.ProjectID = strings.TrimSpace(firstNonEmpty(req.ProjectID, req.ProjectIDLegacy))
 	if req.IsEphemeralLegacy != nil {
 		req.IsEphemeral = *req.IsEphemeralLegacy
@@ -564,6 +568,10 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Model == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "model is required"})
+		return
+	}
+	if req.Slot != "" && !agentSlotPattern.MatchString(req.Slot) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "slot must be lowercase alphanumeric with optional dashes"})
 		return
 	}
 	if req.ProjectID != "" && !req.IsEphemeral {
@@ -589,7 +597,11 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		projectID = &req.ProjectID
 	}
 
-	slot, err := resolveAvailableAgentSlot(agentSlotFromDisplayName(req.DisplayName), func(candidate string) (bool, error) {
+	baseSlot := agentSlotFromDisplayName(req.DisplayName)
+	if req.Slot != "" {
+		baseSlot = req.Slot
+	}
+	slot, err := resolveAvailableAgentSlot(baseSlot, func(candidate string) (bool, error) {
 		existing, lookupErr := h.Store.GetBySlug(r.Context(), candidate)
 		if lookupErr == nil && existing != nil {
 			return true, nil
