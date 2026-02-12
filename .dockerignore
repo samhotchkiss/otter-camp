@@ -1,0 +1,20 @@
+# Keep Docker build context small
+# Only need: go.mod, go.sum, cmd/, internal/, migrations/, web/, www/, data/agents/roster.json
+.git
+data/agents/*/avatar*
+data/agents/*/avatar-prompt.txt
+data/agents/*/IDENTITY.md
+data/agents/*/SOUL.md
+data/agents/*/IDENTITY_SUMMARY.md
+data/agents/_GENERATION_REFERENCE.md
+data/agents/review.html
+data/repos/
+scripts/
+issues/
+node_modules/
+web/node_modules/
+third_party/
+use-cases/
+docs/
+*.test.ts
+*.test.tsx
