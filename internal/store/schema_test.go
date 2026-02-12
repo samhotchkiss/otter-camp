@@ -265,6 +265,128 @@ func TestMigration061ChatThreadsLengthLimitFilesExistAndContainConstraints(t *te
 	require.Contains(t, downContent, "drop constraint if exists chat_threads_thread_key_length_chk")
 }
 
+func TestMigration063ConversationSchemaFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"063_create_conversation_core_schema.up.sql",
+		"063_create_conversation_core_schema.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "063_create_conversation_core_schema.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists rooms")
+	require.Contains(t, upContent, "create table if not exists room_participants")
+	require.Contains(t, upContent, "create table if not exists conversations")
+	require.Contains(t, upContent, "create table if not exists chat_messages")
+	require.Contains(t, upContent, "create table if not exists memories")
+	require.Contains(t, upContent, "chat_messages_embedding_idx")
+	require.Contains(t, upContent, "memories_dedup_active")
+	require.Contains(t, upContent, "enable row level security")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "063_create_conversation_core_schema.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop table if exists room_participants")
+	require.Contains(t, downContent, "drop table if exists rooms")
+	require.Contains(t, downContent, "drop table if exists chat_messages")
+	require.Contains(t, downContent, "drop table if exists conversations")
+	require.Contains(t, downContent, "drop table if exists memories")
+}
+
+func TestSchemaConversationCoreTablesCreateAndRollback(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"rooms",
+		"room_participants",
+		"conversations",
+		"chat_messages",
+		"memories",
+	} {
+		require.True(t, schemaTableExists(t, db, table), table)
+	}
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"rooms",
+		"room_participants",
+		"conversations",
+		"chat_messages",
+		"memories",
+	} {
+		require.False(t, schemaTableExists(t, db, table), table)
+	}
+}
+
+func TestSchemaConversationCoreRLSAndIndexes(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	for _, indexName := range []string{
+		"rooms_org_type_context_idx",
+		"room_participants_room_joined_idx",
+		"chat_messages_room_created_idx",
+		"chat_messages_conversation_idx",
+		"chat_messages_search_idx",
+		"chat_messages_embedding_idx",
+		"chat_messages_unembedded_idx",
+		"memories_dedup_active",
+		"memories_embedding_idx",
+		"memories_org_kind_idx",
+		"memories_org_status_idx",
+		"memories_conversation_idx",
+	} {
+		var indexRegClass sql.NullString
+		err := db.QueryRow(`SELECT to_regclass('public.' || $1)::text`, indexName).Scan(&indexRegClass)
+		require.NoError(t, err)
+		require.True(t, indexRegClass.Valid, indexName)
+	}
+
+	for _, table := range []string{
+		"rooms",
+		"room_participants",
+		"conversations",
+		"chat_messages",
+		"memories",
+	} {
+		var rlsEnabled bool
+		err := db.QueryRow(`SELECT relrowsecurity FROM pg_class WHERE relname = $1`, table).Scan(&rlsEnabled)
+		require.NoError(t, err)
+		require.True(t, rlsEnabled, table)
+	}
+}
+
 func TestSchemaChatThreadsLengthConstraints(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
