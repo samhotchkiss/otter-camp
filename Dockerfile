@@ -34,6 +34,9 @@ RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /app
 
+# Cache bust arg (increment to force fresh build)
+ARG CACHE_BUST=1
+
 # Copy go mod files first (better caching)
 COPY go.mod go.sum ./
 RUN go mod download
