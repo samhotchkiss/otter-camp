@@ -3,6 +3,7 @@ package memory
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,8 +11,15 @@ import (
 	"strings"
 )
 
+const (
+	defaultEllieJSONLMaxLineBytes    = 256 * 1024
+	defaultEllieJSONLMaxBytesScanned = 8 * 1024 * 1024
+)
+
 type EllieFileJSONLScanner struct {
-	RootDir string
+	RootDir         string
+	MaxLineBytes    int
+	MaxBytesScanned int
 }
 
 func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanInput) ([]EllieRetrievedItem, error) {
@@ -28,11 +36,24 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 	if limit <= 0 {
 		limit = 5
 	}
+	maxLineBytes := s.MaxLineBytes
+	if maxLineBytes <= 0 {
+		maxLineBytes = defaultEllieJSONLMaxLineBytes
+	}
+	maxBytesScanned := s.MaxBytesScanned
+	if maxBytesScanned <= 0 {
+		maxBytesScanned = defaultEllieJSONLMaxBytesScanned
+	}
 
 	results := make([]EllieRetrievedItem, 0, limit)
+	bytesScanned := 0
+	exhaustedScanBudget := false
 	err := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
+		}
+		if exhaustedScanBudget {
+			return fs.SkipAll
 		}
 		if len(results) >= limit {
 			return fs.SkipAll
@@ -48,11 +69,19 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 		defer file.Close()
 
 		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 0, 4096), maxLineBytes)
 		lineNumber := 0
 		for scanner.Scan() {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			lineBytes := len(scanner.Bytes()) + 1
+			if maxBytesScanned > 0 && bytesScanned+lineBytes > maxBytesScanned {
+				exhaustedScanBudget = true
+				break
+			}
+			bytesScanned += lineBytes
+
 			lineNumber += 1
 			line := scanner.Text()
 			if !strings.Contains(strings.ToLower(line), query) {
@@ -67,6 +96,12 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 			if len(results) >= limit {
 				break
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			if errors.Is(err, bufio.ErrTooLong) {
+				return nil
+			}
+			return err
 		}
 		return nil
 	})
