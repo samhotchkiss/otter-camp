@@ -36,17 +36,19 @@ type AdminAgentsHandler struct {
 }
 
 type adminAgentSummary struct {
-	ID               string `json:"id"`
-	WorkspaceAgentID string `json:"workspace_agent_id"`
-	Name             string `json:"name"`
-	Status           string `json:"status"`
-	Model            string `json:"model,omitempty"`
-	ContextTokens    int    `json:"context_tokens,omitempty"`
-	TotalTokens      int    `json:"total_tokens,omitempty"`
-	HeartbeatEvery   string `json:"heartbeat_every,omitempty"`
-	Channel          string `json:"channel,omitempty"`
-	SessionKey       string `json:"session_key,omitempty"`
-	LastSeen         string `json:"last_seen,omitempty"`
+	ID               string  `json:"id"`
+	WorkspaceAgentID string  `json:"workspace_agent_id"`
+	Name             string  `json:"name"`
+	Status           string  `json:"status"`
+	IsEphemeral      bool    `json:"is_ephemeral"`
+	ProjectID        *string `json:"project_id,omitempty"`
+	Model            string  `json:"model,omitempty"`
+	ContextTokens    int     `json:"context_tokens,omitempty"`
+	TotalTokens      int     `json:"total_tokens,omitempty"`
+	HeartbeatEvery   string  `json:"heartbeat_every,omitempty"`
+	Channel          string  `json:"channel,omitempty"`
+	SessionKey       string  `json:"session_key,omitempty"`
+	LastSeen         string  `json:"last_seen,omitempty"`
 }
 
 type adminAgentSyncDetails struct {
@@ -67,6 +69,21 @@ type adminAgentDetailResponse struct {
 	Sync  *adminAgentSyncDetails `json:"sync,omitempty"`
 }
 
+type adminAgentBulkRetireProjectResult struct {
+	Agent  string `json:"agent"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+type adminAgentBulkRetireProjectResponse struct {
+	OK        bool                                `json:"ok"`
+	ProjectID string                              `json:"project_id"`
+	Total     int                                 `json:"total"`
+	Retired   int                                 `json:"retired"`
+	Failed    int                                 `json:"failed"`
+	Results   []adminAgentBulkRetireProjectResult `json:"results"`
+}
+
 type adminAgentFilesListResponse struct {
 	ProjectID string             `json:"project_id,omitempty"`
 	Ref       string             `json:"ref"`
@@ -82,6 +99,12 @@ type adminAgentCreateRequest struct {
 	Identity          string `json:"identity,omitempty"`
 	Model             string `json:"model"`
 	Avatar            string `json:"avatar,omitempty"`
+	Slot              string `json:"slot,omitempty"`
+	Role              string `json:"role,omitempty"`
+	IsEphemeral       bool   `json:"isEphemeral,omitempty"`
+	IsEphemeralLegacy *bool  `json:"is_ephemeral,omitempty"`
+	ProjectID         string `json:"projectId,omitempty"`
+	ProjectIDLegacy   string `json:"project_id,omitempty"`
 }
 
 type adminAgentTemplateInput struct {
@@ -103,6 +126,8 @@ type adminAgentRow struct {
 	Slug             string
 	DisplayName      string
 	WorkspaceStatus  string
+	IsEphemeral      bool
+	ProjectID        sql.NullString
 	HeartbeatEvery   sql.NullString
 	SyncName         sql.NullString
 	SyncModel        sql.NullString
@@ -545,6 +570,12 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	req.Soul = strings.TrimSpace(req.Soul)
 	req.Identity = strings.TrimSpace(req.Identity)
 	req.Avatar = strings.TrimSpace(req.Avatar)
+	req.Slot = strings.ToLower(strings.TrimSpace(req.Slot))
+	req.Role = strings.TrimSpace(req.Role)
+	req.ProjectID = strings.TrimSpace(firstNonEmpty(req.ProjectID, req.ProjectIDLegacy))
+	if req.IsEphemeralLegacy != nil {
+		req.IsEphemeral = *req.IsEphemeralLegacy
+	}
 
 	if req.DisplayName == "" {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "displayName is required"})
@@ -554,8 +585,38 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "model is required"})
 		return
 	}
+	if req.Slot != "" && !agentSlotPattern.MatchString(req.Slot) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "slot must be lowercase alphanumeric with optional dashes"})
+		return
+	}
+	if req.ProjectID != "" && !req.IsEphemeral {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "projectId requires isEphemeral=true"})
+		return
+	}
 
-	slot, err := resolveAvailableAgentSlot(agentSlotFromDisplayName(req.DisplayName), func(candidate string) (bool, error) {
+	var projectID *string
+	if req.ProjectID != "" {
+		if err := validateOptionalUUID(&req.ProjectID, "projectId"); err != nil {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			return
+		}
+		if _, err := h.ProjectStore.GetByID(r.Context(), req.ProjectID); err != nil {
+			switch {
+			case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrForbidden):
+				sendJSON(w, http.StatusBadRequest, errorResponse{Error: "projectId must belong to the current workspace"})
+			default:
+				sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to validate projectId"})
+			}
+			return
+		}
+		projectID = &req.ProjectID
+	}
+
+	baseSlot := agentSlotFromDisplayName(req.DisplayName)
+	if req.Slot != "" {
+		baseSlot = req.Slot
+	}
+	slot, err := resolveAvailableAgentSlot(baseSlot, func(candidate string) (bool, error) {
 		existing, lookupErr := h.Store.GetBySlug(r.Context(), candidate)
 		if lookupErr == nil && existing != nil {
 			return true, nil
@@ -583,6 +644,8 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Slug:        slot,
 		DisplayName: req.DisplayName,
 		Status:      "active",
+		IsEphemeral: req.IsEphemeral,
+		ProjectID:   projectID,
 	})
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create agent"})
@@ -609,9 +672,12 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusCreated, map[string]interface{}{
 		"ok": true,
 		"agent": adminAgentSummary{
-			ID:     createdAgent.ID,
-			Name:   createdAgent.DisplayName,
-			Status: createdAgent.Status,
+			ID:               createdAgent.Slug,
+			WorkspaceAgentID: createdAgent.ID,
+			Name:             createdAgent.DisplayName,
+			Status:           createdAgent.Status,
+			IsEphemeral:      createdAgent.IsEphemeral,
+			ProjectID:        createdAgent.ProjectID,
 		},
 	})
 }
@@ -658,6 +724,125 @@ func (h *AdminAgentsHandler) Retire(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.dispatchAgentEnablePatch(w, r, row.Slug, false)
+}
+
+func (h *AdminAgentsHandler) RetireByProject(w http.ResponseWriter, r *http.Request) {
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
+	if workspaceID == "" {
+		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing workspace"})
+		return
+	}
+	if h.DB == nil || h.Store == nil || h.ProjectStore == nil || h.ProjectRepos == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
+	if projectID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "project id is required"})
+		return
+	}
+	if !uuidRegex.MatchString(projectID) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid project id"})
+		return
+	}
+
+	if _, err := h.ProjectStore.GetByID(r.Context(), projectID); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "project not found"})
+		case errors.Is(err, store.ErrForbidden):
+			sendJSON(w, http.StatusForbidden, errorResponse{Error: "project belongs to a different workspace"})
+		default:
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to load project"})
+		}
+		return
+	}
+
+	repoPath, _, _, _, err := h.resolveAgentFilesRepository(r.Context(), workspaceID)
+	if err != nil {
+		h.writeAgentFilesResolveError(w, err)
+		return
+	}
+
+	rows, err := h.DB.QueryContext(
+		r.Context(),
+		`SELECT slug
+		   FROM agents
+		  WHERE org_id = $1
+		    AND project_id = $2
+		    AND is_ephemeral = TRUE
+		    AND status <> 'retired'
+		  ORDER BY slug ASC`,
+		workspaceID,
+		projectID,
+	)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to query project agents"})
+		return
+	}
+	defer rows.Close()
+
+	response := adminAgentBulkRetireProjectResponse{
+		OK:        true,
+		ProjectID: projectID,
+		Results:   make([]adminAgentBulkRetireProjectResult, 0, 8),
+	}
+
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read project agents"})
+			return
+		}
+
+		response.Total++
+		result := adminAgentBulkRetireProjectResult{Agent: slug}
+		if isProtectedSystemAgentNonRemovable(slug) {
+			result.Status = "failed"
+			result.Error = "protected system agents cannot be retired"
+			response.Failed++
+			response.OK = false
+			response.Results = append(response.Results, result)
+			continue
+		}
+
+		moveErr := h.moveAgentFilesAndCommit(
+			r.Context(),
+			repoPath,
+			path.Join("agents", slug),
+			path.Join("agents", "_retired", slug),
+			fmt.Sprintf("Retire agent %s", slug),
+			errAgentFilesDirMissing,
+			errRetiredAgentFilesDirExists,
+		)
+		if moveErr != nil {
+			result.Status = "failed"
+			result.Error = moveErr.Error()
+			response.Failed++
+			response.OK = false
+			response.Results = append(response.Results, result)
+			continue
+		}
+		if err := h.updateAgentStatus(r.Context(), workspaceID, slug, "retired"); err != nil {
+			result.Status = "failed"
+			result.Error = err.Error()
+			response.Failed++
+			response.OK = false
+			response.Results = append(response.Results, result)
+			continue
+		}
+
+		result.Status = "retired"
+		response.Retired++
+		response.Results = append(response.Results, result)
+	}
+	if err := rows.Err(); err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to iterate project agents"})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, response)
 }
 
 func (h *AdminAgentsHandler) Reactivate(w http.ResponseWriter, r *http.Request) {
@@ -918,6 +1103,8 @@ func (h *AdminAgentsHandler) listRows(ctx context.Context, workspaceID string) (
 			a.slug,
 			COALESCE(a.display_name, '') AS display_name,
 			COALESCE(a.status, '') AS workspace_status,
+			COALESCE(a.is_ephemeral, false) AS is_ephemeral,
+			a.project_id::text AS project_id,
 			c.heartbeat_every,
 			s.name,
 			s.model,
@@ -978,6 +1165,8 @@ func (h *AdminAgentsHandler) getRow(ctx context.Context, workspaceID, identifier
 			a.slug,
 			COALESCE(a.display_name, '') AS display_name,
 			COALESCE(a.status, '') AS workspace_status,
+			COALESCE(a.is_ephemeral, false) AS is_ephemeral,
+			a.project_id::text AS project_id,
 			c.heartbeat_every,
 			s.name,
 			s.model,
@@ -1350,6 +1539,8 @@ func rowToAgentSummary(row adminAgentRow) adminAgentSummary {
 		WorkspaceAgentID: strings.TrimSpace(row.WorkspaceAgentID),
 		Name:             name,
 		Status:           status,
+		IsEphemeral:      row.IsEphemeral,
+		ProjectID:        nullableNullString(row.ProjectID),
 		Model:            strings.TrimSpace(row.SyncModel.String),
 		ContextTokens:    int(row.ContextTokens.Int64),
 		TotalTokens:      int(row.TotalTokens.Int64),
@@ -1378,6 +1569,8 @@ func scanAdminAgentRow(scanner interface{ Scan(...any) error }) (adminAgentRow, 
 		&row.Slug,
 		&row.DisplayName,
 		&row.WorkspaceStatus,
+		&row.IsEphemeral,
+		&row.ProjectID,
 		&row.HeartbeatEvery,
 		&row.SyncName,
 		&row.SyncModel,
@@ -1391,6 +1584,17 @@ func scanAdminAgentRow(scanner interface{ Scan(...any) error }) (adminAgentRow, 
 		&row.TotalTokens,
 	)
 	return row, err
+}
+
+func nullableNullString(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	trimmed := strings.TrimSpace(value.String)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func (h *AdminAgentsHandler) writeAgentTemplates(

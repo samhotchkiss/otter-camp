@@ -283,6 +283,13 @@ func TestProjectsAndInboxRoutesAreRegistered(t *testing.T) {
 		t.Fatalf("expected /api/admin/agents/{id}/reactivate route to be registered, got status %d", recAdminAgentReactivate.Code)
 	}
 
+	reqAdminAgentRetireByProject := httptest.NewRequest(http.MethodPost, "/api/admin/agents/retire/project/"+orgID+"?org_id="+orgID, nil)
+	recAdminAgentRetireByProject := httptest.NewRecorder()
+	router.ServeHTTP(recAdminAgentRetireByProject, reqAdminAgentRetireByProject)
+	if recAdminAgentRetireByProject.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/admin/agents/retire/project/{projectID} route to be registered, got status %d", recAdminAgentRetireByProject.Code)
+	}
+
 	// NOTE: /api/admin/config routes are from an unmerged spec — skip until merged
 
 	reqDiagnostics := httptest.NewRequest(http.MethodPost, "/api/admin/diagnostics?org_id="+orgID, nil)
@@ -397,6 +404,7 @@ func TestAdminMutationRoutesRequireCapability(t *testing.T) {
 		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/gateway/restart", adminConnectionsHandler.RestartGateway)`,
 		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents", adminAgentsHandler.Create)`,
 		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/retire", adminAgentsHandler.Retire)`,
+		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/retire/project/{projectID}", adminAgentsHandler.RetireByProject)`,
 		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/reactivate", adminAgentsHandler.Reactivate)`,
 		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)`,
 		`r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)`,

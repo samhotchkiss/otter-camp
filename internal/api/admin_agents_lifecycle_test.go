@@ -14,6 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func seedLifecycleAgentFilesDir(t *testing.T, repoPath, slug string) {
+	t.Helper()
+	baseDir := filepath.Join(repoPath, "agents", slug)
+	require.NoError(t, os.MkdirAll(filepath.Join(baseDir, "memory"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "SOUL.md"), []byte("# SOUL\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "IDENTITY.md"), []byte("# IDENTITY\n"), 0o644))
+}
+
 func TestAdminAgentsLifecycleRetireMovesFilesWithoutOpenClawPatch(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "admin-agents-retire")
@@ -196,4 +204,90 @@ func TestAdminAgentsLifecycleRetireRejectsProtectedElephant(t *testing.T) {
 	var payload errorResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.Contains(t, payload.Error, "protected system agents cannot be retired")
+}
+
+func TestAdminAgentsBulkRetireByProjectRetiresOnlyEphemeralTemps(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-retire-by-project")
+
+	var projectID string
+	err := db.QueryRow(
+		`INSERT INTO projects (org_id, name, status) VALUES ($1, 'Temps Project', 'active') RETURNING id`,
+		orgID,
+	).Scan(&projectID)
+	require.NoError(t, err)
+
+	var otherProjectID string
+	err = db.QueryRow(
+		`INSERT INTO projects (org_id, name, status) VALUES ($1, 'Other Project', 'active') RETURNING id`,
+		orgID,
+	).Scan(&otherProjectID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO agents (org_id, slug, display_name, status, is_ephemeral, project_id)
+		 VALUES
+		   ($1, 'temp-a', 'Temp A', 'active', true, $2),
+		   ($1, 'temp-b', 'Temp B', 'active', true, $2),
+		   ($1, 'perm-a', 'Perm A', 'active', false, $2),
+		   ($1, 'temp-c', 'Temp C', 'active', true, $3)`,
+		orgID,
+		projectID,
+		otherProjectID,
+	)
+	require.NoError(t, err)
+
+	agentFilesProjectID := seedAdminAgentFilesProjectFixture(t, db, orgID, "temp-a")
+	repoPath := agentFilesRepoPathForProject(t, db, orgID, agentFilesProjectID)
+	seedLifecycleAgentFilesDir(t, repoPath, "temp-b")
+	seedLifecycleAgentFilesDir(t, repoPath, "perm-a")
+	seedLifecycleAgentFilesDir(t, repoPath, "temp-c")
+	runGitTest(t, repoPath, "add", ".")
+	runGitTest(t, repoPath, "commit", "-m", "seed lifecycle agent dirs")
+
+	handler := &AdminAgentsHandler{
+		DB:              db,
+		Store:           store.NewAgentStore(db),
+		ProjectStore:    store.NewProjectStore(db),
+		ProjectRepos:    store.NewProjectRepoStore(db),
+		OpenClawHandler: &fakeOpenClawConnectionStatus{connected: true},
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/agents/retire/project/"+projectID, nil)
+	req = addRouteParam(req, "projectID", projectID)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.RetireByProject(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload struct {
+		OK        bool   `json:"ok"`
+		Total     int    `json:"total"`
+		Retired   int    `json:"retired"`
+		Failed    int    `json:"failed"`
+		ProjectID string `json:"project_id"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.True(t, payload.OK)
+	require.Equal(t, projectID, payload.ProjectID)
+	require.Equal(t, 2, payload.Total)
+	require.Equal(t, 2, payload.Retired)
+	require.Equal(t, 0, payload.Failed)
+
+	for _, slug := range []string{"temp-a", "temp-b"} {
+		var status string
+		require.NoError(t, db.QueryRow(`SELECT status FROM agents WHERE org_id = $1 AND slug = $2`, orgID, slug).Scan(&status))
+		require.Equal(t, "retired", status)
+		_, statErr := os.Stat(filepath.Join(repoPath, "agents", "_retired", slug))
+		require.NoError(t, statErr)
+	}
+
+	var permStatus string
+	require.NoError(t, db.QueryRow(`SELECT status FROM agents WHERE org_id = $1 AND slug = 'perm-a'`, orgID).Scan(&permStatus))
+	require.Equal(t, "active", permStatus)
+
+	var otherStatus string
+	require.NoError(t, db.QueryRow(`SELECT status FROM agents WHERE org_id = $1 AND slug = 'temp-c'`, orgID).Scan(&otherStatus))
+	require.Equal(t, "active", otherStatus)
 }

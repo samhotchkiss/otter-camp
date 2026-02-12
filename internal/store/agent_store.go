@@ -20,6 +20,8 @@ type Agent struct {
 	WebhookURL     *string   `json:"webhook_url,omitempty"`
 	Status         string    `json:"status"`
 	SessionPattern *string   `json:"session_pattern,omitempty"`
+	IsEphemeral    bool      `json:"is_ephemeral"`
+	ProjectID      *string   `json:"project_id,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
@@ -34,7 +36,7 @@ func NewAgentStore(db *sql.DB) *AgentStore {
 	return &AgentStore{db: db}
 }
 
-const agentSelectColumns = "id, org_id, slug, display_name, avatar_url, webhook_url, status, session_pattern, created_at, updated_at"
+const agentSelectColumns = "id, org_id, slug, display_name, avatar_url, webhook_url, status, session_pattern, is_ephemeral, project_id, created_at, updated_at"
 
 // GetByID retrieves an agent by ID within the current workspace.
 func (s *AgentStore) GetByID(ctx context.Context, id string) (*Agent, error) {
@@ -164,6 +166,8 @@ type CreateAgentInput struct {
 	WebhookURL     *string
 	Status         string
 	SessionPattern *string
+	IsEphemeral    bool
+	ProjectID      *string
 }
 
 // Create creates a new agent in the current workspace.
@@ -180,8 +184,8 @@ func (s *AgentStore) Create(ctx context.Context, input CreateAgentInput) (*Agent
 	defer conn.Close()
 
 	query := `INSERT INTO agents (
-		org_id, slug, display_name, avatar_url, webhook_url, status, session_pattern
-	) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		org_id, slug, display_name, avatar_url, webhook_url, status, session_pattern, is_ephemeral, project_id
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	RETURNING ` + agentSelectColumns
 
 	args := []interface{}{
@@ -192,6 +196,8 @@ func (s *AgentStore) Create(ctx context.Context, input CreateAgentInput) (*Agent
 		nullableString(input.WebhookURL),
 		input.Status,
 		nullableString(input.SessionPattern),
+		input.IsEphemeral,
+		nullableString(input.ProjectID),
 	}
 
 	agent, err := scanAgent(conn.QueryRowContext(ctx, query, args...))
@@ -210,6 +216,8 @@ type UpdateAgentInput struct {
 	WebhookURL     *string
 	Status         string
 	SessionPattern *string
+	IsEphemeral    bool
+	ProjectID      *string
 }
 
 // Update updates an agent in the current workspace.
@@ -226,8 +234,8 @@ func (s *AgentStore) Update(ctx context.Context, id string, input UpdateAgentInp
 	defer conn.Close()
 
 	query := `UPDATE agents SET
-		slug = $1, display_name = $2, avatar_url = $3, webhook_url = $4, status = $5, session_pattern = $6
-	WHERE id = $7 AND org_id = $8
+		slug = $1, display_name = $2, avatar_url = $3, webhook_url = $4, status = $5, session_pattern = $6, is_ephemeral = $7, project_id = $8
+	WHERE id = $9 AND org_id = $10
 	RETURNING ` + agentSelectColumns
 
 	args := []interface{}{
@@ -237,6 +245,8 @@ func (s *AgentStore) Update(ctx context.Context, id string, input UpdateAgentInp
 		nullableString(input.WebhookURL),
 		input.Status,
 		nullableString(input.SessionPattern),
+		input.IsEphemeral,
+		nullableString(input.ProjectID),
 		id,
 		workspaceID,
 	}
@@ -286,6 +296,7 @@ func scanAgent(scanner interface{ Scan(...any) error }) (Agent, error) {
 	var avatarURL sql.NullString
 	var webhookURL sql.NullString
 	var sessionPattern sql.NullString
+	var projectID sql.NullString
 
 	err := scanner.Scan(
 		&agent.ID,
@@ -296,6 +307,8 @@ func scanAgent(scanner interface{ Scan(...any) error }) (Agent, error) {
 		&webhookURL,
 		&agent.Status,
 		&sessionPattern,
+		&agent.IsEphemeral,
+		&projectID,
 		&agent.CreatedAt,
 		&agent.UpdatedAt,
 	)
@@ -311,6 +324,9 @@ func scanAgent(scanner interface{ Scan(...any) error }) (Agent, error) {
 	}
 	if sessionPattern.Valid {
 		agent.SessionPattern = &sessionPattern.String
+	}
+	if projectID.Valid {
+		agent.ProjectID = &projectID.String
 	}
 
 	return agent, nil

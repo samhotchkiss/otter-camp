@@ -393,6 +393,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory", adminAgentsHandler.ListMemoryFiles)
 		r.With(middleware.OptionalWorkspace).Get("/admin/agents/{id}/memory/{date}", adminAgentsHandler.GetMemoryFileByDate)
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/retire", adminAgentsHandler.Retire)
+		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/retire/project/{projectID}", adminAgentsHandler.RetireByProject)
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/reactivate", adminAgentsHandler.Reactivate)
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/ping", adminConnectionsHandler.PingAgent)
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/agents/{id}/reset", adminConnectionsHandler.ResetAgent)

@@ -142,7 +142,7 @@ describe("AgentsPage", () => {
     });
   });
 
-  it("opens elephant DMs with an elephant-specific context label", async () => {
+  it("opens elephant DMs with an ellie memory context label", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/api/sync/agents")) {
@@ -168,7 +168,7 @@ describe("AgentsPage", () => {
 
     expect(openConversationMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        contextLabel: "Elephant memory chat",
+        contextLabel: "Ellie memory chat",
         subtitle: "Dedicated memory archivist session.",
       }),
     );
