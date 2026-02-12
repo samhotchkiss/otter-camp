@@ -646,6 +646,327 @@ func TestSchemaProjectChatBackfillIsIdempotent(t *testing.T) {
 	require.Equal(t, firstRoomCount, secondRoomCount)
 }
 
+func TestMigration065MemoriesBackfillFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"065_backfill_legacy_memory_tables_into_memories.up.sql",
+		"065_backfill_legacy_memory_tables_into_memories.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "065_backfill_legacy_memory_tables_into_memories.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "insert into memories")
+	require.Contains(t, upContent, "memory_entries")
+	require.Contains(t, upContent, "shared_knowledge")
+	require.Contains(t, upContent, "agent_memories")
+	require.Contains(t, upContent, "on conflict (org_id, content_hash) where status = 'active' do nothing")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "065_backfill_legacy_memory_tables_into_memories.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "delete from memories")
+	require.Contains(t, downContent, "source_table")
+}
+
+func TestSchemaMemoriesBackfillCopiesLegacyRows(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(64)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "memories-backfill-copy-org")
+	projectID := createTestProject(t, db, orgID, "Memories Backfill Copy Project")
+	agentID := insertSchemaAgent(t, db, orgID, "memories-copy-agent")
+
+	var memoryEntryID string
+	err = db.QueryRow(
+		`INSERT INTO memory_entries (
+			org_id, agent_id, kind, title, content, metadata, importance, confidence, sensitivity, status, source_project
+		) VALUES (
+			$1, $2, 'decision', 'Entry Decision', 'Memory entry content', '{}'::jsonb, 3, 0.8, 'internal', 'active', $3
+		) RETURNING id`,
+		orgID,
+		agentID,
+		projectID,
+	).Scan(&memoryEntryID)
+	require.NoError(t, err)
+
+	var sharedKnowledgeID string
+	err = db.QueryRow(
+		`INSERT INTO shared_knowledge (
+			org_id, source_agent_id, kind, title, content, metadata, status
+		) VALUES (
+			$1, $2, 'pattern', 'Shared Pattern', 'Shared knowledge content', '{}'::jsonb, 'active'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&sharedKnowledgeID)
+	require.NoError(t, err)
+
+	var agentMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO agent_memories (
+			org_id, agent_id, kind, date, content
+		) VALUES (
+			$1, $2, 'long_term', CURRENT_DATE, 'Agent memory content'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&agentMemoryID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var copiedCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' IN ('memory_entries', 'shared_knowledge', 'agent_memories')`,
+		orgID,
+	).Scan(&copiedCount)
+	require.NoError(t, err)
+	require.Equal(t, 3, copiedCount)
+
+	for _, check := range [][2]string{
+		{"memory_entries", memoryEntryID},
+		{"shared_knowledge", sharedKnowledgeID},
+		{"agent_memories", agentMemoryID},
+	} {
+		var exists bool
+		err = db.QueryRow(
+			`SELECT EXISTS (
+				SELECT 1
+				FROM memories
+				WHERE org_id = $1
+				  AND metadata->>'source_table' = $2
+				  AND metadata->>'source_id' = $3
+			)`,
+			orgID,
+			check[0],
+			check[1],
+		).Scan(&exists)
+		require.NoError(t, err)
+		require.True(t, exists, check[0])
+	}
+}
+
+func TestSchemaMemoriesBackfillMapsStatusesAndKinds(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(64)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "memories-backfill-mapping-org")
+	agentID := insertSchemaAgent(t, db, orgID, "memories-mapping-agent")
+
+	var memoryEntryID string
+	err = db.QueryRow(
+		`INSERT INTO memory_entries (
+			org_id, agent_id, kind, title, content, metadata, importance, confidence, sensitivity, status
+		) VALUES (
+			$1, $2, 'decision', 'Warm Decision', 'Warm memory entry', '{}'::jsonb, 3, 0.7, 'internal', 'warm'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&memoryEntryID)
+	require.NoError(t, err)
+
+	var sharedKnowledgeID string
+	err = db.QueryRow(
+		`INSERT INTO shared_knowledge (
+			org_id, source_agent_id, kind, title, content, metadata, status
+		) VALUES (
+			$1, $2, 'correction', 'Superseded Correction', 'Old correction', '{}'::jsonb, 'superseded'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&sharedKnowledgeID)
+	require.NoError(t, err)
+
+	var agentMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO agent_memories (
+			org_id, agent_id, kind, date, content
+		) VALUES (
+			$1, $2, 'note', CURRENT_DATE, 'Agent note content'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&agentMemoryID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var (
+		entryKind   string
+		entryStatus string
+	)
+	err = db.QueryRow(
+		`SELECT kind, status
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'memory_entries'
+		   AND metadata->>'source_id' = $2`,
+		orgID,
+		memoryEntryID,
+	).Scan(&entryKind, &entryStatus)
+	require.NoError(t, err)
+	require.Equal(t, "technical_decision", entryKind)
+	require.Equal(t, "archived", entryStatus)
+
+	var (
+		sharedKind   string
+		sharedStatus string
+	)
+	err = db.QueryRow(
+		`SELECT kind, status
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'shared_knowledge'
+		   AND metadata->>'source_id' = $2`,
+		orgID,
+		sharedKnowledgeID,
+	).Scan(&sharedKind, &sharedStatus)
+	require.NoError(t, err)
+	require.Equal(t, "correction", sharedKind)
+	require.Equal(t, "deprecated", sharedStatus)
+
+	var (
+		agentKind   string
+		agentStatus string
+	)
+	err = db.QueryRow(
+		`SELECT kind, status
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'agent_memories'
+		   AND metadata->>'source_id' = $2`,
+		orgID,
+		agentMemoryID,
+	).Scan(&agentKind, &agentStatus)
+	require.NoError(t, err)
+	require.Equal(t, "context", agentKind)
+	require.Equal(t, "active", agentStatus)
+}
+
+func TestSchemaMemoriesBackfillIsIdempotent(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(64)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "memories-backfill-idempotent-org")
+	agentID := insertSchemaAgent(t, db, orgID, "memories-idempotent-agent")
+
+	_, err = db.Exec(
+		`INSERT INTO memory_entries (
+			org_id, agent_id, kind, title, content, metadata, importance, confidence, sensitivity, status
+		) VALUES (
+			$1, $2, 'fact', 'Idempotent Fact', 'Idempotent memory content', '{}'::jsonb, 2, 0.9, 'internal', 'active'
+		)`,
+		orgID,
+		agentID,
+	)
+	require.NoError(t, err)
+
+	upRaw, err := os.ReadFile(filepath.Join(getMigrationsDir(t), "065_backfill_legacy_memory_tables_into_memories.up.sql"))
+	require.NoError(t, err)
+	upSQL := string(upRaw)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var firstCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'memory_entries'`,
+		orgID,
+	).Scan(&firstCount)
+	require.NoError(t, err)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var secondCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'memory_entries'`,
+		orgID,
+	).Scan(&secondCount)
+	require.NoError(t, err)
+
+	require.Equal(t, firstCount, secondCount)
+}
+
 func TestSchemaChatThreadsLengthConstraints(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
