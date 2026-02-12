@@ -2,10 +2,18 @@ package memory
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+	_ "github.com/lib/pq"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -187,4 +195,147 @@ func TestConversationEmbeddingWorkerDetectsVectorCountMismatch(t *testing.T) {
 	_, err := worker.RunOnce(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "returned 0 vectors for 1 rows")
+}
+
+const embeddingWorkerTestDBURLKey = "OTTER_TEST_DATABASE_URL"
+
+func setupEmbeddingWorkerTestDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+	connStr := os.Getenv(embeddingWorkerTestDBURLKey)
+	if connStr == "" {
+		t.Skipf("set %s to run embedding worker integration tests", embeddingWorkerTestDBURLKey)
+	}
+
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	migrationsDir, err := filepath.Abs(filepath.Join("..", "..", "migrations"))
+	require.NoError(t, err)
+	migrator, err := migrate.New("file://"+migrationsDir, connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = migrator.Close()
+		_ = db.Close()
+	})
+
+	err = migrator.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+	err = migrator.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	return db
+}
+
+func TestConversationEmbeddingWorkerProcessesMultipleOrgsFairly(t *testing.T) {
+	db := setupEmbeddingWorkerTestDatabase(t)
+	queue := store.NewConversationEmbeddingStore(db)
+
+	var orgA string
+	err := db.QueryRow(
+		`INSERT INTO organizations (name, slug, tier) VALUES ('Embedding Fairness A', 'embedding-fairness-a', 'free') RETURNING id`,
+	).Scan(&orgA)
+	require.NoError(t, err)
+	var orgB string
+	err = db.QueryRow(
+		`INSERT INTO organizations (name, slug, tier) VALUES ('Embedding Fairness B', 'embedding-fairness-b', 'free') RETURNING id`,
+	).Scan(&orgB)
+	require.NoError(t, err)
+
+	var projectA string
+	err = db.QueryRow(
+		`INSERT INTO projects (org_id, name, status) VALUES ($1, 'Embedding Fairness Project A', 'active') RETURNING id`,
+		orgA,
+	).Scan(&projectA)
+	require.NoError(t, err)
+	var projectB string
+	err = db.QueryRow(
+		`INSERT INTO projects (org_id, name, status) VALUES ($1, 'Embedding Fairness Project B', 'active') RETURNING id`,
+		orgB,
+	).Scan(&projectB)
+	require.NoError(t, err)
+
+	var agentA string
+	err = db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status) VALUES ($1, 'embed-fairness-a', 'Embed Fairness A', 'active') RETURNING id`,
+		orgA,
+	).Scan(&agentA)
+	require.NoError(t, err)
+	var agentB string
+	err = db.QueryRow(
+		`INSERT INTO agents (org_id, slug, display_name, status) VALUES ($1, 'embed-fairness-b', 'Embed Fairness B', 'active') RETURNING id`,
+		orgB,
+	).Scan(&agentB)
+	require.NoError(t, err)
+
+	var roomA string
+	err = db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Embedding Fairness Room A', 'project', $2)
+		 RETURNING id`,
+		orgA,
+		projectA,
+	).Scan(&roomA)
+	require.NoError(t, err)
+	var roomB string
+	err = db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Embedding Fairness Room B', 'project', $2)
+		 RETURNING id`,
+		orgB,
+		projectB,
+	).Scan(&roomB)
+	require.NoError(t, err)
+
+	base := time.Date(2026, 2, 12, 9, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i += 1 {
+		_, err = db.Exec(
+			`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, type, created_at, attachments)
+			 VALUES ($1, $2, $3, 'agent', 'org-a embedding pending', 'message', $4, '[]'::jsonb)`,
+			orgA,
+			roomA,
+			agentA,
+			base.Add(time.Duration(i)*time.Minute),
+		)
+		require.NoError(t, err)
+	}
+	_, err = db.Exec(
+		`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, type, created_at, attachments)
+		 VALUES ($1, $2, $3, 'agent', 'org-b embedding pending', 'message', $4, '[]'::jsonb)`,
+		orgB,
+		roomB,
+		agentB,
+		base.Add(25*time.Minute),
+	)
+	require.NoError(t, err)
+
+	vector := make([]float64, 384)
+	for i := range vector {
+		vector[i] = 0.01
+	}
+	worker := NewConversationEmbeddingWorker(queue, &fakeConversationEmbedder{vector: vector}, ConversationEmbeddingWorkerConfig{
+		BatchSize:    4,
+		PollInterval: time.Second,
+	})
+	worker.Logf = nil
+
+	processed, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 4, processed)
+
+	var orgAEmbedded int
+	err = db.QueryRow(`SELECT COUNT(*) FROM chat_messages WHERE org_id = $1 AND embedding IS NOT NULL`, orgA).Scan(&orgAEmbedded)
+	require.NoError(t, err)
+	var orgBEmbedded int
+	err = db.QueryRow(`SELECT COUNT(*) FROM chat_messages WHERE org_id = $1 AND embedding IS NOT NULL`, orgB).Scan(&orgBEmbedded)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, orgAEmbedded, 1)
+	require.Equal(t, 1, orgBEmbedded)
 }

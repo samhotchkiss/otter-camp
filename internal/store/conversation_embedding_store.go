@@ -44,10 +44,21 @@ func (s *ConversationEmbeddingStore) ListPendingChatMessages(ctx context.Context
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, org_id, body
-		 FROM chat_messages
-		 WHERE embedding IS NULL
-		 ORDER BY created_at ASC, id ASC
+		`WITH ranked AS (
+			SELECT
+				id,
+				org_id,
+				body,
+				ROW_NUMBER() OVER (
+					PARTITION BY org_id
+					ORDER BY created_at ASC, id ASC
+				) AS org_rank
+			FROM chat_messages
+			WHERE embedding IS NULL
+		)
+		 SELECT id, org_id, body
+		 FROM ranked
+		 ORDER BY org_rank ASC, org_id ASC, id ASC
 		 LIMIT $1`,
 		limit,
 	)
@@ -105,10 +116,21 @@ func (s *ConversationEmbeddingStore) ListPendingMemories(ctx context.Context, li
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, org_id, title || E'\n\n' || content AS content
-		 FROM memories
-		 WHERE embedding IS NULL
-		 ORDER BY created_at ASC, id ASC
+		`WITH ranked AS (
+			SELECT
+				id,
+				org_id,
+				title || E'\n\n' || content AS content,
+				ROW_NUMBER() OVER (
+					PARTITION BY org_id
+					ORDER BY created_at ASC, id ASC
+				) AS org_rank
+			FROM memories
+			WHERE embedding IS NULL
+		)
+		 SELECT id, org_id, content
+		 FROM ranked
+		 ORDER BY org_rank ASC, org_id ASC, id ASC
 		 LIMIT $1`,
 		limit,
 	)
