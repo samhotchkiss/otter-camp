@@ -159,6 +159,100 @@ func TestGitToolsReadAreWorkspaceScoped(t *testing.T) {
 	require.Equal(t, -32602, resp.Error.Code)
 }
 
+func TestGitToolsWrite(t *testing.T) {
+	repoPath, _ := setupGitRepoFixture(t)
+	projectStore := gitFixtureProjectStore(repoPath)
+
+	s := NewServer(WithProjectStore(projectStore))
+	require.NoError(t, RegisterProjectTools(s))
+	require.NoError(t, RegisterGitTools(s))
+
+	resp := s.Handle(context.Background(), Identity{OrgID: "org-1", UserID: "user-1"}, rpcRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`7`),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"file_write","arguments":{"project":"otter-camp","path":"notes/new.txt","content":"new content","message":"add note"}}`),
+	})
+	require.Nil(t, resp.Error)
+	require.Contains(t, string(runGitFixture(t, repoPath, "show", "HEAD:notes/new.txt")), "new content")
+}
+
+func TestGitToolsDelete(t *testing.T) {
+	repoPath, _ := setupGitRepoFixture(t)
+	projectStore := gitFixtureProjectStore(repoPath)
+
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "deleteme.txt"), []byte("bye\n"), 0o644))
+	runGitFixture(t, repoPath, "add", "--", "deleteme.txt")
+	runGitFixture(t, repoPath, "commit", "-m", "add delete target")
+
+	s := NewServer(WithProjectStore(projectStore))
+	require.NoError(t, RegisterProjectTools(s))
+	require.NoError(t, RegisterGitTools(s))
+
+	resp := s.Handle(context.Background(), Identity{OrgID: "org-1", UserID: "user-1"}, rpcRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`8`),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"file_delete","arguments":{"project":"otter-camp","path":"deleteme.txt","message":"remove file"}}`),
+	})
+	require.Nil(t, resp.Error)
+
+	diff := string(runGitFixture(t, repoPath, "diff", "--name-status", "HEAD~1..HEAD"))
+	require.Contains(t, diff, "D\tdeleteme.txt")
+}
+
+func TestGitToolsBranchCreate(t *testing.T) {
+	repoPath, commits := setupGitRepoFixture(t)
+	projectStore := gitFixtureProjectStore(repoPath)
+
+	s := NewServer(WithProjectStore(projectStore))
+	require.NoError(t, RegisterProjectTools(s))
+	require.NoError(t, RegisterGitTools(s))
+
+	resp := s.Handle(context.Background(), Identity{OrgID: "org-1", UserID: "user-1"}, rpcRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`9`),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"branch_create","arguments":{"project":"otter-camp","name":"mcp-test-branch","from":"` + commits["base"] + `"}}`),
+	})
+	require.Nil(t, resp.Error)
+	branches := string(runGitFixture(t, repoPath, "branch", "--format=%(refname:short)"))
+	require.Contains(t, branches, "mcp-test-branch")
+}
+
+func TestGitWriteToolsCreateCommits(t *testing.T) {
+	repoPath, _ := setupGitRepoFixture(t)
+	projectStore := gitFixtureProjectStore(repoPath)
+
+	s := NewServer(WithProjectStore(projectStore))
+	require.NoError(t, RegisterProjectTools(s))
+	require.NoError(t, RegisterGitTools(s))
+
+	before := strings.TrimSpace(string(runGitFixture(t, repoPath, "rev-parse", "HEAD")))
+
+	writeResp := s.Handle(context.Background(), Identity{OrgID: "org-1", UserID: "user-1"}, rpcRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`10`),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"file_write","arguments":{"project":"otter-camp","path":"notes/commit-check.txt","content":"commit one","message":"write commit check"}}`),
+	})
+	require.Nil(t, writeResp.Error)
+
+	afterWrite := strings.TrimSpace(string(runGitFixture(t, repoPath, "rev-parse", "HEAD")))
+	require.NotEqual(t, before, afterWrite)
+
+	deleteResp := s.Handle(context.Background(), Identity{OrgID: "org-1", UserID: "user-1"}, rpcRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`11`),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"file_delete","arguments":{"project":"otter-camp","path":"notes/commit-check.txt","message":"delete commit check"}}`),
+	})
+	require.Nil(t, deleteResp.Error)
+
+	afterDelete := strings.TrimSpace(string(runGitFixture(t, repoPath, "rev-parse", "HEAD")))
+	require.NotEqual(t, afterWrite, afterDelete)
+}
+
 func setupGitRepoFixture(t *testing.T) (string, map[string]string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {

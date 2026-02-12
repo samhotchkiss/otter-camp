@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,7 +104,7 @@ func RegisterGitTools(s *Server) error {
 		return registerErr
 	}
 
-	return s.RegisterTool(Tool{
+	registerErr = s.RegisterTool(Tool{
 		Name:        "branch_list",
 		Description: "List branches in the project repository",
 		InputSchema: map[string]any{
@@ -116,6 +117,75 @@ func RegisterGitTools(s *Server) error {
 			},
 		},
 		Handler: s.handleBranchListTool,
+	})
+	if registerErr != nil {
+		return registerErr
+	}
+
+	registerErr = s.RegisterTool(Tool{
+		Name:        "file_write",
+		Description: "Write a file and create a commit",
+		InputSchema: map[string]any{
+			"type": "object",
+			"required": []string{
+				"project",
+				"path",
+				"content",
+				"message",
+			},
+			"properties": map[string]any{
+				"project": map[string]any{"type": "string"},
+				"path":    map[string]any{"type": "string"},
+				"content": map[string]any{"type": "string"},
+				"message": map[string]any{"type": "string"},
+				"ref":     map[string]any{"type": "string"},
+			},
+		},
+		Handler: s.handleFileWriteTool,
+	})
+	if registerErr != nil {
+		return registerErr
+	}
+
+	registerErr = s.RegisterTool(Tool{
+		Name:        "file_delete",
+		Description: "Delete a file and create a commit",
+		InputSchema: map[string]any{
+			"type": "object",
+			"required": []string{
+				"project",
+				"path",
+				"message",
+			},
+			"properties": map[string]any{
+				"project": map[string]any{"type": "string"},
+				"path":    map[string]any{"type": "string"},
+				"message": map[string]any{"type": "string"},
+				"ref":     map[string]any{"type": "string"},
+			},
+		},
+		Handler: s.handleFileDeleteTool,
+	})
+	if registerErr != nil {
+		return registerErr
+	}
+
+	return s.RegisterTool(Tool{
+		Name:        "branch_create",
+		Description: "Create a branch from a base ref",
+		InputSchema: map[string]any{
+			"type": "object",
+			"required": []string{
+				"project",
+				"name",
+			},
+			"properties": map[string]any{
+				"project": map[string]any{"type": "string"},
+				"name":    map[string]any{"type": "string"},
+				"from":    map[string]any{"type": "string"},
+			},
+		},
+		Handler: s.handleBranchCreateTool,
 	})
 }
 
@@ -366,6 +436,146 @@ func (s *Server) handleBranchListTool(ctx context.Context, identity Identity, ar
 	}, nil
 }
 
+func (s *Server) handleFileWriteTool(ctx context.Context, identity Identity, args map[string]any) (ToolCallResult, error) {
+	repoPath, err := s.resolveGitRepo(ctx, identity, args)
+	if err != nil {
+		return ToolCallResult{}, err
+	}
+	if err := ensureWorktreeRepo(repoPath); err != nil {
+		return ToolCallResult{}, err
+	}
+	filePath, err := readRequiredPathArg(args, "path")
+	if err != nil {
+		return ToolCallResult{}, err
+	}
+	rawContent, ok := args["content"]
+	if !ok {
+		return ToolCallResult{}, fmt.Errorf("%w: content is required", ErrInvalidToolCall)
+	}
+	content, ok := rawContent.(string)
+	if !ok {
+		return ToolCallResult{}, fmt.Errorf("%w: content must be a string", ErrInvalidToolCall)
+	}
+	message := readOptionalStringArg(args, "message", "")
+	if message == "" {
+		return ToolCallResult{}, fmt.Errorf("%w: message is required", ErrInvalidToolCall)
+	}
+	ref := readOptionalStringArg(args, "ref", "")
+	if ref != "" {
+		if _, err := runGitWorktree(ctx, repoPath, "checkout", ref); err != nil {
+			return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
+		}
+	}
+
+	absolutePath := filepath.Join(repoPath, filepath.FromSlash(filePath))
+	if err := os.MkdirAll(filepath.Dir(absolutePath), 0o755); err != nil {
+		return ToolCallResult{}, fmt.Errorf("%w: failed to prepare file path", ErrInvalidToolCall)
+	}
+	if err := os.WriteFile(absolutePath, []byte(content), 0o644); err != nil {
+		return ToolCallResult{}, fmt.Errorf("%w: failed to write file", ErrInvalidToolCall)
+	}
+	if _, err := runGitWorktree(ctx, repoPath, "add", "--", filePath); err != nil {
+		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
+	}
+	if _, err := runGitWorktree(ctx, repoPath, "commit", "-m", message, "--", filePath); err != nil {
+		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
+	}
+	shaBytes, err := runGitWorktree(ctx, repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
+	}
+
+	return ToolCallResult{
+		Content: []ToolContent{
+			{
+				Type: "json",
+				Data: map[string]any{
+					"path": "/" + filePath,
+					"sha":  strings.TrimSpace(string(shaBytes)),
+				},
+			},
+		},
+	}, nil
+}
+
+func (s *Server) handleFileDeleteTool(ctx context.Context, identity Identity, args map[string]any) (ToolCallResult, error) {
+	repoPath, err := s.resolveGitRepo(ctx, identity, args)
+	if err != nil {
+		return ToolCallResult{}, err
+	}
+	if err := ensureWorktreeRepo(repoPath); err != nil {
+		return ToolCallResult{}, err
+	}
+	filePath, err := readRequiredPathArg(args, "path")
+	if err != nil {
+		return ToolCallResult{}, err
+	}
+	message := readOptionalStringArg(args, "message", "")
+	if message == "" {
+		return ToolCallResult{}, fmt.Errorf("%w: message is required", ErrInvalidToolCall)
+	}
+	ref := readOptionalStringArg(args, "ref", "")
+	if ref != "" {
+		if _, err := runGitWorktree(ctx, repoPath, "checkout", ref); err != nil {
+			return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
+		}
+	}
+	if _, err := runGitWorktree(ctx, repoPath, "rm", "-f", "--", filePath); err != nil {
+		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
+	}
+	if _, err := runGitWorktree(ctx, repoPath, "commit", "-m", message, "--", filePath); err != nil {
+		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
+	}
+	shaBytes, err := runGitWorktree(ctx, repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
+	}
+
+	return ToolCallResult{
+		Content: []ToolContent{
+			{
+				Type: "json",
+				Data: map[string]any{
+					"path":    "/" + filePath,
+					"sha":     strings.TrimSpace(string(shaBytes)),
+					"deleted": true,
+				},
+			},
+		},
+	}, nil
+}
+
+func (s *Server) handleBranchCreateTool(ctx context.Context, identity Identity, args map[string]any) (ToolCallResult, error) {
+	repoPath, err := s.resolveGitRepo(ctx, identity, args)
+	if err != nil {
+		return ToolCallResult{}, err
+	}
+	if err := ensureWorktreeRepo(repoPath); err != nil {
+		return ToolCallResult{}, err
+	}
+	name := readOptionalStringArg(args, "name", "")
+	if name == "" {
+		return ToolCallResult{}, fmt.Errorf("%w: name is required", ErrInvalidToolCall)
+	}
+	from := readOptionalStringArg(args, "from", "HEAD")
+
+	if _, err := runGitWorktree(ctx, repoPath, "branch", name, from); err != nil {
+		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
+	}
+
+	return ToolCallResult{
+		Content: []ToolContent{
+			{
+				Type: "json",
+				Data: map[string]any{
+					"name": name,
+					"from": from,
+				},
+			},
+		},
+	}, nil
+}
+
 func (s *Server) resolveGitRepo(ctx context.Context, identity Identity, args map[string]any) (string, error) {
 	project, err := s.resolveProject(ctx, identity, args)
 	if err != nil {
@@ -457,4 +667,25 @@ func runGitRepo(ctx context.Context, repoPath string, gitArgs ...string) ([]byte
 		return nil, fmt.Errorf("%s", msg)
 	}
 	return output, nil
+}
+
+func runGitWorktree(ctx context.Context, repoPath string, gitArgs ...string) ([]byte, error) {
+	args := append([]string{"-C", repoPath}, gitArgs...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+	return output, nil
+}
+
+func ensureWorktreeRepo(repoPath string) error {
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+		return fmt.Errorf("%w: write operations require a non-bare repository", ErrInvalidToolCall)
+	}
+	return nil
 }
