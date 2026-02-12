@@ -1,0 +1,33 @@
+Create a square avatar of an anthropomorphic otter in classic woodcut style matching the approved aesthetic.
+
+STYLE:
+- Hand-inked woodcut / linocut look
+- Bold black linework
+- Visible crosshatching and carved-stroke texture
+- Natural warm fur tones (tan/brown/cream), never monochrome color wash
+- Full bleed, edge-to-edge composition
+
+COMPOSITION:
+- **CRITICAL: Square 1:1 image — width MUST equal height exactly**
+- Background base color: #8E44AD
+- Background may include subtle role-themed elements, patterns, or scene hints that enhance context
+- Base color must remain clearly dominant and visible
+- Background must be full bleed to all edges
+- No border, no frame, no inset rectangle, no matte, no vignette
+- Tight crop: head/shoulders should reach image edges
+
+CONTENT RULES:
+- Exactly one coherent otter face (no duplicate faces/features)
+- No text, labels, logos, symbols, badges, or watermarks
+- No extra panels or poster-like framing
+- Expression must be neutral or friendly
+- Must NOT look angry, scary, hostile, or mean
+- Avoid stereotyped, harmful, or caricatured features
+- Fur and clothing must be clearly distinguishable from background color
+
+CHARACTER:
+- Name: Lakshman Ozawa
+- Role: Restaurant/Experience Scout
+- Pronoun/gender cue handling: androgynous cues. Should be easily identified as the assigned gender.
+- Distinctive accessories/features: role-appropriate professional attire and accessories that reflect their specialty
+- Keep high silhouette contrast so avatar is recognizable at very small size

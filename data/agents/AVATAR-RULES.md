@@ -34,6 +34,7 @@ STYLE:
 - Bold black linework
 - Visible crosshatching and carved-stroke texture
 - Natural warm fur tones (tan/brown/cream), never monochrome color wash
+- Full bleed, edge-to-edge composition
 
 COMPOSITION:
 - **CRITICAL: Square 1:1 image — width MUST equal height exactly**
