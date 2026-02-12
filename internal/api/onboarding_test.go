@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,6 +67,133 @@ func TestOnboardingBootstrapCreatesLocalRecords(t *testing.T) {
 	require.Equal(t, "Welcome to Otter Camp", issueTitle)
 	require.Equal(t, "open", issueState)
 	require.Equal(t, "local", issueOrigin)
+}
+
+func TestOnboardingBootstrapSeedsStarterTrioAgents(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+	resetOnboardingAuthDB(t)
+
+	db := openFeedDatabase(t, connStr)
+
+	rec := postOnboardingBootstrap(t, `{"name":"Sam","email":"sam@example.com","organization_name":"My Team"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp OnboardingBootstrapResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Len(t, resp.Agents, 3)
+
+	expected := []OnboardingAgent{
+		{Slug: "frank", DisplayName: "Frank"},
+		{Slug: "lori", DisplayName: "Lori"},
+		{Slug: "ellie", DisplayName: "Ellie"},
+	}
+	for idx, want := range expected {
+		got := resp.Agents[idx]
+		require.NotEmpty(t, got.ID)
+		require.Equal(t, want.Slug, got.Slug)
+		require.Equal(t, want.DisplayName, got.DisplayName)
+	}
+
+	rows, err := db.Query(
+		`SELECT slug, display_name, status
+		 FROM agents
+		 WHERE org_id = $1
+		 ORDER BY CASE slug
+			WHEN 'frank' THEN 1
+			WHEN 'lori' THEN 2
+			WHEN 'ellie' THEN 3
+			ELSE 99
+		 END`,
+		resp.OrgID,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	type agentRecord struct {
+		Slug        string
+		DisplayName string
+		Status      string
+	}
+	var gotRows []agentRecord
+	for rows.Next() {
+		var row agentRecord
+		require.NoError(t, rows.Scan(&row.Slug, &row.DisplayName, &row.Status))
+		gotRows = append(gotRows, row)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, gotRows, 3)
+	for idx, want := range expected {
+		require.Equal(t, want.Slug, gotRows[idx].Slug)
+		require.Equal(t, want.DisplayName, gotRows[idx].DisplayName)
+		require.Equal(t, "active", gotRows[idx].Status)
+	}
+
+	handler := &AgentsHandler{
+		Store: store.NewAgentStore(db),
+		DB:    db,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, resp.OrgID))
+	recList := httptest.NewRecorder()
+	handler.List(recList, req)
+	require.Equal(t, http.StatusOK, recList.Code)
+
+	var payload struct {
+		Agents []AgentResponse `json:"agents"`
+		Total  int             `json:"total"`
+	}
+	require.NoError(t, json.NewDecoder(recList.Body).Decode(&payload))
+	require.GreaterOrEqual(t, payload.Total, 3)
+
+	agentNamesByRole := make(map[string]string, len(payload.Agents))
+	for _, agent := range payload.Agents {
+		agentNamesByRole[agent.Role] = agent.Name
+	}
+	require.Equal(t, "Frank", agentNamesByRole["frank"])
+	require.Equal(t, "Lori", agentNamesByRole["lori"])
+	require.Equal(t, "Ellie", agentNamesByRole["ellie"])
+}
+
+func TestBootstrapOnboardingIsIdempotentForStarterAgents(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	db := openFeedDatabase(t, connStr)
+
+	first, err := bootstrapOnboarding(context.Background(), db, "Sam", "sam@example.com", "My Team", "my-team")
+	require.NoError(t, err)
+	require.Len(t, first.Agents, 3)
+
+	second, err := bootstrapOnboarding(context.Background(), db, "Sam", "sam@example.com", "My Team", "my-team")
+	require.NoError(t, err)
+	require.Len(t, second.Agents, 3)
+	require.Equal(t, first.OrgID, second.OrgID)
+
+	var total int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM agents
+		 WHERE org_id = $1
+		   AND slug IN ('frank', 'lori', 'ellie')`,
+		first.OrgID,
+	).Scan(&total)
+	require.NoError(t, err)
+	require.Equal(t, 3, total)
+
+	for _, slug := range []string{"frank", "lori", "ellie"} {
+		var count int
+		err = db.QueryRow(
+			`SELECT COUNT(*)
+			 FROM agents
+			 WHERE org_id = $1
+			   AND slug = $2`,
+			first.OrgID,
+			slug,
+		).Scan(&count)
+		require.NoError(t, err)
+		require.Equalf(t, 1, count, "expected exactly one %s agent", slug)
+	}
 }
 
 func TestOnboardingBootstrapRejectsSecondSetup(t *testing.T) {
