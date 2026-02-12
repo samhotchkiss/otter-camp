@@ -277,9 +277,14 @@ func TestMainWorkersStopOnContextCancel(t *testing.T) {
 		"sync.WaitGroup",
 		"workerWG.Wait()",
 		"cancelWorkers()",
+		"startWorker(worker.Start)",
 	} {
 		if !strings.Contains(mainContent, snippet) {
 			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
 		}
+	}
+
+	if strings.Contains(mainContent, "go worker.Start(context.Background())") {
+		t.Fatalf("expected cmd/server/main.go to start workers through startWorker, found direct background startup")
 	}
 }

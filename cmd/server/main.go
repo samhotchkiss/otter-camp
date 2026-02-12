@@ -85,7 +85,7 @@ func main() {
 					MaxPerRoom: cfg.EllieIngestion.MaxPerRoom,
 				},
 			)
-			go worker.Start(context.Background())
+			startWorker(worker.Start)
 			log.Printf(
 				"✅ Ellie ingestion worker started (interval=%s batch=%d max_per_room=%d)",
 				cfg.EllieIngestion.Interval,
