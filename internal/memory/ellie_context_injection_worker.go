@@ -208,7 +208,7 @@ func (w *EllieContextInjectionWorker) RunOnce(ctx context.Context) (int, error) 
 				Importance:         candidate.Importance,
 				Confidence:         candidate.Confidence,
 				OccurredAt:         candidate.OccurredAt,
-				SupersedesMemoryID: nil,
+				SupersedesMemoryID: candidate.SupersededBy,
 			})
 		}
 
