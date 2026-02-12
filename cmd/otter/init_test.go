@@ -358,7 +358,7 @@ func TestInitAddsRequiredOpenClawAgentsToConfig(t *testing.T) {
 	}
 
 	output := out.String()
-	if !strings.Contains(output, "Added Elephant to OpenClaw config. Restart OpenClaw when ready to activate.") {
+	if !strings.Contains(output, "Added Ellie (Elephant) to OpenClaw config. Restart OpenClaw when ready to activate.") {
 		t.Fatalf("expected elephant added message, got %q", output)
 	}
 	if !strings.Contains(output, "Added Chameleon to OpenClaw config. Restart OpenClaw when ready to activate.") {
