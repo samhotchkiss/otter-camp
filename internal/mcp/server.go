@@ -32,6 +32,7 @@ type Server struct {
 	version  string
 	tools    *ToolRegistry
 	projects ProjectStore
+	issues   IssueStore
 }
 
 type ServerOption func(*Server)
@@ -53,6 +54,12 @@ func NewServer(opts ...ServerOption) *Server {
 func WithProjectStore(projects ProjectStore) ServerOption {
 	return func(s *Server) {
 		s.projects = projects
+	}
+}
+
+func WithIssueStore(issues IssueStore) ServerOption {
+	return func(s *Server) {
+		s.issues = issues
 	}
 }
 

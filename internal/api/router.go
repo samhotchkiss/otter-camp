@@ -180,9 +180,15 @@ func NewRouter() http.Handler {
 	projectChatHandler.ProjectStore = projectStore
 	websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{IssueStore: issuesHandler.IssueStore}
 
-	mcpServer := mcp.NewServer(mcp.WithProjectStore(projectStore))
+	mcpServer := mcp.NewServer(
+		mcp.WithProjectStore(projectStore),
+		mcp.WithIssueStore(issuesHandler.IssueStore),
+	)
 	if err := mcp.RegisterProjectTools(mcpServer); err != nil {
 		log.Printf("⚠️  MCP project tool registration failed: %v", err)
+	}
+	if err := mcp.RegisterIssueTools(mcpServer); err != nil {
+		log.Printf("⚠️  MCP issue tool registration failed: %v", err)
 	}
 	mcpHandler := mcp.NewHTTPHandler(mcpServer, mcp.NewDBAuthenticator(db))
 	r.Method(http.MethodGet, "/mcp", mcpHandler)
