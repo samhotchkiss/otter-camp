@@ -199,6 +199,9 @@ func (s *Server) handleFileReadTool(ctx context.Context, identity Identity, args
 		return ToolCallResult{}, err
 	}
 	ref := readOptionalStringArg(args, "ref", "HEAD")
+	if err := validateGitRef(ref); err != nil {
+		return ToolCallResult{}, err
+	}
 
 	output, err := runGitRepo(ctx, repoPath, "show", ref+":"+filePath)
 	if err != nil {
@@ -234,6 +237,9 @@ func (s *Server) handleTreeListTool(ctx context.Context, identity Identity, args
 		return ToolCallResult{}, err
 	}
 	ref := readOptionalStringArg(args, "ref", "HEAD")
+	if err := validateGitRef(ref); err != nil {
+		return ToolCallResult{}, err
+	}
 	treePath := readOptionalPathArg(args, "path")
 	recursive := false
 	if rawRecursive, ok := args["recursive"]; ok {
@@ -306,6 +312,9 @@ func (s *Server) handleCommitListTool(ctx context.Context, identity Identity, ar
 		return ToolCallResult{}, err
 	}
 	ref := readOptionalStringArg(args, "ref", "HEAD")
+	if err := validateGitRef(ref); err != nil {
+		return ToolCallResult{}, err
+	}
 	limit := 20
 	if rawLimit, ok := args["limit"]; ok {
 		value, ok := rawLimit.(float64)
@@ -367,6 +376,12 @@ func (s *Server) handleDiffTool(ctx context.Context, identity Identity, args map
 	head := readOptionalStringArg(args, "head", "")
 	if base == "" || head == "" {
 		return ToolCallResult{}, fmt.Errorf("%w: base and head are required", ErrInvalidToolCall)
+	}
+	if err := validateGitRef(base); err != nil {
+		return ToolCallResult{}, err
+	}
+	if err := validateGitRef(head); err != nil {
+		return ToolCallResult{}, err
 	}
 
 	output, err := runGitRepo(ctx, repoPath, "diff", "--name-status", base+".."+head)
@@ -462,6 +477,9 @@ func (s *Server) handleFileWriteTool(ctx context.Context, identity Identity, arg
 	}
 	ref := readOptionalStringArg(args, "ref", "")
 	if ref != "" {
+		if err := validateGitRef(ref); err != nil {
+			return ToolCallResult{}, err
+		}
 		if _, err := runGitWorktree(ctx, repoPath, "checkout", ref); err != nil {
 			return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
 		}
@@ -517,6 +535,9 @@ func (s *Server) handleFileDeleteTool(ctx context.Context, identity Identity, ar
 	}
 	ref := readOptionalStringArg(args, "ref", "")
 	if ref != "" {
+		if err := validateGitRef(ref); err != nil {
+			return ToolCallResult{}, err
+		}
 		if _, err := runGitWorktree(ctx, repoPath, "checkout", ref); err != nil {
 			return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
 		}
@@ -560,6 +581,9 @@ func (s *Server) handleBranchCreateTool(ctx context.Context, identity Identity, 
 		return ToolCallResult{}, fmt.Errorf("%w: name is required", ErrInvalidToolCall)
 	}
 	from := readOptionalStringArg(args, "from", "HEAD")
+	if err := validateGitRef(from); err != nil {
+		return ToolCallResult{}, err
+	}
 
 	if _, err := runGitWorktree(ctx, repoPath, "branch", name, from); err != nil {
 		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
@@ -636,6 +660,17 @@ func readOptionalStringArg(args map[string]any, key, fallback string) string {
 		return fallback
 	}
 	return trimmed
+}
+
+func validateGitRef(ref string) error {
+	trimmed := strings.TrimSpace(ref)
+	if trimmed == "" {
+		return fmt.Errorf("%w: ref must not be empty", ErrInvalidToolCall)
+	}
+	if strings.HasPrefix(trimmed, "-") {
+		return fmt.Errorf("%w: ref must not start with '-'", ErrInvalidToolCall)
+	}
+	return nil
 }
 
 func normalizeRepositoryPath(raw string) string {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -220,6 +221,129 @@ func TestGitToolsBranchCreate(t *testing.T) {
 	require.Contains(t, branches, "mcp-test-branch")
 }
 
+func TestValidateGitRef(t *testing.T) {
+	cases := []struct {
+		name    string
+		ref     string
+		wantErr bool
+	}{
+		{name: "rejects double-dash option", ref: "--upload-pack=x", wantErr: true},
+		{name: "rejects single dash", ref: "-", wantErr: true},
+		{name: "rejects exec option", ref: "--exec=x", wantErr: true},
+		{name: "accepts branch name", ref: "main"},
+		{name: "accepts relative head", ref: "HEAD~3"},
+		{name: "accepts tag", ref: "v1.0.0"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateGitRef(tc.ref)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestGitToolsRejectOptionLikeRefs(t *testing.T) {
+	repoPath, commits := setupGitRepoFixture(t)
+	projectStore := gitFixtureProjectStore(repoPath)
+
+	s := NewServer(WithProjectStore(projectStore))
+	require.NoError(t, RegisterProjectTools(s))
+	require.NoError(t, RegisterGitTools(s))
+
+	tests := []struct {
+		name   string
+		params string
+	}{
+		{
+			name:   "file_read rejects option-like ref",
+			params: `{"name":"file_read","arguments":{"project":"otter-camp","path":"README.md","ref":"--upload-pack=x"}}`,
+		},
+		{
+			name:   "commit_list rejects dash ref",
+			params: `{"name":"commit_list","arguments":{"project":"otter-camp","ref":"-"}}`,
+		},
+		{
+			name:   "diff rejects option-like base and head",
+			params: `{"name":"diff","arguments":{"project":"otter-camp","base":"--exec=x","head":"` + commits["head"] + `"}}`,
+		},
+		{
+			name:   "file_write rejects option-like ref",
+			params: `{"name":"file_write","arguments":{"project":"otter-camp","path":"notes/x.txt","content":"x","message":"x","ref":"--exec=x"}}`,
+		},
+		{
+			name:   "file_delete rejects option-like ref",
+			params: `{"name":"file_delete","arguments":{"project":"otter-camp","path":"README.md","message":"x","ref":"--exec=x"}}`,
+		},
+	}
+
+	for idx, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := s.Handle(context.Background(), Identity{OrgID: "org-1", UserID: "user-1"}, rpcRequest{
+				JSONRPC: "2.0",
+				ID:      json.RawMessage(strconv.Itoa(idx + 1)),
+				Method:  "tools/call",
+				Params:  json.RawMessage(tc.params),
+			})
+			require.NotNil(t, resp.Error)
+			require.Equal(t, -32602, resp.Error.Code)
+			require.Contains(t, strings.ToLower(resp.Error.Message), "ref")
+		})
+	}
+}
+
+func TestGitToolsAllowValidRefs(t *testing.T) {
+	repoPath, commits := setupGitRepoFixture(t)
+	projectStore := gitFixtureProjectStore(repoPath)
+
+	runGitFixture(t, repoPath, "tag", "-f", "v1.0.0", commits["head"])
+
+	readmePath := filepath.Join(repoPath, "HEAD3.txt")
+	require.NoError(t, os.WriteFile(readmePath, []byte("h1\n"), 0o644))
+	runGitFixture(t, repoPath, "add", "--", "HEAD3.txt")
+	runGitFixture(t, repoPath, "commit", "-m", "head3-1")
+	require.NoError(t, os.WriteFile(readmePath, []byte("h2\n"), 0o644))
+	runGitFixture(t, repoPath, "add", "--", "HEAD3.txt")
+	runGitFixture(t, repoPath, "commit", "-m", "head3-2")
+	require.NoError(t, os.WriteFile(readmePath, []byte("h3\n"), 0o644))
+	runGitFixture(t, repoPath, "add", "--", "HEAD3.txt")
+	runGitFixture(t, repoPath, "commit", "-m", "head3-3")
+
+	s := NewServer(WithProjectStore(projectStore))
+	require.NoError(t, RegisterProjectTools(s))
+	require.NoError(t, RegisterGitTools(s))
+
+	requests := []rpcRequest{
+		{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`100`),
+			Method:  "tools/call",
+			Params:  json.RawMessage(`{"name":"commit_list","arguments":{"project":"otter-camp","ref":"main","limit":1}}`),
+		},
+		{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`101`),
+			Method:  "tools/call",
+			Params:  json.RawMessage(`{"name":"file_read","arguments":{"project":"otter-camp","path":"README.md","ref":"v1.0.0"}}`),
+		},
+		{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`102`),
+			Method:  "tools/call",
+			Params:  json.RawMessage(`{"name":"commit_list","arguments":{"project":"otter-camp","ref":"HEAD~3","limit":1}}`),
+		},
+	}
+
+	for _, req := range requests {
+		resp := s.Handle(context.Background(), Identity{OrgID: "org-1", UserID: "user-1"}, req)
+		require.Nil(t, resp.Error)
+	}
+}
+
 func TestGitWriteToolsCreateCommits(t *testing.T) {
 	repoPath, _ := setupGitRepoFixture(t)
 	projectStore := gitFixtureProjectStore(repoPath)
@@ -260,7 +384,7 @@ func setupGitRepoFixture(t *testing.T) (string, map[string]string) {
 	}
 
 	repoPath := t.TempDir()
-	runGitFixture(t, repoPath, "init")
+	runGitFixture(t, repoPath, "init", "-b", "main")
 	runGitFixture(t, repoPath, "config", "user.name", "Otter MCP")
 	runGitFixture(t, repoPath, "config", "user.email", "otter-mcp@example.com")
 
