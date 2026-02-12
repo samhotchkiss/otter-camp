@@ -61,6 +61,8 @@ func (s *EllieRetrievalStore) SearchRoomContext(ctx context.Context, orgID, room
 	if limit <= 0 {
 		limit = 10
 	}
+	// Scaffold implementation: keyword-only matching while semantic/vector retrieval
+	// follow-up is tracked in #850.
 
 	rows, err := s.db.QueryContext(
 		ctx,
@@ -158,6 +160,8 @@ func (s *EllieRetrievalStore) queryMemories(
 	args = append(args, extraArgs...)
 	args = append(args, limit)
 	limitArg := fmt.Sprintf("$%d", len(args))
+	// Scaffold implementation: keyword-only matching while semantic/vector retrieval
+	// follow-up is tracked in #850.
 
 	querySQL := `SELECT id, kind, title, content, source_conversation_id::text, source_project_id::text, occurred_at
 	 FROM memories
@@ -219,6 +223,8 @@ func (s *EllieRetrievalStore) SearchChatHistory(ctx context.Context, orgID, quer
 	if limit <= 0 {
 		limit = 10
 	}
+	// Scaffold implementation: keyword-only matching while semantic/vector retrieval
+	// follow-up is tracked in #850.
 
 	rows, err := s.db.QueryContext(
 		ctx,
