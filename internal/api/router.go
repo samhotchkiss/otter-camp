@@ -147,6 +147,7 @@ func NewRouter() http.Handler {
 		issuesHandler.ProjectStore = projectStore
 		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
 		issuesHandler.ProjectRepos = projectRepoStore
+		issuesHandler.EllieIngestionStore = store.NewEllieIngestionStore(db)
 		issuesHandler.DB = db
 		issuesHandler.ComplianceReviewer = newDefaultIssueComplianceReviewer(
 			store.NewComplianceRuleStore(db),

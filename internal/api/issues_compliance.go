@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -146,6 +147,7 @@ func (h *IssuesHandler) runIssueCloseComplianceReviewBestEffort(
 	}
 
 	h.attachComplianceReportCommentBestEffort(ctx, issue.ID, report)
+	h.ingestComplianceReviewMemoriesBestEffort(ctx, *issue, report)
 	if !report.Blocking {
 		return issue
 	}
@@ -161,6 +163,36 @@ func (h *IssuesHandler) runIssueCloseComplianceReviewBestEffort(
 	}
 
 	return reopened
+}
+
+func (h *IssuesHandler) ingestComplianceReviewMemoriesBestEffort(
+	ctx context.Context,
+	issue store.ProjectIssue,
+	report memory.ComplianceReport,
+) {
+	if h == nil || h.EllieIngestionStore == nil {
+		return
+	}
+
+	candidates := memory.BuildComplianceMemoryCandidates(memory.ComplianceMemoryExtractionInput{
+		Issue:      issue,
+		Report:     report,
+		OccurredAt: time.Now().UTC(),
+	})
+	for _, candidate := range candidates {
+		exists, err := h.EllieIngestionStore.HasComplianceFingerprint(ctx, issue.OrgID, candidate.Fingerprint)
+		if err != nil {
+			log.Printf("issues: compliance memory dedupe check failed for issue %s: %v", issue.ID, err)
+			continue
+		}
+		if exists {
+			continue
+		}
+
+		if _, err := h.EllieIngestionStore.CreateEllieExtractedMemory(ctx, candidate.Memory); err != nil {
+			log.Printf("issues: compliance memory ingestion failed for issue %s: %v", issue.ID, err)
+		}
+	}
 }
 
 func (h *IssuesHandler) attachComplianceReportCommentBestEffort(

@@ -23,17 +23,18 @@ import (
 )
 
 type IssuesHandler struct {
-	IssueStore         *store.ProjectIssueStore
-	AgentStore         *store.AgentStore
-	ChatThreadStore    *store.ChatThreadStore
-	QuestionnaireStore *store.QuestionnaireStore
-	ProjectStore       *store.ProjectStore
-	CommitStore        *store.ProjectCommitStore
-	ProjectRepos       *store.ProjectRepoStore
-	ComplianceReviewer issueComplianceReviewer
-	DB                 *sql.DB
-	Hub                *ws.Hub
-	OpenClawDispatcher openClawMessageDispatcher
+	IssueStore          *store.ProjectIssueStore
+	AgentStore          *store.AgentStore
+	ChatThreadStore     *store.ChatThreadStore
+	QuestionnaireStore  *store.QuestionnaireStore
+	ProjectStore        *store.ProjectStore
+	CommitStore         *store.ProjectCommitStore
+	ProjectRepos        *store.ProjectRepoStore
+	ComplianceReviewer  issueComplianceReviewer
+	EllieIngestionStore *store.EllieIngestionStore
+	DB                  *sql.DB
+	Hub                 *ws.Hub
+	OpenClawDispatcher  openClawMessageDispatcher
 }
 
 var errIssueHandlerDatabaseUnavailable = errors.New("database not available")
