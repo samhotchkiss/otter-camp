@@ -209,3 +209,56 @@ func TestEllieContextInjectionWorkerHandlesMultipleOrgs(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, orgBInjections)
 }
+
+func TestEllieContextInjectionIncludesSupersessionNote(t *testing.T) {
+	db := setupEmbeddingWorkerTestDatabase(t)
+
+	orgID, _, roomID, agentID, oldMemoryID := seedEllieContextInjectionFixture(t, db, "supersession")
+
+	var replacementMemoryID string
+	err := db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status, importance, confidence)
+		 VALUES ($1, 'technical_decision', 'Database policy updated', 'Use MySQL with explicit migrations', 'active', 5, 0.9)
+		 RETURNING id`,
+		orgID,
+	).Scan(&replacementMemoryID)
+	require.NoError(t, err)
+
+	embeddingStore := store.NewConversationEmbeddingStore(db)
+	err = embeddingStore.UpdateMemoryEmbedding(context.Background(), replacementMemoryID, testEllieContextEmbeddingVector(0.01))
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`UPDATE memories
+		 SET status = 'deprecated',
+		     superseded_by = $2
+		 WHERE id = $1`,
+		oldMemoryID,
+		replacementMemoryID,
+	)
+	require.NoError(t, err)
+
+	worker := newEllieContextInjectionWorkerForIntegration(db, 1)
+
+	base := time.Date(2026, 2, 12, 16, 10, 0, 0, time.UTC)
+	insertContextInjectionUserMessage(t, db, orgID, roomID, agentID, "What is our current database policy?", base)
+
+	processed, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+
+	var injectedBody string
+	err = db.QueryRow(
+		`SELECT body FROM chat_messages
+		 WHERE org_id = $1
+		   AND room_id = $2
+		   AND type = 'context_injection'
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`,
+		orgID,
+		roomID,
+	).Scan(&injectedBody)
+	require.NoError(t, err)
+	require.Contains(t, injectedBody, "Updated context: previous decision")
+	require.Contains(t, injectedBody, oldMemoryID)
+}
