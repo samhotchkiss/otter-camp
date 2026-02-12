@@ -48,6 +48,7 @@ func TestAgentStore_Create_WithAllFields(t *testing.T) {
 	avatarURL := "https://example.com/avatar.png"
 	webhookURL := "https://example.com/webhook"
 	sessionPattern := "agent:main:%"
+	projectID := createTestProject(t, db, orgID, "Agent Lifecycle Project")
 
 	input := CreateAgentInput{
 		Slug:           "full-agent",
@@ -56,6 +57,8 @@ func TestAgentStore_Create_WithAllFields(t *testing.T) {
 		WebhookURL:     &webhookURL,
 		Status:         "busy",
 		SessionPattern: &sessionPattern,
+		IsEphemeral:    true,
+		ProjectID:      &projectID,
 	}
 
 	agent, err := store.Create(ctx, input)
@@ -68,6 +71,28 @@ func TestAgentStore_Create_WithAllFields(t *testing.T) {
 	assert.Equal(t, webhookURL, *agent.WebhookURL)
 	assert.Equal(t, "busy", agent.Status)
 	assert.Equal(t, sessionPattern, *agent.SessionPattern)
+	assert.True(t, agent.IsEphemeral)
+	require.NotNil(t, agent.ProjectID)
+	assert.Equal(t, projectID, *agent.ProjectID)
+}
+
+func TestAgentStore_Create_DefaultLifecycleMetadata(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "agent-test-default-lifecycle")
+	ctx := ctxWithWorkspace(orgID)
+	store := NewAgentStore(db)
+
+	agent, err := store.Create(ctx, CreateAgentInput{
+		Slug:        "default-lifecycle-agent",
+		DisplayName: "Default Lifecycle Agent",
+		Status:      "active",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, agent)
+	assert.False(t, agent.IsEphemeral)
+	assert.Nil(t, agent.ProjectID)
 }
 
 func TestAgentStore_Create_NoWorkspace(t *testing.T) {
