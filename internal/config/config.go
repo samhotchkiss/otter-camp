@@ -63,6 +63,11 @@ const (
 	defaultConversationSegmentationPollInterval = 5 * time.Second
 	defaultConversationSegmentationBatchSize    = 200
 	defaultConversationSegmentationGapThreshold = 30 * time.Minute
+
+	defaultEllieIngestionEnabled    = true
+	defaultEllieIngestionInterval   = 5 * time.Minute
+	defaultEllieIngestionBatchSize  = 100
+	defaultEllieIngestionMaxPerRoom = 200
 )
 
 type GitHubConfig struct {
@@ -83,6 +88,7 @@ type Config struct {
 	GitHub                   GitHubConfig
 	ConversationEmbedding    ConversationEmbeddingConfig
 	ConversationSegmentation ConversationSegmentationConfig
+	EllieIngestion           EllieIngestionConfig
 }
 
 type ConversationEmbeddingConfig struct {
@@ -102,6 +108,13 @@ type ConversationSegmentationConfig struct {
 	PollInterval time.Duration
 	BatchSize    int
 	GapThreshold time.Duration
+}
+
+type EllieIngestionConfig struct {
+	Enabled    bool
+	Interval   time.Duration
+	BatchSize  int
+	MaxPerRoom int
 }
 
 func Load() (Config, error) {
@@ -143,6 +156,7 @@ func Load() (Config, error) {
 			OpenAIAPIKey: strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY")),
 		},
 		ConversationSegmentation: ConversationSegmentationConfig{},
+		EllieIngestion:           EllieIngestionConfig{},
 	}
 
 	githubEnabled, err := parseBool("GITHUB_INTEGRATION_ENABLED", false)
@@ -205,6 +219,30 @@ func Load() (Config, error) {
 	}
 	cfg.ConversationSegmentation.GapThreshold = conversationSegmentationGapThreshold
 
+	ellieIngestionEnabled, err := parseBool("ELLIE_INGESTION_WORKER_ENABLED", defaultEllieIngestionEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.Enabled = ellieIngestionEnabled
+
+	ellieIngestionInterval, err := parseDuration("ELLIE_INGESTION_INTERVAL", defaultEllieIngestionInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.Interval = ellieIngestionInterval
+
+	ellieIngestionBatchSize, err := parseInt("ELLIE_INGESTION_BATCH_SIZE", defaultEllieIngestionBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.BatchSize = ellieIngestionBatchSize
+
+	ellieIngestionMaxPerRoom, err := parseInt("ELLIE_INGESTION_MAX_PER_ROOM", defaultEllieIngestionMaxPerRoom)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.MaxPerRoom = ellieIngestionMaxPerRoom
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -240,6 +278,18 @@ func (c Config) Validate() error {
 		}
 		if c.ConversationSegmentation.GapThreshold <= 0 {
 			return fmt.Errorf("CONVERSATION_SEGMENTATION_GAP_THRESHOLD must be greater than zero")
+		}
+	}
+
+	if c.EllieIngestion.Enabled {
+		if c.EllieIngestion.Interval <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_INTERVAL must be greater than zero")
+		}
+		if c.EllieIngestion.BatchSize <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_BATCH_SIZE must be greater than zero")
+		}
+		if c.EllieIngestion.MaxPerRoom <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_MAX_PER_ROOM must be greater than zero")
 		}
 	}
 

@@ -34,6 +34,10 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("CONVERSATION_SEGMENTATION_POLL_INTERVAL", "")
 	t.Setenv("CONVERSATION_SEGMENTATION_BATCH_SIZE", "")
 	t.Setenv("CONVERSATION_SEGMENTATION_GAP_THRESHOLD", "")
+	t.Setenv("ELLIE_INGESTION_WORKER_ENABLED", "")
+	t.Setenv("ELLIE_INGESTION_INTERVAL", "")
+	t.Setenv("ELLIE_INGESTION_BATCH_SIZE", "")
+	t.Setenv("ELLIE_INGESTION_MAX_PER_ROOM", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -97,6 +101,19 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ConversationSegmentation.GapThreshold != defaultConversationSegmentationGapThreshold {
 		t.Fatalf("expected default conversation segmentation gap threshold %v, got %v", defaultConversationSegmentationGapThreshold, cfg.ConversationSegmentation.GapThreshold)
+	}
+
+	if !cfg.EllieIngestion.Enabled {
+		t.Fatalf("expected ellie ingestion worker enabled by default")
+	}
+	if cfg.EllieIngestion.Interval != defaultEllieIngestionInterval {
+		t.Fatalf("expected default ellie ingestion interval %v, got %v", defaultEllieIngestionInterval, cfg.EllieIngestion.Interval)
+	}
+	if cfg.EllieIngestion.BatchSize != defaultEllieIngestionBatchSize {
+		t.Fatalf("expected default ellie ingestion batch size %d, got %d", defaultEllieIngestionBatchSize, cfg.EllieIngestion.BatchSize)
+	}
+	if cfg.EllieIngestion.MaxPerRoom != defaultEllieIngestionMaxPerRoom {
+		t.Fatalf("expected default ellie ingestion max_per_room %d, got %d", defaultEllieIngestionMaxPerRoom, cfg.EllieIngestion.MaxPerRoom)
 	}
 }
 
@@ -286,5 +303,43 @@ func TestLoadRejectsInvalidConversationSegmentationBatchSize(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "CONVERSATION_SEGMENTATION_BATCH_SIZE") {
 		t.Fatalf("expected error to mention CONVERSATION_SEGMENTATION_BATCH_SIZE, got %v", err)
+	}
+}
+
+func TestLoadParsesEllieIngestionSettings(t *testing.T) {
+	t.Setenv("ELLIE_INGESTION_WORKER_ENABLED", "true")
+	t.Setenv("ELLIE_INGESTION_INTERVAL", "2m")
+	t.Setenv("ELLIE_INGESTION_BATCH_SIZE", "80")
+	t.Setenv("ELLIE_INGESTION_MAX_PER_ROOM", "120")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if !cfg.EllieIngestion.Enabled {
+		t.Fatalf("expected ellie ingestion worker enabled")
+	}
+	if cfg.EllieIngestion.Interval != 2*time.Minute {
+		t.Fatalf("expected ellie ingestion interval 2m, got %v", cfg.EllieIngestion.Interval)
+	}
+	if cfg.EllieIngestion.BatchSize != 80 {
+		t.Fatalf("expected ellie ingestion batch size 80, got %d", cfg.EllieIngestion.BatchSize)
+	}
+	if cfg.EllieIngestion.MaxPerRoom != 120 {
+		t.Fatalf("expected ellie ingestion max per room 120, got %d", cfg.EllieIngestion.MaxPerRoom)
+	}
+}
+
+func TestLoadRejectsInvalidEllieIngestionBatchSize(t *testing.T) {
+	t.Setenv("ELLIE_INGESTION_BATCH_SIZE", "bad")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected error for invalid ELLIE_INGESTION_BATCH_SIZE")
+	}
+
+	if !strings.Contains(err.Error(), "ELLIE_INGESTION_BATCH_SIZE") {
+		t.Fatalf("expected error to mention ELLIE_INGESTION_BATCH_SIZE, got %v", err)
 	}
 }

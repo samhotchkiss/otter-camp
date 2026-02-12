@@ -53,6 +53,29 @@ func main() {
 		}
 	}
 
+	if cfg.EllieIngestion.Enabled {
+		db, err := store.DB()
+		if err != nil {
+			log.Printf("⚠️  Ellie ingestion worker disabled; database unavailable: %v", err)
+		} else {
+			worker := memory.NewEllieIngestionWorker(
+				store.NewEllieIngestionStore(db),
+				memory.EllieIngestionWorkerConfig{
+					Interval:   cfg.EllieIngestion.Interval,
+					BatchSize:  cfg.EllieIngestion.BatchSize,
+					MaxPerRoom: cfg.EllieIngestion.MaxPerRoom,
+				},
+			)
+			go worker.Start(context.Background())
+			log.Printf(
+				"✅ Ellie ingestion worker started (interval=%s batch=%d max_per_room=%d)",
+				cfg.EllieIngestion.Interval,
+				cfg.EllieIngestion.BatchSize,
+				cfg.EllieIngestion.MaxPerRoom,
+			)
+		}
+	}
+
 	if cfg.ConversationEmbedding.Enabled {
 		db, err := store.DB()
 		if err != nil {
