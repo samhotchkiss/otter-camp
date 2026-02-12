@@ -1,0 +1,3 @@
+DROP TRIGGER IF EXISTS ellie_retrieval_strategies_updated_at_trg ON ellie_retrieval_strategies;
+DROP INDEX IF EXISTS ellie_retrieval_strategies_org_active_idx;
+DROP TABLE IF EXISTS ellie_retrieval_strategies;
