@@ -140,69 +140,74 @@ test.describe("Agents Page", () => {
     await expect(page.getByText("No agents found")).toBeVisible();
   });
 
-  test("opens DM modal when clicking agent card", async ({ page }) => {
-    // Mock the messages API for DM
-    await page.route("**/api/dm/**", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          messages: [],
-          pagination: { hasMore: false },
-        }),
-      });
+  test("opens global chat when clicking an agent card", async ({ page }) => {
+    await page.route("**/api/messages*", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            messages: [],
+          }),
+        });
+        return;
+      }
+
+      await route.continue();
     });
 
-    // Click on Frank's card
-    await page.getByText("Frank").click();
+    await page.getByRole("button", { name: /Frank/i }).first().click();
 
-    // DM modal should appear
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByText("Frank", { exact: false })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
+    await expect(page.getByPlaceholder(/Message Frank/i)).toBeVisible();
   });
 
-  test("closes DM modal with close button", async ({ page }) => {
-    await page.route("**/api/dm/**", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          messages: [],
-          pagination: { hasMore: false },
-        }),
-      });
+  test("closes global chat with close button", async ({ page }) => {
+    await page.route("**/api/messages*", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ messages: [] }),
+        });
+        return;
+      }
+
+      await route.continue();
     });
 
-    await page.getByText("Frank").click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByRole("button", { name: /Frank/i }).first().click();
+    await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
 
-    await page.getByRole("button", { name: /close/i }).click();
-    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await page.getByRole("button", { name: "Collapse global chat" }).click();
+    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
   });
 
-  test("closes DM modal with escape key", async ({ page }) => {
-    await page.route("**/api/dm/**", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          messages: [],
-          pagination: { hasMore: false },
-        }),
-      });
+  test("closes global chat with escape key", async ({ page }) => {
+    await page.route("**/api/messages*", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ messages: [] }),
+        });
+        return;
+      }
+
+      await route.continue();
     });
 
-    await page.getByText("Frank").click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByRole("button", { name: /Frank/i }).first().click();
+    await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
 
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
   });
 
   test("can send message in DM", async ({ page }) => {
     let messageSent = false;
     
-    await page.route("**/api/dm/**", async (route) => {
+    await page.route("**/api/messages*", async (route) => {
       if (route.request().method() === "POST") {
         messageSent = true;
         await route.fulfill({
@@ -218,6 +223,9 @@ test.describe("Agents Page", () => {
               content: "Hello Frank!",
               createdAt: new Date().toISOString(),
             },
+            delivery: {
+              delivered: true,
+            },
           }),
         });
       } else {
@@ -226,23 +234,23 @@ test.describe("Agents Page", () => {
           contentType: "application/json",
           body: JSON.stringify({
             messages: [],
-            pagination: { hasMore: false },
           }),
         });
       }
     });
 
-    await page.getByText("Frank").click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByRole("button", { name: /Frank/i }).first().click();
+    await expect(page.getByPlaceholder(/Message Frank/i)).toBeVisible();
 
     // Type a message
-    const messageInput = page.getByPlaceholder(/message/i);
+    const messageInput = page.getByPlaceholder(/Message Frank/i);
     await messageInput.fill("Hello Frank!");
 
     // Send the message
-    await page.getByRole("button", { name: /send/i }).click();
+    await page.getByRole("button", { name: "Send message" }).click();
 
-    expect(messageSent).toBe(true);
+    await expect.poll(() => messageSent).toBe(true);
+    await expect(page.getByText("Hello Frank!")).toBeVisible();
   });
 
   test("shows connection status indicator", async ({ page }) => {
@@ -279,7 +287,7 @@ test.describe("Agents Page", () => {
     });
 
     await page.goto("/agents");
-    await expect(page.getByText(/Failed to.*agents/i)).toBeVisible();
+    await expect(page.getByText(/Server error|Failed to.*agents/i)).toBeVisible();
     await expect(page.getByRole("button", { name: /Try Again/i })).toBeVisible();
   });
 
