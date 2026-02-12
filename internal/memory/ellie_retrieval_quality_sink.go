@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -22,7 +23,7 @@ func NewEllieRetrievalQualityStoreSink(store EllieRetrievalQualityEventRecorder)
 
 func (s *EllieRetrievalQualityStoreSink) Record(ctx context.Context, signal EllieRetrievalQualitySignal) error {
 	if s == nil || s.Store == nil {
-		return nil
+		return fmt.Errorf("ellie retrieval quality store is not configured")
 	}
 	projectID := optionalUUIDPtr(signal.ProjectID)
 	roomID := optionalUUIDPtr(signal.RoomID)
