@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { bootstrapAuthenticatedSession } from "./helpers/auth";
 
 test.describe("Notifications", () => {
   const mockNotifications = [
@@ -65,6 +66,8 @@ test.describe("Notifications", () => {
   ];
 
   test.beforeEach(async ({ page }) => {
+    await bootstrapAuthenticatedSession(page);
+
     // Inject notification context data
     await page.addInitScript((notifications) => {
       // Store notifications in window for the context to pick up
