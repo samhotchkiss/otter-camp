@@ -55,8 +55,15 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp := h.server.Handle(r.Context(), identity, req)
 	status := http.StatusOK
-	if resp.Error != nil && resp.Error.Code == -32601 {
-		status = http.StatusNotImplemented
+	if resp.Error != nil {
+		switch resp.Error.Code {
+		case -32601:
+			status = http.StatusNotImplemented
+		case -32600, -32602:
+			status = http.StatusBadRequest
+		default:
+			status = http.StatusInternalServerError
+		}
 	}
 	writeJSON(w, status, resp)
 }

@@ -116,3 +116,40 @@ func TestHandlerAuthErrorMapsToUnauthorized(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
+
+func TestHandlerToolsMethods(t *testing.T) {
+	s := NewServer()
+	err := s.RegisterTool(Tool{
+		Name:        "echo",
+		Description: "Echo text",
+		InputSchema: map[string]any{"type": "object"},
+		Handler: func(_ context.Context, _ Identity, args map[string]any) (ToolCallResult, error) {
+			value, _ := args["value"].(string)
+			return ToolCallResult{
+				Content: []ToolContent{{Type: "text", Text: value}},
+			}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	h := NewHTTPHandler(s, fakeAuth{identity: Identity{OrgID: "org-1", UserID: "user-1"}})
+
+	listReq := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)))
+	listReq.Header.Set("Authorization", "Bearer oc_sess_test")
+	listRec := httptest.NewRecorder()
+	h.ServeHTTP(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code)
+
+	callReq := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"value":"hello"}}}`)))
+	callReq.Header.Set("Authorization", "Bearer oc_sess_test")
+	callRec := httptest.NewRecorder()
+	h.ServeHTTP(callRec, callReq)
+	require.Equal(t, http.StatusOK, callRec.Code)
+
+	var resp struct {
+		Result ToolCallResult `json:"result"`
+	}
+	require.NoError(t, json.NewDecoder(callRec.Body).Decode(&resp))
+	require.Len(t, resp.Result.Content, 1)
+	require.Equal(t, "hello", resp.Result.Content[0].Text)
+}
