@@ -254,11 +254,11 @@ func TestEllieContextInjectionStoreCreateInjectionMessage(t *testing.T) {
 	store := NewEllieContextInjectionStore(db)
 	createdAt := time.Date(2026, 2, 12, 15, 5, 0, 0, time.UTC)
 	messageID, err := store.CreateInjectionMessage(context.Background(), CreateEllieContextInjectionMessageInput{
-		OrgID:      orgID,
-		RoomID:     roomID,
-		SenderID:   agentID,
-		Body:       "📎 Context: Use Postgres with explicit migrations.",
-		CreatedAt:  createdAt,
+		OrgID:       orgID,
+		RoomID:      roomID,
+		SenderID:    agentID,
+		Body:        "📎 Context: Use Postgres with explicit migrations.",
+		CreatedAt:   createdAt,
 		MessageType: "context_injection",
 	})
 	require.NoError(t, err)
@@ -281,4 +281,50 @@ func TestEllieContextInjectionStoreCreateInjectionMessage(t *testing.T) {
 	require.Equal(t, "agent", storedSenderType)
 	require.Equal(t, "📎 Context: Use Postgres with explicit migrations.", storedBody)
 	require.True(t, storedCreatedAt.UTC().Equal(createdAt))
+}
+
+func TestEllieContextInjectionStoreRecordInjectionIdempotent(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-context-idempotent-org")
+	projectID := createTestProject(t, db, orgID, "Ellie Context Idempotent Project")
+
+	var roomID string
+	err := db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Idempotent Room', 'project', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&roomID)
+	require.NoError(t, err)
+
+	var memoryID string
+	err = db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status)
+		 VALUES ($1, 'fact', 'Idempotent Memory', 'Remember this', 'active')
+		 RETURNING id`,
+		orgID,
+	).Scan(&memoryID)
+	require.NoError(t, err)
+
+	queue := NewEllieContextInjectionStore(db)
+	first := time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC)
+	second := first.Add(2 * time.Hour)
+
+	err = queue.RecordInjection(context.Background(), orgID, roomID, memoryID, first)
+	require.NoError(t, err)
+	err = queue.RecordInjection(context.Background(), orgID, roomID, memoryID, second)
+	require.NoError(t, err)
+
+	var rowCount int
+	err = db.QueryRow(`SELECT COUNT(*) FROM context_injections WHERE room_id = $1 AND memory_id = $2`, roomID, memoryID).Scan(&rowCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, rowCount)
+
+	var injectedAt time.Time
+	err = db.QueryRow(`SELECT injected_at FROM context_injections WHERE room_id = $1 AND memory_id = $2`, roomID, memoryID).Scan(&injectedAt)
+	require.NoError(t, err)
+	require.True(t, injectedAt.UTC().Equal(second))
 }
