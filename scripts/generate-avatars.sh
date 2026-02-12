@@ -111,6 +111,11 @@ generate_one() {
       >> "$log_file" 2>&1; then
 
       if [[ -f "$avatar_file" ]]; then
+        # Convert to webp
+        local webp_file="${avatar_file%.png}.webp"
+        if command -v convert &>/dev/null; then
+          convert "$avatar_file" -quality 80 "$webp_file" 2>/dev/null || true
+        fi
         success=true
         break
       fi

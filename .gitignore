@@ -61,3 +61,7 @@ bridge/.env
 /seed
 /server
 /otter
+
+# Avatar PNGs (keep webp, ignore large PNGs)
+data/agents/*/avatar.png
+data/agents/*/avatar-*.png

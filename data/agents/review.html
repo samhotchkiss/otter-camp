@@ -212,7 +212,7 @@ function renderGrid(agents) {
       card.dataset.name = a.display_name.toLowerCase();
       card.dataset.role = a.role_name.toLowerCase();
 
-      const imgPath = `./${a.role_id}/avatar.png`;
+      const imgPath = `./${a.role_id}/avatar.webp`;
       const img = new Image();
       img.src = imgPath;
       img.alt = a.display_name;
