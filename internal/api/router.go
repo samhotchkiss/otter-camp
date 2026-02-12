@@ -198,6 +198,9 @@ func NewRouter() http.Handler {
 	if err := mcp.RegisterAgentTools(mcpServer); err != nil {
 		log.Printf("⚠️  MCP agent tool registration failed: %v", err)
 	}
+	if err := mcp.RegisterMemorySearchWorkflowTools(mcpServer); err != nil {
+		log.Printf("⚠️  MCP memory/search/workflow tool registration failed: %v", err)
+	}
 	mcpHandler := mcp.NewHTTPHandler(mcpServer, mcp.NewDBAuthenticator(db))
 	r.Method(http.MethodGet, "/mcp", mcpHandler)
 	r.Method(http.MethodPost, "/mcp", mcpHandler)
