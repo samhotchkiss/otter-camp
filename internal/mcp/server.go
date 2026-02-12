@@ -164,6 +164,12 @@ func (s *Server) Handle(ctx context.Context, identity Identity, req rpcRequest) 
 			ID:      req.ID,
 			Result:  result,
 		}
+	case "resources/list":
+		resp := s.handleResourcesList(ctx, identity)
+		resp.ID = req.ID
+		return resp
+	case "resources/read":
+		return s.handleResourcesRead(ctx, identity, req)
 	default:
 		return rpcResponse{
 			JSONRPC: "2.0",
