@@ -339,3 +339,30 @@ func TestConversationEmbeddingWorkerProcessesMultipleOrgsFairly(t *testing.T) {
 	require.GreaterOrEqual(t, orgAEmbedded, 1)
 	require.Equal(t, 1, orgBEmbedded)
 }
+
+func TestConversationEmbeddingWorkerStopsOnContextCancel(t *testing.T) {
+	queue := newFakeConversationEmbeddingQueue(nil, nil)
+	embedder := &fakeConversationEmbedder{vector: []float64{0.1, 0.2}}
+
+	worker := NewConversationEmbeddingWorker(queue, embedder, ConversationEmbeddingWorkerConfig{
+		BatchSize:    10,
+		PollInterval: time.Hour,
+	})
+	worker.Logf = nil
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.Start(ctx)
+		close(done)
+	}()
+
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("embedding worker did not stop after context cancellation")
+	}
+}

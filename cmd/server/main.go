@@ -2,9 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/api"
 	"github.com/samhotchkiss/otter-camp/internal/automigrate"
@@ -19,6 +25,19 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("invalid configuration: %v", err)
+	}
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	workerCtx, cancelWorkers := context.WithCancel(signalCtx)
+	defer cancelWorkers()
+	var workerWG sync.WaitGroup
+	startWorker := func(run func(context.Context)) {
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			run(workerCtx)
+		}()
 	}
 
 	// Auto-migrate database on startup
@@ -47,7 +66,7 @@ func main() {
 					&githubsync.GitHubBranchHeadClient{Client: githubClient},
 					cfg.GitHub.PollInterval,
 				)
-				go poller.Start(context.Background())
+				startWorker(poller.Start)
 				log.Printf("✅ GitHub drift poller started (interval=%s)", cfg.GitHub.PollInterval)
 			}
 		}
@@ -77,7 +96,7 @@ func main() {
 						PollInterval: cfg.ConversationEmbedding.PollInterval,
 					},
 				)
-				go worker.Start(context.Background())
+				startWorker(worker.Start)
 				log.Printf(
 					"✅ Conversation embedding worker started (provider=%s model=%s batch=%d interval=%s)",
 					cfg.ConversationEmbedding.Provider,
@@ -102,7 +121,7 @@ func main() {
 					GapThreshold: cfg.ConversationSegmentation.GapThreshold,
 				},
 			)
-			go worker.Start(context.Background())
+			startWorker(worker.Start)
 			log.Printf(
 				"✅ Conversation segmentation worker started (batch=%d interval=%s gap=%s)",
 				cfg.ConversationSegmentation.BatchSize,
@@ -112,10 +131,30 @@ func main() {
 		}
 	}
 
+	server := &http.Server{
+		Addr:    "0.0.0.0:" + cfg.Port,
+		Handler: router,
+	}
+	go func() {
+		<-signalCtx.Done()
+		cancelWorkers()
+		workerWG.Wait()
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("⚠️  HTTP server shutdown failed: %v", err)
+		}
+	}()
+
 	log.Printf("🦦 Otter Camp starting on port %s", cfg.Port)
-	if err := http.ListenAndServe("0.0.0.0:"+cfg.Port, router); err != nil {
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		cancelWorkers()
+		workerWG.Wait()
 		log.Fatalf("server failed: %v", err)
 	}
+	cancelWorkers()
+	workerWG.Wait()
 }
 
 // Deploy trigger: 1770312576

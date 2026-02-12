@@ -240,3 +240,25 @@ func TestMainStartsConversationSegmentationWorkerWhenConfigured(t *testing.T) {
 		}
 	}
 }
+
+func TestMainWorkersStopOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	for _, snippet := range []string{
+		"signal.NotifyContext",
+		"context.WithCancel",
+		"sync.WaitGroup",
+		"workerWG.Wait()",
+		"cancelWorkers()",
+	} {
+		if !strings.Contains(mainContent, snippet) {
+			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
+		}
+	}
+}

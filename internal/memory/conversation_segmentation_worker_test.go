@@ -104,3 +104,30 @@ func TestConversationSegmentationWorkerIdempotent(t *testing.T) {
 	require.Equal(t, 0, processed)
 	require.Len(t, queue.segments, 1)
 }
+
+func TestConversationSegmentationWorkerStopsOnContextCancel(t *testing.T) {
+	queue := newFakeConversationSegmentationQueue(nil)
+
+	worker := NewConversationSegmentationWorker(queue, ConversationSegmentationWorkerConfig{
+		BatchSize:    10,
+		PollInterval: time.Hour,
+		GapThreshold: 20 * time.Minute,
+	})
+	worker.Logf = nil
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.Start(ctx)
+		close(done)
+	}()
+
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("segmentation worker did not stop after context cancellation")
+	}
+}
