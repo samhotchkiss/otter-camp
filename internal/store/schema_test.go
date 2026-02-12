@@ -464,6 +464,67 @@ func TestMigration064ProjectChatBackfillFilesExistAndContainCoreDDL(t *testing.T
 	require.Contains(t, downContent, "delete from chat_messages")
 }
 
+func TestMigration069ConversationSensitivityFilesExistAndContainConstraint(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"069_add_conversations_sensitivity.down.sql",
+		"069_add_conversations_sensitivity.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "069_add_conversations_sensitivity.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table conversations")
+	require.Contains(t, upContent, "add column if not exists sensitivity")
+	require.Contains(t, upContent, "default 'normal'")
+	require.Contains(t, upContent, "'normal'")
+	require.Contains(t, upContent, "'sensitive'")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "069_add_conversations_sensitivity.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop column if exists sensitivity")
+}
+
+func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var isNullable string
+	var defaultExpr sql.NullString
+	err := db.QueryRow(
+		`SELECT is_nullable, column_default
+		 FROM information_schema.columns
+		 WHERE table_schema = 'public'
+		   AND table_name = 'conversations'
+		   AND column_name = 'sensitivity'`,
+	).Scan(&isNullable, &defaultExpr)
+	require.NoError(t, err)
+	require.Equal(t, "NO", strings.ToUpper(strings.TrimSpace(isNullable)))
+	require.True(t, defaultExpr.Valid)
+	require.Contains(t, strings.ToLower(defaultExpr.String), "normal")
+
+	var constraintDef string
+	err = db.QueryRow(
+		`SELECT pg_get_constraintdef(oid)
+		 FROM pg_constraint
+		 WHERE conrelid = 'conversations'::regclass
+		   AND contype = 'c'
+		   AND pg_get_constraintdef(oid) ILIKE '%sensitivity%'
+		 ORDER BY oid DESC
+		 LIMIT 1`,
+	).Scan(&constraintDef)
+	require.NoError(t, err)
+	lowered := strings.ToLower(constraintDef)
+	require.Contains(t, lowered, "sensitivity")
+	require.Contains(t, lowered, "'normal'")
+	require.Contains(t, lowered, "'sensitive'")
+}
+
 func TestSchemaProjectChatBackfillCopiesMessagesWithParity(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db, err := sql.Open("postgres", connStr)
