@@ -70,6 +70,17 @@ func (f *fakeEllieJSONLScanner) Scan(_ context.Context, _ EllieJSONLScanInput) (
 	return out, nil
 }
 
+type fakeEllieRetrievalQualitySink struct {
+	calls  int
+	events []EllieRetrievalQualitySignal
+}
+
+func (f *fakeEllieRetrievalQualitySink) Record(_ context.Context, signal EllieRetrievalQualitySignal) error {
+	f.calls += 1
+	f.events = append(f.events, signal)
+	return nil
+}
+
 func TestEllieRetrievalCascadeUsesRoomThenMemoryThenChatThenJSONL(t *testing.T) {
 	retrievalStore := &fakeEllieRetrievalStore{}
 	jsonlScanner := &fakeEllieJSONLScanner{results: []EllieRetrievedItem{{Tier: 4, Source: "jsonl", ID: "line-1", Snippet: "from jsonl"}}}
@@ -115,4 +126,48 @@ func TestEllieRetrievalCascadeReturnsNoInformationWhenAllTiersMiss(t *testing.T)
 	require.Equal(t, 1, retrievalStore.orgMemCalls)
 	require.Equal(t, 1, retrievalStore.chatCalls)
 	require.Equal(t, 1, jsonlScanner.calls)
+}
+
+func TestEllieRetrievalServiceEmitsQualitySignals(t *testing.T) {
+	retrievalStore := &fakeEllieRetrievalStore{
+		orgMem: []store.EllieMemorySearchResult{
+			{
+				MemoryID: "mem-1",
+				Title:    "Database Choice",
+				Content:  "Use Postgres for deterministic migrations.",
+			},
+			{
+				MemoryID: "mem-2",
+				Title:    "Deploy Rule",
+				Content:  "Always run smoke checks before cutover.",
+			},
+		},
+	}
+	qualitySink := &fakeEllieRetrievalQualitySink{}
+	service := NewEllieRetrievalCascadeService(retrievalStore, nil)
+	service.QualitySink = qualitySink
+
+	response, err := service.Retrieve(context.Background(), EllieRetrievalRequest{
+		OrgID:             "org-1",
+		ProjectID:         "project-1",
+		RoomID:            "room-1",
+		Query:             "deployment checklist",
+		Limit:             5,
+		ReferencedItemIDs: []string{"mem-1"},
+		MissedItemIDs:     []string{"mem-3"},
+	})
+	require.NoError(t, err)
+	require.False(t, response.NoInformation)
+	require.Equal(t, 2, response.TierUsed)
+
+	require.Equal(t, 1, qualitySink.calls)
+	require.Len(t, qualitySink.events, 1)
+	require.Equal(t, "org-1", qualitySink.events[0].OrgID)
+	require.Equal(t, "project-1", qualitySink.events[0].ProjectID)
+	require.Equal(t, "room-1", qualitySink.events[0].RoomID)
+	require.Equal(t, 2, qualitySink.events[0].TierUsed)
+	require.Equal(t, 2, qualitySink.events[0].InjectedCount)
+	require.Equal(t, 1, qualitySink.events[0].ReferencedCount)
+	require.Equal(t, 1, qualitySink.events[0].MissedCount)
+	require.False(t, qualitySink.events[0].NoInformation)
 }
