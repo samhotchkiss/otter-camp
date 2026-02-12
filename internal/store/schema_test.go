@@ -265,6 +265,769 @@ func TestMigration061ChatThreadsLengthLimitFilesExistAndContainConstraints(t *te
 	require.Contains(t, downContent, "drop constraint if exists chat_threads_thread_key_length_chk")
 }
 
+func TestMigration063ConversationSchemaFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"063_create_conversation_core_schema.up.sql",
+		"063_create_conversation_core_schema.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "063_create_conversation_core_schema.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists rooms")
+	require.Contains(t, upContent, "create table if not exists room_participants")
+	require.Contains(t, upContent, "create table if not exists conversations")
+	require.Contains(t, upContent, "create table if not exists chat_messages")
+	require.Contains(t, upContent, "create table if not exists memories")
+	require.Contains(t, upContent, "chat_messages_embedding_idx")
+	require.Contains(t, upContent, "memories_dedup_active")
+	require.Contains(t, upContent, "enable row level security")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "063_create_conversation_core_schema.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop table if exists room_participants")
+	require.Contains(t, downContent, "drop table if exists rooms")
+	require.Contains(t, downContent, "drop table if exists chat_messages")
+	require.Contains(t, downContent, "drop table if exists conversations")
+	require.Contains(t, downContent, "drop table if exists memories")
+}
+
+func TestSchemaConversationCoreTablesCreateAndRollback(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"rooms",
+		"room_participants",
+		"conversations",
+		"chat_messages",
+		"memories",
+	} {
+		require.True(t, schemaTableExists(t, db, table), table)
+	}
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	for _, table := range []string{
+		"rooms",
+		"room_participants",
+		"conversations",
+		"chat_messages",
+		"memories",
+	} {
+		require.False(t, schemaTableExists(t, db, table), table)
+	}
+}
+
+func TestSchemaConversationCoreRLSAndIndexes(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	for _, indexName := range []string{
+		"rooms_org_type_context_idx",
+		"room_participants_room_joined_idx",
+		"chat_messages_room_created_idx",
+		"chat_messages_conversation_idx",
+		"chat_messages_search_idx",
+		"chat_messages_embedding_idx",
+		"chat_messages_unembedded_idx",
+		"memories_dedup_active",
+		"memories_embedding_idx",
+		"memories_org_kind_idx",
+		"memories_org_status_idx",
+		"memories_conversation_idx",
+	} {
+		var indexRegClass sql.NullString
+		err := db.QueryRow(`SELECT to_regclass('public.' || $1)::text`, indexName).Scan(&indexRegClass)
+		require.NoError(t, err)
+		require.True(t, indexRegClass.Valid, indexName)
+	}
+
+	for _, table := range []string{
+		"rooms",
+		"room_participants",
+		"conversations",
+		"chat_messages",
+		"memories",
+	} {
+		var rlsEnabled bool
+		err := db.QueryRow(`SELECT relrowsecurity FROM pg_class WHERE relname = $1`, table).Scan(&rlsEnabled)
+		require.NoError(t, err)
+		require.True(t, rlsEnabled, table)
+	}
+}
+
+func TestSchemaProjectChatBackfillCreatesProjectRooms(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(63)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "project-chat-backfill-room-org")
+	projectID := createTestProject(t, db, orgID, "Project Chat Backfill Room Project")
+
+	_, err = db.Exec(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Sam', 'room bootstrap', '[]'::jsonb)`,
+		orgID,
+		projectID,
+	)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var roomCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM rooms
+		 WHERE org_id = $1
+		   AND type = 'project'
+		   AND context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&roomCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, roomCount)
+}
+
+func TestMigration064ProjectChatBackfillFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"064_backfill_project_chat_rooms_and_messages.up.sql",
+		"064_backfill_project_chat_rooms_and_messages.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "064_backfill_project_chat_rooms_and_messages.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "insert into rooms")
+	require.Contains(t, upContent, "insert into chat_messages")
+	require.Contains(t, upContent, "on conflict (id) do nothing")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "064_backfill_project_chat_rooms_and_messages.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "delete from chat_messages")
+}
+
+func TestMigration069ConversationSensitivityFilesExistAndContainConstraint(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"069_add_conversations_sensitivity.down.sql",
+		"069_add_conversations_sensitivity.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "069_add_conversations_sensitivity.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table conversations")
+	require.Contains(t, upContent, "add column if not exists sensitivity")
+	require.Contains(t, upContent, "default 'normal'")
+	require.Contains(t, upContent, "'normal'")
+	require.Contains(t, upContent, "'sensitive'")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "069_add_conversations_sensitivity.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop column if exists sensitivity")
+}
+
+func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var isNullable string
+	var defaultExpr sql.NullString
+	err := db.QueryRow(
+		`SELECT is_nullable, column_default
+		 FROM information_schema.columns
+		 WHERE table_schema = 'public'
+		   AND table_name = 'conversations'
+		   AND column_name = 'sensitivity'`,
+	).Scan(&isNullable, &defaultExpr)
+	require.NoError(t, err)
+	require.Equal(t, "NO", strings.ToUpper(strings.TrimSpace(isNullable)))
+	require.True(t, defaultExpr.Valid)
+	require.Contains(t, strings.ToLower(defaultExpr.String), "normal")
+
+	var constraintDef string
+	err = db.QueryRow(
+		`SELECT pg_get_constraintdef(oid)
+		 FROM pg_constraint
+		 WHERE conrelid = 'conversations'::regclass
+		   AND contype = 'c'
+		   AND pg_get_constraintdef(oid) ILIKE '%sensitivity%'
+		 ORDER BY oid DESC
+		 LIMIT 1`,
+	).Scan(&constraintDef)
+	require.NoError(t, err)
+	lowered := strings.ToLower(constraintDef)
+	require.Contains(t, lowered, "sensitivity")
+	require.Contains(t, lowered, "'normal'")
+	require.Contains(t, lowered, "'sensitive'")
+}
+
+func TestSchemaProjectChatBackfillCopiesMessagesWithParity(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(63)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "project-chat-backfill-parity-org")
+	projectID := createTestProject(t, db, orgID, "Project Chat Backfill Parity Project")
+
+	var firstID string
+	err = db.QueryRow(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Sam', 'first body', '[{\"id\":\"file-1\"}]'::jsonb)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&firstID)
+	require.NoError(t, err)
+
+	var secondID string
+	err = db.QueryRow(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Frank', 'second body', '[]'::jsonb)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&secondID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var copiedCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.org_id = $1
+		   AND r.type = 'project'
+		   AND r.context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&copiedCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, copiedCount)
+
+	var firstBody, firstAttachments string
+	err = db.QueryRow(
+		`SELECT body, attachments::text
+		 FROM chat_messages
+		 WHERE id = $1`,
+		firstID,
+	).Scan(&firstBody, &firstAttachments)
+	require.NoError(t, err)
+	require.Equal(t, "first body", firstBody)
+	require.Contains(t, firstAttachments, `"id": "file-1"`)
+
+	var secondBody string
+	err = db.QueryRow(`SELECT body FROM chat_messages WHERE id = $1`, secondID).Scan(&secondBody)
+	require.NoError(t, err)
+	require.Equal(t, "second body", secondBody)
+}
+
+func TestSchemaProjectChatBackfillIsIdempotent(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(63)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "project-chat-backfill-idempotent-org")
+	projectID := createTestProject(t, db, orgID, "Project Chat Backfill Idempotent Project")
+
+	_, err = db.Exec(
+		`INSERT INTO project_chat_messages (org_id, project_id, author, body, attachments)
+		 VALUES ($1, $2, 'Sam', 'idempotent body', '[{\"id\":\"doc\"}]'::jsonb)`,
+		orgID,
+		projectID,
+	)
+	require.NoError(t, err)
+
+	upRaw, err := os.ReadFile(filepath.Join(getMigrationsDir(t), "064_backfill_project_chat_rooms_and_messages.up.sql"))
+	require.NoError(t, err)
+	upSQL := string(upRaw)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var firstMessageCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.org_id = $1
+		   AND r.type = 'project'
+		   AND r.context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&firstMessageCount)
+	require.NoError(t, err)
+
+	var firstRoomCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM rooms
+		 WHERE org_id = $1
+		   AND type = 'project'
+		   AND context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&firstRoomCount)
+	require.NoError(t, err)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var secondMessageCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.org_id = $1
+		   AND r.type = 'project'
+		   AND r.context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&secondMessageCount)
+	require.NoError(t, err)
+
+	var secondRoomCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM rooms
+		 WHERE org_id = $1
+		   AND type = 'project'
+		   AND context_id = $2`,
+		orgID,
+		projectID,
+	).Scan(&secondRoomCount)
+	require.NoError(t, err)
+
+	require.Equal(t, firstMessageCount, secondMessageCount)
+	require.Equal(t, firstRoomCount, secondRoomCount)
+}
+
+func TestMigration065MemoriesBackfillFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"065_backfill_legacy_memory_tables_into_memories.up.sql",
+		"065_backfill_legacy_memory_tables_into_memories.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "065_backfill_legacy_memory_tables_into_memories.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "insert into memories")
+	require.Contains(t, upContent, "memory_entries")
+	require.Contains(t, upContent, "shared_knowledge")
+	require.Contains(t, upContent, "agent_memories")
+	require.Contains(t, upContent, "on conflict (org_id, content_hash) where status = 'active' do nothing")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "065_backfill_legacy_memory_tables_into_memories.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "delete from memories")
+	require.Contains(t, downContent, "source_table")
+}
+
+func TestSchemaMemoriesBackfillCopiesLegacyRows(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(64)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "memories-backfill-copy-org")
+	projectID := createTestProject(t, db, orgID, "Memories Backfill Copy Project")
+	agentID := insertSchemaAgent(t, db, orgID, "memories-copy-agent")
+
+	var memoryEntryID string
+	err = db.QueryRow(
+		`INSERT INTO memory_entries (
+			org_id, agent_id, kind, title, content, metadata, importance, confidence, sensitivity, status, source_project
+		) VALUES (
+			$1, $2, 'decision', 'Entry Decision', 'Memory entry content', '{}'::jsonb, 3, 0.8, 'internal', 'active', $3
+		) RETURNING id`,
+		orgID,
+		agentID,
+		projectID,
+	).Scan(&memoryEntryID)
+	require.NoError(t, err)
+
+	var sharedKnowledgeID string
+	err = db.QueryRow(
+		`INSERT INTO shared_knowledge (
+			org_id, source_agent_id, kind, title, content, metadata, status
+		) VALUES (
+			$1, $2, 'pattern', 'Shared Pattern', 'Shared knowledge content', '{}'::jsonb, 'active'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&sharedKnowledgeID)
+	require.NoError(t, err)
+
+	var agentMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO agent_memories (
+			org_id, agent_id, kind, date, content
+		) VALUES (
+			$1, $2, 'long_term', CURRENT_DATE, 'Agent memory content'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&agentMemoryID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var copiedCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' IN ('memory_entries', 'shared_knowledge', 'agent_memories')`,
+		orgID,
+	).Scan(&copiedCount)
+	require.NoError(t, err)
+	require.Equal(t, 3, copiedCount)
+
+	for _, check := range [][2]string{
+		{"memory_entries", memoryEntryID},
+		{"shared_knowledge", sharedKnowledgeID},
+		{"agent_memories", agentMemoryID},
+	} {
+		var exists bool
+		err = db.QueryRow(
+			`SELECT EXISTS (
+				SELECT 1
+				FROM memories
+				WHERE org_id = $1
+				  AND metadata->>'source_table' = $2
+				  AND metadata->>'source_id' = $3
+			)`,
+			orgID,
+			check[0],
+			check[1],
+		).Scan(&exists)
+		require.NoError(t, err)
+		require.True(t, exists, check[0])
+	}
+}
+
+func TestSchemaMemoriesBackfillMapsStatusesAndKinds(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(64)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "memories-backfill-mapping-org")
+	agentID := insertSchemaAgent(t, db, orgID, "memories-mapping-agent")
+
+	var memoryEntryID string
+	err = db.QueryRow(
+		`INSERT INTO memory_entries (
+			org_id, agent_id, kind, title, content, metadata, importance, confidence, sensitivity, status
+		) VALUES (
+			$1, $2, 'decision', 'Warm Decision', 'Warm memory entry', '{}'::jsonb, 3, 0.7, 'internal', 'warm'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&memoryEntryID)
+	require.NoError(t, err)
+
+	var sharedKnowledgeID string
+	err = db.QueryRow(
+		`INSERT INTO shared_knowledge (
+			org_id, source_agent_id, kind, title, content, metadata, status
+		) VALUES (
+			$1, $2, 'correction', 'Superseded Correction', 'Old correction', '{}'::jsonb, 'superseded'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&sharedKnowledgeID)
+	require.NoError(t, err)
+
+	var agentMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO agent_memories (
+			org_id, agent_id, kind, date, content
+		) VALUES (
+			$1, $2, 'note', CURRENT_DATE, 'Agent note content'
+		) RETURNING id`,
+		orgID,
+		agentID,
+	).Scan(&agentMemoryID)
+	require.NoError(t, err)
+
+	err = m.Steps(1)
+	require.NoError(t, err)
+
+	var (
+		entryKind   string
+		entryStatus string
+	)
+	err = db.QueryRow(
+		`SELECT kind, status
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'memory_entries'
+		   AND metadata->>'source_id' = $2`,
+		orgID,
+		memoryEntryID,
+	).Scan(&entryKind, &entryStatus)
+	require.NoError(t, err)
+	require.Equal(t, "technical_decision", entryKind)
+	require.Equal(t, "archived", entryStatus)
+
+	var (
+		sharedKind   string
+		sharedStatus string
+	)
+	err = db.QueryRow(
+		`SELECT kind, status
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'shared_knowledge'
+		   AND metadata->>'source_id' = $2`,
+		orgID,
+		sharedKnowledgeID,
+	).Scan(&sharedKind, &sharedStatus)
+	require.NoError(t, err)
+	require.Equal(t, "correction", sharedKind)
+	require.Equal(t, "deprecated", sharedStatus)
+
+	var (
+		agentKind   string
+		agentStatus string
+	)
+	err = db.QueryRow(
+		`SELECT kind, status
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'agent_memories'
+		   AND metadata->>'source_id' = $2`,
+		orgID,
+		agentMemoryID,
+	).Scan(&agentKind, &agentStatus)
+	require.NoError(t, err)
+	require.Equal(t, "context", agentKind)
+	require.Equal(t, "active", agentStatus)
+}
+
+func TestSchemaMemoriesBackfillIsIdempotent(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+	require.NoError(t, err)
+
+	m, err := migrate.New("file://"+getMigrationsDir(t), connStr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = m.Close()
+	})
+
+	err = m.Down()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	err = m.Steps(64)
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+
+	orgID := createTestOrganization(t, db, "memories-backfill-idempotent-org")
+	agentID := insertSchemaAgent(t, db, orgID, "memories-idempotent-agent")
+
+	_, err = db.Exec(
+		`INSERT INTO memory_entries (
+			org_id, agent_id, kind, title, content, metadata, importance, confidence, sensitivity, status
+		) VALUES (
+			$1, $2, 'fact', 'Idempotent Fact', 'Idempotent memory content', '{}'::jsonb, 2, 0.9, 'internal', 'active'
+		)`,
+		orgID,
+		agentID,
+	)
+	require.NoError(t, err)
+
+	upRaw, err := os.ReadFile(filepath.Join(getMigrationsDir(t), "065_backfill_legacy_memory_tables_into_memories.up.sql"))
+	require.NoError(t, err)
+	upSQL := string(upRaw)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var firstCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'memory_entries'`,
+		orgID,
+	).Scan(&firstCount)
+	require.NoError(t, err)
+
+	_, err = db.Exec(upSQL)
+	require.NoError(t, err)
+
+	var secondCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM memories
+		 WHERE org_id = $1
+		   AND metadata->>'source_table' = 'memory_entries'`,
+		orgID,
+	).Scan(&secondCount)
+	require.NoError(t, err)
+
+	require.Equal(t, firstCount, secondCount)
+}
+
 func TestSchemaChatThreadsLengthConstraints(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +50,11 @@ type ProjectChatStore struct {
 	db *sql.DB
 }
 
+const (
+	projectChatSystemAuthor = "__otter_session__"
+	projectChatSystemPrefix = "project_chat_session_reset:"
+)
+
 func NewProjectChatStore(db *sql.DB) *ProjectChatStore {
 	return &ProjectChatStore{db: db}
 }
@@ -82,17 +89,22 @@ func (s *ProjectChatStore) Create(ctx context.Context, input CreateProjectChatMe
 		return nil, fmt.Errorf("body is required")
 	}
 
-	conn, err := WithWorkspace(ctx, s.db)
+	tx, err := WithWorkspaceTx(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 
-	if err := ensureProjectInWorkspace(ctx, conn, workspaceID, projectID); err != nil {
+	if err := ensureProjectInWorkspace(ctx, tx, workspaceID, projectID); err != nil {
 		return nil, err
 	}
 
-	message, err := scanProjectChatMessage(conn.QueryRowContext(
+	message, err := scanProjectChatMessage(tx.QueryRowContext(
 		ctx,
 		`INSERT INTO project_chat_messages (
 			org_id,
@@ -111,6 +123,20 @@ func (s *ProjectChatStore) Create(ctx context.Context, input CreateProjectChatMe
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project chat message: %w", err)
 	}
+
+	projectRoomID, err := ensureProjectConversationRoom(ctx, tx, workspaceID, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := mirrorProjectChatMessage(ctx, tx, message, projectRoomID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit project chat create: %w", err)
+	}
+	committed = true
 	return &message, nil
 }
 
@@ -403,4 +429,101 @@ func scanProjectChatSearchResult(scanner interface{ Scan(dest ...any) error }) (
 		result.Snippet = snippet.String
 	}
 	return result, nil
+}
+
+func ensureProjectConversationRoom(ctx context.Context, tx *sql.Tx, workspaceID, projectID string) (string, error) {
+	var roomID string
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT id
+		 FROM rooms
+		 WHERE org_id = $1
+		   AND type = 'project'
+		   AND context_id = $2
+		 ORDER BY created_at ASC, id ASC
+		 LIMIT 1`,
+		workspaceID,
+		projectID,
+	).Scan(&roomID)
+	if err == nil {
+		return roomID, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("failed to load project room: %w", err)
+	}
+
+	err = tx.QueryRowContext(
+		ctx,
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 SELECT org_id, name, 'project', id
+		 FROM projects
+		 WHERE org_id = $1 AND id = $2
+		 RETURNING id`,
+		workspaceID,
+		projectID,
+	).Scan(&roomID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrForbidden
+		}
+		return "", fmt.Errorf("failed to create project room: %w", err)
+	}
+	return roomID, nil
+}
+
+func mirrorProjectChatMessage(ctx context.Context, tx *sql.Tx, message ProjectChatMessage, roomID string) error {
+	senderType, messageType := deriveProjectChatMirrorTypes(message.Author)
+	_, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO chat_messages (
+			id,
+			org_id,
+			room_id,
+			sender_id,
+			sender_type,
+			body,
+			type,
+			attachments,
+			created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+		ON CONFLICT (id) DO NOTHING`,
+		message.ID,
+		message.OrgID,
+		roomID,
+		deterministicProjectChatSenderID(message.OrgID, message.Author),
+		senderType,
+		message.Body,
+		messageType,
+		message.Attachments,
+		message.CreatedAt.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mirror project chat message: %w", err)
+	}
+	return nil
+}
+
+func deriveProjectChatMirrorTypes(author string) (senderType string, messageType string) {
+	normalized := strings.TrimSpace(author)
+	if normalized == projectChatSystemAuthor || strings.HasPrefix(normalized, projectChatSystemPrefix) {
+		return "system", "system"
+	}
+	return "user", "message"
+}
+
+func deterministicProjectChatSenderID(workspaceID, author string) string {
+	normalizedAuthor := strings.TrimSpace(author)
+	if normalizedAuthor == "" {
+		normalizedAuthor = "unknown"
+	}
+	sum := md5.Sum([]byte(workspaceID + ":" + normalizedAuthor))
+	encoded := hex.EncodeToString(sum[:])
+	return fmt.Sprintf(
+		"%s-%s-%s-%s-%s",
+		encoded[0:8],
+		encoded[8:12],
+		encoded[12:16],
+		encoded[16:20],
+		encoded[20:32],
+	)
 }
