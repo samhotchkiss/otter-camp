@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -334,4 +335,13 @@ func TestEllieContextInjectionWorkerUsesRoomAndInjectionCountsForScoring(t *test
 	require.NoError(t, err)
 	require.Equal(t, 0, processed)
 	require.Empty(t, highCountsQueue.createdMessages)
+}
+
+func TestDeterministicEllieSenderIDIsDocumentedAsSynthetic(t *testing.T) {
+	workerBytes, err := os.ReadFile("ellie_context_injection_worker.go")
+	require.NoError(t, err)
+	workerContent := string(workerBytes)
+
+	require.Contains(t, workerContent, "intentional synthetic sender ID derived from org ID")
+	require.Contains(t, workerContent, "not a real agent UUID")
 }

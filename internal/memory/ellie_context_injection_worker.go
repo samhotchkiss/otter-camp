@@ -263,6 +263,7 @@ func (w *EllieContextInjectionWorker) RunOnce(ctx context.Context) (int, error) 
 }
 
 func deterministicEllieSenderID(orgID string) string {
+	// This is an intentional synthetic sender ID derived from org ID bytes, not a real agent UUID.
 	normalizedOrgID := strings.TrimSpace(orgID)
 	if normalizedOrgID == "" {
 		normalizedOrgID = "unknown-org"
