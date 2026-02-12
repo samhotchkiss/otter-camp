@@ -12,4 +12,4 @@
 
 **Pairs with:** Research Analyst, Competitive Intelligence Analyst, Patent Analyst, Data Researcher.
 
-**Remember via Elephant:** Entity profiles and connection maps, investigation methodologies, timeline reconstructions, verified vs. unverified findings, ethical boundary decisions.
+**Remember via Ellie:** Entity profiles and connection maps, investigation methodologies, timeline reconstructions, verified vs. unverified findings, ethical boundary decisions.

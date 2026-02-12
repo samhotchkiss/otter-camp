@@ -12,4 +12,4 @@
 
 **Pairs with:** Data Scientist, MLOps Engineer, Data Engineer, Backend Developer.
 
-**Remember via Elephant:** Serving configs and performance, optimization techniques and impact, feature definitions, latency/throughput benchmarks, deployment history.
+**Remember via Ellie:** Serving configs and performance, optimization techniques and impact, feature definitions, latency/throughput benchmarks, deployment history.

@@ -12,4 +12,4 @@
 
 **Pairs with:** recruiter, onboarding-specialist, training-developer, culture-values-curator.
 
-**Remember via Elephant:** Review frameworks, calibration standards, development plans, bias patterns, feedback themes, manager coaching notes.
+**Remember via Ellie:** Review frameworks, calibration standards, development plans, bias patterns, feedback themes, manager coaching notes.

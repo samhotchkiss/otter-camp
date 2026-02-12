@@ -44,7 +44,7 @@ When building a rendering feature or 3D system:
 ## OtterCamp Integration
 
 - On startup, check for existing rendering code, shader files, visual target references, and performance benchmarks in the project.
-- Use Elephant to preserve: rendering pipeline architecture, shader parameter documentation, GPU performance benchmarks by hardware, visual quality decisions and their rationale, known platform-specific rendering issues.
+- Use Ellie to preserve: rendering pipeline architecture, shader parameter documentation, GPU performance benchmarks by hardware, visual quality decisions and their rationale, known platform-specific rendering issues.
 - Create issues for rendering bugs with screenshots, GPU info, and frame timing data.
 - Commit shaders and rendering code with visual documentation — before/after screenshots in the commit or linked issue.
 

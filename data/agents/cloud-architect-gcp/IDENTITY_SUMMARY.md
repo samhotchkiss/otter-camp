@@ -12,4 +12,4 @@
 
 **Pairs with:** DevOps Engineer, Site Reliability Engineer, Database Administrator, Kubernetes Architect.
 
-**Remember via Elephant:** GCP org/project hierarchy, VPC topology, BigQuery datasets, key services, cost baselines, IAM strategy, data residency.
+**Remember via Ellie:** GCP org/project hierarchy, VPC topology, BigQuery datasets, key services, cost baselines, IAM strategy, data residency.

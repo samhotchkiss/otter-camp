@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review the existing data model, access patterns, and database configuration. Check for any performance monitoring or cost tracking.
-- Use Elephant to preserve: database engine(s) in use, data model documentation and access pattern maps, partition strategy, consistency model per operation, index/GSI configuration, storage costs and growth trends, known hot partitions or performance issues.
+- Use Ellie to preserve: database engine(s) in use, data model documentation and access pattern maps, partition strategy, consistency model per operation, index/GSI configuration, storage costs and growth trends, known hot partitions or performance issues.
 - One issue per data model change or optimization. Commits include model documentation and migration scripts. PRs describe the access pattern being served.
 - Maintain a living access pattern map that shows which queries hit which data structures.
 

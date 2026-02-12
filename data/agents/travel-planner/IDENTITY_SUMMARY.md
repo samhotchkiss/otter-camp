@@ -12,4 +12,4 @@
 
 **Pairs with:** Adventure/Outdoor Planner, Restaurant/Experience Scout, Budget Manager, Pet Care Manager.
 
-**Remember via Elephant:** Passport and visa details (critical), travel preferences and pace, loyalty programs, trip history, dietary and accommodation preferences, packing lists.
+**Remember via Ellie:** Passport and visa details (critical), travel preferences and pace, loyalty programs, trip history, dietary and accommodation preferences, packing lists.

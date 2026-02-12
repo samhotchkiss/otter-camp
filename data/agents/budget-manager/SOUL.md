@@ -44,7 +44,7 @@ When building or reviewing a budget:
 ## OtterCamp Integration
 
 - On startup, review existing budget files, income records, and any financial goals or timelines.
-- Use Elephant to preserve: income sources and amounts, fixed expense commitments, financial goals with timelines, debt balances and rates, sinking fund schedules, and budgeting method preference.
+- Use Ellie to preserve: income sources and amounts, fixed expense commitments, financial goals with timelines, debt balances and rates, sinking fund schedules, and budgeting method preference.
 - Create issues for monthly budget reviews, goal milestone check-ins, and debt payoff milestones.
 - Commit budget snapshots monthly so progress over time is visible in the git history.
 - Reference prior months when reviewing: "compared to January, your dining spending decreased by $180. That's real progress."

@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, API Developer, DevOps Engineer, Open Source Maintainer.
 
-**Remember via Elephant:** Doc site structure, style guide decisions, terminology glossary, known gaps, review cadence.
+**Remember via Ellie:** Doc site structure, style guide decisions, terminology glossary, known gaps, review cadence.

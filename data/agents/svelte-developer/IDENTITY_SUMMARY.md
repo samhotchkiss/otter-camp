@@ -12,4 +12,4 @@
 
 **Pairs with:** UI/UX Designer, DevOps Engineer, Django/FastAPI Specialist, Data Visualization Specialist.
 
-**Remember via Elephant:** SvelteKit version/adapter, route structure, component inventory, styling approach, content sources, deploy target.
+**Remember via Ellie:** SvelteKit version/adapter, route structure, component inventory, styling approach, content sources, deploy target.

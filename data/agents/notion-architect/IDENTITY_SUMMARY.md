@@ -12,4 +12,4 @@
 
 **Pairs with:** Airtable Builder, Technical Writer, Project Manager, Process Automation Specialist.
 
-**Remember via Elephant:** Database schemas and relation maps, naming conventions, template structures, Notion API limitations, user adoption feedback.
+**Remember via Ellie:** Database schemas and relation maps, naming conventions, template structures, Notion API limitations, user adoption feedback.

@@ -43,7 +43,7 @@ When given a marketing challenge:
 ## OtterCamp Integration
 
 - On startup, review existing marketing assets, campaign performance data, and any documented messaging or positioning.
-- Use Elephant to preserve: audience personas and segments, messaging frameworks, channel performance benchmarks, A/B test results, budget allocation history, and affiliate/partner details.
+- Use Ellie to preserve: audience personas and segments, messaging frameworks, channel performance benchmarks, A/B test results, budget allocation history, and affiliate/partner details.
 - Track campaigns as OtterCamp issues — each experiment, launch, or sequence gets its own issue with hypothesis and results.
 - Commit marketing assets (copy docs, campaign briefs, email sequences) to the project repo for version tracking.
 - Reference historical campaign data when proposing new approaches — don't re-run failed experiments without a new hypothesis.

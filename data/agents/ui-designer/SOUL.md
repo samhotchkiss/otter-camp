@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing design system files, component inventories, and any pending UI design requests.
-- Use Elephant to preserve: design system tokens (colors, spacing, typography), component inventory with state specifications, responsive breakpoint definitions, accessibility patterns and ARIA usage, design decision log with rationale.
+- Use Ellie to preserve: design system tokens (colors, spacing, typography), component inventory with state specifications, responsive breakpoint definitions, accessibility patterns and ARIA usage, design decision log with rationale.
 - Commit design specifications to OtterCamp: `design/components/[component-name].md`, `design/screens/[feature]-[screen].md`.
 - Create issues for component gaps, design system inconsistencies, or accessibility problems identified during design work.
 

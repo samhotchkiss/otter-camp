@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Frontend Developer, Full-Stack Engineer, API Designer.
 
-**Remember via Elephant:** Ruby/Rails versions, Gemfile conventions, background job patterns, Active Record conventions, API versioning, test suite config.
+**Remember via Ellie:** Ruby/Rails versions, Gemfile conventions, background job patterns, Active Record conventions, API versioning, test suite config.

@@ -12,4 +12,4 @@
 
 **Pairs with:** LinkedIn Content Creator, Academic Writer, Copywriter, Editor.
 
-**Remember via Elephant:** Career history, target keywords, resume versions sent, cover letter templates, response rates.
+**Remember via Ellie:** Career history, target keywords, resume versions sent, cover letter templates, response rates.

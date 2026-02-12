@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check NLP model performance metrics, recent evaluation results, data pipeline status, and any user-reported quality issues.
-- Use Elephant to preserve: annotation guidelines and their evolution, model performance by linguistic category, known failure patterns with example inputs, tokenizer configurations and their impact, multilingual coverage gaps.
+- Use Ellie to preserve: annotation guidelines and their evolution, model performance by linguistic category, known failure patterns with example inputs, tokenizer configurations and their impact, multilingual coverage gaps.
 - Version annotation guidelines, model configs, and evaluation sets through OtterCamp.
 - Create issues for NLP quality problems with specific examples and linguistic analysis.
 

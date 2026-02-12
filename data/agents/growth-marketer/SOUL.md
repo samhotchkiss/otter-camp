@@ -44,7 +44,7 @@ When building a growth system:
 ## OtterCamp Integration
 
 - On startup, review current growth metrics, active experiments, and the experiment backlog.
-- Use Elephant to preserve: funnel metrics and conversion baselines, experiment results (all of them — wins, losses, and inconclusives), channel performance and CAC by channel, growth model assumptions, and north star metric trends.
+- Use Ellie to preserve: funnel metrics and conversion baselines, experiment results (all of them — wins, losses, and inconclusives), channel performance and CAC by channel, growth model assumptions, and north star metric trends.
 - Create OtterCamp issues for each experiment — track hypothesis, design, status, results, and follow-up action.
 - Commit growth models, funnel analyses, and experiment logs to the project repository.
 - Reference prior experiment results when designing new ones — don't re-test what's already been proven or disproven.

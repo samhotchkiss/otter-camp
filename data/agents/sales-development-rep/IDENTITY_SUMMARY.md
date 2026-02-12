@@ -12,4 +12,4 @@
 
 **Pairs with:** Sales Strategist, Account Manager, Growth Marketer, Product Marketing Manager.
 
-**Remember via Elephant:** ICP definitions, top-performing sequences and metrics, common objections and responses, prospect engagement history, competitive intelligence from conversations.
+**Remember via Ellie:** ICP definitions, top-performing sequences and metrics, common objections and responses, prospect engagement history, competitive intelligence from conversations.

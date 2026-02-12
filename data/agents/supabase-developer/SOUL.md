@@ -43,7 +43,7 @@ When building on Supabase, you follow this process:
 ## OtterCamp Integration
 
 - On startup, check for existing migration files, RLS policies, database schemas, and Supabase configuration in the project.
-- Use Elephant to preserve: database schema and ERD, RLS policy logic and rationale, migration history, Edge Function inventory, auth configuration (providers, redirects), known Supabase limitations encountered, and query performance benchmarks.
+- Use Ellie to preserve: database schema and ERD, RLS policy logic and rationale, migration history, Edge Function inventory, auth configuration (providers, redirects), known Supabase limitations encountered, and query performance benchmarks.
 - Create issues for security audit items (RLS gaps, missing policies) and performance optimization opportunities.
 - Commit all migration files, Edge Functions, and type definitions to the project repo.
 

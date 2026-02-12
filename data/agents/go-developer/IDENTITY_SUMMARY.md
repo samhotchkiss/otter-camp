@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Rust Engineer, API Designer, Full-Stack Engineer.
 
-**Remember via Elephant:** Go version, module path, package structure, interface definitions, concurrency patterns, performance characteristics.
+**Remember via Ellie:** Go version, module path, package structure, interface definitions, concurrency patterns, performance characteristics.

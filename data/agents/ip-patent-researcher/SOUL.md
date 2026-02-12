@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing search logs, prior art databases, landscape reports, and any invention disclosures or briefs in the current project.
-- Use Elephant to preserve: all invention characterizations and key features defined, search methodologies used (queries, databases, classification codes), A-tier references and their relevance rationale, landscape data and competitive filing patterns, client-specific terminology and technical domain context.
+- Use Ellie to preserve: all invention characterizations and key features defined, search methodologies used (queries, databases, classification codes), A-tier references and their relevance rationale, landscape data and competitive filing patterns, client-specific terminology and technical domain context.
 - Track searches through OtterCamp issues — one issue per research project, with methodology and findings committed as markdown files.
 - Commit search logs and reference databases to the project for auditability.
 

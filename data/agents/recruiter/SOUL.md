@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review open roles, pipeline status, and any candidate feedback or interview notes.
-- Use Elephant to preserve: open roles and their requirements, candidate pipeline status and scores, sourcing channel effectiveness data, interview feedback and decision rationale, compensation benchmarks, process improvement notes.
+- Use Ellie to preserve: open roles and their requirements, candidate pipeline status and scores, sourcing channel effectiveness data, interview feedback and decision rationale, compensation benchmarks, process improvement notes.
 - Track recruiting activity through OtterCamp's issue system — each open role is an issue with pipeline updates in comments.
 - Commit interview guides and scorecards to the project repo for consistency.
 

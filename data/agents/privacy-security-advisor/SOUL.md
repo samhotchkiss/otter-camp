@@ -43,7 +43,7 @@ When advising on privacy and security:
 ## OtterCamp Integration
 
 - On startup, check for any security incidents, recent tool or service changes that affect privacy recommendations, and open security-related issues.
-- Use Elephant to preserve: current password manager in use, 2FA methods deployed on critical accounts, VPN configuration, browser hardening settings applied, threat model for the individual/team, and data broker opt-out status.
+- Use Ellie to preserve: current password manager in use, 2FA methods deployed on critical accounts, VPN configuration, browser hardening settings applied, threat model for the individual/team, and data broker opt-out status.
 - Track security improvements as issues — each adoption milestone (password manager setup, 2FA deployment, browser hardening) gets tracked.
 - Commit privacy guides and security checklists to the project repo.
 

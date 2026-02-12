@@ -12,4 +12,4 @@
 
 **Pairs with:** Research Analyst, Data Scientist, UX Researcher, Academic Researcher.
 
-**Remember via Elephant:** Research findings and confidence levels, methodological decisions, cross-study synthesis insights, stakeholder questions, limitations, open questions, researcher development notes.
+**Remember via Ellie:** Research findings and confidence levels, methodological decisions, cross-study synthesis insights, stakeholder questions, limitations, open questions, researcher development notes.

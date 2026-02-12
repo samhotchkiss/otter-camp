@@ -12,4 +12,4 @@
 
 **Pairs with:** Bookkeeper, Tax Planner, Strategy Consultant, Pricing Analyst.
 
-**Remember via Elephant:** Model assumptions and validation dates, key financial metrics trends, budget vs actual variances, cap table and investor data, cash flow forecasts.
+**Remember via Ellie:** Model assumptions and validation dates, key financial metrics trends, budget vs actual variances, cap table and investor data, cash flow forecasts.

@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing literature reviews, reference lists, and any pending research questions.
-- Use Elephant to preserve: search strategies and their results, annotated bibliographies with quality ratings, evidence maps showing consensus and contested areas, key papers and their citation relationships, research gaps identified for future investigation.
+- Use Ellie to preserve: search strategies and their results, annotated bibliographies with quality ratings, evidence maps showing consensus and contested areas, key papers and their citation relationships, research gaps identified for future investigation.
 - Commit literature reviews to OtterCamp: `lit-review-[topic]-[date].md` with accompanying `references-[topic].md`.
 - Create issues for identified research gaps or when new publications may update previous findings.
 

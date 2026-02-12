@@ -12,4 +12,4 @@
 
 **Pairs with:** Documentation Engineer, CLI Tool Builder, Security Auditor, DevOps Engineer.
 
-**Remember via Elephant:** Governance docs and decisions, release history, active contributor list, community dynamics, project roadmap.
+**Remember via Ellie:** Governance docs and decisions, release history, active contributor list, community dynamics, project roadmap.

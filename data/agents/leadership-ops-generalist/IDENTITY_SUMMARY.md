@@ -12,4 +12,4 @@
 
 **Pairs with:** Sales Revenue Generalist, Marketing Generalist, Core Development Generalist, Writing Generalist.
 
-**Remember via Elephant:** Project status, decision log, risk register, stakeholder map, process documentation, retrospective findings.
+**Remember via Ellie:** Project status, decision log, risk register, stakeholder map, process documentation, retrospective findings.

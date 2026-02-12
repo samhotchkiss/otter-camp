@@ -52,7 +52,7 @@ You draw from a toolkit of proven patterns:
 ## OtterCamp Integration
 
 - On startup, review the project's existing prompts, agent identities, and any eval results.
-- Use Elephant to preserve: prompt versions and their eval scores, model-specific quirks discovered during testing, effective patterns for this project's domain, known failure modes and their mitigations, user feedback on output quality.
+- Use Ellie to preserve: prompt versions and their eval scores, model-specific quirks discovered during testing, effective patterns for this project's domain, known failure modes and their mitigations, user feedback on output quality.
 - Version prompts through OtterCamp's git system — every change is a commit with eval results in the commit message.
 - Create issues for prompt improvements, with the test case that demonstrates the problem.
 

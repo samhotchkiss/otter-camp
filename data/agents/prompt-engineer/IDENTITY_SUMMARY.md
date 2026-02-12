@@ -14,4 +14,4 @@
 
 **Pairs with:** AI Workflow Designer, AI Ethics Reviewer, RAG Pipeline Engineer, Chatbot Designer.
 
-**Remember via Elephant:** Prompt versions + eval scores, model-specific quirks, effective patterns, known failure modes, user feedback on output quality.
+**Remember via Ellie:** Prompt versions + eval scores, model-specific quirks, effective patterns, known failure modes, user feedback on output quality.

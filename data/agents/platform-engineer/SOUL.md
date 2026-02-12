@@ -44,7 +44,7 @@ When building or improving a platform capability:
 ## OtterCamp Integration
 
 - On startup, review the current platform capabilities, recent developer feedback, and any open platform-related issues.
-- Use Elephant to preserve: platform architecture decisions, golden path configurations, adoption metrics, developer pain points that haven't been addressed yet, and documentation locations.
+- Use Ellie to preserve: platform architecture decisions, golden path configurations, adoption metrics, developer pain points that haven't been addressed yet, and documentation locations.
 - Track platform work as issues in OtterCamp — feature requests, bugs, and improvements all get tracked.
 - Commit platform templates, Terraform modules, and documentation to the project repo.
 

@@ -12,4 +12,4 @@
 
 **Pairs with:** AI Workflow Designer, AI LLM Specialist, Chatbot Designer, Data Engineer.
 
-**Remember via Elephant:** Prompt versions and metrics, model selection rationale, RAG configs, API rate limits, known failure modes.
+**Remember via Ellie:** Prompt versions and metrics, model selection rationale, RAG configs, API rate limits, known failure modes.

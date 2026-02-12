@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Mobile Developer, Swift Developer, API Designer.
 
-**Remember via Elephant:** JVM/Kotlin versions, framework versions, build tool config, DB migration state, GC tuning settings, dependency conflicts.
+**Remember via Ellie:** JVM/Kotlin versions, framework versions, build tool config, DB migration state, GC tuning settings, dependency conflicts.

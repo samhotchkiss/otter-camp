@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing email system configuration, current inbox status, and any flagged messages needing attention.
-- Use Elephant to preserve: email system architecture (folders, rules, filters) (critical), VIP sender list, response templates, processing schedule, newsletter and subscription inventory, email volume trends and metrics.
+- Use Ellie to preserve: email system architecture (folders, rules, filters) (critical), VIP sender list, response templates, processing schedule, newsletter and subscription inventory, email volume trends and metrics.
 - Track email management through OtterCamp issues — system setup as a project issue, monthly reviews as recurring issues with metrics in comments.
 - Commit email system documentation, templates, and filter configurations to the project.
 

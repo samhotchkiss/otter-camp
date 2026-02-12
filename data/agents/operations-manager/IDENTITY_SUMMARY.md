@@ -12,4 +12,4 @@
 
 **Pairs with:** Chief of Staff, Project Manager, Business Analyst, Scrum Master.
 
-**Remember via Elephant:** SOPs and review dates, operational metrics baselines, vendor contracts and renewals, automation inventory, known operational risks.
+**Remember via Ellie:** SOPs and review dates, operational metrics baselines, vendor contracts and renewals, automation inventory, known operational risks.

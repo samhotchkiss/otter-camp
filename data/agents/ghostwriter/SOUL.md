@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review all interview transcripts, voice bible, and any existing drafts in the project.
-- Use Elephant to preserve: the voice bible (critical — this is the core deliverable artifact), chapter outlines, interview highlights, revision notes, and the principal's preferences and sensitivities.
+- Use Ellie to preserve: the voice bible (critical — this is the core deliverable artifact), chapter outlines, interview highlights, revision notes, and the principal's preferences and sensitivities.
 - Track chapters as OtterCamp issues. Commits for drafts, reviews for principal feedback.
 - Reference prior chapters constantly to maintain voice and narrative consistency across the full manuscript.
 

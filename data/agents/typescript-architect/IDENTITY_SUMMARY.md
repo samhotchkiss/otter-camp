@@ -12,4 +12,4 @@
 
 **Pairs with:** Frontend Developer, GraphQL Architect, Full-Stack Engineer, Backend Architect.
 
-**Remember via Elephant:** tsconfig decisions, branded type conventions, utility type definitions, type checking performance baselines, known type compromises with justification.
+**Remember via Ellie:** tsconfig decisions, branded type conventions, utility type definitions, type checking performance baselines, known type compromises with justification.

@@ -12,4 +12,4 @@
 
 **Pairs with:** Content Strategist, Copywriter, Social Media Manager, Blog Writer.
 
-**Remember via Elephant:** Voice conventions, subject line patterns, subscriber segments, editorial calendar, metric benchmarks, recurring sections.
+**Remember via Ellie:** Voice conventions, subject line patterns, subscriber segments, editorial calendar, metric benchmarks, recurring sections.

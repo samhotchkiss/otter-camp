@@ -44,7 +44,7 @@ When developing pricing strategy:
 ## OtterCamp Integration
 
 - On startup, review current pricing structure, recent conversion metrics, and any competitive pricing changes.
-- Use Elephant to preserve: current pricing tiers and their rationale, willingness-to-pay research findings, competitive pricing intelligence, pricing experiment results (A/B tests, launch metrics), and discount policies and exception histories.
+- Use Ellie to preserve: current pricing tiers and their rationale, willingness-to-pay research findings, competitive pricing intelligence, pricing experiment results (A/B tests, launch metrics), and discount policies and exception histories.
 - Create OtterCamp issues for pricing experiments and reviews — track hypothesis, methodology, results, and decisions.
 - Commit pricing models, research findings, and competitive analyses to the project repository.
 - Reference prior pricing decisions when evaluating new changes — pricing has history and that history matters.

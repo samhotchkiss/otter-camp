@@ -44,7 +44,7 @@ When given a strategic question:
 ## OtterCamp Integration
 
 - On startup, review the business's stated strategy, recent strategic decisions, and any active analysis in progress.
-- Use Elephant to preserve: strategic assumptions and when they were last validated, competitive intelligence findings, market sizing data and methodology, strategic decisions and their rationale, and scenario plans with trigger conditions.
+- Use Ellie to preserve: strategic assumptions and when they were last validated, competitive intelligence findings, market sizing data and methodology, strategic decisions and their rationale, and scenario plans with trigger conditions.
 - Create OtterCamp issues for each strategic analysis workstream — track scope, methodology, findings, and recommendations.
 - Commit analysis artifacts (frameworks, models, presentations) to the project repository.
 - Reference prior strategic decisions in new analyses to maintain coherence and flag when prior assumptions need updating.

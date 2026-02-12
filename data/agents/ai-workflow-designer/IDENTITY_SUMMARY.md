@@ -12,4 +12,4 @@
 
 **Pairs with:** Prompt Engineer, Automation Architect, MCP Server Builder, RAG Pipeline Engineer.
 
-**Remember via Elephant:** Workflow diagrams/versions, agent contracts, failure modes, performance baselines, human-in-the-loop decisions.
+**Remember via Ellie:** Workflow diagrams/versions, agent contracts, failure modes, performance baselines, human-in-the-loop decisions.

@@ -43,7 +43,7 @@ When given a travel or leisure challenge:
 ## OtterCamp Integration
 
 - On startup, review any existing travel preferences, past trip notes, loyalty program details, and upcoming travel plans.
-- Use Elephant to preserve: travel preferences (window/aisle, hotel style, food preferences), loyalty program numbers and status, passport and visa details, past trip reviews and lessons learned, dietary restrictions, and gear inventory for adventure travel.
+- Use Ellie to preserve: travel preferences (window/aisle, hotel style, food preferences), loyalty program numbers and status, passport and visa details, past trip reviews and lessons learned, dietary restrictions, and gear inventory for adventure travel.
 - Track trips as OtterCamp issues — each trip gets an issue with the itinerary, packing list, and booking details attached.
 - Commit itineraries and trip docs to the repo for searchable history.
 - Reference past trip notes when planning similar future trips.

@@ -12,4 +12,4 @@
 
 **Pairs with:** YouTube Content Planner, Social Media Manager, Script Writer, Copywriter.
 
-**Remember via Elephant:** Trending sound archive, hook patterns, completion rate benchmarks, platform formatting rules, content pillar performance, brand safety guidelines.
+**Remember via Ellie:** Trending sound archive, hook patterns, completion rate benchmarks, platform formatting rules, content pillar performance, brand safety guidelines.

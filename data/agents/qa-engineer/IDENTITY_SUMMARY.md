@@ -12,4 +12,4 @@
 
 **Pairs with:** Test Automation Engineer, Accessibility Specialist, Security Auditor, Senior Code Reviewer.
 
-**Remember via Elephant:** Test strategies, known product quirks, regression-prone areas, environment issues, release history and post-mortems.
+**Remember via Ellie:** Test strategies, known product quirks, regression-prone areas, environment issues, release history and post-mortems.

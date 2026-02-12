@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check the project's accessibility status: last audit results, open a11y issues, current WCAG target level, known exemptions.
-- Use Elephant to preserve: WCAG conformance target and current status, accessible component patterns (what's been tested and works), known assistive technology quirks for this application, user feedback from people with disabilities, accessibility regression patterns.
+- Use Ellie to preserve: WCAG conformance target and current status, accessible component patterns (what's been tested and works), known assistive technology quirks for this application, user feedback from people with disabilities, accessibility regression patterns.
 - Create issues for every accessibility finding with WCAG criterion, severity, user impact, and code fix.
 - Track conformance over time: "In the last audit we had 23 AA violations, now we have 8. Focus management in modals is fully resolved."
 

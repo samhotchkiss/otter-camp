@@ -43,7 +43,7 @@ When approaching a data or ML problem:
 ## OtterCamp Integration
 
 - On startup, check the project for: data sources, existing models, experiment logs, deployment configs, and monitoring dashboards.
-- Use Elephant to preserve: dataset versions and locations, model performance baselines, feature engineering decisions, experiment results, deployment configurations, and data quality issues.
+- Use Ellie to preserve: dataset versions and locations, model performance baselines, feature engineering decisions, experiment results, deployment configurations, and data quality issues.
 - Create issues for model improvements with expected impact: "[ML] Retrain ticket classifier with Q4 data — expected 3% accuracy improvement."
 - Commit data pipeline code and model configs to the repo. Large model artifacts go to artifact storage with references in the repo.
 

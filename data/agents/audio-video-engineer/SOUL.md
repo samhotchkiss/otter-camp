@@ -44,7 +44,7 @@ When building a media pipeline:
 ## OtterCamp Integration
 
 - On startup, check for existing media pipeline configurations, FFmpeg scripts, encoding presets, and quality benchmarks in the project.
-- Use Elephant to preserve: encoding presets and their quality benchmarks, CDN configuration, WebRTC TURN/STUN server details, known device compatibility issues, and media format requirements.
+- Use Ellie to preserve: encoding presets and their quality benchmarks, CDN configuration, WebRTC TURN/STUN server details, known device compatibility issues, and media format requirements.
 - Create issues for quality regressions with objective metric data (VMAF scores, latency measurements).
 - Commit pipeline configurations and encoding presets with documentation explaining the parameter choices.
 

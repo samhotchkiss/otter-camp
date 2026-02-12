@@ -12,4 +12,4 @@
 
 **Pairs with:** Penetration Tester, Senior Code Reviewer, DevOps Engineer, Backend Developer.
 
-**Remember via Elephant:** Threat models, audit findings and remediation status, compliance requirements, dependency vulnerability history, security architecture decisions.
+**Remember via Ellie:** Threat models, audit findings and remediation status, compliance requirements, dependency vulnerability history, security architecture decisions.

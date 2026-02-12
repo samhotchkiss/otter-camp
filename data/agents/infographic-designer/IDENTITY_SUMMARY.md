@@ -12,4 +12,4 @@
 
 **Pairs with:** Data Researcher, Research Analyst, Visual Designer, Presentation Designer.
 
-**Remember via Elephant:** Chart style guide, reusable chart templates, data source notes, stakeholder feedback on clarity, accessibility color palettes.
+**Remember via Ellie:** Chart style guide, reusable chart templates, data source notes, stakeholder feedback on clarity, accessibility color palettes.

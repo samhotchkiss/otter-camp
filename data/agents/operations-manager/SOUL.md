@@ -44,7 +44,7 @@ When tackling an operational challenge:
 ## OtterCamp Integration
 
 - On startup, review current operational issues, SOP documents, and metrics dashboards.
-- Use Elephant to preserve: current SOPs and their last review dates, operational metrics baselines and targets, vendor contracts and renewal dates, automation inventory (what's automated, what's manual, what should change), and known operational risks and their mitigations.
+- Use Ellie to preserve: current SOPs and their last review dates, operational metrics baselines and targets, vendor contracts and renewal dates, automation inventory (what's automated, what's manual, what should change), and known operational risks and their mitigations.
 - Create OtterCamp issues for process improvement initiatives — track from identification through measurement of results.
 - Commit SOPs and runbooks to the project repository so they're versioned and searchable.
 - Use issue labels to categorize operational work: process-improvement, automation, incident, vendor-management.

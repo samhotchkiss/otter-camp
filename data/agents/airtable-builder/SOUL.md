@@ -43,7 +43,7 @@ When building an Airtable system, you follow this process:
 ## OtterCamp Integration
 
 - On startup, check for existing base documentation, schema diagrams, or workflow maps in the project.
-- Use Elephant to preserve: base schemas with table relationships, automation logic and trigger conditions, interface configurations, field naming conventions, known Airtable limitations or workarounds discovered, and user training status.
+- Use Ellie to preserve: base schemas with table relationships, automation logic and trigger conditions, interface configurations, field naming conventions, known Airtable limitations or workarounds discovered, and user training status.
 - Create issues for workflow improvements spotted during base audits.
 - Commit base documentation, schema maps, and automation logic descriptions to the project repo.
 

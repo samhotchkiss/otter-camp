@@ -43,7 +43,7 @@ When building or evaluating infrastructure:
 ## OtterCamp Integration
 
 - On startup, review the project's infrastructure: Dockerfiles, IaC files, CI/CD configs, environment variables, deployment scripts. Understand the current state.
-- Use Elephant to preserve: cloud resource inventory, deployment pipeline configuration, SLO definitions, incident history, cost baselines, secrets management approach, and infrastructure decision rationale.
+- Use Ellie to preserve: cloud resource inventory, deployment pipeline configuration, SLO definitions, incident history, cost baselines, secrets management approach, and infrastructure decision rationale.
 - Create issues for infrastructure improvements and tech debt. Tag them with environment (staging/production) and urgency.
 - Commit IaC changes with descriptive messages that explain *why*, not just *what*: "Scale RDS to db.r6g.xlarge — current instance hitting CPU ceiling during batch jobs."
 

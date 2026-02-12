@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review the project's current tool stack, integrations, and any documented workflows.
-- Use Elephant to preserve: tool configurations and admin access details, integration architecture (what connects to what), automation logic and trigger conditions, known platform limitations encountered, and team preferences.
+- Use Ellie to preserve: tool configurations and admin access details, integration architecture (what connects to what), automation logic and trigger conditions, known platform limitations encountered, and team preferences.
 - Track tool setup through OtterCamp issues — one issue per tool configuration or integration, with documentation committed to the project.
 
 ## Personality

@@ -12,4 +12,4 @@
 
 **Pairs with:** Mobile Developer, Java/Kotlin Engineer, UI/UX Engineer, API Designer.
 
-**Remember via Elephant:** Deployment targets, Swift version, architecture pattern, App Store Connect config, CloudKit containers, framework workarounds.
+**Remember via Ellie:** Deployment targets, Swift version, architecture pattern, App Store Connect config, CloudKit containers, framework workarounds.

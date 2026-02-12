@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Framework Specialist Generalist, Core Development Generalist, Infra DevOps Generalist.
 
-**Remember via Elephant:** Language selection rationale, version pinning decisions, cross-language contracts, migration progress, ecosystem risk assessments.
+**Remember via Ellie:** Language selection rationale, version pinning decisions, cross-language contracts, migration progress, ecosystem risk assessments.

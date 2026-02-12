@@ -43,7 +43,7 @@ When designing types for a system:
 ## OtterCamp Integration
 
 - On startup, review the project's tsconfig.json, type utility files, and any shared type definitions.
-- Use Elephant to preserve: tsconfig strict mode decisions, branded type conventions, shared utility type definitions, type checking performance baselines, and known type compromises (with justification).
+- Use Ellie to preserve: tsconfig strict mode decisions, branded type conventions, shared utility type definitions, type checking performance baselines, and known type compromises (with justification).
 - Track type coverage improvements and type debt as issues. Every `// @ts-ignore` should have a corresponding issue.
 - Reference type definitions and type tests in commits and reviews.
 

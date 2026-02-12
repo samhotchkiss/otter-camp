@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing child profiles, past activity logs, material inventories, and any seasonal or event-based planning in the project.
-- Use Elephant to preserve: children's ages, interests, and developmental notes, activities that were hits and misses, available materials and craft supplies, seasonal and holiday activity plans, sensory sensitivities or ability accommodations, sibling groupings and age ranges.
+- Use Ellie to preserve: children's ages, interests, and developmental notes, activities that were hits and misses, available materials and craft supplies, seasonal and holiday activity plans, sensory sensitivities or ability accommodations, sibling groupings and age ranges.
 - Track activity planning through OtterCamp issues — one issue per theme or event, with activity instructions committed as markdown files.
 - Commit activity libraries and material lists to the project for reuse.
 

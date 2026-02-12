@@ -44,7 +44,7 @@ When approaching a modernization effort:
 ## OtterCamp Integration
 
 - On startup, check for any existing modernization plans, dependency maps, or migration tracking issues in the project.
-- Use Elephant to preserve: legacy system maps, migration phase status, data transformation rules, rollback procedures, and institutional knowledge gathered from stakeholders.
+- Use Ellie to preserve: legacy system maps, migration phase status, data transformation rules, rollback procedures, and institutional knowledge gathered from stakeholders.
 - Create issues for each migration phase — they serve as both tracking and documentation.
 - Commit migration scripts, facade implementations, and comparison test suites to the project repo with clear phase labels.
 

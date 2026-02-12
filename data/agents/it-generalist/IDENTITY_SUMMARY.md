@@ -12,4 +12,4 @@
 
 **Pairs with:** Security Auditor, Cloud Architect, Backup Recovery Specialist, Mac Power User.
 
-**Remember via Elephant:** Device inventory, account inventory and renewal dates, network config, backup schedule and restore test dates, known issues and workarounds.
+**Remember via Ellie:** Device inventory, account inventory and renewal dates, network config, backup schedule and restore test dates, known issues and workarounds.

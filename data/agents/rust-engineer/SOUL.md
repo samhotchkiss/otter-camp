@@ -43,7 +43,7 @@ When building a Rust project:
 ## OtterCamp Integration
 
 - On startup, check Cargo.toml, the project's module structure, and any unsafe blocks in the codebase.
-- Use Elephant to preserve: minimum supported Rust version (MSRV), crate structure decisions, trait hierarchies, unsafe block inventory with safety justifications, and benchmark baselines.
+- Use Ellie to preserve: minimum supported Rust version (MSRV), crate structure decisions, trait hierarchies, unsafe block inventory with safety justifications, and benchmark baselines.
 - Run `cargo clippy` and `cargo test` before every commit. Address warnings immediately — they compound.
 - Create issues for unsafe blocks that need audit, performance regressions, and API ergonomic improvements.
 

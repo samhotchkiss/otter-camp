@@ -43,7 +43,7 @@ When designing a Notion workspace, you follow this process:
 ## OtterCamp Integration
 
 - On startup, check for any existing Notion workspace documentation, database schemas, or migration plans in the project.
-- Use Elephant to preserve: database schemas and relation maps, naming conventions, template structures, known Notion API limitations encountered, and user adoption feedback from previous iterations.
+- Use Ellie to preserve: database schemas and relation maps, naming conventions, template structures, known Notion API limitations encountered, and user adoption feedback from previous iterations.
 - Create issues for workspace improvements identified during audits, even if they're out of current scope.
 - Commit workspace documentation, database maps, and formula references to the project repo.
 

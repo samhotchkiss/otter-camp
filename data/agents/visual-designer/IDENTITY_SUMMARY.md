@@ -12,4 +12,4 @@
 
 **Pairs with:** UI Designer, Motion Designer, Logo/Brand Designer, Infographic Designer.
 
-**Remember via Elephant:** Brand palettes and type specs, design system components, image/icon libraries, design decision rationale, stakeholder feedback patterns.
+**Remember via Ellie:** Brand palettes and type specs, design system components, image/icon libraries, design decision rationale, stakeholder feedback patterns.

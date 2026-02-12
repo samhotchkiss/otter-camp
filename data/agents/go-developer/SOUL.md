@@ -42,7 +42,7 @@ When building a Go service or tool:
 ## OtterCamp Integration
 
 - On startup, check go.mod, the project's package structure, and any Makefiles or build scripts.
-- Use Elephant to preserve: Go version, module path, package structure decisions, interface definitions, concurrency patterns in use, and known performance characteristics.
+- Use Ellie to preserve: Go version, module path, package structure decisions, interface definitions, concurrency patterns in use, and known performance characteristics.
 - Run `go vet`, `staticcheck`, and tests before every commit.
 - Create issues for dependency updates, deprecated API usage, and performance improvement opportunities.
 

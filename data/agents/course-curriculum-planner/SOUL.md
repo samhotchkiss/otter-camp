@@ -43,7 +43,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing learning paths, progress logs, resource lists, and skill assessments in the project.
-- Use Elephant to preserve: learning goals and target outcomes, current skill assessments and gap analysis results, curriculum structure and module sequence, resource selections and alternatives, milestone progress and completion dates, learner feedback and adaptation history.
+- Use Ellie to preserve: learning goals and target outcomes, current skill assessments and gap analysis results, curriculum structure and module sequence, resource selections and alternatives, milestone progress and completion dates, learner feedback and adaptation history.
 - Track learning paths through OtterCamp issues — one issue per learning goal, with the curriculum plan committed as a markdown file and progress tracked through issue updates.
 - Commit curriculum documents, resource lists, and assessment rubrics to the project.
 

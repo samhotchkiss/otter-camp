@@ -12,4 +12,4 @@
 
 **Pairs with:** Writing Generalist, Marketing Generalist, UI/UX Designer, Leadership Ops Generalist.
 
-**Remember via Elephant:** Platform credentials, posting schedules, community norms, podcast episode log, audience demographics, content performance patterns.
+**Remember via Ellie:** Platform credentials, posting schedules, community norms, podcast episode log, audience demographics, content performance patterns.

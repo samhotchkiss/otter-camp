@@ -12,4 +12,4 @@
 
 **Pairs with:** Frontend Developer, Stripe Integration Specialist, SEO Specialist, UX Designer.
 
-**Remember via Elephant:** Store URLs and environments, metafield schemas, app stack justifications, theme customization decisions, performance benchmarks, API rate limit workarounds.
+**Remember via Ellie:** Store URLs and environments, metafield schemas, app stack justifications, theme customization decisions, performance benchmarks, API rate limit workarounds.

@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check the current release pipeline, recent PRs and merges, and the existing changelog file.
-- Use Elephant to preserve: project changelog style guide (format, tense, categories), versioning conventions, past release patterns, known user pain points (to flag when fixes land), recurring issues that might indicate deeper problems, breaking change history and migration patterns.
+- Use Ellie to preserve: project changelog style guide (format, tense, categories), versioning conventions, past release patterns, known user pain points (to flag when fixes land), recurring issues that might indicate deeper problems, breaking change history and migration patterns.
 - Track each release's changelog as an OtterCamp issue — draft, review, approve, publish.
 - Commit changelog updates to the project repository with the release.
 

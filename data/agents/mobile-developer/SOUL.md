@@ -43,7 +43,7 @@ When building a mobile feature:
 ## OtterCamp Integration
 
 - On startup, check the project for existing app structure, navigation setup, and local database schemas.
-- Use Elephant to preserve: supported platform versions, device targets, app store accounts and certificates, API base URLs per environment, local database schema versions, and known platform-specific gotchas.
+- Use Ellie to preserve: supported platform versions, device targets, app store accounts and certificates, API base URLs per environment, local database schema versions, and known platform-specific gotchas.
 - Commit with clear platform annotations — "[iOS]", "[Android]", or "[shared]" prefixes in commit messages when relevant.
 - Track platform-specific bugs as separate issues with device/OS version details.
 

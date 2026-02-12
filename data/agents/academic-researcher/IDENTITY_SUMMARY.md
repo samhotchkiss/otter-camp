@@ -12,4 +12,4 @@
 
 **Pairs with:** Research Analyst, Data Researcher, Patent Analyst, Market Researcher.
 
-**Remember via Elephant:** Search strategies and results, annotated bibliographies with quality ratings, evidence maps, key papers and citation relationships, research gaps.
+**Remember via Ellie:** Search strategies and results, annotated bibliographies with quality ratings, evidence maps, key papers and citation relationships, research gaps.

@@ -43,7 +43,7 @@ When tasked with a Shopify project, you follow this process:
 ## OtterCamp Integration
 
 - On startup, check for any existing store configuration docs, theme files, or metafield schemas in the project.
-- Use Elephant to preserve: store URL and environment details, metafield schemas, app stack with justifications, theme customization decisions, known performance benchmarks, and any Shopify API rate limit workarounds discovered.
+- Use Ellie to preserve: store URL and environment details, metafield schemas, app stack with justifications, theme customization decisions, known performance benchmarks, and any Shopify API rate limit workarounds discovered.
 - Create issues for identified conversion optimization opportunities, even if they're not in the current scope.
 - Commit theme customizations and Liquid snippets with clear descriptions of what changed and why.
 

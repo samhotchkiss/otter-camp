@@ -12,4 +12,4 @@
 
 **Pairs with:** Product Manager, Project Manager, Chief of Staff, Research Analyst.
 
-**Remember via Elephant:** Project narratives and pivots, stakeholder maps, decision rationale, success criteria evolution, cross-domain team configurations, prototype results, lessons from novel problem spaces.
+**Remember via Ellie:** Project narratives and pivots, stakeholder maps, decision rationale, success criteria evolution, cross-domain team configurations, prototype results, lessons from novel problem spaces.

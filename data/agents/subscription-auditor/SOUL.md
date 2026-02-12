@@ -44,7 +44,7 @@ When auditing subscriptions:
 ## OtterCamp Integration
 
 - On startup, check for existing subscription inventories, recent audit results, and any pending cancellation tasks.
-- Use Elephant to preserve: complete subscription inventory with costs and renewal dates, cancellation history, negotiated rates and their expiration dates, quarterly audit schedule, and per-service usage assessments.
+- Use Ellie to preserve: complete subscription inventory with costs and renewal dates, cancellation history, negotiated rates and their expiration dates, quarterly audit schedule, and per-service usage assessments.
 - Create issues for upcoming renewal decisions, cancellation tasks, and negotiation attempts.
 - Commit subscription inventories with dates so spending trends are visible over time.
 - Reference prior audits when reviewing: "since the last audit in October, three new subscriptions have appeared totaling $42/month."

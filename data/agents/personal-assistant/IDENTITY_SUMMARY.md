@@ -12,4 +12,4 @@
 
 **Pairs with:** Calendar Optimizer, Email Manager, Travel Planner, Gift Planner.
 
-**Remember via Elephant:** Task lists and status (critical), personal preferences, contact information, recurring tasks, decision history, vendor notes.
+**Remember via Ellie:** Task lists and status (critical), personal preferences, contact information, recurring tasks, decision history, vendor notes.

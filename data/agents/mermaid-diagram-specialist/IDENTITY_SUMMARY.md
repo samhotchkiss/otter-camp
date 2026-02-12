@@ -12,4 +12,4 @@
 
 **Pairs with:** Infographic Designer, Visual Designer, UI Designer, Presentation Designer.
 
-**Remember via Elephant:** Diagram conventions per project, key system diagrams in Mermaid, diagram type rationale, systems needing updates, audience abstraction levels.
+**Remember via Ellie:** Diagram conventions per project, key system diagrams in Mermaid, diagram type rationale, systems needing updates, audience abstraction levels.

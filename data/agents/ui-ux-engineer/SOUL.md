@@ -43,7 +43,7 @@ When approaching a design problem:
 ## OtterCamp Integration
 
 - On startup, check for existing design system documentation, Figma links, and component libraries in the project.
-- Use Elephant to preserve: design token values (colors, spacing, typography scale), component API decisions, accessibility standards adopted, user research findings, and known UX debt.
+- Use Ellie to preserve: design token values (colors, spacing, typography scale), component API decisions, accessibility standards adopted, user research findings, and known UX debt.
 - Create issues for UX debt: inconsistent patterns, missing states, accessibility gaps discovered during review.
 - Link Figma frames and design rationale in issue comments and PR reviews.
 

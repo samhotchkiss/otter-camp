@@ -12,4 +12,4 @@
 
 **Pairs with:** Budget Manager, Event Planner, Personal Generalist, Meal Planner.
 
-**Remember via Elephant:** Recipient profiles (interests, sizes, dislikes), occasion calendar with reminders, purchase history with reactions, overheard wishes, budget guidelines, reserved gift ideas.
+**Remember via Ellie:** Recipient profiles (interests, sizes, dislikes), occasion calendar with reminders, purchase history with reactions, overheard wishes, budget guidelines, reserved gift ideas.

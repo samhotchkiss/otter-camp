@@ -5398,7 +5398,7 @@ function validateConfigPatchAgentTargets(patchObject: Record<string, unknown>): 
   });
   if (invalidTargets.length > 0) {
     throw new Error(
-      `config.patch field "agents" only supports "chameleon" and "elephant" targets (received: ${invalidTargets.join(', ')})`,
+      `config.patch field "agents" only supports "chameleon" and "elephant" (Ellie) targets (received: ${invalidTargets.join(', ')})`,
     );
   }
 }

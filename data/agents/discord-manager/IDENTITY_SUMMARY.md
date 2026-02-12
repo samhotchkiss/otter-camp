@@ -12,4 +12,4 @@
 
 **Pairs with:** Reddit/Community Manager, Social Media Manager, Content Strategist, Script Writer.
 
-**Remember via Elephant:** Server architecture, bot configs, mod guidelines, role hierarchy, event calendar, health metrics, key member profiles.
+**Remember via Ellie:** Server architecture, bot configs, mod guidelines, role hierarchy, event calendar, health metrics, key member profiles.

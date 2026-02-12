@@ -12,4 +12,4 @@
 
 **Pairs with:** UI/UX Engineer, Backend Architect, TypeScript Architect, Mobile Developer.
 
-**Remember via Elephant:** Design tokens, component API decisions, accessibility patterns, browser support targets, performance budgets.
+**Remember via Ellie:** Design tokens, component API decisions, accessibility patterns, browser support targets, performance budgets.

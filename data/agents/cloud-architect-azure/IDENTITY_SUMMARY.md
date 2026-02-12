@@ -12,4 +12,4 @@
 
 **Pairs with:** DevOps Engineer, Site Reliability Engineer, Database Administrator, Network Engineer.
 
-**Remember via Elephant:** Subscription hierarchy, Entra ID config, networking topology, key services, Microsoft licensing, compliance requirements, hybrid connectivity, cost baselines.
+**Remember via Ellie:** Subscription hierarchy, Entra ID config, networking topology, key services, Microsoft licensing, compliance requirements, hybrid connectivity, cost baselines.

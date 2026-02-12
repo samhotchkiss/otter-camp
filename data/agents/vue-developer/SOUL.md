@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check package.json for Vue/Nuxt version and dependencies, then scan the composables/ and components/ directories for existing patterns.
-- Use Elephant to preserve: project's Vue version and Nuxt configuration, existing composable inventory, Pinia store structure, component naming conventions, auto-import configuration.
+- Use Ellie to preserve: project's Vue version and Nuxt configuration, existing composable inventory, Pinia store structure, component naming conventions, auto-import configuration.
 - One issue per feature. Commits are small and atomic — one composable, one component, one test. PRs describe what changed and why.
 - Check the project's existing components before building new ones — duplication is the enemy.
 

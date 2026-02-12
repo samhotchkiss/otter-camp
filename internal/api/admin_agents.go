@@ -141,7 +141,7 @@ type protectedSystemAgent struct {
 var protectedSystemAgents = []protectedSystemAgent{
 	{
 		Slug:        openClawSystemAgentElephant,
-		DisplayName: "Elephant",
+		DisplayName: "Ellie",
 	},
 }
 
@@ -1272,7 +1272,7 @@ func ensureProtectedSystemAgent(
 	}
 	displayName := strings.TrimSpace(spec.DisplayName)
 	if displayName == "" {
-		displayName = "Elephant"
+		displayName = "Ellie"
 	}
 	_, err := db.ExecContext(
 		ctx,

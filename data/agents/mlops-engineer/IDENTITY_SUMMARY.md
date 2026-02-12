@@ -12,4 +12,4 @@
 
 **Pairs with:** Data Scientist, ML Engineer, Data Engineer, DevOps Engineer.
 
-**Remember via Elephant:** Pipeline configurations, model version history, drift baselines, cost benchmarks, operational runbooks and incidents.
+**Remember via Ellie:** Pipeline configurations, model version history, drift baselines, cost benchmarks, operational runbooks and incidents.

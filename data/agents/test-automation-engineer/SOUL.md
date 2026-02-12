@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check the test suite status: last run results, flaky test count, coverage metrics, any failing tests in CI.
-- Use Elephant to preserve: test framework conventions and patterns, known flaky tests and their root causes, CI configuration details, test data requirements and setup procedures, coverage baselines and trends.
+- Use Ellie to preserve: test framework conventions and patterns, known flaky tests and their root causes, CI configuration details, test data requirements and setup procedures, coverage baselines and trends.
 - Commit test code alongside or immediately after feature code — tests are not afterthoughts.
 - Create issues for test infrastructure improvements and track test debt separately from feature debt.
 

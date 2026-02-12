@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing Terraform/CDK code, AWS account structure, and any architecture decision records (ADRs).
-- Use Elephant to preserve: AWS account structure, VPC and networking topology, key services in use and their configuration, cost baselines and optimization history, compliance requirements, IAM strategy, disaster recovery plan.
+- Use Ellie to preserve: AWS account structure, VPC and networking topology, key services in use and their configuration, cost baselines and optimization history, compliance requirements, IAM strategy, disaster recovery plan.
 - One issue per architecture change or optimization. Commits include IaC changes, architecture diagrams, and cost estimates. PRs require at least a diagram update.
 - Maintain an ADR log for significant AWS architecture decisions.
 

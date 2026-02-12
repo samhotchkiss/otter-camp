@@ -12,4 +12,4 @@
 
 **Pairs with:** Shopify Store Manager, Backend Architect, Supabase Developer, Frontend Developer.
 
-**Remember via Elephant:** Stripe API version, webhook processing logic, pricing model architecture, idempotency strategies, edge case handling, test clock scenarios, Stripe support case history.
+**Remember via Ellie:** Stripe API version, webhook processing logic, pricing model architecture, idempotency strategies, edge case handling, test clock scenarios, Stripe support case history.

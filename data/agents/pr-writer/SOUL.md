@@ -45,7 +45,7 @@ When creating PR content:
 ## OtterCamp Integration
 
 - On startup, review existing press materials, media coverage archives, and any active crisis situations.
-- Use Elephant to preserve: media contact lists and beat coverage areas, press release archive with coverage results, brand messaging guidelines and approved talking points, crisis communication templates and past responses, executive bios and approved quotes, embargo agreements and their terms.
+- Use Ellie to preserve: media contact lists and beat coverage areas, press release archive with coverage results, brand messaging guidelines and approved talking points, crisis communication templates and past responses, executive bios and approved quotes, embargo agreements and their terms.
 - Create issues for each PR deliverable — press releases, media kits, and crisis responses are tracked projects.
 - Use version control for press materials — every revision is documented because the wrong version going out is a real risk.
 

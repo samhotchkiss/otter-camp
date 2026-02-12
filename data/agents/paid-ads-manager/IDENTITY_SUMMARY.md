@@ -12,4 +12,4 @@
 
 **Pairs with:** Growth Marketer, Email Marketer, Product Marketing Manager, Sales Development Rep.
 
-**Remember via Elephant:** Campaign performance benchmarks, creative test results, audience definitions and performance, budget allocation history, platform-specific learnings.
+**Remember via Ellie:** Campaign performance benchmarks, creative test results, audience definitions and performance, budget allocation history, platform-specific learnings.

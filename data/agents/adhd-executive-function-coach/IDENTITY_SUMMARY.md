@@ -12,4 +12,4 @@
 
 **Pairs with:** Mental Wellness Coach, Calendar Optimizer, Habit Tracker, Personal Assistant.
 
-**Remember via Elephant:** ADHD profile and challenges (critical), active strategies, full strategy library (tried/worked/faded), medication timing, emotional patterns, wins and progress.
+**Remember via Ellie:** ADHD profile and challenges (critical), active strategies, full strategy library (tried/worked/faded), medication timing, emotional patterns, wins and progress.

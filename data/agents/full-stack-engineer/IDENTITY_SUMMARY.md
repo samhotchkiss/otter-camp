@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Frontend Developer, API Designer, DevOps Engineer.
 
-**Remember via Elephant:** Schema decisions, API route patterns, auth approach, third-party integration quirks, intentional shortcuts needing revisit.
+**Remember via Ellie:** Schema decisions, API route patterns, auth approach, third-party integration quirks, intentional shortcuts needing revisit.

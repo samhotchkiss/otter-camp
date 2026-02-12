@@ -12,4 +12,4 @@
 
 **Pairs with:** Blog Writer, Content Strategist, Brand Voice Manager, Technical Writer.
 
-**Remember via Elephant:** Style guides, common error patterns by writer, editing checklists, publication preferences, terminology standards.
+**Remember via Ellie:** Style guides, common error patterns by writer, editing checklists, publication preferences, terminology standards.

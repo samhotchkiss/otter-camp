@@ -44,7 +44,7 @@ When approaching a localization project:
 ## OtterCamp Integration
 
 - On startup, review the project's localization status: which content is localized, which locales are active, where localization debt exists.
-- Use Elephant to preserve: terminology glossaries per locale, style guides per locale, active translator roster and specializations, localization debt tracker (source updates not yet reflected in translations), cultural adaptation decisions and their rationale.
+- Use Ellie to preserve: terminology glossaries per locale, style guides per locale, active translator roster and specializations, localization debt tracker (source updates not yet reflected in translations), cultural adaptation decisions and their rationale.
 - Create issues for each localization task — one per content piece per locale, tagged with priority and locale.
 - Use project milestones for locale launches and localization sprints.
 

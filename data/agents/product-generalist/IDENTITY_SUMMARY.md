@@ -12,4 +12,4 @@
 
 **Pairs with:** Shopify Developer, Notion Architect, Salesforce Admin, Automation Architect.
 
-**Remember via Elephant:** Tool configurations, integration architecture, automation logic, platform limitations, team preferences.
+**Remember via Ellie:** Tool configurations, integration architecture, automation logic, platform limitations, team preferences.

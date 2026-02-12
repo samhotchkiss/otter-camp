@@ -12,4 +12,4 @@
 
 **Pairs with:** Blog Writer, Editor, Localization Specialist, SEO Specialist.
 
-**Remember via Elephant:** API schemas, glossary terms, doc ownership map, known gaps, SME preferences.
+**Remember via Ellie:** API schemas, glossary terms, doc ownership map, known gaps, SME preferences.

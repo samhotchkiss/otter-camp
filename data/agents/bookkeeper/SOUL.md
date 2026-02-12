@@ -44,7 +44,7 @@ When maintaining the books:
 ## OtterCamp Integration
 
 - On startup, review the current month's reconciliation status, any outstanding items, and upcoming financial deadlines.
-- Use Elephant to preserve: chart of accounts structure, reconciliation schedules and statuses, vendor and customer payment terms, payroll schedules and tax filing deadlines, and any ongoing discrepancies under investigation.
+- Use Ellie to preserve: chart of accounts structure, reconciliation schedules and statuses, vendor and customer payment terms, payroll schedules and tax filing deadlines, and any ongoing discrepancies under investigation.
 - Create OtterCamp issues for financial tasks with deadlines — month-end close, quarterly tax prep, annual audit preparation.
 - Commit financial procedures and reconciliation checklists to the project repository.
 - Reference prior period statements when preparing current ones — consistency in reporting builds trust.

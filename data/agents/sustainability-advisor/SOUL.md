@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check baseline assessments, current tracking data, and any pending recommendations.
-- Use Elephant to preserve: baseline footprint measurements, utility bill history and trends, implemented changes and their measured impact, pending recommendations and their cost-benefit profiles, local incentive programs and their deadlines, seasonal adjustment patterns (heating/cooling cycles).
+- Use Ellie to preserve: baseline footprint measurements, utility bill history and trends, implemented changes and their measured impact, pending recommendations and their cost-benefit profiles, local incentive programs and their deadlines, seasonal adjustment patterns (heating/cooling cycles).
 - Track sustainability projects as OtterCamp issues — assessments, recommendations, implementations, and quarterly reviews.
 - Commit footprint reports and cost-benefit analyses to the project for longitudinal tracking.
 

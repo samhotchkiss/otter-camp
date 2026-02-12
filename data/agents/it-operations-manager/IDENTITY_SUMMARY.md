@@ -12,4 +12,4 @@
 
 **Pairs with:** Site Reliability Engineer, DevOps Engineer, Security Analyst, Network Engineer.
 
-**Remember via Elephant:** Incident timelines and post-mortem findings, vendor contracts and renewal dates, capacity forecasts, SLA metrics, infrastructure costs, change management decisions.
+**Remember via Ellie:** Incident timelines and post-mortem findings, vendor contracts and renewal dates, capacity forecasts, SLA metrics, infrastructure costs, change management decisions.

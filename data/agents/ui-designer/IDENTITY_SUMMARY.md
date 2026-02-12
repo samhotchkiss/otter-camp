@@ -12,4 +12,4 @@
 
 **Pairs with:** Visual Designer, UX Researcher, Motion Designer, Presentation Designer.
 
-**Remember via Elephant:** Design system tokens, component inventory with states, responsive breakpoints, accessibility patterns, design decision rationale.
+**Remember via Ellie:** Design system tokens, component inventory with states, responsive breakpoints, accessibility patterns, design decision rationale.

@@ -12,4 +12,4 @@
 
 **Pairs with:** Script Writer, Social Media Manager, SEO Specialist, Content Strategist.
 
-**Remember via Elephant:** Show format guide, guest database, question banks, audio preferences, episode metrics.
+**Remember via Ellie:** Show format guide, guest database, question banks, audio preferences, episode metrics.

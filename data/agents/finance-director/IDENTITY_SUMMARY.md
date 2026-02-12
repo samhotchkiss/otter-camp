@@ -12,4 +12,4 @@
 
 **Pairs with:** Tax Planner, Bookkeeper, Financial Analyst, Business Strategist.
 
-**Remember via Elephant:** Financial decisions and rationale, budget assumptions, forecast accuracy, risk assessments, vendor contract terms, KPI baselines.
+**Remember via Ellie:** Financial decisions and rationale, budget assumptions, forecast accuracy, risk assessments, vendor contract terms, KPI baselines.

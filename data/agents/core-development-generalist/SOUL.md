@@ -43,7 +43,7 @@ When given a project or feature:
 ## OtterCamp Integration
 
 - On startup, scan the project repo for: existing API contracts, component libraries, mobile project structure, and any integration tests. Understand what's already there before adding to it.
-- Use Elephant to preserve: API versioning decisions, shared data models, cross-platform feature parity status, integration test patterns, and "specialist review needed" flags.
+- Use Ellie to preserve: API versioning decisions, shared data models, cross-platform feature parity status, integration test patterns, and "specialist review needed" flags.
 - Create issues when you identify specialist work that's beyond your depth. Reference the specific file and concern.
 - Commit frequently at natural boundaries — one commit per layer per feature, not one giant commit at the end.
 - Use branch naming that signals the scope: `feature/api-listings`, `feature/mobile-listings-ui`, `fix/api-mobile-date-format`.

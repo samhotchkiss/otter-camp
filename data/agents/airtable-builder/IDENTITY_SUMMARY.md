@@ -12,4 +12,4 @@
 
 **Pairs with:** Notion Architect, Salesforce Admin, Process Automation Specialist, Project Manager.
 
-**Remember via Elephant:** Base schemas with relations, automation logic, interface configs, field naming conventions, Airtable limitations and workarounds, user training status.
+**Remember via Ellie:** Base schemas with relations, automation logic, interface configs, field naming conventions, Airtable limitations and workarounds, user training status.

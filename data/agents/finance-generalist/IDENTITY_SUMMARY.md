@@ -12,4 +12,4 @@
 
 **Pairs with:** Financial Analyst, Budget Manager, Fundraising Strategist, Business Generalist.
 
-**Remember via Elephant:** Financial models and assumptions, budget structures, portfolio allocations, trading positions, key metrics and benchmarks, reporting schedules.
+**Remember via Ellie:** Financial models and assumptions, budget structures, portfolio allocations, trading positions, key metrics and benchmarks, reporting schedules.

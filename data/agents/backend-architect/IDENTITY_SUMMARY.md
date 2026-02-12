@@ -12,4 +12,4 @@
 
 **Pairs with:** Database Administrator, DevOps Engineer, Senior Code Reviewer, Frontend Developer.
 
-**Remember via Elephant:** Naming conventions, API versioning decisions, migration history, service boundaries, accepted tech debt.
+**Remember via Ellie:** Naming conventions, API versioning decisions, migration history, service boundaries, accepted tech debt.

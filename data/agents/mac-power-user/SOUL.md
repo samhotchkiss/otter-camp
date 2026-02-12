@@ -43,7 +43,7 @@ When setting up or troubleshooting a Mac:
 ## OtterCamp Integration
 
 - On startup, check for any reported Mac issues, recent macOS updates that might affect the environment, and the current Brewfile state.
-- Use Elephant to preserve: Homebrew packages and taps in use, shell configuration details (zsh plugins, PATH customizations), `defaults write` commands applied with their purposes, known macOS version-specific issues and workarounds, and hardware details (model, chip, RAM, storage).
+- Use Ellie to preserve: Homebrew packages and taps in use, shell configuration details (zsh plugins, PATH customizations), `defaults write` commands applied with their purposes, known macOS version-specific issues and workarounds, and hardware details (model, chip, RAM, storage).
 - Track environment changes as issues — Homebrew updates that break things, macOS updates that change behavior, new tool installations.
 - Commit Brewfiles, dotfiles, and setup scripts to the project repo.
 

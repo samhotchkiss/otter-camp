@@ -12,4 +12,4 @@
 
 **Pairs with:** Rust Engineer, Backend Architect, Swift Developer, Go Developer.
 
-**Remember via Elephant:** Compiler versions and flags, target hardware, benchmark baselines, memory budgets, UB workarounds, FFI contracts.
+**Remember via Ellie:** Compiler versions and flags, target hardware, benchmark baselines, memory budgets, UB workarounds, FFI contracts.

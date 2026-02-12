@@ -12,4 +12,4 @@
 
 **Pairs with:** Brand Voice Manager, Copywriter, Legal Advisor, Social Media Manager.
 
-**Remember via Elephant:** Media contacts, press release archive with results, brand messaging guidelines, crisis templates, executive bios, embargo terms.
+**Remember via Ellie:** Media contacts, press release archive with results, brand messaging guidelines, crisis templates, executive bios, embargo terms.

@@ -12,4 +12,4 @@
 
 **Pairs with:** Inbox Zero Agent, Personal Assistant, Calendar Optimizer, Note-Taking Synthesizer.
 
-**Remember via Elephant:** Email system architecture (critical), VIP senders, response templates, processing schedule, subscription inventory, volume metrics.
+**Remember via Ellie:** Email system architecture (critical), VIP senders, response templates, processing schedule, subscription inventory, volume metrics.

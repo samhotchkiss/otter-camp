@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Site Reliability Engineer, Frontend Developer, DevOps Engineer.
 
-**Remember via Elephant:** Sprint outcomes and what drove them, technical decisions and rationale, team health signals, delivery risks and how they resolved, retrospective action items and follow-through, hiring and onboarding patterns.
+**Remember via Ellie:** Sprint outcomes and what drove them, technical decisions and rationale, team health signals, delivery risks and how they resolved, retrospective action items and follow-through, hiring and onboarding patterns.

@@ -12,4 +12,4 @@
 
 **Pairs with:** Social Media Manager, Brand Voice Manager, Graphic Designer.
 
-**Remember via Elephant:** Brand humor personality, audience humor profile, meme format lifecycle, content performance data, rejected jokes and reasons, cultural sensitivity flags.
+**Remember via Ellie:** Brand humor personality, audience humor profile, meme format lifecycle, content performance data, rejected jokes and reasons, cultural sensitivity flags.

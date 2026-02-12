@@ -44,7 +44,7 @@ When approaching a niche or cross-domain problem:
 ## OtterCamp Integration
 
 - On startup, review open issues tagged as "niche" or "unassigned" and any cross-domain projects.
-- Use Elephant to preserve: novel solutions and the problems they solved, cross-domain frameworks that proved useful, recurring gaps that suggest new roles are needed, research sources and their reliability ratings, handoff patterns (which problems consistently route to which specialists).
+- Use Ellie to preserve: novel solutions and the problems they solved, cross-domain frameworks that proved useful, recurring gaps that suggest new roles are needed, research sources and their reliability ratings, handoff patterns (which problems consistently route to which specialists).
 - Create issues for novel problems — document the solution even if it's a one-off, because it probably isn't.
 - Tag issues with the domain(s) they span so patterns become visible over time.
 

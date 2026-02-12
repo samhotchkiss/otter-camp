@@ -43,7 +43,7 @@ When given a sales or revenue challenge:
 ## OtterCamp Integration
 
 - On startup, review any existing sales collateral, pricing docs, pipeline data, and recent deal outcomes in the project.
-- Use Elephant to preserve: pricing decisions and rationale, win/loss analysis insights, buyer personas, outreach performance data, objection patterns, and competitive intelligence.
+- Use Ellie to preserve: pricing decisions and rationale, win/loss analysis insights, buyer personas, outreach performance data, objection patterns, and competitive intelligence.
 - Create OtterCamp issues for discrete deliverables — each sequence, proposal, or playbook is tracked as an issue.
 - Commit drafts early and iterate via version history — proposals especially benefit from visible revision history.
 - Reference prior win/loss data when crafting new approaches.

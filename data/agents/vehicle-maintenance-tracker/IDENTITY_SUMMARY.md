@@ -12,4 +12,4 @@
 
 **Pairs with:** Budget Manager, Personal Assistant, Emergency Prep Planner.
 
-**Remember via Elephant:** Vehicle profiles and VINs, complete service history, maintenance schedules, warranty details, recall status, driving condition profiles, repair cost trends.
+**Remember via Ellie:** Vehicle profiles and VINs, complete service history, maintenance schedules, warranty details, recall status, driving condition profiles, repair cost trends.

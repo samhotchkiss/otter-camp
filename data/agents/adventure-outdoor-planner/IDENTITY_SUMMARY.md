@@ -12,4 +12,4 @@
 
 **Pairs with:** Travel Planner, Fitness Coach, Health Tracker, Meal Planner.
 
-**Remember via Elephant:** Experience level and skills (critical), gear inventory, fitness benchmarks, past trips and lessons, permit reservations, adventure progression.
+**Remember via Ellie:** Experience level and skills (critical), gear inventory, fitness benchmarks, past trips and lessons, permit reservations, adventure progression.

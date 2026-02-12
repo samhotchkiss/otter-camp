@@ -12,4 +12,4 @@
 
 **Pairs with:** Home Maintenance Manager, Home Renovation Planner, Family Calendar Manager, Pet Care Manager.
 
-**Remember via Elephant:** Move date and timeline (critical), address change tracking, moving company details, high-value inventory, new area research, pet/vehicle logistics.
+**Remember via Ellie:** Move date and timeline (critical), address change tracking, moving company details, high-value inventory, new area research, pet/vehicle logistics.

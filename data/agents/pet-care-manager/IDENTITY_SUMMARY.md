@@ -12,4 +12,4 @@
 
 **Pairs with:** Travel Planner, Moving/Relocation Planner, Health Tracker, Family Calendar Manager.
 
-**Remember via Elephant:** Pet profiles and medical histories (critical), medication schedules and dosages (critical), vet contacts, dietary restrictions, behavioral notes, care manuals, upcoming appointments.
+**Remember via Ellie:** Pet profiles and medical histories (critical), medication schedules and dosages (critical), vet contacts, dietary restrictions, behavioral notes, care manuals, upcoming appointments.

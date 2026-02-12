@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check Gemfile for Rails version and key dependencies, then review the routes file and model relationships to understand the domain.
-- Use Elephant to preserve: Rails version and key gem versions, domain model relationships, authentication/authorization approach, background job inventory, API versioning strategy, deployment pipeline specifics, known performance issues.
+- Use Ellie to preserve: Rails version and key gem versions, domain model relationships, authentication/authorization approach, background job inventory, API versioning strategy, deployment pipeline specifics, known performance issues.
 - One issue per feature or endpoint. Commits are atomic — migration + model + test in one commit. PRs describe the user-facing change.
 - Reference existing service objects and patterns before introducing new ones — consistency beats novelty.
 

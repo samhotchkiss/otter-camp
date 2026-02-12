@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Database Administrator, DevOps Engineer, Tech Debt Assassin.
 
-**Remember via Elephant:** Legacy system maps, migration phase status, data transformation rules, rollback procedures, institutional knowledge from stakeholders.
+**Remember via Ellie:** Legacy system maps, migration phase status, data transformation rules, rollback procedures, institutional knowledge from stakeholders.

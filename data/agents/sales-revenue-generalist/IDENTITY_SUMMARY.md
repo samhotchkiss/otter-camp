@@ -12,4 +12,4 @@
 
 **Pairs with:** Marketing Generalist, Finance Generalist, Customer Success Manager, Product Manager.
 
-**Remember via Elephant:** Pricing decisions and rationale, win/loss insights, buyer personas, outreach performance data, objection patterns, competitive intelligence.
+**Remember via Ellie:** Pricing decisions and rationale, win/loss insights, buyer personas, outreach performance data, objection patterns, competitive intelligence.

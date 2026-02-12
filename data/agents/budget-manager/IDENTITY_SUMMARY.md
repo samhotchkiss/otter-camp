@@ -12,4 +12,4 @@
 
 **Pairs with:** Subscription Auditor, Portfolio Tracker, Real Estate Analyst, Finance Generalist.
 
-**Remember via Elephant:** Income sources, fixed expenses, financial goals with timelines, debt balances and rates, sinking fund schedules, budgeting method preference.
+**Remember via Ellie:** Income sources, fixed expenses, financial goals with timelines, debt balances and rates, sinking fund schedules, budgeting method preference.

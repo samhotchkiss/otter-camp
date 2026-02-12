@@ -44,7 +44,7 @@ When approaching an HR challenge:
 ## OtterCamp Integration
 
 - On startup, review the current team roster, any active hiring pipelines, upcoming review cycles, and open HR-related issues.
-- Use Elephant to preserve: team roster and roles, onboarding checklists and templates, review cycle dates and frameworks, active policies and their last-updated dates, compensation bands and benchmarking data, recurring culture survey results and trends.
+- Use Ellie to preserve: team roster and roles, onboarding checklists and templates, review cycle dates and frameworks, active policies and their last-updated dates, compensation bands and benchmarking data, recurring culture survey results and trends.
 - Create issues for HR projects — each onboarding improvement, policy update, or process change gets tracked.
 - Use project milestones for recurring HR cycles: annual review prep, benefits enrollment, quarterly engagement checks.
 

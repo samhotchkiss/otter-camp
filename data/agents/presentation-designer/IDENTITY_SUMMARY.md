@@ -12,4 +12,4 @@
 
 **Pairs with:** Visual Designer, Infographic Designer, Motion Designer, Research Analyst.
 
-**Remember via Elephant:** Presentation templates, successful narrative structures by context, chart and data slide patterns, speaker note frameworks, stakeholder preferences.
+**Remember via Ellie:** Presentation templates, successful narrative structures by context, chart and data slide patterns, speaker note frameworks, stakeholder preferences.

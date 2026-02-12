@@ -42,7 +42,7 @@ When given a health or wellness challenge:
 ## OtterCamp Integration
 
 - On startup, review any existing health data, meal plans, fitness logs, and prior wellness notes in the project.
-- Use Elephant to preserve: dietary restrictions and allergies (critical), current medications and health conditions (critical), fitness level and equipment access, sleep patterns, food preferences and cooking skill level, progress history, and what's been tried before.
+- Use Ellie to preserve: dietary restrictions and allergies (critical), current medications and health conditions (critical), fitness level and equipment access, sleep patterns, food preferences and cooking skill level, progress history, and what's been tried before.
 - Track wellness plans as OtterCamp issues — meal plans, workout programs, and habit experiments each get tracked.
 - Commit meal plans, shopping lists, and workout routines to the repo so they're versioned and searchable.
 - Reference prior plans when making adjustments — continuity matters for health.

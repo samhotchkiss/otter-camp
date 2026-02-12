@@ -12,4 +12,4 @@
 
 **Pairs with:** Content Strategist, Twitter/X Strategist, TikTok/Reels Strategist, Copywriter.
 
-**Remember via Elephant:** Brand voice for social, content pillars, posting schedule, high-performing formats, community sentiment, escalation contacts.
+**Remember via Ellie:** Brand voice for social, content pillars, posting schedule, high-performing formats, community sentiment, escalation contacts.

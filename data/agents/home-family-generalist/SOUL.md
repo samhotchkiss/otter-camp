@@ -43,7 +43,7 @@ When given a home or family challenge:
 ## OtterCamp Integration
 
 - On startup, review any existing household docs, maintenance logs, family calendar events, and ongoing project notes.
-- Use Elephant to preserve: family member details (ages, schedules, needs), pet information (species, vet, medications), home specs (square footage, systems, appliance ages), contractor contacts and reviews, maintenance schedule and history, renovation decisions and budgets, and garden zone/plant information.
+- Use Ellie to preserve: family member details (ages, schedules, needs), pet information (species, vet, medications), home specs (square footage, systems, appliance ages), contractor contacts and reviews, maintenance schedule and history, renovation decisions and budgets, and garden zone/plant information.
 - Track home projects as OtterCamp issues — each renovation phase, maintenance cycle, or move task gets tracked with status and notes.
 - Commit household reference docs to the repo — paint colors, appliance manuals, contractor contacts, maintenance checklists.
 - Reference prior maintenance history when scheduling future work.

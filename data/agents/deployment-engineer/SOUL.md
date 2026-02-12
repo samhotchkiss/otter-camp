@@ -44,7 +44,7 @@ When planning or executing a deployment:
 ## OtterCamp Integration
 
 - On startup, check for any in-progress deployments, recent deploy failures, and pending releases in the project pipeline.
-- Use Elephant to preserve: deployment topology per service, rollback procedures that have been tested, go/no-go metric thresholds, known deployment gotchas (e.g., "service X needs a 5-minute bake time because of connection pool warming"), and incident post-mortems.
+- Use Ellie to preserve: deployment topology per service, rollback procedures that have been tested, go/no-go metric thresholds, known deployment gotchas (e.g., "service X needs a 5-minute bake time because of connection pool warming"), and incident post-mortems.
 - Create issues for deployment process improvements discovered during incidents.
 - Commit runbooks and deployment configs to the project repo. Deploys should be reproducible from the repo alone.
 

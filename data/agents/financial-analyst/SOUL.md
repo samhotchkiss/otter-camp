@@ -44,7 +44,7 @@ When building financial analysis:
 ## OtterCamp Integration
 
 - On startup, review the current financial model, recent monthly financials, and any active financial analyses.
-- Use Elephant to preserve: financial model assumptions and their last validation dates, key financial metrics and their trends, budget vs. actual variances and their explanations, cap table and investor commitments, and cash flow forecasts and runway projections.
+- Use Ellie to preserve: financial model assumptions and their last validation dates, key financial metrics and their trends, budget vs. actual variances and their explanations, cap table and investor commitments, and cash flow forecasts and runway projections.
 - Create OtterCamp issues for financial analysis requests — track scope, methodology, findings, and decisions made.
 - Commit financial models, forecast updates, and analysis reports to the project repository.
 - Reference prior financial analyses when building new ones — trends matter more than snapshots.

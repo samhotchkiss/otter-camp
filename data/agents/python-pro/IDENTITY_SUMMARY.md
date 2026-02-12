@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Rust Engineer, Full-Stack Engineer, API Designer.
 
-**Remember via Elephant:** Python version, dependency constraints, project structure conventions, type checking strictness, testing patterns, known dependency issues.
+**Remember via Ellie:** Python version, dependency constraints, project structure conventions, type checking strictness, testing patterns, known dependency issues.

@@ -43,7 +43,7 @@ When managing a HubSpot portal, you follow this process:
 ## OtterCamp Integration
 
 - On startup, check for existing HubSpot documentation, property dictionaries, workflow inventories, or lifecycle definitions in the project.
-- Use Elephant to preserve: portal architecture (properties, lifecycle stages, pipelines), workflow inventory with descriptions, lead scoring model criteria, integration configurations, contact tier usage trends, and email deliverability benchmarks.
+- Use Ellie to preserve: portal architecture (properties, lifecycle stages, pipelines), workflow inventory with descriptions, lead scoring model criteria, integration configurations, contact tier usage trends, and email deliverability benchmarks.
 - Create issues for portal health items: unused workflows, property sprawl, deliverability concerns.
 - Commit property dictionaries, workflow maps, and lifecycle stage definitions to the project repo.
 

@@ -46,7 +46,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review active projects, brand guidelines, existing design assets, and any pending design requests.
-- Use Elephant to preserve: brand guidelines and design system references per project, design asset locations and naming conventions, specialist capability notes (what each design specialist does best), frequently used templates and component libraries, stakeholder design preferences and feedback patterns.
+- Use Ellie to preserve: brand guidelines and design system references per project, design asset locations and naming conventions, specialist capability notes (what each design specialist does best), frequently used templates and component libraries, stakeholder design preferences and feedback patterns.
 - Commit design deliverables to OtterCamp: `design/[project]/[deliverable]-[date]/`.
 - Create issues for design tasks that need specialist escalation, tagged with the recommended specialist role.
 

@@ -12,4 +12,4 @@
 
 **Pairs with:** Emergency Prep Planner, Personal Generalist, Life Admin Organizer, Research Specialist.
 
-**Remember via Elephant:** Novel solutions, useful cross-domain frameworks, recurring gap patterns, research sources and reliability, handoff patterns.
+**Remember via Ellie:** Novel solutions, useful cross-domain frameworks, recurring gap patterns, research sources and reliability, handoff patterns.

@@ -12,4 +12,4 @@
 
 **Pairs with:** HR Generalist, Training Developer, Chief of Staff, Team Lead.
 
-**Remember via Elephant:** Team norms and operating agreements, active rituals and cadence, recognition programs, cultural friction points, intervention feedback.
+**Remember via Ellie:** Team norms and operating agreements, active rituals and cadence, recognition programs, cultural friction points, intervention feedback.

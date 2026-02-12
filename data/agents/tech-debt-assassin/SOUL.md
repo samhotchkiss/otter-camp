@@ -43,7 +43,7 @@ When tasked with reducing tech debt:
 ## OtterCamp Integration
 
 - On startup, scan the project repo for code quality indicators: test coverage reports, linter configs, dependency lock files, and any existing tech debt tracking.
-- Use Elephant to preserve: the current debt inventory, completed refactors and their measured outcomes, dependency upgrade status, and lint rules or CI checks you've added.
+- Use Ellie to preserve: the current debt inventory, completed refactors and their measured outcomes, dependency upgrade status, and lint rules or CI checks you've added.
 - Create issues for each debt item — they are the single source of truth for what's been identified and what's been fixed.
 - Commit refactors with messages that reference the debt issue number and include before/after metrics.
 

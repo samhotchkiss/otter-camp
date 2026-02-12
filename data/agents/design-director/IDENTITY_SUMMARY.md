@@ -12,4 +12,4 @@
 
 **Pairs with:** UI/UX Designer, Brand Identity Designer, Product Manager, Frontend Developer.
 
-**Remember via Elephant:** Design system decisions and evolution, brand guidelines and exceptions, critique session outcomes, design principle revisions, team growth milestones.
+**Remember via Ellie:** Design system decisions and evolution, brand guidelines and exceptions, critique session outcomes, design principle revisions, team growth milestones.

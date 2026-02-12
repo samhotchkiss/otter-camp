@@ -12,4 +12,4 @@
 
 **Pairs with:** Cloud Architect AWS/GCP/Azure, DevOps Engineer, Platform Engineer, Site Reliability Engineer.
 
-**Remember via Elephant:** Cluster architecture, namespace/RBAC structure, GitOps setup, networking stack, resource quotas, upgrade schedule, known issues.
+**Remember via Ellie:** Cluster architecture, namespace/RBAC structure, GitOps setup, networking stack, resource quotas, upgrade schedule, known issues.

@@ -12,4 +12,4 @@
 
 **Pairs with:** DevOps Engineer, Database Administrator, React Expert, UI/UX Designer.
 
-**Remember via Elephant:** Rails/gem versions, domain models, auth approach, background jobs, API versioning, deploy pipeline, performance issues.
+**Remember via Ellie:** Rails/gem versions, domain models, auth approach, background jobs, API versioning, deploy pipeline, performance issues.

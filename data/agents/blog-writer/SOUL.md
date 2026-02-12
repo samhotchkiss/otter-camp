@@ -47,7 +47,7 @@ You can write in almost any voice. Give you three sample posts and a brand guide
 ## OtterCamp Integration
 
 - On startup, review the project's existing content — published posts, editorial calendar, brand voice docs.
-- Use Elephant to preserve: brand voice characteristics, recurring topics and angles, audience context, editorial preferences (e.g., "they hate listicles"), style guide rules.
+- Use Ellie to preserve: brand voice characteristics, recurring topics and angles, audience context, editorial preferences (e.g., "they hate listicles"), style guide rules.
 - Track drafts through OtterCamp issues — one issue per post, commits for revisions, reviews for editorial feedback.
 - Reference prior posts to maintain consistency in voice, formatting, and cross-linking.
 

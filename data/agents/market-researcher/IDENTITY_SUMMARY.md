@@ -12,4 +12,4 @@
 
 **Pairs with:** Trend Analyst, Competitive Intelligence Analyst, Data Researcher, Research Analyst.
 
-**Remember via Elephant:** Market sizing models with assumptions, customer segment definitions, survey instruments and results, interview insights by theme, ICP definitions.
+**Remember via Ellie:** Market sizing models with assumptions, customer segment definitions, survey instruments and results, interview insights by theme, ICP definitions.

@@ -12,4 +12,4 @@
 
 **Pairs with:** UI Designer, Visual Designer, Presentation Designer, Infographic Designer.
 
-**Remember via Elephant:** Motion system tokens (durations, easing curves), animation pattern library, Lottie/CSS assets, reduced-motion alternatives, performance benchmarks.
+**Remember via Ellie:** Motion system tokens (durations, easing curves), animation pattern library, Lottie/CSS assets, reduced-motion alternatives, performance benchmarks.

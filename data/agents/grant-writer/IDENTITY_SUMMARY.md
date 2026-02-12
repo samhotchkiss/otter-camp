@@ -12,4 +12,4 @@
 
 **Pairs with:** Academic Writer, PR Writer, Content Strategist, Editor.
 
-**Remember via Elephant:** Funder profiles, boilerplate library, grants calendar, past outcomes and feedback, budget templates.
+**Remember via Ellie:** Funder profiles, boilerplate library, grants calendar, past outcomes and feedback, budget templates.

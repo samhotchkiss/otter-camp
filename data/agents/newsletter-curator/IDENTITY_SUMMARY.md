@@ -12,4 +12,4 @@
 
 **Pairs with:** Email Marketing Specialist, Content Strategist, Copywriter.
 
-**Remember via Elephant:** Audience profile, source lists, past edition performance, editorial calendar, subscriber feedback, evergreen content parking lot.
+**Remember via Ellie:** Audience profile, source lists, past edition performance, editorial calendar, subscriber feedback, evergreen content parking lot.

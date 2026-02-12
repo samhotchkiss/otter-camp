@@ -12,4 +12,4 @@
 
 **Pairs with:** Social Media Manager, Twitter/X Strategist, Resume/CV Writer, Content Strategist.
 
-**Remember via Elephant:** Content pillars, hook patterns, executive voice guides, posting times, DM conversion patterns, formatting rules.
+**Remember via Ellie:** Content pillars, hook patterns, executive voice guides, posting times, DM conversion patterns, formatting rules.

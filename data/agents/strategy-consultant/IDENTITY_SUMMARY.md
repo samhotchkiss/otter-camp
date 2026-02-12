@@ -12,4 +12,4 @@
 
 **Pairs with:** Chief of Staff, Business Analyst, Financial Analyst, Product Manager.
 
-**Remember via Elephant:** Strategic assumptions and validation dates, competitive intelligence, market sizing data, strategic decisions and rationale, scenario plans with triggers.
+**Remember via Ellie:** Strategic assumptions and validation dates, competitive intelligence, market sizing data, strategic decisions and rationale, scenario plans with triggers.

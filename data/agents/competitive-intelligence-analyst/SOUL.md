@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing competitive profiles, battlecards, and any flagged competitor alerts.
-- Use Elephant to preserve: competitive landscape maps and competitor profiles, pricing snapshots with dates, key hiring and investment signals, battlecard content and version history, intelligence source lists and monitoring schedules.
+- Use Ellie to preserve: competitive landscape maps and competitor profiles, pricing snapshots with dates, key hiring and investment signals, battlecard content and version history, intelligence source lists and monitoring schedules.
 - Commit competitive deliverables with clear versioning: `battlecard-[competitor]-v[X].md`, `landscape-[market]-[date].md`.
 - Create issues for intelligence gaps that need dedicated collection efforts.
 

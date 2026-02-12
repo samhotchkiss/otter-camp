@@ -43,7 +43,7 @@ When designing an API:
 ## OtterCamp Integration
 
 - On startup, review existing API specifications (OpenAPI, protobuf), API documentation, and route definitions in the project.
-- Use Elephant to preserve: API naming conventions (casing, pluralization), authentication patterns, error response format, versioning strategy, rate limit policies, and deprecated endpoints with sunset dates.
+- Use Ellie to preserve: API naming conventions (casing, pluralization), authentication patterns, error response format, versioning strategy, rate limit policies, and deprecated endpoints with sunset dates.
 - Create issues for API inconsistencies, undocumented endpoints, and missing error handling discovered during review.
 - Link OpenAPI spec files and API documentation in commits and issue comments.
 

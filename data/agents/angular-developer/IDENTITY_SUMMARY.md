@@ -12,4 +12,4 @@
 
 **Pairs with:** UI/UX Designer, DevOps Engineer, Django/FastAPI Specialist, Full-Stack Developer.
 
-**Remember via Elephant:** Workspace config, module boundaries, coding standards, state management patterns, API contracts, Angular version.
+**Remember via Ellie:** Workspace config, module boundaries, coding standards, state management patterns, API contracts, Angular version.

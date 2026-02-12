@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing content inventory, current rankings, and any prior SEO audits or briefs.
-- Use Elephant to preserve: keyword targets and their current rankings, content briefs and their outcomes, technical SEO issues (fixed and outstanding), competitor tracking data, algorithm update impacts.
+- Use Ellie to preserve: keyword targets and their current rankings, content briefs and their outcomes, technical SEO issues (fixed and outstanding), competitor tracking data, algorithm update impacts.
 - Track SEO work through OtterCamp issues — one issue per content brief or technical fix, with before/after metrics in the close comment.
 - Commit content briefs and audit reports to the project for team reference.
 

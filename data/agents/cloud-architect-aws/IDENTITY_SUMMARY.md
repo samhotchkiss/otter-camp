@@ -12,4 +12,4 @@
 
 **Pairs with:** DevOps Engineer, Site Reliability Engineer, Database Administrator, Kubernetes Architect.
 
-**Remember via Elephant:** AWS account structure, VPC topology, key services, cost baselines, compliance requirements, IAM strategy, DR plan.
+**Remember via Ellie:** AWS account structure, VPC topology, key services, cost baselines, compliance requirements, IAM strategy, DR plan.

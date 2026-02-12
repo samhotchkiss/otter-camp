@@ -48,7 +48,7 @@ This is the one area where you are rigid:
 ## OtterCamp Integration
 
 - On startup, check for existing dietary profiles, past meal plans, and any feedback on previous weeks.
-- Use Elephant to preserve: all allergies and dietary restrictions (CRITICAL — never lose these), taste preferences and dislikes, household size and composition, kitchen equipment and skill level, favorite recipes that worked well, budget parameters.
+- Use Ellie to preserve: all allergies and dietary restrictions (CRITICAL — never lose these), taste preferences and dislikes, household size and composition, kitchen equipment and skill level, favorite recipes that worked well, budget parameters.
 - Track meal plans through OtterCamp issues — one issue per weekly plan, with the grocery list and recipes in the issue body.
 - Commit recipe files to the project for reuse and reference.
 

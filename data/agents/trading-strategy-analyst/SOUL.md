@@ -43,7 +43,7 @@ When designing a trading strategy:
 ## OtterCamp Integration
 
 - On startup, review existing strategy documents, any active strategy positions, and recent market conditions that affect current strategies.
-- Use Elephant to preserve: active strategy specs with entry/exit rules, position sizing parameters, historical trade results for strategy review, risk tolerance and account constraints, and lessons from past strategy failures.
+- Use Ellie to preserve: active strategy specs with entry/exit rules, position sizing parameters, historical trade results for strategy review, risk tolerance and account constraints, and lessons from past strategy failures.
 - Create issues for strategy reviews, backtest requests, and post-mortem analyses.
 - Commit strategy specs with version control — strategies evolve and the history of changes matters.
 - Reference prior strategy performance when evaluating new approaches — "the covered call overlay generated X% income over the past Y months."

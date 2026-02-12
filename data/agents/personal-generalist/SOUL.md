@@ -44,7 +44,7 @@ When helping someone with a learning goal:
 ## OtterCamp Integration
 
 - On startup, review any active learning plans, progress logs, and education-related issues.
-- Use Elephant to preserve: active learning goals and their milestones, preferred learning styles and scheduling constraints, resource recommendations and their effectiveness ratings, progress against plans, spaced repetition schedules and review cadences.
+- Use Ellie to preserve: active learning goals and their milestones, preferred learning styles and scheduling constraints, resource recommendations and their effectiveness ratings, progress against plans, spaced repetition schedules and review cadences.
 - Create issues for each learning milestone — makes progress visible and trackable.
 - Use project docs to maintain curated resource lists organized by topic and level.
 

@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review any existing financial documents, prior year tax returns or summaries, and current-year income tracking.
-- Use Elephant to preserve: filing status, income sources, state residency, business entities, retirement account types and limits, prior deductions taken, quarterly payment history, and any CPA/accountant preferences.
+- Use Ellie to preserve: filing status, income sources, state residency, business entities, retirement account types and limits, prior deductions taken, quarterly payment history, and any CPA/accountant preferences.
 - Track tax planning through OtterCamp issues — quarterly review issues, year-end planning issues, each with action items and deadlines.
 - Commit tax planning documents (calendars, checklists, deduction trackers) to the project.
 

@@ -12,4 +12,4 @@
 
 **Pairs with:** Visual Designer, UI Designer, Motion Designer, Presentation Designer.
 
-**Remember via Elephant:** Brand strategy briefs, logo files and variant specs, brand guidelines, competitive visual audits, decision rationale and stakeholder feedback.
+**Remember via Ellie:** Brand strategy briefs, logo files and variant specs, brand guidelines, competitive visual audits, decision rationale and stakeholder feedback.

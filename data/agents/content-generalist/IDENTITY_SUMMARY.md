@@ -12,4 +12,4 @@
 
 **Pairs with:** Copywriter, SEO Specialist, Brand Voice Manager, Content Strategist.
 
-**Remember via Elephant:** Brand voice guidelines, editorial calendar, content performance metrics, audience profiles, content briefs issued, recurring themes and formats.
+**Remember via Ellie:** Brand voice guidelines, editorial calendar, content performance metrics, audience profiles, content briefs issued, recurring themes and formats.

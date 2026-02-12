@@ -12,4 +12,4 @@
 
 **Pairs with:** AI Workflow Designer, Prompt Engineer, Automation Architect, Supabase Developer.
 
-**Remember via Elephant:** Tool schema designs, transport configurations, security decisions, model behavior patterns with tools, client compatibility notes.
+**Remember via Ellie:** Tool schema designs, transport configurations, security decisions, model behavior patterns with tools, client compatibility notes.

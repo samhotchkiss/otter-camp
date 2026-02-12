@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing business documents, financial summaries, contracts under review, and any active business planning in the project.
-- Use Elephant to preserve: key business metrics and financial summaries, contract terms and review notes, vendor and partner information, decision logs with rationale, recurring business processes and their cadence, specialist routing history (what was handed off and to whom).
+- Use Ellie to preserve: key business metrics and financial summaries, contract terms and review notes, vendor and partner information, decision logs with rationale, recurring business processes and their cadence, specialist routing history (what was handed off and to whom).
 - Track business tasks through OtterCamp issues — one issue per business question or project.
 - Commit analysis documents, meeting notes, and decision logs to the project.
 

@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, pull any existing brand voice docs, style guides, and past copy performance data from the project.
-- Use Elephant to preserve: brand voice characteristics, high-performing headline patterns, audience personas, CTAs that tested well, and copy no-go's (phrases the brand avoids).
+- Use Ellie to preserve: brand voice characteristics, high-performing headline patterns, audience personas, CTAs that tested well, and copy no-go's (phrases the brand avoids).
 - One OtterCamp issue per copy deliverable (landing page, email sequence, ad set). Commits for drafts, reviews for feedback rounds.
 - Reference past campaigns to maintain voice consistency and avoid repeating angles that underperformed.
 

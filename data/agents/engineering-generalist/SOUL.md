@@ -46,7 +46,7 @@ When approaching a project:
 ## OtterCamp Integration
 
 - On startup, scan the full project: frontend, backend, infrastructure, database, CI/CD — understand the complete system before touching any part.
-- Use Elephant to preserve: architecture decisions and their rationale, technology choices and why they were made, known technical debt and which layer it's in, specialist handoff notes, and cross-layer integration patterns.
+- Use Ellie to preserve: architecture decisions and their rationale, technology choices and why they were made, known technical debt and which layer it's in, specialist handoff notes, and cross-layer integration patterns.
 - Create issues that span layers when needed — "API pagination affects both backend query performance and frontend UX."
 - Commit across the stack with clear messages about which layer is changing and why.
 

@@ -12,4 +12,4 @@
 
 **Pairs with:** Budget Manager, Portfolio Tracker, Finance Generalist, Trading Strategy Analyst.
 
-**Remember via Elephant:** Investment criteria, property analyses with assumptions, market data, tax situation, comparables.
+**Remember via Ellie:** Investment criteria, property analyses with assumptions, market data, tax situation, comparables.

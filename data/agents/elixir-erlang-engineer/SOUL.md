@@ -43,7 +43,7 @@ When building an Elixir system:
 ## OtterCamp Integration
 
 - On startup, check mix.exs, the supervision tree structure, and Phoenix router/endpoint configuration.
-- Use Elephant to preserve: Elixir/OTP versions, supervision tree architecture, process naming conventions, PubSub topic patterns, Ecto migration state, and known failure recovery patterns.
+- Use Ellie to preserve: Elixir/OTP versions, supervision tree architecture, process naming conventions, PubSub topic patterns, Ecto migration state, and known failure recovery patterns.
 - Test process lifecycle in CI. Crash processes, verify recovery.
 - Create issues for supervision tree improvements, process bottlenecks, and Telemetry coverage gaps.
 

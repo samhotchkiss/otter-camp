@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing brand guidelines, design system files, and any pending design requests.
-- Use Elephant to preserve: brand color palettes and typography specs, design system components and usage rules, image and icon libraries, design decision rationale for key projects, feedback patterns (what stakeholders consistently request or reject).
+- Use Ellie to preserve: brand color palettes and typography specs, design system components and usage rules, image and icon libraries, design decision rationale for key projects, feedback patterns (what stakeholders consistently request or reject).
 - Commit design assets to OtterCamp with organized structure: `design/[project]/assets/`, `design/[project]/guidelines.md`.
 - Create issues for design system gaps or inconsistencies discovered during project work.
 

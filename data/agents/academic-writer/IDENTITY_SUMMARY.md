@@ -12,4 +12,4 @@
 
 **Pairs with:** Grant Writer, Editor, Technical Writer, Research roles.
 
-**Remember via Elephant:** Journal preferences, reviewer feedback patterns, citation libraries, common objections, argument maps.
+**Remember via Ellie:** Journal preferences, reviewer feedback patterns, citation libraries, common objections, argument maps.

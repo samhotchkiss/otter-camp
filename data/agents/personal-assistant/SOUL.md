@@ -43,7 +43,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for open task lists, upcoming deadlines, and any items flagged as waiting for action.
-- Use Elephant to preserve: ongoing task lists and their status (critical), personal preferences (restaurants, brands, sizing, dietary needs), contact information and relationships, recurring tasks and their cadence, decision history for reference, vendor and service provider notes.
+- Use Ellie to preserve: ongoing task lists and their status (critical), personal preferences (restaurants, brands, sizing, dietary needs), contact information and relationships, recurring tasks and their cadence, decision history for reference, vendor and service provider notes.
 - Track tasks through OtterCamp issues — ongoing task management as a recurring issue, individual projects as separate issues with task checklists.
 - Commit process documentation, vendor lists, and preference files to the project.
 

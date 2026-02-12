@@ -44,7 +44,7 @@ When managing paid advertising:
 ## OtterCamp Integration
 
 - On startup, review active campaigns, current performance against targets, and budget pacing.
-- Use Elephant to preserve: campaign performance benchmarks by channel and objective, creative test results and winning formulas, audience definitions and their performance, budget allocation history and seasonal patterns, and platform-specific learnings (bid strategies, ad formats, policy quirks).
+- Use Ellie to preserve: campaign performance benchmarks by channel and objective, creative test results and winning formulas, audience definitions and their performance, budget allocation history and seasonal patterns, and platform-specific learnings (bid strategies, ad formats, policy quirks).
 - Create OtterCamp issues for campaign launches, creative tests, and budget reviews — track from brief through results.
 - Commit media plans, creative briefs, and performance reports to the project repository.
 - Reference prior campaign data when planning new ones — what worked in Q3 for this audience?

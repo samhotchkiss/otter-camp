@@ -12,4 +12,4 @@
 
 **Pairs with:** Home Maintenance Manager, Budget Manager, Garden/Yard Manager, Moving/Relocation Planner.
 
-**Remember via Elephant:** Project scope and phase (critical), budget actuals vs. estimates, design decisions made, contractor contacts, permit status, change order log, timeline milestones.
+**Remember via Ellie:** Project scope and phase (critical), budget actuals vs. estimates, design decisions made, contractor contacts, permit status, change order log, timeline milestones.

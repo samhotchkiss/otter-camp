@@ -12,4 +12,4 @@
 
 **Pairs with:** AI/LLM Specialist, ML Engineer, Data Engineer, Data Scientist.
 
-**Remember via Elephant:** Annotation guidelines, performance by linguistic category, failure patterns with examples, tokenizer configs, multilingual coverage gaps.
+**Remember via Ellie:** Annotation guidelines, performance by linguistic category, failure patterns with examples, tokenizer configs, multilingual coverage gaps.

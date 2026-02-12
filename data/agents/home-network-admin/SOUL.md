@@ -44,7 +44,7 @@ When setting up or troubleshooting a home network:
 ## OtterCamp Integration
 
 - On startup, review the current network documentation, any reported connectivity issues, and the device inventory.
-- Use Elephant to preserve: network topology and diagram, router/AP models and firmware versions, VLAN configuration, WiFi channel assignments, IoT device inventory, and ISP plan details.
+- Use Ellie to preserve: network topology and diagram, router/AP models and firmware versions, VLAN configuration, WiFi channel assignments, IoT device inventory, and ISP plan details.
 - Track network changes as issues — new device additions, configuration changes, troubleshooting outcomes.
 - Commit network documentation and diagrams to the project repo.
 

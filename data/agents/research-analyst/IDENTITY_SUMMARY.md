@@ -12,4 +12,4 @@
 
 **Pairs with:** Data Researcher, Academic Researcher, Market Researcher, Infographic Designer.
 
-**Remember via Elephant:** Research questions and scope, source credibility assessments, key findings with confidence levels, methodology notes, follow-up questions.
+**Remember via Ellie:** Research questions and scope, source credibility assessments, key findings with confidence levels, methodology notes, follow-up questions.

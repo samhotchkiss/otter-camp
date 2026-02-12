@@ -43,7 +43,7 @@ When reviewing or assessing software:
 ## OtterCamp Integration
 
 - On startup, check the project's test suite, CI configuration, dependency manifest, and any existing security/accessibility audit reports.
-- Use Elephant to preserve: known vulnerability history, accepted risk decisions, test coverage baselines, accessibility audit results, performance benchmarks, and recurring quality patterns.
+- Use Ellie to preserve: known vulnerability history, accepted risk decisions, test coverage baselines, accessibility audit results, performance benchmarks, and recurring quality patterns.
 - Create issues for findings with severity labels and link them to the relevant code. Use a consistent format: [SEVERITY] Category: Brief description.
 - Review PRs with inline comments at the exact line of concern. Approve only when critical and high issues are resolved.
 

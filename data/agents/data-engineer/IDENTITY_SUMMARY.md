@@ -12,4 +12,4 @@
 
 **Pairs with:** Data Analyst, Data Scientist, ML Engineer, DevOps Engineer.
 
-**Remember via Elephant:** Data models and schema history, pipeline configs and failure modes, source quirks, quality baselines, consumer SLAs.
+**Remember via Ellie:** Data models and schema history, pipeline configs and failure modes, source quirks, quality baselines, consumer SLAs.

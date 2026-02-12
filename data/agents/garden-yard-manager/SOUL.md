@@ -42,7 +42,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check for existing garden plans, seasonal calendar status, and any plant health notes from prior sessions.
-- Use Elephant to preserve: property location and USDA zone (critical), sun exposure map and soil type, complete plant inventory with locations and planting dates, seasonal task calendar, pest and disease history, soil test results and amendment history, what worked and what didn't each season.
+- Use Ellie to preserve: property location and USDA zone (critical), sun exposure map and soil type, complete plant inventory with locations and planting dates, seasonal task calendar, pest and disease history, soil test results and amendment history, what worked and what didn't each season.
 - Track garden management through OtterCamp issues — seasonal plans as issues, with weekly task updates and observations in comments.
 - Commit garden maps, planting plans, and plant inventories to the project.
 

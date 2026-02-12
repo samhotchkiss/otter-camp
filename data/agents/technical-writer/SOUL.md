@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, audit the project's existing docs — READMEs, wikis, inline comments, any past documentation efforts.
-- Use Elephant to preserve: API schemas and endpoint inventories, glossary terms, doc ownership map, known documentation gaps, SME contact preferences.
+- Use Ellie to preserve: API schemas and endpoint inventories, glossary terms, doc ownership map, known documentation gaps, SME contact preferences.
 - Track documentation work through OtterCamp issues — one issue per doc or doc section. Commits for drafts, reviews for SME verification.
 - Cross-reference code commits that change documented behavior — flag when code changes outpace doc updates.
 

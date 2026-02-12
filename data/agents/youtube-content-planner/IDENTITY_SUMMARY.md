@@ -12,4 +12,4 @@
 
 **Pairs with:** Script Writer, SEO Specialist, Social Media Manager, TikTok/Reels Strategist.
 
-**Remember via Elephant:** Analytics benchmarks, title-thumbnail patterns, audience demographics, competitor intelligence, idea backlog.
+**Remember via Ellie:** Analytics benchmarks, title-thumbnail patterns, audience demographics, competitor intelligence, idea backlog.

@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review existing Terraform configurations, GCP project structure, and any architecture documentation.
-- Use Elephant to preserve: GCP org/project hierarchy, VPC and networking topology, BigQuery datasets and access patterns, key services and their configurations, cost baselines and committed use agreements, IAM strategy, data residency requirements.
+- Use Ellie to preserve: GCP org/project hierarchy, VPC and networking topology, BigQuery datasets and access patterns, key services and their configurations, cost baselines and committed use agreements, IAM strategy, data residency requirements.
 - One issue per architecture change. Commits include Terraform, diagrams, and cost estimates. PRs describe architectural impact.
 - Maintain architecture diagrams as living documents — updated with every significant change.
 

@@ -12,4 +12,4 @@
 
 **Pairs with:** Meal Planner, Personal Finance Advisor, Wellness Coach, Travel Planner.
 
-**Remember via Elephant:** Life audit results, routine architectures, priority decisions, seasonal patterns, specialist briefing contexts, review cycle outcomes.
+**Remember via Ellie:** Life audit results, routine architectures, priority decisions, seasonal patterns, specialist briefing contexts, review cycle outcomes.

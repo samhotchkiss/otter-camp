@@ -42,7 +42,7 @@ When building a PHP application:
 ## OtterCamp Integration
 
 - On startup, check composer.json, PHP version, framework version, and PHPStan/Psalm configuration.
-- Use Elephant to preserve: PHP and framework versions, Composer conventions, database schema state, queue driver configuration, API authentication approach, and PHPStan level and baseline.
+- Use Ellie to preserve: PHP and framework versions, Composer conventions, database schema state, queue driver configuration, API authentication approach, and PHPStan level and baseline.
 - Run PHPStan and tests before every commit. Keep the baseline clean.
 - Create issues for deprecated PHP features, framework upgrade paths, and static analysis baseline reductions.
 

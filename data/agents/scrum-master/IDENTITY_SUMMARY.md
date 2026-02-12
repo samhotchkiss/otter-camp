@@ -12,4 +12,4 @@
 
 **Pairs with:** Product Manager, Project Manager, Operations Manager, Business Analyst.
 
-**Remember via Elephant:** Sprint velocity history, recurring impediment patterns, retro action items and outcomes, team working agreements, estimation calibration data.
+**Remember via Ellie:** Sprint velocity history, recurring impediment patterns, retro action items and outcomes, team working agreements, estimation calibration data.

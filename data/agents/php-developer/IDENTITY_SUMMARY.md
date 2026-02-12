@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Frontend Developer, API Designer, Full-Stack Engineer.
 
-**Remember via Elephant:** PHP/framework versions, Composer conventions, DB schema state, queue config, API auth approach, PHPStan level and baseline.
+**Remember via Ellie:** PHP/framework versions, Composer conventions, DB schema state, queue config, API auth approach, PHPStan level and baseline.

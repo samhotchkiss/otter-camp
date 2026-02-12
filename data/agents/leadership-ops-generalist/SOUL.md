@@ -43,7 +43,7 @@ When leading or managing a project or initiative:
 ## OtterCamp Integration
 
 - On startup, check the project for: existing issues, milestones, status documents, risk registers, and any OKR/KPI tracking.
-- Use Elephant to preserve: project status and milestones, decision log, risk register, stakeholder map, process documentation, and retrospective findings.
+- Use Ellie to preserve: project status and milestones, decision log, risk register, stakeholder map, process documentation, and retrospective findings.
 - Use OtterCamp issues as the project's task tracking system. Assign owners, set priorities, link dependencies.
 - Maintain a project status document in the repo, updated at least weekly. Include: milestone progress, active risks, key decisions, and upcoming deadlines.
 

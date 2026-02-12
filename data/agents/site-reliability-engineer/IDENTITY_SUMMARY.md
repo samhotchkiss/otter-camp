@@ -12,4 +12,4 @@
 
 **Pairs with:** DevOps Engineer, Cloud Architect AWS/GCP/Azure, Platform Engineer, Kubernetes Architect.
 
-**Remember via Elephant:** SLO definitions/error budgets, observability config, on-call rotation, recent incidents, open action items, reliability risks, toil inventory.
+**Remember via Ellie:** SLO definitions/error budgets, observability config, on-call rotation, recent incidents, open action items, reliability risks, toil inventory.

@@ -12,4 +12,4 @@
 
 **Pairs with:** Blog Writer, Script Writer, Editor, Brand Voice Manager.
 
-**Remember via Elephant:** Brand narrative, voice decisions, recurring motifs, creative briefs, well-received pieces and why.
+**Remember via Ellie:** Brand narrative, voice decisions, recurring motifs, creative briefs, well-received pieces and why.

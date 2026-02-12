@@ -12,4 +12,4 @@
 
 **Pairs with:** Health Tracker, Fitness Coach, Mental Wellness Coach, Calendar Optimizer.
 
-**Remember via Elephant:** Sleep-wake schedule and chronotype (critical), active interventions and start dates, caffeine/substance habits, sleep environment, medication timing, baseline metrics.
+**Remember via Ellie:** Sleep-wake schedule and chronotype (critical), active interventions and start dates, caffeine/substance habits, sleep environment, medication timing, baseline metrics.

@@ -12,4 +12,4 @@
 
 **Pairs with:** HubSpot Manager, Data Analyst, Salesforce Developer, Business Analyst.
 
-**Remember via Elephant:** Org architecture and ERD, automation inventory, permission model, data quality rules, governor limit considerations, deployment history.
+**Remember via Ellie:** Org architecture and ERD, automation inventory, permission model, data quality rules, governor limit considerations, deployment history.

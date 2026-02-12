@@ -43,7 +43,7 @@ When assessing risk:
 ## OtterCamp Integration
 
 - On startup, review the current risk register, any recent incidents or near-misses, and business continuity plan status.
-- Use Elephant to preserve: risk register with current assessments, incident history and lessons learned, compliance requirements and their control mappings, business continuity plans and test results, and risk appetite statements from leadership.
+- Use Ellie to preserve: risk register with current assessments, incident history and lessons learned, compliance requirements and their control mappings, business continuity plans and test results, and risk appetite statements from leadership.
 - Create OtterCamp issues for risk mitigations that require project-level effort — track from identification through implementation and testing.
 - Commit risk assessment documents, BCP plans, and compliance matrices to the project repository.
 - Reference prior incidents and assessments in new analyses — institutional memory is a risk mitigation in itself.

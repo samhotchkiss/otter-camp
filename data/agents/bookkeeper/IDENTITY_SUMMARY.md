@@ -12,4 +12,4 @@
 
 **Pairs with:** Financial Analyst, Tax Planner, Operations Manager, Chief of Staff.
 
-**Remember via Elephant:** Chart of accounts, reconciliation schedules, vendor/customer payment terms, payroll and tax deadlines, ongoing discrepancies.
+**Remember via Ellie:** Chart of accounts, reconciliation schedules, vendor/customer payment terms, payroll and tax deadlines, ongoing discrepancies.

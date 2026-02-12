@@ -12,4 +12,4 @@
 
 **Pairs with:** Budget Manager, Privacy & Security Advisor, IT Generalist, Finance Generalist.
 
-**Remember via Elephant:** Subscription inventory with costs and dates, cancellation history, negotiated rates, audit schedule, usage assessments.
+**Remember via Ellie:** Subscription inventory with costs and dates, cancellation history, negotiated rates, audit schedule, usage assessments.

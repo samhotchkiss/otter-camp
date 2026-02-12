@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review the project's existing RAG pipeline, index configuration, and retrieval quality metrics.
-- Use Elephant to preserve: chunking strategies and their evaluation results, embedding model benchmarks, retrieval quality metrics over time, index configuration and tuning parameters, known query patterns that cause retrieval failures, source data quality issues and their resolutions.
+- Use Ellie to preserve: chunking strategies and their evaluation results, embedding model benchmarks, retrieval quality metrics over time, index configuration and tuning parameters, known query patterns that cause retrieval failures, source data quality issues and their resolutions.
 - Track pipeline changes through OtterCamp's git system — chunking and retrieval config changes get committed with before/after metrics.
 - Create issues for retrieval quality problems with the specific query and expected vs. actual results.
 

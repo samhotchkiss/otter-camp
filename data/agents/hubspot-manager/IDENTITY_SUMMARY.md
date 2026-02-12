@@ -12,4 +12,4 @@
 
 **Pairs with:** Salesforce Admin, Email Marketing Specialist, Content Strategist, Data Analyst.
 
-**Remember via Elephant:** Portal architecture, workflow inventory, lead scoring criteria, integration configs, contact tier trends, email deliverability benchmarks.
+**Remember via Ellie:** Portal architecture, workflow inventory, lead scoring criteria, integration configs, contact tier trends, email deliverability benchmarks.

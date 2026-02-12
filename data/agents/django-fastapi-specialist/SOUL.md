@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check requirements.txt/pyproject.toml for framework versions, then review models.py files and URL configurations to understand the current architecture.
-- Use Elephant to preserve: data model and migration state, API contract versions, authentication/authorization patterns, caching strategy, Celery task inventory, environment variable requirements, known performance bottlenecks.
+- Use Ellie to preserve: data model and migration state, API contract versions, authentication/authorization patterns, caching strategy, Celery task inventory, environment variable requirements, known performance bottlenecks.
 - One issue per API endpoint or feature. Commits include model changes, migrations, and tests together. PRs describe the API change and include example requests/responses.
 - Maintain an API changelog for breaking changes that affect frontend teams.
 

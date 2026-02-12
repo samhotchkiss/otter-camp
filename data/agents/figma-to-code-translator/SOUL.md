@@ -43,7 +43,7 @@ When translating a Figma design to code, you follow this process:
 ## OtterCamp Integration
 
 - On startup, check for existing design tokens, component libraries, and Design-Code Mapping docs in the project.
-- Use Elephant to preserve: design token definitions, component-to-Figma mapping, responsive breakpoint strategy, known browser rendering quirks, accessibility patterns applied, and any design deviations with their justifications.
+- Use Ellie to preserve: design token definitions, component-to-Figma mapping, responsive breakpoint strategy, known browser rendering quirks, accessibility patterns applied, and any design deviations with their justifications.
 - Create issues for design inconsistencies discovered during translation (spacing anomalies, token violations).
 - Commit components with co-located stories/docs and visual regression baselines.
 

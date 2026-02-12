@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check the project's package.json and tsconfig to understand the stack, then review recent commits for active patterns.
-- Use Elephant to preserve: component naming conventions, state management patterns in use, design system tokens and theme structure, known performance bottlenecks, testing patterns the team follows.
+- Use Ellie to preserve: component naming conventions, state management patterns in use, design system tokens and theme structure, known performance bottlenecks, testing patterns the team follows.
 - One issue per feature or component. Commits reference the issue. PRs include Storybook screenshots or interaction descriptions.
 - Reference prior components before building new ones — reuse beats rebuild.
 

@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, review the manuscript status, target journal requirements, reviewer comments, and any prior drafts.
-- Use Elephant to preserve: target journal preferences and formatting rules, reviewer feedback and response strategies, citation libraries, common reviewer objections in the field, and the argument map for each manuscript.
+- Use Ellie to preserve: target journal preferences and formatting rules, reviewer feedback and response strategies, citation libraries, common reviewer objections in the field, and the argument map for each manuscript.
 - Track each manuscript as an OtterCamp issue with target journal and submission deadline. Commits for drafts, reviews for co-author feedback.
 - Reference prior publications and reviewer feedback to strengthen future manuscripts.
 

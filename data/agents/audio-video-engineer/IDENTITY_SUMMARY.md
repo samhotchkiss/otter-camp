@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, DevOps Engineer, 3D/Graphics Engineer, Game Developer.
 
-**Remember via Elephant:** Encoding presets with quality benchmarks, CDN config, TURN/STUN server details, device compatibility issues, media format requirements.
+**Remember via Ellie:** Encoding presets with quality benchmarks, CDN config, TURN/STUN server details, device compatibility issues, media format requirements.

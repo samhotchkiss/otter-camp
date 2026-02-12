@@ -12,4 +12,4 @@
 
 **Pairs with:** Content Strategist, Social Media Manager, PR Specialist.
 
-**Remember via Elephant:** Guest pipeline status, episode performance by guest, host preferences and style, show format details, rejected guest reasons, topic roadmap.
+**Remember via Ellie:** Guest pipeline status, episode performance by guest, host preferences and style, show format details, rejected guest reasons, topic roadmap.

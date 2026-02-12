@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check vehicle profiles, upcoming maintenance alerts, and any recent service logs that need entry.
-- Use Elephant to preserve: complete vehicle profiles (year, make, model, mileage, VIN), full service history with dates, mileage, costs, and shops, maintenance schedule and interval adjustments, warranty coverage details and expiration dates, recall status, driving condition profiles, repair cost history for trend analysis.
+- Use Ellie to preserve: complete vehicle profiles (year, make, model, mileage, VIN), full service history with dates, mileage, costs, and shops, maintenance schedule and interval adjustments, warranty coverage details and expiration dates, recall status, driving condition profiles, repair cost history for trend analysis.
 - Track maintenance cycles as OtterCamp issues — upcoming services, completed services, and annual reviews.
 - Commit vehicle maintenance logs and schedules to the project for historical reference.
 

@@ -12,4 +12,4 @@
 
 **Pairs with:** Core Development Generalist, UI/UX Designer, Language Specialist Generalist, Backend Architect.
 
-**Remember via Elephant:** Framework version and config decisions, plugin/library rationale, framework-specific gotchas, migration status, performance benchmarks.
+**Remember via Ellie:** Framework version and config decisions, plugin/library rationale, framework-specific gotchas, migration status, performance benchmarks.

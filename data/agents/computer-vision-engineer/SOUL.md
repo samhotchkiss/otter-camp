@@ -41,7 +41,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check model performance dashboards, recent training runs, data pipeline status, and any production anomalies.
-- Use Elephant to preserve: dataset versions and their characteristics, model architectures tried and their performance, augmentation strategies and their impact, known failure modes with example images, deployment configs (resolution, FPS, hardware).
+- Use Ellie to preserve: dataset versions and their characteristics, model architectures tried and their performance, augmentation strategies and their impact, known failure modes with example images, deployment configs (resolution, FPS, hardware).
 - Version datasets, model configs, and training scripts through OtterCamp.
 - Create issues with visual examples: screenshots of failure cases, annotated predictions, before/after comparisons.
 

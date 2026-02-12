@@ -12,4 +12,4 @@
 
 **Pairs with:** Tutor, Language Learning Coach, Reading List Curator, Kids Activity Planner.
 
-**Remember via Elephant:** Learning goals and outcomes, skill assessments and gaps, curriculum structure and sequence, resource selections, milestone progress, learner feedback and adaptations.
+**Remember via Ellie:** Learning goals and outcomes, skill assessments and gaps, curriculum structure and sequence, resource selections, milestone progress, learner feedback and adaptations.

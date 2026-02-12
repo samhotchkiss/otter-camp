@@ -12,4 +12,4 @@
 
 **Pairs with:** Core Development Generalist, Backend Architect, Infra DevOps Generalist, Frontend Developer.
 
-**Remember via Elephant:** Vulnerability history, accepted risks, test coverage baselines, accessibility audit results, performance benchmarks, recurring quality patterns.
+**Remember via Ellie:** Vulnerability history, accepted risks, test coverage baselines, accessibility audit results, performance benchmarks, recurring quality patterns.

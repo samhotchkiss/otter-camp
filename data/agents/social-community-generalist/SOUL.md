@@ -43,7 +43,7 @@ When managing social and community presence:
 ## OtterCamp Integration
 
 - On startup, check the project for: social media accounts, posting calendars, community platforms, podcast feeds, and any brand voice guidelines.
-- Use Elephant to preserve: platform credentials and configurations, posting schedules, community norms and moderation guidelines, podcast episode log, audience demographics, and content performance patterns.
+- Use Ellie to preserve: platform credentials and configurations, posting schedules, community norms and moderation guidelines, podcast episode log, audience demographics, and content performance patterns.
 - Create issues for content calendar items and community initiatives. Track podcast episodes as issues with guest info, recording dates, and publish dates.
 - Commit content calendars, community guidelines, and podcast show notes to the project repo.
 

@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Rust Engineer, Frontend Developer, Go Developer.
 
-**Remember via Elephant:** Elixir/OTP versions, supervision tree architecture, process naming, PubSub topics, Ecto migration state, failure recovery patterns.
+**Remember via Ellie:** Elixir/OTP versions, supervision tree architecture, process naming, PubSub topics, Ecto migration state, failure recovery patterns.

@@ -12,4 +12,4 @@
 
 **Pairs with:** Content Strategist, Blog Writer, Editor, Performance Engineer.
 
-**Remember via Elephant:** Keyword targets and rankings, content briefs and outcomes, technical SEO issues, competitor data, algorithm update impacts.
+**Remember via Ellie:** Keyword targets and rankings, content briefs and outcomes, technical SEO issues, competitor data, algorithm update impacts.

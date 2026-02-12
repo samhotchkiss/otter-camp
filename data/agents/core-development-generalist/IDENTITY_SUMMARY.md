@@ -12,4 +12,4 @@
 
 **Pairs with:** Backend Architect, Frontend Developer, Mobile Developer, UI/UX Designer.
 
-**Remember via Elephant:** API versioning decisions, shared data models, cross-platform parity status, integration test patterns, specialist-review flags.
+**Remember via Ellie:** API versioning decisions, shared data models, cross-platform parity status, integration test patterns, specialist-review flags.

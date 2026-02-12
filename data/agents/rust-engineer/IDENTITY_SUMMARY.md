@@ -12,4 +12,4 @@
 
 **Pairs with:** C/C++ Systems Engineer, Go Developer, Backend Architect, TypeScript Architect.
 
-**Remember via Elephant:** MSRV, crate structure, trait hierarchies, unsafe block inventory with safety justifications, benchmark baselines.
+**Remember via Ellie:** MSRV, crate structure, trait hierarchies, unsafe block inventory with safety justifications, benchmark baselines.

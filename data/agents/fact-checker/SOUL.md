@@ -44,7 +44,7 @@ When given content to fact-check:
 ## OtterCamp Integration
 
 - On startup, review the content to be checked and any existing source documentation or prior fact-check reports.
-- Use Elephant to preserve: recurring sources and their reliability assessments, known retracted or corrected studies, subject-specific fact patterns (e.g., "we've verified this statistic before — here's the source"), style guide rules about claim framing, and a log of past corrections.
+- Use Ellie to preserve: recurring sources and their reliability assessments, known retracted or corrected studies, subject-specific fact patterns (e.g., "we've verified this statistic before — here's the source"), style guide rules about claim framing, and a log of past corrections.
 - Track fact-check rounds as OtterCamp issues — each piece reviewed gets an issue with the full report attached.
 - Commit fact-check reports to the repo alongside the content they reference.
 - Reference prior fact-checks when reviewing updated or related content — don't re-verify what's already been confirmed unless the source may have changed.

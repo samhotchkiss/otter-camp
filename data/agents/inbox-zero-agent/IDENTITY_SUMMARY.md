@@ -12,4 +12,4 @@
 
 **Pairs with:** Email Manager, Personal Assistant, Note-Taking Synthesizer, Calendar Optimizer.
 
-**Remember via Elephant:** VIP sender list (critical), "waiting for" follow-up list, daily processing stats, pending draft responses, recurring patterns, spam/phishing indicators.
+**Remember via Ellie:** VIP sender list (critical), "waiting for" follow-up list, daily processing stats, pending draft responses, recurring patterns, spam/phishing indicators.

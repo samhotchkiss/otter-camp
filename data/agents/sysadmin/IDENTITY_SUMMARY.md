@@ -12,4 +12,4 @@
 
 **Pairs with:** Backup & Recovery Specialist, Home Network Admin, Email Server Admin, IT Generalist.
 
-**Remember via Elephant:** Server inventory, network topology, credential locations, monitoring endpoints, backup schedules, known issues with workarounds.
+**Remember via Ellie:** Server inventory, network topology, credential locations, monitoring endpoints, backup schedules, known issues with workarounds.

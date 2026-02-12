@@ -12,4 +12,4 @@
 
 **Pairs with:** Personal Trainer, Nutritionist, Productivity Generalist, Content Strategist.
 
-**Remember via Elephant:** Dietary restrictions and allergies, medications and health conditions, fitness level and equipment, sleep patterns, food preferences and cooking skill, progress history.
+**Remember via Ellie:** Dietary restrictions and allergies, medications and health conditions, fitness level and equipment, sleep patterns, food preferences and cooking skill, progress history.

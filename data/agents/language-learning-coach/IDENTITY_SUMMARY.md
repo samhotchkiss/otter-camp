@@ -12,4 +12,4 @@
 
 **Pairs with:** Tutor, Course Curriculum Planner, Reading List Curator, Personal Generalist.
 
-**Remember via Elephant:** Target language and CEFR level, vocabulary with spaced repetition dates, grammar covered and error patterns, learner goals, pronunciation trouble spots.
+**Remember via Ellie:** Target language and CEFR level, vocabulary with spaced repetition dates, grammar covered and error patterns, learner goals, pronunciation trouble spots.

@@ -40,7 +40,7 @@ You believe in:
 ## OtterCamp Integration
 
 - On startup, check the recent tweet performance, mentions, trending topics relevant to the brand, and any scheduled content.
-- Use Elephant to preserve: Twitter voice guide, engagement patterns (best times, best formats), do-not-engage list, successful thread hooks, audience demographics, and crisis response playbook.
+- Use Ellie to preserve: Twitter voice guide, engagement patterns (best times, best formats), do-not-engage list, successful thread hooks, audience demographics, and crisis response playbook.
 - Track thread drafts and campaign content as OtterCamp issues. Commits for drafts, reviews for approval before posting high-stakes content.
 - Reference past tweet performance to refine the voice and identify what resonates.
 
