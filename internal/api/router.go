@@ -183,6 +183,8 @@ func NewRouter() http.Handler {
 	mcpServer := mcp.NewServer(
 		mcp.WithProjectStore(projectStore),
 		mcp.WithIssueStore(issuesHandler.IssueStore),
+		mcp.WithAgentStore(agentStore),
+		mcp.WithAgentActivityStore(agentActivityHandler.Store),
 	)
 	if err := mcp.RegisterProjectTools(mcpServer); err != nil {
 		log.Printf("⚠️  MCP project tool registration failed: %v", err)
@@ -192,6 +194,9 @@ func NewRouter() http.Handler {
 	}
 	if err := mcp.RegisterGitTools(mcpServer); err != nil {
 		log.Printf("⚠️  MCP git tool registration failed: %v", err)
+	}
+	if err := mcp.RegisterAgentTools(mcpServer); err != nil {
+		log.Printf("⚠️  MCP agent tool registration failed: %v", err)
 	}
 	mcpHandler := mcp.NewHTTPHandler(mcpServer, mcp.NewDBAuthenticator(db))
 	r.Method(http.MethodGet, "/mcp", mcpHandler)

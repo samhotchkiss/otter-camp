@@ -33,6 +33,8 @@ type Server struct {
 	tools        *ToolRegistry
 	projects     ProjectStore
 	issues       IssueStore
+	agents       AgentStore
+	agentEvents  AgentActivityStore
 	resourceSubs *resourceSubscriptions
 }
 
@@ -62,6 +64,18 @@ func WithProjectStore(projects ProjectStore) ServerOption {
 func WithIssueStore(issues IssueStore) ServerOption {
 	return func(s *Server) {
 		s.issues = issues
+	}
+}
+
+func WithAgentStore(agents AgentStore) ServerOption {
+	return func(s *Server) {
+		s.agents = agents
+	}
+}
+
+func WithAgentActivityStore(events AgentActivityStore) ServerOption {
+	return func(s *Server) {
+		s.agentEvents = events
 	}
 }
 
