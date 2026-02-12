@@ -219,3 +219,24 @@ func TestMainStartsConversationEmbeddingWorkerWhenConfigured(t *testing.T) {
 		}
 	}
 }
+
+func TestMainStartsConversationSegmentationWorkerWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	for _, snippet := range []string{
+		"cfg.ConversationSegmentation.Enabled",
+		"memory.NewConversationSegmentationWorker",
+		"Conversation segmentation worker started",
+		"store.NewConversationSegmentationStore",
+	} {
+		if !strings.Contains(mainContent, snippet) {
+			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
+		}
+	}
+}

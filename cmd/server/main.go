@@ -89,6 +89,29 @@ func main() {
 		}
 	}
 
+	if cfg.ConversationSegmentation.Enabled {
+		db, err := store.DB()
+		if err != nil {
+			log.Printf("⚠️  Conversation segmentation worker disabled; database unavailable: %v", err)
+		} else {
+			worker := memory.NewConversationSegmentationWorker(
+				store.NewConversationSegmentationStore(db),
+				memory.ConversationSegmentationWorkerConfig{
+					BatchSize:    cfg.ConversationSegmentation.BatchSize,
+					PollInterval: cfg.ConversationSegmentation.PollInterval,
+					GapThreshold: cfg.ConversationSegmentation.GapThreshold,
+				},
+			)
+			go worker.Start(context.Background())
+			log.Printf(
+				"✅ Conversation segmentation worker started (batch=%d interval=%s gap=%s)",
+				cfg.ConversationSegmentation.BatchSize,
+				cfg.ConversationSegmentation.PollInterval,
+				cfg.ConversationSegmentation.GapThreshold,
+			)
+		}
+	}
+
 	log.Printf("🦦 Otter Camp starting on port %s", cfg.Port)
 	if err := http.ListenAndServe("0.0.0.0:"+cfg.Port, router); err != nil {
 		log.Fatalf("server failed: %v", err)

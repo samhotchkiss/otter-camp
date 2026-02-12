@@ -58,6 +58,11 @@ const (
 	defaultConversationEmbeddingDimension    = 384
 	defaultConversationEmbeddingOllamaURL    = "http://localhost:11434"
 	defaultConversationEmbeddingOpenAIBase   = "https://api.openai.com"
+
+	defaultConversationSegmentationEnabled      = true
+	defaultConversationSegmentationPollInterval = 5 * time.Second
+	defaultConversationSegmentationBatchSize    = 200
+	defaultConversationSegmentationGapThreshold = 30 * time.Minute
 )
 
 type GitHubConfig struct {
@@ -72,11 +77,12 @@ type GitHubConfig struct {
 }
 
 type Config struct {
-	Port                  string
-	DatabaseURL           string
-	Environment           string
-	GitHub                GitHubConfig
-	ConversationEmbedding ConversationEmbeddingConfig
+	Port                     string
+	DatabaseURL              string
+	Environment              string
+	GitHub                   GitHubConfig
+	ConversationEmbedding    ConversationEmbeddingConfig
+	ConversationSegmentation ConversationSegmentationConfig
 }
 
 type ConversationEmbeddingConfig struct {
@@ -89,6 +95,13 @@ type ConversationEmbeddingConfig struct {
 	OllamaURL     string
 	OpenAIBaseURL string
 	OpenAIAPIKey  string
+}
+
+type ConversationSegmentationConfig struct {
+	Enabled      bool
+	PollInterval time.Duration
+	BatchSize    int
+	GapThreshold time.Duration
 }
 
 func Load() (Config, error) {
@@ -129,6 +142,7 @@ func Load() (Config, error) {
 			),
 			OpenAIAPIKey: strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY")),
 		},
+		ConversationSegmentation: ConversationSegmentationConfig{},
 	}
 
 	githubEnabled, err := parseBool("GITHUB_INTEGRATION_ENABLED", false)
@@ -167,6 +181,30 @@ func Load() (Config, error) {
 	}
 	cfg.ConversationEmbedding.Dimension = conversationDimension
 
+	conversationSegmentationEnabled, err := parseBool("CONVERSATION_SEGMENTATION_WORKER_ENABLED", defaultConversationSegmentationEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationSegmentation.Enabled = conversationSegmentationEnabled
+
+	conversationSegmentationPollInterval, err := parseDuration("CONVERSATION_SEGMENTATION_POLL_INTERVAL", defaultConversationSegmentationPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationSegmentation.PollInterval = conversationSegmentationPollInterval
+
+	conversationSegmentationBatchSize, err := parseInt("CONVERSATION_SEGMENTATION_BATCH_SIZE", defaultConversationSegmentationBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationSegmentation.BatchSize = conversationSegmentationBatchSize
+
+	conversationSegmentationGapThreshold, err := parseDuration("CONVERSATION_SEGMENTATION_GAP_THRESHOLD", defaultConversationSegmentationGapThreshold)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationSegmentation.GapThreshold = conversationSegmentationGapThreshold
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -190,6 +228,18 @@ func (c Config) Validate() error {
 		}
 		if c.ConversationEmbedding.Dimension <= 0 {
 			return fmt.Errorf("CONVERSATION_EMBEDDER_DIMENSION must be greater than zero when worker is enabled")
+		}
+	}
+
+	if c.ConversationSegmentation.Enabled {
+		if c.ConversationSegmentation.PollInterval <= 0 {
+			return fmt.Errorf("CONVERSATION_SEGMENTATION_POLL_INTERVAL must be greater than zero")
+		}
+		if c.ConversationSegmentation.BatchSize <= 0 {
+			return fmt.Errorf("CONVERSATION_SEGMENTATION_BATCH_SIZE must be greater than zero")
+		}
+		if c.ConversationSegmentation.GapThreshold <= 0 {
+			return fmt.Errorf("CONVERSATION_SEGMENTATION_GAP_THRESHOLD must be greater than zero")
 		}
 	}
 

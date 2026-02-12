@@ -30,6 +30,10 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("CONVERSATION_EMBEDDER_OLLAMA_URL", "")
 	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_BASE_URL", "")
 	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY", "")
+	t.Setenv("CONVERSATION_SEGMENTATION_WORKER_ENABLED", "")
+	t.Setenv("CONVERSATION_SEGMENTATION_POLL_INTERVAL", "")
+	t.Setenv("CONVERSATION_SEGMENTATION_BATCH_SIZE", "")
+	t.Setenv("CONVERSATION_SEGMENTATION_GAP_THRESHOLD", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -80,6 +84,19 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ConversationEmbedding.Dimension != defaultConversationEmbeddingDimension {
 		t.Fatalf("expected default conversation embedding dimension %d, got %d", defaultConversationEmbeddingDimension, cfg.ConversationEmbedding.Dimension)
+	}
+
+	if !cfg.ConversationSegmentation.Enabled {
+		t.Fatalf("expected conversation segmentation worker enabled by default")
+	}
+	if cfg.ConversationSegmentation.PollInterval != defaultConversationSegmentationPollInterval {
+		t.Fatalf("expected default conversation segmentation poll interval %v, got %v", defaultConversationSegmentationPollInterval, cfg.ConversationSegmentation.PollInterval)
+	}
+	if cfg.ConversationSegmentation.BatchSize != defaultConversationSegmentationBatchSize {
+		t.Fatalf("expected default conversation segmentation batch size %d, got %d", defaultConversationSegmentationBatchSize, cfg.ConversationSegmentation.BatchSize)
+	}
+	if cfg.ConversationSegmentation.GapThreshold != defaultConversationSegmentationGapThreshold {
+		t.Fatalf("expected default conversation segmentation gap threshold %v, got %v", defaultConversationSegmentationGapThreshold, cfg.ConversationSegmentation.GapThreshold)
 	}
 }
 
@@ -231,5 +248,43 @@ func TestLoadRejectsInvalidConversationEmbeddingBatchSize(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "CONVERSATION_EMBEDDING_BATCH_SIZE") {
 		t.Fatalf("expected error to mention CONVERSATION_EMBEDDING_BATCH_SIZE, got %v", err)
+	}
+}
+
+func TestLoadParsesConversationSegmentationSettings(t *testing.T) {
+	t.Setenv("CONVERSATION_SEGMENTATION_WORKER_ENABLED", "true")
+	t.Setenv("CONVERSATION_SEGMENTATION_POLL_INTERVAL", "9s")
+	t.Setenv("CONVERSATION_SEGMENTATION_BATCH_SIZE", "64")
+	t.Setenv("CONVERSATION_SEGMENTATION_GAP_THRESHOLD", "45m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if !cfg.ConversationSegmentation.Enabled {
+		t.Fatalf("expected conversation segmentation worker enabled")
+	}
+	if cfg.ConversationSegmentation.PollInterval != 9*time.Second {
+		t.Fatalf("expected conversation segmentation poll interval 9s, got %v", cfg.ConversationSegmentation.PollInterval)
+	}
+	if cfg.ConversationSegmentation.BatchSize != 64 {
+		t.Fatalf("expected conversation segmentation batch size 64, got %d", cfg.ConversationSegmentation.BatchSize)
+	}
+	if cfg.ConversationSegmentation.GapThreshold != 45*time.Minute {
+		t.Fatalf("expected conversation segmentation gap threshold 45m, got %v", cfg.ConversationSegmentation.GapThreshold)
+	}
+}
+
+func TestLoadRejectsInvalidConversationSegmentationBatchSize(t *testing.T) {
+	t.Setenv("CONVERSATION_SEGMENTATION_BATCH_SIZE", "bad")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected error for invalid CONVERSATION_SEGMENTATION_BATCH_SIZE")
+	}
+
+	if !strings.Contains(err.Error(), "CONVERSATION_SEGMENTATION_BATCH_SIZE") {
+		t.Fatalf("expected error to mention CONVERSATION_SEGMENTATION_BATCH_SIZE, got %v", err)
 	}
 }
