@@ -235,6 +235,7 @@ func (s *Server) handleProjectCreateTool(ctx context.Context, identity Identity,
 	if project.OrgID != "" && project.OrgID != identity.OrgID {
 		return ToolCallResult{}, fmt.Errorf("%w: created project belongs to another workspace", ErrInvalidToolCall)
 	}
+	s.notifyResourceListChanged()
 
 	return ToolCallResult{
 		Content: []ToolContent{
@@ -264,6 +265,7 @@ func (s *Server) handleProjectDeleteTool(ctx context.Context, identity Identity,
 		}
 		return ToolCallResult{}, err
 	}
+	s.notifyResourceListChanged()
 
 	return ToolCallResult{
 		Content: []ToolContent{

@@ -484,6 +484,7 @@ func (s *Server) handleFileWriteTool(ctx context.Context, identity Identity, arg
 	if err != nil {
 		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
 	}
+	s.notifyResourceListChanged()
 
 	return ToolCallResult{
 		Content: []ToolContent{
@@ -530,6 +531,7 @@ func (s *Server) handleFileDeleteTool(ctx context.Context, identity Identity, ar
 	if err != nil {
 		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
 	}
+	s.notifyResourceListChanged()
 
 	return ToolCallResult{
 		Content: []ToolContent{
@@ -562,6 +564,7 @@ func (s *Server) handleBranchCreateTool(ctx context.Context, identity Identity, 
 	if _, err := runGitWorktree(ctx, repoPath, "branch", name, from); err != nil {
 		return ToolCallResult{}, fmt.Errorf("%w: %v", ErrInvalidToolCall, err)
 	}
+	s.notifyResourceListChanged()
 
 	return ToolCallResult{
 		Content: []ToolContent{

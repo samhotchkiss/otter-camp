@@ -28,20 +28,22 @@ type rpcResponse struct {
 }
 
 type Server struct {
-	name     string
-	version  string
-	tools    *ToolRegistry
-	projects ProjectStore
-	issues   IssueStore
+	name         string
+	version      string
+	tools        *ToolRegistry
+	projects     ProjectStore
+	issues       IssueStore
+	resourceSubs *resourceSubscriptions
 }
 
 type ServerOption func(*Server)
 
 func NewServer(opts ...ServerOption) *Server {
 	s := &Server{
-		name:    "otter-camp",
-		version: "1.0.0",
-		tools:   NewToolRegistry(),
+		name:         "otter-camp",
+		version:      "1.0.0",
+		tools:        NewToolRegistry(),
+		resourceSubs: newResourceSubscriptions(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -170,6 +172,10 @@ func (s *Server) Handle(ctx context.Context, identity Identity, req rpcRequest) 
 		return resp
 	case "resources/read":
 		return s.handleResourcesRead(ctx, identity, req)
+	case "resources/subscribe":
+		return s.handleResourcesSubscribe(identity, req)
+	case "resources/unsubscribe":
+		return s.handleResourcesUnsubscribe(identity, req)
 	default:
 		return rpcResponse{
 			JSONRPC: "2.0",

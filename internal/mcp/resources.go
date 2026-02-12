@@ -79,6 +79,82 @@ func (s *Server) handleResourcesRead(ctx context.Context, identity Identity, req
 	}
 }
 
+func (s *Server) handleResourcesSubscribe(identity Identity, req rpcRequest) rpcResponse {
+	var params struct {
+		URI string `json:"uri"`
+	}
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error: &rpcError{
+					Code:    -32602,
+					Message: "invalid params",
+				},
+			}
+		}
+	}
+	params.URI = strings.TrimSpace(params.URI)
+	if params.URI == "" {
+		return rpcResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error: &rpcError{
+				Code:    -32602,
+				Message: "uri is required",
+			},
+		}
+	}
+	s.resourceSubs.subscribe(resourceSubscriberID(identity), params.URI)
+	return rpcResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]any{
+			"subscribed": true,
+			"uri":        params.URI,
+		},
+	}
+}
+
+func (s *Server) handleResourcesUnsubscribe(identity Identity, req rpcRequest) rpcResponse {
+	var params struct {
+		URI string `json:"uri"`
+	}
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error: &rpcError{
+					Code:    -32602,
+					Message: "invalid params",
+				},
+			}
+		}
+	}
+	params.URI = strings.TrimSpace(params.URI)
+	if params.URI == "" {
+		return rpcResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error: &rpcError{
+				Code:    -32602,
+				Message: "uri is required",
+			},
+		}
+	}
+	s.resourceSubs.unsubscribe(resourceSubscriberID(identity), params.URI)
+	return rpcResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]any{
+			"unsubscribed": true,
+			"uri":          params.URI,
+		},
+	}
+}
+
 func (s *Server) readResourceURI(ctx context.Context, identity Identity, uri string) (string, error) {
 	parsed, err := url.Parse(uri)
 	if err != nil {
@@ -159,4 +235,15 @@ func marshalResourceData(result ToolCallResult) (string, error) {
 		return "", fmt.Errorf("%w: failed to encode resource", ErrInvalidToolCall)
 	}
 	return string(raw), nil
+}
+
+func (s *Server) notifyResourceListChanged() {
+	if s.resourceSubs == nil {
+		return
+	}
+	s.resourceSubs.notify()
+}
+
+func resourceSubscriberID(identity Identity) string {
+	return identity.OrgID + ":" + identity.UserID
 }

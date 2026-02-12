@@ -417,6 +417,7 @@ func (s *Server) handleIssueCreateTool(ctx context.Context, identity Identity, a
 	if issue.OrgID != identity.OrgID || issue.ProjectID != project.ID {
 		return ToolCallResult{}, fmt.Errorf("%w: created issue belongs to another workspace", ErrInvalidToolCall)
 	}
+	s.notifyResourceListChanged()
 
 	return ToolCallResult{
 		Content: []ToolContent{
@@ -435,6 +436,7 @@ func (s *Server) handleIssueUpdateTool(ctx context.Context, identity Identity, a
 	if err != nil {
 		return ToolCallResult{}, err
 	}
+	s.notifyResourceListChanged()
 	return ToolCallResult{
 		Content: []ToolContent{
 			{
@@ -452,6 +454,7 @@ func (s *Server) handleIssueCloseTool(ctx context.Context, identity Identity, ar
 	if err != nil {
 		return ToolCallResult{}, err
 	}
+	s.notifyResourceListChanged()
 	return ToolCallResult{
 		Content: []ToolContent{
 			{
@@ -469,6 +472,7 @@ func (s *Server) handleIssueReopenTool(ctx context.Context, identity Identity, a
 	if err != nil {
 		return ToolCallResult{}, err
 	}
+	s.notifyResourceListChanged()
 	return ToolCallResult{
 		Content: []ToolContent{
 			{
@@ -506,6 +510,7 @@ func (s *Server) handleIssueCommentTool(ctx context.Context, identity Identity, 
 	if err != nil {
 		return ToolCallResult{}, err
 	}
+	s.notifyResourceListChanged()
 
 	return ToolCallResult{
 		Content: []ToolContent{
@@ -551,6 +556,7 @@ func (s *Server) handleIssueAssignTool(ctx context.Context, identity Identity, a
 		AgentID: assignee,
 		Role:    "owner",
 	})
+	s.notifyResourceListChanged()
 
 	return ToolCallResult{
 		Content: []ToolContent{
