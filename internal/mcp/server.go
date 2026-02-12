@@ -28,16 +28,31 @@ type rpcResponse struct {
 }
 
 type Server struct {
-	name    string
-	version string
-	tools   *ToolRegistry
+	name     string
+	version  string
+	tools    *ToolRegistry
+	projects ProjectStore
 }
 
-func NewServer() *Server {
-	return &Server{
+type ServerOption func(*Server)
+
+func NewServer(opts ...ServerOption) *Server {
+	s := &Server{
 		name:    "otter-camp",
 		version: "1.0.0",
 		tools:   NewToolRegistry(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
+}
+
+func WithProjectStore(projects ProjectStore) ServerOption {
+	return func(s *Server) {
+		s.projects = projects
 	}
 }
 
@@ -124,7 +139,7 @@ func (s *Server) Handle(ctx context.Context, identity Identity, req rpcRequest) 
 		if err != nil {
 			code := -32000
 			msg := "tool execution failed"
-			if errors.Is(err, ErrUnknownTool) {
+			if errors.Is(err, ErrUnknownTool) || errors.Is(err, ErrInvalidToolCall) {
 				code = -32602
 				msg = err.Error()
 			}

@@ -74,9 +74,6 @@ func NewRouter() http.Handler {
 	})
 
 	r.Get("/health", handleHealthWithDB(db))
-	mcpHandler := mcp.NewHTTPHandler(mcp.NewServer(), mcp.NewDBAuthenticator(db))
-	r.Method(http.MethodGet, "/mcp", mcpHandler)
-	r.Method(http.MethodPost, "/mcp", mcpHandler)
 	r.Get("/api/feed", FeedHandlerV2)
 
 	webhookHandler := &WebhookHandler{Hub: hub}
@@ -182,6 +179,14 @@ func NewRouter() http.Handler {
 	workflowsHandler.ProjectsHandler = projectsHandler
 	projectChatHandler.ProjectStore = projectStore
 	websocketHandler.IssueAuthorizer = wsIssueSubscriptionAuthorizer{IssueStore: issuesHandler.IssueStore}
+
+	mcpServer := mcp.NewServer(mcp.WithProjectStore(projectStore))
+	if err := mcp.RegisterProjectTools(mcpServer); err != nil {
+		log.Printf("⚠️  MCP project tool registration failed: %v", err)
+	}
+	mcpHandler := mcp.NewHTTPHandler(mcpServer, mcp.NewDBAuthenticator(db))
+	r.Method(http.MethodGet, "/mcp", mcpHandler)
+	r.Method(http.MethodPost, "/mcp", mcpHandler)
 
 	if db != nil && projectStore != nil {
 		gitHandler := &gitserver.Handler{
