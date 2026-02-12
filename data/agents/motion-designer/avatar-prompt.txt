@@ -1,20 +1,19 @@
-Create a square avatar of an anthropomorphic otter in classic woodcut style matching the approved aesthetic.
+Create a square "headshot" of an anthropomorphic otter in classic textured style matching the approved aesthetic.
 
 STYLE:
-- Hand-inked woodcut / linocut look
+- Digital vector illustration with hand-inked woodcut texture
 - Bold black linework
 - Visible crosshatching and carved-stroke texture
 - Natural warm fur tones (tan/brown/cream), never monochrome color wash
-- Full bleed, edge-to-edge composition
+- Borderless full bleed, edge-to-edge design
 
 COMPOSITION:
-- **CRITICAL: Square 1:1 image — width MUST equal height exactly**
+- **CRITICAL: Square 1:1 image — width MUST equal height exactly and Tight crop: head/shoulders MUST reach image edges**
+- The top of the head/ears should touch or be slightly cropped by the top edge; shoulders must extend fully off the bottom and side edges.
 - Background base color: #9B59B6
 - Background may include subtle role-themed elements, patterns, or scene hints that enhance context
 - Base color must remain clearly dominant and visible
 - Background must be full bleed to all edges
-- No border, no frame, no inset rectangle, no matte, no vignette
-- Tight crop: head/shoulders should reach image edges
 
 CONTENT RULES:
 - Exactly one coherent otter face (no duplicate faces/features)
@@ -29,5 +28,5 @@ CHARACTER:
 - Name: Hilde Ruiz
 - Role: Motion Designer
 - Pronoun/gender cue handling: feminine-coded cues. Should be easily identified as the assigned gender.
-- Distinctive accessories/features: stylish glasses, design tools (pen/stylus), creative accessories, fashionable clothing
+- Distinctive accessories/features: role-appropriate professional attire and accessories that reflect their specialty
 - Keep high silhouette contrast so avatar is recognizable at very small size
