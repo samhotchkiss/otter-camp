@@ -40,6 +40,7 @@ func (r *resourceSubscriptions) unsubscribe(subscriber, uri string) {
 func (r *resourceSubscriptions) notify() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// TODO(spec-124 follow-up): replace pending counters with active SSE/WebSocket push delivery.
 	for subscriber := range r.subs {
 		r.pending[subscriber]++
 	}

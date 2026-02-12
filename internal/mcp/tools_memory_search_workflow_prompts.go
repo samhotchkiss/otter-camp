@@ -94,6 +94,7 @@ func RegisterMemorySearchWorkflowTools(s *Server) error {
 
 func (s *Server) handleMemoryReadTool(_ context.Context, identity Identity, args map[string]any) (ToolCallResult, error) {
 	key := strings.TrimSpace(readOptionalStringArg(args, "key", ""))
+	// TODO(spec-124 follow-up): replace in-memory state with persistent org-scoped memory storage.
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
@@ -118,6 +119,7 @@ func (s *Server) handleMemoryWriteTool(_ context.Context, identity Identity, arg
 	if key == "" || value == "" {
 		return ToolCallResult{}, fmt.Errorf("%w: key and value are required", ErrInvalidToolCall)
 	}
+	// TODO(spec-124 follow-up): persist writes through the memory store instead of process-local slices.
 	s.stateMu.Lock()
 	s.memory = append(s.memory, memoryRecord{OrgID: identity.OrgID, Key: key, Value: value})
 	s.stateMu.Unlock()
@@ -141,6 +143,7 @@ func (s *Server) handleMemorySearchTool(_ context.Context, identity Identity, ar
 	if limit <= 0 {
 		limit = 20
 	}
+	// TODO(spec-124 follow-up): back memory_search with indexed semantic search over persistent records.
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
@@ -162,6 +165,7 @@ func (s *Server) handleMemorySearchTool(_ context.Context, identity Identity, ar
 }
 
 func (s *Server) handleKnowledgeSearchTool(ctx context.Context, identity Identity, args map[string]any) (ToolCallResult, error) {
+	// TODO(spec-124 follow-up): route to shared knowledge storage instead of aliasing memory_search.
 	return s.handleMemorySearchTool(ctx, identity, args)
 }
 
@@ -170,6 +174,7 @@ func (s *Server) handleSearchTool(ctx context.Context, identity Identity, args m
 	if query == "" {
 		return ToolCallResult{}, fmt.Errorf("%w: query is required", ErrInvalidToolCall)
 	}
+	// TODO(spec-124 follow-up): expand search beyond memory stubs to issues/content/knowledge stores.
 	result, err := s.handleMemorySearchTool(ctx, identity, map[string]any{"query": query, "limit": args["limit"]})
 	if err != nil {
 		return ToolCallResult{}, err
@@ -180,6 +185,7 @@ func (s *Server) handleSearchTool(ctx context.Context, identity Identity, args m
 }
 
 func (s *Server) handleWorkflowListTool(_ context.Context, _ Identity, args map[string]any) (ToolCallResult, error) {
+	// TODO(spec-124 follow-up): load workflow definitions from persistent project workflow config.
 	project := readOptionalStringArg(args, "project", "")
 	workflows := []map[string]any{{"name": "default", "project": project}}
 	return ToolCallResult{
@@ -194,6 +200,7 @@ func (s *Server) handleWorkflowRunTool(_ context.Context, identity Identity, arg
 		return ToolCallResult{}, fmt.Errorf("%w: project and workflow are required", ErrInvalidToolCall)
 	}
 	runID := fmt.Sprintf("run_%d", time.Now().UnixNano())
+	// TODO(spec-124 follow-up): enqueue real workflow execution and lifecycle status updates.
 	state := workflowRunState{RunID: runID, Project: project, Workflow: workflow, Status: "completed"}
 	s.stateMu.Lock()
 	s.workflowRuns[identity.OrgID+":"+runID] = state
@@ -208,6 +215,7 @@ func (s *Server) handleWorkflowStatusTool(_ context.Context, identity Identity, 
 	if runID == "" {
 		return ToolCallResult{}, fmt.Errorf("%w: runId is required", ErrInvalidToolCall)
 	}
+	// TODO(spec-124 follow-up): read workflow state from durable execution records.
 	s.stateMu.Lock()
 	state, ok := s.workflowRuns[identity.OrgID+":"+runID]
 	s.stateMu.Unlock()

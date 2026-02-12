@@ -241,6 +241,7 @@ func (s *Server) notifyResourceListChanged() {
 	if s.resourceSubs == nil {
 		return
 	}
+	// TODO(spec-124 follow-up): emit actual resources/listChanged subscription events over streaming transport.
 	s.resourceSubs.notify()
 }
 
