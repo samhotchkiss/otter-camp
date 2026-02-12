@@ -11,18 +11,21 @@ import (
 )
 
 type EvaluatorCase struct {
-	ID                string   `json:"id"`
-	Query             string   `json:"query"`
-	RetrievedIDs      []string `json:"retrieved_ids"`
-	RelevantIDs       []string `json:"relevant_ids"`
-	ShouldInject      bool     `json:"should_inject"`
-	Injected          bool     `json:"injected"`
-	InjectedTokens    int      `json:"injected_tokens"`
-	RecoveryExpected  bool     `json:"recovery_expected"`
-	RecoverySucceeded bool     `json:"recovery_succeeded"`
-	SharedPromoted    bool     `json:"shared_promoted"`
-	SharedCorrect     bool     `json:"shared_correct"`
-	LatencyMs         float64  `json:"latency_ms"`
+	ID                   string   `json:"id"`
+	Query                string   `json:"query"`
+	RetrievedIDs         []string `json:"retrieved_ids"`
+	RelevantIDs          []string `json:"relevant_ids"`
+	ShouldInject         bool     `json:"should_inject"`
+	Injected             bool     `json:"injected"`
+	InjectedTokens       int      `json:"injected_tokens"`
+	RecoveryExpected     bool     `json:"recovery_expected"`
+	RecoverySucceeded    bool     `json:"recovery_succeeded"`
+	SharedPromoted       bool     `json:"shared_promoted"`
+	SharedCorrect        bool     `json:"shared_correct"`
+	LatencyMs            float64  `json:"latency_ms"`
+	EllieInjectedCount   int      `json:"ellie_injected_count"`
+	EllieReferencedCount int      `json:"ellie_referenced_count"`
+	EllieMissedCount     int      `json:"ellie_missed_count"`
 }
 
 type EvaluatorConfig struct {
@@ -40,6 +43,8 @@ type EvaluatorMetrics struct {
 	P95LatencyMs             float64 `json:"p95_recall_latency_ms"`
 	AvgInjectedTokens        float64 `json:"avg_injected_tokens"`
 	SharedPromotionPrecision float64 `json:"shared_promotion_precision"`
+	EllieRetrievalPrecision  float64 `json:"ellie_retrieval_precision"`
+	EllieRetrievalRecall     float64 `json:"ellie_retrieval_recall"`
 	CaseCount                int     `json:"case_count"`
 }
 
@@ -79,6 +84,8 @@ func (e Evaluator) Run(cases []EvaluatorCase) EvaluatorResult {
 		P95LatencyMs:             computeP95LatencyMs(cases),
 		AvgInjectedTokens:        computeAvgInjectedTokens(cases),
 		SharedPromotionPrecision: computeSharedPromotionPrecision(cases),
+		EllieRetrievalPrecision:  computeEllieRetrievalPrecision(cases),
+		EllieRetrievalRecall:     computeEllieRetrievalRecall(cases),
 		CaseCount:                len(cases),
 	}
 
@@ -321,6 +328,41 @@ func computeP95LatencyMs(cases []EvaluatorCase) float64 {
 		position = len(values) - 1
 	}
 	return values[position]
+}
+
+func computeEllieRetrievalPrecision(cases []EvaluatorCase) float64 {
+	injectedTotal := 0
+	referencedTotal := 0
+	for _, c := range cases {
+		if c.EllieInjectedCount > 0 {
+			injectedTotal += c.EllieInjectedCount
+		}
+		if c.EllieReferencedCount > 0 {
+			referencedTotal += c.EllieReferencedCount
+		}
+	}
+	if injectedTotal <= 0 {
+		return 0
+	}
+	return clampRate(float64(referencedTotal) / float64(injectedTotal))
+}
+
+func computeEllieRetrievalRecall(cases []EvaluatorCase) float64 {
+	referencedTotal := 0
+	missedTotal := 0
+	for _, c := range cases {
+		if c.EllieReferencedCount > 0 {
+			referencedTotal += c.EllieReferencedCount
+		}
+		if c.EllieMissedCount > 0 {
+			missedTotal += c.EllieMissedCount
+		}
+	}
+	denominator := referencedTotal + missedTotal
+	if denominator <= 0 {
+		return 0
+	}
+	return clampRate(float64(referencedTotal) / float64(denominator))
 }
 
 func clampRate(value float64) float64 {

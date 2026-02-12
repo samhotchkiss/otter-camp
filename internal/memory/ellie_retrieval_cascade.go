@@ -28,14 +28,17 @@ type EllieJSONLScanner interface {
 type EllieRetrievalCascadeService struct {
 	Store        EllieRetrievalStore
 	JSONLScanner EllieJSONLScanner
+	QualitySink  EllieRetrievalQualitySink
 }
 
 type EllieRetrievalRequest struct {
-	OrgID     string
-	RoomID    string
-	ProjectID string
-	Query     string
-	Limit     int
+	OrgID             string
+	RoomID            string
+	ProjectID         string
+	Query             string
+	Limit             int
+	ReferencedItemIDs []string
+	MissedItemIDs     []string
 }
 
 type EllieRetrievedItem struct {
@@ -55,6 +58,25 @@ type EllieRetrievalResponse struct {
 	NoInformation bool
 }
 
+type EllieRetrievalQualitySignal struct {
+	OrgID             string
+	ProjectID         string
+	RoomID            string
+	Query             string
+	TierUsed          int
+	InjectedCount     int
+	ReferencedCount   int
+	MissedCount       int
+	NoInformation     bool
+	InjectedItemIDs   []string
+	ReferencedItemIDs []string
+	MissedItemIDs     []string
+}
+
+type EllieRetrievalQualitySink interface {
+	Record(ctx context.Context, signal EllieRetrievalQualitySignal) error
+}
+
 func NewEllieRetrievalCascadeService(store EllieRetrievalStore, scanner EllieJSONLScanner) *EllieRetrievalCascadeService {
 	return &EllieRetrievalCascadeService{Store: store, JSONLScanner: scanner}
 }
@@ -71,7 +93,9 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 		return EllieRetrievalResponse{}, fmt.Errorf("org_id is required")
 	}
 	if query == "" {
-		return EllieRetrievalResponse{TierUsed: 5, NoInformation: true}, nil
+		response := EllieRetrievalResponse{TierUsed: 5, NoInformation: true}
+		s.emitQualitySignal(ctx, request, response)
+		return response, nil
 	}
 	limit := request.Limit
 	if limit <= 0 {
@@ -84,11 +108,13 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 			return EllieRetrievalResponse{}, fmt.Errorf("tier 1 room context lookup failed: %w", err)
 		}
 		if len(roomResults) > 0 {
-			return EllieRetrievalResponse{
+			response := EllieRetrievalResponse{
 				Items:         mapRoomResultsToRetrievedItems(roomResults),
 				TierUsed:      1,
 				NoInformation: false,
-			}, nil
+			}
+			s.emitQualitySignal(ctx, request, response)
+			return response, nil
 		}
 	}
 
@@ -108,11 +134,13 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 	memoryResults = append(memoryResults, orgResults...)
 	memoryResults = dedupeMemoryResults(memoryResults)
 	if len(memoryResults) > 0 {
-		return EllieRetrievalResponse{
+		response := EllieRetrievalResponse{
 			Items:         mapMemoryResultsToRetrievedItems(memoryResults, limit),
 			TierUsed:      2,
 			NoInformation: false,
-		}, nil
+		}
+		s.emitQualitySignal(ctx, request, response)
+		return response, nil
 	}
 
 	chatResults, err := s.Store.SearchChatHistory(ctx, orgID, query, limit)
@@ -120,11 +148,13 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 		return EllieRetrievalResponse{}, fmt.Errorf("tier 3 chat history lookup failed: %w", err)
 	}
 	if len(chatResults) > 0 {
-		return EllieRetrievalResponse{
+		response := EllieRetrievalResponse{
 			Items:         mapChatHistoryResultsToRetrievedItems(chatResults),
 			TierUsed:      3,
 			NoInformation: false,
-		}, nil
+		}
+		s.emitQualitySignal(ctx, request, response)
+		return response, nil
 	}
 
 	if s.JSONLScanner != nil {
@@ -139,15 +169,19 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 					jsonlResults[i].Source = "jsonl"
 				}
 			}
-			return EllieRetrievalResponse{
+			response := EllieRetrievalResponse{
 				Items:         jsonlResults,
 				TierUsed:      4,
 				NoInformation: false,
-			}, nil
+			}
+			s.emitQualitySignal(ctx, request, response)
+			return response, nil
 		}
 	}
 
-	return EllieRetrievalResponse{TierUsed: 5, NoInformation: true}, nil
+	response := EllieRetrievalResponse{TierUsed: 5, NoInformation: true}
+	s.emitQualitySignal(ctx, request, response)
+	return response, nil
 }
 
 func mapRoomResultsToRetrievedItems(results []store.EllieRoomContextResult) []EllieRetrievedItem {
@@ -228,6 +262,74 @@ func dedupeMemoryResults(results []store.EllieMemorySearchResult) []store.EllieM
 		}
 		seen[id] = struct{}{}
 		out = append(out, row)
+	}
+	return out
+}
+
+func (s *EllieRetrievalCascadeService) emitQualitySignal(
+	ctx context.Context,
+	request EllieRetrievalRequest,
+	response EllieRetrievalResponse,
+) {
+	if s == nil || s.QualitySink == nil {
+		return
+	}
+
+	injectedIDs := make([]string, 0, len(response.Items))
+	injectedSet := make(map[string]struct{}, len(response.Items))
+	for _, item := range response.Items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		if _, exists := injectedSet[id]; exists {
+			continue
+		}
+		injectedSet[id] = struct{}{}
+		injectedIDs = append(injectedIDs, id)
+	}
+
+	referencedIDs := dedupeTrimmedIDs(request.ReferencedItemIDs)
+	referencedCount := 0
+	for _, id := range referencedIDs {
+		if _, ok := injectedSet[id]; ok {
+			referencedCount += 1
+		}
+	}
+	missedIDs := dedupeTrimmedIDs(request.MissedItemIDs)
+
+	_ = s.QualitySink.Record(ctx, EllieRetrievalQualitySignal{
+		OrgID:             strings.TrimSpace(request.OrgID),
+		ProjectID:         strings.TrimSpace(request.ProjectID),
+		RoomID:            strings.TrimSpace(request.RoomID),
+		Query:             strings.TrimSpace(request.Query),
+		TierUsed:          response.TierUsed,
+		InjectedCount:     len(injectedIDs),
+		ReferencedCount:   referencedCount,
+		MissedCount:       len(missedIDs),
+		NoInformation:     response.NoInformation,
+		InjectedItemIDs:   injectedIDs,
+		ReferencedItemIDs: referencedIDs,
+		MissedItemIDs:     missedIDs,
+	})
+}
+
+func dedupeTrimmedIDs(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
 	}
 	return out
 }
