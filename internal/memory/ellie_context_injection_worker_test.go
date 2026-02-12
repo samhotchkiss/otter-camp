@@ -20,6 +20,8 @@ type fakeEllieContextInjectionQueue struct {
 	createdMessages            []store.CreateEllieContextInjectionMessageInput
 	recordedMemoryIDs          []string
 	embedCallCount             int
+	roomMessageCount           int
+	priorInjectionCount        int
 }
 
 func (f *fakeEllieContextInjectionQueue) ListPendingMessagesSince(
@@ -78,6 +80,14 @@ func (f *fakeEllieContextInjectionQueue) CreateInjectionMessage(
 
 func (f *fakeEllieContextInjectionQueue) CountMessagesSinceLastContextInjection(_ context.Context, _, _ string) (int, error) {
 	return 99, nil
+}
+
+func (f *fakeEllieContextInjectionQueue) CountRoomMessages(_ context.Context, _, _ string) (int, error) {
+	return f.roomMessageCount, nil
+}
+
+func (f *fakeEllieContextInjectionQueue) CountPriorInjections(_ context.Context, _, _ string) (int, error) {
+	return f.priorInjectionCount, nil
 }
 
 type fakeEllieContextInjectionEmbedder struct {
@@ -254,4 +264,74 @@ func TestEllieContextInjectionWorkerIncludesSupersessionNoteWhenCandidateSuperse
 	require.Len(t, queue.createdMessages, 1)
 	require.Contains(t, queue.createdMessages[0].Body, "Updated context: previous decision")
 	require.Contains(t, queue.createdMessages[0].Body, supersededMemoryID)
+}
+
+func TestEllieContextInjectionWorkerUsesRoomAndInjectionCountsForScoring(t *testing.T) {
+	basePending := []store.EllieContextInjectionPendingMessage{
+		{
+			MessageID:    "msg-counts",
+			OrgID:        "11111111-1111-1111-1111-111111111111",
+			RoomID:       "22222222-2222-2222-2222-222222222222",
+			SenderID:     "33333333-3333-3333-3333-333333333333",
+			SenderType:   "user",
+			Body:         "Do we have database guidance?",
+			MessageType:  "message",
+			HasEmbedding: false,
+			CreatedAt:    time.Date(2026, 2, 12, 15, 45, 0, 0, time.UTC),
+		},
+	}
+	baseMemories := []store.EllieContextInjectionMemoryCandidate{
+		{
+			MemoryID:   "44444444-4444-4444-4444-444444444444",
+			Title:      "Database policy",
+			Content:    "Use explicit migration files.",
+			Similarity: 0.56,
+			Importance: 3,
+			Confidence: 0.50,
+			OccurredAt: time.Date(2026, 2, 12, 15, 45, 0, 0, time.UTC),
+		},
+	}
+
+	service := NewEllieProactiveInjectionService(EllieProactiveInjectionConfig{
+		Threshold: 0.62,
+		MaxItems:  3,
+	})
+	embedder := &fakeEllieContextInjectionEmbedder{}
+
+	lowCountsQueue := &fakeEllieContextInjectionQueue{
+		pending:             basePending,
+		memories:            baseMemories,
+		roomMessageCount:    0,
+		priorInjectionCount: 0,
+	}
+	lowCountsWorker := NewEllieContextInjectionWorker(lowCountsQueue, embedder, service, EllieContextInjectionWorkerConfig{
+		BatchSize:         10,
+		PollInterval:      time.Second,
+		Threshold:         0.62,
+		MaxMemoriesPerMsg: 3,
+		CooldownMessages:  1,
+	})
+	lowCountsWorker.Logf = nil
+	processed, err := lowCountsWorker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+
+	highCountsQueue := &fakeEllieContextInjectionQueue{
+		pending:             basePending,
+		memories:            baseMemories,
+		roomMessageCount:    80,
+		priorInjectionCount: 6,
+	}
+	highCountsWorker := NewEllieContextInjectionWorker(highCountsQueue, embedder, service, EllieContextInjectionWorkerConfig{
+		BatchSize:         10,
+		PollInterval:      time.Second,
+		Threshold:         0.62,
+		MaxMemoriesPerMsg: 3,
+		CooldownMessages:  1,
+	})
+	highCountsWorker.Logf = nil
+	processed, err = highCountsWorker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 0, processed)
+	require.Empty(t, highCountsQueue.createdMessages)
 }

@@ -27,6 +27,8 @@ type EllieContextInjectionQueue interface {
 	RecordInjection(ctx context.Context, orgID, roomID, memoryID string, injectedAt time.Time) error
 	CreateInjectionMessage(ctx context.Context, input store.CreateEllieContextInjectionMessageInput) (string, error)
 	CountMessagesSinceLastContextInjection(ctx context.Context, orgID, roomID string) (int, error)
+	CountRoomMessages(ctx context.Context, orgID, roomID string) (int, error)
+	CountPriorInjections(ctx context.Context, orgID, roomID string) (int, error)
 }
 
 type EllieContextInjectionWorkerConfig struct {
@@ -216,10 +218,19 @@ func (w *EllieContextInjectionWorker) RunOnce(ctx context.Context) (int, error) 
 			continue
 		}
 
+		roomMessageCount, err := w.Queue.CountRoomMessages(ctx, message.OrgID, message.RoomID)
+		if err != nil {
+			return processed, fmt.Errorf("count room messages for context injection: %w", err)
+		}
+		priorInjections, err := w.Queue.CountPriorInjections(ctx, message.OrgID, message.RoomID)
+		if err != nil {
+			return processed, fmt.Errorf("count prior context injections: %w", err)
+		}
+
 		bundle := w.Service.BuildBundle(EllieProactiveInjectionBuildInput{
 			Now:              time.Now().UTC(),
-			RoomMessageCount: 0,
-			PriorInjections:  0,
+			RoomMessageCount: roomMessageCount,
+			PriorInjections:  priorInjections,
 			Candidates:       scoringCandidates,
 		})
 		if len(bundle.Items) == 0 || strings.TrimSpace(bundle.Body) == "" {

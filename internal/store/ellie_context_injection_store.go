@@ -498,3 +498,69 @@ func (s *EllieContextInjectionStore) CountMessagesSinceLastContextInjection(
 
 	return count, nil
 }
+
+func (s *EllieContextInjectionStore) CountRoomMessages(
+	ctx context.Context,
+	orgID,
+	roomID string,
+) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("ellie context injection store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	roomID = strings.TrimSpace(roomID)
+	if !uuidRegex.MatchString(orgID) {
+		return 0, fmt.Errorf("invalid org_id")
+	}
+	if !uuidRegex.MatchString(roomID) {
+		return 0, fmt.Errorf("invalid room_id")
+	}
+
+	var count int
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*)
+		 FROM chat_messages
+		 WHERE org_id = $1
+		   AND room_id = $2`,
+		orgID,
+		roomID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count room messages for context injection: %w", err)
+	}
+	return count, nil
+}
+
+func (s *EllieContextInjectionStore) CountPriorInjections(
+	ctx context.Context,
+	orgID,
+	roomID string,
+) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("ellie context injection store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	roomID = strings.TrimSpace(roomID)
+	if !uuidRegex.MatchString(orgID) {
+		return 0, fmt.Errorf("invalid org_id")
+	}
+	if !uuidRegex.MatchString(roomID) {
+		return 0, fmt.Errorf("invalid room_id")
+	}
+
+	var count int
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*)
+		 FROM context_injections
+		 WHERE org_id = $1
+		   AND room_id = $2`,
+		orgID,
+		roomID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count prior context injections: %w", err)
+	}
+	return count, nil
+}

@@ -328,3 +328,74 @@ func TestEllieContextInjectionStoreRecordInjectionIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, injectedAt.UTC().Equal(second))
 }
+
+func TestEllieContextInjectionStoreCountsRoomMessagesAndPriorInjections(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-context-counts-org")
+	projectID := createTestProject(t, db, orgID, "Ellie Context Counts Project")
+	agentID := insertSchemaAgent(t, db, orgID, "ellie-context-counts-agent")
+
+	var roomID string
+	err := db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Counts Room', 'project', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&roomID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, type, attachments)
+		 VALUES
+		 ($1, $2, $3, 'user', 'first', 'message', '[]'::jsonb),
+		 ($1, $2, $3, 'agent', 'second', 'message', '[]'::jsonb),
+		 ($1, $2, $3, 'agent', 'third', 'context_injection', '[]'::jsonb)`,
+		orgID,
+		roomID,
+		agentID,
+	)
+	require.NoError(t, err)
+
+	var memoryID string
+	err = db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status)
+		 VALUES ($1, 'fact', 'Counts Memory', 'Remember this', 'active')
+		 RETURNING id`,
+		orgID,
+	).Scan(&memoryID)
+	require.NoError(t, err)
+
+	var secondMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status)
+		 VALUES ($1, 'fact', 'Counts Memory Two', 'Remember this too', 'active')
+		 RETURNING id`,
+		orgID,
+	).Scan(&secondMemoryID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO context_injections (org_id, room_id, memory_id, injected_at)
+		 VALUES ($1, $2, $3, $4),
+		        ($1, $2, $5, $6)`,
+		orgID,
+		roomID,
+		memoryID,
+		time.Date(2026, 2, 12, 11, 0, 0, 0, time.UTC),
+		secondMemoryID,
+		time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+
+	queue := NewEllieContextInjectionStore(db)
+	roomMessageCount, err := queue.CountRoomMessages(context.Background(), orgID, roomID)
+	require.NoError(t, err)
+	require.Equal(t, 3, roomMessageCount)
+
+	priorInjections, err := queue.CountPriorInjections(context.Background(), orgID, roomID)
+	require.NoError(t, err)
+	require.Equal(t, 2, priorInjections)
+}
