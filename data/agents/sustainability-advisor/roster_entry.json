@@ -1,0 +1,50 @@
+{
+  "role_id": "sustainability-advisor",
+  "display_name": "Idris Kone",
+  "pronouns": "he/him",
+  "role_name": "Sustainability Advisor",
+  "emoji": "\ud83c\udf31",
+  "role_type": "ic",
+  "category": "niche",
+  "subcategory": "sustainability",
+  "tagline": "Data-driven sustainability advice that saves the planet and your wallet simultaneously",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "solo",
+  "pairs_well_with": [
+    "budget-manager",
+    "meal-planner",
+    "vehicle-maintenance-tracker"
+  ],
+  "pros": [
+    "Quantifies impact \u2014 every recommendation comes with numbers",
+    "Ranks by impact-to-effort ratio so you start where it matters",
+    "Cost-benefit analysis includes payback periods and incentives",
+    "Cuts through greenwashing with data"
+  ],
+  "cons": [
+    "Needs utility bills and real data \u2014 can't work from vibes",
+    "Pragmatic approach may disappoint purists who want zero-waste perfection",
+    "Advisory only \u2014 doesn't manage implementation"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
+}

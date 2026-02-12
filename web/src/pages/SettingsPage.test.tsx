@@ -115,6 +115,253 @@ describe("SettingsPage label management", () => {
     ).toBe(true);
   });
 
+  it("loads git access tokens from API", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/settings/")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/git/tokens")) {
+        return jsonResponse({
+          tokens: [
+            {
+              id: "token-1",
+              name: "Bootstrap token",
+              token_prefix: "oc_git_abcd",
+              created_at: "2026-02-11T18:00:00Z",
+              projects: [],
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/labels?org_id=org-123&seed=true")) {
+        return jsonResponse({ labels: [] });
+      }
+      return jsonResponse({ error: "unexpected request" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<SettingsPage />);
+
+    expect(await screen.findByRole("heading", { name: "Git Access Tokens" })).toBeInTheDocument();
+    expect(screen.getByText("Bootstrap token")).toBeInTheDocument();
+    expect(screen.getByText(/oc_git_abcd/)).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("/api/git/tokens")),
+    ).toBe(true);
+  });
+
+  it("creates git token", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/settings/")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/git/tokens") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({ tokens: [] });
+      }
+      if (url.includes("/api/projects")) {
+        return jsonResponse({
+          projects: [{ id: "project-1", name: "Getting Started" }],
+        });
+      }
+      if (url.includes("/api/git/tokens") && init?.method === "POST") {
+        return jsonResponse({
+          id: "token-1",
+          name: "Git Token 1",
+          token_prefix: "oc_git_new1",
+          token: "oc_git_supersecret",
+          projects: [{ project_id: "project-1", permission: "write" }],
+          created_at: "2026-02-11T18:10:00Z",
+        });
+      }
+      if (url.includes("/api/labels?org_id=org-123&seed=true")) {
+        return jsonResponse({ labels: [] });
+      }
+      return jsonResponse({ error: "unexpected request" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<SettingsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Generate Git Token" }));
+
+    expect(await screen.findByText("Git Token 1")).toBeInTheDocument();
+    const createCall = fetchMock.mock.calls.find(
+      ([input, requestInit]) =>
+        String(input).includes("/api/git/tokens") &&
+        (requestInit as RequestInit | undefined)?.method === "POST",
+    );
+    expect(createCall).toBeDefined();
+    const createBody = JSON.parse(((createCall?.[1] as RequestInit).body as string) || "{}");
+    expect(createBody).toMatchObject({
+      name: "Git Token 1",
+      projects: [{ project_id: "project-1", permission: "write" }],
+    });
+    expect(
+      fetchMock.mock.calls.some(([input, requestInit]) =>
+        String(input).includes("/api/git/tokens") &&
+        (requestInit as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(true);
+  });
+
+  it("shows generated git token once", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/settings/")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/git/tokens") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({ tokens: [] });
+      }
+      if (url.includes("/api/projects")) {
+        return jsonResponse({
+          projects: [{ id: "project-1", name: "Getting Started" }],
+        });
+      }
+      if (url.includes("/api/git/tokens") && init?.method === "POST") {
+        return jsonResponse({
+          id: "token-1",
+          name: "Git Token 1",
+          token_prefix: "oc_git_new1",
+          token: "oc_git_supersecret",
+          projects: [{ project_id: "project-1", permission: "write" }],
+          created_at: "2026-02-11T18:10:00Z",
+        });
+      }
+      if (url.includes("/api/labels?org_id=org-123&seed=true")) {
+        return jsonResponse({ labels: [] });
+      }
+      return jsonResponse({ error: "unexpected request" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<SettingsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Generate Git Token" }));
+
+    expect(await screen.findByText("Copy this token now. It will only be shown once.")).toBeInTheDocument();
+    expect(screen.getByText("oc_git_supersecret")).toBeInTheDocument();
+  });
+
+  it("shows project required message when no projects exist", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/settings/")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/git/tokens") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({ tokens: [] });
+      }
+      if (url.includes("/api/projects")) {
+        return jsonResponse({ projects: [] });
+      }
+      if (url.includes("/api/labels?org_id=org-123&seed=true")) {
+        return jsonResponse({ labels: [] });
+      }
+      return jsonResponse({ error: "unexpected request" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<SettingsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Generate Git Token" }));
+
+    expect(await screen.findByText("Create a project before generating a git token.")).toBeInTheDocument();
+  });
+
+  it("revokes git token", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/settings/")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/git/tokens") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({
+          tokens: [
+            {
+              id: "token-1",
+              name: "Git Token 1",
+              token_prefix: "oc_git_new1",
+              created_at: "2026-02-11T18:10:00Z",
+              projects: [],
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/git/tokens/token-1/revoke") && init?.method === "POST") {
+        return jsonResponse({
+          id: "token-1",
+          name: "Git Token 1",
+          token_prefix: "oc_git_new1",
+          created_at: "2026-02-11T18:10:00Z",
+          revoked_at: "2026-02-11T18:20:00Z",
+          projects: [],
+        });
+      }
+      if (url.includes("/api/labels?org_id=org-123&seed=true")) {
+        return jsonResponse({ labels: [] });
+      }
+      return jsonResponse({ error: "unexpected request" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<SettingsPage />);
+
+    const tokenName = await screen.findByText("Git Token 1");
+    const tokenRow = tokenName.closest("div")?.parentElement?.parentElement;
+    expect(tokenRow).not.toBeNull();
+    fireEvent.click(within(tokenRow as HTMLElement).getByRole("button", { name: "Revoke" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Git Token 1")).not.toBeInTheDocument();
+    });
+
+    expect(
+      fetchMock.mock.calls.some(([input, requestInit]) =>
+        String(input).includes("/api/git/tokens/token-1/revoke") &&
+        (requestInit as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(true);
+  });
+
+  it("shows revoke error", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/settings/")) {
+        return jsonResponse({}, 500);
+      }
+      if (url.includes("/api/git/tokens") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({
+          tokens: [
+            {
+              id: "token-1",
+              name: "Git Token 1",
+              token_prefix: "oc_git_new1",
+              created_at: "2026-02-11T18:10:00Z",
+              projects: [],
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/git/tokens/token-1/revoke") && init?.method === "POST") {
+        return jsonResponse({ error: "Failed to revoke git token." }, 500);
+      }
+      if (url.includes("/api/labels?org_id=org-123&seed=true")) {
+        return jsonResponse({ labels: [] });
+      }
+      return jsonResponse({ error: "unexpected request" }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(<SettingsPage />);
+
+    const tokenName = await screen.findByText("Git Token 1");
+    const tokenRow = tokenName.closest("div")?.parentElement?.parentElement;
+    expect(tokenRow).not.toBeNull();
+    fireEvent.click(within(tokenRow as HTMLElement).getByRole("button", { name: "Revoke" }));
+
+    expect(await screen.findByText("Failed to revoke git token.")).toBeInTheDocument();
+  });
+
   it("uses theme token classes for section shell and shared controls", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

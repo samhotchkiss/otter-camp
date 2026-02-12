@@ -200,7 +200,7 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.Equal(t, true, main["default"])
 
 		memoryAgent := entryByID["elephant"]
-		require.Equal(t, "Elephant", memoryAgent["name"])
+		require.Equal(t, "Ellie", memoryAgent["name"])
 		require.Equal(t, "anthropic/claude-sonnet-4-20250514", memoryAgent["model"])
 		require.Equal(t, "~/.openclaw/workspace-elephant", memoryAgent["workspace"])
 		require.Equal(t, "low", memoryAgent["thinking"])
@@ -215,7 +215,7 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.DirExists(t, filepath.Join(root, "workspace-elephant"))
 		soulRaw, err := os.ReadFile(filepath.Join(root, "workspace-elephant", "SOUL.md"))
 		require.NoError(t, err)
-		require.Contains(t, string(soulRaw), "# Elephant")
+		require.Contains(t, string(soulRaw), "# Ellie (Elephant)")
 
 		stateRaw, err := os.ReadFile(filepath.Join(root, "workspace-elephant", "elephant-state.json"))
 		require.NoError(t, err)

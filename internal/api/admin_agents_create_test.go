@@ -331,3 +331,84 @@ func TestAdminAgentsCreateRollsBackOnTemplateWriteFailure(t *testing.T) {
 	require.True(t, errors.Is(err, store.ErrNotFound))
 	require.Empty(t, dispatcher.calls)
 }
+
+func TestAdminAgentsCreatePersistsLifecycleMetadata(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "admin-agents-create-lifecycle")
+	_ = seedAdminAgentFilesProjectFixture(t, db, orgID, "main")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+
+	var projectID string
+	err := db.QueryRow(
+		`INSERT INTO projects (org_id, name, status) VALUES ($1, 'Lifecycle Project', 'active') RETURNING id`,
+		orgID,
+	).Scan(&projectID)
+	require.NoError(t, err)
+
+	handler := &AdminAgentsHandler{
+		DB:              db,
+		Store:           store.NewAgentStore(db),
+		ProjectStore:    store.NewProjectStore(db),
+		ProjectRepos:    store.NewProjectRepoStore(db),
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/agents",
+		strings.NewReader(`{"displayName":"Temp Worker","model":"gpt-5.2-codex","isEphemeral":true,"projectId":"`+projectID+`"}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgID))
+	rec := httptest.NewRecorder()
+	handler.Create(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	createdAgent, getErr := handler.Store.GetBySlug(
+		context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID),
+		"temp-worker",
+	)
+	require.NoError(t, getErr)
+	require.True(t, createdAgent.IsEphemeral)
+	require.NotNil(t, createdAgent.ProjectID)
+	require.Equal(t, projectID, *createdAgent.ProjectID)
+}
+
+func TestAdminAgentsCreateRejectsProjectOutsideWorkspace(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgA := insertMessageTestOrganization(t, db, "admin-agents-create-project-org-a")
+	orgB := insertMessageTestOrganization(t, db, "admin-agents-create-project-org-b")
+	_ = seedAdminAgentFilesProjectFixture(t, db, orgA, "main")
+	dispatcher := &fakeOpenClawConnectionStatus{connected: true}
+
+	var foreignProjectID string
+	err := db.QueryRow(
+		`INSERT INTO projects (org_id, name, status) VALUES ($1, 'Foreign Project', 'active') RETURNING id`,
+		orgB,
+	).Scan(&foreignProjectID)
+	require.NoError(t, err)
+
+	handler := &AdminAgentsHandler{
+		DB:              db,
+		Store:           store.NewAgentStore(db),
+		ProjectStore:    store.NewProjectStore(db),
+		ProjectRepos:    store.NewProjectRepoStore(db),
+		OpenClawHandler: dispatcher,
+		EventStore:      store.NewConnectionEventStore(db),
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/agents",
+		strings.NewReader(`{"displayName":"Cross Org Temp","model":"gpt-5.2-codex","isEphemeral":true,"projectId":"`+foreignProjectID+`"}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.WorkspaceIDKey, orgA))
+	rec := httptest.NewRecorder()
+	handler.Create(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var payload errorResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "projectId must belong to the current workspace", payload.Error)
+	require.Empty(t, dispatcher.calls)
+}

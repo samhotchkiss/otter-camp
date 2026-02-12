@@ -240,7 +240,7 @@ describe("AgentDetailPage", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    expect(await screen.findByText("Elephant is a protected system agent and cannot be retired.")).toBeInTheDocument();
+    expect(await screen.findByText("Ellie (Elephant) is a protected system agent and cannot be retired.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retire Agent" })).toBeDisabled();
   });
 });

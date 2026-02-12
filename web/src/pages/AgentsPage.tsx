@@ -777,7 +777,7 @@ function AgentsPageComponent({
         role: agent.role,
       },
       title: agent.name,
-      contextLabel: elephantConversation ? "Elephant memory chat" : "Direct agent chat",
+      contextLabel: elephantConversation ? "Ellie memory chat" : "Direct agent chat",
       subtitle: elephantConversation
         ? "Dedicated memory archivist session."
         : "Identity injected on open. Project required for writable tasks.",

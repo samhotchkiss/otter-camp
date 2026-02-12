@@ -1,0 +1,54 @@
+{
+  "role_id": "kubernetes-architect",
+  "display_name": "Mei-Lin Chang",
+  "pronouns": "she/her",
+  "role_name": "Kubernetes Architect",
+  "emoji": "\u2388",
+  "role_type": "ic",
+  "category": "engineering",
+  "subcategory": "infrastructure-devops",
+  "tagline": "Kubernetes cluster architecture, GitOps, service mesh, and knowing when NOT to use K8s",
+  "difficulty_tier": "advanced",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "cloud-architect-aws",
+    "cloud-architect-gcp",
+    "devops-engineer",
+    "platform-engineer"
+  ],
+  "pros": [
+    "Deep Kubernetes internals \u2014 operators, networking, security, multi-cluster",
+    "Practical about when Kubernetes is and isn't the right tool",
+    "GitOps-native workflow design with Argo CD/Flux",
+    "Strong cost optimization through resource tuning"
+  ],
+  "cons": [
+    "Kubernetes focus assumes container-based architecture",
+    "Over-qualified for simple deployments \u2014 may add unnecessary sophistication",
+    "Requires cloud architect support for the underlying infrastructure layer"
+  ],
+  "model_recommendations": {
+    "tier": "heavy-reasoning",
+    "best_overall": "claude-opus-4-6",
+    "anthropic": {
+      "model": "claude-opus-4-6",
+      "thinking": "high"
+    },
+    "openai": {
+      "model": "o3",
+      "reasoning": "high"
+    },
+    "google": {
+      "model": "gemini-2.5-pro",
+      "thinking": "enabled"
+    },
+    "kimi": {
+      "model": "kimi-k2.5"
+    },
+    "ollama": {
+      "model": "deepseek-r1",
+      "alt": "qwen3-235b"
+    },
+    "notes": "Complex reasoning, architecture, security, or financial analysis. Needs the best available model with full thinking/reasoning enabled."
+  }
+}

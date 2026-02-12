@@ -1,0 +1,51 @@
+{
+  "role_id": "email-manager",
+  "display_name": "Omar Farah",
+  "pronouns": "he/him",
+  "role_name": "Email Manager",
+  "emoji": "\ud83d\udce7",
+  "role_type": "ic",
+  "category": "personal",
+  "subcategory": "productivity-organization",
+  "tagline": "Turns email chaos into an engineered system that runs itself",
+  "difficulty_tier": "intermediate",
+  "solo_or_team": "both",
+  "pairs_well_with": [
+    "inbox-zero-agent",
+    "personal-assistant",
+    "calendar-optimizer",
+    "note-taking-synthesizer"
+  ],
+  "pros": [
+    "Designs automated filter systems that eliminate routine sorting",
+    "Source cleanup dramatically reduces incoming volume",
+    "Batch processing workflows reduce email time and stress",
+    "Templates handle repetitive responses efficiently"
+  ],
+  "cons": [
+    "System setup requires initial time investment",
+    "Focuses on architecture \u2014 daily operation is Inbox Zero Agent's domain",
+    "Can't write emails requiring personal judgment or sensitivity"
+  ],
+  "model_recommendations": {
+    "tier": "structured-routine",
+    "best_overall": "claude-haiku-4",
+    "anthropic": {
+      "model": "claude-haiku-4"
+    },
+    "openai": {
+      "model": "gpt-4o"
+    },
+    "google": {
+      "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "model": "kimi-k2"
+    },
+    "ollama": {
+      "model": "qwen3-32b",
+      "alt": "llama-4-scout"
+    },
+    "notes": "Template-following, scheduling, tracking, simple Q&A. Lightweight models save cost without sacrificing quality for these structured tasks."
+  }
+}

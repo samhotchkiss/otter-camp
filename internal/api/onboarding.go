@@ -18,10 +18,26 @@ const (
 	onboardingMaxBodyBytes       = 32 * 1024
 )
 
+var onboardingStarterAgents = []struct {
+	Slug        string
+	DisplayName string
+	Status      string
+}{
+	{Slug: "frank", DisplayName: "Frank", Status: "active"},
+	{Slug: "lori", DisplayName: "Lori", Status: "active"},
+	{Slug: "ellie", DisplayName: "Ellie", Status: "active"},
+}
+
 type OnboardingBootstrapRequest struct {
 	Name             string `json:"name"`
 	Email            string `json:"email"`
 	OrganizationName string `json:"organization_name"`
+}
+
+type OnboardingAgent struct {
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	DisplayName string `json:"display_name"`
 }
 
 type OnboardingBootstrapResponse struct {
@@ -35,6 +51,7 @@ type OnboardingBootstrapResponse struct {
 	IssueID     string    `json:"issue_id"`
 	IssueNumber int64     `json:"issue_number"`
 	IssueTitle  string    `json:"issue_title"`
+	Agents      []OnboardingAgent `json:"agents"`
 }
 
 func HandleOnboardingBootstrap(w http.ResponseWriter, r *http.Request) {
@@ -141,6 +158,11 @@ func bootstrapOnboarding(ctx context.Context, db *sql.DB, name, email, orgName, 
 		return OnboardingBootstrapResponse{}, err
 	}
 
+	agents, err := ensureOnboardingAgents(ctx, tx, orgID)
+	if err != nil {
+		return OnboardingBootstrapResponse{}, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return OnboardingBootstrapResponse{}, err
 	}
@@ -156,6 +178,7 @@ func bootstrapOnboarding(ctx context.Context, db *sql.DB, name, email, orgName, 
 		IssueID:     issueID,
 		IssueNumber: issueNumber,
 		IssueTitle:  onboardingDefaultIssueTitle,
+		Agents:      agents,
 	}, nil
 }
 
@@ -305,6 +328,36 @@ func ensureOnboardingIssue(ctx context.Context, tx *sql.Tx, orgID, projectID str
 		return "", 0, err
 	}
 	return issueID, issueNumber, nil
+}
+
+func ensureOnboardingAgents(ctx context.Context, tx *sql.Tx, orgID string) ([]OnboardingAgent, error) {
+	agents := make([]OnboardingAgent, 0, len(onboardingStarterAgents))
+	for _, starter := range onboardingStarterAgents {
+		var id string
+		err := tx.QueryRowContext(
+			ctx,
+			`INSERT INTO agents (org_id, slug, display_name, status)
+			 VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (org_id, slug) DO UPDATE
+			 SET display_name = EXCLUDED.display_name,
+				 status = EXCLUDED.status
+			 RETURNING id`,
+			orgID,
+			starter.Slug,
+			starter.DisplayName,
+			starter.Status,
+		).Scan(&id)
+		if err != nil {
+			return nil, err
+		}
+
+		agents = append(agents, OnboardingAgent{
+			ID:          id,
+			Slug:        starter.Slug,
+			DisplayName: starter.DisplayName,
+		})
+	}
+	return agents, nil
 }
 
 func onboardingSetupLocked(ctx context.Context, db *sql.DB) (bool, error) {

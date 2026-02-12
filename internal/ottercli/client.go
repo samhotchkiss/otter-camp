@@ -519,6 +519,12 @@ type OnboardingBootstrapRequest struct {
 	OrganizationName string `json:"organization_name"`
 }
 
+type OnboardingAgent struct {
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	DisplayName string `json:"display_name"`
+}
+
 type OnboardingBootstrapResponse struct {
 	OrgID       string    `json:"org_id"`
 	OrgSlug     string    `json:"org_slug"`
@@ -530,6 +536,7 @@ type OnboardingBootstrapResponse struct {
 	IssueID     string    `json:"issue_id"`
 	IssueNumber int64     `json:"issue_number"`
 	IssueTitle  string    `json:"issue_title"`
+	Agents      []OnboardingAgent `json:"agents"`
 }
 
 func (c *Client) WhoAmI() (whoamiResponse, error) {
@@ -683,6 +690,25 @@ func (c *Client) ArchiveAgent(agentID string) error {
 		return err
 	}
 	return c.do(req, nil)
+}
+
+func (c *Client) ArchiveProjectEphemeralAgents(projectID string) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("project id is required")
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/admin/agents/retire/project/"+url.PathEscape(projectID), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 func (c *Client) WriteAgentMemory(agentID string, input map[string]any) (map[string]any, error) {

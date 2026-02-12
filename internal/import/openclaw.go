@@ -80,9 +80,9 @@ type openClawAgentCandidate struct {
 	Workspace string
 }
 
-var elephantSOULTemplate = strings.TrimSpace(`# Elephant
+var elephantSOULTemplate = strings.TrimSpace(`# Ellie (Elephant)
 
-You are the Elephant. Your job is to read agent session logs, extract what's worth
+You are Ellie, the Elephant. Your job is to read agent session logs, extract what's worth
 remembering, and distribute it via Otter Camp memory and knowledge commands.
 
 You run quietly and prioritize signal over noise.
@@ -241,7 +241,7 @@ func ensureMapAgentSlot(agents map[string]any, id string, value map[string]any) 
 func buildElephantSlot() map[string]any {
 	return map[string]any{
 		"id":        "elephant",
-		"name":      "Elephant",
+		"name":      "Ellie",
 		"model":     "anthropic/claude-sonnet-4-20250514",
 		"workspace": "~/.openclaw/workspace-elephant",
 		"thinking":  "low",

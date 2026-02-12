@@ -31,6 +31,8 @@ func TestAgentClientMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"a1","display_name":"Derek","role":"Engineering Lead"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/admin/agents/a1/retire":
 			_, _ = w.Write([]byte(`{"status":"queued"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/admin/agents/retire/project/project-1":
+			_, _ = w.Write([]byte(`{"ok":true,"project_id":"project-1","total":2,"retired":2,"failed":0}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"not found"}`))
@@ -103,5 +105,16 @@ func TestAgentClientMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 	}
 	if gotMethod != http.MethodPost || gotPath != "/api/admin/agents/a1/retire" {
 		t.Fatalf("ArchiveAgent request = %s %s", gotMethod, gotPath)
+	}
+
+	bulkArchived, err := client.ArchiveProjectEphemeralAgents("project-1")
+	if err != nil {
+		t.Fatalf("ArchiveProjectEphemeralAgents() error = %v", err)
+	}
+	if bulkArchived["retired"] != float64(2) {
+		t.Fatalf("ArchiveProjectEphemeralAgents retired = %v, want 2", bulkArchived["retired"])
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/admin/agents/retire/project/project-1" {
+		t.Fatalf("ArchiveProjectEphemeralAgents request = %s %s", gotMethod, gotPath)
 	}
 }

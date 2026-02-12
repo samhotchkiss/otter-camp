@@ -423,26 +423,101 @@ func TestSlugifyAgentName(t *testing.T) {
 }
 
 func TestBuildAgentCreatePayloadIncludesRoleWhenProvided(t *testing.T) {
-	payload := buildAgentCreatePayload("Riley", "riley", "gpt-5.2-codex", "Engineering Lead")
+	payload := buildAgentCreatePayload("Riley", "riley", "gpt-5.2-codex", "Engineering Lead", false, "")
 
-	if payload["slot"] != "riley" {
-		t.Fatalf("slot = %v, want riley", payload["slot"])
-	}
-	if payload["display_name"] != "Riley" {
-		t.Fatalf("display_name = %v, want Riley", payload["display_name"])
+	if payload["displayName"] != "Riley" {
+		t.Fatalf("displayName = %v, want Riley", payload["displayName"])
 	}
 	if payload["model"] != "gpt-5.2-codex" {
 		t.Fatalf("model = %v, want gpt-5.2-codex", payload["model"])
 	}
-	if payload["role"] != "Engineering Lead" {
-		t.Fatalf("role = %v, want Engineering Lead", payload["role"])
+	if payload["slot"] != "riley" {
+		t.Fatalf("slot = %v, want riley", payload["slot"])
 	}
 }
 
 func TestBuildAgentCreatePayloadOmitsRoleWhenEmpty(t *testing.T) {
-	payload := buildAgentCreatePayload("Riley", "riley", "gpt-5.2-codex", "   ")
+	payload := buildAgentCreatePayload("Riley", "riley", "gpt-5.2-codex", "   ", false, "")
 	if _, ok := payload["role"]; ok {
 		t.Fatalf("expected role key to be omitted when empty, got payload: %#v", payload)
+	}
+}
+
+func TestBuildAgentCreatePayloadIncludesLifecycleMetadata(t *testing.T) {
+	payload := buildAgentCreatePayload("Temp Worker", "temp-worker", "gpt-5.2-codex", "", true, "project-123")
+	if payload["isEphemeral"] != true {
+		t.Fatalf("isEphemeral = %v, want true", payload["isEphemeral"])
+	}
+	if payload["projectId"] != "project-123" {
+		t.Fatalf("projectId = %v, want project-123", payload["projectId"])
+	}
+}
+
+type fakeAgentCreateProjectLookup struct {
+	project ottercli.Project
+	err     error
+}
+
+func (f fakeAgentCreateProjectLookup) FindProject(query string) (ottercli.Project, error) {
+	if f.err != nil {
+		return ottercli.Project{}, f.err
+	}
+	if strings.TrimSpace(query) == "" {
+		return ottercli.Project{}, errors.New("project name or id is required")
+	}
+	return f.project, nil
+}
+
+func TestResolveAgentCreateProjectID(t *testing.T) {
+	projectID, err := resolveAgentCreateProjectID(fakeAgentCreateProjectLookup{}, false, "")
+	if err != nil {
+		t.Fatalf("resolveAgentCreateProjectID() unexpected error for empty project query: %v", err)
+	}
+	if projectID != "" {
+		t.Fatalf("project id = %q, want empty", projectID)
+	}
+
+	_, err = resolveAgentCreateProjectID(fakeAgentCreateProjectLookup{}, false, "Alpha")
+	if err == nil || !strings.Contains(err.Error(), "requires --ephemeral") {
+		t.Fatalf("expected ephemeral requirement error, got %v", err)
+	}
+
+	resolvedID, err := resolveAgentCreateProjectID(fakeAgentCreateProjectLookup{
+		project: ottercli.Project{ID: "project-42", Name: "Alpha"},
+	}, true, "Alpha")
+	if err != nil {
+		t.Fatalf("resolveAgentCreateProjectID() unexpected error: %v", err)
+	}
+	if resolvedID != "project-42" {
+		t.Fatalf("project id = %q, want project-42", resolvedID)
+	}
+}
+
+func TestResolveAgentArchiveProjectID(t *testing.T) {
+	_, err := resolveAgentArchiveProjectID(fakeAgentCreateProjectLookup{}, "")
+	if err == nil || !strings.Contains(err.Error(), "project id or name is required") {
+		t.Fatalf("expected required project error, got %v", err)
+	}
+
+	projectID, err := resolveAgentArchiveProjectID(fakeAgentCreateProjectLookup{
+		project: ottercli.Project{ID: "project-7", Name: "Ops"},
+	}, "Ops")
+	if err != nil {
+		t.Fatalf("resolveAgentArchiveProjectID() unexpected error: %v", err)
+	}
+	if projectID != "project-7" {
+		t.Fatalf("project id = %q, want project-7", projectID)
+	}
+}
+
+func TestParseBulkArchiveCounts(t *testing.T) {
+	total, retired, failed := parseBulkArchiveCounts(map[string]any{
+		"total":   float64(5),
+		"retired": float64(4),
+		"failed":  float64(1),
+	})
+	if total != 5 || retired != 4 || failed != 1 {
+		t.Fatalf("counts = (%d,%d,%d), want (5,4,1)", total, retired, failed)
 	}
 }
 

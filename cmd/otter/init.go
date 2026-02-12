@@ -190,6 +190,9 @@ func runLocalInit(opts initOptions, reader *bufio.Reader, out io.Writer) error {
 	fmt.Fprintln(out, "Account setup complete.")
 	fmt.Fprintf(out, "Your auth token (saved to CLI config): %s\n", cfg.Token)
 	fmt.Fprintf(out, "Organization: %s\n", initFirstNonEmpty(req.OrganizationName, resp.OrgSlug, resp.OrgID))
+	if agentNames := initOnboardingAgentNames(resp.Agents); len(agentNames) > 0 {
+		fmt.Fprintf(out, "Created agents: %s\n", strings.Join(agentNames, ", "))
+	}
 	fmt.Fprintf(out, "Dashboard: %s\n", initLocalDefaultAPIBaseURL)
 	fmt.Fprintln(out, "Next step: otter whoami")
 
@@ -258,7 +261,7 @@ func runInitImportAndBridge(reader *bufio.Reader, out io.Writer, client initBoot
 		fmt.Fprintf(out, "WARNING: OpenClaw config update failed: %v\n", ensureErr)
 	case ensureResult.Updated:
 		if ensureResult.AddedElephant {
-			fmt.Fprintln(out, "Added Elephant to OpenClaw config. Restart OpenClaw when ready to activate.")
+			fmt.Fprintln(out, "Added Ellie (Elephant) to OpenClaw config. Restart OpenClaw when ready to activate.")
 		}
 		if ensureResult.AddedChameleon {
 			fmt.Fprintln(out, "Added Chameleon to OpenClaw config. Restart OpenClaw when ready to activate.")
@@ -546,6 +549,18 @@ func initFirstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func initOnboardingAgentNames(agents []ottercli.OnboardingAgent) []string {
+	names := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		name := initFirstNonEmpty(agent.DisplayName, agent.Slug)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 func normalizeInitAgentSlot(value string) string {

@@ -572,6 +572,8 @@ type IntegrationsSectionProps = {
   onSave: () => Promise<void>;
   onGenerateApiKey: () => Promise<void>;
   onRevokeApiKey: (keyId: string) => Promise<void>;
+  tokenError: string | null;
+  generatedToken: string | null;
   saving: boolean;
 };
 
@@ -581,6 +583,8 @@ function IntegrationsSection({
   onSave,
   onGenerateApiKey,
   onRevokeApiKey,
+  tokenError,
+  generatedToken,
   saving,
 }: IntegrationsSectionProps) {
   const [generatingKey, setGeneratingKey] = useState(false);
@@ -617,6 +621,16 @@ function IntegrationsSection({
       icon="🔗"
     >
       <div className="space-y-6">
+        {generatedToken && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900">
+            <p className="text-sm font-medium">Copy this token now. It will only be shown once.</p>
+            <p className="mt-2 break-all font-mono text-sm">{generatedToken}</p>
+          </div>
+        )}
+        {tokenError && (
+          <p className="text-sm text-red-700">{tokenError}</p>
+        )}
+
         {/* OpenClaw Webhook URL */}
         <div>
           <Input
@@ -637,14 +651,14 @@ function IntegrationsSection({
         <div>
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium text-[var(--text)]">
-              API Keys
+              Git Access Tokens
             </h3>
             <Button
               variant="secondary"
               onClick={handleGenerateKey}
               loading={generatingKey}
             >
-              Generate New Key
+              Generate Git Token
             </Button>
           </div>
 
@@ -679,10 +693,10 @@ function IntegrationsSection({
           ) : (
             <div className="mt-3 rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface-alt)] px-6 py-8 text-center">
               <p className="text-sm text-[var(--text-muted)]">
-                No API keys yet
+                No git tokens yet
               </p>
               <p className="mt-1 text-xs text-[var(--text-muted)]">
-                Generate a key to access the API programmatically
+                Generate a token to access git and API workflows
               </p>
             </div>
           )}
@@ -924,6 +938,8 @@ export default function SettingsPage() {
     openclawWebhookUrl: "",
     apiKeys: [],
   });
+  const [gitTokenError, setGitTokenError] = useState<string | null>(null);
+  const [generatedGitToken, setGeneratedGitToken] = useState<string | null>(null);
   const [savingIntegrations, setSavingIntegrations] = useState(false);
 
   // Labels state
@@ -955,12 +971,13 @@ export default function SettingsPage() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const [profileRes, notificationsRes, workspaceRes, integrationsRes] =
+        const [profileRes, notificationsRes, workspaceRes, integrationsRes, gitTokensRes] =
           await Promise.all([
             fetch("/api/settings/profile"),
             fetch("/api/settings/notifications"),
             fetch("/api/settings/workspace"),
             fetch("/api/settings/integrations"),
+            fetch("/api/git/tokens"),
           ]);
 
         if (profileRes.ok) {
@@ -982,16 +999,35 @@ export default function SettingsPage() {
           });
         }
 
+        let openclawWebhookUrl = "";
+        let apiKeys: Integrations["apiKeys"] = [];
         if (integrationsRes.ok) {
           const data = await integrationsRes.json();
-          setIntegrations({
-            ...data,
-            apiKeys: data.apiKeys.map((key: { createdAt: string }) => ({
-              ...key,
+          openclawWebhookUrl = data.openclawWebhookUrl ?? "";
+          apiKeys = Array.isArray(data.apiKeys)
+            ? data.apiKeys.map((key: { id: string; name: string; prefix: string; createdAt: string }) => ({
+              id: key.id,
+              name: key.name,
+              prefix: key.prefix,
               createdAt: new Date(key.createdAt),
-            })),
-          });
+            }))
+            : [];
         }
+        if (gitTokensRes.ok) {
+          const data = await gitTokensRes.json();
+          apiKeys = Array.isArray(data.tokens)
+            ? data.tokens.map((token: { id: string; name: string; token_prefix: string; created_at: string }) => ({
+              id: token.id,
+              name: token.name,
+              prefix: token.token_prefix,
+              createdAt: new Date(token.created_at),
+            }))
+            : [];
+        }
+        setIntegrations({
+          openclawWebhookUrl,
+          apiKeys,
+        });
 
         // Load theme from localStorage
         const savedTheme = localStorage.getItem("otter-camp-theme") as ThemeMode;
@@ -1121,28 +1157,80 @@ export default function SettingsPage() {
   }, [integrations]);
 
   const handleGenerateApiKey = useCallback(async () => {
-    const response = await fetch("/api/settings/integrations/api-keys", {
+    setGitTokenError(null);
+    setGeneratedGitToken(null);
+
+    const projectsResponse = await fetch("/api/projects");
+    if (!projectsResponse.ok) {
+      const payload = await projectsResponse.json().catch(() => null);
+      setGitTokenError(payload?.error ?? "Failed to load projects for git token creation.");
+      return;
+    }
+
+    const projectsPayload = await projectsResponse.json().catch(() => ({})) as {
+      projects?: Array<{ id?: string }>;
+    };
+    const projectIDs = (projectsPayload.projects ?? [])
+      .map((project) => project.id ?? "")
+      .filter((id) => id !== "");
+
+    if (projectIDs.length === 0) {
+      setGitTokenError("Create a project before generating a git token.");
+      return;
+    }
+
+    const response = await fetch("/api/git/tokens", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: `API Key ${integrations.apiKeys.length + 1}` }),
+      body: JSON.stringify({
+        name: `Git Token ${integrations.apiKeys.length + 1}`,
+        projects: projectIDs.map((projectID) => ({
+          project_id: projectID,
+          permission: "write",
+        })),
+      }),
     });
 
-    if (response.ok) {
-      const newKey = await response.json();
-      setIntegrations((prev) => ({
-        ...prev,
-        apiKeys: [
-          ...prev.apiKeys,
-          { ...newKey, createdAt: new Date(newKey.createdAt) },
-        ],
-      }));
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      setGitTokenError(payload?.error ?? "Failed to create git token.");
+      return;
     }
+
+    const token = await response.json() as {
+      id: string;
+      name: string;
+      token_prefix: string;
+      token?: string;
+      created_at: string;
+    };
+
+    setIntegrations((prev) => ({
+      ...prev,
+      apiKeys: [
+        {
+          id: token.id,
+          name: token.name,
+          prefix: token.token_prefix,
+          createdAt: new Date(token.created_at),
+        },
+        ...prev.apiKeys,
+      ],
+    }));
+    setGeneratedGitToken(token.token ?? null);
   }, [integrations.apiKeys.length]);
 
   const handleRevokeApiKey = useCallback(async (keyId: string) => {
-    await fetch(`/api/settings/integrations/api-keys/${keyId}`, {
-      method: "DELETE",
+    setGitTokenError(null);
+    const response = await fetch(`/api/git/tokens/${encodeURIComponent(keyId)}/revoke`, {
+      method: "POST",
     });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      setGitTokenError(payload?.error ?? "Failed to revoke git token.");
+      return;
+    }
 
     setIntegrations((prev) => ({
       ...prev,
@@ -1314,6 +1402,8 @@ export default function SettingsPage() {
           onSave={handleSaveIntegrations}
           onGenerateApiKey={handleGenerateApiKey}
           onRevokeApiKey={handleRevokeApiKey}
+          tokenError={gitTokenError}
+          generatedToken={generatedGitToken}
           saving={savingIntegrations}
         />
 
