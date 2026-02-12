@@ -31,6 +31,10 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 	if rootDir == "" {
 		return []EllieRetrievedItem{}, nil
 	}
+	rootDir, err := normalizeJSONLRoot(rootDir)
+	if err != nil {
+		return nil, err
+	}
 
 	limit := input.Limit
 	if limit <= 0 {
@@ -48,7 +52,7 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 	results := make([]EllieRetrievedItem, 0, limit)
 	bytesScanned := 0
 	exhaustedScanBudget := false
-	err := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
@@ -62,7 +66,15 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 			return nil
 		}
 
-		file, err := os.Open(path)
+		resolvedPath, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil
+		}
+		if err := ensurePathWithinRoot(rootDir, resolvedPath); err != nil {
+			return fmt.Errorf("jsonl scanner path %q escapes root: %w", path, err)
+		}
+
+		file, err := os.Open(resolvedPath)
 		if err != nil {
 			return nil
 		}
@@ -90,7 +102,7 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 			results = append(results, EllieRetrievedItem{
 				Tier:    4,
 				Source:  "jsonl",
-				ID:      fmt.Sprintf("%s:%d", path, lineNumber),
+				ID:      formatJSONLItemID(rootDir, resolvedPath, lineNumber),
 				Snippet: line,
 			})
 			if len(results) >= limit {
@@ -109,4 +121,36 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 		return nil, err
 	}
 	return results, nil
+}
+
+func normalizeJSONLRoot(rootDir string) (string, error) {
+	cleanRoot := filepath.Clean(rootDir)
+	absRoot, err := filepath.Abs(cleanRoot)
+	if err != nil {
+		return "", err
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return "", err
+	}
+	return resolvedRoot, nil
+}
+
+func ensurePathWithinRoot(root, path string) error {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("path %q is outside %q", path, root)
+	}
+	return nil
+}
+
+func formatJSONLItemID(rootDir, filePath string, lineNumber int) string {
+	rel, err := filepath.Rel(rootDir, filePath)
+	if err != nil {
+		rel = filepath.Base(filePath)
+	}
+	return fmt.Sprintf("%s:%d", filepath.ToSlash(rel), lineNumber)
 }

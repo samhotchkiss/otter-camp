@@ -50,3 +50,40 @@ func TestEllieFileJSONLScannerRespectsMaxBytesScanned(t *testing.T) {
 	require.NotEmpty(t, results)
 	require.Less(t, len(results), 20)
 }
+
+func TestEllieFileJSONLScannerUsesRelativeItemIDs(t *testing.T) {
+	rootDir := t.TempDir()
+	nestedDir := filepath.Join(rootDir, "nested")
+	require.NoError(t, os.MkdirAll(nestedDir, 0o755))
+
+	path := filepath.Join(nestedDir, "events.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("keyword hit\n"), 0o644))
+
+	scanner := &EllieFileJSONLScanner{RootDir: rootDir}
+	results, err := scanner.Scan(context.Background(), EllieJSONLScanInput{
+		Query: "keyword",
+		Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, filepath.ToSlash("nested/events.jsonl:1"), results[0].ID)
+	require.NotContains(t, results[0].ID, rootDir)
+}
+
+func TestEllieFileJSONLScannerRejectsSymlinkEscape(t *testing.T) {
+	rootDir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "outside.jsonl")
+	require.NoError(t, os.WriteFile(outsidePath, []byte("keyword hit\n"), 0o644))
+
+	escapeLink := filepath.Join(rootDir, "escape.jsonl")
+	require.NoError(t, os.Symlink(outsidePath, escapeLink))
+
+	scanner := &EllieFileJSONLScanner{RootDir: rootDir}
+	_, err := scanner.Scan(context.Background(), EllieJSONLScanInput{
+		Query: "keyword",
+		Limit: 5,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "escapes root")
+}
