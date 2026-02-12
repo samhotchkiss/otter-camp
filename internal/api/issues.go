@@ -24,11 +24,13 @@ import (
 
 type IssuesHandler struct {
 	IssueStore         *store.ProjectIssueStore
+	AgentStore         *store.AgentStore
 	ChatThreadStore    *store.ChatThreadStore
 	QuestionnaireStore *store.QuestionnaireStore
 	ProjectStore       *store.ProjectStore
 	CommitStore        *store.ProjectCommitStore
 	ProjectRepos       *store.ProjectRepoStore
+	ComplianceReviewer issueComplianceReviewer
 	DB                 *sql.DB
 	Hub                *ws.Hub
 	OpenClawDispatcher openClawMessageDispatcher
@@ -859,6 +861,10 @@ func (h *IssuesHandler) PatchIssue(w http.ResponseWriter, r *http.Request) {
 	h.applyAutomaticIssueLabelsBestEffort(r.Context(), updated)
 	if shouldDispatchIssueKickoffAfterPatch(*beforeIssue, *updated, req) {
 		h.dispatchIssueKickoffBestEffort(r.Context(), *updated)
+	}
+	if !strings.EqualFold(strings.TrimSpace(beforeIssue.State), "closed") &&
+		strings.EqualFold(strings.TrimSpace(updated.State), "closed") {
+		updated = h.runIssueCloseComplianceReviewBestEffort(r.Context(), updated)
 	}
 	if h.ChatThreadStore != nil &&
 		!strings.EqualFold(strings.TrimSpace(beforeIssue.State), "closed") &&

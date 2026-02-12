@@ -139,6 +139,7 @@ func NewRouter() http.Handler {
 		projectChatHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		projectChatHandler.DB = db
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
+		issuesHandler.AgentStore = agentStore
 		issuesHandler.ChatThreadStore = chatThreadStore
 		issuesHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		questionnaireHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
@@ -146,6 +147,10 @@ func NewRouter() http.Handler {
 		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
 		issuesHandler.ProjectRepos = projectRepoStore
 		issuesHandler.DB = db
+		issuesHandler.ComplianceReviewer = newDefaultIssueComplianceReviewer(
+			store.NewComplianceRuleStore(db),
+			issuesHandler.CommitStore,
+		)
 		messageHandler.ChatThreadStore = chatThreadStore
 		projectCommitsHandler.ProjectStore = projectStore
 		projectCommitsHandler.CommitStore = store.NewProjectCommitStore(db)
