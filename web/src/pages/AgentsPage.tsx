@@ -777,7 +777,7 @@ function AgentsPageComponent({
         role: agent.role,
       },
       title: agent.name,
-      contextLabel: elephantConversation ? "Elephant memory chat" : "Direct agent chat",
+      contextLabel: elephantConversation ? "Ellie memory chat" : "Direct agent chat",
       subtitle: elephantConversation
         ? "Dedicated memory archivist session."
         : "Identity injected on open. Project required for writable tasks.",
@@ -869,7 +869,7 @@ function AgentsPageComponent({
         <p className="mt-4 text-xs text-[var(--text-muted)]">
           Chats are routed through OpenClaw with OtterCamp identity injection.
         </p>
-        <div className="mt-6 flex flex-wrap gap-2" role="group" aria-label="Agent status filters">
+        <div className="mt-6 flex flex-wrap gap-2">
           <StatusFilterButton
             status="all"
             label="All"
