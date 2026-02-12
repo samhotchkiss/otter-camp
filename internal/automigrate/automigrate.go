@@ -38,6 +38,14 @@ func Run(db *sql.DB, migrationsDir string) error {
 		}
 		applied[v] = true
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate migration versions: %w", err)
+	}
+
+	hasDirtyColumn, err := schemaMigrationsHasDirtyColumn(db)
+	if err != nil {
+		return fmt.Errorf("detect schema_migrations columns: %w", err)
+	}
 
 	// Find pending up migrations
 	entries, err := os.ReadDir(migrationsDir)
@@ -96,20 +104,18 @@ func Run(db *sql.DB, migrationsDir string) error {
 			errStr := err.Error()
 			if strings.Contains(errStr, "already exists") || strings.Contains(errStr, "duplicate key") {
 				log.Printf("  ⏭️  Skipped (already applied): %d", version)
-				// Record it so we don't retry
-				db.Exec("INSERT INTO schema_migrations (version, dirty) VALUES ($1, false) ON CONFLICT DO NOTHING", version)
+				// Record it so we don't retry.
+				if err := recordMigrationVersion(db, version, hasDirtyColumn); err != nil {
+					return fmt.Errorf("record skipped %s: %w", name, err)
+				}
 				continue
 			}
 			return fmt.Errorf("apply %s: %w", name, err)
 		}
 
-		// Insert with dirty=false; handle both schemas (with/without dirty column)
-		if _, err := tx.Exec("INSERT INTO schema_migrations (version, dirty) VALUES ($1, false)", version); err != nil {
-			// Fallback: table might not have dirty column
-			if _, err2 := tx.Exec("INSERT INTO schema_migrations (version) VALUES ($1)", version); err2 != nil {
-				tx.Rollback()
-				return fmt.Errorf("record %s: %w", name, err2)
-			}
+		if err := recordMigrationVersion(tx, version, hasDirtyColumn); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("record %s: %w", name, err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -121,4 +127,34 @@ func Run(db *sql.DB, migrationsDir string) error {
 
 	log.Printf("✅ All migrations applied (%d new, %d total)", len(pending), len(applied)+len(pending))
 	return nil
+}
+
+func schemaMigrationsHasDirtyColumn(db *sql.DB) (bool, error) {
+	var hasDirtyColumn bool
+	err := db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = 'schema_migrations'
+			  AND column_name = 'dirty'
+		)
+	`).Scan(&hasDirtyColumn)
+	if err != nil {
+		return false, err
+	}
+	return hasDirtyColumn, nil
+}
+
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func recordMigrationVersion(exec sqlExecer, version int, hasDirtyColumn bool) error {
+	if hasDirtyColumn {
+		_, err := exec.Exec("INSERT INTO schema_migrations (version, dirty) VALUES ($1, false)", version)
+		return err
+	}
+	_, err := exec.Exec("INSERT INTO schema_migrations (version) VALUES ($1)", version)
+	return err
 }
