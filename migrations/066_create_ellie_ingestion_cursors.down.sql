@@ -1,0 +1,3 @@
+DROP TRIGGER IF EXISTS ellie_ingestion_cursors_updated_at_trg ON ellie_ingestion_cursors;
+DROP INDEX IF EXISTS ellie_ingestion_cursors_org_source_idx;
+DROP TABLE IF EXISTS ellie_ingestion_cursors;
