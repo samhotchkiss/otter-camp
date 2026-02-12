@@ -49,7 +49,8 @@ for agent_dir in "$AGENTS_DIR"/*/; do
     continue
   fi
 
-  if [[ -f "$avatar_file" ]] && [[ "$FORCE" != "true" ]]; then
+  webp_check="${avatar_file%.png}.webp"
+  if { [[ -f "$avatar_file" ]] || [[ -f "$webp_check" ]]; } && [[ "$FORCE" != "true" ]]; then
     ((SKIPPED++)) || true
     continue
   fi
