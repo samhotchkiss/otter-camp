@@ -74,6 +74,47 @@ func TestProjectChatHandlerCreateAndList(t *testing.T) {
 	require.False(t, listResp.HasMore)
 }
 
+func TestProjectChatCreatePersistsToConversationTables(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "project-chat-conversation-persist-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Project Chat Conversation Persist")
+
+	handler := &ProjectChatHandler{
+		ProjectStore: store.NewProjectStore(db),
+		ChatStore:    store.NewProjectChatStore(db),
+	}
+	router := newProjectChatTestRouter(handler)
+
+	createBody := []byte(`{"author":"Sam","body":"Conversation mirror message"}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/projects/"+projectID+"/chat/messages?org_id="+orgID, bytes.NewReader(createBody))
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+
+	require.Equal(t, http.StatusCreated, createRec.Code)
+	var createResp struct {
+		Message projectChatMessagePayload `json:"message"`
+	}
+	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&createResp))
+
+	var (
+		roomType  string
+		contextID string
+		body      string
+	)
+	err := db.QueryRow(
+		`SELECT r.type, r.context_id::text, cm.body
+		 FROM chat_messages cm
+		 JOIN rooms r ON r.id = cm.room_id
+		 WHERE cm.id = $1 AND cm.org_id = $2`,
+		createResp.Message.ID,
+		orgID,
+	).Scan(&roomType, &contextID, &body)
+	require.NoError(t, err)
+	require.Equal(t, "project", roomType)
+	require.Equal(t, projectID, contextID)
+	require.Equal(t, "Conversation mirror message", body)
+}
+
 func TestProjectChatHandlerCreateTouchesChatThreadForAuthenticatedUser(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "project-chat-thread-org")
