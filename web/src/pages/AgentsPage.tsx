@@ -869,7 +869,7 @@ function AgentsPageComponent({
         <p className="mt-4 text-xs text-[var(--text-muted)]">
           Chats are routed through OpenClaw with OtterCamp identity injection.
         </p>
-        <div className="mt-6 flex flex-wrap gap-2">
+        <div className="mt-6 flex flex-wrap gap-2" role="group" aria-label="Agent status filters">
           <StatusFilterButton
             status="all"
             label="All"

@@ -80,10 +80,11 @@ test.describe("Agents Page", () => {
   });
 
   test("shows all status filter buttons", async ({ page }) => {
-    await expect(page.getByRole("button", { name: /All.*4/i })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Online.*2/i })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Busy.*1/i })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Offline.*1/i })).toBeVisible();
+    const statusFilters = page.getByRole("group", { name: "Agent status filters" });
+    await expect(statusFilters.getByRole("button", { name: /All.*4/i })).toBeVisible();
+    await expect(statusFilters.getByRole("button", { name: /Online.*2/i })).toBeVisible();
+    await expect(statusFilters.getByRole("button", { name: /Busy.*1/i })).toBeVisible();
+    await expect(statusFilters.getByRole("button", { name: /Offline.*1/i })).toBeVisible();
   });
 
   test("displays agent cards with correct information", async ({ page }) => {
@@ -95,7 +96,8 @@ test.describe("Agents Page", () => {
   });
 
   test("filters agents by online status", async ({ page }) => {
-    await page.getByRole("button", { name: /Online.*2/i }).click();
+    const statusFilters = page.getByRole("group", { name: "Agent status filters" });
+    await statusFilters.getByRole("button", { name: /Online.*2/i }).click();
 
     // Should show Frank and Stone (online)
     await expect(page.getByText("Frank")).toBeVisible();
@@ -107,7 +109,8 @@ test.describe("Agents Page", () => {
   });
 
   test("filters agents by busy status", async ({ page }) => {
-    await page.getByRole("button", { name: /Busy.*1/i }).click();
+    const statusFilters = page.getByRole("group", { name: "Agent status filters" });
+    await statusFilters.getByRole("button", { name: /Busy.*1/i }).click();
 
     // Should only show Nova
     await expect(page.getByText("Nova")).toBeVisible();
@@ -115,7 +118,8 @@ test.describe("Agents Page", () => {
   });
 
   test("filters agents by offline status", async ({ page }) => {
-    await page.getByRole("button", { name: /Offline.*1/i }).click();
+    const statusFilters = page.getByRole("group", { name: "Agent status filters" });
+    await statusFilters.getByRole("button", { name: /Offline.*1/i }).click();
 
     // Should only show Derek
     await expect(page.getByText("Derek")).toBeVisible();
