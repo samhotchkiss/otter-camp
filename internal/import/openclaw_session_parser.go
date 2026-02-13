@@ -52,6 +52,10 @@ func ParseOpenClawSessionEvents(install *OpenClawInstallation) ([]OpenClawSessio
 	if root == "" {
 		return nil, fmt.Errorf("openclaw root dir is required")
 	}
+	sourceGuard, err := NewOpenClawSourceGuard(root)
+	if err != nil {
+		return nil, err
+	}
 
 	sessionFiles, err := filepath.Glob(filepath.Join(root, "agents", "*", "sessions", "*.jsonl"))
 	if err != nil {
@@ -61,6 +65,9 @@ func ParseOpenClawSessionEvents(install *OpenClawInstallation) ([]OpenClawSessio
 
 	events := make([]OpenClawSessionEvent, 0)
 	for _, sessionPath := range sessionFiles {
+		if err := sourceGuard.ValidateReadPath(sessionPath); err != nil {
+			return nil, err
+		}
 		sessionEvents, err := parseOpenClawSessionFile(sessionPath)
 		if err != nil {
 			return nil, err

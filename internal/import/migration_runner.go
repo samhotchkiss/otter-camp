@@ -53,6 +53,7 @@ type RunOpenClawMigrationResult struct {
 	HistoryBackfill  *OpenClawHistoryBackfillResult
 	EllieBackfill    *OpenClawEllieBackfillResult
 	ProjectDiscovery *OpenClawProjectDiscoveryResult
+	Summary          OpenClawMigrationSummaryReport
 	Paused           bool
 }
 
@@ -72,6 +73,14 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 	}
 	if input.Installation == nil {
 		return RunOpenClawMigrationResult{}, fmt.Errorf("installation is required")
+	}
+	sourceGuard, err := NewOpenClawSourceGuard(input.Installation.RootDir)
+	if err != nil {
+		return RunOpenClawMigrationResult{}, err
+	}
+	sourceSnapshot, err := sourceGuard.CaptureSnapshot()
+	if err != nil {
+		return RunOpenClawMigrationResult{}, err
 	}
 
 	result := RunOpenClawMigrationResult{}
@@ -104,6 +113,11 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 			return RunOpenClawMigrationResult{}, discoveryErr
 		}
 		result.ProjectDiscovery = discoveryResult
+	}
+
+	result.Summary = BuildOpenClawMigrationSummaryReport(result)
+	if err := sourceGuard.VerifyUnchanged(sourceSnapshot); err != nil {
+		return RunOpenClawMigrationResult{}, err
 	}
 
 	return result, nil

@@ -230,12 +230,30 @@ func runMigrateFromOpenClaw(out io.Writer, opts migrateFromOpenClawOptions) erro
 	if err != nil {
 		return err
 	}
+	renderMigrateOpenClawSummary(out, runResult.Summary)
 	if runResult.Paused {
 		fmt.Fprintln(out, "OpenClaw migration paused at checkpoint.")
 		return nil
 	}
 	fmt.Fprintln(out, "OpenClaw migration complete.")
 	return nil
+}
+
+func renderMigrateOpenClawSummary(out io.Writer, summary importer.OpenClawMigrationSummaryReport) {
+	fmt.Fprintln(out, "OpenClaw migration summary:")
+	fmt.Fprintf(out, "  agent_import.processed=%d\n", summary.AgentImportProcessed)
+	fmt.Fprintf(out, "  history_backfill.events_processed=%d\n", summary.HistoryEventsProcessed)
+	fmt.Fprintf(out, "  history_backfill.messages_inserted=%d\n", summary.HistoryMessagesInserted)
+	fmt.Fprintf(out, "  memory_extraction.processed=%d\n", summary.MemoryExtractionProcessed)
+	fmt.Fprintf(out, "  project_discovery.processed=%d\n", summary.ProjectDiscoveryProcessed)
+	fmt.Fprintf(out, "  failed_items=%d\n", summary.FailedItems)
+	if len(summary.Warnings) == 0 {
+		return
+	}
+	fmt.Fprintln(out, "  warnings:")
+	for _, warning := range summary.Warnings {
+		fmt.Fprintf(out, "    - %s\n", strings.TrimSpace(warning))
+	}
 }
 
 func resolveMigrateOrgID(flagOrgID string) (string, error) {
