@@ -28,3 +28,22 @@ func TestOpenClawSourceGuardRejectsSymlinkEscape(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "outside openclaw root")
 }
+
+func TestOpenClawSourceGuardAllowsSymlinkInsideRoot(t *testing.T) {
+	root := t.TempDir()
+
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	insideFile := filepath.Join(root, "allowed.jsonl")
+	require.NoError(t, os.WriteFile(insideFile, []byte("safe\n"), 0o644))
+
+	insideLink := filepath.Join(sessionDir, "inside.jsonl")
+	require.NoError(t, os.Symlink(insideFile, insideLink))
+
+	guard, err := NewOpenClawSourceGuard(root)
+	require.NoError(t, err)
+
+	err = guard.ValidateReadPath(insideLink)
+	require.NoError(t, err)
+}
