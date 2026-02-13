@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,6 +45,14 @@ type openClawSessionRawMessage struct {
 }
 
 func ParseOpenClawSessionEvents(install *OpenClawInstallation) ([]OpenClawSessionEvent, error) {
+	return parseOpenClawSessionEvents(install, false)
+}
+
+func ParseOpenClawSessionEventsStrict(install *OpenClawInstallation) ([]OpenClawSessionEvent, error) {
+	return parseOpenClawSessionEvents(install, true)
+}
+
+func parseOpenClawSessionEvents(install *OpenClawInstallation, strict bool) ([]OpenClawSessionEvent, error) {
 	if install == nil {
 		return nil, fmt.Errorf("installation is required")
 	}
@@ -75,7 +84,7 @@ func ParseOpenClawSessionEvents(install *OpenClawInstallation) ([]OpenClawSessio
 		if err := sourceGuard.ValidateReadPath(sessionPath); err != nil {
 			return nil, err
 		}
-		sessionEvents, err := parseOpenClawSessionFile(sessionPath)
+		sessionEvents, err := parseOpenClawSessionFile(sessionPath, strict)
 		if err != nil {
 			return nil, err
 		}
@@ -98,7 +107,7 @@ func ParseOpenClawSessionEvents(install *OpenClawInstallation) ([]OpenClawSessio
 	return events, nil
 }
 
-func parseOpenClawSessionFile(sessionPath string) ([]OpenClawSessionEvent, error) {
+func parseOpenClawSessionFile(sessionPath string, strict bool) ([]OpenClawSessionEvent, error) {
 	file, err := os.Open(sessionPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open openclaw session file %s: %w", sessionPath, err)
@@ -120,12 +129,20 @@ func parseOpenClawSessionFile(sessionPath string) ([]OpenClawSessionEvent, error
 
 		var raw openClawSessionRawEvent
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			return nil, fmt.Errorf("failed to parse openclaw jsonl %s:%d: %w", sessionPath, lineNo, err)
+			if strict {
+				return nil, fmt.Errorf("failed to parse openclaw jsonl %s:%d: %w", sessionPath, lineNo, err)
+			}
+			log.Printf("warning: skipping malformed openclaw jsonl line %s:%d: %v", sessionPath, lineNo, err)
+			continue
 		}
 
 		event, include, err := normalizeOpenClawSessionEvent(raw, sessionPath, agentSlug, sessionID, lineNo)
 		if err != nil {
-			return nil, fmt.Errorf("failed to normalize openclaw session event %s:%d: %w", sessionPath, lineNo, err)
+			if strict {
+				return nil, fmt.Errorf("failed to normalize openclaw session event %s:%d: %w", sessionPath, lineNo, err)
+			}
+			log.Printf("warning: skipping invalid openclaw session event %s:%d: %v", sessionPath, lineNo, err)
+			continue
 		}
 		if !include {
 			continue

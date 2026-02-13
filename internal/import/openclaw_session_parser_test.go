@@ -1,8 +1,12 @@
 package importer
 
 import (
+	"bytes"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +112,102 @@ func TestOpenClawSessionParserRejectsSymlinkedSessionFile(t *testing.T) {
 	_, err := ParseOpenClawSessionEvents(&OpenClawInstallation{RootDir: root})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "must not be a symlink")
+}
+
+func TestOpenClawSessionParserLenientModeSkipsMalformedLines(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	sessionPath := filepath.Join(sessionDir, "mixed-valid-invalid.jsonl")
+	writeOpenClawSessionFixture(t, sessionPath, []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:05Z","message":{"role":"user","content":[{"type":"text","text":"Need a migration plan"}]}}`,
+		`{"type":"message","id":"bad","timestamp":"2026-01-01T10:00:06Z","message":`,
+		`{"type":"message","id":"a1","timestamp":"2026-01-01T10:00:07Z","message":{"role":"assistant","content":[{"type":"text","text":"Here is the plan."}]}}`,
+	})
+
+	var logBuf bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	events, err := ParseOpenClawSessionEvents(&OpenClawInstallation{RootDir: root})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	require.Equal(t, OpenClawSessionEventRoleUser, events[0].Role)
+	require.Equal(t, OpenClawSessionEventRoleAssistant, events[1].Role)
+	require.Contains(t, strings.ToLower(logBuf.String()), "skipping malformed openclaw jsonl line")
+}
+
+func TestOpenClawSessionParserStrictModeRejectsMalformedLines(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	sessionPath := filepath.Join(sessionDir, "strict-invalid.jsonl")
+	writeOpenClawSessionFixture(t, sessionPath, []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:05Z","message":{"role":"user","content":[{"type":"text","text":"Need a migration plan"}]}}`,
+		`{"type":"message","id":"bad","timestamp":"2026-01-01T10:00:06Z","message":`,
+	})
+
+	_, err := ParseOpenClawSessionEventsStrict(&OpenClawInstallation{RootDir: root})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "failed to parse openclaw jsonl")
+}
+
+func TestOpenClawSessionParserEmptyFile(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "empty.jsonl"), []byte{}, 0o644))
+
+	events, err := ParseOpenClawSessionEvents(&OpenClawInstallation{RootDir: root})
+	require.NoError(t, err)
+	require.Empty(t, events)
+}
+
+func TestOpenClawSessionParserBlankLinesOnly(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "blank-lines.jsonl"), []byte("\n\n  \n\t\n"), 0o644))
+
+	events, err := ParseOpenClawSessionEvents(&OpenClawInstallation{RootDir: root})
+	require.NoError(t, err)
+	require.Empty(t, events)
+}
+
+func TestOpenClawSessionParserInvalidJSONOnly(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "invalid-only.jsonl"), []byte("{invalid json\n{also invalid\n"), 0o644))
+
+	var logBuf bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	events, err := ParseOpenClawSessionEvents(&OpenClawInstallation{RootDir: root})
+	require.NoError(t, err)
+	require.Empty(t, events)
+	require.Contains(t, strings.ToLower(logBuf.String()), "skipping malformed openclaw jsonl line")
+}
+
+func TestOpenClawSessionParserNearBufferLimitLine(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	largeText := strings.Repeat("x", (8*1024*1024)-1024)
+	line := fmt.Sprintf(`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:05Z","message":{"role":"user","content":[{"type":"text","text":"%s"}]}}`, largeText)
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "large-line.jsonl"), []byte(line+"\n"), 0o644))
+
+	events, err := ParseOpenClawSessionEvents(&OpenClawInstallation{RootDir: root})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, OpenClawSessionEventRoleUser, events[0].Role)
+	require.NotEmpty(t, events[0].Body)
 }
 
 func writeOpenClawSessionFixture(t *testing.T, path string, lines []string) {
