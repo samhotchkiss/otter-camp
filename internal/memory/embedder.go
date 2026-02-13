@@ -163,7 +163,10 @@ func (e *ollamaEmbedder) Embed(ctx context.Context, inputs []string) ([][]float6
 
 	out := make([][]float64, 0, len(inputs))
 	for _, input := range inputs {
-		vector, err := e.embedOne(ctx, input)
+		// Truncate to ~8000 tokens (~32000 chars) to stay within model context window.
+		// nomic-embed-text has 8192 token limit; rough 4 chars/token estimate.
+		truncated := truncateForEmbedding(input, 32000)
+		vector, err := e.embedOne(ctx, truncated)
 		if err != nil {
 			return nil, err
 		}
@@ -254,7 +257,8 @@ func (e *openAIEmbedder) Embed(ctx context.Context, inputs []string) ([][]float6
 		if trimmed == "" {
 			return nil, ErrEmbedderInputRequired
 		}
-		normalized = append(normalized, trimmed)
+		// Truncate to stay within model context limits (~8191 tokens for text-embedding-ada-002)
+		normalized = append(normalized, truncateForEmbedding(trimmed, 32000))
 	}
 	return e.embedBatchWithRetry(ctx, normalized)
 }
@@ -380,4 +384,19 @@ func sleepWithContext(ctx context.Context, duration time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// truncateForEmbedding truncates text to maxChars to stay within embedding
+// model context windows. Truncates at the last space boundary to avoid
+// splitting words.
+func truncateForEmbedding(text string, maxChars int) string {
+	if len(text) <= maxChars {
+		return text
+	}
+	truncated := text[:maxChars]
+	// Try to break at last space
+	if idx := strings.LastIndex(truncated, " "); idx > maxChars/2 {
+		truncated = truncated[:idx]
+	}
+	return truncated
 }
