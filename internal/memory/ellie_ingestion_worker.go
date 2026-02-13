@@ -13,13 +13,21 @@ import (
 )
 
 const (
-	defaultEllieIngestionInterval   = 5 * time.Minute
-	defaultEllieIngestionBatchSize  = 100
-	defaultEllieIngestionMaxPerRoom = 200
-	ellieIngestionWindowGap         = 15 * time.Minute
+	defaultEllieIngestionInterval           = 5 * time.Minute
+	defaultEllieIngestionBatchSize          = 100
+	defaultEllieIngestionMaxPerRoom         = 200
+	defaultEllieIngestionBackfillMaxPerRoom = 250
+	ellieIngestionWindowGap                 = 15 * time.Minute
 )
 
 var ellieOperationalContextPattern = regexp.MustCompile(`\b(api|build|code|config|database|deploy|feature|migration|pipeline|release|schema|test)\b`)
+
+type EllieIngestionMode string
+
+const (
+	EllieIngestionModeNormal   EllieIngestionMode = "normal"
+	EllieIngestionModeBackfill EllieIngestionMode = "backfill"
+)
 
 type EllieIngestionStore interface {
 	ListRoomsForIngestion(ctx context.Context, limit int) ([]store.EllieRoomIngestionCandidate, error)
@@ -30,17 +38,21 @@ type EllieIngestionStore interface {
 }
 
 type EllieIngestionWorkerConfig struct {
-	Interval   time.Duration
-	BatchSize  int
-	MaxPerRoom int
+	Interval           time.Duration
+	BatchSize          int
+	MaxPerRoom         int
+	BackfillMaxPerRoom int
+	Mode               EllieIngestionMode
 }
 
 type EllieIngestionWorker struct {
-	Store      EllieIngestionStore
-	Interval   time.Duration
-	BatchSize  int
-	MaxPerRoom int
-	Logf       func(format string, args ...any)
+	Store              EllieIngestionStore
+	Interval           time.Duration
+	BatchSize          int
+	MaxPerRoom         int
+	BackfillMaxPerRoom int
+	Mode               EllieIngestionMode
+	Logf               func(format string, args ...any)
 }
 
 func NewEllieIngestionWorker(store EllieIngestionStore, cfg EllieIngestionWorkerConfig) *EllieIngestionWorker {
@@ -56,13 +68,27 @@ func NewEllieIngestionWorker(store EllieIngestionStore, cfg EllieIngestionWorker
 	if maxPerRoom <= 0 {
 		maxPerRoom = defaultEllieIngestionMaxPerRoom
 	}
-	return &EllieIngestionWorker{
-		Store:      store,
-		Interval:   interval,
-		BatchSize:  batchSize,
-		MaxPerRoom: maxPerRoom,
-		Logf:       log.Printf,
+	backfillMaxPerRoom := cfg.BackfillMaxPerRoom
+	if backfillMaxPerRoom <= 0 {
+		backfillMaxPerRoom = defaultEllieIngestionBackfillMaxPerRoom
 	}
+	mode := normalizeEllieIngestionMode(cfg.Mode)
+	return &EllieIngestionWorker{
+		Store:              store,
+		Interval:           interval,
+		BatchSize:          batchSize,
+		MaxPerRoom:         maxPerRoom,
+		BackfillMaxPerRoom: backfillMaxPerRoom,
+		Mode:               mode,
+		Logf:               log.Printf,
+	}
+}
+
+func (w *EllieIngestionWorker) SetMode(mode EllieIngestionMode) {
+	if w == nil {
+		return
+	}
+	w.Mode = normalizeEllieIngestionMode(mode)
 }
 
 func (w *EllieIngestionWorker) Start(ctx context.Context) {
@@ -105,6 +131,14 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 	if w.MaxPerRoom <= 0 {
 		w.MaxPerRoom = defaultEllieIngestionMaxPerRoom
 	}
+	if w.BackfillMaxPerRoom <= 0 {
+		w.BackfillMaxPerRoom = defaultEllieIngestionBackfillMaxPerRoom
+	}
+	mode := normalizeEllieIngestionMode(w.Mode)
+	maxPerRoom := w.MaxPerRoom
+	if mode == EllieIngestionModeBackfill {
+		maxPerRoom = w.BackfillMaxPerRoom
+	}
 
 	rooms, err := w.Store.ListRoomsForIngestion(ctx, w.BatchSize)
 	if err != nil {
@@ -125,9 +159,12 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 		if cursor != nil && cursor.LastMessageID != "" && !cursor.LastMessageCreatedAt.IsZero() {
 			afterCreatedAt = &cursor.LastMessageCreatedAt
 			afterMessageID = &cursor.LastMessageID
+		} else if mode == EllieIngestionModeBackfill {
+			epoch := time.Unix(0, 0).UTC()
+			afterCreatedAt = &epoch
 		}
 
-		messages, err := w.Store.ListRoomMessagesSince(ctx, room.OrgID, room.RoomID, afterCreatedAt, afterMessageID, w.MaxPerRoom)
+		messages, err := w.Store.ListRoomMessagesSince(ctx, room.OrgID, room.RoomID, afterCreatedAt, afterMessageID, maxPerRoom)
 		if err != nil {
 			return processed, fmt.Errorf("list room messages for ellie ingestion %s/%s: %w", room.OrgID, room.RoomID, err)
 		}
@@ -163,6 +200,15 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 	}
 
 	return processed, nil
+}
+
+func normalizeEllieIngestionMode(mode EllieIngestionMode) EllieIngestionMode {
+	switch strings.TrimSpace(strings.ToLower(string(mode))) {
+	case string(EllieIngestionModeBackfill):
+		return EllieIngestionModeBackfill
+	default:
+		return EllieIngestionModeNormal
+	}
 }
 
 func deriveEllieMemoryCandidate(message store.EllieIngestionMessage) (store.CreateEllieExtractedMemoryInput, bool) {

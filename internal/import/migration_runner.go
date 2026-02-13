@@ -11,8 +11,31 @@ import (
 type OpenClawMigrationRunner struct {
 	DB                  *sql.DB
 	ProgressStore       *store.MigrationProgressStore
+	EllieBackfillRunner OpenClawEllieBackfillRunner
 	HistoryCheckpoint   int
 	OnHistoryCheckpoint func(processed, total int)
+}
+
+type OpenClawEllieBackfillInput struct {
+	OrgID string
+}
+
+type OpenClawEllieBackfillResult struct {
+	ProcessedMessages int
+	ExtractedMemories int
+}
+
+type OpenClawEllieBackfillRunner interface {
+	RunBackfill(ctx context.Context, input OpenClawEllieBackfillInput) (OpenClawEllieBackfillResult, error)
+}
+
+type noopOpenClawEllieBackfillRunner struct{}
+
+func (noopOpenClawEllieBackfillRunner) RunBackfill(
+	_ context.Context,
+	_ OpenClawEllieBackfillInput,
+) (OpenClawEllieBackfillResult, error) {
+	return OpenClawEllieBackfillResult{}, nil
 }
 
 type RunOpenClawMigrationInput struct {
@@ -27,14 +50,16 @@ type RunOpenClawMigrationInput struct {
 type RunOpenClawMigrationResult struct {
 	AgentImport     *OpenClawAgentImportResult
 	HistoryBackfill *OpenClawHistoryBackfillResult
+	EllieBackfill   *OpenClawEllieBackfillResult
 	Paused          bool
 }
 
 func NewOpenClawMigrationRunner(db *sql.DB) *OpenClawMigrationRunner {
 	return &OpenClawMigrationRunner{
-		DB:                db,
-		ProgressStore:     store.NewMigrationProgressStore(db),
-		HistoryCheckpoint: 100,
+		DB:                  db,
+		ProgressStore:       store.NewMigrationProgressStore(db),
+		EllieBackfillRunner: noopOpenClawEllieBackfillRunner{},
+		HistoryCheckpoint:   100,
 	}
 }
 
@@ -63,6 +88,13 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 		}
 		result.HistoryBackfill = historyResult
 		result.Paused = paused
+	}
+	if !input.AgentsOnly && !result.Paused {
+		ellieResult, err := r.runEllieBackfillPhase(ctx, input)
+		if err != nil {
+			return RunOpenClawMigrationResult{}, err
+		}
+		result.EllieBackfill = ellieResult
 	}
 
 	return result, nil
@@ -261,6 +293,78 @@ func (r *OpenClawMigrationRunner) runHistoryBackfillPhase(
 	}
 
 	return &aggregated, false, nil
+}
+
+func (r *OpenClawMigrationRunner) runEllieBackfillPhase(
+	ctx context.Context,
+	input RunOpenClawMigrationInput,
+) (*OpenClawEllieBackfillResult, error) {
+	if r.EllieBackfillRunner == nil {
+		return nil, nil
+	}
+
+	phaseType := "memory_extraction"
+	progress, err := r.ProgressStore.GetByType(ctx, input.OrgID, phaseType)
+	if err != nil {
+		return nil, err
+	}
+	if progress == nil {
+		started, startErr := r.ProgressStore.StartPhase(ctx, store.StartMigrationProgressInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			CurrentLabel:  migrationRunnerStringPtr("starting memory extraction"),
+		})
+		if startErr != nil {
+			return nil, startErr
+		}
+		progress = started
+	} else {
+		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusRunning,
+			CurrentLabel:  migrationRunnerStringPtr("resuming memory extraction"),
+		}); setErr != nil {
+			return nil, setErr
+		}
+	}
+
+	backfillResult, backfillErr := r.EllieBackfillRunner.RunBackfill(ctx, OpenClawEllieBackfillInput{
+		OrgID: input.OrgID,
+	})
+	if backfillErr != nil {
+		_, _ = r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusFailed,
+			Error:         migrationRunnerStringPtr(backfillErr.Error()),
+		})
+		return nil, backfillErr
+	}
+
+	if backfillResult.ProcessedMessages > 0 {
+		if _, advanceErr := r.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
+			OrgID:          input.OrgID,
+			MigrationType:  phaseType,
+			ProcessedDelta: backfillResult.ProcessedMessages,
+			CurrentLabel: migrationRunnerStringPtr(
+				fmt.Sprintf("processed %d messages", backfillResult.ProcessedMessages),
+			),
+		}); advanceErr != nil {
+			return nil, advanceErr
+		}
+	}
+
+	if _, err := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+		OrgID:         input.OrgID,
+		MigrationType: phaseType,
+		Status:        store.MigrationProgressStatusCompleted,
+		CurrentLabel:  migrationRunnerStringPtr("memory extraction complete"),
+	}); err != nil {
+		return nil, err
+	}
+
+	return &backfillResult, nil
 }
 
 func migrationRunnerStringPtr(value string) *string {
