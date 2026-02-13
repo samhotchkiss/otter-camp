@@ -8,6 +8,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func ellieRetrievalEmbeddingVector(values ...float64) []float64 {
+	vector := make([]float64, 768)
+	for i, value := range values {
+		if i >= len(vector) {
+			break
+		}
+		vector[i] = value
+	}
+	return vector
+}
+
 func TestEllieRetrievalStoreIncludesMemorySensitivity(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
@@ -180,6 +191,138 @@ func TestEllieRetrievalStoreKeywordScaffoldBehavior(t *testing.T) {
 	results, err := retrievalStore.SearchMemoriesByProject(context.Background(), orgID, projectID, "database choice", 10)
 	require.NoError(t, err)
 	require.Empty(t, results)
+}
+
+func TestEllieRetrievalStoreSemanticQueryFindsNonLiteralMatches(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-retrieval-semantic-org")
+	projectID := createTestProject(t, db, orgID, "Ellie Semantic Retrieval Project")
+	agentID := insertSchemaAgent(t, db, orgID, "ellie-retrieval-semantic-agent")
+
+	var roomID string
+	err := db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Semantic Room', 'project', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&roomID)
+	require.NoError(t, err)
+
+	var semanticMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status, source_project_id)
+		 VALUES ($1, 'technical_decision', 'Storage direction', 'The team chose Postgres for production persistence.', 'active', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&semanticMemoryID)
+	require.NoError(t, err)
+
+	var irrelevantMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status, source_project_id)
+		 VALUES ($1, 'fact', 'Unrelated memory', 'The office lunch schedule was updated.', 'active', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&irrelevantMemoryID)
+	require.NoError(t, err)
+
+	var semanticMessageID string
+	err = db.QueryRow(
+		`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, type, attachments)
+		 VALUES ($1, $2, $3, 'agent', 'We selected Postgres after comparing storage options.', 'message', '[]'::jsonb)
+		 RETURNING id`,
+		orgID,
+		roomID,
+		agentID,
+	).Scan(&semanticMessageID)
+	require.NoError(t, err)
+
+	queryVector := ellieRetrievalEmbeddingVector(1, 0)
+	nearVector := ellieRetrievalEmbeddingVector(1, 0)
+	farVector := ellieRetrievalEmbeddingVector(-1, 0)
+	nearLiteral, err := formatVectorLiteral(nearVector)
+	require.NoError(t, err)
+	farLiteral, err := formatVectorLiteral(farVector)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`UPDATE memories SET embedding = $2::vector WHERE id = $1`, semanticMemoryID, nearLiteral)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE memories SET embedding = $2::vector WHERE id = $1`, irrelevantMemoryID, farLiteral)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE chat_messages SET embedding = $2::vector WHERE id = $1`, semanticMessageID, nearLiteral)
+	require.NoError(t, err)
+
+	store := NewEllieRetrievalStore(db)
+
+	memoryResults, err := store.SearchMemoriesByProjectWithEmbedding(
+		context.Background(),
+		orgID,
+		projectID,
+		"database choice",
+		queryVector,
+		10,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, memoryResults)
+	require.Equal(t, semanticMemoryID, memoryResults[0].MemoryID)
+
+	chatResults, err := store.SearchChatHistoryWithEmbedding(context.Background(), orgID, "database choice", queryVector, 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, chatResults)
+	require.Equal(t, semanticMessageID, chatResults[0].MessageID)
+}
+
+func TestEllieRetrievalStoreSemanticQueryBlendsKeywordAndVectorRanking(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-retrieval-semantic-blend-org")
+	projectID := createTestProject(t, db, orgID, "Ellie Semantic Blend Project")
+
+	var keywordBoostedID string
+	err := db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status, source_project_id)
+		 VALUES ($1, 'technical_decision', 'Database choice documented', 'The explicit database choice remains Postgres.', 'active', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&keywordBoostedID)
+	require.NoError(t, err)
+
+	var semanticOnlyID string
+	err = db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status, source_project_id)
+		 VALUES ($1, 'technical_decision', 'Storage strategy', 'The team settled on a relational engine after comparing tradeoffs.', 'active', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&semanticOnlyID)
+	require.NoError(t, err)
+
+	queryVector := ellieRetrievalEmbeddingVector(1, 0)
+	keywordVector := ellieRetrievalEmbeddingVector(0.6, 0.8)
+	semanticOnlyVector := ellieRetrievalEmbeddingVector(0.95, 0.3122499)
+	keywordLiteral, err := formatVectorLiteral(keywordVector)
+	require.NoError(t, err)
+	semanticOnlyLiteral, err := formatVectorLiteral(semanticOnlyVector)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`UPDATE memories SET embedding = $2::vector WHERE id = $1`, keywordBoostedID, keywordLiteral)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE memories SET embedding = $2::vector WHERE id = $1`, semanticOnlyID, semanticOnlyLiteral)
+	require.NoError(t, err)
+
+	store := NewEllieRetrievalStore(db)
+	results, err := store.SearchMemoriesOrgWideWithEmbedding(context.Background(), orgID, "database choice", queryVector, 10)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.Equal(t, keywordBoostedID, results[0].MemoryID)
+	require.Equal(t, semanticOnlyID, results[1].MemoryID)
 }
 
 func TestEllieRetrievalStoreTreatsWildcardQueryCharsAsLiterals(t *testing.T) {

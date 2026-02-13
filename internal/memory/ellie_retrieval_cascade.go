@@ -16,6 +16,16 @@ type EllieRetrievalStore interface {
 	SearchChatHistory(ctx context.Context, orgID, query string, limit int) ([]store.EllieChatHistoryResult, error)
 }
 
+type EllieSemanticRetrievalStore interface {
+	SearchMemoriesByProjectWithEmbedding(ctx context.Context, orgID, projectID, query string, queryEmbedding []float64, limit int) ([]store.EllieMemorySearchResult, error)
+	SearchMemoriesOrgWideWithEmbedding(ctx context.Context, orgID, query string, queryEmbedding []float64, limit int) ([]store.EllieMemorySearchResult, error)
+	SearchChatHistoryWithEmbedding(ctx context.Context, orgID, query string, queryEmbedding []float64, limit int) ([]store.EllieChatHistoryResult, error)
+}
+
+type EllieQueryEmbedder interface {
+	Embed(ctx context.Context, inputs []string) ([][]float64, error)
+}
+
 type EllieJSONLScanInput struct {
 	OrgID string
 	Query string
@@ -30,6 +40,7 @@ type EllieRetrievalCascadeService struct {
 	Store        EllieRetrievalStore
 	JSONLScanner EllieJSONLScanner
 	QualitySink  EllieRetrievalQualitySink
+	QueryEmbedder EllieQueryEmbedder
 }
 
 type EllieRetrievalRequest struct {
@@ -102,6 +113,8 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 	if limit <= 0 {
 		limit = 5
 	}
+	queryEmbedding, hasQueryEmbedding := s.getQueryEmbedding(ctx, query)
+	semanticStore, semanticStoreOK := s.Store.(EllieSemanticRetrievalStore)
 
 	if roomID != "" {
 		roomResults, err := s.Store.SearchRoomContext(ctx, orgID, roomID, query, limit)
@@ -121,14 +134,30 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 
 	memoryResults := make([]store.EllieMemorySearchResult, 0, limit)
 	if projectID != "" {
-		projectResults, err := s.Store.SearchMemoriesByProject(ctx, orgID, projectID, query, limit)
+		var (
+			projectResults []store.EllieMemorySearchResult
+			err            error
+		)
+		if semanticStoreOK && hasQueryEmbedding {
+			projectResults, err = semanticStore.SearchMemoriesByProjectWithEmbedding(ctx, orgID, projectID, query, queryEmbedding, limit)
+		} else {
+			projectResults, err = s.Store.SearchMemoriesByProject(ctx, orgID, projectID, query, limit)
+		}
 		if err != nil {
 			return EllieRetrievalResponse{}, fmt.Errorf("tier 2 project memory lookup failed: %w", err)
 		}
 		memoryResults = append(memoryResults, projectResults...)
 	}
 
-	orgResults, err := s.Store.SearchMemoriesOrgWide(ctx, orgID, query, limit)
+	var (
+		orgResults []store.EllieMemorySearchResult
+		err        error
+	)
+	if semanticStoreOK && hasQueryEmbedding {
+		orgResults, err = semanticStore.SearchMemoriesOrgWideWithEmbedding(ctx, orgID, query, queryEmbedding, limit)
+	} else {
+		orgResults, err = s.Store.SearchMemoriesOrgWide(ctx, orgID, query, limit)
+	}
 	if err != nil {
 		return EllieRetrievalResponse{}, fmt.Errorf("tier 2 org memory lookup failed: %w", err)
 	}
@@ -147,7 +176,12 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 		return response, nil
 	}
 
-	chatResults, err := s.Store.SearchChatHistory(ctx, orgID, query, limit)
+	var chatResults []store.EllieChatHistoryResult
+	if semanticStoreOK && hasQueryEmbedding {
+		chatResults, err = semanticStore.SearchChatHistoryWithEmbedding(ctx, orgID, query, queryEmbedding, limit)
+	} else {
+		chatResults, err = s.Store.SearchChatHistory(ctx, orgID, query, limit)
+	}
 	if err != nil {
 		return EllieRetrievalResponse{}, fmt.Errorf("tier 3 chat history lookup failed: %w", err)
 	}
@@ -186,6 +220,20 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 	response := EllieRetrievalResponse{TierUsed: 5, NoInformation: true}
 	s.emitQualitySignal(ctx, request, response)
 	return response, nil
+}
+
+func (s *EllieRetrievalCascadeService) getQueryEmbedding(ctx context.Context, query string) ([]float64, bool) {
+	if s == nil || s.QueryEmbedder == nil {
+		return nil, false
+	}
+	embeddings, err := s.QueryEmbedder.Embed(ctx, []string{query})
+	if err != nil {
+		return nil, false
+	}
+	if len(embeddings) != 1 || len(embeddings[0]) == 0 {
+		return nil, false
+	}
+	return embeddings[0], true
 }
 
 func mapRoomResultsToRetrievedItems(results []store.EllieRoomContextResult) []EllieRetrievedItem {

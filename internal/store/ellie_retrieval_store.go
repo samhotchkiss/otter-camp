@@ -71,6 +71,11 @@ type EllieRetrievalStore struct {
 }
 
 const maxEllieSearchQueryLimit = 200
+const (
+	ellieSemanticRankingWeight   = 0.65
+	ellieKeywordRankingWeight    = 0.35
+	ellieSemanticSimilarityFloor = 0.20
+)
 
 func NewEllieRetrievalStore(db *sql.DB) *EllieRetrievalStore {
 	return &EllieRetrievalStore{db: db}
@@ -139,6 +144,17 @@ func (s *EllieRetrievalStore) SearchRoomContext(ctx context.Context, orgID, room
 }
 
 func (s *EllieRetrievalStore) SearchMemoriesByProject(ctx context.Context, orgID, projectID, query string, limit int) ([]EllieMemorySearchResult, error) {
+	return s.SearchMemoriesByProjectWithEmbedding(ctx, orgID, projectID, query, nil, limit)
+}
+
+func (s *EllieRetrievalStore) SearchMemoriesByProjectWithEmbedding(
+	ctx context.Context,
+	orgID,
+	projectID,
+	query string,
+	queryEmbedding []float64,
+	limit int,
+) ([]EllieMemorySearchResult, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("ellie retrieval store is not configured")
 	}
@@ -156,10 +172,20 @@ func (s *EllieRetrievalStore) SearchMemoriesByProject(ctx context.Context, orgID
 	}
 	limit = normalizeEllieSearchLimit(limit, 10)
 
-	return s.queryMemories(ctx, orgID, query, limit, "source_project_id = $3", projectID)
+	return s.queryMemories(ctx, orgID, query, limit, &projectID, queryEmbedding)
 }
 
 func (s *EllieRetrievalStore) SearchMemoriesOrgWide(ctx context.Context, orgID, query string, limit int) ([]EllieMemorySearchResult, error) {
+	return s.SearchMemoriesOrgWideWithEmbedding(ctx, orgID, query, nil, limit)
+}
+
+func (s *EllieRetrievalStore) SearchMemoriesOrgWideWithEmbedding(
+	ctx context.Context,
+	orgID,
+	query string,
+	queryEmbedding []float64,
+	limit int,
+) ([]EllieMemorySearchResult, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("ellie retrieval store is not configured")
 	}
@@ -173,7 +199,7 @@ func (s *EllieRetrievalStore) SearchMemoriesOrgWide(ctx context.Context, orgID, 
 	}
 	limit = normalizeEllieSearchLimit(limit, 10)
 
-	return s.queryMemories(ctx, orgID, query, limit, "1=1")
+	return s.queryMemories(ctx, orgID, query, limit, nil, queryEmbedding)
 }
 
 func (s *EllieRetrievalStore) queryMemories(
@@ -181,24 +207,79 @@ func (s *EllieRetrievalStore) queryMemories(
 	orgID,
 	query string,
 	limit int,
-	extraPredicate string,
-	extraArgs ...any,
+	projectID *string,
+	queryEmbedding []float64,
 ) ([]EllieMemorySearchResult, error) {
 	args := []any{orgID, escapeILIKEPattern(query)}
-	args = append(args, extraArgs...)
+	where := `org_id = $1 AND status = 'active'`
+	if projectID != nil {
+		args = append(args, strings.TrimSpace(*projectID))
+		where += fmt.Sprintf(" AND source_project_id = $%d", len(args))
+	}
+
+	vectorLiteral, hasSemanticLookup, err := normalizeEllieQueryEmbedding(queryEmbedding)
+	if err != nil {
+		return nil, err
+	}
+
 	args = append(args, limit)
 	limitArg := fmt.Sprintf("$%d", len(args))
-	// Scaffold implementation: keyword-only matching while semantic/vector retrieval
-	// follow-up is tracked in #850.
-
 	querySQL := `SELECT id, kind, title, content, source_conversation_id::text, source_project_id::text, occurred_at
 	 FROM memories
-	 WHERE org_id = $1
-	   AND status = 'active'
-	   AND (` + extraPredicate + `)
+	 WHERE ` + where + `
 	   AND ((title || ' ' || content) ILIKE '%' || $2 || '%' ESCAPE '\\')
 	 ORDER BY occurred_at DESC, id DESC
 	 LIMIT ` + limitArg
+	if hasSemanticLookup {
+		args = args[:len(args)-1]
+		args = append(args, vectorLiteral, limit)
+		vectorArg := fmt.Sprintf("$%d", len(args)-1)
+		limitArg = fmt.Sprintf("$%d", len(args))
+		querySQL = fmt.Sprintf(
+			`WITH ranked_memories AS (
+				SELECT
+					id,
+					kind,
+					title,
+					content,
+					source_conversation_id::text,
+					source_project_id::text,
+					occurred_at,
+					CASE
+						WHEN embedding IS NOT NULL THEN 1 - (embedding <=> %s::vector)
+					END AS semantic_score,
+					CASE
+						WHEN (title || ' ' || content) ILIKE '%%' || $2 || '%%' ESCAPE '\\' THEN 1.0
+						ELSE 0.0
+					END AS keyword_score
+				FROM memories
+				WHERE %s
+				  AND (
+						(title || ' ' || content) ILIKE '%%' || $2 || '%%' ESCAPE '\\'
+						OR (
+							embedding IS NOT NULL
+							AND (1 - (embedding <=> %s::vector)) >= %.2f
+						)
+				  )
+			)
+			SELECT id, kind, title, content, source_conversation_id, source_project_id, occurred_at
+			FROM ranked_memories
+			ORDER BY
+				((%.2f * COALESCE(semantic_score, 0.0)) + (%.2f * keyword_score)) DESC,
+				keyword_score DESC,
+				semantic_score DESC NULLS LAST,
+				occurred_at DESC,
+				id DESC
+			LIMIT %s`,
+			vectorArg,
+			where,
+			vectorArg,
+			ellieSemanticSimilarityFloor,
+			ellieSemanticRankingWeight,
+			ellieKeywordRankingWeight,
+			limitArg,
+		)
+	}
 
 	rows, err := s.db.QueryContext(ctx, querySQL, args...)
 	if err != nil {
@@ -237,6 +318,16 @@ func (s *EllieRetrievalStore) queryMemories(
 }
 
 func (s *EllieRetrievalStore) SearchChatHistory(ctx context.Context, orgID, query string, limit int) ([]EllieChatHistoryResult, error) {
+	return s.SearchChatHistoryWithEmbedding(ctx, orgID, query, nil, limit)
+}
+
+func (s *EllieRetrievalStore) SearchChatHistoryWithEmbedding(
+	ctx context.Context,
+	orgID,
+	query string,
+	queryEmbedding []float64,
+	limit int,
+) ([]EllieChatHistoryResult, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("ellie retrieval store is not configured")
 	}
@@ -249,21 +340,62 @@ func (s *EllieRetrievalStore) SearchChatHistory(ctx context.Context, orgID, quer
 		return []EllieChatHistoryResult{}, nil
 	}
 	limit = normalizeEllieSearchLimit(limit, 10)
-	// Scaffold implementation: keyword-only matching while semantic/vector retrieval
-	// follow-up is tracked in #850.
 
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT id, room_id, body, conversation_id::text, created_at
-		 FROM chat_messages
-		 WHERE org_id = $1
-		   AND body ILIKE '%' || $2 || '%' ESCAPE '\\'
-		 ORDER BY created_at DESC, id DESC
-		 LIMIT $3`,
-		orgID,
-		escapeILIKEPattern(query),
-		limit,
-	)
+	vectorLiteral, hasSemanticLookup, err := normalizeEllieQueryEmbedding(queryEmbedding)
+	if err != nil {
+		return nil, err
+	}
+
+	args := []any{orgID, escapeILIKEPattern(query), limit}
+	querySQL := `SELECT id, room_id, body, conversation_id::text, created_at
+	 FROM chat_messages
+	 WHERE org_id = $1
+	   AND body ILIKE '%' || $2 || '%' ESCAPE '\\'
+	 ORDER BY created_at DESC, id DESC
+	 LIMIT $3`
+	if hasSemanticLookup {
+		args = []any{orgID, escapeILIKEPattern(query), vectorLiteral, limit}
+		querySQL = fmt.Sprintf(
+			`WITH ranked_messages AS (
+				SELECT
+					id,
+					room_id,
+					body,
+					conversation_id::text,
+					created_at,
+					CASE
+						WHEN embedding IS NOT NULL THEN 1 - (embedding <=> $3::vector)
+					END AS semantic_score,
+					CASE
+						WHEN body ILIKE '%%' || $2 || '%%' ESCAPE '\\' THEN 1.0
+						ELSE 0.0
+					END AS keyword_score
+				FROM chat_messages
+				WHERE org_id = $1
+				  AND (
+						body ILIKE '%%' || $2 || '%%' ESCAPE '\\'
+						OR (
+							embedding IS NOT NULL
+							AND (1 - (embedding <=> $3::vector)) >= %.2f
+						)
+				  )
+			)
+			SELECT id, room_id, body, conversation_id, created_at
+			FROM ranked_messages
+			ORDER BY
+				((%.2f * COALESCE(semantic_score, 0.0)) + (%.2f * keyword_score)) DESC,
+				keyword_score DESC,
+				semantic_score DESC NULLS LAST,
+				created_at DESC,
+				id DESC
+			LIMIT $4`,
+			ellieSemanticSimilarityFloor,
+			ellieSemanticRankingWeight,
+			ellieKeywordRankingWeight,
+		)
+	}
+
+	rows, err := s.db.QueryContext(ctx, querySQL, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search chat history: %w", err)
 	}
@@ -290,6 +422,17 @@ func (s *EllieRetrievalStore) SearchChatHistory(ctx context.Context, orgID, quer
 		return nil, fmt.Errorf("failed reading chat history results: %w", err)
 	}
 	return results, nil
+}
+
+func normalizeEllieQueryEmbedding(queryEmbedding []float64) (string, bool, error) {
+	if len(queryEmbedding) == 0 {
+		return "", false, nil
+	}
+	vectorLiteral, err := formatVectorLiteral(queryEmbedding)
+	if err != nil {
+		return "", false, fmt.Errorf("invalid query embedding: %w", err)
+	}
+	return vectorLiteral, true, nil
 }
 
 func (s *EllieRetrievalStore) ListMemoriesForOrg(ctx context.Context, orgID string, limit int) ([]EllieRetrievedMemory, error) {

@@ -16,14 +16,21 @@ import (
 type fakeEllieRetrievalStore struct {
 	mu sync.Mutex
 
-	roomResults     []store.EllieRoomContextResult
-	projectMem      []store.EllieMemorySearchResult
-	orgMem          []store.EllieMemorySearchResult
-	chatHistory     []store.EllieChatHistoryResult
-	roomCalls       int
-	projectMemCalls int
-	orgMemCalls     int
-	chatCalls       int
+	roomResults        []store.EllieRoomContextResult
+	projectMem         []store.EllieMemorySearchResult
+	orgMem             []store.EllieMemorySearchResult
+	chatHistory        []store.EllieChatHistoryResult
+	semanticProjectMem []store.EllieMemorySearchResult
+	semanticOrgMem     []store.EllieMemorySearchResult
+	semanticChat       []store.EllieChatHistoryResult
+	roomCalls          int
+	projectMemCalls    int
+	orgMemCalls        int
+	chatCalls          int
+	semanticProjectCalls int
+	semanticOrgCalls     int
+	semanticChatCalls    int
+	lastSemanticVector   []float64
 }
 
 func (f *fakeEllieRetrievalStore) SearchRoomContext(_ context.Context, _ string, _ string, _ string, _ int) ([]store.EllieRoomContextResult, error) {
@@ -62,6 +69,48 @@ func (f *fakeEllieRetrievalStore) SearchChatHistory(_ context.Context, _ string,
 	return out, nil
 }
 
+func (f *fakeEllieRetrievalStore) SearchMemoriesByProjectWithEmbedding(_ context.Context, _ string, _ string, _ string, queryEmbedding []float64, _ int) ([]store.EllieMemorySearchResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.semanticProjectCalls += 1
+	f.lastSemanticVector = append([]float64(nil), queryEmbedding...)
+	source := f.semanticProjectMem
+	if len(source) == 0 {
+		source = f.projectMem
+	}
+	out := make([]store.EllieMemorySearchResult, len(source))
+	copy(out, source)
+	return out, nil
+}
+
+func (f *fakeEllieRetrievalStore) SearchMemoriesOrgWideWithEmbedding(_ context.Context, _ string, _ string, queryEmbedding []float64, _ int) ([]store.EllieMemorySearchResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.semanticOrgCalls += 1
+	f.lastSemanticVector = append([]float64(nil), queryEmbedding...)
+	source := f.semanticOrgMem
+	if len(source) == 0 {
+		source = f.orgMem
+	}
+	out := make([]store.EllieMemorySearchResult, len(source))
+	copy(out, source)
+	return out, nil
+}
+
+func (f *fakeEllieRetrievalStore) SearchChatHistoryWithEmbedding(_ context.Context, _ string, _ string, queryEmbedding []float64, _ int) ([]store.EllieChatHistoryResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.semanticChatCalls += 1
+	f.lastSemanticVector = append([]float64(nil), queryEmbedding...)
+	source := f.semanticChat
+	if len(source) == 0 {
+		source = f.chatHistory
+	}
+	out := make([]store.EllieChatHistoryResult, len(source))
+	copy(out, source)
+	return out, nil
+}
+
 type fakeEllieJSONLScanner struct {
 	results []EllieRetrievedItem
 	calls   int
@@ -84,6 +133,24 @@ func (f *fakeEllieRetrievalQualitySink) Record(_ context.Context, signal EllieRe
 	f.calls += 1
 	f.events = append(f.events, signal)
 	return f.err
+}
+
+type fakeEllieQueryEmbedder struct {
+	vectors [][]float64
+	err     error
+	calls   int
+}
+
+func (f *fakeEllieQueryEmbedder) Embed(_ context.Context, _ []string) ([][]float64, error) {
+	f.calls += 1
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([][]float64, 0, len(f.vectors))
+	for _, vector := range f.vectors {
+		out = append(out, append([]float64(nil), vector...))
+	}
+	return out, nil
 }
 
 func TestEllieRetrievalCascadeUsesRoomThenMemoryThenChatThenJSONL(t *testing.T) {
@@ -236,4 +303,63 @@ func TestEllieRetrievalCascadeTierTwoNeverReturnsOverLimitAfterDedupe(t *testing
 	require.NoError(t, err)
 	require.Equal(t, 2, response.TierUsed)
 	require.Len(t, response.Items, 4)
+}
+
+func TestEllieRetrievalCascadeUsesSemanticStoreResults(t *testing.T) {
+	retrievalStore := &fakeEllieRetrievalStore{
+		semanticOrgMem: []store.EllieMemorySearchResult{
+			{
+				MemoryID: "semantic-1",
+				Title:    "Storage Choice",
+				Content:  "The team chose Postgres.",
+			},
+		},
+	}
+	embedder := &fakeEllieQueryEmbedder{vectors: [][]float64{{0.8, 0.1, 0.2}}}
+	service := NewEllieRetrievalCascadeService(retrievalStore, nil)
+	service.QueryEmbedder = embedder
+
+	response, err := service.Retrieve(context.Background(), EllieRetrievalRequest{
+		OrgID: "org-1",
+		Query: "database choice",
+		Limit: 5,
+	})
+	require.NoError(t, err)
+	require.False(t, response.NoInformation)
+	require.Equal(t, 2, response.TierUsed)
+	require.Len(t, response.Items, 1)
+	require.Equal(t, "semantic-1", response.Items[0].ID)
+	require.Equal(t, 1, embedder.calls)
+	require.Equal(t, 1, retrievalStore.semanticOrgCalls)
+	require.Equal(t, 0, retrievalStore.orgMemCalls)
+	require.Equal(t, []float64{0.8, 0.1, 0.2}, retrievalStore.lastSemanticVector)
+}
+
+func TestEllieRetrievalCascadeFallsBackWhenQueryEmbeddingUnavailable(t *testing.T) {
+	retrievalStore := &fakeEllieRetrievalStore{
+		orgMem: []store.EllieMemorySearchResult{
+			{
+				MemoryID: "keyword-1",
+				Title:    "Database Choice",
+				Content:  "Use Postgres for production.",
+			},
+		},
+	}
+	embedder := &fakeEllieQueryEmbedder{err: errors.New("embedder unavailable")}
+	service := NewEllieRetrievalCascadeService(retrievalStore, nil)
+	service.QueryEmbedder = embedder
+
+	response, err := service.Retrieve(context.Background(), EllieRetrievalRequest{
+		OrgID: "org-1",
+		Query: "database choice",
+		Limit: 5,
+	})
+	require.NoError(t, err)
+	require.False(t, response.NoInformation)
+	require.Equal(t, 2, response.TierUsed)
+	require.Len(t, response.Items, 1)
+	require.Equal(t, "keyword-1", response.Items[0].ID)
+	require.Equal(t, 1, embedder.calls)
+	require.Equal(t, 1, retrievalStore.orgMemCalls)
+	require.Equal(t, 0, retrievalStore.semanticOrgCalls)
 }
