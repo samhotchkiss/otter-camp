@@ -91,6 +91,25 @@ func TestOpenClawSessionParserSkipsThinkingAndOperationalEvents(t *testing.T) {
 	require.Equal(t, expectedTimes[1], events[1].CreatedAt)
 }
 
+func TestOpenClawSessionParserRejectsSymlinkedSessionFile(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	outsideDir := t.TempDir()
+	outsideSessionPath := filepath.Join(outsideDir, "outside.jsonl")
+	writeOpenClawSessionFixture(t, outsideSessionPath, []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:05Z","message":{"role":"user","content":[{"type":"text","text":"outside"}]}}`,
+	})
+
+	symlinkSessionPath := filepath.Join(sessionDir, "linked.jsonl")
+	require.NoError(t, os.Symlink(outsideSessionPath, symlinkSessionPath))
+
+	_, err := ParseOpenClawSessionEvents(&OpenClawInstallation{RootDir: root})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "must not be a symlink")
+}
+
 func writeOpenClawSessionFixture(t *testing.T, path string, lines []string) {
 	t.Helper()
 	content := ""

@@ -65,6 +65,13 @@ func ParseOpenClawSessionEvents(install *OpenClawInstallation) ([]OpenClawSessio
 
 	events := make([]OpenClawSessionEvent, 0)
 	for _, sessionPath := range sessionFiles {
+		fileInfo, err := os.Lstat(sessionPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to stat openclaw session file %s: %w", sessionPath, err)
+		}
+		if fileInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("openclaw session file %s must not be a symlink", sessionPath)
+		}
 		if err := sourceGuard.ValidateReadPath(sessionPath); err != nil {
 			return nil, err
 		}

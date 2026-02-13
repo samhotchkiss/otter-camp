@@ -3,6 +3,7 @@ package importer
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -34,8 +35,12 @@ func NewOpenClawSourceGuard(rootDir string) (*OpenClawSourceGuard, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("openclaw root path is not a directory: %s", cleanRoot)
 	}
+	resolvedRoot, err := filepath.EvalSymlinks(cleanRoot)
+	if err != nil {
+		return nil, fmt.Errorf("openclaw root dir %s: %w", cleanRoot, err)
+	}
 
-	return &OpenClawSourceGuard{rootDir: cleanRoot}, nil
+	return &OpenClawSourceGuard{rootDir: resolvedRoot}, nil
 }
 
 func (g *OpenClawSourceGuard) ValidateReadPath(path string) error {
@@ -50,8 +55,12 @@ func (g *OpenClawSourceGuard) ValidateReadPath(path string) error {
 	if !filepath.IsAbs(target) {
 		target = filepath.Clean(filepath.Join(g.rootDir, target))
 	}
-	if !isWithinDir(g.rootDir, target) {
-		return fmt.Errorf("path %s is outside openclaw root %s", target, g.rootDir)
+	resolvedTarget, err := resolveOpenClawGuardPath(target)
+	if err != nil {
+		return fmt.Errorf("resolve path %s: %w", target, err)
+	}
+	if !isWithinDir(g.rootDir, resolvedTarget) {
+		return fmt.Errorf("path %s is outside openclaw root %s", resolvedTarget, g.rootDir)
 	}
 	return nil
 }
@@ -160,4 +169,21 @@ func hashOpenClawFile(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func resolveOpenClawGuardPath(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+
+	parent := filepath.Dir(path)
+	resolvedParent, parentErr := filepath.EvalSymlinks(parent)
+	if parentErr != nil {
+		return "", parentErr
+	}
+	return filepath.Join(resolvedParent, filepath.Base(path)), nil
 }
