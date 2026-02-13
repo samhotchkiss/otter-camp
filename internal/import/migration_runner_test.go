@@ -29,6 +29,25 @@ func (f *fakeOpenClawEllieBackfillRunner) RunBackfill(
 	return f.result, nil
 }
 
+type fakeOpenClawProjectDiscoveryRunner struct {
+	called bool
+	inputs []OpenClawProjectDiscoveryInput
+	result OpenClawProjectDiscoveryResult
+	err    error
+}
+
+func (f *fakeOpenClawProjectDiscoveryRunner) Discover(
+	_ context.Context,
+	input OpenClawProjectDiscoveryInput,
+) (OpenClawProjectDiscoveryResult, error) {
+	f.called = true
+	f.inputs = append(f.inputs, input)
+	if f.err != nil {
+		return OpenClawProjectDiscoveryResult{}, f.err
+	}
+	return f.result, nil
+}
+
 func TestMigrationRunnerPauseAndResumeFromCheckpoint(t *testing.T) {
 	connStr := getOpenClawImportTestDatabaseURL(t)
 	db := setupOpenClawImportTestDatabase(t, connStr)
@@ -190,4 +209,72 @@ func TestMigrationRunnerStartsEllieBackfillPhase(t *testing.T) {
 	require.Equal(t, store.MigrationProgressStatusCompleted, memoryProgress.Status)
 	require.Equal(t, 4, memoryProgress.ProcessedItems)
 	require.Equal(t, "memory extraction complete", memoryProgress.CurrentLabel)
+}
+
+func TestMigrationRunnerStartsProjectDiscoveryPhase(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-project-discovery")
+	userID := createOpenClawImportTestUser(t, db, orgID, "runner-project-discovery")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(sessionDir, "main-project-discovery.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"project:otter-camp issue: add migration endpoint"}]}}`,
+	})
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events, err := ParseOpenClawSessionEvents(install)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	projectDiscoveryRunner := &fakeOpenClawProjectDiscoveryRunner{
+		result: OpenClawProjectDiscoveryResult{
+			ProjectsCreated: 1,
+			IssuesCreated:   2,
+			ProcessedItems:  5,
+		},
+	}
+
+	runner := NewOpenClawMigrationRunner(db)
+	runner.ProjectDiscoveryRunner = projectDiscoveryRunner
+
+	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
+		OrgID:        orgID,
+		UserID:       userID,
+		Installation: install,
+		ParsedEvents: events,
+		HistoryOnly:  true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, runResult.ProjectDiscovery)
+	require.Equal(t, 1, runResult.ProjectDiscovery.ProjectsCreated)
+	require.Equal(t, 2, runResult.ProjectDiscovery.IssuesCreated)
+
+	require.True(t, projectDiscoveryRunner.called)
+	require.Len(t, projectDiscoveryRunner.inputs, 1)
+	require.Equal(t, orgID, projectDiscoveryRunner.inputs[0].OrgID)
+	require.Len(t, projectDiscoveryRunner.inputs[0].ParsedEvents, 1)
+
+	progressStore := store.NewMigrationProgressStore(db)
+	discoveryProgress, err := progressStore.GetByType(context.Background(), orgID, "project_discovery")
+	require.NoError(t, err)
+	require.NotNil(t, discoveryProgress)
+	require.Equal(t, store.MigrationProgressStatusCompleted, discoveryProgress.Status)
+	require.Equal(t, 5, discoveryProgress.ProcessedItems)
+	require.Equal(t, "project discovery complete", discoveryProgress.CurrentLabel)
 }

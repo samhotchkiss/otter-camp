@@ -9,11 +9,12 @@ import (
 )
 
 type OpenClawMigrationRunner struct {
-	DB                  *sql.DB
-	ProgressStore       *store.MigrationProgressStore
-	EllieBackfillRunner OpenClawEllieBackfillRunner
-	HistoryCheckpoint   int
-	OnHistoryCheckpoint func(processed, total int)
+	DB                     *sql.DB
+	ProgressStore          *store.MigrationProgressStore
+	EllieBackfillRunner    OpenClawEllieBackfillRunner
+	ProjectDiscoveryRunner OpenClawProjectDiscoveryRunner
+	HistoryCheckpoint      int
+	OnHistoryCheckpoint    func(processed, total int)
 }
 
 type OpenClawEllieBackfillInput struct {
@@ -48,18 +49,20 @@ type RunOpenClawMigrationInput struct {
 }
 
 type RunOpenClawMigrationResult struct {
-	AgentImport     *OpenClawAgentImportResult
-	HistoryBackfill *OpenClawHistoryBackfillResult
-	EllieBackfill   *OpenClawEllieBackfillResult
-	Paused          bool
+	AgentImport      *OpenClawAgentImportResult
+	HistoryBackfill  *OpenClawHistoryBackfillResult
+	EllieBackfill    *OpenClawEllieBackfillResult
+	ProjectDiscovery *OpenClawProjectDiscoveryResult
+	Paused           bool
 }
 
 func NewOpenClawMigrationRunner(db *sql.DB) *OpenClawMigrationRunner {
 	return &OpenClawMigrationRunner{
-		DB:                  db,
-		ProgressStore:       store.NewMigrationProgressStore(db),
-		EllieBackfillRunner: noopOpenClawEllieBackfillRunner{},
-		HistoryCheckpoint:   100,
+		DB:                     db,
+		ProgressStore:          store.NewMigrationProgressStore(db),
+		EllieBackfillRunner:    noopOpenClawEllieBackfillRunner{},
+		ProjectDiscoveryRunner: newOpenClawProjectDiscoveryRunner(db),
+		HistoryCheckpoint:      100,
 	}
 }
 
@@ -95,6 +98,12 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 			return RunOpenClawMigrationResult{}, err
 		}
 		result.EllieBackfill = ellieResult
+
+		discoveryResult, discoveryErr := r.runProjectDiscoveryPhase(ctx, input)
+		if discoveryErr != nil {
+			return RunOpenClawMigrationResult{}, discoveryErr
+		}
+		result.ProjectDiscovery = discoveryResult
 	}
 
 	return result, nil
@@ -365,6 +374,98 @@ func (r *OpenClawMigrationRunner) runEllieBackfillPhase(
 	}
 
 	return &backfillResult, nil
+}
+
+func (r *OpenClawMigrationRunner) runProjectDiscoveryPhase(
+	ctx context.Context,
+	input RunOpenClawMigrationInput,
+) (*OpenClawProjectDiscoveryResult, error) {
+	if r.ProjectDiscoveryRunner == nil {
+		return nil, nil
+	}
+
+	events := input.ParsedEvents
+	if len(events) == 0 {
+		parsed, err := ParseOpenClawSessionEvents(input.Installation)
+		if err != nil {
+			return nil, err
+		}
+		events = parsed
+	}
+
+	totalItems := len(events)
+	phaseType := "project_discovery"
+	progress, err := r.ProgressStore.GetByType(ctx, input.OrgID, phaseType)
+	if err != nil {
+		return nil, err
+	}
+	if progress == nil {
+		started, startErr := r.ProgressStore.StartPhase(ctx, store.StartMigrationProgressInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			TotalItems:    &totalItems,
+			CurrentLabel:  migrationRunnerStringPtr("starting project discovery"),
+		})
+		if startErr != nil {
+			return nil, startErr
+		}
+		progress = started
+	} else {
+		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusRunning,
+			CurrentLabel:  migrationRunnerStringPtr("resuming project discovery"),
+		}); setErr != nil {
+			return nil, setErr
+		}
+	}
+
+	discoveryResult, discoveryErr := r.ProjectDiscoveryRunner.Discover(ctx, OpenClawProjectDiscoveryInput{
+		OrgID:        input.OrgID,
+		ParsedEvents: events,
+	})
+	if discoveryErr != nil {
+		_, _ = r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusFailed,
+			Error:         migrationRunnerStringPtr(discoveryErr.Error()),
+		})
+		return nil, discoveryErr
+	}
+
+	processedDelta := discoveryResult.ProcessedItems
+	if processedDelta <= 0 {
+		processedDelta = totalItems
+	}
+	if processedDelta > 0 {
+		if _, advanceErr := r.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
+			OrgID:          input.OrgID,
+			MigrationType:  phaseType,
+			ProcessedDelta: processedDelta,
+			CurrentLabel: migrationRunnerStringPtr(
+				fmt.Sprintf(
+					"projects + issues upserted: %d + %d",
+					discoveryResult.ProjectsCreated+discoveryResult.ProjectsUpdated,
+					discoveryResult.IssuesCreated+discoveryResult.IssuesUpdated,
+				),
+			),
+		}); advanceErr != nil {
+			return nil, advanceErr
+		}
+	}
+
+	if _, err := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+		OrgID:         input.OrgID,
+		MigrationType: phaseType,
+		Status:        store.MigrationProgressStatusCompleted,
+		CurrentLabel:  migrationRunnerStringPtr("project discovery complete"),
+	}); err != nil {
+		return nil, err
+	}
+
+	return &discoveryResult, nil
 }
 
 func migrationRunnerStringPtr(value string) *string {
