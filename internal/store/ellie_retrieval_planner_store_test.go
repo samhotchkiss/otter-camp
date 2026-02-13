@@ -41,3 +41,21 @@ func TestEllieRetrievalPlannerStrategyVersioning(t *testing.T) {
 	require.Equal(t, 2, strategy.Version)
 	require.Equal(t, "v2", strategy.Name)
 }
+
+func TestEllieRetrievalPlannerStoreRejectsMalformedRulesJSON(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-planner-invalid-rules-org")
+	plannerStore := NewEllieRetrievalPlannerStore(db)
+
+	err := plannerStore.UpsertStrategy(context.Background(), UpsertEllieRetrievalStrategyInput{
+		OrgID:    orgID,
+		Version:  1,
+		Name:     "invalid-rules",
+		Rules:    json.RawMessage(`{"topic_expansions":"not-an-object"}`),
+		IsActive: true,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "invalid rules")
+}

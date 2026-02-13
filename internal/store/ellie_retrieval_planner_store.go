@@ -32,6 +32,10 @@ type EllieRetrievalPlannerStore struct {
 	db *sql.DB
 }
 
+type ellieRetrievalPlannerRules struct {
+	TopicExpansions map[string][]string `json:"topic_expansions"`
+}
+
 func NewEllieRetrievalPlannerStore(db *sql.DB) *EllieRetrievalPlannerStore {
 	return &EllieRetrievalPlannerStore{db: db}
 }
@@ -55,8 +59,20 @@ func (s *EllieRetrievalPlannerStore) UpsertStrategy(ctx context.Context, input U
 	if len(strings.TrimSpace(string(rules))) == 0 {
 		rules = json.RawMessage(`{"topic_expansions":{}}`)
 	}
+	var parsedRules ellieRetrievalPlannerRules
+	if err := json.Unmarshal(rules, &parsedRules); err != nil {
+		return fmt.Errorf("invalid rules: %w", err)
+	}
+	if parsedRules.TopicExpansions == nil {
+		parsedRules.TopicExpansions = map[string][]string{}
+	}
+	normalizedRules, err := json.Marshal(parsedRules)
+	if err != nil {
+		return fmt.Errorf("invalid rules: %w", err)
+	}
+	rules = json.RawMessage(normalizedRules)
 
-	_, err := s.db.ExecContext(
+	_, err = s.db.ExecContext(
 		ctx,
 		`INSERT INTO ellie_retrieval_strategies (
 			org_id,

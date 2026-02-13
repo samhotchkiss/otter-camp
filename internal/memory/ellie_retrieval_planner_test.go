@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -165,4 +166,39 @@ func TestDedupePlanSteps(t *testing.T) {
 	require.Equal(t, "database", deduped[0].Query)
 	require.Equal(t, "project", deduped[1].Scope)
 	require.Equal(t, "database", deduped[1].Query)
+}
+
+func TestEllieRetrievalPlannerCapsTopicExpansionSteps(t *testing.T) {
+	expansions := make([]string, 0, 40)
+	for i := 0; i < 40; i++ {
+		expansions = append(expansions, fmt.Sprintf("expansion-%02d", i))
+	}
+
+	rules, err := json.Marshal(map[string]any{
+		"topic_expansions": map[string][]string{
+			"database": expansions,
+		},
+	})
+	require.NoError(t, err)
+
+	planner := NewEllieRetrievalPlanner(&fakeEllieRetrievalPlannerStore{
+		strategy: &store.EllieRetrievalStrategy{
+			Version: 7,
+			Rules:   json.RawMessage(rules),
+		},
+	})
+
+	plan, err := planner.BuildPlan(context.Background(), EllieRetrievalPlanInput{
+		OrgID: "org-1",
+		Query: "database indexing",
+	})
+	require.NoError(t, err)
+
+	expansionSteps := 0
+	for _, step := range plan.Steps {
+		if step.Scope == "org" && step.Reason == "topic_expansion:database" {
+			expansionSteps += 1
+		}
+	}
+	require.Equal(t, 20, expansionSteps)
 }

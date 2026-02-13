@@ -309,3 +309,20 @@ func TestMainStartsEllieContextInjectionWorkerWhenConfigured(t *testing.T) {
 		}
 	}
 }
+
+func TestMainConstructsSingleSharedEmbedderForEmbeddingWorkers(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	if strings.Count(mainContent, "memory.NewEmbedder(") != 1 {
+		t.Fatalf("expected exactly one memory.NewEmbedder construction in cmd/server/main.go")
+	}
+	if strings.Count(mainContent, "getConversationEmbedder()") < 2 {
+		t.Fatalf("expected both worker startup paths to reuse getConversationEmbedder()")
+	}
+}

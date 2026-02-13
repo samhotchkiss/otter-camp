@@ -38,6 +38,8 @@ type elliePlannerRules struct {
 	TopicExpansions map[string][]string `json:"topic_expansions"`
 }
 
+const maxElliePlannerExpansionSteps = 20
+
 func NewEllieRetrievalPlanner(store EllieRetrievalPlannerStore) *EllieRetrievalPlanner {
 	return &EllieRetrievalPlanner{Store: store}
 }
@@ -89,12 +91,16 @@ func (p *EllieRetrievalPlanner) BuildPlan(ctx context.Context, input EllieRetrie
 	})
 
 	lowerQuery := strings.ToLower(query)
+	expansionSteps := 0
 	for keyword, expansions := range rules.TopicExpansions {
 		normalizedKeyword := strings.TrimSpace(strings.ToLower(keyword))
 		if normalizedKeyword == "" || !strings.Contains(lowerQuery, normalizedKeyword) {
 			continue
 		}
 		for _, expansion := range expansions {
+			if expansionSteps >= maxElliePlannerExpansionSteps {
+				break
+			}
 			normalizedExpansion := strings.TrimSpace(strings.ToLower(expansion))
 			if normalizedExpansion == "" {
 				continue
@@ -104,6 +110,10 @@ func (p *EllieRetrievalPlanner) BuildPlan(ctx context.Context, input EllieRetrie
 				Query:  normalizedExpansion,
 				Reason: "topic_expansion:" + normalizedKeyword,
 			})
+			expansionSteps += 1
+		}
+		if expansionSteps >= maxElliePlannerExpansionSteps {
+			break
 		}
 	}
 

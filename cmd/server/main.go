@@ -95,19 +95,33 @@ func main() {
 		}
 	}
 
+	var (
+		conversationEmbedder     memory.Embedder
+		conversationEmbedderErr  error
+		conversationEmbedderInit bool
+	)
+	getConversationEmbedder := func() (memory.Embedder, error) {
+		if conversationEmbedderInit {
+			return conversationEmbedder, conversationEmbedderErr
+		}
+		conversationEmbedderInit = true
+		conversationEmbedder, conversationEmbedderErr = memory.NewEmbedder(memory.EmbedderConfig{
+			Provider:      memory.Provider(strings.ToLower(cfg.ConversationEmbedding.Provider)),
+			Model:         cfg.ConversationEmbedding.Model,
+			Dimension:     cfg.ConversationEmbedding.Dimension,
+			OllamaURL:     cfg.ConversationEmbedding.OllamaURL,
+			OpenAIBaseURL: cfg.ConversationEmbedding.OpenAIBaseURL,
+			OpenAIAPIKey:  cfg.ConversationEmbedding.OpenAIAPIKey,
+		}, nil)
+		return conversationEmbedder, conversationEmbedderErr
+	}
+
 	if cfg.EllieContextInjection.Enabled {
 		db, err := store.DB()
 		if err != nil {
 			log.Printf("⚠️  Ellie context injection worker disabled; database unavailable: %v", err)
 		} else {
-			embedder, err := memory.NewEmbedder(memory.EmbedderConfig{
-				Provider:      memory.Provider(strings.ToLower(cfg.ConversationEmbedding.Provider)),
-				Model:         cfg.ConversationEmbedding.Model,
-				Dimension:     cfg.ConversationEmbedding.Dimension,
-				OllamaURL:     cfg.ConversationEmbedding.OllamaURL,
-				OpenAIBaseURL: cfg.ConversationEmbedding.OpenAIBaseURL,
-				OpenAIAPIKey:  cfg.ConversationEmbedding.OpenAIAPIKey,
-			}, nil)
+			embedder, err := getConversationEmbedder()
 			if err != nil {
 				log.Printf("⚠️  Ellie context injection worker disabled; embedder init failed: %v", err)
 			} else {
@@ -145,14 +159,7 @@ func main() {
 		if err != nil {
 			log.Printf("⚠️  Conversation embedding worker disabled; database unavailable: %v", err)
 		} else {
-			embedder, err := memory.NewEmbedder(memory.EmbedderConfig{
-				Provider:      memory.Provider(strings.ToLower(cfg.ConversationEmbedding.Provider)),
-				Model:         cfg.ConversationEmbedding.Model,
-				Dimension:     cfg.ConversationEmbedding.Dimension,
-				OllamaURL:     cfg.ConversationEmbedding.OllamaURL,
-				OpenAIBaseURL: cfg.ConversationEmbedding.OpenAIBaseURL,
-				OpenAIAPIKey:  cfg.ConversationEmbedding.OpenAIAPIKey,
-			}, nil)
+			embedder, err := getConversationEmbedder()
 			if err != nil {
 				log.Printf("⚠️  Conversation embedding worker disabled; embedder init failed: %v", err)
 			} else {
