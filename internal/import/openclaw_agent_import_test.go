@@ -274,3 +274,17 @@ func writeOpenClawAgentConfigFixture(t *testing.T, root string, agents []map[str
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "openclaw.json"), raw, 0o644))
 }
+
+func TestOpenClawImportRejectsMalformedUUIDStrings(t *testing.T) {
+	valid := "11111111-2222-3333-4444-555555555555"
+	require.True(t, openClawImportUUIDRegex.MatchString(valid))
+
+	invalids := []string{
+		"------------------------------------",
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"11111111-2222-3333-4444-55555555555g",
+	}
+	for _, candidate := range invalids {
+		require.False(t, openClawImportUUIDRegex.MatchString(candidate), candidate)
+	}
+}

@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 )
 
-var openClawImportUUIDRegex = regexp.MustCompile(`^[a-fA-F0-9-]{36}$`)
+var openClawImportUUIDRegex = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
 
 var openClawImportActiveAgentSlugs = map[string]struct{}{
 	"main":     {},
