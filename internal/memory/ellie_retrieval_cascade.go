@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -298,7 +299,7 @@ func (s *EllieRetrievalCascadeService) emitQualitySignal(
 	}
 	missedIDs := dedupeTrimmedIDs(request.MissedItemIDs)
 
-	_ = s.QualitySink.Record(ctx, EllieRetrievalQualitySignal{
+	if err := s.QualitySink.Record(ctx, EllieRetrievalQualitySignal{
 		OrgID:             strings.TrimSpace(request.OrgID),
 		ProjectID:         strings.TrimSpace(request.ProjectID),
 		RoomID:            strings.TrimSpace(request.RoomID),
@@ -311,7 +312,9 @@ func (s *EllieRetrievalCascadeService) emitQualitySignal(
 		InjectedItemIDs:   injectedIDs,
 		ReferencedItemIDs: referencedIDs,
 		MissedItemIDs:     missedIDs,
-	})
+	}); err != nil {
+		log.Printf("warning: ellie retrieval quality sink record failed: %v", err)
+	}
 }
 
 func dedupeTrimmedIDs(values []string) []string {

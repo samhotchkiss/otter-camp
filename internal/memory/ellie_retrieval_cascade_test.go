@@ -1,7 +1,11 @@
 package memory
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log"
+	"strings"
 	"sync"
 	"testing"
 
@@ -73,12 +77,13 @@ func (f *fakeEllieJSONLScanner) Scan(_ context.Context, _ EllieJSONLScanInput) (
 type fakeEllieRetrievalQualitySink struct {
 	calls  int
 	events []EllieRetrievalQualitySignal
+	err    error
 }
 
 func (f *fakeEllieRetrievalQualitySink) Record(_ context.Context, signal EllieRetrievalQualitySignal) error {
 	f.calls += 1
 	f.events = append(f.events, signal)
-	return nil
+	return f.err
 }
 
 func TestEllieRetrievalCascadeUsesRoomThenMemoryThenChatThenJSONL(t *testing.T) {
@@ -170,4 +175,38 @@ func TestEllieRetrievalServiceEmitsQualitySignals(t *testing.T) {
 	require.Equal(t, 1, qualitySink.events[0].ReferencedCount)
 	require.Equal(t, 1, qualitySink.events[0].MissedCount)
 	require.False(t, qualitySink.events[0].NoInformation)
+}
+
+func TestEllieRetrievalServiceLogsQualitySinkErrors(t *testing.T) {
+	retrievalStore := &fakeEllieRetrievalStore{
+		orgMem: []store.EllieMemorySearchResult{
+			{
+				MemoryID: "mem-1",
+				Title:    "Database Choice",
+				Content:  "Use Postgres.",
+			},
+		},
+	}
+	qualitySink := &fakeEllieRetrievalQualitySink{err: errors.New("sink unavailable")}
+	service := NewEllieRetrievalCascadeService(retrievalStore, nil)
+	service.QualitySink = qualitySink
+
+	var logBuffer bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logBuffer)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	response, err := service.Retrieve(context.Background(), EllieRetrievalRequest{
+		OrgID: "org-1",
+		Query: "database choice",
+		Limit: 1,
+	})
+	require.NoError(t, err)
+	require.False(t, response.NoInformation)
+	require.Equal(t, 2, response.TierUsed)
+	require.Equal(t, 1, qualitySink.calls)
+
+	logOutput := strings.ToLower(logBuffer.String())
+	require.Contains(t, logOutput, "quality sink")
+	require.Contains(t, logOutput, "sink unavailable")
 }
