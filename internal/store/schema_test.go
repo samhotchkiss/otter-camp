@@ -626,6 +626,41 @@ func TestMigration072ComplianceRulesFilesExistAndContainCoreDDL(t *testing.T) {
 	require.Contains(t, downContent, "drop table if exists compliance_rules")
 }
 
+func TestMigration074ConversationTokenTrackingFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"074_add_conversation_token_tracking.down.sql",
+		"074_add_conversation_token_tracking.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "074_add_conversation_token_tracking.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table chat_messages")
+	require.Contains(t, upContent, "add column if not exists token_count")
+	require.Contains(t, upContent, "alter table conversations")
+	require.Contains(t, upContent, "add column if not exists total_tokens")
+	require.Contains(t, upContent, "alter table rooms")
+	require.Contains(t, upContent, "create index if not exists chat_messages_room_created_tokens_idx")
+	require.Contains(t, upContent, "create or replace function otter_estimate_token_count")
+	require.Contains(t, upContent, "create or replace function otter_chat_messages_token_rollup")
+	require.Contains(t, upContent, "create trigger chat_messages_token_rollup_trg")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "074_add_conversation_token_tracking.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop trigger if exists chat_messages_token_rollup_trg on chat_messages")
+	require.Contains(t, downContent, "drop function if exists otter_chat_messages_token_rollup")
+	require.Contains(t, downContent, "drop function if exists otter_estimate_token_count")
+	require.Contains(t, downContent, "drop index if exists chat_messages_room_created_tokens_idx")
+	require.Contains(t, downContent, "drop column if exists token_count")
+	require.Contains(t, downContent, "drop column if exists total_tokens")
+}
+
 func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
