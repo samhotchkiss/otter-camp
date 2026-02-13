@@ -241,6 +241,27 @@ func TestMainStartsConversationSegmentationWorkerWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestMainStartsEllieIngestionWorkerWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	for _, snippet := range []string{
+		"cfg.EllieIngestion.Enabled",
+		"memory.NewEllieIngestionWorker",
+		"Ellie ingestion worker started",
+		"store.NewEllieIngestionStore",
+	} {
+		if !strings.Contains(mainContent, snippet) {
+			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
+		}
+	}
+}
+
 func TestMainWorkersStopOnContextCancel(t *testing.T) {
 	t.Parallel()
 
@@ -256,10 +277,15 @@ func TestMainWorkersStopOnContextCancel(t *testing.T) {
 		"sync.WaitGroup",
 		"workerWG.Wait()",
 		"cancelWorkers()",
+		"startWorker(worker.Start)",
 	} {
 		if !strings.Contains(mainContent, snippet) {
 			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
 		}
+	}
+
+	if strings.Contains(mainContent, "go worker.Start(context.Background())") {
+		t.Fatalf("expected cmd/server/main.go to start workers through startWorker, found direct background startup")
 	}
 }
 
@@ -281,5 +307,22 @@ func TestMainStartsEllieContextInjectionWorkerWhenConfigured(t *testing.T) {
 		if !strings.Contains(mainContent, snippet) {
 			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
 		}
+	}
+}
+
+func TestMainConstructsSingleSharedEmbedderForEmbeddingWorkers(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	if strings.Count(mainContent, "memory.NewEmbedder(") != 1 {
+		t.Fatalf("expected exactly one memory.NewEmbedder construction in cmd/server/main.go")
+	}
+	if strings.Count(mainContent, "getConversationEmbedder()") < 2 {
+		t.Fatalf("expected both worker startup paths to reuse getConversationEmbedder()")
 	}
 }

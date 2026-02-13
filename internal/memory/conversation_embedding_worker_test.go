@@ -196,7 +196,6 @@ func TestConversationEmbeddingWorkerDetectsVectorCountMismatch(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "returned 0 vectors for 1 rows")
 }
-
 const embeddingWorkerTestDBURLKey = "OTTER_TEST_DATABASE_URL"
 
 func setupEmbeddingWorkerTestDatabase(t *testing.T) *sql.DB {
@@ -339,7 +338,6 @@ func TestConversationEmbeddingWorkerProcessesMultipleOrgsFairly(t *testing.T) {
 	require.GreaterOrEqual(t, orgAEmbedded, 1)
 	require.Equal(t, 1, orgBEmbedded)
 }
-
 func TestConversationEmbeddingWorkerStopsOnContextCancel(t *testing.T) {
 	queue := newFakeConversationEmbeddingQueue(nil, nil)
 	embedder := &fakeConversationEmbedder{vector: []float64{0.1, 0.2}}

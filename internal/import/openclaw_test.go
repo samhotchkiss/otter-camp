@@ -275,6 +275,84 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 	})
 }
 
+func TestEnsureOpenClawRequiredAgentsAddsEllieGuidance(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "openclaw.json")
+	config := map[string]any{
+		"agents": map[string]any{
+			"list": []any{
+				map[string]any{
+					"id":   "main",
+					"name": "Main Agent",
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(config)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, raw, 0o644))
+
+	result, err := EnsureOpenClawRequiredAgents(&OpenClawInstallation{
+		RootDir:    root,
+		ConfigPath: configPath,
+	}, EnsureOpenClawRequiredAgentsOptions{
+		IncludeChameleon: false,
+	})
+	require.NoError(t, err)
+	require.True(t, result.AddedElephant)
+	require.True(t, result.Updated)
+
+	soulRaw, err := os.ReadFile(filepath.Join(root, "workspace-elephant", "SOUL.md"))
+	require.NoError(t, err)
+	soul := string(soulRaw)
+	require.Contains(t, soul, "Ask Ellie First")
+	require.Contains(t, soul, "Zero Hallucination")
+}
+
+func TestEnsureOpenClawRequiredAgentsPreservesLegacyElephantSlots(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "openclaw.json")
+	config := map[string]any{
+		"agents": map[string]any{
+			"list": []any{
+				map[string]any{
+					"id":        "elephant",
+					"name":      "Elephant",
+					"workspace": "~/.openclaw/workspace-elephant",
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(config)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, raw, 0o644))
+
+	result, err := EnsureOpenClawRequiredAgents(&OpenClawInstallation{
+		RootDir:    root,
+		ConfigPath: configPath,
+	}, EnsureOpenClawRequiredAgentsOptions{
+		IncludeChameleon: false,
+	})
+	require.NoError(t, err)
+	require.False(t, result.Updated)
+	require.False(t, result.AddedElephant)
+
+	updatedRaw, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	var updated map[string]any
+	require.NoError(t, json.Unmarshal(updatedRaw, &updated))
+	agentsObj, ok := updated["agents"].(map[string]any)
+	require.True(t, ok)
+	list, ok := agentsObj["list"].([]any)
+	require.True(t, ok)
+	require.Len(t, list, 1)
+	require.True(t, listHasAgentID(list, "elephant"))
+}
+
+func TestEllieBootstrapTemplatesContainAskEllieFirstRule(t *testing.T) {
+	require.Contains(t, elephantSOULTemplate, "Ask Ellie First")
+}
+
 func TestWriteFileIfMissingDoesNotFollowSymlinks(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "symlink-target.txt")

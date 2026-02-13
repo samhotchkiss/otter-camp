@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -64,6 +65,11 @@ const (
 	defaultConversationSegmentationBatchSize    = 200
 	defaultConversationSegmentationGapThreshold = 30 * time.Minute
 
+	defaultEllieIngestionEnabled    = true
+	defaultEllieIngestionInterval   = 5 * time.Minute
+	defaultEllieIngestionBatchSize  = 100
+	defaultEllieIngestionMaxPerRoom = 200
+
 	defaultEllieContextInjectionEnabled          = true
 	defaultEllieContextInjectionPollInterval     = 3 * time.Second
 	defaultEllieContextInjectionBatchSize        = 50
@@ -90,6 +96,7 @@ type Config struct {
 	GitHub                   GitHubConfig
 	ConversationEmbedding    ConversationEmbeddingConfig
 	ConversationSegmentation ConversationSegmentationConfig
+	EllieIngestion           EllieIngestionConfig
 	EllieContextInjection    EllieContextInjectionConfig
 }
 
@@ -110,6 +117,13 @@ type ConversationSegmentationConfig struct {
 	PollInterval time.Duration
 	BatchSize    int
 	GapThreshold time.Duration
+}
+
+type EllieIngestionConfig struct {
+	Enabled    bool
+	Interval   time.Duration
+	BatchSize  int
+	MaxPerRoom int
 }
 
 type EllieContextInjectionConfig struct {
@@ -160,6 +174,7 @@ func Load() (Config, error) {
 			OpenAIAPIKey: strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY")),
 		},
 		ConversationSegmentation: ConversationSegmentationConfig{},
+		EllieIngestion:           EllieIngestionConfig{},
 		EllieContextInjection:    EllieContextInjectionConfig{},
 	}
 
@@ -223,6 +238,30 @@ func Load() (Config, error) {
 	}
 	cfg.ConversationSegmentation.GapThreshold = conversationSegmentationGapThreshold
 
+	ellieIngestionEnabled, err := parseBool("ELLIE_INGESTION_WORKER_ENABLED", defaultEllieIngestionEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.Enabled = ellieIngestionEnabled
+
+	ellieIngestionInterval, err := parseDuration("ELLIE_INGESTION_INTERVAL", defaultEllieIngestionInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.Interval = ellieIngestionInterval
+
+	ellieIngestionBatchSize, err := parseInt("ELLIE_INGESTION_BATCH_SIZE", defaultEllieIngestionBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.BatchSize = ellieIngestionBatchSize
+
+	ellieIngestionMaxPerRoom, err := parseInt("ELLIE_INGESTION_MAX_PER_ROOM", defaultEllieIngestionMaxPerRoom)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.MaxPerRoom = ellieIngestionMaxPerRoom
+
 	ellieContextInjectionEnabled, err := parseBool("ELLIE_CONTEXT_INJECTION_WORKER_ENABLED", defaultEllieContextInjectionEnabled)
 	if err != nil {
 		return Config{}, err
@@ -274,14 +313,16 @@ func (c Config) Validate() error {
 		if c.ConversationEmbedding.BatchSize <= 0 {
 			return fmt.Errorf("CONVERSATION_EMBEDDING_BATCH_SIZE must be greater than zero")
 		}
+	}
+	if c.ConversationEmbedding.Enabled || c.EllieContextInjection.Enabled {
 		if c.ConversationEmbedding.Provider == "" {
-			return fmt.Errorf("CONVERSATION_EMBEDDER_PROVIDER must not be empty when worker is enabled")
+			return fmt.Errorf("CONVERSATION_EMBEDDER_PROVIDER must not be empty when conversation embedding or ellie context injection is enabled")
 		}
 		if c.ConversationEmbedding.Model == "" {
-			return fmt.Errorf("CONVERSATION_EMBEDDER_MODEL must not be empty when worker is enabled")
+			return fmt.Errorf("CONVERSATION_EMBEDDER_MODEL must not be empty when conversation embedding or ellie context injection is enabled")
 		}
 		if c.ConversationEmbedding.Dimension <= 0 {
-			return fmt.Errorf("CONVERSATION_EMBEDDER_DIMENSION must be greater than zero when worker is enabled")
+			return fmt.Errorf("CONVERSATION_EMBEDDER_DIMENSION must be greater than zero when conversation embedding or ellie context injection is enabled")
 		}
 	}
 
@@ -294,6 +335,18 @@ func (c Config) Validate() error {
 		}
 		if c.ConversationSegmentation.GapThreshold <= 0 {
 			return fmt.Errorf("CONVERSATION_SEGMENTATION_GAP_THRESHOLD must be greater than zero")
+		}
+	}
+
+	if c.EllieIngestion.Enabled {
+		if c.EllieIngestion.Interval <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_INTERVAL must be greater than zero")
+		}
+		if c.EllieIngestion.BatchSize <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_BATCH_SIZE must be greater than zero")
+		}
+		if c.EllieIngestion.MaxPerRoom <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_MAX_PER_ROOM must be greater than zero")
 		}
 	}
 
@@ -425,6 +478,9 @@ func parseFloat(name string, defaultValue float64) (float64, error) {
 	parsed, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a valid float: %w", name, err)
+	}
+	if math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, fmt.Errorf("%s must be a finite float", name)
 	}
 
 	return parsed, nil

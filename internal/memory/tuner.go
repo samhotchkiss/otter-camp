@@ -417,6 +417,12 @@ func compareEvaluatorMetrics(candidate, baseline EvaluatorMetrics) (better bool,
 	if candidate.P95LatencyMs > baseline.P95LatencyMs+epsilon {
 		hasRegression = true
 	}
+	if candidate.EllieRetrievalPrecision+epsilon < baseline.EllieRetrievalPrecision {
+		hasRegression = true
+	}
+	if candidate.EllieRetrievalRecall+epsilon < baseline.EllieRetrievalRecall {
+		hasRegression = true
+	}
 
 	if candidate.PrecisionAtK > baseline.PrecisionAtK+epsilon {
 		better = true
@@ -428,6 +434,12 @@ func compareEvaluatorMetrics(candidate, baseline EvaluatorMetrics) (better bool,
 		better = true
 	}
 	if candidate.P95LatencyMs+epsilon < baseline.P95LatencyMs {
+		better = true
+	}
+	if candidate.EllieRetrievalPrecision > baseline.EllieRetrievalPrecision+epsilon {
+		better = true
+	}
+	if candidate.EllieRetrievalRecall > baseline.EllieRetrievalRecall+epsilon {
 		better = true
 	}
 

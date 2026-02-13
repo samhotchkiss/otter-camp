@@ -131,7 +131,6 @@ func TestConversationSegmentationWorkerStopsOnContextCancel(t *testing.T) {
 		t.Fatal("segmentation worker did not stop after context cancellation")
 	}
 }
-
 func TestConversationSegmentationWorkerProcessesMultipleOrgsFairly(t *testing.T) {
 	db := setupEmbeddingWorkerTestDatabase(t)
 	queue := store.NewConversationSegmentationStore(db)

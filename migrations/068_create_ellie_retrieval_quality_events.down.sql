@@ -1,0 +1,4 @@
+DROP POLICY IF EXISTS ellie_retrieval_quality_events_org_isolation ON ellie_retrieval_quality_events;
+DROP INDEX IF EXISTS ellie_retrieval_quality_events_org_created_idx;
+DROP INDEX IF EXISTS ellie_retrieval_quality_events_org_project_idx;
+DROP TABLE IF EXISTS ellie_retrieval_quality_events;
