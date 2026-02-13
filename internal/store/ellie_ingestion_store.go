@@ -93,10 +93,27 @@ func (s *EllieIngestionStore) ListRoomsForIngestion(ctx context.Context, limit i
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT org_id, room_id
-		 FROM chat_messages
-		 GROUP BY org_id, room_id
-		 ORDER BY MAX(created_at) ASC, room_id ASC
+		`WITH latest_room_messages AS (
+		     SELECT DISTINCT ON (org_id, room_id)
+		       org_id,
+		       room_id,
+		       id AS latest_message_id,
+		       created_at AS latest_message_created_at
+		     FROM chat_messages
+		     ORDER BY org_id, room_id, created_at DESC, id DESC
+		 )
+		 SELECT latest.org_id, latest.room_id
+		 FROM latest_room_messages latest
+		 LEFT JOIN ellie_ingestion_cursors cursor
+		   ON cursor.org_id = latest.org_id
+		  AND cursor.source_type = 'room'
+		  AND cursor.source_id = latest.room_id::text
+		 WHERE (latest.latest_message_created_at, latest.latest_message_id) >
+		       (
+		         COALESCE(cursor.last_message_created_at, TIMESTAMPTZ '1970-01-01'),
+		         COALESCE(cursor.last_message_id, '00000000-0000-0000-0000-000000000000'::uuid)
+		       )
+		 ORDER BY latest.latest_message_created_at ASC, latest.room_id ASC
 		 LIMIT $1`,
 		limit,
 	)

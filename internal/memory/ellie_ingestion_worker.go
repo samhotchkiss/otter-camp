@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +18,8 @@ const (
 	defaultEllieIngestionMaxPerRoom = 200
 	ellieIngestionWindowGap         = 15 * time.Minute
 )
+
+var ellieOperationalContextPattern = regexp.MustCompile(`\b(api|build|code|config|database|deploy|feature|migration|pipeline|release|schema|test)\b`)
 
 type EllieIngestionStore interface {
 	ListRoomsForIngestion(ctx context.Context, limit int) ([]store.EllieRoomIngestionCandidate, error)
@@ -184,7 +187,7 @@ func deriveEllieMemoryCandidateFromWindow(messages []store.EllieIngestionMessage
 
 	switch {
 	case strings.Contains(lowerBody, "we decided") ||
-		strings.Contains(lowerBody, "decided to") ||
+		(strings.Contains(lowerBody, "decided to") && hasEllieOperationalContext(lowerBody)) ||
 		strings.Contains(lowerBody, "decision:") ||
 		strings.Contains(lowerBody, "we will use") ||
 		strings.Contains(lowerBody, "let's go with"):
@@ -310,26 +313,7 @@ func firstEllieConversationID(messages []store.EllieIngestionMessage) *string {
 }
 
 func hasEllieOperationalContext(body string) bool {
-	keywords := []string{
-		"api",
-		"build",
-		"code",
-		"config",
-		"database",
-		"deploy",
-		"feature",
-		"migration",
-		"pipeline",
-		"release",
-		"schema",
-		"test",
-	}
-	for _, keyword := range keywords {
-		if strings.Contains(body, keyword) {
-			return true
-		}
-	}
-	return false
+	return ellieOperationalContextPattern.MatchString(body)
 }
 
 func isEllieLowSignalMessage(body string) bool {

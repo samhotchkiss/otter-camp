@@ -169,27 +169,57 @@ func TestEllieIngestionWorkerGroupsMessagesWithinTimeWindow(t *testing.T) {
 }
 
 func TestEllieIngestionWorkerAvoidsFalsePositiveDecisionAndFactClassification(t *testing.T) {
-	messageDecisionQuestion := store.EllieIngestionMessage{
-		ID:        "msg-1",
-		OrgID:     "org-1",
-		RoomID:    "room-1",
-		Body:      "Can we decide where to eat lunch?",
-		CreatedAt: time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC),
+	cases := []struct {
+		name          string
+		body          string
+		notExpected   string
+		messageSuffix string
+	}{
+		{
+			name:          "decision question does not become technical decision",
+			body:          "Can we decide where to eat lunch?",
+			notExpected:   "technical_decision",
+			messageSuffix: "1",
+		},
+		{
+			name:          "fact question does not become fact",
+			body:          "Where is the bathroom in this building?",
+			notExpected:   "fact",
+			messageSuffix: "2",
+		},
+		{
+			name:          "decided to non technical statement does not become technical decision",
+			body:          "Someone decided to order pizza for tonight.",
+			notExpected:   "technical_decision",
+			messageSuffix: "3",
+		},
+		{
+			name:          "latest substring does not trigger test keyword anti pattern",
+			body:          "Don't forget the latest lunch menu before we leave.",
+			notExpected:   "anti_pattern",
+			messageSuffix: "4",
+		},
+		{
+			name:          "contest substring does not trigger test keyword anti pattern",
+			body:          "Do not enter the contest booth during lunch.",
+			notExpected:   "anti_pattern",
+			messageSuffix: "5",
+		},
 	}
-	candidate, ok := deriveEllieMemoryCandidate(messageDecisionQuestion)
-	require.True(t, ok)
-	require.NotEqual(t, "technical_decision", candidate.Kind)
 
-	messageFactQuestion := store.EllieIngestionMessage{
-		ID:        "msg-2",
-		OrgID:     "org-1",
-		RoomID:    "room-1",
-		Body:      "Where is the bathroom in this building?",
-		CreatedAt: time.Date(2026, 2, 12, 12, 1, 0, 0, time.UTC),
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate, ok := deriveEllieMemoryCandidate(store.EllieIngestionMessage{
+				ID:        "msg-" + tc.messageSuffix,
+				OrgID:     "org-1",
+				RoomID:    "room-1",
+				Body:      tc.body,
+				CreatedAt: time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC),
+			})
+			require.True(t, ok)
+			require.NotEqual(t, tc.notExpected, candidate.Kind)
+		})
 	}
-	candidate, ok = deriveEllieMemoryCandidate(messageFactQuestion)
-	require.True(t, ok)
-	require.NotEqual(t, "fact", candidate.Kind)
 }
 
 func TestEllieIngestionWorkerStartSleepsAfterProcessedError(t *testing.T) {
