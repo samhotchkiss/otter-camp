@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	importer "github.com/samhotchkiss/otter-camp/internal/import"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/scheduler"
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -466,6 +467,26 @@ func (h *JobsHandler) Resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sendJSON(w, http.StatusOK, toJobPayload(*updated))
+}
+
+func (h *JobsHandler) ImportOpenClawCron(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database not available"})
+		return
+	}
+
+	workspaceID := strings.TrimSpace(middleware.WorkspaceFromContext(r.Context()))
+	if workspaceID == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "org_id is required"})
+		return
+	}
+
+	result, err := importer.NewOpenClawCronJobImporter(h.DB).ImportFromSyncMetadata(r.Context(), workspaceID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to import openclaw cron jobs"})
+		return
+	}
+	sendJSON(w, http.StatusOK, result)
 }
 
 func (h *JobsHandler) getAuthorizedJob(w http.ResponseWriter, r *http.Request) (*store.AgentJob, *string, bool) {

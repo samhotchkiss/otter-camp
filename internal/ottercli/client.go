@@ -232,6 +232,14 @@ type AgentJobRunsResponse struct {
 	Total int           `json:"total"`
 }
 
+type OpenClawCronJobImportResult struct {
+	Total    int      `json:"total"`
+	Imported int      `json:"imported"`
+	Updated  int      `json:"updated"`
+	Skipped  int      `json:"skipped"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
 type PipelineRoleAssignment struct {
 	AgentID *string `json:"agentId"`
 }
@@ -1503,6 +1511,21 @@ func (c *Client) DeleteJob(jobID string) (map[string]any, error) {
 	var response map[string]any
 	if err := c.do(req, &response); err != nil {
 		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ImportOpenClawCronJobs() (OpenClawCronJobImportResult, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawCronJobImportResult{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/v1/jobs/import/openclaw-cron", nil)
+	if err != nil {
+		return OpenClawCronJobImportResult{}, err
+	}
+	var response OpenClawCronJobImportResult
+	if err := c.do(req, &response); err != nil {
+		return OpenClawCronJobImportResult{}, err
 	}
 	return response, nil
 }

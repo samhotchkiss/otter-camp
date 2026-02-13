@@ -84,6 +84,8 @@ func main() {
 		handlePipeline(os.Args[2:])
 	case "deploy":
 		handleDeploy(os.Args[2:])
+	case "migrate":
+		handleMigrate(os.Args[2:])
 	case "version":
 		fmt.Println("otter dev")
 	default:
@@ -118,6 +120,7 @@ Commands:
   issue            Manage project issues
   pipeline         Configure per-project pipeline settings
   deploy           Configure per-project deployment settings
+  migrate          Run migration utilities
   version          Show CLI version`)
 }
 
@@ -243,6 +246,46 @@ func handleReleaseGate(args []string) {
 		fmt.Fprintln(os.Stderr, formatCLIError(requestErr))
 	}
 	os.Exit(1)
+}
+
+func handleMigrate(args []string) {
+	const usageText = "usage: otter migrate from-openclaw cron [--org <id>] [--json]"
+	if len(args) < 2 {
+		fmt.Println(usageText)
+		os.Exit(1)
+	}
+	if args[0] != "from-openclaw" || args[1] != "cron" {
+		fmt.Println(usageText)
+		os.Exit(1)
+	}
+
+	flags := flag.NewFlagSet("migrate from-openclaw cron", flag.ExitOnError)
+	org := flags.String("org", "", "org id override")
+	jsonOut := flags.Bool("json", false, "JSON output")
+	_ = flags.Parse(args[2:])
+
+	cfg, err := ottercli.LoadConfig()
+	dieIf(err)
+	client, _ := ottercli.NewClient(cfg, *org)
+
+	result, err := client.ImportOpenClawCronJobs()
+	dieIf(err)
+
+	if *jsonOut {
+		printJSON(result)
+		return
+	}
+
+	fmt.Printf(
+		"OpenClaw cron import complete: total=%d imported=%d updated=%d skipped=%d\n",
+		result.Total,
+		result.Imported,
+		result.Updated,
+		result.Skipped,
+	)
+	for _, warning := range result.Warnings {
+		fmt.Printf("warning: %s\n", strings.TrimSpace(warning))
+	}
 }
 
 func handleAgent(args []string) {

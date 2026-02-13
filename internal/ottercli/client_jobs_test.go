@@ -37,6 +37,8 @@ func TestClientAgentJobsMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 			_, _ = w.Write([]byte(`{"items":[{"id":"run-1","job_id":"job-1","org_id":"org-1","status":"success","started_at":"2026-02-12T00:00:10Z","created_at":"2026-02-12T00:00:10Z","payload_text":"ping"}],"total":1}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/jobs/job-1":
 			_, _ = w.Write([]byte(`{"deleted":true,"id":"job-1"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/jobs/import/openclaw-cron":
+			_, _ = w.Write([]byte(`{"total":2,"imported":1,"updated":1,"skipped":0,"warnings":[]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"not found"}`))
@@ -145,6 +147,17 @@ func TestClientAgentJobsMethodsUseExpectedPathsAndPayloads(t *testing.T) {
 	}
 	if gotMethod != http.MethodDelete || gotPath != "/api/v1/jobs/job-1" {
 		t.Fatalf("DeleteJob request = %s %s", gotMethod, gotPath)
+	}
+
+	imported, err := client.ImportOpenClawCronJobs()
+	if err != nil {
+		t.Fatalf("ImportOpenClawCronJobs() error = %v", err)
+	}
+	if imported.Total != 2 || imported.Imported != 1 || imported.Updated != 1 {
+		t.Fatalf("ImportOpenClawCronJobs() response = %#v", imported)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/v1/jobs/import/openclaw-cron" {
+		t.Fatalf("ImportOpenClawCronJobs request = %s %s", gotMethod, gotPath)
 	}
 }
 

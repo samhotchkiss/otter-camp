@@ -404,6 +404,7 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/v1/jobs/{id}/runs", jobsHandler.ListRuns)
 		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/{id}/pause", jobsHandler.Pause)
 		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/{id}/resume", jobsHandler.Resume)
+		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/import/openclaw-cron", jobsHandler.ImportOpenClawCron)
 
 		// Admin endpoints
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/init-repos", HandleAdminInitRepos(db))
