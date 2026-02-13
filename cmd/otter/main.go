@@ -84,8 +84,6 @@ func main() {
 		handlePipeline(os.Args[2:])
 	case "deploy":
 		handleDeploy(os.Args[2:])
-	case "migrate":
-		handleMigrate(os.Args[2:])
 	case "version":
 		fmt.Println("otter dev")
 	default:
@@ -248,21 +246,11 @@ func handleReleaseGate(args []string) {
 	os.Exit(1)
 }
 
-func handleMigrate(args []string) {
-	const usageText = "usage: otter migrate from-openclaw cron [--org <id>] [--json]"
-	if len(args) < 2 {
-		fmt.Println(usageText)
-		os.Exit(1)
-	}
-	if args[0] != "from-openclaw" || args[1] != "cron" {
-		fmt.Println(usageText)
-		os.Exit(1)
-	}
-
+func handleMigrateFromOpenClawCron(args []string) {
 	flags := flag.NewFlagSet("migrate from-openclaw cron", flag.ExitOnError)
 	org := flags.String("org", "", "org id override")
 	jsonOut := flags.Bool("json", false, "JSON output")
-	_ = flags.Parse(args[2:])
+	_ = flags.Parse(args)
 
 	cfg, err := ottercli.LoadConfig()
 	dieIf(err)
