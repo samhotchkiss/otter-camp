@@ -163,9 +163,9 @@ func (e *ollamaEmbedder) Embed(ctx context.Context, inputs []string) ([][]float6
 
 	out := make([][]float64, 0, len(inputs))
 	for _, input := range inputs {
-		// Truncate to ~8000 tokens (~32000 chars) to stay within model context window.
-		// nomic-embed-text has 8192 token limit; rough 4 chars/token estimate.
-		truncated := truncateForEmbedding(input, 32000)
+		// Truncate to stay within model context window.
+		// nomic-embed-text context varies by quantization; ~2048 tokens safe limit.
+		truncated := truncateForEmbedding(input, 8000)
 		vector, err := e.embedOne(ctx, truncated)
 		if err != nil {
 			return nil, err
@@ -257,8 +257,8 @@ func (e *openAIEmbedder) Embed(ctx context.Context, inputs []string) ([][]float6
 		if trimmed == "" {
 			return nil, ErrEmbedderInputRequired
 		}
-		// Truncate to stay within model context limits (~8191 tokens for text-embedding-ada-002)
-		normalized = append(normalized, truncateForEmbedding(trimmed, 32000))
+		// Truncate to stay within model context limits
+		normalized = append(normalized, truncateForEmbedding(trimmed, 8000))
 	}
 	return e.embedBatchWithRetry(ctx, normalized)
 }
