@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -37,12 +38,39 @@ type EllieIngestionStore interface {
 	UpsertRoomCursor(ctx context.Context, input store.UpsertEllieRoomCursorInput) error
 }
 
+type EllieIngestionLLMExtractionInput struct {
+	OrgID    string
+	RoomID   string
+	Messages []store.EllieIngestionMessage
+}
+
+type EllieIngestionLLMCandidate struct {
+	Kind                 string
+	Title                string
+	Content              string
+	Importance           int
+	Confidence           float64
+	SourceConversationID *string
+	Metadata             map[string]any
+}
+
+type EllieIngestionLLMExtractionResult struct {
+	Model      string
+	TraceID    string
+	Candidates []EllieIngestionLLMCandidate
+}
+
+type EllieIngestionLLMExtractor interface {
+	Extract(ctx context.Context, input EllieIngestionLLMExtractionInput) (EllieIngestionLLMExtractionResult, error)
+}
+
 type EllieIngestionWorkerConfig struct {
 	Interval           time.Duration
 	BatchSize          int
 	MaxPerRoom         int
 	BackfillMaxPerRoom int
 	Mode               EllieIngestionMode
+	LLMExtractor       EllieIngestionLLMExtractor
 }
 
 type EllieIngestionWorker struct {
@@ -52,6 +80,7 @@ type EllieIngestionWorker struct {
 	MaxPerRoom         int
 	BackfillMaxPerRoom int
 	Mode               EllieIngestionMode
+	LLMExtractor       EllieIngestionLLMExtractor
 	Logf               func(format string, args ...any)
 }
 
@@ -80,6 +109,7 @@ func NewEllieIngestionWorker(store EllieIngestionStore, cfg EllieIngestionWorker
 		MaxPerRoom:         maxPerRoom,
 		BackfillMaxPerRoom: backfillMaxPerRoom,
 		Mode:               mode,
+		LLMExtractor:       cfg.LLMExtractor,
 		Logf:               log.Printf,
 	}
 }
@@ -174,11 +204,31 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 
 		windows := groupEllieIngestionMessagesByWindow(messages, ellieIngestionWindowGap)
 		for _, window := range windows {
-			candidate, ok := deriveEllieMemoryCandidateFromWindow(window)
 			processed += len(window)
+			if w.LLMExtractor != nil {
+				llmCandidates, err := w.extractLLMMemoryCandidates(ctx, room, window)
+				if err != nil {
+					return processed, fmt.Errorf("llm extraction for room %s: %w", room.RoomID, err)
+				}
+				if len(llmCandidates) > 0 {
+					for _, candidate := range llmCandidates {
+						inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
+						if err != nil {
+							return processed, fmt.Errorf("insert llm extracted memory for room %s: %w", room.RoomID, err)
+						}
+						if inserted && w.Logf != nil {
+							w.Logf("ellie ingestion extracted llm memory kind=%s room=%s", candidate.Kind, room.RoomID)
+						}
+					}
+					continue
+				}
+			}
+
+			candidate, ok := deriveEllieMemoryCandidateFromWindow(window)
 			if !ok {
 				continue
 			}
+
 			inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
 			if err != nil {
 				return processed, fmt.Errorf("insert ellie extracted memory for room %s: %w", room.RoomID, err)
@@ -200,6 +250,34 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 	}
 
 	return processed, nil
+}
+
+func (w *EllieIngestionWorker) extractLLMMemoryCandidates(
+	ctx context.Context,
+	room store.EllieRoomIngestionCandidate,
+	window []store.EllieIngestionMessage,
+) ([]store.CreateEllieExtractedMemoryInput, error) {
+	if w == nil || w.LLMExtractor == nil || len(window) == 0 {
+		return nil, nil
+	}
+	result, err := w.LLMExtractor.Extract(ctx, EllieIngestionLLMExtractionInput{
+		OrgID:    room.OrgID,
+		RoomID:   room.RoomID,
+		Messages: window,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	candidates := make([]store.CreateEllieExtractedMemoryInput, 0, len(result.Candidates))
+	for _, candidate := range result.Candidates {
+		normalized, ok := normalizeEllieLLMExtractedCandidate(room, window, result, candidate)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, normalized)
+	}
+	return candidates, nil
 }
 
 func normalizeEllieIngestionMode(mode EllieIngestionMode) EllieIngestionMode {
@@ -291,6 +369,86 @@ func deriveEllieMemoryCandidateFromWindow(messages []store.EllieIngestionMessage
 	}, true
 }
 
+func normalizeEllieLLMExtractedCandidate(
+	room store.EllieRoomIngestionCandidate,
+	window []store.EllieIngestionMessage,
+	result EllieIngestionLLMExtractionResult,
+	candidate EllieIngestionLLMCandidate,
+) (store.CreateEllieExtractedMemoryInput, bool) {
+	if len(window) == 0 {
+		return store.CreateEllieExtractedMemoryInput{}, false
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(candidate.Kind))
+	switch kind {
+	case "technical_decision", "process_decision", "preference", "fact", "lesson", "pattern", "anti_pattern", "correction", "process_outcome", "context":
+	default:
+		kind = "context"
+	}
+
+	title := strings.TrimSpace(candidate.Title)
+	if title == "" {
+		title = "LLM extracted memory"
+	}
+	content := strings.TrimSpace(candidate.Content)
+	if content == "" {
+		return store.CreateEllieExtractedMemoryInput{}, false
+	}
+	if len([]rune(content)) > 400 {
+		content = string([]rune(content)[:400])
+	}
+
+	importance := candidate.Importance
+	if importance <= 0 {
+		importance = 3
+	}
+	if importance > 5 {
+		importance = 5
+	}
+
+	confidence := candidate.Confidence
+	if math.IsNaN(confidence) || confidence < 0 {
+		confidence = 0
+	}
+	if confidence > 1 {
+		confidence = 1
+	}
+
+	metadata := map[string]any{
+		"source_table":       "chat_messages",
+		"source_message_ids": ellieWindowMessageIDs(window),
+		"source_room_id":     room.RoomID,
+		"extraction_method":  "llm_windowed",
+	}
+	if model := strings.TrimSpace(result.Model); model != "" {
+		metadata["extraction_model"] = model
+	}
+	if traceID := strings.TrimSpace(result.TraceID); traceID != "" {
+		metadata["extraction_trace_id"] = traceID
+	}
+	if candidate.Metadata != nil && len(candidate.Metadata) > 0 {
+		metadata["llm_metadata"] = candidate.Metadata
+	}
+	metadataRaw, _ := json.Marshal(metadata)
+
+	sourceConversationID := normalizeEllieOptionalID(candidate.SourceConversationID)
+	if sourceConversationID == nil {
+		sourceConversationID = firstEllieConversationID(window)
+	}
+
+	return store.CreateEllieExtractedMemoryInput{
+		OrgID:                room.OrgID,
+		Kind:                 kind,
+		Title:                title,
+		Content:              content,
+		Metadata:             metadataRaw,
+		Importance:           importance,
+		Confidence:           confidence,
+		SourceConversationID: sourceConversationID,
+		OccurredAt:           window[len(window)-1].CreatedAt,
+	}, true
+}
+
 func groupEllieIngestionMessagesByWindow(messages []store.EllieIngestionMessage, gap time.Duration) [][]store.EllieIngestionMessage {
 	if len(messages) == 0 {
 		return [][]store.EllieIngestionMessage{}
@@ -356,6 +514,17 @@ func firstEllieConversationID(messages []store.EllieIngestionMessage) *string {
 		return &trimmed
 	}
 	return nil
+}
+
+func normalizeEllieOptionalID(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func hasEllieOperationalContext(body string) bool {
