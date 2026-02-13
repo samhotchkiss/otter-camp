@@ -56,16 +56,10 @@ func (g *OpenClawSourceGuard) ValidateReadPath(path string) error {
 		target = filepath.Clean(filepath.Join(g.rootDir, target))
 	}
 
-	// Check the logical path (before symlink resolution) is within root.
-	// This allows reading identity files that are symlinked outside the root
-	// (e.g., SOUL.md -> ~/Documents/SamsBrain/Agents/Frank/SOUL.md).
-	// The symlink itself must live within the OpenClaw directory.
-	if isWithinDir(g.rootDir, target) {
-		return nil
-	}
-
-	// If the logical path isn't within root, try resolving symlinks
-	// and check again (handles case where root itself is a symlink).
+	// Resolve symlinks (or missing final path segments) and enforce root
+	// containment on the resolved path. This handles platform path aliases
+	// (e.g. /var -> /private/var on macOS) while still rejecting symlink
+	// escapes that resolve outside the OpenClaw root.
 	resolvedTarget, err := resolveOpenClawGuardPath(target)
 	if err != nil {
 		return fmt.Errorf("resolve path %s: %w", target, err)
