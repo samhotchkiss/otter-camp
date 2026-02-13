@@ -76,6 +76,12 @@ const (
 	defaultEllieContextInjectionThreshold        = 0.62
 	defaultEllieContextInjectionCooldownMessages = 4
 	defaultEllieContextInjectionMaxItems         = 3
+
+	defaultJobSchedulerEnabled       = true
+	defaultJobSchedulerPollInterval  = 5 * time.Second
+	defaultJobSchedulerMaxPerPoll    = 50
+	defaultJobSchedulerRunTimeout    = 5 * time.Minute
+	defaultJobSchedulerMaxRunHistory = 100
 )
 
 type GitHubConfig struct {
@@ -98,6 +104,7 @@ type Config struct {
 	ConversationSegmentation ConversationSegmentationConfig
 	EllieIngestion           EllieIngestionConfig
 	EllieContextInjection    EllieContextInjectionConfig
+	JobScheduler             JobSchedulerConfig
 }
 
 type ConversationEmbeddingConfig struct {
@@ -133,6 +140,14 @@ type EllieContextInjectionConfig struct {
 	Threshold        float64
 	CooldownMessages int
 	MaxItems         int
+}
+
+type JobSchedulerConfig struct {
+	Enabled       bool
+	PollInterval  time.Duration
+	MaxPerPoll    int
+	RunTimeout    time.Duration
+	MaxRunHistory int
 }
 
 func Load() (Config, error) {
@@ -176,6 +191,7 @@ func Load() (Config, error) {
 		ConversationSegmentation: ConversationSegmentationConfig{},
 		EllieIngestion:           EllieIngestionConfig{},
 		EllieContextInjection:    EllieContextInjectionConfig{},
+		JobScheduler:             JobSchedulerConfig{},
 	}
 
 	githubEnabled, err := parseBool("GITHUB_INTEGRATION_ENABLED", false)
@@ -298,6 +314,36 @@ func Load() (Config, error) {
 	}
 	cfg.EllieContextInjection.MaxItems = ellieContextInjectionMaxItems
 
+	jobSchedulerEnabled, err := parseBool("JOB_SCHEDULER_ENABLED", defaultJobSchedulerEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.Enabled = jobSchedulerEnabled
+
+	jobSchedulerPollInterval, err := parseDuration("JOB_SCHEDULER_POLL_INTERVAL", defaultJobSchedulerPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.PollInterval = jobSchedulerPollInterval
+
+	jobSchedulerMaxPerPoll, err := parseInt("JOB_SCHEDULER_MAX_PER_POLL", defaultJobSchedulerMaxPerPoll)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.MaxPerPoll = jobSchedulerMaxPerPoll
+
+	jobSchedulerRunTimeout, err := parseDuration("JOB_SCHEDULER_RUN_TIMEOUT", defaultJobSchedulerRunTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.RunTimeout = jobSchedulerRunTimeout
+
+	jobSchedulerMaxRunHistory, err := parseInt("JOB_SCHEDULER_MAX_RUN_HISTORY", defaultJobSchedulerMaxRunHistory)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.MaxRunHistory = jobSchedulerMaxRunHistory
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -365,6 +411,21 @@ func (c Config) Validate() error {
 		}
 		if c.EllieContextInjection.MaxItems <= 0 {
 			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_MAX_ITEMS must be greater than zero")
+		}
+	}
+
+	if c.JobScheduler.Enabled {
+		if c.JobScheduler.PollInterval <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_POLL_INTERVAL must be greater than zero")
+		}
+		if c.JobScheduler.MaxPerPoll <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_MAX_PER_POLL must be greater than zero")
+		}
+		if c.JobScheduler.RunTimeout <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_RUN_TIMEOUT must be greater than zero")
+		}
+		if c.JobScheduler.MaxRunHistory <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_MAX_RUN_HISTORY must be greater than zero")
 		}
 	}
 

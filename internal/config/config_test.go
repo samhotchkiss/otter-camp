@@ -44,6 +44,11 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("ELLIE_CONTEXT_INJECTION_THRESHOLD", "")
 	t.Setenv("ELLIE_CONTEXT_INJECTION_COOLDOWN_MESSAGES", "")
 	t.Setenv("ELLIE_CONTEXT_INJECTION_MAX_ITEMS", "")
+	t.Setenv("JOB_SCHEDULER_ENABLED", "")
+	t.Setenv("JOB_SCHEDULER_POLL_INTERVAL", "")
+	t.Setenv("JOB_SCHEDULER_MAX_PER_POLL", "")
+	t.Setenv("JOB_SCHEDULER_RUN_TIMEOUT", "")
+	t.Setenv("JOB_SCHEDULER_MAX_RUN_HISTORY", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -140,6 +145,22 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.EllieContextInjection.MaxItems != defaultEllieContextInjectionMaxItems {
 		t.Fatalf("expected default ellie context injection max items %d, got %d", defaultEllieContextInjectionMaxItems, cfg.EllieContextInjection.MaxItems)
 	}
+
+	if !cfg.JobScheduler.Enabled {
+		t.Fatalf("expected job scheduler enabled by default")
+	}
+	if cfg.JobScheduler.PollInterval != defaultJobSchedulerPollInterval {
+		t.Fatalf("expected default job scheduler poll interval %v, got %v", defaultJobSchedulerPollInterval, cfg.JobScheduler.PollInterval)
+	}
+	if cfg.JobScheduler.MaxPerPoll != defaultJobSchedulerMaxPerPoll {
+		t.Fatalf("expected default job scheduler max_per_poll %d, got %d", defaultJobSchedulerMaxPerPoll, cfg.JobScheduler.MaxPerPoll)
+	}
+	if cfg.JobScheduler.RunTimeout != defaultJobSchedulerRunTimeout {
+		t.Fatalf("expected default job scheduler run timeout %v, got %v", defaultJobSchedulerRunTimeout, cfg.JobScheduler.RunTimeout)
+	}
+	if cfg.JobScheduler.MaxRunHistory != defaultJobSchedulerMaxRunHistory {
+		t.Fatalf("expected default job scheduler max run history %d, got %d", defaultJobSchedulerMaxRunHistory, cfg.JobScheduler.MaxRunHistory)
+	}
 }
 
 func TestLoadParsesGitHubSettings(t *testing.T) {
@@ -192,6 +213,89 @@ func TestLoadRejectsInvalidGitHubPollInterval(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "GITHUB_POLL_INTERVAL") {
 		t.Fatalf("expected error to mention GITHUB_POLL_INTERVAL, got %v", err)
+	}
+}
+
+func TestLoadDefaultsJobScheduler(t *testing.T) {
+	t.Setenv("JOB_SCHEDULER_ENABLED", "")
+	t.Setenv("JOB_SCHEDULER_POLL_INTERVAL", "")
+	t.Setenv("JOB_SCHEDULER_MAX_PER_POLL", "")
+	t.Setenv("JOB_SCHEDULER_RUN_TIMEOUT", "")
+	t.Setenv("JOB_SCHEDULER_MAX_RUN_HISTORY", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if !cfg.JobScheduler.Enabled {
+		t.Fatalf("expected job scheduler enabled by default")
+	}
+	if cfg.JobScheduler.PollInterval != defaultJobSchedulerPollInterval {
+		t.Fatalf("expected poll interval %v, got %v", defaultJobSchedulerPollInterval, cfg.JobScheduler.PollInterval)
+	}
+	if cfg.JobScheduler.MaxPerPoll != defaultJobSchedulerMaxPerPoll {
+		t.Fatalf("expected max per poll %d, got %d", defaultJobSchedulerMaxPerPoll, cfg.JobScheduler.MaxPerPoll)
+	}
+	if cfg.JobScheduler.RunTimeout != defaultJobSchedulerRunTimeout {
+		t.Fatalf("expected run timeout %v, got %v", defaultJobSchedulerRunTimeout, cfg.JobScheduler.RunTimeout)
+	}
+	if cfg.JobScheduler.MaxRunHistory != defaultJobSchedulerMaxRunHistory {
+		t.Fatalf("expected max run history %d, got %d", defaultJobSchedulerMaxRunHistory, cfg.JobScheduler.MaxRunHistory)
+	}
+}
+
+func TestLoadParsesJobSchedulerSettings(t *testing.T) {
+	t.Setenv("JOB_SCHEDULER_ENABLED", "true")
+	t.Setenv("JOB_SCHEDULER_POLL_INTERVAL", "7s")
+	t.Setenv("JOB_SCHEDULER_MAX_PER_POLL", "25")
+	t.Setenv("JOB_SCHEDULER_RUN_TIMEOUT", "4m")
+	t.Setenv("JOB_SCHEDULER_MAX_RUN_HISTORY", "150")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if !cfg.JobScheduler.Enabled {
+		t.Fatalf("expected job scheduler enabled")
+	}
+	if cfg.JobScheduler.PollInterval != 7*time.Second {
+		t.Fatalf("expected poll interval 7s, got %v", cfg.JobScheduler.PollInterval)
+	}
+	if cfg.JobScheduler.MaxPerPoll != 25 {
+		t.Fatalf("expected max per poll 25, got %d", cfg.JobScheduler.MaxPerPoll)
+	}
+	if cfg.JobScheduler.RunTimeout != 4*time.Minute {
+		t.Fatalf("expected run timeout 4m, got %v", cfg.JobScheduler.RunTimeout)
+	}
+	if cfg.JobScheduler.MaxRunHistory != 150 {
+		t.Fatalf("expected max run history 150, got %d", cfg.JobScheduler.MaxRunHistory)
+	}
+}
+
+func TestLoadRejectsInvalidJobSchedulerPollInterval(t *testing.T) {
+	t.Setenv("JOB_SCHEDULER_POLL_INTERVAL", "not-a-duration")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected error for invalid JOB_SCHEDULER_POLL_INTERVAL")
+	}
+	if !strings.Contains(err.Error(), "JOB_SCHEDULER_POLL_INTERVAL") {
+		t.Fatalf("expected error to mention JOB_SCHEDULER_POLL_INTERVAL, got %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidJobSchedulerMaxPerPoll(t *testing.T) {
+	t.Setenv("JOB_SCHEDULER_ENABLED", "true")
+	t.Setenv("JOB_SCHEDULER_MAX_PER_POLL", "0")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected error for non-positive JOB_SCHEDULER_MAX_PER_POLL")
+	}
+	if !strings.Contains(err.Error(), "JOB_SCHEDULER_MAX_PER_POLL") {
+		t.Fatalf("expected error to mention JOB_SCHEDULER_MAX_PER_POLL, got %v", err)
 	}
 }
 
