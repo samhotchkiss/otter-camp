@@ -509,6 +509,33 @@ func TestMigration067EllieRetrievalStrategiesFilesExistAndContainCoreDDL(t *test
 	require.Contains(t, downContent, "drop table if exists ellie_retrieval_strategies")
 }
 
+func TestMigration068EllieRetrievalQualityEventsFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"068_create_ellie_retrieval_quality_events.up.sql",
+		"068_create_ellie_retrieval_quality_events.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "068_create_ellie_retrieval_quality_events.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists ellie_retrieval_quality_events")
+	require.Contains(t, upContent, "create index if not exists ellie_retrieval_quality_events_org_project_idx")
+	require.Contains(t, upContent, "create index if not exists ellie_retrieval_quality_events_org_created_idx")
+	require.Contains(t, upContent, "create policy ellie_retrieval_quality_events_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "068_create_ellie_retrieval_quality_events.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop index if exists ellie_retrieval_quality_events_org_created_idx")
+	require.Contains(t, downContent, "drop index if exists ellie_retrieval_quality_events_org_project_idx")
+	require.Contains(t, downContent, "drop table if exists ellie_retrieval_quality_events")
+}
+
 func TestMigration069ConversationSensitivityFilesExistAndContainConstraint(t *testing.T) {
 	migrationsDir := getMigrationsDir(t)
 	files := []string{

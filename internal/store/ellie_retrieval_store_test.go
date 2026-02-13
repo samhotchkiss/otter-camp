@@ -244,6 +244,12 @@ func TestEscapeILIKEPattern(t *testing.T) {
 	require.Equal(t, `abc\%\_\\path`, escaped)
 }
 
+func TestNormalizeEllieSearchLimitClampsUpperBound(t *testing.T) {
+	require.Equal(t, 10, normalizeEllieSearchLimit(0, 10))
+	require.Equal(t, 25, normalizeEllieSearchLimit(25, 10))
+	require.Equal(t, maxEllieSearchQueryLimit, normalizeEllieSearchLimit(500, 10))
+}
+
 func TestEllieRetrievalStoreProjectAndOrgScopes(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

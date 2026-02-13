@@ -134,6 +134,9 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 	}
 	memoryResults = append(memoryResults, orgResults...)
 	memoryResults = dedupeMemoryResults(memoryResults)
+	if limit > 0 && len(memoryResults) > limit {
+		memoryResults = memoryResults[:limit]
+	}
 	if len(memoryResults) > 0 {
 		response := EllieRetrievalResponse{
 			Items:         mapMemoryResultsToRetrievedItems(memoryResults, limit),

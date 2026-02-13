@@ -401,3 +401,29 @@ func TestLoadIncludesEllieContextInjectionDefaults(t *testing.T) {
 		t.Fatalf("expected ellie context injection max items 4, got %d", cfg.EllieContextInjection.MaxItems)
 	}
 }
+
+func TestLoadRejectsNaNContextInjectionThreshold(t *testing.T) {
+	t.Setenv("ELLIE_CONTEXT_INJECTION_THRESHOLD", "NaN")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected error for NaN ELLIE_CONTEXT_INJECTION_THRESHOLD")
+	}
+	if !strings.Contains(err.Error(), "ELLIE_CONTEXT_INJECTION_THRESHOLD") {
+		t.Fatalf("expected error to mention ELLIE_CONTEXT_INJECTION_THRESHOLD, got %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidEmbedderConfigWhenInjectionEnabled(t *testing.T) {
+	t.Setenv("CONVERSATION_EMBEDDING_WORKER_ENABLED", "false")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_WORKER_ENABLED", "true")
+	t.Setenv("CONVERSATION_EMBEDDER_DIMENSION", "0")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected error when context injection is enabled with invalid embedder config")
+	}
+	if !strings.Contains(err.Error(), "CONVERSATION_EMBEDDER_DIMENSION") {
+		t.Fatalf("expected error to mention CONVERSATION_EMBEDDER_DIMENSION, got %v", err)
+	}
+}

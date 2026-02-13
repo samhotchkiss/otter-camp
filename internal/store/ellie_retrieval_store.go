@@ -70,6 +70,8 @@ type EllieRetrievalStore struct {
 	db *sql.DB
 }
 
+const maxEllieSearchQueryLimit = 200
+
 func NewEllieRetrievalStore(db *sql.DB) *EllieRetrievalStore {
 	return &EllieRetrievalStore{db: db}
 }
@@ -90,9 +92,7 @@ func (s *EllieRetrievalStore) SearchRoomContext(ctx context.Context, orgID, room
 	if query == "" {
 		return []EllieRoomContextResult{}, nil
 	}
-	if limit <= 0 {
-		limit = 10
-	}
+	limit = normalizeEllieSearchLimit(limit, 10)
 	// Scaffold implementation: keyword-only matching while semantic/vector retrieval
 	// follow-up is tracked in #850.
 
@@ -154,9 +154,7 @@ func (s *EllieRetrievalStore) SearchMemoriesByProject(ctx context.Context, orgID
 	if query == "" {
 		return []EllieMemorySearchResult{}, nil
 	}
-	if limit <= 0 {
-		limit = 10
-	}
+	limit = normalizeEllieSearchLimit(limit, 10)
 
 	return s.queryMemories(ctx, orgID, query, limit, "source_project_id = $3", projectID)
 }
@@ -173,9 +171,7 @@ func (s *EllieRetrievalStore) SearchMemoriesOrgWide(ctx context.Context, orgID, 
 	if query == "" {
 		return []EllieMemorySearchResult{}, nil
 	}
-	if limit <= 0 {
-		limit = 10
-	}
+	limit = normalizeEllieSearchLimit(limit, 10)
 
 	return s.queryMemories(ctx, orgID, query, limit, "1=1")
 }
@@ -252,9 +248,7 @@ func (s *EllieRetrievalStore) SearchChatHistory(ctx context.Context, orgID, quer
 	if query == "" {
 		return []EllieChatHistoryResult{}, nil
 	}
-	if limit <= 0 {
-		limit = 10
-	}
+	limit = normalizeEllieSearchLimit(limit, 10)
 	// Scaffold implementation: keyword-only matching while semantic/vector retrieval
 	// follow-up is tracked in #850.
 
@@ -541,6 +535,17 @@ func normalizeEllieScopedQuery(orgID string, limit int) (string, int, error) {
 		queryLimit = 200
 	}
 	return normalizedOrgID, queryLimit, nil
+}
+
+func normalizeEllieSearchLimit(limit, defaultLimit int) int {
+	queryLimit := limit
+	if queryLimit <= 0 {
+		queryLimit = defaultLimit
+	}
+	if queryLimit > maxEllieSearchQueryLimit {
+		queryLimit = maxEllieSearchQueryLimit
+	}
+	return queryLimit
 }
 
 func scanEllieRetrievedMemory(scanner interface{ Scan(...any) error }) (EllieRetrievedMemory, error) {

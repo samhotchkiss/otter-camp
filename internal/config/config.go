@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -312,14 +313,16 @@ func (c Config) Validate() error {
 		if c.ConversationEmbedding.BatchSize <= 0 {
 			return fmt.Errorf("CONVERSATION_EMBEDDING_BATCH_SIZE must be greater than zero")
 		}
+	}
+	if c.ConversationEmbedding.Enabled || c.EllieContextInjection.Enabled {
 		if c.ConversationEmbedding.Provider == "" {
-			return fmt.Errorf("CONVERSATION_EMBEDDER_PROVIDER must not be empty when worker is enabled")
+			return fmt.Errorf("CONVERSATION_EMBEDDER_PROVIDER must not be empty when conversation embedding or ellie context injection is enabled")
 		}
 		if c.ConversationEmbedding.Model == "" {
-			return fmt.Errorf("CONVERSATION_EMBEDDER_MODEL must not be empty when worker is enabled")
+			return fmt.Errorf("CONVERSATION_EMBEDDER_MODEL must not be empty when conversation embedding or ellie context injection is enabled")
 		}
 		if c.ConversationEmbedding.Dimension <= 0 {
-			return fmt.Errorf("CONVERSATION_EMBEDDER_DIMENSION must be greater than zero when worker is enabled")
+			return fmt.Errorf("CONVERSATION_EMBEDDER_DIMENSION must be greater than zero when conversation embedding or ellie context injection is enabled")
 		}
 	}
 
@@ -475,6 +478,9 @@ func parseFloat(name string, defaultValue float64) (float64, error) {
 	parsed, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a valid float: %w", name, err)
+	}
+	if math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, fmt.Errorf("%s must be a finite float", name)
 	}
 
 	return parsed, nil

@@ -210,3 +210,30 @@ func TestEllieRetrievalServiceLogsQualitySinkErrors(t *testing.T) {
 	require.Contains(t, logOutput, "quality sink")
 	require.Contains(t, logOutput, "sink unavailable")
 }
+
+func TestEllieRetrievalCascadeTierTwoNeverReturnsOverLimitAfterDedupe(t *testing.T) {
+	retrievalStore := &fakeEllieRetrievalStore{
+		projectMem: []store.EllieMemorySearchResult{
+			{MemoryID: "mem-1", Title: "one", Content: "project"},
+			{MemoryID: "mem-2", Title: "two", Content: "project"},
+			{MemoryID: "mem-3", Title: "three", Content: "project"},
+		},
+		orgMem: []store.EllieMemorySearchResult{
+			{MemoryID: "mem-2", Title: "two-org", Content: "org"},
+			{MemoryID: "mem-4", Title: "four", Content: "org"},
+			{MemoryID: "mem-5", Title: "five", Content: "org"},
+			{MemoryID: "mem-6", Title: "six", Content: "org"},
+		},
+	}
+	service := NewEllieRetrievalCascadeService(retrievalStore, nil)
+
+	response, err := service.Retrieve(context.Background(), EllieRetrievalRequest{
+		OrgID:     "org-1",
+		ProjectID: "project-1",
+		Query:     "database",
+		Limit:     4,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, response.TierUsed)
+	require.Len(t, response.Items, 4)
+}

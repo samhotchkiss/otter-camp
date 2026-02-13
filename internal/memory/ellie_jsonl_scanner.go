@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -195,5 +196,9 @@ func truncateJSONLSnippet(line string) string {
 	if len(line) <= defaultEllieJSONLSnippetMaxBytes {
 		return line
 	}
-	return line[:defaultEllieJSONLSnippetMaxBytes]
+	snippet := line[:defaultEllieJSONLSnippetMaxBytes]
+	for len(snippet) > 0 && !utf8.ValidString(snippet) {
+		snippet = snippet[:len(snippet)-1]
+	}
+	return snippet
 }

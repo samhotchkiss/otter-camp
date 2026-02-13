@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -125,6 +126,16 @@ func TestEllieFileJSONLScannerTruncatesSnippetLength(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.LessOrEqual(t, len(results[0].Snippet), 1024)
+}
+
+func TestTruncateJSONLSnippetPreservesUTF8Boundaries(t *testing.T) {
+	prefix := strings.Repeat("a", defaultEllieJSONLSnippetMaxBytes-1)
+	line := prefix + "€" + " trailing content"
+
+	snippet := truncateJSONLSnippet(line)
+	require.True(t, utf8.ValidString(snippet))
+	require.LessOrEqual(t, len(snippet), defaultEllieJSONLSnippetMaxBytes)
+	require.Equal(t, prefix, snippet)
 }
 
 func TestEllieFileJSONLScannerScopesResultsToInputOrg(t *testing.T) {
