@@ -14,6 +14,7 @@ import (
 const (
 	defaultEllieJSONLMaxLineBytes    = 256 * 1024
 	defaultEllieJSONLMaxBytesScanned = 8 * 1024 * 1024
+	defaultEllieJSONLSnippetMaxBytes = 1024
 )
 
 type EllieFileJSONLScanner struct {
@@ -103,7 +104,7 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 				Tier:    4,
 				Source:  "jsonl",
 				ID:      formatJSONLItemID(rootDir, resolvedPath, lineNumber),
-				Snippet: line,
+				Snippet: truncateJSONLSnippet(line),
 			})
 			if len(results) >= limit {
 				break
@@ -153,4 +154,11 @@ func formatJSONLItemID(rootDir, filePath string, lineNumber int) string {
 		rel = filepath.Base(filePath)
 	}
 	return fmt.Sprintf("%s:%d", filepath.ToSlash(rel), lineNumber)
+}
+
+func truncateJSONLSnippet(line string) string {
+	if len(line) <= defaultEllieJSONLSnippetMaxBytes {
+		return line
+	}
+	return line[:defaultEllieJSONLSnippetMaxBytes]
 }

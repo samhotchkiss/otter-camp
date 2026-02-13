@@ -14,7 +14,7 @@ func TestEllieFileJSONLScannerHandlesLongLinesWithExplicitLimit(t *testing.T) {
 	rootDir := t.TempDir()
 	path := filepath.Join(rootDir, "events.jsonl")
 
-	longLine := strings.Repeat("a", 70*1024) + " database-choice"
+	longLine := "database-choice " + strings.Repeat("a", 70*1024)
 	require.NoError(t, os.WriteFile(path, []byte(longLine+"\n"), 0o644))
 
 	scanner := &EllieFileJSONLScanner{
@@ -86,4 +86,21 @@ func TestEllieFileJSONLScannerRejectsSymlinkEscape(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "escapes root")
+}
+
+func TestEllieFileJSONLScannerTruncatesSnippetLength(t *testing.T) {
+	rootDir := t.TempDir()
+	path := filepath.Join(rootDir, "events.jsonl")
+
+	line := strings.Repeat("x", 4096) + " keyword"
+	require.NoError(t, os.WriteFile(path, []byte(line+"\n"), 0o644))
+
+	scanner := &EllieFileJSONLScanner{RootDir: rootDir}
+	results, err := scanner.Scan(context.Background(), EllieJSONLScanInput{
+		Query: "keyword",
+		Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.LessOrEqual(t, len(results[0].Snippet), 1024)
 }
