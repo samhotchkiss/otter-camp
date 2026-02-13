@@ -190,7 +190,7 @@ func TestMigrationRunnerStartsEllieBackfillPhase(t *testing.T) {
 		UserID:       userID,
 		Installation: install,
 		ParsedEvents: events,
-		HistoryOnly:  true,
+		HistoryOnly:  false,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, runResult.HistoryBackfill)
@@ -258,7 +258,7 @@ func TestMigrationRunnerStartsProjectDiscoveryPhase(t *testing.T) {
 		UserID:       userID,
 		Installation: install,
 		ParsedEvents: events,
-		HistoryOnly:  true,
+		HistoryOnly:  false,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, runResult.ProjectDiscovery)
@@ -277,4 +277,122 @@ func TestMigrationRunnerStartsProjectDiscoveryPhase(t *testing.T) {
 	require.Equal(t, store.MigrationProgressStatusCompleted, discoveryProgress.Status)
 	require.Equal(t, 5, discoveryProgress.ProcessedItems)
 	require.Equal(t, "project discovery complete", discoveryProgress.CurrentLabel)
+}
+
+func TestMigrationRunnerHistoryOnlySkipsEllieAndProjectDiscovery(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-history-only")
+	userID := createOpenClawImportTestUser(t, db, orgID, "runner-history-only")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(sessionDir, "main-history-only.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"one"}]}}`,
+	})
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events, err := ParseOpenClawSessionEvents(install)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	backfillRunner := &fakeOpenClawEllieBackfillRunner{}
+	projectDiscoveryRunner := &fakeOpenClawProjectDiscoveryRunner{}
+
+	runner := NewOpenClawMigrationRunner(db)
+	runner.EllieBackfillRunner = backfillRunner
+	runner.ProjectDiscoveryRunner = projectDiscoveryRunner
+
+	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
+		OrgID:        orgID,
+		UserID:       userID,
+		Installation: install,
+		ParsedEvents: events,
+		HistoryOnly:  true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, runResult.HistoryBackfill)
+	require.Nil(t, runResult.EllieBackfill)
+	require.Nil(t, runResult.ProjectDiscovery)
+	require.False(t, backfillRunner.called)
+	require.False(t, projectDiscoveryRunner.called)
+}
+
+func TestMigrationRunnerResumeSkipsCompletedPhase(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-skip-completed")
+	progressStore := store.NewMigrationProgressStore(db)
+
+	_, err := progressStore.StartPhase(context.Background(), store.StartMigrationProgressInput{
+		OrgID:         orgID,
+		MigrationType: "memory_extraction",
+	})
+	require.NoError(t, err)
+	_, err = progressStore.SetStatus(context.Background(), store.SetMigrationProgressStatusInput{
+		OrgID:         orgID,
+		MigrationType: "memory_extraction",
+		Status:        store.MigrationProgressStatusCompleted,
+		CurrentLabel:  migrationRunnerStringPtr("already done"),
+	})
+	require.NoError(t, err)
+
+	backfillRunner := &fakeOpenClawEllieBackfillRunner{}
+	runner := NewOpenClawMigrationRunner(db)
+	runner.EllieBackfillRunner = backfillRunner
+
+	result, runErr := runner.runEllieBackfillPhase(context.Background(), RunOpenClawMigrationInput{
+		OrgID: orgID,
+	})
+	require.NoError(t, runErr)
+	require.Nil(t, result)
+	require.False(t, backfillRunner.called)
+}
+
+func TestMigrationRunnerResumeDoesNotAutoResetFailedPhase(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-skip-failed")
+	progressStore := store.NewMigrationProgressStore(db)
+
+	_, err := progressStore.StartPhase(context.Background(), store.StartMigrationProgressInput{
+		OrgID:         orgID,
+		MigrationType: "memory_extraction",
+	})
+	require.NoError(t, err)
+	_, err = progressStore.SetStatus(context.Background(), store.SetMigrationProgressStatusInput{
+		OrgID:         orgID,
+		MigrationType: "memory_extraction",
+		Status:        store.MigrationProgressStatusFailed,
+		Error:         migrationRunnerStringPtr("boom"),
+	})
+	require.NoError(t, err)
+
+	backfillRunner := &fakeOpenClawEllieBackfillRunner{}
+	runner := NewOpenClawMigrationRunner(db)
+	runner.EllieBackfillRunner = backfillRunner
+
+	result, runErr := runner.runEllieBackfillPhase(context.Background(), RunOpenClawMigrationInput{
+		OrgID: orgID,
+	})
+	require.Error(t, runErr)
+	require.ErrorContains(t, runErr, "reset status before rerun")
+	require.Nil(t, result)
+	require.False(t, backfillRunner.called)
 }

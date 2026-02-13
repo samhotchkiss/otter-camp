@@ -101,7 +101,7 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 		result.HistoryBackfill = historyResult
 		result.Paused = paused
 	}
-	if !input.AgentsOnly && !result.Paused {
+	if !input.AgentsOnly && !input.HistoryOnly && !result.Paused {
 		ellieResult, err := r.runEllieBackfillPhase(ctx, input)
 		if err != nil {
 			return RunOpenClawMigrationResult{}, err
@@ -147,6 +147,12 @@ func (r *OpenClawMigrationRunner) runAgentImportPhase(ctx context.Context, input
 		}
 		progress = started
 	} else {
+		if progress.Status == store.MigrationProgressStatusCompleted {
+			return nil, nil
+		}
+		if progress.Status == store.MigrationProgressStatusFailed {
+			return nil, fmt.Errorf("migration phase %q is failed; reset status before rerun", phaseType)
+		}
 		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
 			OrgID:         input.OrgID,
 			MigrationType: phaseType,
@@ -230,6 +236,12 @@ func (r *OpenClawMigrationRunner) runHistoryBackfillPhase(
 		}
 		progress = started
 	} else {
+		if progress.Status == store.MigrationProgressStatusCompleted {
+			return &OpenClawHistoryBackfillResult{}, false, nil
+		}
+		if progress.Status == store.MigrationProgressStatusFailed {
+			return nil, false, fmt.Errorf("migration phase %q is failed; reset status before rerun", phaseType)
+		}
 		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
 			OrgID:         input.OrgID,
 			MigrationType: phaseType,
@@ -342,6 +354,12 @@ func (r *OpenClawMigrationRunner) runEllieBackfillPhase(
 		}
 		progress = started
 	} else {
+		if progress.Status == store.MigrationProgressStatusCompleted {
+			return nil, nil
+		}
+		if progress.Status == store.MigrationProgressStatusFailed {
+			return nil, fmt.Errorf("migration phase %q is failed; reset status before rerun", phaseType)
+		}
 		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
 			OrgID:         input.OrgID,
 			MigrationType: phaseType,
@@ -425,6 +443,12 @@ func (r *OpenClawMigrationRunner) runProjectDiscoveryPhase(
 		}
 		progress = started
 	} else {
+		if progress.Status == store.MigrationProgressStatusCompleted {
+			return nil, nil
+		}
+		if progress.Status == store.MigrationProgressStatusFailed {
+			return nil, fmt.Errorf("migration phase %q is failed; reset status before rerun", phaseType)
+		}
 		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
 			OrgID:         input.OrgID,
 			MigrationType: phaseType,
@@ -484,11 +508,4 @@ func (r *OpenClawMigrationRunner) runProjectDiscoveryPhase(
 
 func migrationRunnerStringPtr(value string) *string {
 	return &value
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
