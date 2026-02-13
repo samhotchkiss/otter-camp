@@ -14,13 +14,28 @@ import (
 	_ "github.com/lib/pq"
 	importer "github.com/samhotchkiss/otter-camp/internal/import"
 	"github.com/samhotchkiss/otter-camp/internal/ottercli"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
 var detectMigrateOpenClawInstallation = importer.DetectOpenClawInstallation
 var importMigrateOpenClawAgentIdentities = importer.ImportOpenClawAgentIdentities
-var importMigrateOpenClawAgents = importer.ImportOpenClawAgents
 var parseMigrateOpenClawSessionEvents = importer.ParseOpenClawSessionEvents
-var backfillMigrateOpenClawHistory = importer.BackfillOpenClawHistory
+var newOpenClawMigrationRunner = importer.NewOpenClawMigrationRunner
+var openMigrateDatabase = openMigrateDatabaseFromEnv
+var listMigrateProgressByOrg = func(ctx context.Context, db *sql.DB, orgID string) ([]store.MigrationProgress, error) {
+	progressStore := store.NewMigrationProgressStore(db)
+	return progressStore.ListByOrg(ctx, orgID)
+}
+var updateMigrateProgressByOrgStatus = func(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+	fromStatus store.MigrationProgressStatus,
+	toStatus store.MigrationProgressStatus,
+) (int, error) {
+	progressStore := store.NewMigrationProgressStore(db)
+	return progressStore.UpdateStatusByOrg(ctx, orgID, fromStatus, toStatus)
+}
 
 type migrateFromOpenClawOptions struct {
 	OpenClawDir string
@@ -41,7 +56,7 @@ type migrateOpenClawDryRunSummary struct {
 
 func handleMigrate(args []string) {
 	if len(args) == 0 {
-		fmt.Println("usage: otter migrate from-openclaw [--openclaw-dir <path>] [--agents-only|--history-only] [--dry-run] [--since <date>] [--org <org-id>]")
+		fmt.Println("usage: otter migrate <from-openclaw|status|pause|resume> ...")
 		os.Exit(1)
 	}
 
@@ -54,10 +69,41 @@ func handleMigrate(args []string) {
 		if err := runMigrateFromOpenClaw(os.Stdout, opts); err != nil {
 			dieIf(err)
 		}
+	case "status":
+		orgID, err := parseMigrateOrgOnlyOptions("migrate status", args[1:])
+		if err != nil {
+			die(err.Error())
+		}
+		dieIf(runMigrateStatus(os.Stdout, orgID))
+	case "pause":
+		orgID, err := parseMigrateOrgOnlyOptions("migrate pause", args[1:])
+		if err != nil {
+			die(err.Error())
+		}
+		dieIf(runMigratePause(os.Stdout, orgID))
+	case "resume":
+		orgID, err := parseMigrateOrgOnlyOptions("migrate resume", args[1:])
+		if err != nil {
+			die(err.Error())
+		}
+		dieIf(runMigrateResume(os.Stdout, orgID))
 	default:
-		fmt.Println("usage: otter migrate from-openclaw [--openclaw-dir <path>] [--agents-only|--history-only] [--dry-run] [--since <date>] [--org <org-id>]")
+		fmt.Println("usage: otter migrate <from-openclaw|status|pause|resume> ...")
 		os.Exit(1)
 	}
+}
+
+func parseMigrateOrgOnlyOptions(name string, args []string) (string, error) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	orgID := flags.String("org", "", "org id override")
+	if err := flags.Parse(args); err != nil {
+		return "", err
+	}
+	if len(flags.Args()) > 0 {
+		return "", fmt.Errorf("unexpected positional argument(s): %s", strings.Join(flags.Args(), " "))
+	}
+	return strings.TrimSpace(*orgID), nil
 }
 
 func parseMigrateFromOpenClawOptions(args []string) (migrateFromOpenClawOptions, error) {
@@ -154,39 +200,40 @@ func runMigrateFromOpenClaw(out io.Writer, opts migrateFromOpenClawOptions) erro
 		return err
 	}
 
-	db, err := openMigrateDatabaseFromEnv()
+	db, err := openMigrateDatabase()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
-
-	ctx := context.Background()
-
-	if !opts.HistoryOnly {
-		if _, err := importMigrateOpenClawAgents(ctx, db, importer.OpenClawAgentImportOptions{
-			OrgID:         orgID,
-			Installation:  install,
-			SummaryWriter: out,
-		}); err != nil {
-			return err
-		}
+	if db != nil {
+		defer db.Close()
 	}
 
+	ctx := context.Background()
+	userID := ""
+
 	if !opts.AgentsOnly {
-		userID, err := resolveMigrateBackfillUserID(ctx, db, orgID)
+		userID, err = resolveMigrateBackfillUserID(ctx, db, orgID)
 		if err != nil {
 			return err
 		}
-		if _, err := backfillMigrateOpenClawHistory(ctx, db, importer.OpenClawHistoryBackfillOptions{
-			OrgID:         orgID,
-			UserID:        userID,
-			ParsedEvents:  events,
-			SummaryWriter: out,
-		}); err != nil {
-			return err
-		}
 	}
 
+	runner := newOpenClawMigrationRunner(db)
+	runResult, err := runner.Run(ctx, importer.RunOpenClawMigrationInput{
+		OrgID:        orgID,
+		UserID:       userID,
+		Installation: install,
+		ParsedEvents: events,
+		AgentsOnly:   opts.AgentsOnly,
+		HistoryOnly:  opts.HistoryOnly,
+	})
+	if err != nil {
+		return err
+	}
+	if runResult.Paused {
+		fmt.Fprintln(out, "OpenClaw migration paused at checkpoint.")
+		return nil
+	}
 	fmt.Fprintln(out, "OpenClaw migration complete.")
 	return nil
 }
@@ -205,6 +252,97 @@ func resolveMigrateOrgID(flagOrgID string) (string, error) {
 		return "", fmt.Errorf("org id is required (pass --org or set default org with otter auth login)")
 	}
 	return strings.TrimSpace(cfg.DefaultOrg), nil
+}
+
+func runMigrateStatus(out io.Writer, orgOverride string) error {
+	orgID, err := resolveMigrateOrgID(orgOverride)
+	if err != nil {
+		return err
+	}
+	db, err := openMigrateDatabase()
+	if err != nil {
+		return err
+	}
+	if db != nil {
+		defer db.Close()
+	}
+
+	progressRows, err := listMigrateProgressByOrg(context.Background(), db, orgID)
+	if err != nil {
+		return err
+	}
+	if len(progressRows) == 0 {
+		fmt.Fprintln(out, "No migration progress found.")
+		return nil
+	}
+
+	fmt.Fprintln(out, "Migration Status:")
+	for _, row := range progressRows {
+		progress := fmt.Sprintf("%d", row.ProcessedItems)
+		if row.TotalItems != nil && *row.TotalItems > 0 {
+			progress = fmt.Sprintf("%d / %d", row.ProcessedItems, *row.TotalItems)
+		}
+		line := fmt.Sprintf("  %s: %s (%s)", row.MigrationType, row.Status, progress)
+		if strings.TrimSpace(row.CurrentLabel) != "" {
+			line += " - " + strings.TrimSpace(row.CurrentLabel)
+		}
+		fmt.Fprintln(out, line)
+	}
+	return nil
+}
+
+func runMigratePause(out io.Writer, orgOverride string) error {
+	orgID, err := resolveMigrateOrgID(orgOverride)
+	if err != nil {
+		return err
+	}
+	db, err := openMigrateDatabase()
+	if err != nil {
+		return err
+	}
+	if db != nil {
+		defer db.Close()
+	}
+
+	updated, err := updateMigrateProgressByOrgStatus(
+		context.Background(),
+		db,
+		orgID,
+		store.MigrationProgressStatusRunning,
+		store.MigrationProgressStatusPaused,
+	)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Paused %d running migration phase(s).\n", updated)
+	return nil
+}
+
+func runMigrateResume(out io.Writer, orgOverride string) error {
+	orgID, err := resolveMigrateOrgID(orgOverride)
+	if err != nil {
+		return err
+	}
+	db, err := openMigrateDatabase()
+	if err != nil {
+		return err
+	}
+	if db != nil {
+		defer db.Close()
+	}
+
+	updated, err := updateMigrateProgressByOrgStatus(
+		context.Background(),
+		db,
+		orgID,
+		store.MigrationProgressStatusPaused,
+		store.MigrationProgressStatusRunning,
+	)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Resumed %d paused migration phase(s).\n", updated)
+	return nil
 }
 
 func openMigrateDatabaseFromEnv() (*sql.DB, error) {

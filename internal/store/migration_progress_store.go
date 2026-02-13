@@ -166,6 +166,44 @@ func (s *MigrationProgressStore) GetByType(ctx context.Context, orgID, migration
 	return progress, nil
 }
 
+func (s *MigrationProgressStore) ListByOrg(ctx context.Context, orgID string) ([]MigrationProgress, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("migration progress store is not configured")
+	}
+
+	normalizedOrgID := strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(normalizedOrgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, org_id, migration_type, status, total_items, processed_items, failed_items, current_label, started_at, completed_at, error, created_at, updated_at
+		 FROM migration_progress
+		 WHERE org_id = $1
+		 ORDER BY migration_type ASC, created_at ASC`,
+		normalizedOrgID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list migration progress rows: %w", err)
+	}
+	defer rows.Close()
+
+	progressRows := make([]MigrationProgress, 0)
+	for rows.Next() {
+		row, scanErr := scanMigrationProgressRow(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("failed to scan migration progress row: %w", scanErr)
+		}
+		progressRows = append(progressRows, *row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading migration progress rows: %w", err)
+	}
+
+	return progressRows, nil
+}
+
 func (s *MigrationProgressStore) Advance(ctx context.Context, input AdvanceMigrationProgressInput) (*MigrationProgress, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("migration progress store is not configured")
@@ -259,6 +297,61 @@ func (s *MigrationProgressStore) SetStatus(ctx context.Context, input SetMigrati
 	}
 
 	return progress, nil
+}
+
+func (s *MigrationProgressStore) UpdateStatusByOrg(
+	ctx context.Context,
+	orgID string,
+	fromStatus MigrationProgressStatus,
+	toStatus MigrationProgressStatus,
+) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("migration progress store is not configured")
+	}
+
+	normalizedOrgID := strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(normalizedOrgID) {
+		return 0, fmt.Errorf("invalid org_id")
+	}
+	if _, ok := validMigrationProgressStatuses[fromStatus]; !ok {
+		return 0, fmt.Errorf("invalid from_status")
+	}
+	if _, ok := validMigrationProgressStatuses[toStatus]; !ok {
+		return 0, fmt.Errorf("invalid to_status")
+	}
+
+	updateResult, err := s.db.ExecContext(
+		ctx,
+		`UPDATE migration_progress
+		    SET status = $3,
+		        error = CASE
+		            WHEN $3 = 'running' THEN NULL
+		            ELSE error
+		        END,
+		        started_at = CASE
+		            WHEN $3 = 'running' AND started_at IS NULL THEN NOW()
+		            ELSE started_at
+		        END,
+		        completed_at = CASE
+		            WHEN $3 IN ('completed', 'failed') THEN NOW()
+		            ELSE NULL
+		        END
+		  WHERE org_id = $1
+		    AND status = $2`,
+		normalizedOrgID,
+		fromStatus,
+		toStatus,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to update migration progress status by org: %w", err)
+	}
+
+	rowsAffected, err := updateResult.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read updated migration progress row count: %w", err)
+	}
+
+	return int(rowsAffected), nil
 }
 
 type migrationProgressRowScanner interface {

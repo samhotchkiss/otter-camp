@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
 
 	importer "github.com/samhotchkiss/otter-camp/internal/import"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -126,4 +129,70 @@ func TestMigrateFromOpenClawSinceFilter(t *testing.T) {
 	require.Contains(t, rendered, "Since: 2026-01-01T00:00:00Z")
 	require.Contains(t, rendered, "Conversation events to import: 2")
 	require.True(t, strings.Contains(rendered, "Mode: full"))
+}
+
+func TestMigrateStatusPauseResumeCommands(t *testing.T) {
+	originalOpenDB := openMigrateDatabase
+	originalList := listMigrateProgressByOrg
+	originalUpdate := updateMigrateProgressByOrgStatus
+	t.Cleanup(func() {
+		openMigrateDatabase = originalOpenDB
+		listMigrateProgressByOrg = originalList
+		updateMigrateProgressByOrgStatus = originalUpdate
+	})
+
+	openMigrateDatabase = func() (*sql.DB, error) {
+		return nil, nil
+	}
+	listMigrateProgressByOrg = func(_ context.Context, _ *sql.DB, _ string) ([]store.MigrationProgress, error) {
+		total := 10
+		return []store.MigrationProgress{
+			{
+				MigrationType:  "agent_import",
+				Status:         store.MigrationProgressStatusCompleted,
+				TotalItems:     &total,
+				ProcessedItems: 10,
+				CurrentLabel:   "agent import complete",
+			},
+			{
+				MigrationType:  "history_backfill",
+				Status:         store.MigrationProgressStatusRunning,
+				TotalItems:     &total,
+				ProcessedItems: 3,
+				CurrentLabel:   "processed 3/10 events",
+			},
+		}, nil
+	}
+
+	updates := make([][2]store.MigrationProgressStatus, 0, 2)
+	updateMigrateProgressByOrgStatus = func(
+		_ context.Context,
+		_ *sql.DB,
+		_ string,
+		fromStatus store.MigrationProgressStatus,
+		toStatus store.MigrationProgressStatus,
+	) (int, error) {
+		updates = append(updates, [2]store.MigrationProgressStatus{fromStatus, toStatus})
+		return 1, nil
+	}
+
+	var statusOut bytes.Buffer
+	require.NoError(t, runMigrateStatus(&statusOut, "org-1"))
+	require.Contains(t, statusOut.String(), "Migration Status:")
+	require.Contains(t, statusOut.String(), "agent_import: completed (10 / 10)")
+	require.Contains(t, statusOut.String(), "history_backfill: running (3 / 10)")
+
+	var pauseOut bytes.Buffer
+	require.NoError(t, runMigratePause(&pauseOut, "org-1"))
+	require.Contains(t, pauseOut.String(), "Paused 1 running migration phase(s).")
+
+	var resumeOut bytes.Buffer
+	require.NoError(t, runMigrateResume(&resumeOut, "org-1"))
+	require.Contains(t, resumeOut.String(), "Resumed 1 paused migration phase(s).")
+
+	require.Len(t, updates, 2)
+	require.Equal(t, store.MigrationProgressStatusRunning, updates[0][0])
+	require.Equal(t, store.MigrationProgressStatusPaused, updates[0][1])
+	require.Equal(t, store.MigrationProgressStatusPaused, updates[1][0])
+	require.Equal(t, store.MigrationProgressStatusRunning, updates[1][1])
 }
