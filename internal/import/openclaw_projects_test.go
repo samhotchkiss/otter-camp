@@ -250,3 +250,54 @@ func TestOpenClawProjectDiscoveryStatusInference(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "closed", phoenixIssueState)
 }
+
+func TestOpenClawProjectDiscoveryRejectsMalformedOrgID(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	_, err := DiscoverOpenClawProjectsFromHistory(context.Background(), db, OpenClawProjectDiscoveryInput{
+		OrgID: "------------------------------------",
+		ParsedEvents: []OpenClawSessionEvent{
+			{
+				AgentSlug: "main",
+				Body:      "project:otter-camp issue: add migration status endpoint",
+				CreatedAt: time.Date(2026, 1, 10, 10, 0, 0, 0, time.UTC),
+			},
+		},
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "invalid org_id")
+}
+
+func TestOpenClawProjectDiscoveryIssueNumberUniqueness(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-project-discovery-issue-unique")
+
+	var projectID string
+	err := db.QueryRow(
+		`INSERT INTO projects (org_id, name, status)
+		 VALUES ($1, 'Otter Camp', 'active')
+		 RETURNING id::text`,
+		orgID,
+	).Scan(&projectID)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO project_issues (org_id, project_id, issue_number, title, state, origin)
+		 VALUES ($1, $2, 1, 'Issue One', 'open', 'local')`,
+		orgID,
+		projectID,
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO project_issues (org_id, project_id, issue_number, title, state, origin)
+		 VALUES ($1, $2, 1, 'Issue Duplicate', 'open', 'local')`,
+		orgID,
+		projectID,
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "duplicate key value")
+}

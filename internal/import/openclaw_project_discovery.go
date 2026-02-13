@@ -107,8 +107,8 @@ func DiscoverOpenClawProjects(
 	}
 
 	orgID := strings.TrimSpace(input.OrgID)
-	if orgID == "" {
-		return OpenClawProjectDiscoveryResult{}, fmt.Errorf("org_id is required")
+	if !openClawImportUUIDRegex.MatchString(orgID) {
+		return OpenClawProjectDiscoveryResult{}, fmt.Errorf("invalid org_id")
 	}
 
 	referenceTime := input.ReferenceTime.UTC()
@@ -277,6 +277,18 @@ func upsertOpenClawDiscoveredIssue(
 	).Scan(&existingID, &existingState, &existingBody)
 	if queryErr != nil {
 		if errors.Is(queryErr, sql.ErrNoRows) {
+			var lockedProjectID string
+			if err := tx.QueryRowContext(
+				ctx,
+				`SELECT id
+				   FROM projects
+				  WHERE id = $1
+				  FOR UPDATE`,
+				projectID,
+			).Scan(&lockedProjectID); err != nil {
+				return false, false, fmt.Errorf("lock project issue sequence for project %s: %w", projectID, err)
+			}
+
 			var nextIssueNumber int64
 			if err := tx.QueryRowContext(
 				ctx,
