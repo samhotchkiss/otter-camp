@@ -75,6 +75,8 @@ func main() {
 		handleRepo(os.Args[2:])
 	case "issue":
 		handleIssue(os.Args[2:])
+	case "room":
+		handleRoom(os.Args[2:])
 	case "pipeline":
 		handlePipeline(os.Args[2:])
 	case "deploy":
@@ -109,6 +111,7 @@ Commands:
   remote add       Add origin remote for project
   repo info        Show repo URL for project
   issue            Manage project issues
+  room             Manage room stats
   pipeline         Configure per-project pipeline settings
   deploy           Configure per-project deployment settings
   version          Show CLI version`)

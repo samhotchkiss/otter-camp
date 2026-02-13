@@ -196,6 +196,22 @@ type DeployConfig struct {
 	CLICommand    *string `json:"cliCommand,omitempty"`
 }
 
+type RoomTokenSenderStats struct {
+	SenderID    string `json:"sender_id"`
+	SenderType  string `json:"sender_type"`
+	TotalTokens int64  `json:"total_tokens"`
+}
+
+type RoomTokenStats struct {
+	RoomID                   string                 `json:"room_id"`
+	RoomName                 string                 `json:"room_name"`
+	TotalTokens              int64                  `json:"total_tokens"`
+	ConversationCount        int                    `json:"conversation_count"`
+	AvgTokensPerConversation int64                  `json:"avg_tokens_per_conversation"`
+	Last7DaysTokens          int64                  `json:"last_7_days_tokens"`
+	TokensBySender           []RoomTokenSenderStats `json:"tokens_by_sender"`
+}
+
 func (c *Client) ListProjects() ([]Project, error) {
 	return c.ListProjectsWithWorkflow(false)
 }
@@ -300,6 +316,27 @@ func (c *Client) CreateProject(input map[string]interface{}) (Project, error) {
 		return Project{}, err
 	}
 	return project, nil
+}
+
+func (c *Client) GetRoomStats(roomID string) (RoomTokenStats, error) {
+	if err := c.requireAuth(); err != nil {
+		return RoomTokenStats{}, err
+	}
+	roomID = strings.TrimSpace(roomID)
+	if roomID == "" {
+		return RoomTokenStats{}, errors.New("room id is required")
+	}
+
+	req, err := c.newRequest(http.MethodGet, "/api/v1/rooms/"+url.PathEscape(roomID)+"/stats", nil)
+	if err != nil {
+		return RoomTokenStats{}, err
+	}
+
+	var stats RoomTokenStats
+	if err := c.do(req, &stats); err != nil {
+		return RoomTokenStats{}, err
+	}
+	return stats, nil
 }
 
 func (c *Client) GetProject(projectID string) (Project, error) {

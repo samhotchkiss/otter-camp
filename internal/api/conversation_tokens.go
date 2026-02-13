@@ -35,6 +35,7 @@ type roomTokenSenderResponse struct {
 
 type roomTokenStatsResponse struct {
 	RoomID                   string                    `json:"room_id"`
+	RoomName                 string                    `json:"room_name"`
 	TotalTokens              int64                     `json:"total_tokens"`
 	ConversationCount        int                       `json:"conversation_count"`
 	AvgTokensPerConversation int64                     `json:"avg_tokens_per_conversation"`
@@ -108,6 +109,7 @@ func (h *ConversationTokenHandler) GetRoomStats(w http.ResponseWriter, r *http.R
 
 	sendJSON(w, http.StatusOK, roomTokenStatsResponse{
 		RoomID:                   stats.RoomID,
+		RoomName:                 stats.RoomName,
 		TotalTokens:              stats.TotalTokens,
 		ConversationCount:        stats.ConversationCount,
 		AvgTokensPerConversation: stats.AvgTokensPerConversation,

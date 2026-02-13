@@ -37,6 +37,7 @@ type RoomTokenSenderStat struct {
 
 type RoomTokenStats struct {
 	RoomID                   string
+	RoomName                 string
 	TotalTokens              int64
 	ConversationCount        int
 	AvgTokensPerConversation int64
@@ -175,6 +176,7 @@ func (s *ConversationTokenStore) GetRoomTokenStats(ctx context.Context, roomID s
 	err = conn.QueryRowContext(
 		ctx,
 		`SELECT
+			COALESCE(r.name, ''),
 			COALESCE(r.total_tokens, 0),
 			COALESCE(c.conversation_count, 0),
 			COALESCE(t.last_7_days_tokens, 0)
@@ -196,7 +198,7 @@ func (s *ConversationTokenStore) GetRoomTokenStats(ctx context.Context, roomID s
 		  AND r.id = $2`,
 		workspaceID,
 		roomID,
-	).Scan(&stats.TotalTokens, &stats.ConversationCount, &stats.Last7DaysTokens)
+	).Scan(&stats.RoomName, &stats.TotalTokens, &stats.ConversationCount, &stats.Last7DaysTokens)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound

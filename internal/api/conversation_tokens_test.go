@@ -171,6 +171,7 @@ func TestRoomStatsEndpoint(t *testing.T) {
 	var payload roomTokenStatsResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.Equal(t, roomID, payload.RoomID)
+	require.Equal(t, "Room Stats", payload.RoomName)
 	require.Equal(t, expectedTotal, payload.TotalTokens)
 	require.Equal(t, 1, payload.ConversationCount)
 	require.Equal(t, expectedTotal, payload.AvgTokensPerConversation)
