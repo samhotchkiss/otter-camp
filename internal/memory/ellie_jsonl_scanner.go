@@ -28,6 +28,10 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 	if query == "" {
 		return []EllieRetrievedItem{}, nil
 	}
+	orgID := strings.TrimSpace(input.OrgID)
+	if orgID == "" {
+		return []EllieRetrievedItem{}, nil
+	}
 	rootDir := strings.TrimSpace(s.RootDir)
 	if rootDir == "" {
 		return []EllieRetrievedItem{}, nil
@@ -35,6 +39,13 @@ func (s *EllieFileJSONLScanner) Scan(ctx context.Context, input EllieJSONLScanIn
 	rootDir, err := normalizeJSONLRoot(rootDir)
 	if err != nil {
 		return nil, err
+	}
+	rootDir, err = resolveJSONLOrgRoot(rootDir, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if rootDir == "" {
+		return []EllieRetrievedItem{}, nil
 	}
 
 	limit := input.Limit
@@ -137,6 +148,25 @@ func normalizeJSONLRoot(rootDir string) (string, error) {
 	return resolvedRoot, nil
 }
 
+func resolveJSONLOrgRoot(rootDir, orgID string) (string, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return "", nil
+	}
+	if strings.Contains(orgID, "..") || strings.Contains(orgID, "/") || strings.Contains(orgID, "\\") {
+		return "", fmt.Errorf("invalid org_id path")
+	}
+
+	orgRoot := filepath.Clean(filepath.Join(rootDir, orgID))
+	if err := ensurePathWithinRoot(rootDir, orgRoot); err != nil {
+		return "", err
+	}
+	if !isDirectory(orgRoot) {
+		return "", nil
+	}
+	return normalizeJSONLRoot(orgRoot)
+}
+
 func ensurePathWithinRoot(root, path string) error {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
@@ -146,6 +176,11 @@ func ensurePathWithinRoot(root, path string) error {
 		return fmt.Errorf("path %q is outside %q", path, root)
 	}
 	return nil
+}
+
+func isDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func formatJSONLItemID(rootDir, filePath string, lineNumber int) string {
