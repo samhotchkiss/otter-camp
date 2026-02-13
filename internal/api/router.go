@@ -103,6 +103,7 @@ func NewRouter() http.Handler {
 	sharedKnowledgeHandler := &SharedKnowledgeHandler{}
 	memoryHandler := &MemoryHandler{}
 	memoryEventsHandler := &MemoryEventsHandler{}
+	complianceRulesHandler := &ComplianceRulesHandler{}
 	websocketHandler := &ws.Handler{Hub: hub}
 	projectIssueSyncHandler := &ProjectIssueSyncHandler{}
 	adminAgentsHandler := &AdminAgentsHandler{DB: db, OpenClawHandler: openClawWSHandler}
@@ -139,13 +140,19 @@ func NewRouter() http.Handler {
 		projectChatHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		projectChatHandler.DB = db
 		issuesHandler.IssueStore = store.NewProjectIssueStore(db)
+		issuesHandler.AgentStore = agentStore
 		issuesHandler.ChatThreadStore = chatThreadStore
 		issuesHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		questionnaireHandler.QuestionnaireStore = store.NewQuestionnaireStore(db)
 		issuesHandler.ProjectStore = projectStore
 		issuesHandler.CommitStore = store.NewProjectCommitStore(db)
 		issuesHandler.ProjectRepos = projectRepoStore
+		issuesHandler.EllieIngestionStore = store.NewEllieIngestionStore(db)
 		issuesHandler.DB = db
+		issuesHandler.ComplianceReviewer = newDefaultIssueComplianceReviewer(
+			store.NewComplianceRuleStore(db),
+			issuesHandler.CommitStore,
+		)
 		messageHandler.ChatThreadStore = chatThreadStore
 		projectCommitsHandler.ProjectStore = projectStore
 		projectCommitsHandler.CommitStore = store.NewProjectCommitStore(db)
@@ -172,6 +179,7 @@ func NewRouter() http.Handler {
 		memoryHandler.Store = store.NewMemoryStore(db)
 		memoryHandler.DB = db
 		memoryEventsHandler.Store = store.NewMemoryEventsStore(db)
+		complianceRulesHandler.Store = store.NewComplianceRuleStore(db)
 	}
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db, ChatThreadStore: chatThreadStore}
 	workflowsHandler.ProjectStore = projectStore
@@ -239,6 +247,10 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/memory", agentsHandler.GetMemory)
 		r.With(middleware.OptionalWorkspace).Post("/agents/{id}/memory", agentsHandler.CreateMemory)
 		r.With(middleware.OptionalWorkspace).Get("/agents/{id}/memory/search", agentsHandler.SearchMemory)
+		r.With(middleware.OptionalWorkspace).Get("/compliance/rules", complianceRulesHandler.List)
+		r.With(middleware.OptionalWorkspace).Post("/compliance/rules", complianceRulesHandler.Create)
+		r.With(middleware.OptionalWorkspace).Patch("/compliance/rules/{id}", complianceRulesHandler.Patch)
+		r.With(middleware.OptionalWorkspace).Post("/compliance/rules/{id}/disable", complianceRulesHandler.Disable)
 		r.With(middleware.OptionalWorkspace).Get("/workflows", workflowsHandler.List)
 		r.With(middleware.OptionalWorkspace).Patch("/workflows/{id}", workflowsHandler.Toggle)
 		r.With(middleware.OptionalWorkspace).Post("/workflows/{id}/run", workflowsHandler.Run)

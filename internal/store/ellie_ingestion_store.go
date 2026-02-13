@@ -496,6 +496,39 @@ func (s *EllieIngestionStore) UpsertRoomCursor(ctx context.Context, input Upsert
 	return nil
 }
 
+func (s *EllieIngestionStore) HasComplianceFingerprint(ctx context.Context, orgID, fingerprint string) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("ellie ingestion store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return false, fmt.Errorf("invalid org_id")
+	}
+
+	fingerprint = strings.TrimSpace(fingerprint)
+	if fingerprint == "" {
+		return false, fmt.Errorf("compliance fingerprint is required")
+	}
+
+	var exists bool
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT EXISTS(
+			SELECT 1
+			  FROM memories
+			 WHERE org_id = $1
+			   AND metadata->>'compliance_fingerprint' = $2
+		)`,
+		orgID,
+		fingerprint,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("failed to check compliance fingerprint memory: %w", err)
+	}
+
+	return exists, nil
+}
+
 func normalizeOptionalEllieUUID(value *string) (interface{}, error) {
 	if value == nil {
 		return nil, nil

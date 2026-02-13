@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lib/pq"
+	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/samhotchkiss/otter-camp/internal/ws"
@@ -45,6 +46,20 @@ func newIssueTestRouter(handler *IssuesHandler) http.Handler {
 
 func issueTestCtx(orgID string) context.Context {
 	return context.WithValue(context.Background(), middleware.WorkspaceIDKey, orgID)
+}
+
+type fakeIssueComplianceReviewer struct {
+	report memory.ComplianceReport
+	err    error
+	calls  int
+}
+
+func (f *fakeIssueComplianceReviewer) ReviewIssueClose(_ context.Context, _ store.ProjectIssue) (memory.ComplianceReport, error) {
+	f.calls++
+	if f.err != nil {
+		return memory.ComplianceReport{}, f.err
+	}
+	return f.report, nil
 }
 
 func TestIssuesHandlerListAndGetIncludeOwnerParticipantsAndComments(t *testing.T) {
@@ -519,6 +534,135 @@ func TestIssuesHandlerPatchIssueAutoArchivesChatsOnCloseTransition(t *testing.T)
 	require.True(t, archivedAt.Valid)
 	require.True(t, autoReason.Valid)
 	require.Equal(t, store.ChatThreadArchiveReasonIssueClosed, autoReason.String)
+}
+
+func TestIssueCloseComplianceReviewPassesAndStaysClosed(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-compliance-pass-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Compliance Pass Project")
+	insertMessageTestAgent(t, db, orgID, "ellie")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Compliance pass issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	report := memory.BuildComplianceReport(memory.ComplianceReportInput{
+		IssueNumber: int(issue.IssueNumber),
+		Findings: []memory.ComplianceRuleFinding{
+			{
+				RuleID:   "rule-pass",
+				Title:    "Tests included",
+				Category: store.ComplianceRuleCategoryCodeQuality,
+				Severity: store.ComplianceRuleSeverityRequired,
+				Passed:   true,
+				Details:  "Tests were provided.",
+			},
+		},
+	})
+	reviewer := &fakeIssueComplianceReviewer{report: report}
+
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		AgentStore:         store.NewAgentStore(db),
+		ComplianceReviewer: reviewer,
+	}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"state":"closed"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 1, reviewer.calls)
+
+	var payload issueSummaryPayload
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "closed", payload.State)
+
+	updated, err := issueStore.GetIssueByID(issueTestCtx(orgID), issue.ID)
+	require.NoError(t, err)
+	require.Equal(t, "closed", updated.State)
+
+	var reportComments int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM project_issue_comments WHERE issue_id = $1 AND body ILIKE '%Compliance Review%'`,
+		issue.ID,
+	).Scan(&reportComments)
+	require.NoError(t, err)
+	require.Equal(t, 1, reportComments)
+}
+
+func TestIssueCloseComplianceReviewReopensOnRequiredFailure(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "issues-compliance-reopen-org")
+	projectID := insertProjectTestProject(t, db, orgID, "Issue Compliance Reopen Project")
+	insertMessageTestAgent(t, db, orgID, "ellie")
+
+	issueStore := store.NewProjectIssueStore(db)
+	issue, err := issueStore.CreateIssue(issueTestCtx(orgID), store.CreateProjectIssueInput{
+		ProjectID: projectID,
+		Title:     "Compliance reopen issue",
+		Origin:    "local",
+	})
+	require.NoError(t, err)
+
+	report := memory.BuildComplianceReport(memory.ComplianceReportInput{
+		IssueNumber: int(issue.IssueNumber),
+		Findings: []memory.ComplianceRuleFinding{
+			{
+				RuleID:      "rule-required-fail",
+				Title:       "Tests required",
+				Category:    store.ComplianceRuleCategoryCodeQuality,
+				Severity:    store.ComplianceRuleSeverityRequired,
+				Passed:      false,
+				Details:     "No test file updates were detected.",
+				ActionLabel: "Add tests for the changed code path.",
+			},
+		},
+	})
+	reviewer := &fakeIssueComplianceReviewer{report: report}
+
+	handler := &IssuesHandler{
+		IssueStore:         issueStore,
+		AgentStore:         store.NewAgentStore(db),
+		ComplianceReviewer: reviewer,
+	}
+	router := newIssueTestRouter(handler)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/issues/"+issue.ID+"?org_id="+orgID,
+		bytes.NewReader([]byte(`{"state":"closed"}`)),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 1, reviewer.calls)
+
+	var payload issueSummaryPayload
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
+	require.Equal(t, "open", payload.State)
+
+	updated, err := issueStore.GetIssueByID(issueTestCtx(orgID), issue.ID)
+	require.NoError(t, err)
+	require.Equal(t, "open", updated.State)
+	require.Equal(t, store.IssueWorkStatusQueued, updated.WorkStatus)
+
+	var commentBody string
+	err = db.QueryRow(
+		`SELECT body FROM project_issue_comments WHERE issue_id = $1 ORDER BY created_at DESC LIMIT 1`,
+		issue.ID,
+	).Scan(&commentBody)
+	require.NoError(t, err)
+	require.Contains(t, commentBody, "Compliance Review")
+	require.Contains(t, commentBody, "Action:")
 }
 
 func TestIssuesHandlerPatchIssueRejectsInvalidTransitionsAndValues(t *testing.T) {

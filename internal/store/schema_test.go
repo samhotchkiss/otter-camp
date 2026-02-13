@@ -564,6 +564,41 @@ func TestMigration071MemoriesSensitivityFilesExistAndContainConstraint(t *testin
 	require.Contains(t, downContent, "drop column if exists sensitivity")
 }
 
+func TestMigration072ComplianceRulesFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"072_create_compliance_rules.down.sql",
+		"072_create_compliance_rules.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "072_create_compliance_rules.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists compliance_rules")
+	require.Contains(t, upContent, "category text not null")
+	require.Contains(t, upContent, "'code_quality'")
+	require.Contains(t, upContent, "'security'")
+	require.Contains(t, upContent, "severity text not null default 'required'")
+	require.Contains(t, upContent, "'required'")
+	require.Contains(t, upContent, "'recommended'")
+	require.Contains(t, upContent, "'informational'")
+	require.Contains(t, upContent, "create index if not exists compliance_rules_org_idx")
+	require.Contains(t, upContent, "create index if not exists compliance_rules_project_idx")
+	require.Contains(t, upContent, "create policy compliance_rules_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "072_create_compliance_rules.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop policy if exists compliance_rules_org_isolation")
+	require.Contains(t, downContent, "drop index if exists compliance_rules_project_idx")
+	require.Contains(t, downContent, "drop index if exists compliance_rules_org_idx")
+	require.Contains(t, downContent, "drop table if exists compliance_rules")
+}
+
 func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
@@ -712,6 +747,94 @@ func TestSchemaMemoriesAndConversationsSensitivityColumnsAndConstraints(t *testi
 	require.Contains(t, loweredIndexDef, "where")
 	require.Contains(t, loweredIndexDef, "sensitivity")
 	require.Contains(t, loweredIndexDef, "sensitive")
+}
+
+func TestSchemaComplianceRulesTableAndConstraints(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	var tableRegClass sql.NullString
+	err := db.QueryRow(`SELECT to_regclass('public.compliance_rules')::text`).Scan(&tableRegClass)
+	require.NoError(t, err)
+	require.True(t, tableRegClass.Valid)
+
+	var orgIdx sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.compliance_rules_org_idx')::text`).Scan(&orgIdx)
+	require.NoError(t, err)
+	require.True(t, orgIdx.Valid)
+
+	var projectIdx sql.NullString
+	err = db.QueryRow(`SELECT to_regclass('public.compliance_rules_project_idx')::text`).Scan(&projectIdx)
+	require.NoError(t, err)
+	require.True(t, projectIdx.Valid)
+
+	var rlsEnabled bool
+	err = db.QueryRow(
+		`SELECT relrowsecurity
+		 FROM pg_class
+		 WHERE relname = 'compliance_rules'`,
+	).Scan(&rlsEnabled)
+	require.NoError(t, err)
+	require.True(t, rlsEnabled)
+
+	var enabledDefault sql.NullString
+	err = db.QueryRow(
+		`SELECT column_default
+		 FROM information_schema.columns
+		 WHERE table_schema = 'public'
+		   AND table_name = 'compliance_rules'
+		   AND column_name = 'enabled'`,
+	).Scan(&enabledDefault)
+	require.NoError(t, err)
+	require.True(t, enabledDefault.Valid)
+	require.Contains(t, strings.ToLower(enabledDefault.String), "true")
+
+	var severityDefault sql.NullString
+	err = db.QueryRow(
+		`SELECT column_default
+		 FROM information_schema.columns
+		 WHERE table_schema = 'public'
+		   AND table_name = 'compliance_rules'
+		   AND column_name = 'severity'`,
+	).Scan(&severityDefault)
+	require.NoError(t, err)
+	require.True(t, severityDefault.Valid)
+	require.Contains(t, strings.ToLower(severityDefault.String), "required")
+
+	var categoryConstraint string
+	err = db.QueryRow(
+		`SELECT pg_get_constraintdef(oid)
+		 FROM pg_constraint
+		 WHERE conrelid = 'compliance_rules'::regclass
+		   AND contype = 'c'
+		   AND pg_get_constraintdef(oid) ILIKE '%category%'
+		 ORDER BY oid DESC
+		 LIMIT 1`,
+	).Scan(&categoryConstraint)
+	require.NoError(t, err)
+	loweredCategory := strings.ToLower(categoryConstraint)
+	require.Contains(t, loweredCategory, "'code_quality'")
+	require.Contains(t, loweredCategory, "'security'")
+	require.Contains(t, loweredCategory, "'scope'")
+	require.Contains(t, loweredCategory, "'style'")
+	require.Contains(t, loweredCategory, "'process'")
+	require.Contains(t, loweredCategory, "'technical'")
+
+	var severityConstraint string
+	err = db.QueryRow(
+		`SELECT pg_get_constraintdef(oid)
+		 FROM pg_constraint
+		 WHERE conrelid = 'compliance_rules'::regclass
+		   AND contype = 'c'
+		   AND pg_get_constraintdef(oid) ILIKE '%severity%'
+		 ORDER BY oid DESC
+		 LIMIT 1`,
+	).Scan(&severityConstraint)
+	require.NoError(t, err)
+	loweredSeverity := strings.ToLower(severityConstraint)
+	require.Contains(t, loweredSeverity, "'required'")
+	require.Contains(t, loweredSeverity, "'recommended'")
+	require.Contains(t, loweredSeverity, "'informational'")
 }
 
 func TestSchemaProjectChatBackfillCopiesMessagesWithParity(t *testing.T) {

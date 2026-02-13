@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -143,4 +144,32 @@ func TestEllieIngestionStoreRejectsInvalidMemorySensitivity(t *testing.T) {
 		SourceProjectID:      &projectID,
 	})
 	require.ErrorContains(t, err, "invalid sensitivity")
+}
+
+func TestEllieIngestionStoreHasComplianceFingerprint(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-ingestion-fingerprint-org")
+	projectID := createTestProject(t, db, orgID, "Ellie Ingestion Fingerprint Project")
+	store := NewEllieIngestionStore(db)
+
+	metadata := json.RawMessage(`{"source":"compliance_review","compliance_fingerprint":"fingerprint-123"}`)
+	_, err := store.CreateEllieExtractedMemory(context.Background(), CreateEllieExtractedMemoryInput{
+		OrgID:           orgID,
+		Kind:            "lesson",
+		Title:           "Compliance lesson",
+		Content:         "Repeated finding",
+		Metadata:        metadata,
+		SourceProjectID: &projectID,
+	})
+	require.NoError(t, err)
+
+	exists, err := store.HasComplianceFingerprint(context.Background(), orgID, "fingerprint-123")
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	exists, err = store.HasComplianceFingerprint(context.Background(), orgID, "fingerprint-999")
+	require.NoError(t, err)
+	require.False(t, exists)
 }
