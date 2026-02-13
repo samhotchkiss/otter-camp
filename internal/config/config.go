@@ -56,7 +56,7 @@ const (
 	defaultConversationEmbeddingBatchSize    = 50
 	defaultConversationEmbeddingProvider     = "ollama"
 	defaultConversationEmbeddingModel        = "nomic-embed-text"
-	defaultConversationEmbeddingDimension    = 384
+	defaultConversationEmbeddingDimension    = 768
 	defaultConversationEmbeddingOllamaURL    = "http://localhost:11434"
 	defaultConversationEmbeddingOpenAIBase   = "https://api.openai.com"
 
