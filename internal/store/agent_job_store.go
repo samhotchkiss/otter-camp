@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -138,6 +140,15 @@ type CompleteAgentJobRunInput struct {
 	RunError    *string
 	NextRunAt   *time.Time
 	CompleteJob bool
+}
+
+type CreateAgentJobMessageInput struct {
+	JobID       string
+	OrgID       string
+	RoomID      string
+	PayloadKind string
+	PayloadText string
+	CreatedAt   time.Time
 }
 
 type AgentJobStore struct {
@@ -1009,6 +1020,188 @@ func (s *AgentJobStore) CleanupStaleRuns(ctx context.Context, olderThan time.Dur
 	return total, nil
 }
 
+func (s *AgentJobStore) EnsureRoomForJob(ctx context.Context, jobID string) (string, error) {
+	if s == nil || s.db == nil {
+		return "", fmt.Errorf("agent job store is not configured")
+	}
+	jobID = strings.TrimSpace(jobID)
+	if !uuidRegex.MatchString(jobID) {
+		return "", fmt.Errorf("%w: invalid job_id", ErrValidation)
+	}
+
+	tx, err := WithWorkspaceTx(ctx, s.db)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		orgID   string
+		agentID string
+		roomID  sql.NullString
+	)
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT org_id, agent_id, room_id
+		 FROM agent_jobs
+		 WHERE id = $1
+		 FOR UPDATE`,
+		jobID,
+	).Scan(&orgID, &agentID, &roomID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("failed to load agent job room: %w", err)
+	}
+	if roomID.Valid {
+		if err := tx.Commit(); err != nil {
+			return "", fmt.Errorf("failed to commit room lookup: %w", err)
+		}
+		return roomID.String, nil
+	}
+
+	var displayName string
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT display_name FROM agents WHERE id = $1`,
+		agentID,
+	).Scan(&displayName)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("failed to load agent for room creation: %w", err)
+	}
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		displayName = "Agent"
+	}
+
+	roomName := fmt.Sprintf("Scheduled - %s", displayName)
+	var createdRoomID string
+	err = tx.QueryRowContext(
+		ctx,
+		`INSERT INTO rooms (org_id, name, type)
+		 VALUES ($1, $2, 'ad_hoc')
+		 RETURNING id`,
+		orgID,
+		roomName,
+	).Scan(&createdRoomID)
+	if err != nil {
+		return "", fmt.Errorf("failed to create scheduled job room: %w", err)
+	}
+
+	_, err = tx.ExecContext(
+		ctx,
+		`INSERT INTO room_participants (org_id, room_id, participant_id, participant_type)
+		 VALUES ($1, $2, $3, 'agent')
+		 ON CONFLICT (room_id, participant_id) DO NOTHING`,
+		orgID,
+		createdRoomID,
+		agentID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to add scheduled room participant: %w", err)
+	}
+
+	_, err = tx.ExecContext(
+		ctx,
+		`UPDATE agent_jobs
+		 SET room_id = $2,
+		     updated_at = NOW()
+		 WHERE id = $1`,
+		jobID,
+		createdRoomID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to persist scheduled room reference: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("failed to commit scheduled room creation: %w", err)
+	}
+	return createdRoomID, nil
+}
+
+func (s *AgentJobStore) CreateJobMessage(ctx context.Context, input CreateAgentJobMessageInput) (string, error) {
+	if s == nil || s.db == nil {
+		return "", fmt.Errorf("agent job store is not configured")
+	}
+
+	jobID := strings.TrimSpace(input.JobID)
+	orgID := strings.TrimSpace(input.OrgID)
+	roomID := strings.TrimSpace(input.RoomID)
+	payloadText := strings.TrimSpace(input.PayloadText)
+	if !uuidRegex.MatchString(jobID) {
+		return "", fmt.Errorf("%w: invalid job_id", ErrValidation)
+	}
+	if !uuidRegex.MatchString(orgID) {
+		return "", fmt.Errorf("%w: invalid org_id", ErrValidation)
+	}
+	if !uuidRegex.MatchString(roomID) {
+		return "", fmt.Errorf("%w: invalid room_id", ErrValidation)
+	}
+	if payloadText == "" {
+		return "", fmt.Errorf("%w: payload_text is required", ErrValidation)
+	}
+	payloadKind, err := normalizeAgentJobPayloadKind(input.PayloadKind)
+	if err != nil {
+		return "", err
+	}
+
+	senderType := "user"
+	messageType := "message"
+	if payloadKind == AgentJobPayloadSystemEvent {
+		senderType = "system"
+		messageType = "system"
+	}
+	senderID := deterministicAgentJobSenderID(orgID, jobID, payloadKind)
+
+	createdAt := input.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	} else {
+		createdAt = createdAt.UTC()
+	}
+
+	conn, err := WithWorkspace(ctx, s.db)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	var messageID string
+	err = conn.QueryRowContext(
+		ctx,
+		`INSERT INTO chat_messages (
+			org_id,
+			room_id,
+			sender_id,
+			sender_type,
+			body,
+			type,
+			attachments,
+			created_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, '[]'::jsonb, $7
+		)
+		RETURNING id`,
+		orgID,
+		roomID,
+		senderID,
+		senderType,
+		payloadText,
+		messageType,
+		createdAt,
+	).Scan(&messageID)
+	if err != nil {
+		return "", fmt.Errorf("failed to create scheduled job message: %w", err)
+	}
+
+	return messageID, nil
+}
+
 func normalizeCreateAgentJobInput(input CreateAgentJobInput) (CreateAgentJobInput, error) {
 	input.AgentID = strings.TrimSpace(input.AgentID)
 	if !uuidRegex.MatchString(input.AgentID) {
@@ -1378,4 +1571,18 @@ func nullableSQLStringPointer(value sql.NullString) *string {
 
 func isForeignKeyViolation(err error) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(err.Error())), "violates foreign key constraint")
+}
+
+func deterministicAgentJobSenderID(orgID, jobID, payloadKind string) string {
+	seed := strings.TrimSpace(orgID) + ":" + strings.TrimSpace(jobID) + ":" + strings.TrimSpace(payloadKind)
+	sum := md5.Sum([]byte(seed))
+	encoded := hex.EncodeToString(sum[:])
+	return fmt.Sprintf(
+		"%s-%s-%s-%s-%s",
+		encoded[0:8],
+		encoded[8:12],
+		encoded[12:16],
+		encoded[16:20],
+		encoded[20:32],
+	)
 }
