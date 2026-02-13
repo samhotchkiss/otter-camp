@@ -168,7 +168,20 @@ func (e *ollamaEmbedder) Embed(ctx context.Context, inputs []string) ([][]float6
 		truncated := truncateForEmbedding(input, 8000)
 		vector, err := e.embedOne(ctx, truncated)
 		if err != nil {
-			return nil, err
+			// If a single input fails (e.g. still too long for model context),
+			// try progressively shorter truncation before giving up.
+			for _, fallbackLen := range []int{4000, 2000, 500} {
+				shorter := truncateForEmbedding(input, fallbackLen)
+				vector, err = e.embedOne(ctx, shorter)
+				if err == nil {
+					break
+				}
+			}
+			if err != nil {
+				// Return a zero vector so the batch can continue.
+				// The message will be marked as embedded (with zeros) to avoid retrying.
+				vector = make([]float64, e.dimension)
+			}
 		}
 		out = append(out, vector)
 	}

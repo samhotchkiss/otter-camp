@@ -56,23 +56,13 @@ func (s *ConversationTokenStore) BackfillMissingTokenCounts(ctx context.Context,
 
 	result, err := s.db.ExecContext(
 		ctx,
-		`WITH ranked AS (
-			SELECT
-				id,
-				org_id,
-				created_at,
-				ROW_NUMBER() OVER (
-					PARTITION BY org_id
-					ORDER BY created_at ASC, id ASC
-				) AS org_rank
+		`WITH candidates AS (
+			SELECT id
 			  FROM chat_messages
 			 WHERE token_count IS NULL
-			 FOR UPDATE SKIP LOCKED
-		), candidates AS (
-			SELECT id
-			  FROM ranked
-			 ORDER BY org_rank ASC, org_id ASC, created_at ASC, id ASC
+			 ORDER BY created_at ASC, id ASC
 			 LIMIT $1
+			 FOR UPDATE SKIP LOCKED
 		)
 		UPDATE chat_messages cm
 		   SET token_count = otter_estimate_token_count(cm.body)
