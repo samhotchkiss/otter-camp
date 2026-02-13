@@ -44,6 +44,9 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("ELLIE_CONTEXT_INJECTION_THRESHOLD", "")
 	t.Setenv("ELLIE_CONTEXT_INJECTION_COOLDOWN_MESSAGES", "")
 	t.Setenv("ELLIE_CONTEXT_INJECTION_MAX_ITEMS", "")
+	t.Setenv("CONVERSATION_TOKEN_BACKFILL_WORKER_ENABLED", "")
+	t.Setenv("CONVERSATION_TOKEN_BACKFILL_POLL_INTERVAL", "")
+	t.Setenv("CONVERSATION_TOKEN_BACKFILL_BATCH_SIZE", "")
 	t.Setenv("JOB_SCHEDULER_ENABLED", "")
 	t.Setenv("JOB_SCHEDULER_POLL_INTERVAL", "")
 	t.Setenv("JOB_SCHEDULER_MAX_PER_POLL", "")
@@ -144,6 +147,16 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.EllieContextInjection.MaxItems != defaultEllieContextInjectionMaxItems {
 		t.Fatalf("expected default ellie context injection max items %d, got %d", defaultEllieContextInjectionMaxItems, cfg.EllieContextInjection.MaxItems)
+	}
+
+	if !cfg.ConversationTokenBackfill.Enabled {
+		t.Fatalf("expected conversation token backfill worker enabled by default")
+	}
+	if cfg.ConversationTokenBackfill.PollInterval != defaultConversationTokenBackfillPollInterval {
+		t.Fatalf("expected default token backfill interval %v, got %v", defaultConversationTokenBackfillPollInterval, cfg.ConversationTokenBackfill.PollInterval)
+	}
+	if cfg.ConversationTokenBackfill.BatchSize != defaultConversationTokenBackfillBatchSize {
+		t.Fatalf("expected default token backfill batch size %d, got %d", defaultConversationTokenBackfillBatchSize, cfg.ConversationTokenBackfill.BatchSize)
 	}
 
 	if !cfg.JobScheduler.Enabled {
@@ -381,6 +394,27 @@ func TestLoadParsesConversationEmbeddingSettings(t *testing.T) {
 	}
 	if cfg.ConversationEmbedding.Dimension != 1536 {
 		t.Fatalf("expected conversation embedding dimension 1536, got %d", cfg.ConversationEmbedding.Dimension)
+	}
+}
+
+func TestLoadConversationTokenBackfill(t *testing.T) {
+	t.Setenv("CONVERSATION_TOKEN_BACKFILL_WORKER_ENABLED", "true")
+	t.Setenv("CONVERSATION_TOKEN_BACKFILL_POLL_INTERVAL", "11s")
+	t.Setenv("CONVERSATION_TOKEN_BACKFILL_BATCH_SIZE", "321")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if !cfg.ConversationTokenBackfill.Enabled {
+		t.Fatalf("expected conversation token backfill worker enabled")
+	}
+	if cfg.ConversationTokenBackfill.PollInterval != 11*time.Second {
+		t.Fatalf("expected token backfill poll interval 11s, got %v", cfg.ConversationTokenBackfill.PollInterval)
+	}
+	if cfg.ConversationTokenBackfill.BatchSize != 321 {
+		t.Fatalf("expected token backfill batch size 321, got %d", cfg.ConversationTokenBackfill.BatchSize)
 	}
 }
 

@@ -110,6 +110,7 @@ func NewRouter() http.Handler {
 	adminConfigHandler := &AdminConfigHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	labelsHandler := &LabelsHandler{}
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
+	conversationTokenHandler := &ConversationTokenHandler{}
 	// Settings uses standalone handler functions (no struct needed)
 	pipelineRolesHandler := &PipelineRolesHandler{}
 	deployConfigHandler := &DeployConfigHandler{}
@@ -164,6 +165,7 @@ func NewRouter() http.Handler {
 		labelsHandler.Store = store.NewLabelStore(db)
 		labelsHandler.DB = db
 		agentActivityHandler.Store = store.NewAgentActivityEventStore(db)
+		conversationTokenHandler.Store = store.NewConversationTokenStore(db)
 		pipelineRolesHandler.Store = store.NewPipelineRoleStore(db)
 		deployConfigHandler.Store = store.NewDeployConfigStore(db)
 		jobsHandler.Store = store.NewAgentJobStore(db)
@@ -364,6 +366,10 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Put("/settings/integrations", HandleSettingsIntegrationsPut)
 		r.With(middleware.OptionalWorkspace).Post("/settings/integrations/api-keys", HandleSettingsAPIKeyCreate)
 		r.With(middleware.OptionalWorkspace).Delete("/settings/integrations/api-keys/{id}", HandleSettingsAPIKeyDelete)
+
+		r.With(middleware.RequireWorkspace).Get("/v1/rooms/{id}", conversationTokenHandler.GetRoom)
+		r.With(middleware.RequireWorkspace).Get("/v1/rooms/{id}/stats", conversationTokenHandler.GetRoomStats)
+		r.With(middleware.RequireWorkspace).Get("/v1/conversations/{id}", conversationTokenHandler.GetConversation)
 
 		r.With(middleware.OptionalWorkspace).Get("/github/integration/status", githubIntegrationHandler.IntegrationStatus)
 		r.With(RequireCapability(db, CapabilityGitHubIntegrationAdmin)).Get("/github/integration/repos", githubIntegrationHandler.ListRepos)

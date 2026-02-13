@@ -77,6 +77,10 @@ const (
 	defaultEllieContextInjectionCooldownMessages = 4
 	defaultEllieContextInjectionMaxItems         = 3
 
+	defaultConversationTokenBackfillEnabled      = true
+	defaultConversationTokenBackfillPollInterval = 5 * time.Second
+	defaultConversationTokenBackfillBatchSize    = 200
+
 	defaultJobSchedulerEnabled       = true
 	defaultJobSchedulerPollInterval  = 5 * time.Second
 	defaultJobSchedulerMaxPerPoll    = 50
@@ -104,6 +108,7 @@ type Config struct {
 	ConversationSegmentation ConversationSegmentationConfig
 	EllieIngestion           EllieIngestionConfig
 	EllieContextInjection    EllieContextInjectionConfig
+	ConversationTokenBackfill ConversationTokenBackfillConfig
 	JobScheduler             JobSchedulerConfig
 }
 
@@ -140,6 +145,12 @@ type EllieContextInjectionConfig struct {
 	Threshold        float64
 	CooldownMessages int
 	MaxItems         int
+}
+
+type ConversationTokenBackfillConfig struct {
+	Enabled      bool
+	PollInterval time.Duration
+	BatchSize    int
 }
 
 type JobSchedulerConfig struct {
@@ -191,6 +202,7 @@ func Load() (Config, error) {
 		ConversationSegmentation: ConversationSegmentationConfig{},
 		EllieIngestion:           EllieIngestionConfig{},
 		EllieContextInjection:    EllieContextInjectionConfig{},
+		ConversationTokenBackfill: ConversationTokenBackfillConfig{},
 		JobScheduler:             JobSchedulerConfig{},
 	}
 
@@ -314,6 +326,24 @@ func Load() (Config, error) {
 	}
 	cfg.EllieContextInjection.MaxItems = ellieContextInjectionMaxItems
 
+	conversationTokenBackfillEnabled, err := parseBool("CONVERSATION_TOKEN_BACKFILL_WORKER_ENABLED", defaultConversationTokenBackfillEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationTokenBackfill.Enabled = conversationTokenBackfillEnabled
+
+	conversationTokenBackfillPollInterval, err := parseDuration("CONVERSATION_TOKEN_BACKFILL_POLL_INTERVAL", defaultConversationTokenBackfillPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationTokenBackfill.PollInterval = conversationTokenBackfillPollInterval
+
+	conversationTokenBackfillBatchSize, err := parseInt("CONVERSATION_TOKEN_BACKFILL_BATCH_SIZE", defaultConversationTokenBackfillBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationTokenBackfill.BatchSize = conversationTokenBackfillBatchSize
+
 	jobSchedulerEnabled, err := parseBool("JOB_SCHEDULER_ENABLED", defaultJobSchedulerEnabled)
 	if err != nil {
 		return Config{}, err
@@ -411,6 +441,15 @@ func (c Config) Validate() error {
 		}
 		if c.EllieContextInjection.MaxItems <= 0 {
 			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_MAX_ITEMS must be greater than zero")
+		}
+	}
+
+	if c.ConversationTokenBackfill.Enabled {
+		if c.ConversationTokenBackfill.PollInterval <= 0 {
+			return fmt.Errorf("CONVERSATION_TOKEN_BACKFILL_POLL_INTERVAL must be greater than zero")
+		}
+		if c.ConversationTokenBackfill.BatchSize <= 0 {
+			return fmt.Errorf("CONVERSATION_TOKEN_BACKFILL_BATCH_SIZE must be greater than zero")
 		}
 	}
 

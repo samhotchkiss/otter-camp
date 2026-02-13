@@ -333,6 +333,27 @@ func TestMainStartsEllieContextInjectionWorkerWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestMainStartsConversationTokenBackfillWorkerWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	for _, snippet := range []string{
+		"cfg.ConversationTokenBackfill.Enabled",
+		"memory.NewConversationTokenBackfillWorker",
+		"Conversation token backfill worker started",
+		"store.NewConversationTokenStore",
+	} {
+		if !strings.Contains(mainContent, snippet) {
+			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
+		}
+	}
+}
+
 func TestMainConstructsSingleSharedEmbedderForEmbeddingWorkers(t *testing.T) {
 	t.Parallel()
 

@@ -96,6 +96,27 @@ func main() {
 		}
 	}
 
+	if cfg.ConversationTokenBackfill.Enabled {
+		db, err := store.DB()
+		if err != nil {
+			log.Printf("⚠️  Conversation token backfill worker disabled; database unavailable: %v", err)
+		} else {
+			worker := memory.NewConversationTokenBackfillWorker(
+				store.NewConversationTokenStore(db),
+				memory.ConversationTokenBackfillWorkerConfig{
+					BatchSize:    cfg.ConversationTokenBackfill.BatchSize,
+					PollInterval: cfg.ConversationTokenBackfill.PollInterval,
+				},
+			)
+			startWorker(worker.Start)
+			log.Printf(
+				"✅ Conversation token backfill worker started (interval=%s batch=%d)",
+				cfg.ConversationTokenBackfill.PollInterval,
+				cfg.ConversationTokenBackfill.BatchSize,
+			)
+		}
+	}
+
 	var (
 		conversationEmbedder     memory.Embedder
 		conversationEmbedderErr  error

@@ -390,6 +390,26 @@ func TestWorkflowRoutesUseOptionalWorkspaceMiddleware(t *testing.T) {
 	}
 }
 
+func TestConversationTokenRoutesUseRequireWorkspaceMiddleware(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile(filepath.Join("router.go"))
+	if err != nil {
+		t.Fatalf("failed to read router.go: %v", err)
+	}
+	source := string(content)
+	requiredLines := []string{
+		`r.With(middleware.RequireWorkspace).Get("/v1/rooms/{id}", conversationTokenHandler.GetRoom)`,
+		`r.With(middleware.RequireWorkspace).Get("/v1/rooms/{id}/stats", conversationTokenHandler.GetRoomStats)`,
+		`r.With(middleware.RequireWorkspace).Get("/v1/conversations/{id}", conversationTokenHandler.GetConversation)`,
+	}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected conversation token route to include RequireWorkspace middleware: %s", line)
+		}
+	}
+}
+
 func TestAdminMutationRoutesRequireCapability(t *testing.T) {
 	t.Parallel()
 
