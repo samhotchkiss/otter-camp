@@ -626,6 +626,35 @@ func TestMigration072ComplianceRulesFilesExistAndContainCoreDDL(t *testing.T) {
 	require.Contains(t, downContent, "drop table if exists compliance_rules")
 }
 
+func TestMigration073MigrationProgressFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"073_create_migration_progress.down.sql",
+		"073_create_migration_progress.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "073_create_migration_progress.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists migration_progress")
+	require.Contains(t, upContent, "migration_type text not null")
+	require.Contains(t, upContent, "status text not null default 'pending'")
+	require.Contains(t, upContent, "processed_items int not null default 0")
+	require.Contains(t, upContent, "create unique index if not exists migration_progress_org_type_uidx")
+	require.Contains(t, upContent, "create policy migration_progress_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "073_create_migration_progress.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop policy if exists migration_progress_org_isolation")
+	require.Contains(t, downContent, "drop index if exists migration_progress_org_type_uidx")
+	require.Contains(t, downContent, "drop table if exists migration_progress")
+}
+
 func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
