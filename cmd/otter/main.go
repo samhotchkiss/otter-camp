@@ -67,6 +67,8 @@ func main() {
 		handleMemory(os.Args[2:])
 	case "knowledge":
 		handleKnowledge(os.Args[2:])
+	case "migrate":
+		handleMigrate(os.Args[2:])
 	case "clone":
 		handleClone(os.Args[2:])
 	case "remote":
@@ -107,6 +109,7 @@ Commands:
   agent            Manage agents
   memory           Manage agent memory
   knowledge        Manage shared knowledge
+  migrate          Run OpenClaw migration commands
   clone            Clone a project repo
   remote add       Add origin remote for project
   repo info        Show repo URL for project

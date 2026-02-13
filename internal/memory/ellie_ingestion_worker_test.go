@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,21 +15,31 @@ import (
 type fakeEllieIngestionStore struct {
 	mu sync.Mutex
 
-	rooms    []store.EllieRoomIngestionCandidate
-	messages map[string][]store.EllieIngestionMessage
-	cursors  map[string]store.EllieRoomCursor
-	created  []store.CreateEllieExtractedMemoryInput
+	rooms     []store.EllieRoomIngestionCandidate
+	messages  map[string][]store.EllieIngestionMessage
+	cursors   map[string]store.EllieRoomCursor
+	created   []store.CreateEllieExtractedMemoryInput
+	listCalls []fakeEllieRoomMessagesCall
 
 	listRoomsCalls int
 	upsertErr      error
 }
 
+type fakeEllieRoomMessagesCall struct {
+	OrgID          string
+	RoomID         string
+	AfterCreatedAt *time.Time
+	AfterMessageID *string
+	Limit          int
+}
+
 func newFakeEllieIngestionStore() *fakeEllieIngestionStore {
 	return &fakeEllieIngestionStore{
-		rooms:    make([]store.EllieRoomIngestionCandidate, 0),
-		messages: make(map[string][]store.EllieIngestionMessage),
-		cursors:  make(map[string]store.EllieRoomCursor),
-		created:  make([]store.CreateEllieExtractedMemoryInput, 0),
+		rooms:     make([]store.EllieRoomIngestionCandidate, 0),
+		messages:  make(map[string][]store.EllieIngestionMessage),
+		cursors:   make(map[string]store.EllieRoomCursor),
+		created:   make([]store.CreateEllieExtractedMemoryInput, 0),
+		listCalls: make([]fakeEllieRoomMessagesCall, 0),
 	}
 }
 
@@ -56,9 +67,24 @@ func (f *fakeEllieIngestionStore) GetRoomCursor(_ context.Context, orgID, roomID
 	return &copy, nil
 }
 
-func (f *fakeEllieIngestionStore) ListRoomMessagesSince(_ context.Context, orgID, roomID string, _ *time.Time, _ *string, _ int) ([]store.EllieIngestionMessage, error) {
+func (f *fakeEllieIngestionStore) ListRoomMessagesSince(_ context.Context, orgID, roomID string, afterCreatedAt *time.Time, afterMessageID *string, limit int) ([]store.EllieIngestionMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	call := fakeEllieRoomMessagesCall{
+		OrgID:  orgID,
+		RoomID: roomID,
+		Limit:  limit,
+	}
+	if afterCreatedAt != nil {
+		copyCreatedAt := afterCreatedAt.UTC()
+		call.AfterCreatedAt = &copyCreatedAt
+	}
+	if afterMessageID != nil {
+		copyMessageID := strings.TrimSpace(*afterMessageID)
+		call.AfterMessageID = &copyMessageID
+	}
+	f.listCalls = append(f.listCalls, call)
+
 	rows := f.messages[roomCursorKey(orgID, roomID)]
 	out := make([]store.EllieIngestionMessage, len(rows))
 	copy(out, rows)
@@ -220,6 +246,89 @@ func TestEllieIngestionWorkerAvoidsFalsePositiveDecisionAndFactClassification(t 
 			require.NotEqual(t, tc.notExpected, candidate.Kind)
 		})
 	}
+}
+
+func TestEllieIngestionWorkerBackfillModeStartsFromEpoch(t *testing.T) {
+	fakeStore := newFakeEllieIngestionStore()
+	first := time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC)
+	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
+	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
+		{
+			ID:        "msg-1",
+			OrgID:     "org-1",
+			RoomID:    "room-1",
+			Body:      "Context note",
+			CreatedAt: first,
+		},
+	}
+
+	worker := NewEllieIngestionWorker(fakeStore, EllieIngestionWorkerConfig{
+		BatchSize:          50,
+		Interval:           time.Second,
+		MaxPerRoom:         20,
+		BackfillMaxPerRoom: 80,
+		Mode:               EllieIngestionModeBackfill,
+	})
+	worker.Logf = nil
+
+	processed, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	require.Len(t, fakeStore.listCalls, 1)
+	require.Equal(t, 80, fakeStore.listCalls[0].Limit)
+	require.NotNil(t, fakeStore.listCalls[0].AfterCreatedAt)
+	require.Equal(t, time.Unix(0, 0).UTC(), fakeStore.listCalls[0].AfterCreatedAt.UTC())
+	require.Nil(t, fakeStore.listCalls[0].AfterMessageID)
+}
+
+func TestEllieIngestionWorkerBackfillModeResumesNormalCursoring(t *testing.T) {
+	fakeStore := newFakeEllieIngestionStore()
+	first := time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC)
+	second := first.Add(1 * time.Minute)
+	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
+	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
+		{
+			ID:        "msg-1",
+			OrgID:     "org-1",
+			RoomID:    "room-1",
+			Body:      "Context note",
+			CreatedAt: first,
+		},
+	}
+
+	worker := NewEllieIngestionWorker(fakeStore, EllieIngestionWorkerConfig{
+		BatchSize:          50,
+		Interval:           time.Second,
+		MaxPerRoom:         30,
+		BackfillMaxPerRoom: 90,
+		Mode:               EllieIngestionModeBackfill,
+	})
+	worker.Logf = nil
+
+	_, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+
+	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
+		{
+			ID:        "msg-2",
+			OrgID:     "org-1",
+			RoomID:    "room-1",
+			Body:      "Preference: keep SQL explicit",
+			CreatedAt: second,
+		},
+	}
+	worker.SetMode(EllieIngestionModeNormal)
+	processed, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+
+	require.Len(t, fakeStore.listCalls, 2)
+	require.Equal(t, 90, fakeStore.listCalls[0].Limit)
+	require.Equal(t, 30, fakeStore.listCalls[1].Limit)
+	require.NotNil(t, fakeStore.listCalls[1].AfterCreatedAt)
+	require.Equal(t, first, fakeStore.listCalls[1].AfterCreatedAt.UTC())
+	require.NotNil(t, fakeStore.listCalls[1].AfterMessageID)
+	require.Equal(t, "msg-1", strings.TrimSpace(*fakeStore.listCalls[1].AfterMessageID))
 }
 
 func TestEllieIngestionWorkerStartSleepsAfterProcessedError(t *testing.T) {

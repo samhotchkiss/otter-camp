@@ -5,12 +5,15 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 const openClawProjectMinConfidence = 2
 
 var (
 	inlineProjectHintPattern = regexp.MustCompile(`(?i)\b(?:project|repo)[:=]\s*([a-z0-9][a-z0-9._-]{1,63})`)
+	inlineIssueHintPattern   = regexp.MustCompile(`(?i)\b(?:issue|task|todo)[:=]\s*([^\n.;]+)`)
+	completionSignalPattern  = regexp.MustCompile(`(?i)\b(?:shipped|completed|done|resolved|closed)\b`)
 	genericProjectKeys       = map[string]struct{}{
 		"agent":      {},
 		"agents":     {},
@@ -45,6 +48,7 @@ type OpenClawSessionSignal struct {
 	RepoPath    string
 	ProjectHint string
 	IssueHints  []string
+	OccurredAt  time.Time
 }
 
 type OpenClawMemorySignal struct {
@@ -52,20 +56,24 @@ type OpenClawMemorySignal struct {
 	Text        string
 	ProjectHint string
 	IssueHints  []string
+	OccurredAt  time.Time
 }
 
 type OpenClawProjectCandidate struct {
-	Key        string
-	Name       string
-	RepoPath   string
-	Confidence int
-	Signals    []string
-	Issues     []OpenClawIssueCandidate
+	Key             string
+	Name            string
+	RepoPath        string
+	Status          string
+	LastDiscussedAt *time.Time
+	Confidence      int
+	Signals         []string
+	Issues          []OpenClawIssueCandidate
 }
 
 type OpenClawIssueCandidate struct {
-	Title  string
-	Source string
+	Title      string
+	Source     string
+	OccurredAt time.Time
 }
 
 type openClawProjectSignal struct {
@@ -75,21 +83,32 @@ type openClawProjectSignal struct {
 	Weight     int
 	Source     string
 	IssueHints []string
+	OccurredAt time.Time
+	Completed  bool
 }
 
 type openClawProjectAccumulator struct {
-	Key         string
-	Name        string
-	RepoPath    string
-	Confidence  int
-	Signals     map[string]struct{}
-	IssueByNorm map[string]OpenClawIssueCandidate
+	Key             string
+	Name            string
+	RepoPath        string
+	Confidence      int
+	HasCompletion   bool
+	LastDiscussedAt *time.Time
+	Signals         map[string]struct{}
+	IssueByNorm     map[string]OpenClawIssueCandidate
 }
 
 func InferOpenClawProjectCandidates(input OpenClawProjectImportInput) []OpenClawProjectCandidate {
+	return InferOpenClawProjectCandidatesAt(input, time.Now().UTC())
+}
+
+func InferOpenClawProjectCandidatesAt(input OpenClawProjectImportInput, now time.Time) []OpenClawProjectCandidate {
 	signals := ExtractOpenClawProjectSignals(input)
 	if len(signals) == 0 {
 		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
 	}
 
 	accumulators := map[string]*openClawProjectAccumulator{}
@@ -119,6 +138,15 @@ func InferOpenClawProjectCandidates(input OpenClawProjectImportInput) []OpenClaw
 		if signal.Source != "" {
 			acc.Signals[signal.Source] = struct{}{}
 		}
+		if signal.Completed {
+			acc.HasCompletion = true
+		}
+		if !signal.OccurredAt.IsZero() {
+			occurredAt := signal.OccurredAt.UTC()
+			if acc.LastDiscussedAt == nil || occurredAt.After(acc.LastDiscussedAt.UTC()) {
+				acc.LastDiscussedAt = &occurredAt
+			}
+		}
 
 		for _, hint := range signal.IssueHints {
 			title := normalizeIssueHint(hint)
@@ -130,8 +158,9 @@ func InferOpenClawProjectCandidates(input OpenClawProjectImportInput) []OpenClaw
 				continue
 			}
 			acc.IssueByNorm[norm] = OpenClawIssueCandidate{
-				Title:  title,
-				Source: signal.Source,
+				Title:      title,
+				Source:     signal.Source,
+				OccurredAt: signal.OccurredAt.UTC(),
 			}
 		}
 	}
@@ -157,12 +186,14 @@ func InferOpenClawProjectCandidates(input OpenClawProjectImportInput) []OpenClaw
 		})
 
 		candidates = append(candidates, OpenClawProjectCandidate{
-			Key:        acc.Key,
-			Name:       acc.Name,
-			RepoPath:   acc.RepoPath,
-			Confidence: acc.Confidence,
-			Signals:    signals,
-			Issues:     issues,
+			Key:             acc.Key,
+			Name:            acc.Name,
+			RepoPath:        acc.RepoPath,
+			Status:          inferOpenClawProjectStatus(acc.LastDiscussedAt, acc.HasCompletion, now),
+			LastDiscussedAt: cloneOpenClawTimestamp(acc.LastDiscussedAt),
+			Confidence:      acc.Confidence,
+			Signals:         signals,
+			Issues:          issues,
 		})
 	}
 
@@ -191,6 +222,7 @@ func ExtractOpenClawProjectSignals(input OpenClawProjectImportInput) []openClawP
 			Weight:     3,
 			Source:     firstNonEmpty("workspace:"+workspace.AgentID, "workspace"),
 			IssueHints: workspace.IssueHints,
+			Completed:  hasOpenClawCompletionSignal(strings.Join(workspace.IssueHints, " ")),
 		})
 	}
 
@@ -211,6 +243,8 @@ func ExtractOpenClawProjectSignals(input OpenClawProjectImportInput) []openClawP
 			Weight:     2,
 			Source:     firstNonEmpty("session:"+session.AgentID, "session"),
 			IssueHints: session.IssueHints,
+			OccurredAt: session.OccurredAt.UTC(),
+			Completed:  hasOpenClawCompletionSignal(session.Summary + " " + strings.Join(session.IssueHints, " ")),
 		})
 	}
 
@@ -226,6 +260,8 @@ func ExtractOpenClawProjectSignals(input OpenClawProjectImportInput) []openClawP
 			Weight:     1,
 			Source:     firstNonEmpty("memory:"+memory.AgentID, "memory"),
 			IssueHints: memory.IssueHints,
+			OccurredAt: memory.OccurredAt.UTC(),
+			Completed:  hasOpenClawCompletionSignal(memory.Text + " " + strings.Join(memory.IssueHints, " ")),
 		})
 	}
 
@@ -306,4 +342,54 @@ func normalizeIssueHint(value string) string {
 		return ""
 	}
 	return strings.Join(words, " ")
+}
+
+func extractInlineIssueHints(value string) []string {
+	matches := inlineIssueHintPattern.FindAllStringSubmatch(strings.TrimSpace(value), -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		normalized := normalizeIssueHint(match[1])
+		if normalized == "" {
+			continue
+		}
+		normKey := strings.ToLower(normalized)
+		if _, exists := seen[normKey]; exists {
+			continue
+		}
+		seen[normKey] = struct{}{}
+		out = append(out, normalized)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func inferOpenClawProjectStatus(lastDiscussedAt *time.Time, hasCompletion bool, now time.Time) string {
+	if hasCompletion {
+		return "completed"
+	}
+	if lastDiscussedAt != nil && !lastDiscussedAt.IsZero() {
+		if lastDiscussedAt.UTC().Before(now.UTC().AddDate(0, 0, -60)) {
+			return "archived"
+		}
+	}
+	return "active"
+}
+
+func hasOpenClawCompletionSignal(value string) bool {
+	return completionSignalPattern.MatchString(strings.TrimSpace(value))
+}
+
+func cloneOpenClawTimestamp(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	clone := value.UTC()
+	return &clone
 }

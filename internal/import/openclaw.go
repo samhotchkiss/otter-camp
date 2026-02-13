@@ -420,6 +420,10 @@ func ImportOpenClawAgentIdentities(install *OpenClawInstallation) ([]ImportedAge
 	if install == nil {
 		return nil, errors.New("installation is required")
 	}
+	guard, err := NewOpenClawSourceGuard(install.RootDir)
+	if err != nil {
+		return nil, err
+	}
 
 	identities := make([]ImportedAgentIdentity, 0, len(install.Agents))
 	for _, agent := range install.Agents {
@@ -431,7 +435,7 @@ func ImportOpenClawAgentIdentities(install *OpenClawInstallation) ([]ImportedAge
 		}
 
 		for _, fileName := range identityFileNames {
-			content, sourcePath, found, err := readIdentityFile(agent.WorkspaceDir, fileName)
+			content, sourcePath, found, err := readIdentityFileGuarded(agent.WorkspaceDir, fileName, guard)
 			if err != nil {
 				return nil, err
 			}
@@ -692,10 +696,23 @@ func detectWorkspaceRoot(rootDir string) string {
 }
 
 func readIdentityFile(workspaceDir, fileName string) (string, string, bool, error) {
+	return readIdentityFileGuarded(workspaceDir, fileName, nil)
+}
+
+func readIdentityFileGuarded(workspaceDir, fileName string, guard *OpenClawSourceGuard) (string, string, bool, error) {
 	base := filepath.Clean(workspaceDir)
 	target := filepath.Clean(filepath.Join(base, fileName))
 	if !isWithinDir(base, target) {
 		return "", "", false, nil
+	}
+	return readIdentityFileWithGuard(base, target, guard)
+}
+
+func readIdentityFileWithGuard(_ string, target string, guard *OpenClawSourceGuard) (string, string, bool, error) {
+	if guard != nil {
+		if err := guard.ValidateReadPath(target); err != nil {
+			return "", "", false, err
+		}
 	}
 
 	info, err := os.Lstat(target)
