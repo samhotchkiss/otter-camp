@@ -129,11 +129,12 @@ func BackfillOpenClawHistory(
 	for _, event := range events {
 		agent, ok := agentsBySlug[event.AgentSlug]
 		if !ok {
-			return OpenClawHistoryBackfillResult{}, fmt.Errorf("no imported agent found for slug %q", event.AgentSlug)
+			// Skip events for agents that weren't imported (e.g. codex)
+			continue
 		}
 		roomID, ok := roomByAgentSlug[event.AgentSlug]
 		if !ok || strings.TrimSpace(roomID) == "" {
-			return OpenClawHistoryBackfillResult{}, fmt.Errorf("no room found for agent slug %q", event.AgentSlug)
+			continue
 		}
 
 		senderID, senderType, messageType := mapOpenClawEventToMessageFields(event, userID, agent.ID)
@@ -247,7 +248,9 @@ func loadOpenClawBackfillAgents(
 		missing = append(missing, slug)
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("missing imported agent(s) for slug(s): %s", strings.Join(missing, ", "))
+		// Warn but don't fail — agents like codex may have session files
+		// but aren't real agents in the OpenClaw config.
+		fmt.Printf("⚠️  Skipping history for agents not in DB: %s\n", strings.Join(missing, ", "))
 	}
 
 	return agentsBySlug, nil

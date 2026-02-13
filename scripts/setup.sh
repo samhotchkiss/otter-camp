@@ -1091,6 +1091,21 @@ run_bootstrap_steps() {
   log_success "Otter CLI configured."
 
   pull_ollama_model
+
+  # Auto-migrate from OpenClaw if detected
+  if command -v openclaw >/dev/null 2>&1 && [[ -d "$HOME/.openclaw" ]]; then
+    echo
+    echo "Migrating data from OpenClaw..."
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      echo "↪ ./bin/otter migrate from-openclaw --dry-run"
+    else
+      if ./bin/otter migrate from-openclaw 2>&1; then
+        log_success "OpenClaw migration complete."
+      else
+        log_warn "OpenClaw migration had errors (non-fatal). Run 'otter migrate from-openclaw' manually to retry."
+      fi
+    fi
+  fi
 }
 
 parse_args() {

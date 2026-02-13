@@ -101,23 +101,33 @@ func (g *OpenClawSourceGuard) CaptureSnapshot() (*OpenClawSourceSnapshot, error)
 			return nil
 		}
 		if d.IsDir() {
+			name := d.Name()
+			// Skip runtime directories that change while OpenClaw is running
+			if name == "logs" || name == "devices" || name == "identity" || name == "sessions" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !d.Type().IsRegular() {
 			return nil
 		}
-		if err := g.ValidateReadPath(path); err != nil {
-			return err
+		// Skip runtime files that change naturally during operation
+		relPath, relErr := filepath.Rel(g.rootDir, path)
+		if relErr != nil {
+			return relErr
 		}
-		relPath, err := filepath.Rel(g.rootDir, path)
-		if err != nil {
+		relSlash := filepath.ToSlash(relPath)
+		if isRuntimePath(relSlash) {
+			return nil
+		}
+		if err := g.ValidateReadPath(path); err != nil {
 			return err
 		}
 		hash, err := hashOpenClawFile(path)
 		if err != nil {
 			return err
 		}
-		hashes[filepath.ToSlash(relPath)] = hash
+		hashes[relSlash] = hash
 		return nil
 	})
 	if err != nil {
@@ -181,6 +191,37 @@ func hashOpenClawFile(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// isRuntimePath returns true for files that change naturally while OpenClaw
+// is running and should be excluded from source guard snapshots.
+func isRuntimePath(relSlash string) bool {
+	// Log files
+	if strings.HasPrefix(relSlash, "logs/") {
+		return true
+	}
+	// Device state (paired.json, etc.)
+	if strings.HasPrefix(relSlash, "devices/") {
+		return true
+	}
+	// Auth/identity runtime state
+	if strings.HasPrefix(relSlash, "identity/") {
+		return true
+	}
+	// Active session JSONL files and session indexes
+	if strings.Contains(relSlash, "/sessions/") {
+		return true
+	}
+	// Top-level runtime files
+	base := relSlash
+	if idx := strings.LastIndex(relSlash, "/"); idx >= 0 {
+		base = relSlash[idx+1:]
+	}
+	switch base {
+	case "gateway.log", "sessions.json", "paired.json", "device-auth.json":
+		return true
+	}
+	return false
 }
 
 func resolveOpenClawGuardPath(path string) (string, error) {

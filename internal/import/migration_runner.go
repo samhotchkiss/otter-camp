@@ -85,40 +85,92 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 
 	result := RunOpenClawMigrationResult{}
 
+	fmt.Printf("\n🦦 OpenClaw → Otter Camp Migration\n")
+	fmt.Printf("   Source: %s\n", input.Installation.RootDir)
+	fmt.Printf("   Agents: %d\n", len(input.Installation.Agents))
+	fmt.Printf("   Events: %d\n\n", len(input.ParsedEvents))
+
 	if !input.HistoryOnly {
+		fmt.Printf("📦 Phase 1: Agent Import\n")
 		agentResult, err := r.runAgentImportPhase(ctx, input)
 		if err != nil {
 			return RunOpenClawMigrationResult{}, err
 		}
 		result.AgentImport = agentResult
+		if agentResult != nil {
+			fmt.Printf("   ✅ %d agents imported (%d active, %d inactive)\n\n", agentResult.ImportedAgents, agentResult.ActiveAgents, agentResult.InactiveAgents)
+		} else {
+			fmt.Printf("   ⏭️  Already completed\n\n")
+		}
 	}
 
 	if !input.AgentsOnly {
+		fmt.Printf("💬 Phase 2: History Backfill (%d events)\n", len(input.ParsedEvents))
 		historyResult, paused, err := r.runHistoryBackfillPhase(ctx, input)
 		if err != nil {
 			return RunOpenClawMigrationResult{}, err
 		}
 		result.HistoryBackfill = historyResult
 		result.Paused = paused
+		if historyResult != nil {
+			fmt.Printf("   ✅ %d messages inserted, %d rooms created\n\n", historyResult.MessagesInserted, historyResult.RoomsCreated)
+		} else if paused {
+			fmt.Printf("   ⏸️  Paused\n\n")
+		} else {
+			fmt.Printf("   ⏭️  Already completed\n\n")
+		}
 	}
 	if !input.AgentsOnly && !input.HistoryOnly && !result.Paused {
+		fmt.Printf("🧠 Phase 3: Memory Extraction\n")
 		ellieResult, err := r.runEllieBackfillPhase(ctx, input)
 		if err != nil {
 			return RunOpenClawMigrationResult{}, err
 		}
 		result.EllieBackfill = ellieResult
+		if ellieResult != nil {
+			fmt.Printf("   ✅ %d messages processed, %d memories extracted\n\n", ellieResult.ProcessedMessages, ellieResult.ExtractedMemories)
+		} else {
+			fmt.Printf("   ⏭️  Already completed\n\n")
+		}
 
+		fmt.Printf("🔍 Phase 4: Project Discovery\n")
 		discoveryResult, discoveryErr := r.runProjectDiscoveryPhase(ctx, input)
 		if discoveryErr != nil {
 			return RunOpenClawMigrationResult{}, discoveryErr
 		}
 		result.ProjectDiscovery = discoveryResult
+		if discoveryResult != nil {
+			fmt.Printf("   ✅ %d projects created, %d issues created\n\n", discoveryResult.ProjectsCreated, discoveryResult.IssuesCreated)
+		} else {
+			fmt.Printf("   ⏭️  Already completed\n\n")
+		}
 	}
 
 	result.Summary = BuildOpenClawMigrationSummaryReport(result)
+
+	fmt.Printf("🔒 Verifying source integrity...\n")
 	if err := sourceGuard.VerifyUnchanged(sourceSnapshot); err != nil {
-		return RunOpenClawMigrationResult{}, err
+		// Runtime file changes are expected when OpenClaw is running.
+		// Warn but don't fail — the data is already committed.
+		fmt.Printf("   ⚠️  %s\n", err.Error())
+		fmt.Printf("   (Expected when OpenClaw is running during migration)\n\n")
+		result.Summary.Warnings = append(result.Summary.Warnings, "source files changed during migration (expected if OpenClaw was running)")
+	} else {
+		fmt.Printf("   ✅ Source unchanged\n\n")
 	}
+
+	fmt.Printf("✨ Migration complete!\n")
+	fmt.Printf("   Agents imported:  %d\n", result.Summary.AgentImportProcessed)
+	fmt.Printf("   Messages created: %d\n", result.Summary.HistoryMessagesInserted)
+	fmt.Printf("   Events processed: %d\n", result.Summary.HistoryEventsProcessed)
+	fmt.Printf("   Projects found:   %d\n", result.Summary.ProjectDiscoveryProcessed)
+	if len(result.Summary.Warnings) > 0 {
+		fmt.Printf("   Warnings:         %d\n", len(result.Summary.Warnings))
+		for _, w := range result.Summary.Warnings {
+			fmt.Printf("     ⚠️  %s\n", w)
+		}
+	}
+	fmt.Println()
 
 	return result, nil
 }
