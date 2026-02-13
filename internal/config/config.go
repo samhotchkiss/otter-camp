@@ -80,6 +80,12 @@ const (
 	defaultConversationTokenBackfillEnabled      = true
 	defaultConversationTokenBackfillPollInterval = 5 * time.Second
 	defaultConversationTokenBackfillBatchSize    = 200
+
+	defaultJobSchedulerEnabled       = true
+	defaultJobSchedulerPollInterval  = 5 * time.Second
+	defaultJobSchedulerMaxPerPoll    = 50
+	defaultJobSchedulerRunTimeout    = 5 * time.Minute
+	defaultJobSchedulerMaxRunHistory = 100
 )
 
 type GitHubConfig struct {
@@ -94,15 +100,16 @@ type GitHubConfig struct {
 }
 
 type Config struct {
-	Port                      string
-	DatabaseURL               string
-	Environment               string
-	GitHub                    GitHubConfig
-	ConversationEmbedding     ConversationEmbeddingConfig
-	ConversationSegmentation  ConversationSegmentationConfig
-	EllieIngestion            EllieIngestionConfig
-	EllieContextInjection     EllieContextInjectionConfig
+	Port                     string
+	DatabaseURL              string
+	Environment              string
+	GitHub                   GitHubConfig
+	ConversationEmbedding    ConversationEmbeddingConfig
+	ConversationSegmentation ConversationSegmentationConfig
+	EllieIngestion           EllieIngestionConfig
+	EllieContextInjection    EllieContextInjectionConfig
 	ConversationTokenBackfill ConversationTokenBackfillConfig
+	JobScheduler             JobSchedulerConfig
 }
 
 type ConversationEmbeddingConfig struct {
@@ -146,6 +153,14 @@ type ConversationTokenBackfillConfig struct {
 	BatchSize    int
 }
 
+type JobSchedulerConfig struct {
+	Enabled       bool
+	PollInterval  time.Duration
+	MaxPerPoll    int
+	RunTimeout    time.Duration
+	MaxRunHistory int
+}
+
 func Load() (Config, error) {
 	cfg := Config{
 		Port:        firstNonEmpty(strings.TrimSpace(os.Getenv("PORT")), defaultPort),
@@ -184,10 +199,11 @@ func Load() (Config, error) {
 			),
 			OpenAIAPIKey: strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY")),
 		},
-		ConversationSegmentation:  ConversationSegmentationConfig{},
-		EllieIngestion:            EllieIngestionConfig{},
-		EllieContextInjection:     EllieContextInjectionConfig{},
+		ConversationSegmentation: ConversationSegmentationConfig{},
+		EllieIngestion:           EllieIngestionConfig{},
+		EllieContextInjection:    EllieContextInjectionConfig{},
 		ConversationTokenBackfill: ConversationTokenBackfillConfig{},
+		JobScheduler:             JobSchedulerConfig{},
 	}
 
 	githubEnabled, err := parseBool("GITHUB_INTEGRATION_ENABLED", false)
@@ -328,6 +344,36 @@ func Load() (Config, error) {
 	}
 	cfg.ConversationTokenBackfill.BatchSize = conversationTokenBackfillBatchSize
 
+	jobSchedulerEnabled, err := parseBool("JOB_SCHEDULER_ENABLED", defaultJobSchedulerEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.Enabled = jobSchedulerEnabled
+
+	jobSchedulerPollInterval, err := parseDuration("JOB_SCHEDULER_POLL_INTERVAL", defaultJobSchedulerPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.PollInterval = jobSchedulerPollInterval
+
+	jobSchedulerMaxPerPoll, err := parseInt("JOB_SCHEDULER_MAX_PER_POLL", defaultJobSchedulerMaxPerPoll)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.MaxPerPoll = jobSchedulerMaxPerPoll
+
+	jobSchedulerRunTimeout, err := parseDuration("JOB_SCHEDULER_RUN_TIMEOUT", defaultJobSchedulerRunTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.RunTimeout = jobSchedulerRunTimeout
+
+	jobSchedulerMaxRunHistory, err := parseInt("JOB_SCHEDULER_MAX_RUN_HISTORY", defaultJobSchedulerMaxRunHistory)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.JobScheduler.MaxRunHistory = jobSchedulerMaxRunHistory
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -404,6 +450,21 @@ func (c Config) Validate() error {
 		}
 		if c.ConversationTokenBackfill.BatchSize <= 0 {
 			return fmt.Errorf("CONVERSATION_TOKEN_BACKFILL_BATCH_SIZE must be greater than zero")
+		}
+	}
+
+	if c.JobScheduler.Enabled {
+		if c.JobScheduler.PollInterval <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_POLL_INTERVAL must be greater than zero")
+		}
+		if c.JobScheduler.MaxPerPoll <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_MAX_PER_POLL must be greater than zero")
+		}
+		if c.JobScheduler.RunTimeout <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_RUN_TIMEOUT must be greater than zero")
+		}
+		if c.JobScheduler.MaxRunHistory <= 0 {
+			return fmt.Errorf("JOB_SCHEDULER_MAX_RUN_HISTORY must be greater than zero")
 		}
 	}
 

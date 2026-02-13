@@ -75,6 +75,11 @@ func handleMigrate(args []string) {
 
 	switch args[0] {
 	case "from-openclaw":
+		// Sub-subcommand: "from-openclaw cron" imports cron jobs into agent_jobs
+		if len(args) > 1 && args[1] == "cron" {
+			handleMigrateFromOpenClawCron(args[2:])
+			return
+		}
 		opts, err := parseMigrateFromOpenClawOptions(args[1:])
 		if err != nil {
 			die(err.Error())

@@ -114,6 +114,7 @@ func NewRouter() http.Handler {
 	// Settings uses standalone handler functions (no struct needed)
 	pipelineRolesHandler := &PipelineRolesHandler{}
 	deployConfigHandler := &DeployConfigHandler{}
+	jobsHandler := &JobsHandler{}
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -167,6 +168,8 @@ func NewRouter() http.Handler {
 		conversationTokenHandler.Store = store.NewConversationTokenStore(db)
 		pipelineRolesHandler.Store = store.NewPipelineRoleStore(db)
 		deployConfigHandler.Store = store.NewDeployConfigStore(db)
+		jobsHandler.Store = store.NewAgentJobStore(db)
+		jobsHandler.DB = db
 		adminAgentsHandler.Store = agentStore
 		adminAgentsHandler.ProjectStore = projectStore
 		adminAgentsHandler.ProjectRepos = projectRepoStore
@@ -397,6 +400,17 @@ func NewRouter() http.Handler {
 		r.Get("/export", HandleExport)
 		r.Post("/import", HandleImport)
 		r.Post("/import/validate", HandleImportValidate)
+
+		r.With(middleware.OptionalWorkspace).Post("/v1/jobs", jobsHandler.Create)
+		r.With(middleware.OptionalWorkspace).Get("/v1/jobs", jobsHandler.List)
+		r.With(middleware.OptionalWorkspace).Get("/v1/jobs/{id}", jobsHandler.Get)
+		r.With(middleware.OptionalWorkspace).Patch("/v1/jobs/{id}", jobsHandler.Patch)
+		r.With(middleware.OptionalWorkspace).Delete("/v1/jobs/{id}", jobsHandler.Delete)
+		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/{id}/run", jobsHandler.RunNow)
+		r.With(middleware.OptionalWorkspace).Get("/v1/jobs/{id}/runs", jobsHandler.ListRuns)
+		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/{id}/pause", jobsHandler.Pause)
+		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/{id}/resume", jobsHandler.Resume)
+		r.With(middleware.OptionalWorkspace).Post("/v1/jobs/import/openclaw-cron", jobsHandler.ImportOpenClawCron)
 
 		// Admin endpoints
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/init-repos", HandleAdminInitRepos(db))

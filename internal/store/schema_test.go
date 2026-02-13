@@ -2001,3 +2001,34 @@ func TestSchemaProjectChatAttachmentColumnsAndForeignKey(t *testing.T) {
 	)
 	requirePQCode(t, err, "23503")
 }
+
+func TestMigration073AgentJobsFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"073_create_agent_jobs.up.sql",
+		"073_create_agent_jobs.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "073_create_agent_jobs.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists agent_jobs")
+	require.Contains(t, upContent, "create table if not exists agent_job_runs")
+	require.Contains(t, upContent, "schedule_kind in ('cron', 'interval', 'once')")
+	require.Contains(t, upContent, "payload_kind in ('message', 'system_event')")
+	require.Contains(t, upContent, "status in ('active', 'paused', 'completed', 'failed')")
+	require.Contains(t, upContent, "for update skip locked")
+	require.Contains(t, upContent, "enable row level security")
+	require.Contains(t, upContent, "agent_jobs_org_isolation")
+	require.Contains(t, upContent, "agent_job_runs_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "073_create_agent_jobs.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop table if exists agent_job_runs")
+	require.Contains(t, downContent, "drop table if exists agent_jobs")
+}

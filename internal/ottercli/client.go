@@ -179,6 +179,67 @@ type issueDetailResponse struct {
 	Issue Issue `json:"issue"`
 }
 
+type AgentJob struct {
+	ID                  string  `json:"id"`
+	OrgID               string  `json:"org_id"`
+	AgentID             string  `json:"agent_id"`
+	Name                string  `json:"name"`
+	Description         *string `json:"description,omitempty"`
+	ScheduleKind        string  `json:"schedule_kind"`
+	CronExpr            *string `json:"cron_expr,omitempty"`
+	IntervalMS          *int64  `json:"interval_ms,omitempty"`
+	RunAt               *string `json:"run_at,omitempty"`
+	Timezone            string  `json:"timezone"`
+	PayloadKind         string  `json:"payload_kind"`
+	PayloadText         string  `json:"payload_text"`
+	RoomID              *string `json:"room_id,omitempty"`
+	Enabled             bool    `json:"enabled"`
+	Status              string  `json:"status"`
+	LastRunAt           *string `json:"last_run_at,omitempty"`
+	LastRunStatus       *string `json:"last_run_status,omitempty"`
+	LastRunError        *string `json:"last_run_error,omitempty"`
+	NextRunAt           *string `json:"next_run_at,omitempty"`
+	RunCount            int     `json:"run_count"`
+	ErrorCount          int     `json:"error_count"`
+	MaxFailures         int     `json:"max_failures"`
+	ConsecutiveFailures int     `json:"consecutive_failures"`
+	CreatedBy           *string `json:"created_by,omitempty"`
+	CreatedAt           string  `json:"created_at"`
+	UpdatedAt           string  `json:"updated_at"`
+}
+
+type AgentJobRun struct {
+	ID          string  `json:"id"`
+	JobID       string  `json:"job_id"`
+	OrgID       string  `json:"org_id"`
+	Status      string  `json:"status"`
+	StartedAt   string  `json:"started_at"`
+	CompletedAt *string `json:"completed_at,omitempty"`
+	DurationMS  *int    `json:"duration_ms,omitempty"`
+	Error       *string `json:"error,omitempty"`
+	PayloadText string  `json:"payload_text"`
+	MessageID   *string `json:"message_id,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+}
+
+type AgentJobListResponse struct {
+	Items []AgentJob `json:"items"`
+	Total int        `json:"total"`
+}
+
+type AgentJobRunsResponse struct {
+	Items []AgentJobRun `json:"items"`
+	Total int           `json:"total"`
+}
+
+type OpenClawCronJobImportResult struct {
+	Total    int      `json:"total"`
+	Imported int      `json:"imported"`
+	Updated  int      `json:"updated"`
+	Skipped  int      `json:"skipped"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
 type PipelineRoleAssignment struct {
 	AgentID *string `json:"agentId"`
 }
@@ -563,16 +624,16 @@ type OnboardingAgent struct {
 }
 
 type OnboardingBootstrapResponse struct {
-	OrgID       string    `json:"org_id"`
-	OrgSlug     string    `json:"org_slug"`
-	UserID      string    `json:"user_id"`
-	Token       string    `json:"token"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	ProjectID   string    `json:"project_id"`
-	ProjectName string    `json:"project_name"`
-	IssueID     string    `json:"issue_id"`
-	IssueNumber int64     `json:"issue_number"`
-	IssueTitle  string    `json:"issue_title"`
+	OrgID       string            `json:"org_id"`
+	OrgSlug     string            `json:"org_slug"`
+	UserID      string            `json:"user_id"`
+	Token       string            `json:"token"`
+	ExpiresAt   time.Time         `json:"expires_at"`
+	ProjectID   string            `json:"project_id"`
+	ProjectName string            `json:"project_name"`
+	IssueID     string            `json:"issue_id"`
+	IssueNumber int64             `json:"issue_number"`
+	IssueTitle  string            `json:"issue_title"`
 	Agents      []OnboardingAgent `json:"agents"`
 }
 
@@ -1383,6 +1444,146 @@ func (c *Client) ListIssues(projectID string, filters map[string]string) ([]Issu
 		return nil, err
 	}
 	return resp.Items, nil
+}
+
+func (c *Client) ListJobs(filters map[string]string) (AgentJobListResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return AgentJobListResponse{}, err
+	}
+
+	path := "/api/v1/jobs"
+	q := url.Values{}
+	for key, value := range filters {
+		trimmedValue := strings.TrimSpace(value)
+		if trimmedValue == "" {
+			continue
+		}
+		q.Set(strings.TrimSpace(key), trimmedValue)
+	}
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+
+	req, err := c.newRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return AgentJobListResponse{}, err
+	}
+	var response AgentJobListResponse
+	if err := c.do(req, &response); err != nil {
+		return AgentJobListResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) CreateJob(input map[string]any) (AgentJob, error) {
+	if err := c.requireAuth(); err != nil {
+		return AgentJob{}, err
+	}
+	if len(input) == 0 {
+		return AgentJob{}, errors.New("job payload is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return AgentJob{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(payload))
+	if err != nil {
+		return AgentJob{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response AgentJob
+	if err := c.do(req, &response); err != nil {
+		return AgentJob{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) PauseJob(jobID string) (AgentJob, error) {
+	return c.runJobAction(http.MethodPost, jobID, "/pause")
+}
+
+func (c *Client) ResumeJob(jobID string) (AgentJob, error) {
+	return c.runJobAction(http.MethodPost, jobID, "/resume")
+}
+
+func (c *Client) RunJobNow(jobID string) (AgentJob, error) {
+	return c.runJobAction(http.MethodPost, jobID, "/run")
+}
+
+func (c *Client) ListJobRuns(jobID string, limit int) (AgentJobRunsResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return AgentJobRunsResponse{}, err
+	}
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return AgentJobRunsResponse{}, errors.New("job id is required")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	path := fmt.Sprintf("/api/v1/jobs/%s/runs?limit=%d", url.PathEscape(jobID), limit)
+	req, err := c.newRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return AgentJobRunsResponse{}, err
+	}
+	var response AgentJobRunsResponse
+	if err := c.do(req, &response); err != nil {
+		return AgentJobRunsResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) DeleteJob(jobID string) (map[string]any, error) {
+	if err := c.requireAuth(); err != nil {
+		return nil, err
+	}
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return nil, errors.New("job id is required")
+	}
+	req, err := c.newRequest(http.MethodDelete, "/api/v1/jobs/"+url.PathEscape(jobID), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if err := c.do(req, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *Client) ImportOpenClawCronJobs() (OpenClawCronJobImportResult, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawCronJobImportResult{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/v1/jobs/import/openclaw-cron", nil)
+	if err != nil {
+		return OpenClawCronJobImportResult{}, err
+	}
+	var response OpenClawCronJobImportResult
+	if err := c.do(req, &response); err != nil {
+		return OpenClawCronJobImportResult{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) runJobAction(method string, jobID string, suffix string) (AgentJob, error) {
+	if err := c.requireAuth(); err != nil {
+		return AgentJob{}, err
+	}
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return AgentJob{}, errors.New("job id is required")
+	}
+	req, err := c.newRequest(method, "/api/v1/jobs/"+url.PathEscape(jobID)+suffix, nil)
+	if err != nil {
+		return AgentJob{}, err
+	}
+	var response AgentJob
+	if err := c.do(req, &response); err != nil {
+		return AgentJob{}, err
+	}
+	return response, nil
 }
 
 func (c *Client) GetIssue(issueID string) (Issue, error) {

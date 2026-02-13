@@ -18,6 +18,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/github"
 	"github.com/samhotchkiss/otter-camp/internal/githubsync"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
+	"github.com/samhotchkiss/otter-camp/internal/scheduler"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
@@ -223,6 +224,32 @@ func main() {
 				cfg.ConversationSegmentation.BatchSize,
 				cfg.ConversationSegmentation.PollInterval,
 				cfg.ConversationSegmentation.GapThreshold,
+			)
+		}
+	}
+
+	if cfg.JobScheduler.Enabled {
+		db, err := store.DB()
+		if err != nil {
+			log.Printf("⚠️  Agent job scheduler worker disabled; database unavailable: %v", err)
+		} else {
+			worker := scheduler.NewAgentJobWorker(
+				store.NewAgentJobStore(db),
+				scheduler.AgentJobWorkerConfig{
+					PollInterval:  cfg.JobScheduler.PollInterval,
+					MaxPerPoll:    cfg.JobScheduler.MaxPerPoll,
+					RunTimeout:    cfg.JobScheduler.RunTimeout,
+					MaxRunHistory: cfg.JobScheduler.MaxRunHistory,
+				},
+			)
+			worker.Logf = log.Printf
+			startWorker(worker.Start)
+			log.Printf(
+				"✅ Agent job scheduler worker started (interval=%s max_per_poll=%d run_timeout=%s max_run_history=%d)",
+				cfg.JobScheduler.PollInterval,
+				cfg.JobScheduler.MaxPerPoll,
+				cfg.JobScheduler.RunTimeout,
+				cfg.JobScheduler.MaxRunHistory,
 			)
 		}
 	}

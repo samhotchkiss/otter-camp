@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/ottercli"
 )
@@ -65,6 +66,8 @@ func main() {
 		handleAgent(os.Args[2:])
 	case "memory":
 		handleMemory(os.Args[2:])
+	case "jobs":
+		handleJobs(os.Args[2:])
 	case "knowledge":
 		handleKnowledge(os.Args[2:])
 	case "migrate":
@@ -108,6 +111,7 @@ Commands:
   project          Manage projects
   agent            Manage agents
   memory           Manage agent memory
+  jobs             Manage scheduled jobs
   knowledge        Manage shared knowledge
   migrate          Run OpenClaw migration commands
   clone            Clone a project repo
@@ -117,6 +121,7 @@ Commands:
   room             Manage room stats
   pipeline         Configure per-project pipeline settings
   deploy           Configure per-project deployment settings
+  migrate          Run migration utilities
   version          Show CLI version`)
 }
 
@@ -242,6 +247,36 @@ func handleReleaseGate(args []string) {
 		fmt.Fprintln(os.Stderr, formatCLIError(requestErr))
 	}
 	os.Exit(1)
+}
+
+func handleMigrateFromOpenClawCron(args []string) {
+	flags := flag.NewFlagSet("migrate from-openclaw cron", flag.ExitOnError)
+	org := flags.String("org", "", "org id override")
+	jsonOut := flags.Bool("json", false, "JSON output")
+	_ = flags.Parse(args)
+
+	cfg, err := ottercli.LoadConfig()
+	dieIf(err)
+	client, _ := ottercli.NewClient(cfg, *org)
+
+	result, err := client.ImportOpenClawCronJobs()
+	dieIf(err)
+
+	if *jsonOut {
+		printJSON(result)
+		return
+	}
+
+	fmt.Printf(
+		"OpenClaw cron import complete: total=%d imported=%d updated=%d skipped=%d\n",
+		result.Total,
+		result.Imported,
+		result.Updated,
+		result.Skipped,
+	)
+	for _, warning := range result.Warnings {
+		fmt.Printf("warning: %s\n", strings.TrimSpace(warning))
+	}
 }
 
 func handleAgent(args []string) {
@@ -856,6 +891,330 @@ func handleMemory(args []string) {
 			fmt.Println(evalUsage)
 			os.Exit(1)
 		}
+	default:
+		fmt.Println(usageText)
+		os.Exit(1)
+	}
+}
+
+func handleJobs(args []string) {
+	const usageText = "usage: otter jobs <list|create|pause|resume|run|history|delete> ..."
+	if len(args) == 0 {
+		fmt.Println(usageText)
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "list":
+		flags := flag.NewFlagSet("jobs list", flag.ExitOnError)
+		agentRef := flags.String("agent", "", "agent id/name/slug")
+		status := flags.String("status", "", "status filter")
+		enabled := flags.String("enabled", "", "enabled filter (true|false)")
+		sessionKey := flags.String("session", "", "optional session key for self-scoped listing")
+		limit := flags.Int("limit", 50, "max results")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		if *limit <= 0 {
+			die("--limit must be positive")
+		}
+		if trimmedEnabled := strings.TrimSpace(*enabled); trimmedEnabled != "" {
+			if _, err := strconv.ParseBool(trimmedEnabled); err != nil {
+				die("--enabled must be true or false")
+			}
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		filters := map[string]string{
+			"limit": strconv.Itoa(*limit),
+		}
+		if trimmedStatus := strings.TrimSpace(*status); trimmedStatus != "" {
+			filters["status"] = trimmedStatus
+		}
+		if trimmedEnabled := strings.TrimSpace(*enabled); trimmedEnabled != "" {
+			filters["enabled"] = trimmedEnabled
+		}
+		if trimmedSession := strings.TrimSpace(*sessionKey); trimmedSession != "" {
+			filters["session_key"] = trimmedSession
+		}
+		if trimmedAgent := strings.TrimSpace(*agentRef); trimmedAgent != "" {
+			agentID := trimmedAgent
+			if !issueUUIDPattern.MatchString(trimmedAgent) {
+				resolved, resolveErr := client.ResolveAgent(trimmedAgent)
+				dieIf(resolveErr)
+				agentID = resolved.ID
+			}
+			filters["agent_id"] = agentID
+		}
+
+		response, err := client.ListJobs(filters)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		if len(response.Items) == 0 {
+			fmt.Println("No jobs found.")
+			return
+		}
+		fmt.Printf("Jobs (%d)\n", response.Total)
+		for _, job := range response.Items {
+			schedule := job.ScheduleKind
+			switch job.ScheduleKind {
+			case "cron":
+				if job.CronExpr != nil {
+					schedule = "cron " + *job.CronExpr
+				}
+			case "interval":
+				if job.IntervalMS != nil {
+					schedule = fmt.Sprintf("every %dms", *job.IntervalMS)
+				}
+			case "once":
+				if job.RunAt != nil {
+					schedule = "at " + *job.RunAt
+				}
+			}
+			fmt.Printf("%s  %-8s  %s\n", job.ID, job.Status, schedule)
+		}
+	case "create":
+		flags := flag.NewFlagSet("jobs create", flag.ExitOnError)
+		agentRef := flags.String("agent", "", "agent id/name/slug")
+		name := flags.String("name", "", "job name")
+		schedule := flags.String("schedule", "", "cron expression schedule")
+		every := flags.String("every", "", "duration interval (e.g. 30s, 10m, 1h)")
+		at := flags.String("at", "", "one-shot RFC3339 time")
+		timezone := flags.String("timezone", "UTC", "timezone for cron schedules")
+		payload := flags.String("payload", "", "payload text to inject")
+		payloadKind := flags.String("payload-kind", "message", "payload kind (message|system_event)")
+		roomID := flags.String("room", "", "optional room id")
+		maxFailures := flags.Int("max-failures", 5, "auto-pause after this many consecutive failures")
+		enabled := flags.Bool("enabled", true, "enable job after creation")
+		sessionKey := flags.String("session", "", "optional session key for self-scoped creation")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(args[1:])
+
+		if strings.TrimSpace(*agentRef) == "" {
+			die("--agent is required")
+		}
+		if strings.TrimSpace(*name) == "" {
+			die("--name is required")
+		}
+		payloadText := strings.TrimSpace(*payload)
+		if payloadText == "" {
+			payloadText = strings.TrimSpace(strings.Join(flags.Args(), " "))
+		}
+		if payloadText == "" {
+			die("--payload is required")
+		}
+		normalizedPayloadKind := strings.TrimSpace(strings.ToLower(*payloadKind))
+		if normalizedPayloadKind != "message" && normalizedPayloadKind != "system_event" {
+			die("--payload-kind must be message or system_event")
+		}
+		if *maxFailures <= 0 {
+			die("--max-failures must be positive")
+		}
+		scheduleSpec, err := resolveJobCreateSchedule(*schedule, *every, *at)
+		dieIf(err)
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+
+		agentID := strings.TrimSpace(*agentRef)
+		if !issueUUIDPattern.MatchString(agentID) {
+			resolvedAgent, resolveErr := client.ResolveAgent(agentID)
+			dieIf(resolveErr)
+			agentID = resolvedAgent.ID
+		}
+
+		payloadBody := map[string]any{
+			"agent_id":      agentID,
+			"name":          strings.TrimSpace(*name),
+			"schedule_kind": scheduleSpec.Kind,
+			"timezone":      strings.TrimSpace(*timezone),
+			"payload_kind":  normalizedPayloadKind,
+			"payload_text":  payloadText,
+			"enabled":       *enabled,
+			"max_failures":  *maxFailures,
+		}
+		if payloadBody["timezone"] == "" {
+			payloadBody["timezone"] = "UTC"
+		}
+		if scheduleSpec.CronExpr != nil {
+			payloadBody["cron_expr"] = *scheduleSpec.CronExpr
+		}
+		if scheduleSpec.IntervalMS != nil {
+			payloadBody["interval_ms"] = *scheduleSpec.IntervalMS
+		}
+		if scheduleSpec.RunAt != nil {
+			payloadBody["run_at"] = *scheduleSpec.RunAt
+		}
+		if trimmedRoomID := strings.TrimSpace(*roomID); trimmedRoomID != "" {
+			payloadBody["room_id"] = trimmedRoomID
+		}
+		if trimmedSessionKey := strings.TrimSpace(*sessionKey); trimmedSessionKey != "" {
+			payloadBody["session_key"] = trimmedSessionKey
+		}
+
+		created, err := client.CreateJob(payloadBody)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(created)
+			return
+		}
+		fmt.Printf("Created job %s (%s)\n", created.Name, created.ID)
+	case "pause":
+		jobID, flagArgs := splitJobCommandArgs(args[1:])
+		flags := flag.NewFlagSet("jobs pause", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(flagArgs)
+		if jobID == "" {
+			if len(flags.Args()) == 0 {
+				die("usage: otter jobs pause <job-id>")
+			}
+			jobID = strings.TrimSpace(flags.Args()[0])
+		}
+		if jobID == "" {
+			die("job id is required")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		updated, err := client.PauseJob(jobID)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(updated)
+			return
+		}
+		fmt.Printf("Paused job %s\n", updated.ID)
+	case "resume":
+		jobID, flagArgs := splitJobCommandArgs(args[1:])
+		flags := flag.NewFlagSet("jobs resume", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(flagArgs)
+		if jobID == "" {
+			if len(flags.Args()) == 0 {
+				die("usage: otter jobs resume <job-id>")
+			}
+			jobID = strings.TrimSpace(flags.Args()[0])
+		}
+		if jobID == "" {
+			die("job id is required")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		updated, err := client.ResumeJob(jobID)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(updated)
+			return
+		}
+		fmt.Printf("Resumed job %s\n", updated.ID)
+	case "run":
+		jobID, flagArgs := splitJobCommandArgs(args[1:])
+		flags := flag.NewFlagSet("jobs run", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(flagArgs)
+		if jobID == "" {
+			if len(flags.Args()) == 0 {
+				die("usage: otter jobs run <job-id>")
+			}
+			jobID = strings.TrimSpace(flags.Args()[0])
+		}
+		if jobID == "" {
+			die("job id is required")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		updated, err := client.RunJobNow(jobID)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(updated)
+			return
+		}
+		fmt.Printf("Triggered job %s\n", updated.ID)
+	case "history":
+		jobID, flagArgs := splitJobCommandArgs(args[1:])
+		flags := flag.NewFlagSet("jobs history", flag.ExitOnError)
+		limit := flags.Int("limit", 50, "max run history entries")
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(flagArgs)
+		if jobID == "" {
+			if len(flags.Args()) == 0 {
+				die("usage: otter jobs history <job-id> [--limit <n>]")
+			}
+			jobID = strings.TrimSpace(flags.Args()[0])
+		}
+		if jobID == "" {
+			die("job id is required")
+		}
+		if *limit <= 0 {
+			die("--limit must be positive")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		runs, err := client.ListJobRuns(jobID, *limit)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(runs)
+			return
+		}
+		if len(runs.Items) == 0 {
+			fmt.Printf("No runs found for job %s.\n", jobID)
+			return
+		}
+		for _, run := range runs.Items {
+			fmt.Printf("%s  %-8s  %s\n", run.ID, run.Status, run.StartedAt)
+		}
+	case "delete":
+		jobID, flagArgs := splitJobCommandArgs(args[1:])
+		flags := flag.NewFlagSet("jobs delete", flag.ExitOnError)
+		org := flags.String("org", "", "org id override")
+		jsonOut := flags.Bool("json", false, "JSON output")
+		_ = flags.Parse(flagArgs)
+		if jobID == "" {
+			if len(flags.Args()) == 0 {
+				die("usage: otter jobs delete <job-id>")
+			}
+			jobID = strings.TrimSpace(flags.Args()[0])
+		}
+		if jobID == "" {
+			die("job id is required")
+		}
+
+		cfg, err := ottercli.LoadConfig()
+		dieIf(err)
+		client, _ := ottercli.NewClient(cfg, *org)
+		response, err := client.DeleteJob(jobID)
+		dieIf(err)
+
+		if *jsonOut {
+			printJSON(response)
+			return
+		}
+		fmt.Printf("Deleted job %s\n", jobID)
 	default:
 		fmt.Println(usageText)
 		os.Exit(1)
@@ -2350,6 +2709,74 @@ func validateKnowledgeImportFileSize(path string, maxBytes int64) error {
 		return fmt.Errorf("knowledge import file exceeds %d bytes", maxBytes)
 	}
 	return nil
+}
+
+type jobCreateScheduleSpec struct {
+	Kind       string
+	CronExpr   *string
+	IntervalMS *int64
+	RunAt      *string
+}
+
+func resolveJobCreateSchedule(schedule string, every string, at string) (jobCreateScheduleSpec, error) {
+	cronExpr := strings.TrimSpace(schedule)
+	intervalRaw := strings.TrimSpace(every)
+	runAtRaw := strings.TrimSpace(at)
+
+	selected := 0
+	if cronExpr != "" {
+		selected++
+	}
+	if intervalRaw != "" {
+		selected++
+	}
+	if runAtRaw != "" {
+		selected++
+	}
+	if selected != 1 {
+		return jobCreateScheduleSpec{}, errors.New("must provide exactly one of --schedule, --every, or --at")
+	}
+
+	if cronExpr != "" {
+		return jobCreateScheduleSpec{
+			Kind:     "cron",
+			CronExpr: &cronExpr,
+		}, nil
+	}
+	if intervalRaw != "" {
+		duration, err := time.ParseDuration(intervalRaw)
+		if err != nil || duration <= 0 {
+			return jobCreateScheduleSpec{}, errors.New("--every must be a positive duration (for example: 30s, 10m, 1h)")
+		}
+		intervalMS := duration.Milliseconds()
+		if intervalMS <= 0 {
+			return jobCreateScheduleSpec{}, errors.New("--every must be at least 1ms")
+		}
+		return jobCreateScheduleSpec{
+			Kind:       "interval",
+			IntervalMS: &intervalMS,
+		}, nil
+	}
+
+	parsed, err := time.Parse(time.RFC3339, runAtRaw)
+	if err != nil {
+		return jobCreateScheduleSpec{}, errors.New("--at must be an RFC3339 timestamp")
+	}
+	normalized := parsed.UTC().Format(time.RFC3339)
+	return jobCreateScheduleSpec{
+		Kind:  "once",
+		RunAt: &normalized,
+	}, nil
+}
+
+func splitJobCommandArgs(args []string) (string, []string) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return "", args
+	}
+	return strings.TrimSpace(args[0]), args[1:]
 }
 
 func splitCSV(raw string) []string {

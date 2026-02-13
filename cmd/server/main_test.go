@@ -262,6 +262,29 @@ func TestMainStartsEllieIngestionWorkerWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestMainStartsJobSchedulerWorkerWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	for _, snippet := range []string{
+		"cfg.JobScheduler.Enabled",
+		"scheduler.NewAgentJobWorker",
+		"store.NewAgentJobStore",
+		"Agent job scheduler worker started",
+		"Agent job scheduler worker disabled; database unavailable",
+		"startWorker(worker.Start)",
+	} {
+		if !strings.Contains(mainContent, snippet) {
+			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
+		}
+	}
+}
+
 func TestMainWorkersStopOnContextCancel(t *testing.T) {
 	t.Parallel()
 
