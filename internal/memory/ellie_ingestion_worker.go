@@ -208,9 +208,10 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 			if w.LLMExtractor != nil {
 				llmCandidates, err := w.extractLLMMemoryCandidates(ctx, room, window)
 				if err != nil {
-					return processed, fmt.Errorf("llm extraction for room %s: %w", room.RoomID, err)
-				}
-				if len(llmCandidates) > 0 {
+					if w.Logf != nil {
+						w.Logf("ellie ingestion llm extraction failed room=%s: %v (falling back to heuristics)", room.RoomID, err)
+					}
+				} else if len(llmCandidates) > 0 {
 					for _, candidate := range llmCandidates {
 						inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
 						if err != nil {

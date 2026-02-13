@@ -326,6 +326,96 @@ func TestEllieIngestionWorkerLLMExtractionMetadataIncludesTraceability(t *testin
 	require.Equal(t, "message-window-1", llmMetadata["evidence"])
 }
 
+func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMUnavailable(t *testing.T) {
+	fakeStore := newFakeEllieIngestionStore()
+	base := time.Date(2026, 2, 13, 9, 20, 0, 0, time.UTC)
+	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
+	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
+		{
+			ID:        "msg-1",
+			OrgID:     "org-1",
+			RoomID:    "room-1",
+			Body:      "We decided to use Postgres for production.",
+			CreatedAt: base,
+		},
+	}
+
+	worker := NewEllieIngestionWorker(fakeStore, EllieIngestionWorkerConfig{
+		BatchSize:  50,
+		Interval:   time.Second,
+		MaxPerRoom: 50,
+	})
+	worker.Logf = nil
+
+	processed, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	require.Len(t, fakeStore.created, 1)
+	require.Equal(t, "technical_decision", fakeStore.created[0].Kind)
+}
+
+func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMExtractorErrors(t *testing.T) {
+	fakeStore := newFakeEllieIngestionStore()
+	base := time.Date(2026, 2, 13, 9, 22, 0, 0, time.UTC)
+	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
+	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
+		{
+			ID:        "msg-1",
+			OrgID:     "org-1",
+			RoomID:    "room-1",
+			Body:      "Preference: use explicit SQL migrations.",
+			CreatedAt: base,
+		},
+	}
+	extractor := &fakeEllieLLMExtractor{err: errors.New("llm unavailable")}
+
+	worker := NewEllieIngestionWorker(fakeStore, EllieIngestionWorkerConfig{
+		BatchSize:    50,
+		Interval:     time.Second,
+		MaxPerRoom:   50,
+		LLMExtractor: extractor,
+	})
+	worker.Logf = nil
+
+	processed, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	require.Equal(t, 1, extractor.calls)
+	require.Len(t, fakeStore.created, 1)
+	require.Equal(t, "preference", fakeStore.created[0].Kind)
+}
+
+func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMReturnsNoCandidates(t *testing.T) {
+	fakeStore := newFakeEllieIngestionStore()
+	base := time.Date(2026, 2, 13, 9, 24, 0, 0, time.UTC)
+	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
+	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
+		{
+			ID:        "msg-1",
+			OrgID:     "org-1",
+			RoomID:    "room-1",
+			Body:      "Lesson learned: keep migrations reversible.",
+			CreatedAt: base,
+		},
+	}
+	extractor := &fakeEllieLLMExtractor{result: EllieIngestionLLMExtractionResult{Candidates: nil}}
+
+	worker := NewEllieIngestionWorker(fakeStore, EllieIngestionWorkerConfig{
+		BatchSize:    50,
+		Interval:     time.Second,
+		MaxPerRoom:   50,
+		LLMExtractor: extractor,
+	})
+	worker.Logf = nil
+
+	processed, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+	require.Equal(t, 1, extractor.calls)
+	require.Len(t, fakeStore.created, 1)
+	require.Equal(t, "lesson", fakeStore.created[0].Kind)
+}
+
 func TestEllieIngestionWorkerAvoidsFalsePositiveDecisionAndFactClassification(t *testing.T) {
 	cases := []struct {
 		name          string
