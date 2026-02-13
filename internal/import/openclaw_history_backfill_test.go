@@ -273,7 +273,63 @@ func TestOpenClawHistoryBackfillIsIdempotent(t *testing.T) {
 	require.Equal(t, 2, messageCount)
 }
 
+func TestOpenClawHistoryBackfillUsesUserDisplayNameInRoomName(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-history-display-name")
+	userID := createOpenClawImportTestUserWithDisplayName(t, db, orgID, "history-display-name", "Alex Rivera")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+
+	mainSessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(mainSessionDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(mainSessionDir, "main-display-name.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+	})
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events, err := ParseOpenClawSessionEvents(install)
+	require.NoError(t, err)
+
+	_, err = BackfillOpenClawHistory(context.Background(), db, OpenClawHistoryBackfillOptions{
+		OrgID:        orgID,
+		UserID:       userID,
+		ParsedEvents: events,
+	})
+	require.NoError(t, err)
+
+	var roomName string
+	err = db.QueryRow(
+		`SELECT name
+		   FROM rooms
+		  WHERE org_id = $1
+		    AND type = 'ad_hoc'
+		  LIMIT 1`,
+		orgID,
+	).Scan(&roomName)
+	require.NoError(t, err)
+	require.Equal(t, "Alex Rivera & Frank", roomName)
+}
+
 func createOpenClawImportTestUser(t *testing.T, db *sql.DB, orgID, key string) string {
+	t.Helper()
+	return createOpenClawImportTestUserWithDisplayName(t, db, orgID, key, "Sam "+key)
+}
+
+func createOpenClawImportTestUserWithDisplayName(t *testing.T, db *sql.DB, orgID, key, displayName string) string {
 	t.Helper()
 	var userID string
 	err := db.QueryRow(
@@ -282,7 +338,7 @@ func createOpenClawImportTestUser(t *testing.T, db *sql.DB, orgID, key string) s
 		 RETURNING id::text`,
 		orgID,
 		"subject-"+key,
-		"Sam "+key,
+		displayName,
 		key+"@example.com",
 	).Scan(&userID)
 	require.NoError(t, err)

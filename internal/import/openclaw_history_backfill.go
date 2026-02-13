@@ -85,6 +85,10 @@ func BackfillOpenClawHistory(
 	if err != nil {
 		return OpenClawHistoryBackfillResult{}, err
 	}
+	userDisplayName, err := loadOpenClawBackfillUserDisplayName(ctx, tx, orgID, userID)
+	if err != nil {
+		return OpenClawHistoryBackfillResult{}, err
+	}
 
 	result := OpenClawHistoryBackfillResult{}
 	roomByAgentSlug := make(map[string]string, len(agentsBySlug))
@@ -101,6 +105,7 @@ func BackfillOpenClawHistory(
 			tx,
 			orgID,
 			userID,
+			userDisplayName,
 			agent,
 		)
 		if err != nil {
@@ -243,7 +248,7 @@ func loadOpenClawBackfillAgents(
 func ensureOpenClawAgentHistoryRoom(
 	ctx context.Context,
 	tx *sql.Tx,
-	orgID, userID string,
+	orgID, userID, userDisplayName string,
 	agent openClawBackfillAgent,
 ) (roomID string, roomCreated bool, participantsAdded int, err error) {
 	err = tx.QueryRowContext(
@@ -262,7 +267,7 @@ func ensureOpenClawAgentHistoryRoom(
 		if err != sql.ErrNoRows {
 			return "", false, 0, fmt.Errorf("failed to lookup existing room for agent %q: %w", agent.Slug, err)
 		}
-		expectedName := "Sam & " + firstNonEmpty(strings.TrimSpace(agent.DisplayName), agent.Slug)
+		expectedName := firstNonEmpty(strings.TrimSpace(userDisplayName), "User") + " & " + firstNonEmpty(strings.TrimSpace(agent.DisplayName), agent.Slug)
 		err = tx.QueryRowContext(
 			ctx,
 			`INSERT INTO rooms (org_id, name, type, context_id)
@@ -313,6 +318,30 @@ func ensureOpenClawAgentHistoryRoom(
 	}
 
 	return roomID, roomCreated, addedCount, nil
+}
+
+func loadOpenClawBackfillUserDisplayName(
+	ctx context.Context,
+	tx *sql.Tx,
+	orgID, userID string,
+) (string, error) {
+	var displayName sql.NullString
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT display_name
+		   FROM users
+		  WHERE org_id = $1
+		    AND id = $2`,
+		orgID,
+		userID,
+	).Scan(&displayName)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("user %q not found in org %q", userID, orgID)
+		}
+		return "", fmt.Errorf("failed to load user display name for history backfill: %w", err)
+	}
+	return firstNonEmpty(strings.TrimSpace(displayName.String), "User"), nil
 }
 
 func mapOpenClawEventToMessageFields(event OpenClawSessionEvent, userID, agentID string) (senderID, senderType, messageType string) {
