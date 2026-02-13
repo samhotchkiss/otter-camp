@@ -458,6 +458,109 @@ generate_secret() {
   date +%s%N | shasum | awk '{print $1}'
 }
 
+install_native_postgres() {
+  local platform="$1"
+  echo "Installing native PostgreSQL..."
+
+  if [[ "$platform" == "macos" ]]; then
+    run_cmd brew install postgresql@16
+    run_cmd brew services start postgresql@16
+
+    # Wait for Postgres to be ready
+    local pg_bin="/opt/homebrew/opt/postgresql@16/bin"
+    if [[ ! -d "$pg_bin" ]]; then
+      pg_bin="/usr/local/opt/postgresql@16/bin"
+    fi
+    export PATH="$pg_bin:$PATH"
+
+    echo -n "⏳ Waiting for PostgreSQL"
+    local pg_wait=0
+    while ! pg_isready >/dev/null 2>&1; do
+      echo -n "."
+      sleep 2
+      pg_wait=$((pg_wait + 2))
+      if [[ "$pg_wait" -ge 30 ]]; then
+        echo
+        log_error "PostgreSQL didn't start within 30 seconds."
+        return 1
+      fi
+    done
+    echo
+    log_success "PostgreSQL is running."
+
+    # Install pgvector extension
+    if ! ls "$pg_bin"/../share/postgresql@16/extension/vector.control >/dev/null 2>&1; then
+      echo "Building pgvector extension..."
+      local tmpdir
+      tmpdir="$(mktemp -d)"
+      (
+        cd "$tmpdir"
+        git clone --depth 1 --branch v0.8.1 https://github.com/pgvector/pgvector.git .
+        export PG_CONFIG="$pg_bin/pg_config"
+        make -j"$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+        make install
+      )
+      rm -rf "$tmpdir"
+      log_success "pgvector extension installed."
+    fi
+
+    # Ensure PATH hint
+    if [[ ":$PATH:" != *":$pg_bin:"* ]]; then
+      log_warn "Add $pg_bin to PATH: export PATH=\"$pg_bin:\$PATH\""
+    fi
+
+  else
+    # Linux: install postgresql and pgvector
+    if command -v apt-get >/dev/null 2>&1; then
+      local sudo_cmd=""
+      if [[ "${EUID:-$(id -u)}" -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
+        sudo_cmd="sudo"
+      fi
+      $sudo_cmd apt-get update -qq
+      $sudo_cmd apt-get install -y postgresql postgresql-16-pgvector 2>/dev/null || {
+        # pgvector package might not exist — install from source
+        $sudo_cmd apt-get install -y postgresql postgresql-server-dev-16 build-essential git
+        local tmpdir
+        tmpdir="$(mktemp -d)"
+        (
+          cd "$tmpdir"
+          git clone --depth 1 --branch v0.8.1 https://github.com/pgvector/pgvector.git .
+          make -j"$(nproc 2>/dev/null || echo 4)"
+          $sudo_cmd make install
+        )
+        rm -rf "$tmpdir"
+      }
+      # Start PostgreSQL
+      $sudo_cmd systemctl start postgresql 2>/dev/null || $sudo_cmd service postgresql start 2>/dev/null || true
+    elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+      local pkg_cmd="yum"
+      command -v dnf >/dev/null 2>&1 && pkg_cmd="dnf"
+      local sudo_cmd=""
+      if [[ "${EUID:-$(id -u)}" -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
+        sudo_cmd="sudo"
+      fi
+      $sudo_cmd $pkg_cmd install -y postgresql-server postgresql-devel gcc git make
+      $sudo_cmd postgresql-setup --initdb 2>/dev/null || true
+      $sudo_cmd systemctl start postgresql 2>/dev/null || true
+      # Build pgvector from source
+      local tmpdir
+      tmpdir="$(mktemp -d)"
+      (
+        cd "$tmpdir"
+        git clone --depth 1 --branch v0.8.1 https://github.com/pgvector/pgvector.git .
+        make -j"$(nproc 2>/dev/null || echo 4)"
+        $sudo_cmd make install
+      )
+      rm -rf "$tmpdir"
+    else
+      log_error "No supported package manager found for PostgreSQL install."
+      return 1
+    fi
+
+    log_success "Native PostgreSQL installed."
+  fi
+}
+
 ensure_dependencies() {
   local platform="$1"
 
@@ -487,17 +590,56 @@ ensure_dependencies() {
     has_psql=1
   fi
 
+  # Check if Docker daemon is actually healthy (not just installed)
+  local docker_healthy=0
   if [[ "$has_docker" -eq 1 && "$has_compose" -eq 1 ]]; then
-    log_success "Docker + Compose detected."
-    return 0
+    if docker info >/dev/null 2>&1; then
+      docker_healthy=1
+      log_success "Docker + Compose detected."
+    else
+      log_warn "Docker is installed but the daemon is not running."
+    fi
   fi
-  if [[ "$has_psql" -eq 1 ]]; then
-    log_warn "Docker not found; using existing local PostgreSQL."
+
+  if [[ "$docker_healthy" -eq 1 ]]; then
     return 0
   fi
 
-  ensure_dependency docker "$platform" "$AUTO_YES" 1
-  ensure_dependency compose "$platform" "$AUTO_YES" 1
+  if [[ "$has_psql" -eq 1 ]]; then
+    log_warn "Using local PostgreSQL (Docker unavailable)."
+    return 0
+  fi
+
+  # Neither healthy Docker nor psql — try to install one
+  if [[ "$has_docker" -eq 1 ]]; then
+    # Docker installed but unhealthy — fall back to native Postgres
+    log_warn "Docker daemon not responding. Installing native PostgreSQL instead..."
+    install_native_postgres "$platform"
+    return $?
+  fi
+
+  # No Docker at all — ask user preference
+  echo
+  echo "Database options:"
+  echo "  [1] Docker (pulls pgvector/pgvector:pg16 container)"
+  echo "  [2] Native PostgreSQL (installs via package manager)"
+  echo
+  if [[ "$AUTO_YES" -eq 1 ]]; then
+    # Default to Docker in auto mode
+    ensure_dependency docker "$platform" "$AUTO_YES" 1
+    ensure_dependency compose "$platform" "$AUTO_YES" 1
+  else
+    local db_choice=""
+    read -r -p "Choose [1/2] (default: 1): " db_choice
+    db_choice="${db_choice:-1}"
+    if [[ "$db_choice" == "2" ]]; then
+      install_native_postgres "$platform"
+      return $?
+    else
+      ensure_dependency docker "$platform" "$AUTO_YES" 1
+      ensure_dependency compose "$platform" "$AUTO_YES" 1
+    fi
+  fi
 }
 
 write_env_if_missing() {
@@ -565,11 +707,15 @@ load_env() {
 }
 
 resolve_compose_cmd() {
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    echo "docker compose"
-    return 0
+  # Only return a compose command if the Docker daemon is actually responsive.
+  # Docker may be installed but the daemon can be dead/broken (common on headless macOS).
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    if docker compose version >/dev/null 2>&1; then
+      echo "docker compose"
+      return 0
+    fi
   fi
-  if command -v docker-compose >/dev/null 2>&1; then
+  if command -v docker-compose >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     echo "docker-compose"
     return 0
   fi
@@ -606,9 +752,18 @@ start_postgres_if_needed() {
   fi
 
   if command -v psql >/dev/null 2>&1; then
-    log_warn "Using local PostgreSQL from DATABASE_URL."
+    log_success "Using local PostgreSQL."
     return 0
   fi
+
+  # Try adding Homebrew Postgres to PATH (may have just been installed)
+  for pg_path in /opt/homebrew/opt/postgresql@16/bin /usr/local/opt/postgresql@16/bin; do
+    if [[ -x "$pg_path/psql" ]]; then
+      export PATH="$pg_path:$PATH"
+      log_success "Using local PostgreSQL."
+      return 0
+    fi
+  done
 
   log_error "Need Docker+Compose or local PostgreSQL to continue."
   return 1
@@ -718,6 +873,18 @@ ensure_local_postgres_role_and_database() {
   if ! run_psql_sql "$db_sql"; then
     log_error "Failed to ensure PostgreSQL database '${db_name}'."
     return 1
+  fi
+
+  # Enable pgvector extension
+  local ext_sql="CREATE EXTENSION IF NOT EXISTS vector;"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "↪ psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -c \"$ext_sql\""
+  else
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "$ext_sql" 2>/dev/null || {
+      # May need superuser — try via default role
+      psql postgres -v ON_ERROR_STOP=1 -c "ALTER ROLE ${db_role} WITH SUPERUSER;" 2>/dev/null || true
+      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "$ext_sql" 2>/dev/null || log_warn "Could not enable pgvector extension automatically."
+    }
   fi
 
   log_success "Local PostgreSQL role/database verified."
