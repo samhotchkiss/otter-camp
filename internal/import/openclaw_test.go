@@ -96,11 +96,11 @@ func TestOpenClawAgentImportFallsBackToWorkspaceDiscovery(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", install.ConfigPath)
 	require.Equal(t, filepath.Join(root, "workspaces"), install.WorkspacesDir)
-	require.Len(t, install.Agents, 2)
+	require.Len(t, install.Agents, 1)
 
 	identities, err := ImportOpenClawAgentIdentities(install)
 	require.NoError(t, err)
-	require.Len(t, identities, 2)
+	require.Len(t, identities, 1)
 
 	byID := map[string]ImportedAgentIdentity{}
 	for _, item := range identities {

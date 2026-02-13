@@ -570,15 +570,24 @@ func collectOpenClawAgents(rootDir, workspaceRoot string, config openClawConfigF
 			if !entry.IsDir() {
 				continue
 			}
-			workspace := filepath.Join(workspaceRoot, entry.Name())
+			// Skip directories that don't look like agent workspaces.
+			// A valid workspace has at least one identity file (SOUL.md or IDENTITY.md).
+			name := entry.Name()
+			if isSkippableWorkspaceDir(name) {
+				continue
+			}
+			workspace := filepath.Join(workspaceRoot, name)
 			clean := filepath.Clean(workspace)
 			if _, ok := byWorkspace[clean]; ok {
 				continue
 			}
+			if !hasAnyIdentityFile(clean) {
+				continue
+			}
 			byWorkspace[clean] = struct{}{}
 			agents = append(agents, OpenClawAgentWorkspace{
-				ID:           entry.Name(),
-				Name:         entry.Name(),
+				ID:           name,
+				Name:         name,
 				WorkspaceDir: clean,
 			})
 		}
@@ -603,7 +612,22 @@ func extractAgentCandidates(raw json.RawMessage) []openClawAgentCandidate {
 	candidates := make([]openClawAgentCandidate, 0)
 	switch typed := parsed.(type) {
 	case map[string]any:
+		// Handle {"list": [...], "defaults": {...}} format (OpenClaw agents config)
+		if listVal, ok := typed["list"]; ok {
+			if listArr, ok := listVal.([]any); ok {
+				for _, value := range listArr {
+					candidate, ok := decodeAgentCandidate("", value)
+					if ok {
+						candidates = append(candidates, candidate)
+					}
+				}
+			}
+		}
+		// Also try each key as an agent entry (legacy map format)
 		for key, value := range typed {
+			if key == "list" || key == "defaults" {
+				continue
+			}
 			candidate, ok := decodeAgentCandidate(key, value)
 			if ok {
 				candidates = append(candidates, candidate)
@@ -677,14 +701,66 @@ func resolveWorkspacePath(rootDir, workspaceRoot string, candidate openClawAgent
 	}
 
 	id := strings.TrimSpace(candidate.ID)
-	if workspaceRoot != "" && id != "" {
-		path := filepath.Join(workspaceRoot, id)
+	if id != "" {
+		// Try workspaceRoot/id (e.g., workspaces/main)
+		if workspaceRoot != "" {
+			path := filepath.Join(workspaceRoot, id)
+			if isDirectory(path) {
+				return filepath.Clean(path)
+			}
+		}
+		// Try rootDir/workspace-id (e.g., ~/.openclaw/workspace-main)
+		// This is the common OpenClaw layout where each agent has workspace-<slug>
+		path := filepath.Join(rootDir, "workspace-"+id)
 		if isDirectory(path) {
 			return filepath.Clean(path)
+		}
+		// Special case: "main" agent often uses bare "workspace/" directory
+		if id == "main" {
+			barePath := filepath.Join(rootDir, "workspace")
+			if isDirectory(barePath) {
+				return filepath.Clean(barePath)
+			}
 		}
 	}
 
 	return ""
+}
+
+var skippableWorkspaceDirs = map[string]struct{}{
+	".git":         {},
+	"node_modules": {},
+	"scripts":      {},
+	"memory":       {},
+	"logs":         {},
+	"tmp":          {},
+	"cache":        {},
+}
+
+func isSkippableWorkspaceDir(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if _, ok := skippableWorkspaceDirs[lower]; ok {
+		return true
+	}
+	// Skip hidden directories
+	if strings.HasPrefix(lower, ".") {
+		return true
+	}
+	return false
+}
+
+func hasAnyIdentityFile(workspaceDir string) bool {
+	for _, name := range identityFileNames {
+		path := filepath.Join(workspaceDir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			continue
+		}
+		if info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func detectWorkspaceRoot(rootDir string) string {
