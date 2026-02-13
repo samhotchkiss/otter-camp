@@ -2,7 +2,7 @@ package importer
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha1"
 	"database/sql"
 	"fmt"
 	"io"
@@ -13,6 +13,14 @@ import (
 
 	"github.com/lib/pq"
 )
+
+var openClawBackfillMessageIDNamespace = [16]byte{
+	0x6b, 0xa7, 0xb8, 0x11,
+	0x9d, 0xad,
+	0x11, 0xd1,
+	0x80, 0xb4,
+	0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8,
+}
 
 type OpenClawHistoryBackfillOptions struct {
 	OrgID         string
@@ -403,14 +411,13 @@ func stableOpenClawBackfillMessageID(orgID string, event OpenClawSessionEvent) s
 		strings.TrimSpace(event.Body),
 	}, "|")
 
-	hash := md5.Sum([]byte(seed))
-	hex := fmt.Sprintf("%x", hash)
-	return fmt.Sprintf(
-		"%s-%s-%s-%s-%s",
-		hex[0:8],
-		hex[8:12],
-		hex[12:16],
-		hex[16:20],
-		hex[20:32],
-	)
+	sum := sha1.Sum(append(openClawBackfillMessageIDNamespace[:], []byte(seed)...))
+	var id [16]byte
+	copy(id[:], sum[:16])
+
+	// RFC 4122 UUIDv5 version and variant bits.
+	id[6] = (id[6] & 0x0f) | 0x50
+	id[8] = (id[8] & 0x3f) | 0x80
+
+	return fmt.Sprintf("%x-%x-%x-%x-%x", id[0:4], id[4:6], id[6:8], id[8:10], id[10:16])
 }

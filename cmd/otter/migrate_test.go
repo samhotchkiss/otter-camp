@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -135,16 +136,20 @@ func TestMigrateStatusPauseResumeCommands(t *testing.T) {
 	originalOpenDB := openMigrateDatabase
 	originalList := listMigrateProgressByOrg
 	originalUpdate := updateMigrateProgressByOrgStatus
+	originalQueryTimeout := migrateQueryTimeout
 	t.Cleanup(func() {
 		openMigrateDatabase = originalOpenDB
 		listMigrateProgressByOrg = originalList
 		updateMigrateProgressByOrgStatus = originalUpdate
+		migrateQueryTimeout = originalQueryTimeout
 	})
 
 	openMigrateDatabase = func() (*sql.DB, error) {
 		return nil, nil
 	}
-	listMigrateProgressByOrg = func(_ context.Context, _ *sql.DB, _ string) ([]store.MigrationProgress, error) {
+	statusContextHasDeadline := false
+	listMigrateProgressByOrg = func(ctx context.Context, _ *sql.DB, _ string) ([]store.MigrationProgress, error) {
+		_, statusContextHasDeadline = ctx.Deadline()
 		total := 10
 		return []store.MigrationProgress{
 			{
@@ -165,16 +170,21 @@ func TestMigrateStatusPauseResumeCommands(t *testing.T) {
 	}
 
 	updates := make([][2]store.MigrationProgressStatus, 0, 2)
+	updateContextsWithDeadline := 0
 	updateMigrateProgressByOrgStatus = func(
-		_ context.Context,
+		ctx context.Context,
 		_ *sql.DB,
 		_ string,
 		fromStatus store.MigrationProgressStatus,
 		toStatus store.MigrationProgressStatus,
 	) (int, error) {
+		if _, ok := ctx.Deadline(); ok {
+			updateContextsWithDeadline++
+		}
 		updates = append(updates, [2]store.MigrationProgressStatus{fromStatus, toStatus})
 		return 1, nil
 	}
+	migrateQueryTimeout = 500 * time.Millisecond
 
 	var statusOut bytes.Buffer
 	require.NoError(t, runMigrateStatus(&statusOut, "org-1"))
@@ -195,4 +205,59 @@ func TestMigrateStatusPauseResumeCommands(t *testing.T) {
 	require.Equal(t, store.MigrationProgressStatusPaused, updates[0][1])
 	require.Equal(t, store.MigrationProgressStatusPaused, updates[1][0])
 	require.Equal(t, store.MigrationProgressStatusRunning, updates[1][1])
+	require.True(t, statusContextHasDeadline)
+	require.Equal(t, 2, updateContextsWithDeadline)
+}
+
+func TestMigrateFromOpenClawRunUsesExecutionTimeoutContext(t *testing.T) {
+	originalDetect := detectMigrateOpenClawInstallation
+	originalIdentities := importMigrateOpenClawAgentIdentities
+	originalNewRunner := newOpenClawMigrationRunner
+	originalOpenDB := openMigrateDatabase
+	originalRunRunner := runMigrateRunner
+	originalExecutionTimeout := migrateExecutionTimeout
+	t.Cleanup(func() {
+		detectMigrateOpenClawInstallation = originalDetect
+		importMigrateOpenClawAgentIdentities = originalIdentities
+		newOpenClawMigrationRunner = originalNewRunner
+		openMigrateDatabase = originalOpenDB
+		runMigrateRunner = originalRunRunner
+		migrateExecutionTimeout = originalExecutionTimeout
+	})
+
+	detectMigrateOpenClawInstallation = func(opts importer.DetectOpenClawOptions) (*importer.OpenClawInstallation, error) {
+		return &importer.OpenClawInstallation{RootDir: opts.HomeDir}, nil
+	}
+	importMigrateOpenClawAgentIdentities = func(_ *importer.OpenClawInstallation) ([]importer.ImportedAgentIdentity, error) {
+		return []importer.ImportedAgentIdentity{{ID: "main"}}, nil
+	}
+	openMigrateDatabase = func() (*sql.DB, error) {
+		return nil, nil
+	}
+	newOpenClawMigrationRunner = func(_ *sql.DB) *importer.OpenClawMigrationRunner {
+		return &importer.OpenClawMigrationRunner{}
+	}
+
+	runnerContextHasDeadline := false
+	runMigrateRunner = func(
+		ctx context.Context,
+		_ *importer.OpenClawMigrationRunner,
+		_ importer.RunOpenClawMigrationInput,
+	) (importer.RunOpenClawMigrationResult, error) {
+		_, runnerContextHasDeadline = ctx.Deadline()
+		<-ctx.Done()
+		return importer.RunOpenClawMigrationResult{}, ctx.Err()
+	}
+
+	migrateExecutionTimeout = 5 * time.Millisecond
+
+	var out bytes.Buffer
+	err := runMigrateFromOpenClaw(&out, migrateFromOpenClawOptions{
+		OpenClawDir: "/tmp/openclaw",
+		AgentsOnly:  true,
+		OrgID:       "org-1",
+	})
+	require.Error(t, err)
+	require.True(t, runnerContextHasDeadline)
+	require.True(t, errors.Is(err, context.DeadlineExceeded))
 }

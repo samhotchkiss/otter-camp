@@ -98,6 +98,17 @@ func TestMigrationStatusEndpointReturnsPhaseProgress(t *testing.T) {
 	require.Equal(t, 20, *payload.Phases[1].TotalItems)
 }
 
+func TestMigrationStatusEndpointReturnsBadRequestWithoutWorkspaceContext(t *testing.T) {
+	db := setupMessageTestDB(t)
+	handler := handleMigrationStatus(db)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/migrations/status", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 func migrationStatusIntPtr(value int) *int {
 	return &value
 }

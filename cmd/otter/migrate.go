@@ -22,6 +22,14 @@ var importMigrateOpenClawAgentIdentities = importer.ImportOpenClawAgentIdentitie
 var parseMigrateOpenClawSessionEvents = importer.ParseOpenClawSessionEvents
 var newOpenClawMigrationRunner = importer.NewOpenClawMigrationRunner
 var openMigrateDatabase = openMigrateDatabaseFromEnv
+var resolveMigrateBackfillUserIDFn = resolveMigrateBackfillUserID
+var runMigrateRunner = func(
+	ctx context.Context,
+	runner *importer.OpenClawMigrationRunner,
+	input importer.RunOpenClawMigrationInput,
+) (importer.RunOpenClawMigrationResult, error) {
+	return runner.Run(ctx, input)
+}
 var listMigrateProgressByOrg = func(ctx context.Context, db *sql.DB, orgID string) ([]store.MigrationProgress, error) {
 	progressStore := store.NewMigrationProgressStore(db)
 	return progressStore.ListByOrg(ctx, orgID)
@@ -36,6 +44,11 @@ var updateMigrateProgressByOrgStatus = func(
 	progressStore := store.NewMigrationProgressStore(db)
 	return progressStore.UpdateStatusByOrg(ctx, orgID, fromStatus, toStatus)
 }
+
+var (
+	migrateExecutionTimeout = 30 * time.Minute
+	migrateQueryTimeout     = 30 * time.Second
+)
 
 type migrateFromOpenClawOptions struct {
 	OpenClawDir string
@@ -208,18 +221,19 @@ func runMigrateFromOpenClaw(out io.Writer, opts migrateFromOpenClawOptions) erro
 		defer db.Close()
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), migrateExecutionTimeout)
+	defer cancel()
 	userID := ""
 
 	if !opts.AgentsOnly {
-		userID, err = resolveMigrateBackfillUserID(ctx, db, orgID)
+		userID, err = resolveMigrateBackfillUserIDFn(ctx, db, orgID)
 		if err != nil {
 			return err
 		}
 	}
 
 	runner := newOpenClawMigrationRunner(db)
-	runResult, err := runner.Run(ctx, importer.RunOpenClawMigrationInput{
+	runResult, err := runMigrateRunner(ctx, runner, importer.RunOpenClawMigrationInput{
 		OrgID:        orgID,
 		UserID:       userID,
 		Installation: install,
@@ -285,7 +299,10 @@ func runMigrateStatus(out io.Writer, orgOverride string) error {
 		defer db.Close()
 	}
 
-	progressRows, err := listMigrateProgressByOrg(context.Background(), db, orgID)
+	ctx, cancel := context.WithTimeout(context.Background(), migrateQueryTimeout)
+	defer cancel()
+
+	progressRows, err := listMigrateProgressByOrg(ctx, db, orgID)
 	if err != nil {
 		return err
 	}
@@ -322,8 +339,11 @@ func runMigratePause(out io.Writer, orgOverride string) error {
 		defer db.Close()
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), migrateQueryTimeout)
+	defer cancel()
+
 	updated, err := updateMigrateProgressByOrgStatus(
-		context.Background(),
+		ctx,
 		db,
 		orgID,
 		store.MigrationProgressStatusRunning,
@@ -349,8 +369,11 @@ func runMigrateResume(out io.Writer, orgOverride string) error {
 		defer db.Close()
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), migrateQueryTimeout)
+	defer cancel()
+
 	updated, err := updateMigrateProgressByOrgStatus(
-		context.Background(),
+		ctx,
 		db,
 		orgID,
 		store.MigrationProgressStatusPaused,
@@ -373,7 +396,9 @@ func openMigrateDatabaseFromEnv() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Ping(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), migrateQueryTimeout)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

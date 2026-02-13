@@ -377,7 +377,7 @@ func NewRouter() http.Handler {
 		r.Get("/sync/openclaw/dispatch/pending", openclawSyncHandler.PullDispatchQueue)
 		r.Post("/sync/openclaw/dispatch/{id}/ack", openclawSyncHandler.AckDispatchQueue)
 		r.Get("/sync/agents", openclawSyncHandler.GetAgents)
-		r.With(middleware.OptionalWorkspace).Get("/migrations/status", handleMigrationStatus(db))
+		r.With(middleware.RequireWorkspace).Get("/migrations/status", handleMigrationStatus(db))
 		r.Patch("/tasks/{id}", taskHandler.UpdateTask)
 		r.Patch("/tasks/{id}/status", taskHandler.UpdateTaskStatus)
 		r.Get("/messages", messageHandler.ListMessages)

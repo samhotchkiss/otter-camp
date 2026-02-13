@@ -470,6 +470,20 @@ func TestSettingsRoutesAreRegisteredExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestMigrationStatusRouteUsesRequireWorkspaceMiddleware(t *testing.T) {
+	t.Parallel()
+
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	source := string(sourceBytes)
+	requiredLine := `r.With(middleware.RequireWorkspace).Get("/migrations/status", handleMigrationStatus(db))`
+	if !strings.Contains(source, requiredLine) {
+		t.Fatalf("expected migration status route to require workspace middleware")
+	}
+}
+
 func TestSettingsRoutesAreRegistered(t *testing.T) {
 	t.Parallel()
 

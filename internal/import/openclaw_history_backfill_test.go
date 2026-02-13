@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -322,6 +323,33 @@ func TestOpenClawHistoryBackfillUsesUserDisplayNameInRoomName(t *testing.T) {
 	).Scan(&roomName)
 	require.NoError(t, err)
 	require.Equal(t, "Alex Rivera & Frank", roomName)
+}
+
+func TestStableOpenClawBackfillMessageIDUsesUUIDv5(t *testing.T) {
+	event := OpenClawSessionEvent{
+		AgentSlug:   "main",
+		SessionID:   "session-1",
+		EventID:     "event-1",
+		Role:        OpenClawSessionEventRoleAssistant,
+		CreatedAt:   time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC),
+		Body:        "hello",
+		Line:        7,
+		SessionPath: "agents/main/sessions/session-1.jsonl",
+	}
+
+	first := stableOpenClawBackfillMessageID("org-1", event)
+	second := stableOpenClawBackfillMessageID("org-1", event)
+	require.Equal(t, first, second)
+
+	parts := strings.Split(first, "-")
+	require.Len(t, parts, 5)
+	require.Len(t, parts[0], 8)
+	require.Len(t, parts[1], 4)
+	require.Len(t, parts[2], 4)
+	require.Len(t, parts[3], 4)
+	require.Len(t, parts[4], 12)
+	require.Equal(t, "5", strings.ToLower(parts[2][:1]))
+	require.Contains(t, "89ab", strings.ToLower(parts[3][:1]))
 }
 
 func createOpenClawImportTestUser(t *testing.T, db *sql.DB, orgID, key string) string {
