@@ -75,6 +75,10 @@ func (w *EllieIngestionWorker) Start(ctx context.Context) {
 			if w.Logf != nil {
 				w.Logf("ellie ingestion worker run failed: %v", err)
 			}
+			if err := sleepWithContext(ctx, w.Interval); err != nil {
+				return
+			}
+			continue
 		}
 		if processed > 0 {
 			continue
