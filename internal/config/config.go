@@ -76,6 +76,10 @@ const (
 	defaultEllieContextInjectionThreshold        = 0.62
 	defaultEllieContextInjectionCooldownMessages = 4
 	defaultEllieContextInjectionMaxItems         = 3
+
+	defaultConversationTokenBackfillEnabled      = true
+	defaultConversationTokenBackfillPollInterval = 5 * time.Second
+	defaultConversationTokenBackfillBatchSize    = 200
 )
 
 type GitHubConfig struct {
@@ -90,14 +94,15 @@ type GitHubConfig struct {
 }
 
 type Config struct {
-	Port                     string
-	DatabaseURL              string
-	Environment              string
-	GitHub                   GitHubConfig
-	ConversationEmbedding    ConversationEmbeddingConfig
-	ConversationSegmentation ConversationSegmentationConfig
-	EllieIngestion           EllieIngestionConfig
-	EllieContextInjection    EllieContextInjectionConfig
+	Port                      string
+	DatabaseURL               string
+	Environment               string
+	GitHub                    GitHubConfig
+	ConversationEmbedding     ConversationEmbeddingConfig
+	ConversationSegmentation  ConversationSegmentationConfig
+	EllieIngestion            EllieIngestionConfig
+	EllieContextInjection     EllieContextInjectionConfig
+	ConversationTokenBackfill ConversationTokenBackfillConfig
 }
 
 type ConversationEmbeddingConfig struct {
@@ -133,6 +138,12 @@ type EllieContextInjectionConfig struct {
 	Threshold        float64
 	CooldownMessages int
 	MaxItems         int
+}
+
+type ConversationTokenBackfillConfig struct {
+	Enabled      bool
+	PollInterval time.Duration
+	BatchSize    int
 }
 
 func Load() (Config, error) {
@@ -173,9 +184,10 @@ func Load() (Config, error) {
 			),
 			OpenAIAPIKey: strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY")),
 		},
-		ConversationSegmentation: ConversationSegmentationConfig{},
-		EllieIngestion:           EllieIngestionConfig{},
-		EllieContextInjection:    EllieContextInjectionConfig{},
+		ConversationSegmentation:  ConversationSegmentationConfig{},
+		EllieIngestion:            EllieIngestionConfig{},
+		EllieContextInjection:     EllieContextInjectionConfig{},
+		ConversationTokenBackfill: ConversationTokenBackfillConfig{},
 	}
 
 	githubEnabled, err := parseBool("GITHUB_INTEGRATION_ENABLED", false)
@@ -298,6 +310,24 @@ func Load() (Config, error) {
 	}
 	cfg.EllieContextInjection.MaxItems = ellieContextInjectionMaxItems
 
+	conversationTokenBackfillEnabled, err := parseBool("CONVERSATION_TOKEN_BACKFILL_WORKER_ENABLED", defaultConversationTokenBackfillEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationTokenBackfill.Enabled = conversationTokenBackfillEnabled
+
+	conversationTokenBackfillPollInterval, err := parseDuration("CONVERSATION_TOKEN_BACKFILL_POLL_INTERVAL", defaultConversationTokenBackfillPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationTokenBackfill.PollInterval = conversationTokenBackfillPollInterval
+
+	conversationTokenBackfillBatchSize, err := parseInt("CONVERSATION_TOKEN_BACKFILL_BATCH_SIZE", defaultConversationTokenBackfillBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConversationTokenBackfill.BatchSize = conversationTokenBackfillBatchSize
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -365,6 +395,15 @@ func (c Config) Validate() error {
 		}
 		if c.EllieContextInjection.MaxItems <= 0 {
 			return fmt.Errorf("ELLIE_CONTEXT_INJECTION_MAX_ITEMS must be greater than zero")
+		}
+	}
+
+	if c.ConversationTokenBackfill.Enabled {
+		if c.ConversationTokenBackfill.PollInterval <= 0 {
+			return fmt.Errorf("CONVERSATION_TOKEN_BACKFILL_POLL_INTERVAL must be greater than zero")
+		}
+		if c.ConversationTokenBackfill.BatchSize <= 0 {
+			return fmt.Errorf("CONVERSATION_TOKEN_BACKFILL_BATCH_SIZE must be greater than zero")
 		}
 	}
 
