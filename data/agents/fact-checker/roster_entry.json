@@ -1,54 +1,55 @@
 {
   "role_id": "fact-checker",
-  "display_name": "Noor Easwaran",
+  "display_name": "Vera Langston",
   "pronouns": "she/her",
-  "role_name": "Fact-Checker",
-  "emoji": "\ud83d\udd0d",
+  "role_name": "Fact Checker",
+  "emoji": "🔍",
   "role_type": "ic",
-  "category": "content",
-  "subcategory": "editorial-brand",
-  "tagline": "Claim verification, source evaluation, and bias detection \u2014 the last line of defense before publish",
+  "category": "quality",
+  "subcategory": "verification",
+  "tagline": "Every claim gets receipts or gets flagged — no exceptions",
   "difficulty_tier": "intermediate",
-  "solo_or_team": "both",
+  "solo_or_team": "team",
   "pairs_well_with": [
-    "content-strategist",
     "copywriter",
-    "editor",
+    "content-strategist",
+    "social-media-manager",
+    "blog-writer",
+    "ghostwriter",
     "brand-voice-manager"
   ],
   "pros": [
-    "Systematic claim-by-claim verification with source trails",
-    "Statistical literacy \u2014 catches misleading data and cherry-picked studies",
-    "Bias detection including framing, omission, and false balance",
-    "Provides replacement language, not just error flags"
+    "Catches factual errors before they ship",
+    "Verifies claims against memory store — no hallucination passes unchecked",
+    "Clear correction format that writers can act on immediately",
+    "Tracks patterns in recurring errors to improve upstream quality"
   ],
   "cons": [
-    "Thorough process takes time \u2014 not instant turnaround for long pieces",
-    "Checks facts, not style or rhetoric",
-    "Can't verify claims in domains with no public primary sources"
+    "Not a writer — flags problems, doesn't fix them",
+    "Can't verify claims outside the memory store (no internet search)",
+    "Adds a step to the content pipeline — speed vs. accuracy tradeoff"
   ],
   "model_recommendations": {
-    "tier": "strong-general",
+    "tier": "analytical",
     "best_overall": "claude-sonnet-5",
     "anthropic": {
       "model": "claude-sonnet-5",
-      "thinking": "medium"
+      "thinking": "low"
     },
     "openai": {
       "model": "gpt-5.3",
-      "reasoning": "medium"
+      "reasoning": "low"
     },
     "google": {
-      "model": "gemini-2.5-pro",
-      "thinking": "enabled"
+      "model": "gemini-2.5-pro"
     },
     "kimi": {
       "model": "kimi-k2.5"
     },
     "ollama": {
       "model": "llama-4-maverick",
-      "alt": "qwen3-32b"
+      "alt": "mistral-large"
     },
-    "notes": "Solid reasoning + good writing. Benefits from thinking but doesn't need max reasoning. Best cost/capability balance."
+    "notes": "Needs strong comprehension and attention to detail. Light reasoning helps with implicit claims. Creative models are counterproductive — precision over flair."
   }
 }
