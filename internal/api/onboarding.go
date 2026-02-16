@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -68,14 +69,16 @@ func HandleOnboardingBootstrap(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "database unavailable"})
 		return
 	}
-	locked, err := onboardingSetupLocked(r.Context(), db)
-	if err != nil {
-		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to evaluate onboarding state"})
-		return
-	}
-	if locked {
-		sendJSON(w, http.StatusConflict, errorResponse{Error: "onboarding already completed"})
-		return
+	if onboardingSetupLockEnabled() {
+		locked, err := onboardingSetupLocked(r.Context(), db)
+		if err != nil {
+			sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to evaluate onboarding state"})
+			return
+		}
+		if locked {
+			sendJSON(w, http.StatusConflict, errorResponse{Error: "onboarding already completed"})
+			return
+		}
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, onboardingMaxBodyBytes)
@@ -372,6 +375,21 @@ func onboardingSetupLocked(ctx context.Context, db *sql.DB) (bool, error) {
 	var exists bool
 	err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM organizations LIMIT 1)`).Scan(&exists)
 	return exists, err
+}
+
+func onboardingSetupLockEnabled() bool {
+	if envFlagEnabled("ONBOARDING_ALLOW_MULTI_ORG") {
+		return false
+	}
+	if envFlagEnabled("ONBOARDING_SETUP_LOCK_DISABLED") {
+		return false
+	}
+	return true
+}
+
+func envFlagEnabled(name string) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	return raw == "1" || raw == "true" || raw == "yes"
 }
 
 func looksLikeEmail(value string) bool {
