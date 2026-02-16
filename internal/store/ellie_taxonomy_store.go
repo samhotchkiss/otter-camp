@@ -57,6 +57,12 @@ type EllieTaxonomySubtreeMemory struct {
 	OccurredAt           time.Time
 }
 
+type EllieTaxonomyPendingMemory struct {
+	MemoryID string
+	Title    string
+	Content  string
+}
+
 type ellieTaxonomyQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
@@ -232,6 +238,94 @@ func (s *EllieTaxonomyStore) ListNodesByParent(ctx context.Context, orgID string
 	return nodes, nil
 }
 
+func (s *EllieTaxonomyStore) ListAllNodes(ctx context.Context, orgID string) ([]EllieTaxonomyNode, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("ellie taxonomy store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, org_id, parent_id::text, slug, display_name, description, depth, created_at
+		   FROM ellie_taxonomy_nodes
+		  WHERE org_id = $1
+		  ORDER BY depth ASC, slug ASC`,
+		orgID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list taxonomy nodes: %w", err)
+	}
+	defer rows.Close()
+
+	nodes := make([]EllieTaxonomyNode, 0)
+	for rows.Next() {
+		node, scanErr := scanEllieTaxonomyNode(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("failed to scan taxonomy node: %w", scanErr)
+		}
+		nodes = append(nodes, *node)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading taxonomy nodes: %w", err)
+	}
+	return nodes, nil
+}
+
+func (s *EllieTaxonomyStore) ListPendingMemoriesForClassification(
+	ctx context.Context,
+	orgID string,
+	limit int,
+) ([]EllieTaxonomyPendingMemory, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("ellie taxonomy store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT m.id::text, m.title, m.content
+		   FROM memories m
+		  WHERE m.org_id = $1
+		    AND m.status = 'active'
+		    AND COALESCE(m.metadata->>'taxonomy_classified_at', '') = ''
+		  ORDER BY m.occurred_at ASC, m.id ASC
+		  LIMIT $2`,
+		orgID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pending taxonomy memories: %w", err)
+	}
+	defer rows.Close()
+
+	memories := make([]EllieTaxonomyPendingMemory, 0, limit)
+	for rows.Next() {
+		var row EllieTaxonomyPendingMemory
+		if err := rows.Scan(&row.MemoryID, &row.Title, &row.Content); err != nil {
+			return nil, fmt.Errorf("failed to scan pending taxonomy memory: %w", err)
+		}
+		memories = append(memories, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading pending taxonomy memories: %w", err)
+	}
+	return memories, nil
+}
+
 func (s *EllieTaxonomyStore) UpsertMemoryClassification(ctx context.Context, input UpsertEllieMemoryTaxonomyInput) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("ellie taxonomy store is not configured")
@@ -291,6 +385,60 @@ func (s *EllieTaxonomyStore) UpsertMemoryClassification(ctx context.Context, inp
 		return fmt.Errorf("failed to upsert memory classification: %w", err)
 	}
 
+	return nil
+}
+
+func (s *EllieTaxonomyStore) MarkMemoryTaxonomyClassified(
+	ctx context.Context,
+	orgID,
+	memoryID string,
+	classifiedAt time.Time,
+	classifierModel,
+	classifierTraceID string,
+) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("ellie taxonomy store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return fmt.Errorf("invalid org_id")
+	}
+	memoryID = strings.TrimSpace(memoryID)
+	if !uuidRegex.MatchString(memoryID) {
+		return fmt.Errorf("invalid memory_id")
+	}
+	if classifiedAt.IsZero() {
+		classifiedAt = time.Now().UTC()
+	}
+
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE memories
+		    SET metadata = metadata || jsonb_strip_nulls(jsonb_build_object(
+		            'taxonomy_classified_at', $3,
+		            'taxonomy_classifier_model', NULLIF($4, ''),
+		            'taxonomy_classifier_trace_id', NULLIF($5, '')
+		        )),
+		        updated_at = NOW()
+		  WHERE org_id = $1
+		    AND id = $2`,
+		orgID,
+		memoryID,
+		classifiedAt.UTC().Format(time.RFC3339Nano),
+		strings.TrimSpace(classifierModel),
+		strings.TrimSpace(classifierTraceID),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark memory taxonomy classified: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read taxonomy classified update count: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
 	return nil
 }
 
