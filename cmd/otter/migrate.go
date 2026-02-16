@@ -266,6 +266,7 @@ func renderMigrateOpenClawSummary(out io.Writer, summary importer.OpenClawMigrat
 	fmt.Fprintf(out, "  memory_extraction.processed=%d\n", summary.MemoryExtractionProcessed)
 	fmt.Fprintf(out, "  entity_synthesis.processed=%d\n", summary.EntitySynthesisProcessed)
 	fmt.Fprintf(out, "  memory_dedup.processed=%d\n", summary.MemoryDedupProcessed)
+	fmt.Fprintf(out, "  taxonomy_classification.processed=%d\n", summary.TaxonomyClassificationProcessed)
 	fmt.Fprintf(out, "  project_discovery.processed=%d\n", summary.ProjectDiscoveryProcessed)
 	fmt.Fprintf(out, "  failed_items=%d\n", summary.FailedItems)
 	if len(summary.Warnings) == 0 {

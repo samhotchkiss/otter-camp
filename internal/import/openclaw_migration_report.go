@@ -1,15 +1,16 @@
 package importer
 
 type OpenClawMigrationSummaryReport struct {
-	AgentImportProcessed      int
-	HistoryEventsProcessed    int
-	HistoryMessagesInserted   int
-	MemoryExtractionProcessed int
-	EntitySynthesisProcessed  int
-	MemoryDedupProcessed      int
-	ProjectDiscoveryProcessed int
-	FailedItems               int
-	Warnings                  []string
+	AgentImportProcessed            int
+	HistoryEventsProcessed          int
+	HistoryMessagesInserted         int
+	MemoryExtractionProcessed       int
+	EntitySynthesisProcessed        int
+	MemoryDedupProcessed            int
+	TaxonomyClassificationProcessed int
+	ProjectDiscoveryProcessed       int
+	FailedItems                     int
+	Warnings                        []string
 }
 
 func BuildOpenClawMigrationSummaryReport(result RunOpenClawMigrationResult) OpenClawMigrationSummaryReport {
@@ -30,6 +31,9 @@ func BuildOpenClawMigrationSummaryReport(result RunOpenClawMigrationResult) Open
 	}
 	if result.Dedup != nil {
 		report.MemoryDedupProcessed = result.Dedup.ProcessedClusters
+	}
+	if result.TaxonomyPhase != nil {
+		report.TaxonomyClassificationProcessed = result.TaxonomyPhase.ProcessedMemories
 	}
 	if result.ProjectDiscovery != nil {
 		report.ProjectDiscoveryProcessed = result.ProjectDiscovery.ProcessedItems
