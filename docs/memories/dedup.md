@@ -58,4 +58,5 @@ Before LLM dedup, we tested tighter cosine similarity thresholds:
 
 ## Change Log
 
+- 2026-02-16: Integrated migration runner phase ordering (`entity_synthesis -> memory_dedup -> project_discovery`) and aligned summary/report counters.
 - 2026-02-16: Created with E02 and E13 dedup results.

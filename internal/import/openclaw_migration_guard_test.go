@@ -90,6 +90,9 @@ func TestOpenClawMigrationSummaryReport(t *testing.T) {
 		EntitySynthesis: &OpenClawEntitySynthesisResult{
 			ProcessedEntities: 11,
 		},
+		Dedup: &OpenClawDedupResult{
+			ProcessedClusters: 12,
+		},
 		ProjectDiscovery: &OpenClawProjectDiscoveryResult{
 			ProcessedItems: 7,
 		},
@@ -101,6 +104,7 @@ func TestOpenClawMigrationSummaryReport(t *testing.T) {
 	require.Equal(t, 39, report.HistoryMessagesInserted)
 	require.Equal(t, 39, report.MemoryExtractionProcessed)
 	require.Equal(t, 11, report.EntitySynthesisProcessed)
+	require.Equal(t, 12, report.MemoryDedupProcessed)
 	require.Equal(t, 7, report.ProjectDiscoveryProcessed)
 	require.Equal(t, 0, report.FailedItems)
 	require.Len(t, report.Warnings, 1)
@@ -112,8 +116,23 @@ func TestOpenClawMigrationSummaryReport(t *testing.T) {
 		HistoryBackfill:  &OpenClawHistoryBackfillResult{EventsProcessed: 42, MessagesInserted: 39},
 		EllieBackfill:    &OpenClawEllieBackfillResult{ProcessedMessages: 39},
 		EntitySynthesis:  &OpenClawEntitySynthesisResult{ProcessedEntities: 11},
+		Dedup:            &OpenClawDedupResult{ProcessedClusters: 12},
 		ProjectDiscovery: &OpenClawProjectDiscoveryResult{ProcessedItems: 7},
 		Paused:           true,
 	})
 	require.Equal(t, report, reportAgain)
+}
+
+func TestOpenClawMigrationSummaryReportIncludesEntityAndDedup(t *testing.T) {
+	report := BuildOpenClawMigrationSummaryReport(RunOpenClawMigrationResult{
+		EntitySynthesis: &OpenClawEntitySynthesisResult{
+			ProcessedEntities: 11,
+		},
+		Dedup: &OpenClawDedupResult{
+			ProcessedClusters: 8,
+		},
+	})
+
+	require.Equal(t, 11, report.EntitySynthesisProcessed)
+	require.Equal(t, 8, report.MemoryDedupProcessed)
 }

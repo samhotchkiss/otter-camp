@@ -6,6 +6,7 @@ type OpenClawMigrationSummaryReport struct {
 	HistoryMessagesInserted   int
 	MemoryExtractionProcessed int
 	EntitySynthesisProcessed  int
+	MemoryDedupProcessed      int
 	ProjectDiscoveryProcessed int
 	FailedItems               int
 	Warnings                  []string
@@ -26,6 +27,9 @@ func BuildOpenClawMigrationSummaryReport(result RunOpenClawMigrationResult) Open
 	}
 	if result.EntitySynthesis != nil {
 		report.EntitySynthesisProcessed = result.EntitySynthesis.ProcessedEntities
+	}
+	if result.Dedup != nil {
+		report.MemoryDedupProcessed = result.Dedup.ProcessedClusters
 	}
 	if result.ProjectDiscovery != nil {
 		report.ProjectDiscoveryProcessed = result.ProjectDiscovery.ProcessedItems
