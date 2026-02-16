@@ -33,6 +33,8 @@ type EllieDedupStore interface {
 	RecordReviewedPair(ctx context.Context, orgID, memoryID1, memoryID2, decision string) error
 	DeprecateMemories(ctx context.Context, orgID string, memoryIDs []string, supersededBy *string) error
 	CreateMergedMemory(ctx context.Context, orgID, title, content string, sourceMemoryIDs []string) (string, error)
+	GetCursor(ctx context.Context, orgID string) (*EllieDedupCursorState, error)
+	UpsertCursor(ctx context.Context, orgID string, lastClusterKey *string, processedClusters, totalClusters int) error
 }
 
 type EllieDedupReviewer interface {
@@ -49,6 +51,7 @@ type EllieDedupWorkerConfig struct {
 	SimilarityThreshold float64
 	PairLimit           int
 	Reviewer            EllieDedupReviewer
+	MaxClustersPerRun   int
 }
 
 type EllieDedupRunResult struct {
@@ -63,6 +66,13 @@ type EllieDedupWorker struct {
 	SimilarityThreshold float64
 	PairLimit           int
 	Reviewer            EllieDedupReviewer
+	MaxClustersPerRun   int
+}
+
+type EllieDedupCursorState struct {
+	LastClusterKey    *string
+	ProcessedClusters int
+	TotalClusters     int
 }
 
 func NewEllieDedupWorker(store EllieDedupStore, cfg EllieDedupWorkerConfig) *EllieDedupWorker {
@@ -79,6 +89,7 @@ func NewEllieDedupWorker(store EllieDedupStore, cfg EllieDedupWorkerConfig) *Ell
 		SimilarityThreshold: threshold,
 		PairLimit:           pairLimit,
 		Reviewer:            cfg.Reviewer,
+		MaxClustersPerRun:   cfg.MaxClustersPerRun,
 	}
 }
 
@@ -116,9 +127,30 @@ func (w *EllieDedupWorker) RunOnce(ctx context.Context, orgID string) (EllieDedu
 
 	result := EllieDedupRunResult{PairsDiscovered: len(filteredPairs)}
 	clusters := ClusterEllieDedupPairs(filteredPairs)
+	cursorState, err := w.Store.GetCursor(ctx, orgID)
+	if err != nil {
+		return result, fmt.Errorf("get dedup cursor: %w", err)
+	}
+	lastClusterKey := ""
+	processedClusters := 0
+	if cursorState != nil {
+		if cursorState.LastClusterKey != nil {
+			lastClusterKey = strings.TrimSpace(*cursorState.LastClusterKey)
+		}
+		if cursorState.ProcessedClusters > 0 {
+			processedClusters = cursorState.ProcessedClusters
+		}
+	}
+	totalClusters := len(clusters)
+	processedThisRun := 0
+
 	for _, cluster := range clusters {
 		clusterIDs := append([]string(nil), cluster.MemoryIDs...)
 		if len(clusterIDs) < 2 {
+			continue
+		}
+		clusterKey := ellieDedupClusterKey(cluster)
+		if lastClusterKey != "" && clusterKey <= lastClusterKey {
 			continue
 		}
 
@@ -172,6 +204,20 @@ func (w *EllieDedupWorker) RunOnce(ctx context.Context, orgID string) (EllieDedu
 			}
 		}
 		result.ClustersReviewed += 1
+		processedClusters += 1
+		lastClusterKey = clusterKey
+		if err := w.Store.UpsertCursor(ctx, orgID, &clusterKey, processedClusters, totalClusters); err != nil {
+			return result, fmt.Errorf("upsert dedup cursor: %w", err)
+		}
+		processedThisRun += 1
+		if w.MaxClustersPerRun > 0 && processedThisRun >= w.MaxClustersPerRun {
+			break
+		}
+	}
+	if result.ClustersReviewed == 0 {
+		if err := w.Store.UpsertCursor(ctx, orgID, nil, processedClusters, totalClusters); err != nil {
+			return result, fmt.Errorf("upsert dedup cursor for no-op run: %w", err)
+		}
 	}
 
 	return result, nil
@@ -344,4 +390,13 @@ func ellieDedupAllPairCombinations(memoryIDs []string) []EllieDedupPair {
 		}
 	}
 	return pairs
+}
+
+func ellieDedupClusterKey(cluster EllieDedupCluster) string {
+	if len(cluster.MemoryIDs) == 0 {
+		return ""
+	}
+	ids := append([]string(nil), cluster.MemoryIDs...)
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
 }

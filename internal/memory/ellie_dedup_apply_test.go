@@ -19,6 +19,8 @@ type fakeEllieDedupStore struct {
 	mergeID      string
 	mergeCalls   int
 	mergeInputs  []EllieDedupMergeDecision
+	cursor       *EllieDedupCursorState
+	cursorLog    []EllieDedupCursorState
 }
 
 func (f *fakeEllieDedupStore) ListCandidatePairs(_ context.Context, _ string, _ float64, _ int) ([]EllieDedupPair, error) {
@@ -75,13 +77,47 @@ func (f *fakeEllieDedupStore) CreateMergedMemory(_ context.Context, _ string, ti
 	return f.mergeID, nil
 }
 
+func (f *fakeEllieDedupStore) GetCursor(_ context.Context, _ string) (*EllieDedupCursorState, error) {
+	if f.cursor == nil {
+		return nil, nil
+	}
+	copyCursor := *f.cursor
+	return &copyCursor, nil
+}
+
+func (f *fakeEllieDedupStore) UpsertCursor(_ context.Context, _ string, lastClusterKey *string, processedClusters, totalClusters int) error {
+	var keyCopy *string
+	if lastClusterKey != nil {
+		trimmed := strings.TrimSpace(*lastClusterKey)
+		if trimmed != "" {
+			keyCopy = &trimmed
+		}
+	}
+	next := EllieDedupCursorState{
+		LastClusterKey:    keyCopy,
+		ProcessedClusters: processedClusters,
+		TotalClusters:     totalClusters,
+	}
+	f.cursor = &next
+	f.cursorLog = append(f.cursorLog, next)
+	return nil
+}
+
 type fakeEllieDedupReviewer struct {
 	calls    int
 	decision EllieDedupDecision
+	dynamic  bool
 }
 
-func (f *fakeEllieDedupReviewer) Review(_ context.Context, _ EllieDedupReviewInput) (EllieDedupDecision, error) {
+func (f *fakeEllieDedupReviewer) Review(_ context.Context, input EllieDedupReviewInput) (EllieDedupDecision, error) {
 	f.calls += 1
+	if f.dynamic {
+		next := f.decision
+		if len(input.Cluster.MemoryIDs) > 0 {
+			next.Keep = input.Cluster.MemoryIDs[0]
+		}
+		return next, nil
+	}
 	return f.decision, nil
 }
 
@@ -151,6 +187,71 @@ func TestEllieDedupWorkerSkipsPreviouslyReviewedPairs(t *testing.T) {
 	require.Equal(t, 0, reviewer.calls)
 	require.Empty(t, store.deprecated)
 	require.Empty(t, store.recorded)
+}
+
+func TestEllieDedupWorkerResumesFromCursorAfterInterruption(t *testing.T) {
+	store := &fakeEllieDedupStore{
+		pairs: []EllieDedupPair{
+			{MemoryID1: "a", MemoryID2: "b", Similarity: 0.92},
+			{MemoryID1: "c", MemoryID2: "d", Similarity: 0.93},
+		},
+		memories: map[string]EllieDedupReviewMemory{
+			"a": {MemoryID: "a", Title: "A", Content: "dup"},
+			"b": {MemoryID: "b", Title: "B", Content: "dup"},
+			"c": {MemoryID: "c", Title: "C", Content: "dup"},
+			"d": {MemoryID: "d", Title: "D", Content: "dup"},
+		},
+	}
+	reviewer := &fakeEllieDedupReviewer{decision: EllieDedupDecision{Deprecate: []string{}}, dynamic: true}
+	worker := NewEllieDedupWorker(store, EllieDedupWorkerConfig{
+		Reviewer:          reviewer,
+		MaxClustersPerRun: 1,
+	})
+
+	first, err := worker.RunOnce(context.Background(), "org-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, first.ClustersReviewed)
+	require.NotNil(t, store.cursor)
+	require.NotNil(t, store.cursor.LastClusterKey)
+	firstKey := *store.cursor.LastClusterKey
+	require.NotEmpty(t, firstKey)
+
+	second, err := worker.RunOnce(context.Background(), "org-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, second.ClustersReviewed)
+	require.Equal(t, 2, reviewer.calls)
+	require.NotNil(t, store.cursor)
+	require.Equal(t, 2, store.cursor.ProcessedClusters)
+}
+
+func TestEllieDedupWorkerProgressReportingIsMonotonic(t *testing.T) {
+	store := &fakeEllieDedupStore{
+		pairs: []EllieDedupPair{
+			{MemoryID1: "a", MemoryID2: "b", Similarity: 0.92},
+			{MemoryID1: "c", MemoryID2: "d", Similarity: 0.93},
+		},
+		memories: map[string]EllieDedupReviewMemory{
+			"a": {MemoryID: "a", Title: "A", Content: "dup"},
+			"b": {MemoryID: "b", Title: "B", Content: "dup"},
+			"c": {MemoryID: "c", Title: "C", Content: "dup"},
+			"d": {MemoryID: "d", Title: "D", Content: "dup"},
+		},
+	}
+	reviewer := &fakeEllieDedupReviewer{decision: EllieDedupDecision{Deprecate: []string{}}, dynamic: true}
+	worker := NewEllieDedupWorker(store, EllieDedupWorkerConfig{Reviewer: reviewer})
+
+	_, err := worker.RunOnce(context.Background(), "org-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, store.cursorLog)
+
+	prev := -1
+	for _, entry := range store.cursorLog {
+		require.GreaterOrEqual(t, entry.ProcessedClusters, prev)
+		prev = entry.ProcessedClusters
+	}
+	last := store.cursorLog[len(store.cursorLog)-1]
+	require.Equal(t, 2, last.ProcessedClusters)
+	require.Equal(t, 2, last.TotalClusters)
 }
 
 func fakeEllieDedupPairKey(memoryID1, memoryID2 string) string {
