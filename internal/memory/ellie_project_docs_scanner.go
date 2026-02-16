@@ -15,6 +15,8 @@ import (
 
 var markdownLinkPattern = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 
+const defaultProjectDocSectionMaxChars = 4000
+
 type EllieProjectDocChangeStatus string
 
 const (
@@ -29,12 +31,14 @@ type EllieKnownProjectDoc struct {
 }
 
 type EllieDiscoveredProjectDoc struct {
-	FilePath        string
-	Title           string
-	Content         string
-	ContentHash     string
-	ChangeStatus    EllieProjectDocChangeStatus
-	StartHereLinked bool
+	FilePath         string
+	Title            string
+	Content          string
+	ContentHash      string
+	Summary          string
+	SummaryEmbedding []float64
+	ChangeStatus     EllieProjectDocChangeStatus
+	StartHereLinked  bool
 }
 
 type EllieProjectDocsScanInput struct {
@@ -47,7 +51,27 @@ type EllieProjectDocsScanResult struct {
 	DeletedPaths []string
 }
 
-type EllieProjectDocsScanner struct{}
+type EllieProjectDocSummarizer interface {
+	Summarize(ctx context.Context, input EllieProjectDocSummaryInput) (string, error)
+}
+
+type EllieProjectDocEmbeddingClient interface {
+	Embed(ctx context.Context, inputs []string) ([][]float64, error)
+}
+
+type EllieProjectDocSummaryInput struct {
+	FilePath     string
+	Title        string
+	Content      string
+	SectionIndex int
+	SectionTotal int
+}
+
+type EllieProjectDocsScanner struct {
+	Summarizer      EllieProjectDocSummarizer
+	EmbeddingClient EllieProjectDocEmbeddingClient
+	MaxSectionChars int
+}
 
 func (s *EllieProjectDocsScanner) Scan(
 	ctx context.Context,
@@ -154,6 +178,78 @@ func (s *EllieProjectDocsScanner) Scan(
 		Documents:    documents,
 		DeletedPaths: deletedPaths,
 	}, nil
+}
+
+func (s *EllieProjectDocsScanner) SummarizeAndEmbedDocuments(
+	ctx context.Context,
+	documents []EllieDiscoveredProjectDoc,
+) ([]EllieDiscoveredProjectDoc, error) {
+	if len(documents) == 0 {
+		return []EllieDiscoveredProjectDoc{}, nil
+	}
+	if s == nil {
+		return nil, fmt.Errorf("project docs scanner is required")
+	}
+	if s.Summarizer == nil {
+		return nil, fmt.Errorf("project docs summarizer is required")
+	}
+	if s.EmbeddingClient == nil {
+		return nil, fmt.Errorf("project docs embedding client is required")
+	}
+
+	maxSectionChars := s.MaxSectionChars
+	if maxSectionChars <= 0 {
+		maxSectionChars = defaultProjectDocSectionMaxChars
+	}
+
+	enriched := make([]EllieDiscoveredProjectDoc, len(documents))
+	copy(enriched, documents)
+
+	for i := range enriched {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if enriched[i].ChangeStatus == EllieProjectDocChangeStatusUnchanged {
+			continue
+		}
+
+		sections := splitProjectDocIntoSections(enriched[i].Content, maxSectionChars)
+		sectionSummaries := make([]string, 0, len(sections))
+		for sectionIndex, section := range sections {
+			summary, err := s.Summarizer.Summarize(ctx, EllieProjectDocSummaryInput{
+				FilePath:     enriched[i].FilePath,
+				Title:        enriched[i].Title,
+				Content:      section,
+				SectionIndex: sectionIndex,
+				SectionTotal: len(sections),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("summarize %s section %d: %w", enriched[i].FilePath, sectionIndex+1, err)
+			}
+			summary = strings.TrimSpace(summary)
+			if summary != "" {
+				sectionSummaries = append(sectionSummaries, summary)
+			}
+		}
+
+		finalSummary := strings.TrimSpace(strings.Join(sectionSummaries, "\n\n"))
+		enriched[i].Summary = finalSummary
+		if finalSummary == "" {
+			enriched[i].SummaryEmbedding = nil
+			continue
+		}
+
+		embeddings, err := s.EmbeddingClient.Embed(ctx, []string{finalSummary})
+		if err != nil {
+			return nil, fmt.Errorf("embed summary for %s: %w", enriched[i].FilePath, err)
+		}
+		if len(embeddings) != 1 || len(embeddings[0]) == 0 {
+			return nil, fmt.Errorf("embed summary for %s: missing embedding", enriched[i].FilePath)
+		}
+		enriched[i].SummaryEmbedding = embeddings[0]
+	}
+
+	return enriched, nil
 }
 
 func discoverStartHereLinkedDocs(
@@ -267,4 +363,65 @@ func normalizeProjectDocPath(value string) string {
 		return ""
 	}
 	return cleaned
+}
+
+func splitProjectDocIntoSections(content string, maxChars int) []string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return []string{""}
+	}
+	if maxChars <= 0 || len(trimmed) <= maxChars {
+		return []string{trimmed}
+	}
+
+	paragraphs := strings.Split(trimmed, "\n\n")
+	sections := make([]string, 0, len(paragraphs))
+	current := strings.Builder{}
+
+	flush := func() {
+		section := strings.TrimSpace(current.String())
+		if section != "" {
+			sections = append(sections, section)
+		}
+		current.Reset()
+	}
+
+	for _, paragraph := range paragraphs {
+		chunk := strings.TrimSpace(paragraph)
+		if chunk == "" {
+			continue
+		}
+		if len(chunk) > maxChars {
+			if current.Len() > 0 {
+				flush()
+			}
+			for len(chunk) > maxChars {
+				sections = append(sections, strings.TrimSpace(chunk[:maxChars]))
+				chunk = strings.TrimSpace(chunk[maxChars:])
+			}
+			if chunk != "" {
+				sections = append(sections, chunk)
+			}
+			continue
+		}
+
+		next := chunk
+		if current.Len() > 0 {
+			next = current.String() + "\n\n" + chunk
+		}
+		if len(next) > maxChars && current.Len() > 0 {
+			flush()
+		}
+		if current.Len() > 0 {
+			current.WriteString("\n\n")
+		}
+		current.WriteString(chunk)
+	}
+	if current.Len() > 0 {
+		flush()
+	}
+	if len(sections) == 0 {
+		return []string{trimmed}
+	}
+	return sections
 }

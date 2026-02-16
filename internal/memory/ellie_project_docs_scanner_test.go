@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -80,4 +82,118 @@ func TestEllieProjectDocsScannerDetectsChangedAndDeletedFiles(t *testing.T) {
 	}
 	require.Equal(t, EllieProjectDocChangeStatusUnchanged, statusByPath["docs/keep.md"])
 	require.Equal(t, EllieProjectDocChangeStatusChanged, statusByPath["docs/changed.md"])
+}
+
+func TestEllieProjectDocsScannerSummarizesAndEmbedsChangedDocs(t *testing.T) {
+	summarizer := &fakeProjectDocSummarizer{}
+	embedder := &fakeProjectDocEmbedder{}
+	scanner := &EllieProjectDocsScanner{
+		Summarizer:      summarizer,
+		EmbeddingClient: embedder,
+		MaxSectionChars: 1024,
+	}
+
+	docs := []EllieDiscoveredProjectDoc{
+		{
+			FilePath:     "docs/changed.md",
+			Content:      "# Changed\nContent",
+			ChangeStatus: EllieProjectDocChangeStatusChanged,
+		},
+		{
+			FilePath:     "docs/new.md",
+			Content:      "# New\nContent",
+			ChangeStatus: EllieProjectDocChangeStatusNew,
+		},
+	}
+
+	enriched, err := scanner.SummarizeAndEmbedDocuments(context.Background(), docs)
+	require.NoError(t, err)
+	require.Len(t, enriched, 2)
+	require.Equal(t, "summary:docs/changed.md:1", enriched[0].Summary)
+	require.Len(t, enriched[0].SummaryEmbedding, 1536)
+	require.Equal(t, "summary:docs/new.md:1", enriched[1].Summary)
+	require.Len(t, enriched[1].SummaryEmbedding, 1536)
+	require.Len(t, summarizer.calls, 2)
+	require.Len(t, embedder.calls, 2)
+}
+
+func TestEllieProjectDocsScannerSkipsUnchangedDocs(t *testing.T) {
+	summarizer := &fakeProjectDocSummarizer{}
+	embedder := &fakeProjectDocEmbedder{}
+	scanner := &EllieProjectDocsScanner{
+		Summarizer:      summarizer,
+		EmbeddingClient: embedder,
+		MaxSectionChars: 1024,
+	}
+
+	docs := []EllieDiscoveredProjectDoc{
+		{
+			FilePath:     "docs/unchanged.md",
+			Content:      "# Unchanged\nNo-op",
+			ChangeStatus: EllieProjectDocChangeStatusUnchanged,
+		},
+	}
+
+	enriched, err := scanner.SummarizeAndEmbedDocuments(context.Background(), docs)
+	require.NoError(t, err)
+	require.Len(t, enriched, 1)
+	require.Empty(t, enriched[0].Summary)
+	require.Nil(t, enriched[0].SummaryEmbedding)
+	require.Empty(t, summarizer.calls)
+	require.Empty(t, embedder.calls)
+}
+
+func TestEllieProjectDocsScannerSplitsLargeDocsIntoSections(t *testing.T) {
+	summarizer := &fakeProjectDocSummarizer{}
+	embedder := &fakeProjectDocEmbedder{}
+	scanner := &EllieProjectDocsScanner{
+		Summarizer:      summarizer,
+		EmbeddingClient: embedder,
+		MaxSectionChars: 40,
+	}
+
+	docs := []EllieDiscoveredProjectDoc{
+		{
+			FilePath: "docs/large.md",
+			Content: strings.Join([]string{
+				"# Large",
+				"",
+				"Section one paragraph that exceeds the section limit.",
+				"",
+				"Section two paragraph also exceeds the section limit.",
+			}, "\n"),
+			ChangeStatus: EllieProjectDocChangeStatusChanged,
+		},
+	}
+
+	enriched, err := scanner.SummarizeAndEmbedDocuments(context.Background(), docs)
+	require.NoError(t, err)
+	require.Len(t, enriched, 1)
+	require.Greater(t, len(summarizer.calls), 1)
+	require.Len(t, embedder.calls, 1)
+	require.Contains(t, enriched[0].Summary, "summary:docs/large.md:1")
+	require.Contains(t, enriched[0].Summary, "summary:docs/large.md:2")
+}
+
+type fakeProjectDocSummarizer struct {
+	calls []EllieProjectDocSummaryInput
+}
+
+func (f *fakeProjectDocSummarizer) Summarize(
+	_ context.Context,
+	input EllieProjectDocSummaryInput,
+) (string, error) {
+	f.calls = append(f.calls, input)
+	return "summary:" + input.FilePath + ":" + strconv.Itoa(input.SectionIndex+1), nil
+}
+
+type fakeProjectDocEmbedder struct {
+	calls [][]string
+}
+
+func (f *fakeProjectDocEmbedder) Embed(_ context.Context, inputs []string) ([][]float64, error) {
+	f.calls = append(f.calls, append([]string(nil), inputs...))
+	vector := make([]float64, 1536)
+	vector[0] = 1
+	return [][]float64{vector}, nil
 }
