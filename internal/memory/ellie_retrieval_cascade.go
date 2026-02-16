@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -20,6 +22,10 @@ type EllieSemanticRetrievalStore interface {
 	SearchMemoriesByProjectWithEmbedding(ctx context.Context, orgID, projectID, query string, queryEmbedding []float64, limit int) ([]store.EllieMemorySearchResult, error)
 	SearchMemoriesOrgWideWithEmbedding(ctx context.Context, orgID, query string, queryEmbedding []float64, limit int) ([]store.EllieMemorySearchResult, error)
 	SearchChatHistoryWithEmbedding(ctx context.Context, orgID, query string, queryEmbedding []float64, limit int) ([]store.EllieChatHistoryResult, error)
+}
+
+type EllieProjectDocSemanticRetrievalStore interface {
+	SearchProjectDocsByEmbedding(ctx context.Context, orgID, projectID, query string, queryEmbedding []float64, limit int) ([]store.EllieProjectDocSearchResult, error)
 }
 
 type EllieQueryEmbedder interface {
@@ -138,6 +144,23 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 	}
 	queryEmbedding, hasQueryEmbedding := s.getQueryEmbedding(ctx, query)
 	semanticStore, semanticStoreOK := s.Store.(EllieSemanticRetrievalStore)
+	projectDocStore, projectDocStoreOK := s.Store.(EllieProjectDocSemanticRetrievalStore)
+
+	if projectID != "" && projectDocStoreOK && hasQueryEmbedding {
+		projectDocResults, err := projectDocStore.SearchProjectDocsByEmbedding(ctx, orgID, projectID, query, queryEmbedding, limit)
+		if err != nil {
+			return EllieRetrievalResponse{}, fmt.Errorf("project docs lookup failed: %w", err)
+		}
+		if len(projectDocResults) > 0 {
+			response := EllieRetrievalResponse{
+				Items:         mapProjectDocResultsToRetrievedItems(projectDocResults, limit),
+				TierUsed:      1,
+				NoInformation: false,
+			}
+			s.emitQualitySignal(ctx, request, response)
+			return response, nil
+		}
+	}
 
 	if roomID != "" {
 		roomResults, err := s.Store.SearchRoomContext(ctx, orgID, roomID, query, limit)
@@ -500,4 +523,55 @@ func dedupeTrimmedIDs(values []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func mapProjectDocResultsToRetrievedItems(results []store.EllieProjectDocSearchResult, limit int) []EllieRetrievedItem {
+	items := make([]EllieRetrievedItem, 0, len(results))
+	for _, row := range results {
+		snippet := strings.TrimSpace(loadProjectDocContent(row.LocalRepoPath, row.FilePath))
+		if snippet == "" {
+			snippet = strings.TrimSpace(row.Summary)
+		}
+		if snippet == "" {
+			snippet = strings.TrimSpace(row.Title)
+		}
+		items = append(items, EllieRetrievedItem{
+			Tier:      1,
+			Source:    "project_doc",
+			ID:        row.DocID,
+			Snippet:   snippet,
+			ProjectID: row.ProjectID,
+		})
+		if limit > 0 && len(items) >= limit {
+			break
+		}
+	}
+	return items
+}
+
+func loadProjectDocContent(repoRoot, relativePath string) string {
+	root := strings.TrimSpace(repoRoot)
+	rel := strings.TrimSpace(relativePath)
+	if root == "" || rel == "" {
+		return ""
+	}
+
+	absRoot, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return ""
+	}
+	candidate := filepath.Clean(filepath.Join(absRoot, filepath.FromSlash(rel)))
+	relCheck, err := filepath.Rel(absRoot, candidate)
+	if err != nil {
+		return ""
+	}
+	if relCheck == ".." || strings.HasPrefix(relCheck, ".."+string(os.PathSeparator)) {
+		return ""
+	}
+
+	content, err := os.ReadFile(candidate)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(content))
 }

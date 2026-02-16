@@ -9,6 +9,7 @@ type OpenClawMigrationSummaryReport struct {
 	MemoryDedupProcessed            int
 	TaxonomyClassificationProcessed int
 	ProjectDiscoveryProcessed       int
+	ProjectDocsScanningProcessed    int
 	FailedItems                     int
 	Warnings                        []string
 }
@@ -37,6 +38,9 @@ func BuildOpenClawMigrationSummaryReport(result RunOpenClawMigrationResult) Open
 	}
 	if result.ProjectDiscovery != nil {
 		report.ProjectDiscoveryProcessed = result.ProjectDiscovery.ProcessedItems
+	}
+	if result.ProjectDocsScanning != nil {
+		report.ProjectDocsScanningProcessed = result.ProjectDocsScanning.ProcessedDocs
 	}
 	if result.Paused {
 		report.Warnings = append(report.Warnings, "migration paused before all phases completed")

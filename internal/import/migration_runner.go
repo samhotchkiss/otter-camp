@@ -15,8 +15,9 @@ type OpenClawMigrationRunner struct {
 	EntitySynthesisRunner  OpenClawEntitySynthesisRunner
 	DedupRunner            OpenClawDedupRunner
 	TaxonomyRunner         OpenClawTaxonomyClassificationRunner
-	ProjectDiscoveryRunner OpenClawProjectDiscoveryRunner
-	HistoryCheckpoint      int
+	ProjectDiscoveryRunner    OpenClawProjectDiscoveryRunner
+	ProjectDocsScanningRunner OpenClawProjectDocsScanningRunner
+	HistoryCheckpoint         int
 	OnHistoryCheckpoint    func(processed, total int)
 }
 
@@ -109,6 +110,29 @@ func (noopOpenClawTaxonomyClassificationRunner) RunClassification(
 	return OpenClawTaxonomyClassificationResult{}, nil
 }
 
+type OpenClawProjectDocsScanningInput struct {
+	OrgID string
+}
+
+type OpenClawProjectDocsScanningResult struct {
+	ProcessedDocs   int
+	UpdatedDocs     int
+	InactivatedDocs int
+}
+
+type OpenClawProjectDocsScanningRunner interface {
+	RunScan(ctx context.Context, input OpenClawProjectDocsScanningInput) (OpenClawProjectDocsScanningResult, error)
+}
+
+type noopOpenClawProjectDocsScanningRunner struct{}
+
+func (noopOpenClawProjectDocsScanningRunner) RunScan(
+	_ context.Context,
+	_ OpenClawProjectDocsScanningInput,
+) (OpenClawProjectDocsScanningResult, error) {
+	return OpenClawProjectDocsScanningResult{}, nil
+}
+
 type RunOpenClawMigrationInput struct {
 	OrgID        string
 	UserID       string
@@ -125,8 +149,9 @@ type RunOpenClawMigrationResult struct {
 	EntitySynthesis  *OpenClawEntitySynthesisResult
 	Dedup            *OpenClawDedupResult
 	TaxonomyPhase    *OpenClawTaxonomyClassificationResult
-	ProjectDiscovery *OpenClawProjectDiscoveryResult
-	Summary          OpenClawMigrationSummaryReport
+	ProjectDiscovery    *OpenClawProjectDiscoveryResult
+	ProjectDocsScanning *OpenClawProjectDocsScanningResult
+	Summary             OpenClawMigrationSummaryReport
 	Paused           bool
 }
 
@@ -138,8 +163,9 @@ func NewOpenClawMigrationRunner(db *sql.DB) *OpenClawMigrationRunner {
 		EntitySynthesisRunner:  noopOpenClawEntitySynthesisRunner{},
 		DedupRunner:            noopOpenClawDedupRunner{},
 		TaxonomyRunner:         noopOpenClawTaxonomyClassificationRunner{},
-		ProjectDiscoveryRunner: newOpenClawProjectDiscoveryRunner(db),
-		HistoryCheckpoint:      100,
+		ProjectDiscoveryRunner:    newOpenClawProjectDiscoveryRunner(db),
+		ProjectDocsScanningRunner: noopOpenClawProjectDocsScanningRunner{},
+		HistoryCheckpoint:         100,
 	}
 }
 
@@ -258,6 +284,23 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 		result.ProjectDiscovery = discoveryResult
 		if discoveryResult != nil {
 			fmt.Printf("   ✅ %d projects created, %d issues created\n\n", discoveryResult.ProjectsCreated, discoveryResult.IssuesCreated)
+		} else {
+			fmt.Printf("   ⏭️  Already completed\n\n")
+		}
+
+		fmt.Printf("📚 Phase 8: Project Docs Scanning\n")
+		projectDocsResult, projectDocsErr := r.runProjectDocsScanningPhase(ctx, input)
+		if projectDocsErr != nil {
+			return RunOpenClawMigrationResult{}, projectDocsErr
+		}
+		result.ProjectDocsScanning = projectDocsResult
+		if projectDocsResult != nil {
+			fmt.Printf(
+				"   ✅ %d docs processed, %d updated, %d inactivated\n\n",
+				projectDocsResult.ProcessedDocs,
+				projectDocsResult.UpdatedDocs,
+				projectDocsResult.InactivatedDocs,
+			)
 		} else {
 			fmt.Printf("   ⏭️  Already completed\n\n")
 		}
@@ -676,6 +719,84 @@ func (r *OpenClawMigrationRunner) runProjectDiscoveryPhase(
 	}
 
 	return &discoveryResult, nil
+}
+
+func (r *OpenClawMigrationRunner) runProjectDocsScanningPhase(
+	ctx context.Context,
+	input RunOpenClawMigrationInput,
+) (*OpenClawProjectDocsScanningResult, error) {
+	if r.ProjectDocsScanningRunner == nil {
+		return nil, nil
+	}
+
+	phaseType := "project_docs_scanning"
+	progress, err := r.ProgressStore.GetByType(ctx, input.OrgID, phaseType)
+	if err != nil {
+		return nil, err
+	}
+	if progress == nil {
+		started, startErr := r.ProgressStore.StartPhase(ctx, store.StartMigrationProgressInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			CurrentLabel:  migrationRunnerStringPtr("starting project docs scanning"),
+		})
+		if startErr != nil {
+			return nil, startErr
+		}
+		progress = started
+	} else {
+		if progress.Status == store.MigrationProgressStatusCompleted {
+			return nil, nil
+		}
+		if progress.Status == store.MigrationProgressStatusFailed {
+			return nil, fmt.Errorf("migration phase %q is failed; reset status before rerun", phaseType)
+		}
+		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusRunning,
+			CurrentLabel:  migrationRunnerStringPtr("resuming project docs scanning"),
+		}); setErr != nil {
+			return nil, setErr
+		}
+	}
+
+	scanResult, scanErr := r.ProjectDocsScanningRunner.RunScan(ctx, OpenClawProjectDocsScanningInput{
+		OrgID: input.OrgID,
+	})
+	if scanErr != nil {
+		_, _ = r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusFailed,
+			Error:         migrationRunnerStringPtr(scanErr.Error()),
+		})
+		return nil, scanErr
+	}
+
+	if scanResult.ProcessedDocs > 0 {
+		if _, advanceErr := r.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
+			OrgID:          input.OrgID,
+			MigrationType:  phaseType,
+			ProcessedDelta: scanResult.ProcessedDocs,
+			CurrentLabel: migrationRunnerStringPtr(
+				fmt.Sprintf("scanned %d project docs", scanResult.ProcessedDocs),
+			),
+		}); advanceErr != nil {
+			return nil, advanceErr
+		}
+	}
+
+	if _, err := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+		OrgID:         input.OrgID,
+		MigrationType: phaseType,
+		Status:        store.MigrationProgressStatusCompleted,
+		CurrentLabel:  migrationRunnerStringPtr("project docs scanning complete"),
+	}); err != nil {
+		return nil, err
+	}
+
+	return &scanResult, nil
 }
 
 func (r *OpenClawMigrationRunner) runDedupPhase(

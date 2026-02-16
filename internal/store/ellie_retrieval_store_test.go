@@ -420,6 +420,78 @@ func TestEllieRetrievalStoreSemanticQueryBlendsKeywordAndVectorRanking(t *testin
 	require.Equal(t, semanticOnlyID, results[1].MemoryID)
 }
 
+func TestEllieProjectDocsStoreSimilaritySearchOrdering(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-project-docs-search-org")
+	projectID := createTestProject(t, db, orgID, "Ellie Project Docs Search")
+
+	queryVector := ellieRetrievalEmbeddingVector1536(1, 0)
+	nearVector := ellieRetrievalEmbeddingVector1536(1, 0)
+	farVector := ellieRetrievalEmbeddingVector1536(-1, 0)
+	nearLiteral, err := formatVectorLiteral(nearVector)
+	require.NoError(t, err)
+	farLiteral, err := formatVectorLiteral(farVector)
+	require.NoError(t, err)
+
+	var nearDocID string
+	err = db.QueryRow(
+		`INSERT INTO ellie_project_docs (
+			org_id,
+			project_id,
+			file_path,
+			title,
+			summary,
+			summary_embedding,
+			content_hash,
+			is_active,
+			last_scanned_at
+		) VALUES (
+			$1, $2, 'docs/near.md', 'Near Doc', 'Postgres architecture guide', $3::vector, 'near-hash', true, NOW()
+		) RETURNING id`,
+		orgID,
+		projectID,
+		nearLiteral,
+	).Scan(&nearDocID)
+	require.NoError(t, err)
+
+	var farDocID string
+	err = db.QueryRow(
+		`INSERT INTO ellie_project_docs (
+			org_id,
+			project_id,
+			file_path,
+			title,
+			summary,
+			summary_embedding,
+			content_hash,
+			is_active,
+			last_scanned_at
+		) VALUES (
+			$1, $2, 'docs/far.md', 'Far Doc', 'Unrelated office update', $3::vector, 'far-hash', true, NOW()
+		) RETURNING id`,
+		orgID,
+		projectID,
+		farLiteral,
+	).Scan(&farDocID)
+	require.NoError(t, err)
+
+	retrievalStore := NewEllieRetrievalStore(db)
+	results, err := retrievalStore.SearchProjectDocsByEmbedding(
+		context.Background(),
+		orgID,
+		projectID,
+		"database architecture",
+		queryVector,
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.Equal(t, nearDocID, results[0].DocID)
+	require.Equal(t, farDocID, results[1].DocID)
+}
+
 func TestEllieRetrievalStoreTreatsWildcardQueryCharsAsLiterals(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)

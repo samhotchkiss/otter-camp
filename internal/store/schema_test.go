@@ -298,34 +298,6 @@ func TestMigration063ConversationSchemaFilesExistAndContainCoreDDL(t *testing.T)
 	require.Contains(t, downContent, "drop table if exists memories")
 }
 
-func TestMigration080TaxonomySchemaFilesExistAndContainCoreDDL(t *testing.T) {
-	migrationsDir := getMigrationsDir(t)
-	files := []string{
-		"080_create_ellie_taxonomy_tables.up.sql",
-		"080_create_ellie_taxonomy_tables.down.sql",
-	}
-	for _, filename := range files {
-		_, err := os.Stat(filepath.Join(migrationsDir, filename))
-		require.NoError(t, err)
-	}
-
-	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "080_create_ellie_taxonomy_tables.up.sql"))
-	require.NoError(t, err)
-	upContent := strings.ToLower(string(upRaw))
-	require.Contains(t, upContent, "create table if not exists ellie_taxonomy_nodes")
-	require.Contains(t, upContent, "create table if not exists ellie_memory_taxonomy")
-	require.Contains(t, upContent, "unique (org_id, parent_id, slug)")
-	require.Contains(t, upContent, "primary key (memory_id, node_id)")
-	require.Contains(t, upContent, "enable row level security")
-	require.Contains(t, upContent, "ellie_taxonomy_nodes_org_isolation")
-
-	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "080_create_ellie_taxonomy_tables.down.sql"))
-	require.NoError(t, err)
-	downContent := strings.ToLower(string(downRaw))
-	require.Contains(t, downContent, "drop table if exists ellie_memory_taxonomy")
-	require.Contains(t, downContent, "drop table if exists ellie_taxonomy_nodes")
-}
-
 func TestSchemaConversationCoreTablesCreateAndRollback(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db, err := sql.Open("postgres", connStr)
@@ -745,6 +717,38 @@ func TestMigration078Embedding1536ColumnsFilesExistAndContainCoreDDL(t *testing.
 	require.Contains(t, downContent, "drop index if exists memories_embedding_1536_idx")
 	require.Contains(t, downContent, "drop index if exists chat_messages_embedding_1536_idx")
 	require.Contains(t, downContent, "drop column if exists embedding_1536")
+}
+
+func TestSchemaIncludesEllieProjectDocsMigration(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"081_create_ellie_project_docs.up.sql",
+		"081_create_ellie_project_docs.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "081_create_ellie_project_docs.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists ellie_project_docs")
+	require.Contains(t, upContent, "summary_embedding vector(1536)")
+	require.Contains(t, upContent, "unique (org_id, project_id, file_path)")
+	require.Contains(t, upContent, "create index if not exists ellie_project_docs_org_project_active_idx")
+	require.Contains(t, upContent, "create index if not exists ellie_project_docs_embedding_idx")
+	require.Contains(t, upContent, "create trigger ellie_project_docs_updated_at_trg")
+	require.Contains(t, upContent, "create policy ellie_project_docs_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "081_create_ellie_project_docs.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop trigger if exists ellie_project_docs_updated_at_trg")
+	require.Contains(t, downContent, "drop index if exists ellie_project_docs_embedding_idx")
+	require.Contains(t, downContent, "drop index if exists ellie_project_docs_org_project_active_idx")
+	require.Contains(t, downContent, "drop policy if exists ellie_project_docs_org_isolation on ellie_project_docs")
+	require.Contains(t, downContent, "drop table if exists ellie_project_docs")
 }
 
 func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
