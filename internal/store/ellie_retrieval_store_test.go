@@ -19,6 +19,17 @@ func ellieRetrievalEmbeddingVector(values ...float64) []float64 {
 	return vector
 }
 
+func ellieRetrievalEmbeddingVector1536(values ...float64) []float64 {
+	vector := make([]float64, 1536)
+	for i, value := range values {
+		if i >= len(vector) {
+			break
+		}
+		vector[i] = value
+	}
+	return vector
+}
+
 func TestEllieRetrievalStoreIncludesMemorySensitivity(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
@@ -277,6 +288,90 @@ func TestEllieRetrievalStoreSemanticQueryFindsNonLiteralMatches(t *testing.T) {
 	require.Equal(t, semanticMessageID, chatResults[0].MessageID)
 }
 
+func TestEllieRetrievalStoreSemanticQueryFindsNonLiteralMatches1536(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-retrieval-semantic-1536-org")
+	projectID := createTestProject(t, db, orgID, "Ellie Semantic Retrieval 1536 Project")
+	agentID := insertSchemaAgent(t, db, orgID, "ellie-retrieval-semantic-1536-agent")
+
+	var roomID string
+	err := db.QueryRow(
+		`INSERT INTO rooms (org_id, name, type, context_id)
+		 VALUES ($1, 'Semantic 1536 Room', 'project', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&roomID)
+	require.NoError(t, err)
+
+	var semanticMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status, source_project_id)
+		 VALUES ($1, 'technical_decision', 'Storage direction 1536', 'The team chose Postgres for production persistence.', 'active', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&semanticMemoryID)
+	require.NoError(t, err)
+
+	var irrelevantMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status, source_project_id)
+		 VALUES ($1, 'fact', 'Unrelated memory 1536', 'The office lunch schedule was updated.', 'active', $2)
+		 RETURNING id`,
+		orgID,
+		projectID,
+	).Scan(&irrelevantMemoryID)
+	require.NoError(t, err)
+
+	var semanticMessageID string
+	err = db.QueryRow(
+		`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, type, attachments)
+		 VALUES ($1, $2, $3, 'agent', 'We selected Postgres after comparing storage options.', 'message', '[]'::jsonb)
+		 RETURNING id`,
+		orgID,
+		roomID,
+		agentID,
+	).Scan(&semanticMessageID)
+	require.NoError(t, err)
+
+	queryVector := ellieRetrievalEmbeddingVector1536(1, 0)
+	nearVector := ellieRetrievalEmbeddingVector1536(1, 0)
+	farVector := ellieRetrievalEmbeddingVector1536(-1, 0)
+	nearLiteral, err := formatVectorLiteral(nearVector)
+	require.NoError(t, err)
+	farLiteral, err := formatVectorLiteral(farVector)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`UPDATE memories SET embedding_1536 = $2::vector WHERE id = $1`, semanticMemoryID, nearLiteral)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE memories SET embedding_1536 = $2::vector WHERE id = $1`, irrelevantMemoryID, farLiteral)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE chat_messages SET embedding_1536 = $2::vector WHERE id = $1`, semanticMessageID, nearLiteral)
+	require.NoError(t, err)
+
+	store := NewEllieRetrievalStore(db)
+
+	memoryResults, err := store.SearchMemoriesByProjectWithEmbedding(
+		context.Background(),
+		orgID,
+		projectID,
+		"database choice",
+		queryVector,
+		10,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, memoryResults)
+	require.Equal(t, semanticMemoryID, memoryResults[0].MemoryID)
+
+	chatResults, err := store.SearchChatHistoryWithEmbedding(context.Background(), orgID, "database choice", queryVector, 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, chatResults)
+	require.Equal(t, semanticMessageID, chatResults[0].MessageID)
+}
+
 func TestEllieRetrievalStoreSemanticQueryBlendsKeywordAndVectorRanking(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
@@ -391,6 +486,27 @@ func TestNormalizeEllieSearchLimitClampsUpperBound(t *testing.T) {
 	require.Equal(t, 10, normalizeEllieSearchLimit(0, 10))
 	require.Equal(t, 25, normalizeEllieSearchLimit(25, 10))
 	require.Equal(t, maxEllieSearchQueryLimit, normalizeEllieSearchLimit(500, 10))
+}
+
+func TestNormalizeEllieQueryEmbeddingSelectsColumnByDimension(t *testing.T) {
+	literal768, column768, hasSemantic768, err := normalizeEllieQueryEmbedding(ellieRetrievalEmbeddingVector(0.2, 0.1))
+	require.NoError(t, err)
+	require.True(t, hasSemantic768)
+	require.Equal(t, "embedding", column768)
+	require.Contains(t, literal768, "[")
+
+	literal1536, column1536, hasSemantic1536, err := normalizeEllieQueryEmbedding(ellieRetrievalEmbeddingVector1536(0.2, 0.1))
+	require.NoError(t, err)
+	require.True(t, hasSemantic1536)
+	require.Equal(t, "embedding_1536", column1536)
+	require.Contains(t, literal1536, "[")
+}
+
+func TestNormalizeEllieQueryEmbeddingRejectsUnsupportedDimension(t *testing.T) {
+	unsupported := make([]float64, 1024)
+	_, _, _, err := normalizeEllieQueryEmbedding(unsupported)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported query embedding dimension")
 }
 
 func TestEllieRetrievalStoreProjectAndOrgScopes(t *testing.T) {

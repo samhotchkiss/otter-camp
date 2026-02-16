@@ -142,8 +142,30 @@ func TestLocalRuntimeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read web/e2e/app.spec.ts: %v", err)
 	}
-	if !strings.Contains(string(e2eBytes), "http://localhost:4200/health") {
-		t.Fatalf("expected web/e2e/app.spec.ts to contain health check on port 4200")
+	e2eSpec := string(e2eBytes)
+	for _, snippet := range []string{
+		"resolveApiHealthUrl",
+		"request.get(resolveApiHealthUrl())",
+	} {
+		if !strings.Contains(e2eSpec, snippet) {
+			t.Fatalf("expected web/e2e/app.spec.ts to contain %q", snippet)
+		}
+	}
+
+	e2eApiURLBytes, err := os.ReadFile("../../web/e2e/api-base-url.ts")
+	if err != nil {
+		t.Fatalf("failed to read web/e2e/api-base-url.ts: %v", err)
+	}
+	e2eApiURL := string(e2eApiURLBytes)
+	for _, snippet := range []string{
+		"http://127.0.0.1:${port}",
+		"'4200'",
+		"E2E_API_BASE_URL",
+		"E2E_API_PORT",
+	} {
+		if !strings.Contains(e2eApiURL, snippet) {
+			t.Fatalf("expected web/e2e/api-base-url.ts to contain %q", snippet)
+		}
 	}
 
 	bridgeEnvBytes, err := os.ReadFile("../../bridge/.env.example")
@@ -177,6 +199,8 @@ func TestLocalRuntimeDefaults(t *testing.T) {
 		"PORT: '4200'",
 		"VITE_API_URL: http://localhost:4200",
 		"curl -s http://localhost:4200/health",
+		"CONVERSATION_EMBEDDING_WORKER_ENABLED: 'false'",
+		"ELLIE_CONTEXT_INJECTION_WORKER_ENABLED: 'false'",
 	} {
 		if !strings.Contains(ci, snippet) {
 			t.Fatalf("expected .github/workflows/ci.yml to contain %q", snippet)

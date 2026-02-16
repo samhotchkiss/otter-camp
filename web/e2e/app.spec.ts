@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 
+import { resolveApiHealthUrl } from './api-base-url';
+
 test.describe('Otter Camp E2E Tests', () => {
   test('homepage loads successfully', async ({ page }) => {
     await page.goto('/');
@@ -16,7 +18,7 @@ test.describe('Otter Camp E2E Tests', () => {
   });
 
   test('API health check', async ({ request }) => {
-    const response = await request.get('http://localhost:4200/health');
+    const response = await request.get(resolveApiHealthUrl());
     expect(response.ok()).toBeTruthy();
   });
 });

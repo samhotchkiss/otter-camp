@@ -1,10 +1,19 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+func loadWithDefaultOpenAIKey(t *testing.T) (Config, error) {
+	t.Helper()
+	if _, exists := os.LookupEnv("CONVERSATION_EMBEDDER_OPENAI_API_KEY"); !exists {
+		t.Setenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY", "test-openai-key")
+	}
+	return Load()
+}
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("PORT", "")
@@ -29,7 +38,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("CONVERSATION_EMBEDDER_DIMENSION", "")
 	t.Setenv("CONVERSATION_EMBEDDER_OLLAMA_URL", "")
 	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_BASE_URL", "")
-	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY", "")
+	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY", "test-default-openai-key")
 	t.Setenv("CONVERSATION_SEGMENTATION_WORKER_ENABLED", "")
 	t.Setenv("CONVERSATION_SEGMENTATION_POLL_INTERVAL", "")
 	t.Setenv("CONVERSATION_SEGMENTATION_BATCH_SIZE", "")
@@ -53,9 +62,9 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("JOB_SCHEDULER_RUN_TIMEOUT", "")
 	t.Setenv("JOB_SCHEDULER_MAX_RUN_HISTORY", "")
 
-	cfg, err := Load()
+	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
 	}
 
 	if cfg.Port != defaultPort {
@@ -94,14 +103,14 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ConversationEmbedding.BatchSize != defaultConversationEmbeddingBatchSize {
 		t.Fatalf("expected default conversation embedding batch size %d, got %d", defaultConversationEmbeddingBatchSize, cfg.ConversationEmbedding.BatchSize)
 	}
-	if cfg.ConversationEmbedding.Provider != defaultConversationEmbeddingProvider {
-		t.Fatalf("expected default conversation embedding provider %q, got %q", defaultConversationEmbeddingProvider, cfg.ConversationEmbedding.Provider)
+	if cfg.ConversationEmbedding.Provider != "openai" {
+		t.Fatalf("expected default conversation embedding provider %q, got %q", "openai", cfg.ConversationEmbedding.Provider)
 	}
-	if cfg.ConversationEmbedding.Model != defaultConversationEmbeddingModel {
-		t.Fatalf("expected default conversation embedding model %q, got %q", defaultConversationEmbeddingModel, cfg.ConversationEmbedding.Model)
+	if cfg.ConversationEmbedding.Model != "text-embedding-3-small" {
+		t.Fatalf("expected default conversation embedding model %q, got %q", "text-embedding-3-small", cfg.ConversationEmbedding.Model)
 	}
-	if cfg.ConversationEmbedding.Dimension != defaultConversationEmbeddingDimension {
-		t.Fatalf("expected default conversation embedding dimension %d, got %d", defaultConversationEmbeddingDimension, cfg.ConversationEmbedding.Dimension)
+	if cfg.ConversationEmbedding.Dimension != 1536 {
+		t.Fatalf("expected default conversation embedding dimension %d, got %d", 1536, cfg.ConversationEmbedding.Dimension)
 	}
 
 	if !cfg.ConversationSegmentation.Enabled {
@@ -186,9 +195,9 @@ func TestLoadParsesGitHubSettings(t *testing.T) {
 	t.Setenv("GITHUB_POLL_INTERVAL", "90m")
 	t.Setenv("GITHUB_API_BASE_URL", "https://ghe.example.com/api/v3")
 
-	cfg, err := Load()
+	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
 	}
 
 	if !cfg.GitHub.Enabled {
@@ -219,7 +228,7 @@ func TestLoadParsesGitHubSettings(t *testing.T) {
 func TestLoadRejectsInvalidGitHubPollInterval(t *testing.T) {
 	t.Setenv("GITHUB_POLL_INTERVAL", "not-a-duration")
 
-	_, err := Load()
+	_, err := loadWithDefaultOpenAIKey(t)
 	if err == nil {
 		t.Fatalf("expected error for invalid poll interval")
 	}
@@ -236,9 +245,9 @@ func TestLoadDefaultsJobScheduler(t *testing.T) {
 	t.Setenv("JOB_SCHEDULER_RUN_TIMEOUT", "")
 	t.Setenv("JOB_SCHEDULER_MAX_RUN_HISTORY", "")
 
-	cfg, err := Load()
+	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
 	}
 
 	if !cfg.JobScheduler.Enabled {
@@ -265,9 +274,9 @@ func TestLoadParsesJobSchedulerSettings(t *testing.T) {
 	t.Setenv("JOB_SCHEDULER_RUN_TIMEOUT", "4m")
 	t.Setenv("JOB_SCHEDULER_MAX_RUN_HISTORY", "150")
 
-	cfg, err := Load()
+	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
 	}
 
 	if !cfg.JobScheduler.Enabled {
@@ -290,7 +299,7 @@ func TestLoadParsesJobSchedulerSettings(t *testing.T) {
 func TestLoadRejectsInvalidJobSchedulerPollInterval(t *testing.T) {
 	t.Setenv("JOB_SCHEDULER_POLL_INTERVAL", "not-a-duration")
 
-	_, err := Load()
+	_, err := loadWithDefaultOpenAIKey(t)
 	if err == nil {
 		t.Fatalf("expected error for invalid JOB_SCHEDULER_POLL_INTERVAL")
 	}
@@ -303,7 +312,7 @@ func TestLoadRejectsInvalidJobSchedulerMaxPerPoll(t *testing.T) {
 	t.Setenv("JOB_SCHEDULER_ENABLED", "true")
 	t.Setenv("JOB_SCHEDULER_MAX_PER_POLL", "0")
 
-	_, err := Load()
+	_, err := loadWithDefaultOpenAIKey(t)
 	if err == nil {
 		t.Fatalf("expected error for non-positive JOB_SCHEDULER_MAX_PER_POLL")
 	}
@@ -320,7 +329,7 @@ func TestLoadRequiresGitHubCredentialsInNonDevelopment(t *testing.T) {
 	t.Setenv("GITHUB_APP_PRIVATE_KEY_PATH", "")
 	t.Setenv("GITHUB_WEBHOOK_SECRET", "")
 
-	_, err := Load()
+	_, err := loadWithDefaultOpenAIKey(t)
 	if err == nil {
 		t.Fatalf("expected error when required GitHub credentials are missing")
 	}
@@ -338,7 +347,7 @@ func TestLoadAllowsDevModeWithoutGitHubCredentials(t *testing.T) {
 	t.Setenv("GITHUB_APP_PRIVATE_KEY_PATH", "")
 	t.Setenv("GITHUB_WEBHOOK_SECRET", "")
 
-	cfg, err := Load()
+	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
 		t.Fatalf("expected no error in development mode, got %v", err)
 	}
@@ -351,7 +360,7 @@ func TestLoadAllowsDevModeWithoutGitHubCredentials(t *testing.T) {
 func TestLoadRejectsInvalidGitHubEnabledFlag(t *testing.T) {
 	t.Setenv("GITHUB_INTEGRATION_ENABLED", "definitely")
 
-	_, err := Load()
+	_, err := loadWithDefaultOpenAIKey(t)
 	if err == nil {
 		t.Fatalf("expected error for invalid GITHUB_INTEGRATION_ENABLED value")
 	}
@@ -372,9 +381,9 @@ func TestLoadParsesConversationEmbeddingSettings(t *testing.T) {
 	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_BASE_URL", "https://api.openai.com")
 	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY", "test-key")
 
-	cfg, err := Load()
+	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
 	}
 
 	if !cfg.ConversationEmbedding.Enabled {
@@ -402,9 +411,9 @@ func TestLoadConversationTokenBackfill(t *testing.T) {
 	t.Setenv("CONVERSATION_TOKEN_BACKFILL_POLL_INTERVAL", "11s")
 	t.Setenv("CONVERSATION_TOKEN_BACKFILL_BATCH_SIZE", "321")
 
-	cfg, err := Load()
+	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
 	}
 
 	if !cfg.ConversationTokenBackfill.Enabled {
@@ -421,7 +430,7 @@ func TestLoadConversationTokenBackfill(t *testing.T) {
 func TestLoadRejectsInvalidConversationEmbeddingBatchSize(t *testing.T) {
 	t.Setenv("CONVERSATION_EMBEDDING_BATCH_SIZE", "abc")
 
-	_, err := Load()
+	_, err := loadWithDefaultOpenAIKey(t)
 	if err == nil {
 		t.Fatalf("expected error for invalid CONVERSATION_EMBEDDING_BATCH_SIZE")
 	}
@@ -437,9 +446,9 @@ func TestLoadParsesConversationSegmentationSettings(t *testing.T) {
 	t.Setenv("CONVERSATION_SEGMENTATION_BATCH_SIZE", "64")
 	t.Setenv("CONVERSATION_SEGMENTATION_GAP_THRESHOLD", "45m")
 
-	cfg, err := Load()
+	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
 	}
 
 	if !cfg.ConversationSegmentation.Enabled {
@@ -459,7 +468,7 @@ func TestLoadParsesConversationSegmentationSettings(t *testing.T) {
 func TestLoadRejectsInvalidConversationSegmentationBatchSize(t *testing.T) {
 	t.Setenv("CONVERSATION_SEGMENTATION_BATCH_SIZE", "bad")
 
-	_, err := Load()
+	_, err := loadWithDefaultOpenAIKey(t)
 	if err == nil {
 		t.Fatalf("expected error for invalid CONVERSATION_SEGMENTATION_BATCH_SIZE")
 	}
@@ -475,9 +484,9 @@ func TestLoadParsesEllieIngestionSettings(t *testing.T) {
 	t.Setenv("ELLIE_INGESTION_BATCH_SIZE", "80")
 	t.Setenv("ELLIE_INGESTION_MAX_PER_ROOM", "120")
 
-	cfg, err := Load()
+	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
 	}
 
 	if !cfg.EllieIngestion.Enabled {
@@ -497,7 +506,7 @@ func TestLoadParsesEllieIngestionSettings(t *testing.T) {
 func TestLoadRejectsInvalidEllieIngestionBatchSize(t *testing.T) {
 	t.Setenv("ELLIE_INGESTION_BATCH_SIZE", "bad")
 
-	_, err := Load()
+	_, err := loadWithDefaultOpenAIKey(t)
 	if err == nil {
 		t.Fatalf("expected error for invalid ELLIE_INGESTION_BATCH_SIZE")
 	}
@@ -515,9 +524,9 @@ func TestLoadIncludesEllieContextInjectionDefaults(t *testing.T) {
 	t.Setenv("ELLIE_CONTEXT_INJECTION_COOLDOWN_MESSAGES", "7")
 	t.Setenv("ELLIE_CONTEXT_INJECTION_MAX_ITEMS", "4")
 
-	cfg, err := Load()
+	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
 	}
 
 	if !cfg.EllieContextInjection.Enabled {
@@ -543,7 +552,7 @@ func TestLoadIncludesEllieContextInjectionDefaults(t *testing.T) {
 func TestLoadRejectsNaNContextInjectionThreshold(t *testing.T) {
 	t.Setenv("ELLIE_CONTEXT_INJECTION_THRESHOLD", "NaN")
 
-	_, err := Load()
+	_, err := loadWithDefaultOpenAIKey(t)
 	if err == nil {
 		t.Fatalf("expected error for NaN ELLIE_CONTEXT_INJECTION_THRESHOLD")
 	}
@@ -557,11 +566,41 @@ func TestLoadRejectsInvalidEmbedderConfigWhenInjectionEnabled(t *testing.T) {
 	t.Setenv("ELLIE_CONTEXT_INJECTION_WORKER_ENABLED", "true")
 	t.Setenv("CONVERSATION_EMBEDDER_DIMENSION", "0")
 
-	_, err := Load()
+	_, err := loadWithDefaultOpenAIKey(t)
 	if err == nil {
 		t.Fatalf("expected error when context injection is enabled with invalid embedder config")
 	}
 	if !strings.Contains(err.Error(), "CONVERSATION_EMBEDDER_DIMENSION") {
 		t.Fatalf("expected error to mention CONVERSATION_EMBEDDER_DIMENSION, got %v", err)
+	}
+}
+
+func TestLoadRejectsMissingOpenAIAPIKeyWhenOpenAIProviderEnabled(t *testing.T) {
+	t.Setenv("CONVERSATION_EMBEDDING_WORKER_ENABLED", "true")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_WORKER_ENABLED", "false")
+	t.Setenv("CONVERSATION_EMBEDDER_PROVIDER", "openai")
+	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected error when openai provider is enabled without API key")
+	}
+	if !strings.Contains(err.Error(), "CONVERSATION_EMBEDDER_OPENAI_API_KEY") {
+		t.Fatalf("expected error to mention CONVERSATION_EMBEDDER_OPENAI_API_KEY, got %v", err)
+	}
+}
+
+func TestLoadAllowsMissingOpenAIAPIKeyWhenProviderIsNotOpenAI(t *testing.T) {
+	t.Setenv("CONVERSATION_EMBEDDING_WORKER_ENABLED", "true")
+	t.Setenv("ELLIE_CONTEXT_INJECTION_WORKER_ENABLED", "false")
+	t.Setenv("CONVERSATION_EMBEDDER_PROVIDER", "ollama")
+	t.Setenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected ollama provider to load without openai api key, got %v", err)
+	}
+	if cfg.ConversationEmbedding.Provider != "ollama" {
+		t.Fatalf("expected provider ollama, got %q", cfg.ConversationEmbedding.Provider)
 	}
 }

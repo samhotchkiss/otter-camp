@@ -54,9 +54,9 @@ const (
 	defaultConversationEmbeddingEnabled      = true
 	defaultConversationEmbeddingPollInterval = 5 * time.Second
 	defaultConversationEmbeddingBatchSize    = 50
-	defaultConversationEmbeddingProvider     = "ollama"
-	defaultConversationEmbeddingModel        = "nomic-embed-text"
-	defaultConversationEmbeddingDimension    = 768
+	defaultConversationEmbeddingProvider     = "openai"
+	defaultConversationEmbeddingModel        = "text-embedding-3-small"
+	defaultConversationEmbeddingDimension    = 1536
 	defaultConversationEmbeddingOllamaURL    = "http://localhost:11434"
 	defaultConversationEmbeddingOpenAIBase   = "https://api.openai.com"
 
@@ -399,6 +399,10 @@ func (c Config) Validate() error {
 		}
 		if c.ConversationEmbedding.Dimension <= 0 {
 			return fmt.Errorf("CONVERSATION_EMBEDDER_DIMENSION must be greater than zero when conversation embedding or ellie context injection is enabled")
+		}
+		if strings.EqualFold(strings.TrimSpace(c.ConversationEmbedding.Provider), "openai") &&
+			strings.TrimSpace(c.ConversationEmbedding.OpenAIAPIKey) == "" {
+			return fmt.Errorf("CONVERSATION_EMBEDDER_OPENAI_API_KEY is required when CONVERSATION_EMBEDDER_PROVIDER is openai and conversation embedding or ellie context injection is enabled")
 		}
 	}
 

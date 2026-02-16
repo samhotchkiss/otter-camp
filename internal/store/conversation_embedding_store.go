@@ -24,11 +24,26 @@ type PendingMemoryEmbedding struct {
 }
 
 type ConversationEmbeddingStore struct {
-	db *sql.DB
+	db              *sql.DB
+	targetDimension int
 }
 
 func NewConversationEmbeddingStore(db *sql.DB) *ConversationEmbeddingStore {
-	return &ConversationEmbeddingStore{db: db}
+	return NewConversationEmbeddingStoreWithDimension(db, legacyEmbeddingDimension)
+}
+
+func NewConversationEmbeddingStoreWithDimension(db *sql.DB, targetDimension int) *ConversationEmbeddingStore {
+	return &ConversationEmbeddingStore{
+		db:              db,
+		targetDimension: normalizeEmbeddingDimension(targetDimension),
+	}
+}
+
+func (s *ConversationEmbeddingStore) embeddingColumn() string {
+	if s == nil {
+		return embeddingColumnForDimension(legacyEmbeddingDimension)
+	}
+	return embeddingColumnForDimension(s.targetDimension)
 }
 
 func (s *ConversationEmbeddingStore) ListPendingChatMessages(ctx context.Context, limit int) ([]PendingChatMessageEmbedding, error) {
@@ -44,7 +59,7 @@ func (s *ConversationEmbeddingStore) ListPendingChatMessages(ctx context.Context
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`WITH ranked AS (
+		fmt.Sprintf(`WITH ranked AS (
 			SELECT
 				id,
 				org_id,
@@ -54,12 +69,12 @@ func (s *ConversationEmbeddingStore) ListPendingChatMessages(ctx context.Context
 					ORDER BY created_at ASC, id ASC
 				) AS org_rank
 			FROM chat_messages
-			WHERE embedding IS NULL
+			WHERE %s IS NULL
 		)
 		 SELECT id, org_id, body
 		 FROM ranked
 		 ORDER BY org_rank ASC, org_id ASC, id ASC
-		 LIMIT $1`,
+		 LIMIT $1`, s.embeddingColumn()),
 		limit,
 	)
 	if err != nil {
@@ -91,9 +106,9 @@ func (s *ConversationEmbeddingStore) UpdateChatMessageEmbedding(ctx context.Cont
 	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`UPDATE chat_messages
-		 SET embedding = $2::vector
-		 WHERE id = $1`,
+		fmt.Sprintf(`UPDATE chat_messages
+		 SET %s = $2::vector
+		 WHERE id = $1`, s.embeddingColumn()),
 		strings.TrimSpace(messageID),
 		vectorLiteral,
 	)
@@ -116,7 +131,7 @@ func (s *ConversationEmbeddingStore) ListPendingMemories(ctx context.Context, li
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`WITH ranked AS (
+		fmt.Sprintf(`WITH ranked AS (
 			SELECT
 				id,
 				org_id,
@@ -126,12 +141,12 @@ func (s *ConversationEmbeddingStore) ListPendingMemories(ctx context.Context, li
 					ORDER BY created_at ASC, id ASC
 				) AS org_rank
 			FROM memories
-			WHERE embedding IS NULL
+			WHERE %s IS NULL
 		)
 		 SELECT id, org_id, content
 		 FROM ranked
 		 ORDER BY org_rank ASC, org_id ASC, id ASC
-		 LIMIT $1`,
+		 LIMIT $1`, s.embeddingColumn()),
 		limit,
 	)
 	if err != nil {
@@ -163,9 +178,9 @@ func (s *ConversationEmbeddingStore) UpdateMemoryEmbedding(ctx context.Context, 
 	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`UPDATE memories
-		 SET embedding = $2::vector
-		 WHERE id = $1`,
+		fmt.Sprintf(`UPDATE memories
+		 SET %s = $2::vector
+		 WHERE id = $1`, s.embeddingColumn()),
 		strings.TrimSpace(memoryID),
 		vectorLiteral,
 	)
