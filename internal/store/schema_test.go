@@ -298,18 +298,18 @@ func TestMigration063ConversationSchemaFilesExistAndContainCoreDDL(t *testing.T)
 	require.Contains(t, downContent, "drop table if exists memories")
 }
 
-func TestMigration079TaxonomySchemaFilesExistAndContainCoreDDL(t *testing.T) {
+func TestMigration080TaxonomySchemaFilesExistAndContainCoreDDL(t *testing.T) {
 	migrationsDir := getMigrationsDir(t)
 	files := []string{
-		"079_create_ellie_taxonomy_tables.up.sql",
-		"079_create_ellie_taxonomy_tables.down.sql",
+		"080_create_ellie_taxonomy_tables.up.sql",
+		"080_create_ellie_taxonomy_tables.down.sql",
 	}
 	for _, filename := range files {
 		_, err := os.Stat(filepath.Join(migrationsDir, filename))
 		require.NoError(t, err)
 	}
 
-	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "079_create_ellie_taxonomy_tables.up.sql"))
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "080_create_ellie_taxonomy_tables.up.sql"))
 	require.NoError(t, err)
 	upContent := strings.ToLower(string(upRaw))
 	require.Contains(t, upContent, "create table if not exists ellie_taxonomy_nodes")
@@ -319,7 +319,7 @@ func TestMigration079TaxonomySchemaFilesExistAndContainCoreDDL(t *testing.T) {
 	require.Contains(t, upContent, "enable row level security")
 	require.Contains(t, upContent, "ellie_taxonomy_nodes_org_isolation")
 
-	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "079_create_ellie_taxonomy_tables.down.sql"))
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "080_create_ellie_taxonomy_tables.down.sql"))
 	require.NoError(t, err)
 	downContent := strings.ToLower(string(downRaw))
 	require.Contains(t, downContent, "drop table if exists ellie_memory_taxonomy")
