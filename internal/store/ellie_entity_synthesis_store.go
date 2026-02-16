@@ -183,6 +183,17 @@ func (s *EllieEntitySynthesisStore) ListCandidates(
 	return candidates, nil
 }
 
+func (s *EllieEntitySynthesisStore) CreateEllieExtractedMemory(
+	ctx context.Context,
+	input CreateEllieExtractedMemoryInput,
+) (string, error) {
+	if s == nil || s.db == nil {
+		return "", fmt.Errorf("ellie entity synthesis store is not configured")
+	}
+	ingestionStore := NewEllieIngestionStore(s.db)
+	return ingestionStore.CreateEllieExtractedMemory(ctx, input)
+}
+
 func (s *EllieEntitySynthesisStore) ListSourceMemories(
 	ctx context.Context,
 	orgID string,
