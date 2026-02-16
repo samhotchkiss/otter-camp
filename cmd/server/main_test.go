@@ -154,17 +154,17 @@ func TestLocalRuntimeDefaults(t *testing.T) {
 		t.Fatalf("expected bridge/.env.example to set OTTERCAMP_URL to localhost:4200")
 	}
 
-	docsBytes, err := os.ReadFile("../../docs/INFRASTRUCTURE.md")
+	docsBytes, err := os.ReadFile("../../docs/START-HERE.md")
 	if err != nil {
-		t.Fatalf("failed to read docs/INFRASTRUCTURE.md: %v", err)
+		t.Fatalf("failed to read docs/START-HERE.md: %v", err)
 	}
 	docs := string(docsBytes)
 	for _, snippet := range []string{
-		"# → http://localhost:4200",
-		"VITE_API_URL=http://localhost:4200 npm run dev",
+		"http://localhost:4200",
+		"Hosted + Bridge Mode (`{site}.otter.camp`)",
 	} {
 		if !strings.Contains(docs, snippet) {
-			t.Fatalf("expected docs/INFRASTRUCTURE.md to contain %q", snippet)
+			t.Fatalf("expected docs/START-HERE.md to contain %q", snippet)
 		}
 	}
 
