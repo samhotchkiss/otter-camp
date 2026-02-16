@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const ellieEntitySynthesisDefaultGrowthThreshold = 0.20
@@ -16,6 +17,15 @@ type EllieEntitySynthesisCandidate struct {
 	ExistingSynthesisMemoryID *string
 	ExistingSourceMemoryCount int
 	NeedsResynthesis          bool
+}
+
+type EllieEntitySynthesisSourceMemory struct {
+	MemoryID        string
+	Kind            string
+	Title           string
+	Content         string
+	SourceProjectID *string
+	OccurredAt      time.Time
 }
 
 type EllieEntitySynthesisStore struct {
@@ -157,4 +167,85 @@ func (s *EllieEntitySynthesisStore) ListCandidates(
 	}
 
 	return candidates, nil
+}
+
+func (s *EllieEntitySynthesisStore) ListSourceMemories(
+	ctx context.Context,
+	orgID string,
+	entityKey string,
+	limit int,
+) ([]EllieEntitySynthesisSourceMemory, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("ellie entity synthesis store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+	entityKey = strings.TrimSpace(entityKey)
+	if entityKey == "" {
+		return []EllieEntitySynthesisSourceMemory{}, nil
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT
+			id,
+			kind,
+			title,
+			content,
+			source_project_id::text,
+			occurred_at
+		FROM memories
+		WHERE org_id = $1
+		  AND status = 'active'
+		  AND COALESCE(metadata->>'source_type', '') <> 'synthesis'
+		  AND (title || ' ' || content) ILIKE '%' || $2 || '%' ESCAPE '\'
+		ORDER BY occurred_at ASC, id ASC
+		LIMIT $3`,
+		orgID,
+		escapeILIKEPattern(entityKey),
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list entity synthesis source memories: %w", err)
+	}
+	defer rows.Close()
+
+	memories := make([]EllieEntitySynthesisSourceMemory, 0, limit)
+	for rows.Next() {
+		var (
+			row             EllieEntitySynthesisSourceMemory
+			sourceProjectID sql.NullString
+		)
+		if err := rows.Scan(
+			&row.MemoryID,
+			&row.Kind,
+			&row.Title,
+			&row.Content,
+			&sourceProjectID,
+			&row.OccurredAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan entity synthesis source memory: %w", err)
+		}
+		if sourceProjectID.Valid {
+			trimmed := strings.TrimSpace(sourceProjectID.String)
+			if trimmed != "" {
+				row.SourceProjectID = &trimmed
+			}
+		}
+		memories = append(memories, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading entity synthesis source memories: %w", err)
+	}
+
+	return memories, nil
 }
