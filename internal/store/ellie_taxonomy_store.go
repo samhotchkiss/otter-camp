@@ -47,12 +47,21 @@ type EllieMemoryTaxonomyClassification struct {
 	ClassifiedAt time.Time
 }
 
+type ellieTaxonomyQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 type EllieTaxonomyStore struct {
-	db *sql.DB
+	db ellieTaxonomyQuerier
 }
 
 func NewEllieTaxonomyStore(db *sql.DB) *EllieTaxonomyStore {
 	return &EllieTaxonomyStore{db: db}
+}
+
+func NewEllieTaxonomyStoreTx(tx *sql.Tx) *EllieTaxonomyStore {
+	return &EllieTaxonomyStore{db: tx}
 }
 
 func (s *EllieTaxonomyStore) CreateNode(ctx context.Context, input CreateEllieTaxonomyNodeInput) (*EllieTaxonomyNode, error) {

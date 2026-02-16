@@ -156,6 +156,41 @@ func TestOnboardingBootstrapSeedsStarterTrioAgents(t *testing.T) {
 	require.Equal(t, "Ellie", agentNamesByRole["ellie"])
 }
 
+func TestOnboardingBootstrapSeedsDefaultTaxonomyRoots(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+	resetOnboardingAuthDB(t)
+
+	db := openFeedDatabase(t, connStr)
+
+	rec := postOnboardingBootstrap(t, `{"name":"Sam","email":"sam@example.com","organization_name":"My Team"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp OnboardingBootstrapResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+
+	rows, err := db.Query(
+		`SELECT slug
+		 FROM ellie_taxonomy_nodes
+		 WHERE org_id = $1
+		   AND parent_id IS NULL
+		 ORDER BY slug ASC`,
+		resp.OrgID,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var slug string
+		require.NoError(t, rows.Scan(&slug))
+		got = append(got, slug)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{"agents", "personal", "process", "projects", "technical"}, got)
+}
+
 func TestBootstrapOnboardingIsIdempotentForStarterAgents(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)
@@ -193,6 +228,43 @@ func TestBootstrapOnboardingIsIdempotentForStarterAgents(t *testing.T) {
 		).Scan(&count)
 		require.NoError(t, err)
 		require.Equalf(t, 1, count, "expected exactly one %s agent", slug)
+	}
+}
+
+func TestBootstrapOnboardingTaxonomySeedIsIdempotent(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	db := openFeedDatabase(t, connStr)
+
+	first, err := bootstrapOnboarding(context.Background(), db, "Sam", "sam@example.com", "My Team", "my-team")
+	require.NoError(t, err)
+	second, err := bootstrapOnboarding(context.Background(), db, "Sam", "sam@example.com", "My Team", "my-team")
+	require.NoError(t, err)
+	require.Equal(t, first.OrgID, second.OrgID)
+
+	rows, err := db.Query(
+		`SELECT slug, COUNT(*)
+		 FROM ellie_taxonomy_nodes
+		 WHERE org_id = $1
+		   AND parent_id IS NULL
+		 GROUP BY slug
+		 ORDER BY slug ASC`,
+		first.OrgID,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	counts := map[string]int{}
+	for rows.Next() {
+		var slug string
+		var count int
+		require.NoError(t, rows.Scan(&slug, &count))
+		counts[slug] = count
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, 5, len(counts))
+	for _, slug := range []string{"agents", "personal", "process", "projects", "technical"} {
+		require.Equalf(t, 1, counts[slug], "expected exactly one %s root", slug)
 	}
 }
 
