@@ -1,0 +1,653 @@
+# Issue #105: Issue Lifecycle & Agent Work Roles
+
+## Summary
+
+Formalize the issue lifecycle into a pipeline with three distinct agent roles — **Planner**, **Worker**, **Reviewer** — each picking up work automatically when it reaches their stage. Issues flow through the pipeline from human intent to deployed result with minimal human intervention.
+
+## The Cycle
+
+```
+                          ┌─────────────────────────────┐
+                          │                             │
+  ┌─────────┐    ┌───────▼──────┐    ┌──────────────────────────┐
+  │ CREATED  │───▶│ MARKED READY │───▶│ SPLIT INTO "SHOVEL READY" │
+  └─────────┘    └──────────────┘    │ SUB-ISSUES               │
+                   picked up by      └────────────┬─────────────┘
+                   "Planner"                      │
+                   (may call in others             │ picked up by
+                    or kick back questions          │ "Worker"
+                    to human)                      │
+                                                   ▼
+  ┌──────────────────────────┐    ┌──────────────────────────┐
+  │ REVIEWED & EITHER:       │◀───│ WORK GETS DONE           │
+  │ • Deployed               │    │ IN BRANCH                │
+  │ • New sub-issues created │    └──────────────────────────┘
+  │ • Flagged for human      │      picked up by
+  │   review                 │      "Reviewer"
+  └──────────────────────────┘
+```
+
+### Stage 1: Created
+- Human (or agent) creates an issue with a title and description
+- Issue is in `draft` state — not yet ready for work
+- This is where ideas, bug reports, and feature requests land
+
+### Stage 2: Marked Ready
+- Human marks the issue as `ready` — signals it's worth working on
+- This is the **intent boundary**: human has decided this should happen
+- Issue now enters the Planner's queue
+
+### Stage 3: Planner Picks Up
+The **Planner** agent (a role, not a specific agent) picks up `ready` issues and:
+1. **Reads the issue** — understands what's being asked
+2. **Researches the codebase** — finds relevant files, existing patterns, dependencies
+3. **Splits into sub-issues** — creates "shovel ready" sub-issues that are small enough for a single Worker session to complete
+4. **Writes specs** — each sub-issue has clear acceptance criteria, files to modify, and test expectations
+5. **Sequences work** — marks dependencies between sub-issues (e.g., "schema migration before API handler")
+
+The Planner may:
+- **Call in other agents** for input (e.g., ask the design agent about UI, ask the architect about schema)
+- **Kick back to the human** with questions if the issue is ambiguous or needs decisions
+- **Link related issues** if the work overlaps with something else in progress
+
+Output: Parent issue updated with plan, child sub-issues created in `ready_for_work` state.
+
+### Stage 4: Worker Picks Up
+**Worker** agents (could be Codex, could be OpenClaw agents) pick up `ready_for_work` sub-issues:
+1. **Create a branch** from main (named `issue-<number>-<slug>`)
+2. **Do the work** — implement the change, write tests
+3. **Commit to the branch** with issue references
+4. **Mark sub-issue as `review`** — signals work is done and ready for review
+
+Workers are ephemeral — they spin up, do one sub-issue, and move on. No long-lived state beyond the branch and commits.
+
+### Stage 5: Reviewer Picks Up
+The **Reviewer** agent picks up sub-issues in `review` state:
+1. **Reads the diff** — compares branch to main
+2. **Runs tests** — verifies nothing is broken
+3. **Checks against the spec** — does the implementation match what the Planner wrote?
+4. **Makes a decision:**
+   - ✅ **Approve & merge** — merges branch to main, closes sub-issue
+   - 🔄 **Request changes** — adds comments, moves back to `in_progress` for Worker to fix
+   - 🆕 **Create new sub-issues** — if the review reveals additional work needed
+   - 🚩 **Flag for human review** — if the change is significant/risky enough to need human eyes
+
+When all sub-issues of a parent are closed, the parent issue is automatically closed (or moved to a "verify" state for the human).
+
+## Roles
+
+### Planner
+- **What they do:** Decompose issues into shovel-ready sub-issues
+- **Skills needed:** Codebase knowledge, architecture understanding, clear writing
+- **Analogy:** Tech lead / staff engineer doing sprint planning
+- **Gas Town equivalent:** Mayor + design crew
+- **In our system:** Could be Frank, Josh S, or a specialized planning agent
+- **Trigger:** Issue moves to `ready` state
+
+### Worker  
+- **What they do:** Implement one sub-issue at a time in a branch
+- **Skills needed:** Coding, following specs precisely
+- **Analogy:** Engineer heads-down on a ticket
+- **Gas Town equivalent:** Polecats (ephemeral workers)
+- **In our system:** Codex sessions, Derek's sub-agents, or any coding agent
+- **Trigger:** Sub-issue in `ready_for_work` state with no unresolved dependencies
+
+### Reviewer
+- **What they do:** Review completed work, merge or kick back
+- **Skills needed:** Code review, testing, quality judgment
+- **Analogy:** Senior engineer doing PR review
+- **Gas Town equivalent:** Refinery (merge queue manager)
+- **In our system:** Jeremy H, or a specialized review agent
+- **Trigger:** Sub-issue moves to `review` state
+
+### Human (Overseer)
+- **What they do:** Create issues, mark ready, review flagged items, make decisions
+- **Not automated:** The human is the intent source and final authority
+- **Notifications:** Gets pinged when Planner has questions, when Reviewer flags something
+
+## Data Model Changes
+
+### Sub-Issues (Parent/Child)
+```sql
+ALTER TABLE project_issues
+  ADD COLUMN parent_issue_id UUID REFERENCES project_issues(id),
+  ADD COLUMN issue_role TEXT;  -- 'planner', 'worker', 'reviewer', or NULL
+```
+
+- `parent_issue_id` — links sub-issues to their parent
+- `issue_role` — which role is currently responsible for this issue
+
+### Work Status Updates
+Current states: `queued`, `in_progress`, `blocked`, `review`, `done`, `cancelled`
+
+New states needed:
+- `ready` — human has marked it ready for planning (replaces current `queued` for parent issues)
+- `planning` — Planner is actively decomposing it
+- `ready_for_work` — sub-issue is fully specced and ready for a Worker
+- Keep `in_progress`, `review`, `done`, `cancelled` as-is
+- Add `flagged` — Reviewer has flagged for human review
+
+### Branch Tracking
+```sql
+ALTER TABLE project_issues
+  ADD COLUMN branch_name TEXT,
+  ADD COLUMN branch_merged_at TIMESTAMPTZ;
+```
+
+### Agent Role Assignment
+```sql
+CREATE TABLE issue_role_assignments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id UUID NOT NULL,
+  project_id UUID NOT NULL,
+  role TEXT NOT NULL,  -- 'planner', 'worker', 'reviewer'
+  agent_id UUID,       -- specific agent, or NULL for "any available"
+  priority INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+## Automatic Pickup (GUPP-inspired)
+
+The key insight from Gas Town: **if there's work on your hook, you must run it.**
+
+For Otter Camp, this means:
+1. **Polling or webhook**: Agents periodically check for issues in their role's queue (or get notified via bridge)
+2. **Claim mechanism**: Agent claims an issue (sets `owner_agent_id`), preventing double-pickup
+3. **Timeout/heartbeat**: If a claimed issue goes stale (no activity for X minutes), it gets released back to the queue
+4. **Bridge dispatch**: The Otter Camp bridge can push work notifications to OpenClaw agents
+
+### Queue Endpoints
+```
+GET /api/projects/{id}/issues/queue?role=planner    — issues in `ready` state
+GET /api/projects/{id}/issues/queue?role=worker      — sub-issues in `ready_for_work` state  
+GET /api/projects/{id}/issues/queue?role=reviewer    — sub-issues in `review` state
+POST /api/issues/{id}/claim                          — claim an issue for work
+POST /api/issues/{id}/release                        — release a claimed issue
+```
+
+## What This Changes About How We Work Today
+
+**Today:** Sam writes detailed specs in `issues/` markdown files → Codex reads the folder and implements everything → Frank checks progress logs.
+
+**After:** Sam writes a brief issue → marks it `ready` → Planner agent reads codebase and writes the spec (what Codex's progress-log shows it doing: breaking specs into numbered GitHub issues) → Workers implement in branches → Reviewer checks and merges → Sam gets notified of completion or questions.
+
+The human's job shifts from **writing specs** to **creating intent and reviewing results**. The spec-writing becomes the Planner's job.
+
+## Inspiration
+
+### From Gas Town (Yegge)
+- **Role separation**: Distinct roles with clear handoff points (Mayor → Polecats → Refinery)
+- **GUPP**: Automatic work pickup — if work exists, agents must run it
+- **Molecules**: Chained workflows that survive crashes (our sub-issue chains)
+- **Merge Queue**: Managed merging prevents conflicts (our Reviewer role)
+- **Ephemeral workers**: Polecats spin up, do work, disappear (our Workers)
+- **Graceful degradation**: System works with any subset of roles active
+
+### From Our Codex Experience
+- **Spec files work**: Detailed specs in a folder → Codex implements. This IS the Planner output.
+- **Sub-issue breakdown works**: Codex's progress log shows it creating numbered issues (#257-#275) from specs. This IS planning.
+- **Branch-per-work works**: Codex creates PRs. This IS the Worker→Reviewer flow.
+- **The bottleneck is spec writing**: Sam spent hours writing 4 specs. A Planner agent could do this.
+
+### What's Different From Gas Town
+- **Web UI, not tmux**: Otter Camp is the interface, not a terminal multiplexer
+- **Not code-only**: Our pipeline handles any kind of work — code, content, design, ops. "Tests" and "deploy" are project-configurable.
+- **Human-in-the-loop by default**: The human marks issues ready and reviews flagged items. Gas Town is more autonomous.
+- **Simpler role model**: 3 roles + human, not 7. We can always add complexity later.
+- **Deploy is configurable**: Not just "merge to main" — could be publish, upload, email, webhook, or any combination.
+
+## Project-Level Configuration
+
+The pipeline is universal — plan, execute, review, deploy — but what each stage *means* is defined per project.
+
+### Role Assignments (per project)
+
+```json
+{
+  "planner": { "agent": "josh-s", "fallback": "frank" },
+  "worker": { "agent": "codex", "allow_swarm": true, "max_concurrent": 3 },
+  "reviewer": { "agent": "jeremy-h", "fallback": "derek" }
+}
+```
+
+Each project sets who fills each role. Some projects might have the same agent in multiple roles (small projects). Others might have dedicated specialists.
+
+### Review Criteria (per project)
+
+What "review" means depends on the work:
+
+| Project | Review Criteria |
+|---------|----------------|
+| Otter Camp (code) | Tests pass, no regressions, matches spec, code style |
+| Technonymous (writing) | Matches writer's voice, hits key points, hook draws you in, no AI slop |
+| Agent Avatars (design) | Consistent style, correct dimensions, matches brief |
+| ItsAlive (product) | Tests pass, UI matches design, accessibility |
+| Pearl (infra) | Tests pass, no performance regression, security review |
+
+The Reviewer agent gets project-specific review criteria in its prompt. This is configurable in project settings.
+
+### Deploy Actions (per project)
+
+What "deploy" means after Reviewer approves:
+
+| Project | Deploy Action | Auto/Manual |
+|---------|--------------|-------------|
+| Otter Camp | Merge to main → Railway auto-deploys | Auto after review |
+| Technonymous | Merge to main → Publish to Substack | Manual (human signs off) |
+| OpenClaw | Merge to main → GitHub sync → npm publish | Manual |
+| Three Stones | Merge to main → Generate PDF/ebook | Manual |
+| Agent Avatars | Upload assets via SSH/API | Auto |
+| Email campaign | Send via email provider | Manual (always) |
+
+Deploy is a **configurable action** per project:
+
+```json
+{
+  "deploy": {
+    "auto": false,
+    "require_human_signoff": true,
+    "actions": [
+      { "type": "merge_to_main" },
+      { "type": "github_sync" },
+      { "type": "webhook", "url": "https://..." },
+      { "type": "ssh_upload", "host": "...", "path": "..." },
+      { "type": "command", "run": "npx itsalive-co" },
+      { "type": "email", "template": "..." },
+      { "type": "notify_human", "message": "Ready for your review" }
+    ]
+  }
+}
+```
+
+Deploy actions are composable — a project might merge to main AND trigger a webhook AND notify the human. The `auto` flag determines whether this happens immediately after review approval or waits for human confirmation.
+
+### Per-Issue Overrides
+
+Project settings are defaults. Any issue can override any of them:
+
+```json
+{
+  "title": "Redesign the onboarding flow",
+  "overrides": {
+    "planner": "jeff-g",
+    "reviewer": "sam",
+    "deploy": { "auto": false, "require_human_signoff": true },
+    "review_criteria": "Focus on mobile UX and accessibility"
+  }
+}
+```
+
+Examples of when you'd override:
+- **Different reviewer**: This issue touches billing — route to Sam, not Jeremy
+- **Force human signoff**: This deploys a breaking API change — no auto-deploy
+- **Different planner**: This is a design issue — Jeff G plans instead of Josh
+- **Custom review criteria**: "Make sure the legal language matches the template exactly"
+- **Different deploy**: This one issue needs to go to staging first, not straight to prod
+- **Skip review entirely**: Typo fix — Worker merges directly (if project allows)
+
+Overrides cascade: issue overrides > project defaults > system defaults.
+
+In the CLI:
+```bash
+otter issue create --project Technonymous --reviewer sam --deploy-manual "Sensitive legal update"
+```
+
+In the web UI: an "Override settings" expandable section on the issue detail page.
+
+### What This Means
+
+The same pipeline handles:
+- **Code**: Plan architecture → implement in branch → review diff + tests → merge + deploy
+- **Writing**: Plan outline + research → draft content → review voice/quality/accuracy → publish
+- **Design**: Plan brief + references → create assets → review against brand/spec → upload
+- **Ops**: Plan changes → implement config/infra → review safety → apply
+- **Comms**: Plan message + audience → draft → review tone/accuracy → send
+
+The human's project-level settings define the pipeline's behavior. The agents just follow the pipeline.
+
+## Context Profiles Per Role
+
+Each role gets a tailored context package — the right information for their job, nothing more. Overloading context causes hallucination, missed details, and token overflow.
+
+### Planner Context
+
+The Planner needs **breadth** — enough to decompose work intelligently.
+
+| Context | Why | Source |
+|---------|-----|--------|
+| Issue description | What the human wants | Issue body |
+| Project overview | Tech stack, architecture, conventions | `CONTEXT.md` in project repo |
+| Codebase map | File tree, key modules, how things connect | Tree API |
+| **Decision history** | Past decisions and *why* they were made — avoids re-litigating or contradicting prior choices | Project-level decision log, issue comment history, relevant closed issues |
+| Recent changes | What's been touched lately (avoid conflicts) | Recent commits / recent closed issues |
+| Open issues | What's already being worked on | Active issue list |
+| Pipeline config | Who are the workers/reviewers, deploy rules | Project settings |
+| API/service documentation | Real endpoint specs, schemas, auth patterns — **never assume an API shape** | Linked docs, OpenAPI specs, or explicit references in project context |
+
+**Critical rule for Planner:** *Do not hallucinate interfaces.* If you don't know what an endpoint accepts or returns, look it up or ask. Invented API shapes create bugs that are extremely hard to track down. Every sub-issue spec must reference real, verified interfaces — not guesses.
+
+### Worker Context
+
+The Worker needs **depth but narrow** — just what they need to implement one sub-issue.
+
+| Context | Why | Source |
+|---------|-----|--------|
+| Sub-issue spec | Exactly what to build, acceptance criteria, files to modify | Sub-issue body |
+| **Sibling sub-issues (high level)** | Awareness of what else is being built in this sprint — avoids conflicting approaches or duplicate work | Titles + summaries of other sub-issues under the same parent |
+| Relevant source files | The specific files to touch + their imports/dependencies | Spec's "files to modify" list + dependency analysis |
+| **Connected system documentation** | Real endpoint specs, real schemas, real auth patterns for any service they're integrating with | Linked docs, OpenAPI specs, explicit URLs/examples |
+| Test patterns | How this project writes tests | Existing test files in relevant directories |
+| Branch info | Where to commit | Auto-assigned branch name |
+
+**Critical rule for Worker:** *Do not hallucinate APIs, endpoints, schemas, or interfaces.* If the sub-issue spec references a service you're connecting to, you MUST verify the actual interface (read the source, check the docs, call the endpoint). If you can't verify it, flag it and ask — do not guess. An invented endpoint shape is worse than a missing feature.
+
+### Reviewer Context
+
+The Reviewer needs **diff + spec** — focused on "does this match what was asked?"
+
+| Context | Why | Source |
+|---------|-----|--------|
+| The diff | What changed | Branch diff vs main |
+| Sub-issue spec | What was supposed to change | Sub-issue body |
+| Review criteria | What "good" looks like for this project | Project pipeline config + issue overrides |
+| Test results | Did tests pass? | CI output or local test run |
+| Related sub-issues | Consistency check — are sibling changes compatible? | Other completed/in-review sub-issues under same parent |
+
+### Context Assembly
+
+When an agent claims an issue, Otter Camp assembles the context package automatically based on:
+1. The agent's **role** (planner/worker/reviewer)
+2. The **project's** context config (what docs exist, where specs are)
+3. The **issue's** overrides (if any)
+4. A **token budget** per role (prevents context overflow)
+
+The assembled context is delivered as part of the work notification through the bridge. The agent doesn't have to go hunting for information — it's handed exactly what it needs.
+
+### Decision Log
+
+Each project should maintain a lightweight decision log — a record of significant choices and their reasoning. This prevents:
+- Planner re-proposing something that was already rejected
+- Worker implementing something in a way that contradicts an earlier architectural decision
+- Reviewer questioning a choice that was already deliberated
+
+Format: append-only list in the project (or in issue comments), searchable by the Planner.
+
+```markdown
+## Decisions
+- **2026-02-07**: Issues are the single work tracking primitive, not tasks. Tasks may become a filtered view later.
+- **2026-02-07**: Agents don't interact with GitHub directly. Commit to Otter Camp, sync handles the rest.
+- **2026-02-08**: Pipeline roles are project-level defaults with per-issue overrides.
+```
+
+## Failure & Recovery
+
+### Worker Failure
+If a Worker fails mid-implementation (crash, timeout, bad output):
+1. Stale claim timeout — if no commit activity for X minutes, issue auto-releases back to `ready_for_work`
+2. Next available Worker picks it up with context about the previous attempt (partial commits on branch, if any)
+3. After N failed attempts, escalate to human
+
+### Review Rejection
+When the Reviewer finds problems, they **do not** simply move the sub-issue back to `in_progress`. Instead:
+1. Reviewer creates **new sub-issues** describing each fix needed, linked as children of the original sub-issue
+2. Original sub-issue stays in `review` state until fix sub-issues are completed
+3. Once fix sub-issues are done, Reviewer re-reviews the combined result
+4. This creates an audit trail — every requested change is a tracked issue, not a comment that gets lost
+
+### Post-Deploy Regression
+If something breaks after deploy:
+1. Auto-create a regression issue linked to the deployed sub-issue
+2. Regression issues get `P0` priority and skip to the front of the Worker queue
+3. Original parent issue is flagged
+
+### Stuck Detection
+- Issues with no activity for configurable duration get flagged
+- Daily digest of stuck issues shown in Otter Camp dashboard
+- Escalation: stuck → notify assigned role → notify project lead → notify human
+
+## Sub-Issue Dependency Model
+
+Dependencies between sub-issues determine execution order and parallelization safety.
+
+### Dependency Rules
+
+```sql
+CREATE TABLE issue_dependencies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id UUID NOT NULL,
+  issue_id UUID NOT NULL REFERENCES project_issues(id),
+  depends_on_id UUID NOT NULL REFERENCES project_issues(id),
+  dependency_type TEXT DEFAULT 'blocks',  -- 'blocks', 'informs'
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+- **`blocks`**: Worker cannot pick up this sub-issue until the dependency is `done`
+- **`informs`**: Soft dependency — Worker should read the dependency's output but can start immediately
+
+### File-Level Conflict Prevention
+
+The Planner must declare which files each sub-issue touches. The system enforces:
+
+1. **No two `ready_for_work` sub-issues under the same parent can modify the same file** unless they have an explicit dependency between them
+2. If the Planner needs two sub-issues to modify the same file, they must be sequenced with a `blocks` dependency
+3. The queue endpoint filters out sub-issues whose file lists overlap with any currently `in_progress` sibling
+
+```json
+{
+  "title": "Add user avatar upload endpoint",
+  "files_modified": [
+    "internal/api/router.go",
+    "internal/api/avatars.go",
+    "web/src/components/AvatarUpload.tsx"
+  ],
+  "depends_on": ["sub-issue-id-for-schema-migration"]
+}
+```
+
+### Parallel Worker Safety
+
+Workers CAN run in parallel when:
+- Sub-issues touch different files entirely
+- Sub-issues are in different sections of the app (frontend vs backend vs migrations)
+- No `blocks` dependency exists between them
+
+Workers MUST be serialized when:
+- Sub-issues modify the same file
+- Sub-issues both touch the database schema
+- One sub-issue's output is another's input (e.g., migration before API handler)
+
+The Planner is responsible for declaring file lists and dependencies correctly. The system enforces them — a Worker physically cannot claim a sub-issue if a conflicting sibling is in progress.
+
+### Circular Dependency Detection
+
+On sub-issue creation, validate that no circular dependency chains exist. Reject creation if detected.
+
+## Sub-Issue Spec Format
+
+The contract between Planner and Worker. Every sub-issue created by the Planner MUST include:
+
+```markdown
+## Title
+[Clear, action-oriented title]
+
+## Description
+[What this sub-issue accomplishes and why]
+
+## Acceptance Criteria
+- [ ] Criterion 1
+- [ ] Criterion 2
+- [ ] Criterion 3
+
+## Files to Modify
+- `path/to/file1.go` — what changes
+- `path/to/file2.tsx` — what changes
+
+## Connected Interfaces
+[REQUIRED if integrating with any API, service, or external system]
+- Endpoint: `POST /api/example` — [link to docs or source]
+- Request shape: `{ "field": "type" }`
+- Response shape: `{ "field": "type" }`
+- Auth: Bearer token via X-Session-Token header
+
+⚠️ All interfaces must be verified against real source code or documentation.
+Do not invent or assume any API shape.
+
+## Dependencies
+- Blocks: [list of sub-issue IDs that must complete first]
+- Informs: [list of sub-issue IDs worth reading but not blocking]
+
+## Test Expectations
+- [ ] Unit test for X
+- [ ] Integration test for Y
+- [ ] Existing tests still pass
+```
+
+## Progress Visibility
+
+### Parent Issue Roll-Up
+
+Every parent issue shows real-time progress of its sub-issues:
+
+```
+Issue #42: Redesign onboarding flow
+━━━━━━━━━━━━━━━━━━━━ 67%
+
+Planning: ✅ Complete
+Sub-issues: 6 total
+  ✅ Done:        4
+  🔍 In review:   1  (#42.5 — form validation)
+  🔨 In progress: 1  (#42.6 — mobile responsive)
+  ⏳ Queued:      0
+
+Planner: Josh S
+Workers: Codex (3 sessions)
+Reviewer: Jeremy H
+Deploy: Auto (merge to main → Railway)
+```
+
+### Pipeline Dashboard
+
+Project-level view showing all active issues flowing through the pipeline:
+
+| Issue | Stage | Owner | Since | Sub-Issues |
+|-------|-------|-------|-------|------------|
+| #42 Onboarding redesign | Worker | Codex | 2h ago | 4/6 done |
+| #43 Chat file uploads | Review | Jeremy H | 15m ago | 6/6 done |
+| #44 iOS toast fix | Planning | Josh S | 5m ago | — |
+
+### Activity Feed
+
+Real-time feed of pipeline events:
+- "Planner split #44 into 3 sub-issues"
+- "Worker claimed #42.5 (form validation)"
+- "Reviewer approved #43.6, merging to main"
+- "Deploy triggered for #43 (Otter Camp → Railway)"
+- "⚠️ #42.3 stale — no activity for 45 minutes"
+
+## Notifications
+
+All notifications happen through **Otter Camp** — this replaces Slack for agent coordination.
+
+### Notification Events
+| Event | Who Gets Notified | Where |
+|-------|------------------|-------|
+| Planner has questions (questionnaire) | Human | Otter Camp inbox + issue thread |
+| All sub-issues complete | Human | Otter Camp inbox |
+| Reviewer flags for human review | Human | Otter Camp inbox + issue thread |
+| Stuck/stale issue | Project lead → Human | Otter Camp dashboard + daily digest |
+| Deploy complete | Human | Otter Camp inbox |
+| Deploy failed | Human (urgent) | Otter Camp inbox |
+| Sub-issue claimed | Parent issue thread | Activity feed |
+| Sub-issue completed | Parent issue thread | Activity feed |
+| Review rejection (new fix sub-issues) | Worker queue | Auto-pickup |
+
+The human can view pipeline status at any time from the Otter Camp dashboard — no need to wait for notifications. Real-time visibility into what every agent is doing, what's in queue, what's stuck.
+
+## Metrics & Cycle Time
+
+Track pipeline health to identify bottlenecks and tune the system:
+
+| Metric | What It Measures |
+|--------|-----------------|
+| **Planning time** | How long from `ready` → sub-issues created |
+| **Work time** | How long from `ready_for_work` → `review` per sub-issue |
+| **Review time** | How long from `review` → `done` or rejection |
+| **Total cycle time** | How long from `created` → `deployed` for parent issues |
+| **Throughput** | Sub-issues completed per day/week |
+| **Rejection rate** | % of sub-issues kicked back by Reviewer |
+| **Stale rate** | % of issues that hit the stale timeout |
+| **First-pass rate** | % of sub-issues approved on first review |
+| **Parallel utilization** | Average concurrent Workers active |
+
+Displayed on the project dashboard. Trends over time to show whether the pipeline is getting faster/more reliable.
+
+## Open Questions
+
+1. **Who is the Planner?** A dedicated agent? The project lead? A specialized planning agent? Or configurable per project?
+2. **Branch management**: Do we use Otter Camp's git server for branches, or the local filesystem? How do Workers get isolated workspaces?
+3. **Cross-project issues**: Some work spans multiple projects. How do sub-issues reference different repos?
+4. **Deploy plugin system**: How extensible should deploy actions be? Hardcoded types vs. arbitrary shell commands vs. a plugin API?
+
+## Implementation Phases
+
+### Phase 1: Sub-Issues & States
+- Add `parent_issue_id` to issues
+- Add new work states (`ready`, `planning`, `ready_for_work`, `flagged`)
+- CLI: `otter issue create --parent <id>` for sub-issues
+- UI: Show sub-issue tree on parent issue page
+
+### Phase 2: Role Queues
+- Add queue endpoints
+- Add claim/release mechanism
+- Add role assignment configuration
+- Bridge: push work notifications to agents
+
+### Phase 3: Planner Agent
+- Build the Planner prompt/workflow
+- Planner reads codebase, creates sub-issues with specs
+- Test with real issues
+
+### Phase 4: Automated Worker Pickup
+- Workers auto-claim sub-issues from queue
+- Branch creation and management
+- Commit tracking per sub-issue
+
+### Phase 5: Reviewer Agent
+- Build the Reviewer prompt/workflow
+- Diff review, test execution, merge decisions
+- Human escalation pathway
+
+## Files to Create/Modify
+
+- `migrations/` — sub-issue schema, new states, branch tracking, role assignments
+- `internal/store/project_issue_store.go` — parent/child queries, queue queries, claim/release
+- `internal/api/issues.go` — queue endpoints, claim/release handlers
+- `internal/api/router.go` — new routes
+- `cmd/otter/main.go` — `--parent` flag, queue commands
+- `web/src/` — sub-issue tree UI, queue views, role management
+- `bridge/openclaw-bridge.ts` — work notification dispatch
+
+## Execution Log
+- [2026-02-08 11:22 MST] Issue #306 | Commit dad5cf2 | closed | Added parent/child issue model and lifecycle statuses with migration + API/store coverage | Tests: go test ./internal/store ./internal/api -run 'TestProjectIssueStore_(CreateIssueSupportsParentIssueAndLifecycleStatuses|ListIssuesFiltersByParentIssueID|TransitionWorkStatusSupportsLifecyclePipeline)|TestIssuesHandler(CreateIssueSupportsParentIssueID|ListSupportsParentIssueFilter)' -count=1; go test ./internal/store ./internal/api -count=1
+- [2026-02-08 11:22 MST] Issue #307 | Commit 4e6ee7f | closed | Added CLI sub-issue creation via --parent and numeric issue-id resolution flow | Tests: go test ./internal/ottercli -run 'TestClientIssueMethodsUseExpectedPathsAndPayloads' -count=1; go test ./cmd/otter -run 'TestResolveOptionalParentIssueID' -count=1; go test ./cmd/otter ./internal/ottercli -count=1
+- [2026-02-08 11:22 MST] Issue #308 | Commit a7e3d07 | closed | Added web parent/child relationship rendering in issue list and thread panel | Tests: cd web && npm test -- src/components/project/ProjectIssuesList.test.tsx src/components/project/IssueThreadPanel.test.tsx --run; cd web && npm test -- src/components/project/IssueThreadPanel.realtime.test.tsx --run
+- [2026-02-08 11:22 MST] Issue #309 | Commit n/a | opened | Planned Phase2A role-based queue endpoint with explicit API tests | Tests: n/a
+- [2026-02-08 11:22 MST] Issue #310 | Commit n/a | opened | Planned Phase2B issue claim/release workflow with store/API transition tests | Tests: n/a
+- [2026-02-08 11:22 MST] Issue #311 | Commit n/a | opened | Planned Phase2C project role assignment persistence with migration/store/API tests | Tests: n/a
+- [2026-02-08 11:22 MST] Issue #312 | Commit n/a | opened | Planned Phase2D bridge queue notification dispatch for role-eligible issue states | Tests: n/a
+- [2026-02-08 11:22 MST] Issue #313 | Commit n/a | opened | Planned Phase4A worker auto-pickup endpoint and deterministic queue selection tests | Tests: n/a
+- [2026-02-08 11:22 MST] Issue #314 | Commit n/a | opened | Planned Phase3A planner sub-issue batch creation workflow and transactional validation tests | Tests: n/a
+- [2026-02-08 11:22 MST] Issue #315 | Commit n/a | opened | Planned Phase4B issue branch/commit tracking persistence and API validation coverage | Tests: n/a
+- [2026-02-08 11:22 MST] Issue #316 | Commit n/a | opened | Planned Phase5A reviewer decision/escalation endpoint and lifecycle transition tests | Tests: n/a
+- [2026-02-08 11:24 MST] Issue #309 | Commit 28f9527 | closed | Added role-based queue endpoint and router wiring () with role/status mapping | Tests: go test ./internal/api -run 'TestIssuesHandlerRoleQueue|TestResolveIssueQueueRoleWorkStatus' -count=1; go test ./internal/api -count=1
+- [2026-02-08 11:24 MST] Issue #309 | Commit 28f9527 | note | Corrected prior log detail: route wired as `GET /api/projects/{id}/issues/queue` (previous line omitted path due shell interpolation) | Tests: n/a
+- [2026-02-08 11:26 MST] Issue #310 | Commit 02320b9 | closed | Added claim/release workflow (`POST /api/issues/{id}/claim`, `POST /api/issues/{id}/release`) with owner-participant synchronization | Tests: go test ./internal/store -run 'TestProjectIssueStore_(ClaimIssue|ReleaseIssue)' -count=1; go test ./internal/api -run 'TestIssuesHandler(ClaimIssue|ReleaseIssue)' -count=1; go test ./internal/store ./internal/api -count=1
+- [2026-02-08 11:30 MST] Issue #311 | Commit f90c06a | closed | Added role-assignment persistence (`issue_role_assignments`) with list/upsert API endpoints and validation | Tests: go test ./internal/store -run 'TestIssueRoleAssignmentStore' -count=1; go test ./internal/api -run 'TestIssueRoleAssignmentsHandler' -count=1; go test ./internal/store ./internal/api -count=1
+- [2026-02-08 11:34 MST] Issue #312 | Commit 3564e5a | closed | Added role queue notification dispatch (`issue.queue.available`) for create/patch/release transitions into ready queue states | Tests: go test ./internal/api -run 'TestIssuesHandlerQueueNotificationDispatch' -count=1; go test ./internal/api -count=1; go test ./internal/store ./internal/api -count=1
+- [2026-02-08 11:38 MST] Issue #313 | Commit e84c384 | closed | Added queue auto-pickup endpoint (`POST /api/projects/{id}/issues/queue/claim-next`) with store-level locked selection + deterministic ordering | Tests: go test ./internal/store -run 'TestProjectIssueStore_ClaimNextQueuedIssue' -count=1; go test ./internal/api -run 'TestIssuesHandlerClaimNextQueueIssue' -count=1; go test ./internal/store ./internal/api -count=1
+- [2026-02-08 11:42 MST] Issue #314 | Commit edc71ea | closed | Added planner batch sub-issue creation endpoint (`POST /api/issues/{id}/sub-issues`) with transactional no-partial-write semantics | Tests: go test ./internal/store -run 'TestProjectIssueStore_CreateSubIssuesBatch' -count=1; go test ./internal/api -run 'TestIssuesHandlerCreateSubIssuesBatch' -count=1; go test ./internal/store ./internal/api -count=1
+- [2026-02-08 11:47 MST] Issue #315 | Commit fde629e | closed | Added issue branch/commit tracking (`active_branch`, `last_commit_sha`) with migration and patch validation/serialization | Tests: go test ./internal/store -run 'TestProjectIssueStore_UpdateIssueBranchTracking' -count=1; go test ./internal/api -run 'TestIssuesHandlerPatchIssueBranchTracking' -count=1; go test ./internal/store ./internal/api -count=1
+- [2026-02-08 11:53 MST] Issue #316 | Commit d7a0beb | closed | Added reviewer decision workflow (`POST /api/issues/{id}/reviewer-decision`) mapping approve/request_changes/escalate to lifecycle transitions | Tests: go test ./internal/store -run 'TestProjectIssueStore_ReviewerDecisionTransitions' -count=1; go test ./internal/api -run 'TestIssuesHandlerReviewerDecision' -count=1; go test ./internal/store ./internal/api -count=1
+- [2026-02-08 11:55 MST] Issue #306-#316 | Commit d7a0beb | implementation-complete | All planned Spec105 micro-issues completed and closed; ready for external review | Tests: go test ./internal/store ./internal/api -count=1
