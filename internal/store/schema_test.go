@@ -690,6 +690,35 @@ func TestMigration074ConversationTokenTrackingFilesExistAndContainCoreDDL(t *tes
 	require.Contains(t, downContent, "drop column if exists total_tokens")
 }
 
+func TestMigration078Embedding1536ColumnsFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"078_add_1536_embedding_columns.down.sql",
+		"078_add_1536_embedding_columns.up.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "078_add_1536_embedding_columns.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table memories")
+	require.Contains(t, upContent, "add column if not exists embedding_1536 vector(1536)")
+	require.Contains(t, upContent, "alter table chat_messages")
+	require.Contains(t, upContent, "add column if not exists embedding_1536 vector(1536)")
+	require.Contains(t, upContent, "create index if not exists memories_embedding_1536_idx")
+	require.Contains(t, upContent, "create index if not exists chat_messages_embedding_1536_idx")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "078_add_1536_embedding_columns.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop index if exists memories_embedding_1536_idx")
+	require.Contains(t, downContent, "drop index if exists chat_messages_embedding_1536_idx")
+	require.Contains(t, downContent, "drop column if exists embedding_1536")
+}
+
 func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
