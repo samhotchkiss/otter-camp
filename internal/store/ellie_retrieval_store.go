@@ -217,7 +217,7 @@ func (s *EllieRetrievalStore) queryMemories(
 		where += fmt.Sprintf(" AND source_project_id = $%d", len(args))
 	}
 
-	vectorLiteral, hasSemanticLookup, err := normalizeEllieQueryEmbedding(queryEmbedding)
+	vectorLiteral, semanticColumn, hasSemanticLookup, err := normalizeEllieQueryEmbedding(queryEmbedding)
 	if err != nil {
 		return nil, err
 	}
@@ -246,34 +246,34 @@ func (s *EllieRetrievalStore) queryMemories(
 					source_project_id::text,
 					occurred_at,
 					CASE
-						WHEN embedding IS NOT NULL THEN 1 - (embedding <=> %s::vector)
+						WHEN %[1]s IS NOT NULL THEN 1 - (%[1]s <=> %[2]s::vector)
 					END AS semantic_score,
 					CASE
 						WHEN (title || ' ' || content) ILIKE '%%' || $2 || '%%' ESCAPE '\\' THEN 1.0
 						ELSE 0.0
 					END AS keyword_score
-				FROM memories
-				WHERE %s
-				  AND (
-						(title || ' ' || content) ILIKE '%%' || $2 || '%%' ESCAPE '\\'
-						OR (
-							embedding IS NOT NULL
-							AND (1 - (embedding <=> %s::vector)) >= %.2f
-						)
-				  )
-			)
-			SELECT id, kind, title, content, source_conversation_id, source_project_id, occurred_at
-			FROM ranked_memories
-			ORDER BY
-				((%.2f * COALESCE(semantic_score, 0.0)) + (%.2f * keyword_score)) DESC,
-				keyword_score DESC,
-				semantic_score DESC NULLS LAST,
-				occurred_at DESC,
-				id DESC
-			LIMIT %s`,
+					FROM memories
+					WHERE %[3]s
+					  AND (
+							(title || ' ' || content) ILIKE '%%' || $2 || '%%' ESCAPE '\\'
+							OR (
+								%[1]s IS NOT NULL
+								AND (1 - (%[1]s <=> %[2]s::vector)) >= %[4].2f
+							)
+					  )
+				)
+				SELECT id, kind, title, content, source_conversation_id, source_project_id, occurred_at
+				FROM ranked_memories
+				ORDER BY
+					((%[5].2f * COALESCE(semantic_score, 0.0)) + (%[6].2f * keyword_score)) DESC,
+					keyword_score DESC,
+					semantic_score DESC NULLS LAST,
+					occurred_at DESC,
+					id DESC
+				LIMIT %[7]s`,
+			semanticColumn,
 			vectorArg,
 			where,
-			vectorArg,
 			ellieSemanticSimilarityFloor,
 			ellieSemanticRankingWeight,
 			ellieKeywordRankingWeight,
@@ -341,7 +341,7 @@ func (s *EllieRetrievalStore) SearchChatHistoryWithEmbedding(
 	}
 	limit = normalizeEllieSearchLimit(limit, 10)
 
-	vectorLiteral, hasSemanticLookup, err := normalizeEllieQueryEmbedding(queryEmbedding)
+	vectorLiteral, semanticColumn, hasSemanticLookup, err := normalizeEllieQueryEmbedding(queryEmbedding)
 	if err != nil {
 		return nil, err
 	}
@@ -364,7 +364,7 @@ func (s *EllieRetrievalStore) SearchChatHistoryWithEmbedding(
 					conversation_id::text,
 					created_at,
 					CASE
-						WHEN embedding IS NOT NULL THEN 1 - (embedding <=> $3::vector)
+						WHEN %[1]s IS NOT NULL THEN 1 - (%[1]s <=> $3::vector)
 					END AS semantic_score,
 					CASE
 						WHEN body ILIKE '%%' || $2 || '%%' ESCAPE '\\' THEN 1.0
@@ -375,8 +375,8 @@ func (s *EllieRetrievalStore) SearchChatHistoryWithEmbedding(
 				  AND (
 						body ILIKE '%%' || $2 || '%%' ESCAPE '\\'
 						OR (
-							embedding IS NOT NULL
-							AND (1 - (embedding <=> $3::vector)) >= %.2f
+							%[1]s IS NOT NULL
+							AND (1 - (%[1]s <=> $3::vector)) >= %.2f
 						)
 				  )
 			)
@@ -389,6 +389,7 @@ func (s *EllieRetrievalStore) SearchChatHistoryWithEmbedding(
 				created_at DESC,
 				id DESC
 			LIMIT $4`,
+			semanticColumn,
 			ellieSemanticSimilarityFloor,
 			ellieSemanticRankingWeight,
 			ellieKeywordRankingWeight,
@@ -424,15 +425,18 @@ func (s *EllieRetrievalStore) SearchChatHistoryWithEmbedding(
 	return results, nil
 }
 
-func normalizeEllieQueryEmbedding(queryEmbedding []float64) (string, bool, error) {
+func normalizeEllieQueryEmbedding(queryEmbedding []float64) (string, string, bool, error) {
 	if len(queryEmbedding) == 0 {
-		return "", false, nil
+		return "", "", false, nil
+	}
+	if normalizeEmbeddingDimension(len(queryEmbedding)) != len(queryEmbedding) {
+		return "", "", false, fmt.Errorf("unsupported query embedding dimension %d", len(queryEmbedding))
 	}
 	vectorLiteral, err := formatVectorLiteral(queryEmbedding)
 	if err != nil {
-		return "", false, fmt.Errorf("invalid query embedding: %w", err)
+		return "", "", false, fmt.Errorf("invalid query embedding: %w", err)
 	}
-	return vectorLiteral, true, nil
+	return vectorLiteral, embeddingColumnForDimension(len(queryEmbedding)), true, nil
 }
 
 func (s *EllieRetrievalStore) ListMemoriesForOrg(ctx context.Context, orgID string, limit int) ([]EllieRetrievedMemory, error) {
