@@ -514,6 +514,71 @@ func TestOpenClawMigrationRunnerSkipsCompletedProjectDocsPhase(t *testing.T) {
 	require.False(t, projectDocsRunner.called)
 }
 
+func TestOpenClawMigrationRunnerDocScanningPhaseIntegration(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-doc-scan-integration")
+	userID := createOpenClawImportTestUser(t, db, orgID, "runner-doc-scan-integration")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(sessionDir, "main-doc-scan-integration.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"project docs should be indexed"}]}}`,
+	})
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events, err := ParseOpenClawSessionEvents(install)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	runner := NewOpenClawMigrationRunner(db)
+	runner.EllieBackfillRunner = &fakeOpenClawEllieBackfillRunner{
+		result: OpenClawEllieBackfillResult{ProcessedMessages: 1, ExtractedMemories: 1},
+	}
+	runner.EntitySynthesisRunner = &fakeOpenClawEntitySynthesisRunner{
+		result: OpenClawEntitySynthesisResult{ProcessedEntities: 1, SynthesizedItems: 1},
+	}
+	runner.ProjectDiscoveryRunner = &fakeOpenClawProjectDiscoveryRunner{
+		result: OpenClawProjectDiscoveryResult{ProcessedItems: 1, ProjectsCreated: 1, IssuesCreated: 1},
+	}
+	runner.ProjectDocsScanningRunner = &fakeOpenClawProjectDocsScanningRunner{
+		result: OpenClawProjectDocsScanningResult{ProcessedDocs: 2, UpdatedDocs: 2, InactivatedDocs: 0},
+	}
+
+	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
+		OrgID:        orgID,
+		UserID:       userID,
+		Installation: install,
+		ParsedEvents: events,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, runResult.ProjectDocsScanning)
+	require.Equal(t, 2, runResult.ProjectDocsScanning.ProcessedDocs)
+	require.Equal(t, 2, runResult.ProjectDocsScanning.UpdatedDocs)
+
+	progressStore := store.NewMigrationProgressStore(db)
+	docsProgress, err := progressStore.GetByType(context.Background(), orgID, "project_docs_scanning")
+	require.NoError(t, err)
+	require.NotNil(t, docsProgress)
+	require.Equal(t, store.MigrationProgressStatusCompleted, docsProgress.Status)
+	require.Equal(t, 2, docsProgress.ProcessedItems)
+	require.Equal(t, "project docs scanning complete", docsProgress.CurrentLabel)
+}
+
 func TestMigrationRunnerSkipsEntitySynthesisWhenHistoryOnly(t *testing.T) {
 	connStr := getOpenClawImportTestDatabaseURL(t)
 	db := setupOpenClawImportTestDatabase(t, connStr)
