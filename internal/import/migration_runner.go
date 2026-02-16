@@ -14,6 +14,7 @@ type OpenClawMigrationRunner struct {
 	EllieBackfillRunner    OpenClawEllieBackfillRunner
 	EntitySynthesisRunner  OpenClawEntitySynthesisRunner
 	DedupRunner            OpenClawDedupRunner
+	TaxonomyRunner         OpenClawTaxonomyClassificationRunner
 	ProjectDiscoveryRunner OpenClawProjectDiscoveryRunner
 	HistoryCheckpoint      int
 	OnHistoryCheckpoint    func(processed, total int)
@@ -85,6 +86,29 @@ func (noopOpenClawDedupRunner) RunDedup(
 	return OpenClawDedupResult{}, nil
 }
 
+type OpenClawTaxonomyClassificationInput struct {
+	OrgID string
+}
+
+type OpenClawTaxonomyClassificationResult struct {
+	ProcessedMemories  int
+	ClassifiedMemories int
+	InvalidOutputs     int
+}
+
+type OpenClawTaxonomyClassificationRunner interface {
+	RunClassification(ctx context.Context, input OpenClawTaxonomyClassificationInput) (OpenClawTaxonomyClassificationResult, error)
+}
+
+type noopOpenClawTaxonomyClassificationRunner struct{}
+
+func (noopOpenClawTaxonomyClassificationRunner) RunClassification(
+	_ context.Context,
+	_ OpenClawTaxonomyClassificationInput,
+) (OpenClawTaxonomyClassificationResult, error) {
+	return OpenClawTaxonomyClassificationResult{}, nil
+}
+
 type RunOpenClawMigrationInput struct {
 	OrgID        string
 	UserID       string
@@ -100,6 +124,7 @@ type RunOpenClawMigrationResult struct {
 	EllieBackfill    *OpenClawEllieBackfillResult
 	EntitySynthesis  *OpenClawEntitySynthesisResult
 	Dedup            *OpenClawDedupResult
+	TaxonomyPhase    *OpenClawTaxonomyClassificationResult
 	ProjectDiscovery *OpenClawProjectDiscoveryResult
 	Summary          OpenClawMigrationSummaryReport
 	Paused           bool
@@ -112,6 +137,7 @@ func NewOpenClawMigrationRunner(db *sql.DB) *OpenClawMigrationRunner {
 		EllieBackfillRunner:    noopOpenClawEllieBackfillRunner{},
 		EntitySynthesisRunner:  noopOpenClawEntitySynthesisRunner{},
 		DedupRunner:            noopOpenClawDedupRunner{},
+		TaxonomyRunner:         noopOpenClawTaxonomyClassificationRunner{},
 		ProjectDiscoveryRunner: newOpenClawProjectDiscoveryRunner(db),
 		HistoryCheckpoint:      100,
 	}
@@ -207,7 +233,24 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 			fmt.Printf("   ⏭️  Already completed\n\n")
 		}
 
-		fmt.Printf("🔍 Phase 6: Project Discovery\n")
+		fmt.Printf("🏷️  Phase 6: Taxonomy Classification\n")
+		taxonomyResult, taxonomyErr := r.runTaxonomyClassificationPhase(ctx, input)
+		if taxonomyErr != nil {
+			return RunOpenClawMigrationResult{}, taxonomyErr
+		}
+		result.TaxonomyPhase = taxonomyResult
+		if taxonomyResult != nil {
+			fmt.Printf(
+				"   ✅ %d memories evaluated, %d classified (%d invalid output)\n\n",
+				taxonomyResult.ProcessedMemories,
+				taxonomyResult.ClassifiedMemories,
+				taxonomyResult.InvalidOutputs,
+			)
+		} else {
+			fmt.Printf("   ⏭️  Already completed\n\n")
+		}
+
+		fmt.Printf("🔍 Phase 7: Project Discovery\n")
 		discoveryResult, discoveryErr := r.runProjectDiscoveryPhase(ctx, input)
 		if discoveryErr != nil {
 			return RunOpenClawMigrationResult{}, discoveryErr
@@ -239,6 +282,7 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 	fmt.Printf("   Events processed: %d\n", result.Summary.HistoryEventsProcessed)
 	fmt.Printf("   Entities processed: %d\n", result.Summary.EntitySynthesisProcessed)
 	fmt.Printf("   Dedup clusters:   %d\n", result.Summary.MemoryDedupProcessed)
+	fmt.Printf("   Taxonomy memories: %d\n", result.Summary.TaxonomyClassificationProcessed)
 	fmt.Printf("   Projects found:   %d\n", result.Summary.ProjectDiscoveryProcessed)
 	if len(result.Summary.Warnings) > 0 {
 		fmt.Printf("   Warnings:         %d\n", len(result.Summary.Warnings))
@@ -788,6 +832,88 @@ func (r *OpenClawMigrationRunner) runEntitySynthesisPhase(
 	}
 
 	return &synthesisResult, nil
+}
+
+func (r *OpenClawMigrationRunner) runTaxonomyClassificationPhase(
+	ctx context.Context,
+	input RunOpenClawMigrationInput,
+) (*OpenClawTaxonomyClassificationResult, error) {
+	if r.TaxonomyRunner == nil {
+		return nil, nil
+	}
+
+	phaseType := "taxonomy_classification"
+	progress, err := r.ProgressStore.GetByType(ctx, input.OrgID, phaseType)
+	if err != nil {
+		return nil, err
+	}
+	if progress == nil {
+		started, startErr := r.ProgressStore.StartPhase(ctx, store.StartMigrationProgressInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			CurrentLabel:  migrationRunnerStringPtr("starting taxonomy classification"),
+		})
+		if startErr != nil {
+			return nil, startErr
+		}
+		progress = started
+	} else {
+		if progress.Status == store.MigrationProgressStatusCompleted {
+			return nil, nil
+		}
+		if progress.Status == store.MigrationProgressStatusFailed {
+			return nil, fmt.Errorf("migration phase %q is failed; reset status before rerun", phaseType)
+		}
+		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusRunning,
+			CurrentLabel:  migrationRunnerStringPtr("resuming taxonomy classification"),
+		}); setErr != nil {
+			return nil, setErr
+		}
+	}
+
+	classificationResult, classifyErr := r.TaxonomyRunner.RunClassification(ctx, OpenClawTaxonomyClassificationInput{
+		OrgID: input.OrgID,
+	})
+	if classifyErr != nil {
+		_, _ = r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusFailed,
+			Error:         migrationRunnerStringPtr(classifyErr.Error()),
+		})
+		return nil, classifyErr
+	}
+
+	if classificationResult.ProcessedMemories > 0 {
+		if _, advanceErr := r.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
+			OrgID:          input.OrgID,
+			MigrationType:  phaseType,
+			ProcessedDelta: classificationResult.ProcessedMemories,
+			CurrentLabel: migrationRunnerStringPtr(
+				fmt.Sprintf(
+					"classified %d of %d memories",
+					classificationResult.ClassifiedMemories,
+					classificationResult.ProcessedMemories,
+				),
+			),
+		}); advanceErr != nil {
+			return nil, advanceErr
+		}
+	}
+
+	if _, err := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+		OrgID:         input.OrgID,
+		MigrationType: phaseType,
+		Status:        store.MigrationProgressStatusCompleted,
+		CurrentLabel:  migrationRunnerStringPtr("taxonomy classification complete"),
+	}); err != nil {
+		return nil, err
+	}
+
+	return &classificationResult, nil
 }
 
 func migrationRunnerStringPtr(value string) *string {

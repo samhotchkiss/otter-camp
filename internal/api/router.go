@@ -109,6 +109,7 @@ func NewRouter() http.Handler {
 	adminAgentsHandler := &AdminAgentsHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	adminConfigHandler := &AdminConfigHandler{DB: db, OpenClawHandler: openClawWSHandler}
 	labelsHandler := &LabelsHandler{}
+	taxonomyHandler := &TaxonomyHandler{}
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
 	conversationTokenHandler := &ConversationTokenHandler{}
 	// Settings uses standalone handler functions (no struct needed)
@@ -164,6 +165,7 @@ func NewRouter() http.Handler {
 		projectIssueSyncHandler.Projects = projectStore
 		labelsHandler.Store = store.NewLabelStore(db)
 		labelsHandler.DB = db
+		taxonomyHandler.Store = store.NewEllieTaxonomyStore(db)
 		agentActivityHandler.Store = store.NewAgentActivityEventStore(db)
 		conversationTokenHandler.Store = store.NewConversationTokenStore(db)
 		pipelineRolesHandler.Store = store.NewPipelineRoleStore(db)
@@ -349,6 +351,12 @@ func NewRouter() http.Handler {
 		r.With(middleware.OptionalWorkspace).Post("/labels", labelsHandler.Create)
 		r.With(middleware.OptionalWorkspace).Patch("/labels/{id}", labelsHandler.Patch)
 		r.With(middleware.OptionalWorkspace).Delete("/labels/{id}", labelsHandler.Delete)
+		r.With(middleware.OptionalWorkspace).Get("/taxonomy/nodes", taxonomyHandler.ListNodes)
+		r.With(middleware.OptionalWorkspace).Post("/taxonomy/nodes", taxonomyHandler.CreateNode)
+		r.With(middleware.OptionalWorkspace).Get("/taxonomy/nodes/{id}", taxonomyHandler.GetNode)
+		r.With(middleware.OptionalWorkspace).Patch("/taxonomy/nodes/{id}", taxonomyHandler.PatchNode)
+		r.With(middleware.OptionalWorkspace).Delete("/taxonomy/nodes/{id}", taxonomyHandler.DeleteNode)
+		r.With(middleware.OptionalWorkspace).Get("/taxonomy/nodes/{id}/memories", taxonomyHandler.ListSubtreeMemories)
 		r.With(middleware.OptionalWorkspace).Get("/projects/{id}/labels", labelsHandler.ListProjectLabels)
 		r.With(middleware.OptionalWorkspace).Post("/projects/{id}/labels", labelsHandler.AddProjectLabels)
 		r.With(middleware.OptionalWorkspace).Delete("/projects/{id}/labels/{lid}", labelsHandler.RemoveProjectLabel)
