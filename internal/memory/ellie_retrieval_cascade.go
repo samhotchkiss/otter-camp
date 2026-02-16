@@ -26,6 +26,27 @@ type EllieQueryEmbedder interface {
 	Embed(ctx context.Context, inputs []string) ([][]float64, error)
 }
 
+type EllieTaxonomyQueryClassificationInput struct {
+	OrgID          string
+	Query          string
+	TaxonomyPaths  []string
+	MaxAssignments int
+}
+
+type EllieTaxonomyQueryClassification struct {
+	Path       string
+	Confidence float64
+}
+
+type EllieTaxonomyQueryClassifier interface {
+	ClassifyQuery(ctx context.Context, input EllieTaxonomyQueryClassificationInput) ([]EllieTaxonomyQueryClassification, error)
+}
+
+type EllieTaxonomyRetrievalStore interface {
+	ListAllNodes(ctx context.Context, orgID string) ([]store.EllieTaxonomyNode, error)
+	ListMemoriesBySubtree(ctx context.Context, orgID, nodeID string, limit int) ([]store.EllieTaxonomySubtreeMemory, error)
+}
+
 type EllieJSONLScanInput struct {
 	OrgID string
 	Query string
@@ -37,10 +58,12 @@ type EllieJSONLScanner interface {
 }
 
 type EllieRetrievalCascadeService struct {
-	Store        EllieRetrievalStore
-	JSONLScanner EllieJSONLScanner
-	QualitySink  EllieRetrievalQualitySink
-	QueryEmbedder EllieQueryEmbedder
+	Store                   EllieRetrievalStore
+	TaxonomyStore           EllieTaxonomyRetrievalStore
+	TaxonomyQueryClassifier EllieTaxonomyQueryClassifier
+	JSONLScanner            EllieJSONLScanner
+	QualitySink             EllieRetrievalQualitySink
+	QueryEmbedder           EllieQueryEmbedder
 }
 
 type EllieRetrievalRequest struct {
@@ -162,6 +185,12 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 		return EllieRetrievalResponse{}, fmt.Errorf("tier 2 org memory lookup failed: %w", err)
 	}
 	memoryResults = append(memoryResults, orgResults...)
+
+	taxonomyResults, taxonomyErr := s.retrieveTaxonomyTier(ctx, orgID, query, limit)
+	if taxonomyErr != nil {
+		return EllieRetrievalResponse{}, fmt.Errorf("taxonomy retrieval tier failed: %w", taxonomyErr)
+	}
+	memoryResults = append(memoryResults, taxonomyResults...)
 	memoryResults = dedupeMemoryResults(memoryResults)
 	if limit > 0 && len(memoryResults) > limit {
 		memoryResults = memoryResults[:limit]
@@ -220,6 +249,91 @@ func (s *EllieRetrievalCascadeService) Retrieve(ctx context.Context, request Ell
 	response := EllieRetrievalResponse{TierUsed: 5, NoInformation: true}
 	s.emitQualitySignal(ctx, request, response)
 	return response, nil
+}
+
+func (s *EllieRetrievalCascadeService) retrieveTaxonomyTier(
+	ctx context.Context,
+	orgID,
+	query string,
+	limit int,
+) ([]store.EllieMemorySearchResult, error) {
+	if s == nil || s.TaxonomyStore == nil || s.TaxonomyQueryClassifier == nil {
+		return []store.EllieMemorySearchResult{}, nil
+	}
+
+	nodes, err := s.TaxonomyStore.ListAllNodes(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return []store.EllieMemorySearchResult{}, nil
+	}
+
+	pathToNodeID, taxonomyPaths, err := ellieBuildTaxonomyPathIndex(nodes)
+	if err != nil {
+		return nil, err
+	}
+
+	classifications, err := s.TaxonomyQueryClassifier.ClassifyQuery(ctx, EllieTaxonomyQueryClassificationInput{
+		OrgID:          orgID,
+		Query:          query,
+		TaxonomyPaths:  taxonomyPaths,
+		MaxAssignments: defaultEllieTaxonomyClassifierMaxAssignments,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(classifications) == 0 {
+		return []store.EllieMemorySearchResult{}, nil
+	}
+
+	results := make([]store.EllieMemorySearchResult, 0, limit)
+	seenNodeIDs := make(map[string]struct{}, len(classifications))
+	for _, row := range classifications {
+		path := normalizeEllieTaxonomyPath(row.Path)
+		nodeID, ok := pathToNodeID[path]
+		if !ok {
+			continue
+		}
+		if _, seen := seenNodeIDs[nodeID]; seen {
+			continue
+		}
+		seenNodeIDs[nodeID] = struct{}{}
+
+		subtreeRows, err := s.TaxonomyStore.ListMemoriesBySubtree(ctx, orgID, nodeID, limit)
+		if err != nil {
+			if err == store.ErrNotFound {
+				continue
+			}
+			return nil, err
+		}
+		results = append(results, mapTaxonomySubtreeMemoryRows(subtreeRows)...)
+	}
+
+	results = dedupeMemoryResults(results)
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+func mapTaxonomySubtreeMemoryRows(rows []store.EllieTaxonomySubtreeMemory) []store.EllieMemorySearchResult {
+	if len(rows) == 0 {
+		return []store.EllieMemorySearchResult{}
+	}
+	results := make([]store.EllieMemorySearchResult, 0, len(rows))
+	for _, row := range rows {
+		results = append(results, store.EllieMemorySearchResult{
+			MemoryID:             strings.TrimSpace(row.MemoryID),
+			Kind:                 strings.TrimSpace(row.Kind),
+			Title:                strings.TrimSpace(row.Title),
+			Content:              strings.TrimSpace(row.Content),
+			SourceConversationID: row.SourceConversationID,
+			SourceProjectID:      row.SourceProjectID,
+			OccurredAt:           row.OccurredAt,
+		})
+	}
+	return results
 }
 
 func (s *EllieRetrievalCascadeService) getQueryEmbedding(ctx context.Context, query string) ([]float64, bool) {
