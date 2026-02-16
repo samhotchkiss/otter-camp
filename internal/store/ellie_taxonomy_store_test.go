@@ -168,6 +168,68 @@ func TestEllieMemoryTaxonomyStoreOrgIsolation(t *testing.T) {
 	require.True(t, errors.Is(err, ErrNotFound))
 }
 
+func TestEllieTaxonomyStoreReparentPreventsCycles(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "taxonomy-store-reparent-cycle")
+	taxonomyStore := NewEllieTaxonomyStore(db)
+
+	root, err := taxonomyStore.CreateNode(context.Background(), CreateEllieTaxonomyNodeInput{
+		OrgID:       orgID,
+		Slug:        "projects",
+		DisplayName: "Projects",
+	})
+	require.NoError(t, err)
+
+	child, err := taxonomyStore.CreateNode(context.Background(), CreateEllieTaxonomyNodeInput{
+		OrgID:       orgID,
+		ParentID:    taxonomyPtr(root.ID),
+		Slug:        "otter-camp",
+		DisplayName: "Otter Camp",
+	})
+	require.NoError(t, err)
+
+	_, err = taxonomyStore.ReparentNode(context.Background(), orgID, root.ID, taxonomyPtr(child.ID))
+	require.ErrorIs(t, err, ErrConflict)
+}
+
+func TestEllieTaxonomyStoreListMemoriesBySubtree(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "taxonomy-store-subtree")
+	taxonomyStore := NewEllieTaxonomyStore(db)
+
+	root, err := taxonomyStore.CreateNode(context.Background(), CreateEllieTaxonomyNodeInput{
+		OrgID:       orgID,
+		Slug:        "technical",
+		DisplayName: "Technical",
+	})
+	require.NoError(t, err)
+
+	child, err := taxonomyStore.CreateNode(context.Background(), CreateEllieTaxonomyNodeInput{
+		OrgID:       orgID,
+		ParentID:    taxonomyPtr(root.ID),
+		Slug:        "embeddings",
+		DisplayName: "Embeddings",
+	})
+	require.NoError(t, err)
+
+	memoryID := insertTaxonomyTestMemory(t, db, orgID, "Embedding migration", "1536 dimensional switch")
+	require.NoError(t, taxonomyStore.UpsertMemoryClassification(context.Background(), UpsertEllieMemoryTaxonomyInput{
+		OrgID:      orgID,
+		MemoryID:   memoryID,
+		NodeID:     child.ID,
+		Confidence: 0.8,
+	}))
+
+	memories, err := taxonomyStore.ListMemoriesBySubtree(context.Background(), orgID, root.ID, 50)
+	require.NoError(t, err)
+	require.Len(t, memories, 1)
+	require.Equal(t, memoryID, memories[0].MemoryID)
+}
+
 func insertTaxonomyTestMemory(t *testing.T, db *sql.DB, orgID, title, content string) string {
 	t.Helper()
 	var memoryID string

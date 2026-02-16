@@ -47,9 +47,20 @@ type EllieMemoryTaxonomyClassification struct {
 	ClassifiedAt time.Time
 }
 
+type EllieTaxonomySubtreeMemory struct {
+	MemoryID             string
+	Kind                 string
+	Title                string
+	Content              string
+	SourceConversationID *string
+	SourceProjectID      *string
+	OccurredAt           time.Time
+}
+
 type ellieTaxonomyQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 type EllieTaxonomyStore struct {
@@ -357,6 +368,336 @@ func (s *EllieTaxonomyStore) ListMemoryClassifications(ctx context.Context, orgI
 	}
 
 	return classifications, nil
+}
+
+func (s *EllieTaxonomyStore) UpdateNodeDetails(
+	ctx context.Context,
+	orgID,
+	nodeID string,
+	displayName *string,
+	description *string,
+	setDescription bool,
+) (*EllieTaxonomyNode, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("ellie taxonomy store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if !uuidRegex.MatchString(nodeID) {
+		return nil, fmt.Errorf("invalid node_id")
+	}
+
+	var displayNameArg any
+	if displayName != nil {
+		trimmed := strings.TrimSpace(*displayName)
+		if trimmed == "" {
+			return nil, fmt.Errorf("display_name is required")
+		}
+		displayNameArg = trimmed
+	}
+
+	descriptionArg := sanitizeOptionalString(description)
+
+	node, err := scanEllieTaxonomyNode(s.db.QueryRowContext(
+		ctx,
+		`UPDATE ellie_taxonomy_nodes
+		    SET display_name = COALESCE($3, display_name),
+		        description = CASE
+		            WHEN $4 THEN $5
+		            ELSE description
+		        END
+		  WHERE org_id = $1
+		    AND id = $2
+		RETURNING id, org_id, parent_id::text, slug, display_name, description, depth, created_at`,
+		orgID,
+		nodeID,
+		displayNameArg,
+		setDescription,
+		descriptionArg,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to update taxonomy node details: %w", err)
+	}
+	return node, nil
+}
+
+func (s *EllieTaxonomyStore) ReparentNode(ctx context.Context, orgID, nodeID string, parentID *string) (*EllieTaxonomyNode, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("ellie taxonomy store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if !uuidRegex.MatchString(nodeID) {
+		return nil, fmt.Errorf("invalid node_id")
+	}
+
+	normalizedParentID, err := normalizeOptionalEllieUUID(parentID)
+	if err != nil {
+		return nil, fmt.Errorf("parent_id: %w", err)
+	}
+
+	var parentIDString string
+	if normalizedParentID != nil {
+		parentIDString, _ = normalizedParentID.(string)
+		parentIDString = strings.TrimSpace(parentIDString)
+		if parentIDString == nodeID {
+			return nil, ErrConflict
+		}
+	}
+
+	newDepth := 0
+	if parentIDString != "" {
+		var parentDepth int
+		if err := s.db.QueryRowContext(
+			ctx,
+			`SELECT depth
+			   FROM ellie_taxonomy_nodes
+			  WHERE org_id = $1
+			    AND id = $2`,
+			orgID,
+			parentIDString,
+		).Scan(&parentDepth); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, ErrNotFound
+			}
+			return nil, fmt.Errorf("failed to get parent taxonomy node: %w", err)
+		}
+		newDepth = parentDepth + 1
+
+		var createsCycle bool
+		if err := s.db.QueryRowContext(
+			ctx,
+			`WITH RECURSIVE descendants AS (
+				SELECT id
+				  FROM ellie_taxonomy_nodes
+				 WHERE org_id = $1
+				   AND id = $2
+				UNION ALL
+				SELECT n.id
+				  FROM ellie_taxonomy_nodes n
+				  JOIN descendants d ON n.parent_id = d.id
+				 WHERE n.org_id = $1
+			)
+			SELECT EXISTS(
+				SELECT 1
+				  FROM descendants
+				 WHERE id = $3
+			)`,
+			orgID,
+			nodeID,
+			parentIDString,
+		).Scan(&createsCycle); err != nil {
+			return nil, fmt.Errorf("failed to validate taxonomy reparent cycle: %w", err)
+		}
+		if createsCycle {
+			return nil, ErrConflict
+		}
+	}
+
+	node, err := scanEllieTaxonomyNode(s.db.QueryRowContext(
+		ctx,
+		`UPDATE ellie_taxonomy_nodes
+		    SET parent_id = $3,
+		        depth = $4
+		  WHERE org_id = $1
+		    AND id = $2
+		RETURNING id, org_id, parent_id::text, slug, display_name, description, depth, created_at`,
+		orgID,
+		nodeID,
+		normalizedParentID,
+		newDepth,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to reparent taxonomy node: %w", err)
+	}
+	return node, nil
+}
+
+func (s *EllieTaxonomyStore) DeleteLeafNode(ctx context.Context, orgID, nodeID string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("ellie taxonomy store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return fmt.Errorf("invalid org_id")
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if !uuidRegex.MatchString(nodeID) {
+		return fmt.Errorf("invalid node_id")
+	}
+
+	var hasChildren bool
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT EXISTS(
+			SELECT 1
+			  FROM ellie_taxonomy_nodes
+			 WHERE org_id = $1
+			   AND parent_id = $2
+		)`,
+		orgID,
+		nodeID,
+	).Scan(&hasChildren); err != nil {
+		return fmt.Errorf("failed to check taxonomy node children: %w", err)
+	}
+	if hasChildren {
+		return ErrConflict
+	}
+
+	result, err := s.db.ExecContext(
+		ctx,
+		`DELETE
+		   FROM ellie_taxonomy_nodes
+		  WHERE org_id = $1
+		    AND id = $2`,
+		orgID,
+		nodeID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete taxonomy node: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read taxonomy node delete count: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *EllieTaxonomyStore) ListMemoriesBySubtree(
+	ctx context.Context,
+	orgID,
+	nodeID string,
+	limit int,
+) ([]EllieTaxonomySubtreeMemory, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("ellie taxonomy store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if !uuidRegex.MatchString(nodeID) {
+		return nil, fmt.Errorf("invalid node_id")
+	}
+
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+
+	var exists bool
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT EXISTS(
+			SELECT 1
+			  FROM ellie_taxonomy_nodes
+			 WHERE org_id = $1
+			   AND id = $2
+		)`,
+		orgID,
+		nodeID,
+	).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("failed to check taxonomy subtree root: %w", err)
+	}
+	if !exists {
+		return nil, ErrNotFound
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`WITH RECURSIVE subtree AS (
+			SELECT id
+			  FROM ellie_taxonomy_nodes
+			 WHERE org_id = $1
+			   AND id = $2
+			UNION ALL
+			SELECT n.id
+			  FROM ellie_taxonomy_nodes n
+			  JOIN subtree s ON n.parent_id = s.id
+			 WHERE n.org_id = $1
+		)
+		SELECT DISTINCT
+			m.id::text,
+			m.kind,
+			m.title,
+			m.content,
+			m.source_conversation_id::text,
+			m.source_project_id::text,
+			m.occurred_at
+		FROM ellie_memory_taxonomy mt
+		JOIN subtree s ON s.id = mt.node_id
+		JOIN memories m ON m.id = mt.memory_id
+		WHERE m.org_id = $1
+		  AND m.status = 'active'
+		ORDER BY m.occurred_at DESC, m.id DESC
+		LIMIT $3`,
+		orgID,
+		nodeID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list subtree memories: %w", err)
+	}
+	defer rows.Close()
+
+	memories := make([]EllieTaxonomySubtreeMemory, 0, limit)
+	for rows.Next() {
+		var (
+			row                  EllieTaxonomySubtreeMemory
+			sourceConversationID sql.NullString
+			sourceProjectID      sql.NullString
+		)
+		if err := rows.Scan(
+			&row.MemoryID,
+			&row.Kind,
+			&row.Title,
+			&row.Content,
+			&sourceConversationID,
+			&sourceProjectID,
+			&row.OccurredAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan subtree memory: %w", err)
+		}
+		if sourceConversationID.Valid {
+			trimmed := strings.TrimSpace(sourceConversationID.String)
+			if trimmed != "" {
+				row.SourceConversationID = &trimmed
+			}
+		}
+		if sourceProjectID.Valid {
+			trimmed := strings.TrimSpace(sourceProjectID.String)
+			if trimmed != "" {
+				row.SourceProjectID = &trimmed
+			}
+		}
+		memories = append(memories, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading subtree memories: %w", err)
+	}
+	return memories, nil
 }
 
 func (s *EllieTaxonomyStore) listNodesForPath(ctx context.Context, orgID string) (map[string]EllieTaxonomyNode, error) {
