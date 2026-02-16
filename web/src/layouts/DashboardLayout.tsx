@@ -358,7 +358,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     : bridgeStatus === "degraded"
       ? "status-degraded"
       : "status-offline";
-  const showBridgeDelayBanner = bridgeStatus !== "healthy";
+  const isLocalDev = typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+  const showBridgeDelayBanner = bridgeStatus !== "healthy" && !isLocalDev;
   const bridgeDelayBannerMessage = getBridgeDelayBannerMessage(bridgeStatus);
   const bridgeLastSyncLabel = formatLastSyncLabel(bridgeLastSyncAgeSeconds);
 
