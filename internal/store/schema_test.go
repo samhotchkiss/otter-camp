@@ -626,18 +626,18 @@ func TestMigration072ComplianceRulesFilesExistAndContainCoreDDL(t *testing.T) {
 	require.Contains(t, downContent, "drop table if exists compliance_rules")
 }
 
-func TestMigration073MigrationProgressFilesExistAndContainCoreDDL(t *testing.T) {
+func TestMigration074MigrationProgressFilesExistAndContainCoreDDL(t *testing.T) {
 	migrationsDir := getMigrationsDir(t)
 	files := []string{
-		"073_create_migration_progress.down.sql",
-		"073_create_migration_progress.up.sql",
+		"074_create_migration_progress.down.sql",
+		"074_create_migration_progress.up.sql",
 	}
 	for _, filename := range files {
 		_, err := os.Stat(filepath.Join(migrationsDir, filename))
 		require.NoError(t, err)
 	}
 
-	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "073_create_migration_progress.up.sql"))
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "074_create_migration_progress.up.sql"))
 	require.NoError(t, err)
 	upContent := strings.ToLower(string(upRaw))
 	require.Contains(t, upContent, "create table if not exists migration_progress")
@@ -647,7 +647,7 @@ func TestMigration073MigrationProgressFilesExistAndContainCoreDDL(t *testing.T) 
 	require.Contains(t, upContent, "create unique index if not exists migration_progress_org_type_uidx")
 	require.Contains(t, upContent, "create policy migration_progress_org_isolation")
 
-	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "073_create_migration_progress.down.sql"))
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "074_create_migration_progress.down.sql"))
 	require.NoError(t, err)
 	downContent := strings.ToLower(string(downRaw))
 	require.Contains(t, downContent, "drop policy if exists migration_progress_org_isolation")
@@ -655,18 +655,18 @@ func TestMigration073MigrationProgressFilesExistAndContainCoreDDL(t *testing.T) 
 	require.Contains(t, downContent, "drop table if exists migration_progress")
 }
 
-func TestMigration074ConversationTokenTrackingFilesExistAndContainCoreDDL(t *testing.T) {
+func TestMigration075ConversationTokenTrackingFilesExistAndContainCoreDDL(t *testing.T) {
 	migrationsDir := getMigrationsDir(t)
 	files := []string{
-		"074_add_conversation_token_tracking.down.sql",
-		"074_add_conversation_token_tracking.up.sql",
+		"075_add_conversation_token_tracking.down.sql",
+		"075_add_conversation_token_tracking.up.sql",
 	}
 	for _, filename := range files {
 		_, err := os.Stat(filepath.Join(migrationsDir, filename))
 		require.NoError(t, err)
 	}
 
-	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "074_add_conversation_token_tracking.up.sql"))
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "075_add_conversation_token_tracking.up.sql"))
 	require.NoError(t, err)
 	upContent := strings.ToLower(string(upRaw))
 	require.Contains(t, upContent, "alter table chat_messages")
@@ -679,7 +679,7 @@ func TestMigration074ConversationTokenTrackingFilesExistAndContainCoreDDL(t *tes
 	require.Contains(t, upContent, "create or replace function otter_chat_messages_token_rollup")
 	require.Contains(t, upContent, "create trigger chat_messages_token_rollup_trg")
 
-	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "074_add_conversation_token_tracking.down.sql"))
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "075_add_conversation_token_tracking.down.sql"))
 	require.NoError(t, err)
 	downContent := strings.ToLower(string(downRaw))
 	require.Contains(t, downContent, "drop trigger if exists chat_messages_token_rollup_trg on chat_messages")

@@ -101,7 +101,7 @@ func TestEmbedder(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("dimension mismatch returns error", func(t *testing.T) {
+	t.Run("dimension mismatch returns zero vector fallback", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"embedding":[0.1,0.2,0.3]}`))
@@ -116,8 +116,10 @@ func TestEmbedder(t *testing.T) {
 		}, server.Client())
 		require.NoError(t, err)
 
-		_, err = embedder.Embed(context.Background(), []string{"alpha"})
-		require.Error(t, err)
+		vectors, err := embedder.Embed(context.Background(), []string{"alpha"})
+		require.NoError(t, err)
+		require.Len(t, vectors, 1)
+		require.Equal(t, []float64{0, 0}, vectors[0])
 	})
 }
 
@@ -172,8 +174,10 @@ func TestEmbedderTimeout(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	_, err = embedder.Embed(context.Background(), []string{"slow request"})
-	require.Error(t, err)
+	vectors, err := embedder.Embed(context.Background(), []string{"slow request"})
+	require.NoError(t, err)
+	require.Len(t, vectors, 1)
+	require.Equal(t, []float64{0, 0}, vectors[0])
 	require.GreaterOrEqual(t, calls.Load(), int32(3))
 }
 

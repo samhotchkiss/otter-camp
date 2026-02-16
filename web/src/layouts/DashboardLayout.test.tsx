@@ -125,7 +125,7 @@ describe("DashboardLayout", () => {
     expect(screen.queryByText("Messages may be delayed - bridge reconnecting")).not.toBeInTheDocument();
   });
 
-  it("renders degraded bridge indicator and delayed-message banner", async () => {
+  it("renders degraded bridge indicator and hides delay banner in local dev", async () => {
     adminConnectionsMock.mockResolvedValue({
       bridge: {
         connected: true,
@@ -146,11 +146,11 @@ describe("DashboardLayout", () => {
     );
 
     expect(await screen.findByText("Bridge connected, OpenClaw unreachable")).toBeInTheDocument();
-    expect(await screen.findByText("Bridge connected but OpenClaw unreachable")).toBeInTheDocument();
-    expect(await screen.findByText("Last successful sync 3m ago")).toBeInTheDocument();
+    expect(screen.queryByText("Bridge connected but OpenClaw unreachable")).not.toBeInTheDocument();
+    expect(screen.queryByText("Last successful sync 3m ago")).not.toBeInTheDocument();
   });
 
-  it("renders unhealthy bridge indicator and delayed-message banner", async () => {
+  it("renders unhealthy bridge indicator and hides delay banner in local dev", async () => {
     adminConnectionsMock.mockResolvedValue({
       bridge: {
         connected: false,
@@ -171,7 +171,7 @@ describe("DashboardLayout", () => {
     );
 
     expect(await screen.findByText("Bridge offline")).toBeInTheDocument();
-    expect(await screen.findByText("Bridge offline - reconnecting")).toBeInTheDocument();
-    expect(await screen.findByText("Last successful sync 1h ago")).toBeInTheDocument();
+    expect(screen.queryByText("Bridge offline - reconnecting")).not.toBeInTheDocument();
+    expect(screen.queryByText("Last successful sync 1h ago")).not.toBeInTheDocument();
   });
 });
