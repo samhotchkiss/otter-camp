@@ -45,11 +45,26 @@ type CreateEllieContextInjectionMessageInput struct {
 }
 
 type EllieContextInjectionStore struct {
-	db *sql.DB
+	db              *sql.DB
+	targetDimension int
 }
 
 func NewEllieContextInjectionStore(db *sql.DB) *EllieContextInjectionStore {
-	return &EllieContextInjectionStore{db: db}
+	return NewEllieContextInjectionStoreWithDimension(db, legacyEmbeddingDimension)
+}
+
+func NewEllieContextInjectionStoreWithDimension(db *sql.DB, targetDimension int) *EllieContextInjectionStore {
+	return &EllieContextInjectionStore{
+		db:              db,
+		targetDimension: normalizeEmbeddingDimension(targetDimension),
+	}
+}
+
+func (s *EllieContextInjectionStore) embeddingColumn() string {
+	if s == nil {
+		return embeddingColumnForDimension(legacyEmbeddingDimension)
+	}
+	return embeddingColumnForDimension(s.targetDimension)
 }
 
 func (s *EllieContextInjectionStore) ListPendingMessagesSince(
@@ -100,7 +115,7 @@ func (s *EllieContextInjectionStore) ListPendingMessagesSince(
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT cm.id,
+		fmt.Sprintf(`SELECT cm.id,
 		        cm.org_id,
 		        cm.room_id,
 		        cm.sender_id::text,
@@ -109,11 +124,11 @@ func (s *EllieContextInjectionStore) ListPendingMessagesSince(
 		        cm.type,
 		        cm.conversation_id::text,
 		        cm.created_at,
-		        cm.embedding IS NOT NULL
+		        cm.%s IS NOT NULL
 		 FROM chat_messages cm
 		 WHERE `+strings.Join(where, " AND ")+`
 		 ORDER BY cm.created_at ASC, cm.id ASC
-		 LIMIT `+limitArg,
+		 LIMIT `+limitArg, s.embeddingColumn()),
 		args...,
 	)
 	if err != nil {
@@ -170,9 +185,9 @@ func (s *EllieContextInjectionStore) UpdateMessageEmbedding(ctx context.Context,
 	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`UPDATE chat_messages
-		 SET embedding = $2::vector
-		 WHERE id = $1`,
+		fmt.Sprintf(`UPDATE chat_messages
+		 SET %s = $2::vector
+		 WHERE id = $1`, s.embeddingColumn()),
 		messageID,
 		vectorLiteral,
 	)
@@ -209,7 +224,7 @@ func (s *EllieContextInjectionStore) SearchMemoryCandidatesByEmbedding(
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id,
+		fmt.Sprintf(`SELECT id,
 		        kind,
 		        title,
 		        content,
@@ -218,13 +233,13 @@ func (s *EllieContextInjectionStore) SearchMemoryCandidatesByEmbedding(
 		        occurred_at,
 		        source_conversation_id::text,
 		        superseded_by::text,
-		        1 - (embedding <=> $2::vector) AS similarity
+		        1 - (%[1]s <=> $2::vector) AS similarity
 		 FROM memories
 		 WHERE org_id = $1
 		   AND status = 'active'
-		   AND embedding IS NOT NULL
-		 ORDER BY embedding <=> $2::vector ASC, occurred_at DESC, id DESC
-		 LIMIT $3`,
+		   AND %[1]s IS NOT NULL
+		 ORDER BY %[1]s <=> $2::vector ASC, occurred_at DESC, id DESC
+		 LIMIT $3`, s.embeddingColumn()),
 		orgID,
 		vectorLiteral,
 		limit,

@@ -152,7 +152,7 @@ func main() {
 					MaxItems:  cfg.EllieContextInjection.MaxItems,
 				})
 				worker := memory.NewEllieContextInjectionWorker(
-					store.NewEllieContextInjectionStore(db),
+					store.NewEllieContextInjectionStoreWithDimension(db, cfg.ConversationEmbedding.Dimension),
 					embedder,
 					service,
 					memory.EllieContextInjectionWorkerConfig{
@@ -186,7 +186,7 @@ func main() {
 				log.Printf("⚠️  Conversation embedding worker disabled; embedder init failed: %v", err)
 			} else {
 				worker := memory.NewConversationEmbeddingWorker(
-					store.NewConversationEmbeddingStore(db),
+					store.NewConversationEmbeddingStoreWithDimension(db, cfg.ConversationEmbedding.Dimension),
 					embedder,
 					memory.ConversationEmbeddingWorkerConfig{
 						BatchSize:    cfg.ConversationEmbedding.BatchSize,

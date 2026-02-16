@@ -16,6 +16,14 @@ func testEmbeddingVector(value float64) []float64 {
 	return vector
 }
 
+func testEmbeddingVector1536(value float64) []float64 {
+	vector := make([]float64, 1536)
+	for i := range vector {
+		vector[i] = value
+	}
+	return vector
+}
+
 func TestEllieContextInjectionStoreListPendingMessages(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
@@ -152,6 +160,52 @@ func TestEllieContextInjectionStoreSearchMemoryCandidatesByEmbedding(t *testing.
 	require.NoError(t, err)
 
 	store := NewEllieContextInjectionStore(db)
+	candidates, err := store.SearchMemoryCandidatesByEmbedding(context.Background(), orgID, queryVector, 5)
+	require.NoError(t, err)
+	require.Len(t, candidates, 2)
+	require.Equal(t, nearMemoryID, candidates[0].MemoryID)
+	require.Equal(t, farMemoryID, candidates[1].MemoryID)
+	require.Greater(t, candidates[0].Similarity, candidates[1].Similarity)
+}
+
+func TestEllieContextInjectionStoreSearchMemoryCandidatesByEmbedding1536(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-context-memory-search-1536-org")
+
+	var nearMemoryID string
+	err := db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status, importance)
+		 VALUES ($1, 'technical_decision', 'Near memory 1536', 'Use Postgres', 'active', 5)
+		 RETURNING id`,
+		orgID,
+	).Scan(&nearMemoryID)
+	require.NoError(t, err)
+
+	var farMemoryID string
+	err = db.QueryRow(
+		`INSERT INTO memories (org_id, kind, title, content, status, importance)
+		 VALUES ($1, 'fact', 'Far memory 1536', 'Use flat files', 'active', 2)
+		 RETURNING id`,
+		orgID,
+	).Scan(&farMemoryID)
+	require.NoError(t, err)
+
+	queryVector := testEmbeddingVector1536(0.01)
+	nearVector := testEmbeddingVector1536(0.01)
+	farVector := testEmbeddingVector1536(-0.01)
+	nearLiteral, err := formatVectorLiteral(nearVector)
+	require.NoError(t, err)
+	farLiteral, err := formatVectorLiteral(farVector)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`UPDATE memories SET embedding_1536 = $2::vector WHERE id = $1`, nearMemoryID, nearLiteral)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE memories SET embedding_1536 = $2::vector WHERE id = $1`, farMemoryID, farLiteral)
+	require.NoError(t, err)
+
+	store := NewEllieContextInjectionStoreWithDimension(db, 1536)
 	candidates, err := store.SearchMemoryCandidatesByEmbedding(context.Background(), orgID, queryVector, 5)
 	require.NoError(t, err)
 	require.Len(t, candidates, 2)
