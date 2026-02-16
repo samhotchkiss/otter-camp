@@ -12,6 +12,7 @@ type OpenClawMigrationRunner struct {
 	DB                     *sql.DB
 	ProgressStore          *store.MigrationProgressStore
 	EllieBackfillRunner    OpenClawEllieBackfillRunner
+	EntitySynthesisRunner  OpenClawEntitySynthesisRunner
 	ProjectDiscoveryRunner OpenClawProjectDiscoveryRunner
 	HistoryCheckpoint      int
 	OnHistoryCheckpoint    func(processed, total int)
@@ -39,6 +40,28 @@ func (noopOpenClawEllieBackfillRunner) RunBackfill(
 	return OpenClawEllieBackfillResult{}, nil
 }
 
+type OpenClawEntitySynthesisInput struct {
+	OrgID string
+}
+
+type OpenClawEntitySynthesisResult struct {
+	ProcessedEntities int
+	SynthesizedItems  int
+}
+
+type OpenClawEntitySynthesisRunner interface {
+	RunSynthesis(ctx context.Context, input OpenClawEntitySynthesisInput) (OpenClawEntitySynthesisResult, error)
+}
+
+type noopOpenClawEntitySynthesisRunner struct{}
+
+func (noopOpenClawEntitySynthesisRunner) RunSynthesis(
+	_ context.Context,
+	_ OpenClawEntitySynthesisInput,
+) (OpenClawEntitySynthesisResult, error) {
+	return OpenClawEntitySynthesisResult{}, nil
+}
+
 type RunOpenClawMigrationInput struct {
 	OrgID        string
 	UserID       string
@@ -52,6 +75,7 @@ type RunOpenClawMigrationResult struct {
 	AgentImport      *OpenClawAgentImportResult
 	HistoryBackfill  *OpenClawHistoryBackfillResult
 	EllieBackfill    *OpenClawEllieBackfillResult
+	EntitySynthesis  *OpenClawEntitySynthesisResult
 	ProjectDiscovery *OpenClawProjectDiscoveryResult
 	Summary          OpenClawMigrationSummaryReport
 	Paused           bool
@@ -62,6 +86,7 @@ func NewOpenClawMigrationRunner(db *sql.DB) *OpenClawMigrationRunner {
 		DB:                     db,
 		ProgressStore:          store.NewMigrationProgressStore(db),
 		EllieBackfillRunner:    noopOpenClawEllieBackfillRunner{},
+		EntitySynthesisRunner:  noopOpenClawEntitySynthesisRunner{},
 		ProjectDiscoveryRunner: newOpenClawProjectDiscoveryRunner(db),
 		HistoryCheckpoint:      100,
 	}
@@ -133,7 +158,19 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 			fmt.Printf("   ⏭️  Already completed\n\n")
 		}
 
-		fmt.Printf("🔍 Phase 4: Project Discovery\n")
+		fmt.Printf("🧩 Phase 4: Entity Synthesis\n")
+		entityResult, entityErr := r.runEntitySynthesisPhase(ctx, input)
+		if entityErr != nil {
+			return RunOpenClawMigrationResult{}, entityErr
+		}
+		result.EntitySynthesis = entityResult
+		if entityResult != nil {
+			fmt.Printf("   ✅ %d entities processed, %d syntheses written\n\n", entityResult.ProcessedEntities, entityResult.SynthesizedItems)
+		} else {
+			fmt.Printf("   ⏭️  Already completed\n\n")
+		}
+
+		fmt.Printf("🔍 Phase 5: Project Discovery\n")
 		discoveryResult, discoveryErr := r.runProjectDiscoveryPhase(ctx, input)
 		if discoveryErr != nil {
 			return RunOpenClawMigrationResult{}, discoveryErr
@@ -163,6 +200,7 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 	fmt.Printf("   Agents imported:  %d\n", result.Summary.AgentImportProcessed)
 	fmt.Printf("   Messages created: %d\n", result.Summary.HistoryMessagesInserted)
 	fmt.Printf("   Events processed: %d\n", result.Summary.HistoryEventsProcessed)
+	fmt.Printf("   Entities processed: %d\n", result.Summary.EntitySynthesisProcessed)
 	fmt.Printf("   Projects found:   %d\n", result.Summary.ProjectDiscoveryProcessed)
 	if len(result.Summary.Warnings) > 0 {
 		fmt.Printf("   Warnings:         %d\n", len(result.Summary.Warnings))
@@ -556,6 +594,84 @@ func (r *OpenClawMigrationRunner) runProjectDiscoveryPhase(
 	}
 
 	return &discoveryResult, nil
+}
+
+func (r *OpenClawMigrationRunner) runEntitySynthesisPhase(
+	ctx context.Context,
+	input RunOpenClawMigrationInput,
+) (*OpenClawEntitySynthesisResult, error) {
+	if r.EntitySynthesisRunner == nil {
+		return nil, nil
+	}
+
+	phaseType := "entity_synthesis"
+	progress, err := r.ProgressStore.GetByType(ctx, input.OrgID, phaseType)
+	if err != nil {
+		return nil, err
+	}
+	if progress == nil {
+		started, startErr := r.ProgressStore.StartPhase(ctx, store.StartMigrationProgressInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			CurrentLabel:  migrationRunnerStringPtr("starting entity synthesis"),
+		})
+		if startErr != nil {
+			return nil, startErr
+		}
+		progress = started
+	} else {
+		if progress.Status == store.MigrationProgressStatusCompleted {
+			return nil, nil
+		}
+		if progress.Status == store.MigrationProgressStatusFailed {
+			return nil, fmt.Errorf("migration phase %q is failed; reset status before rerun", phaseType)
+		}
+		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusRunning,
+			CurrentLabel:  migrationRunnerStringPtr("resuming entity synthesis"),
+		}); setErr != nil {
+			return nil, setErr
+		}
+	}
+
+	synthesisResult, synthesisErr := r.EntitySynthesisRunner.RunSynthesis(ctx, OpenClawEntitySynthesisInput{
+		OrgID: input.OrgID,
+	})
+	if synthesisErr != nil {
+		_, _ = r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusFailed,
+			Error:         migrationRunnerStringPtr(synthesisErr.Error()),
+		})
+		return nil, synthesisErr
+	}
+
+	if synthesisResult.ProcessedEntities > 0 {
+		if _, advanceErr := r.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
+			OrgID:          input.OrgID,
+			MigrationType:  phaseType,
+			ProcessedDelta: synthesisResult.ProcessedEntities,
+			CurrentLabel: migrationRunnerStringPtr(
+				fmt.Sprintf("processed %d entities", synthesisResult.ProcessedEntities),
+			),
+		}); advanceErr != nil {
+			return nil, advanceErr
+		}
+	}
+
+	if _, err := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+		OrgID:         input.OrgID,
+		MigrationType: phaseType,
+		Status:        store.MigrationProgressStatusCompleted,
+		CurrentLabel:  migrationRunnerStringPtr("entity synthesis complete"),
+	}); err != nil {
+		return nil, err
+	}
+
+	return &synthesisResult, nil
 }
 
 func migrationRunnerStringPtr(value string) *string {
