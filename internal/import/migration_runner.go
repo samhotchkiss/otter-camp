@@ -12,6 +12,7 @@ type OpenClawMigrationRunner struct {
 	DB                     *sql.DB
 	ProgressStore          *store.MigrationProgressStore
 	EllieBackfillRunner    OpenClawEllieBackfillRunner
+	DedupRunner            OpenClawDedupRunner
 	ProjectDiscoveryRunner OpenClawProjectDiscoveryRunner
 	HistoryCheckpoint      int
 	OnHistoryCheckpoint    func(processed, total int)
@@ -39,6 +40,28 @@ func (noopOpenClawEllieBackfillRunner) RunBackfill(
 	return OpenClawEllieBackfillResult{}, nil
 }
 
+type OpenClawDedupInput struct {
+	OrgID string
+}
+
+type OpenClawDedupResult struct {
+	ProcessedClusters int
+	DeprecatedItems   int
+}
+
+type OpenClawDedupRunner interface {
+	RunDedup(ctx context.Context, input OpenClawDedupInput) (OpenClawDedupResult, error)
+}
+
+type noopOpenClawDedupRunner struct{}
+
+func (noopOpenClawDedupRunner) RunDedup(
+	_ context.Context,
+	_ OpenClawDedupInput,
+) (OpenClawDedupResult, error) {
+	return OpenClawDedupResult{}, nil
+}
+
 type RunOpenClawMigrationInput struct {
 	OrgID        string
 	UserID       string
@@ -52,6 +75,7 @@ type RunOpenClawMigrationResult struct {
 	AgentImport      *OpenClawAgentImportResult
 	HistoryBackfill  *OpenClawHistoryBackfillResult
 	EllieBackfill    *OpenClawEllieBackfillResult
+	Dedup            *OpenClawDedupResult
 	ProjectDiscovery *OpenClawProjectDiscoveryResult
 	Summary          OpenClawMigrationSummaryReport
 	Paused           bool
@@ -62,6 +86,7 @@ func NewOpenClawMigrationRunner(db *sql.DB) *OpenClawMigrationRunner {
 		DB:                     db,
 		ProgressStore:          store.NewMigrationProgressStore(db),
 		EllieBackfillRunner:    noopOpenClawEllieBackfillRunner{},
+		DedupRunner:            noopOpenClawDedupRunner{},
 		ProjectDiscoveryRunner: newOpenClawProjectDiscoveryRunner(db),
 		HistoryCheckpoint:      100,
 	}
@@ -133,7 +158,19 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 			fmt.Printf("   ⏭️  Already completed\n\n")
 		}
 
-		fmt.Printf("🔍 Phase 4: Project Discovery\n")
+		fmt.Printf("🧹 Phase 4: Memory Dedup\n")
+		dedupResult, dedupErr := r.runDedupPhase(ctx, input)
+		if dedupErr != nil {
+			return RunOpenClawMigrationResult{}, dedupErr
+		}
+		result.Dedup = dedupResult
+		if dedupResult != nil {
+			fmt.Printf("   ✅ %d clusters processed, %d memories deprecated\n\n", dedupResult.ProcessedClusters, dedupResult.DeprecatedItems)
+		} else {
+			fmt.Printf("   ⏭️  Already completed\n\n")
+		}
+
+		fmt.Printf("🔍 Phase 5: Project Discovery\n")
 		discoveryResult, discoveryErr := r.runProjectDiscoveryPhase(ctx, input)
 		if discoveryErr != nil {
 			return RunOpenClawMigrationResult{}, discoveryErr
@@ -163,6 +200,7 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 	fmt.Printf("   Agents imported:  %d\n", result.Summary.AgentImportProcessed)
 	fmt.Printf("   Messages created: %d\n", result.Summary.HistoryMessagesInserted)
 	fmt.Printf("   Events processed: %d\n", result.Summary.HistoryEventsProcessed)
+	fmt.Printf("   Dedup clusters:   %d\n", result.Summary.MemoryDedupProcessed)
 	fmt.Printf("   Projects found:   %d\n", result.Summary.ProjectDiscoveryProcessed)
 	if len(result.Summary.Warnings) > 0 {
 		fmt.Printf("   Warnings:         %d\n", len(result.Summary.Warnings))
@@ -556,6 +594,84 @@ func (r *OpenClawMigrationRunner) runProjectDiscoveryPhase(
 	}
 
 	return &discoveryResult, nil
+}
+
+func (r *OpenClawMigrationRunner) runDedupPhase(
+	ctx context.Context,
+	input RunOpenClawMigrationInput,
+) (*OpenClawDedupResult, error) {
+	if r.DedupRunner == nil {
+		return nil, nil
+	}
+
+	phaseType := "memory_dedup"
+	progress, err := r.ProgressStore.GetByType(ctx, input.OrgID, phaseType)
+	if err != nil {
+		return nil, err
+	}
+	if progress == nil {
+		started, startErr := r.ProgressStore.StartPhase(ctx, store.StartMigrationProgressInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			CurrentLabel:  migrationRunnerStringPtr("starting memory dedup"),
+		})
+		if startErr != nil {
+			return nil, startErr
+		}
+		progress = started
+	} else {
+		if progress.Status == store.MigrationProgressStatusCompleted {
+			return nil, nil
+		}
+		if progress.Status == store.MigrationProgressStatusFailed {
+			return nil, fmt.Errorf("migration phase %q is failed; reset status before rerun", phaseType)
+		}
+		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusRunning,
+			CurrentLabel:  migrationRunnerStringPtr("resuming memory dedup"),
+		}); setErr != nil {
+			return nil, setErr
+		}
+	}
+
+	dedupResult, dedupErr := r.DedupRunner.RunDedup(ctx, OpenClawDedupInput{
+		OrgID: input.OrgID,
+	})
+	if dedupErr != nil {
+		_, _ = r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusFailed,
+			Error:         migrationRunnerStringPtr(dedupErr.Error()),
+		})
+		return nil, dedupErr
+	}
+
+	if dedupResult.ProcessedClusters > 0 {
+		if _, advanceErr := r.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
+			OrgID:          input.OrgID,
+			MigrationType:  phaseType,
+			ProcessedDelta: dedupResult.ProcessedClusters,
+			CurrentLabel: migrationRunnerStringPtr(
+				fmt.Sprintf("processed %d dedup clusters", dedupResult.ProcessedClusters),
+			),
+		}); advanceErr != nil {
+			return nil, advanceErr
+		}
+	}
+
+	if _, err := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+		OrgID:         input.OrgID,
+		MigrationType: phaseType,
+		Status:        store.MigrationProgressStatusCompleted,
+		CurrentLabel:  migrationRunnerStringPtr("memory dedup complete"),
+	}); err != nil {
+		return nil, err
+	}
+
+	return &dedupResult, nil
 }
 
 func migrationRunnerStringPtr(value string) *string {

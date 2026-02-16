@@ -264,6 +264,7 @@ func renderMigrateOpenClawSummary(out io.Writer, summary importer.OpenClawMigrat
 	fmt.Fprintf(out, "  history_backfill.events_processed=%d\n", summary.HistoryEventsProcessed)
 	fmt.Fprintf(out, "  history_backfill.messages_inserted=%d\n", summary.HistoryMessagesInserted)
 	fmt.Fprintf(out, "  memory_extraction.processed=%d\n", summary.MemoryExtractionProcessed)
+	fmt.Fprintf(out, "  memory_dedup.processed=%d\n", summary.MemoryDedupProcessed)
 	fmt.Fprintf(out, "  project_discovery.processed=%d\n", summary.ProjectDiscoveryProcessed)
 	fmt.Fprintf(out, "  failed_items=%d\n", summary.FailedItems)
 	if len(summary.Warnings) == 0 {

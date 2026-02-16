@@ -36,6 +36,13 @@ type fakeOpenClawProjectDiscoveryRunner struct {
 	err    error
 }
 
+type fakeOpenClawDedupRunner struct {
+	called bool
+	inputs []OpenClawDedupInput
+	result OpenClawDedupResult
+	err    error
+}
+
 func (f *fakeOpenClawProjectDiscoveryRunner) Discover(
 	_ context.Context,
 	input OpenClawProjectDiscoveryInput,
@@ -44,6 +51,18 @@ func (f *fakeOpenClawProjectDiscoveryRunner) Discover(
 	f.inputs = append(f.inputs, input)
 	if f.err != nil {
 		return OpenClawProjectDiscoveryResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func (f *fakeOpenClawDedupRunner) RunDedup(
+	_ context.Context,
+	input OpenClawDedupInput,
+) (OpenClawDedupResult, error) {
+	f.called = true
+	f.inputs = append(f.inputs, input)
+	if f.err != nil {
+		return OpenClawDedupResult{}, f.err
 	}
 	return f.result, nil
 }
@@ -279,6 +298,84 @@ func TestMigrationRunnerStartsProjectDiscoveryPhase(t *testing.T) {
 	require.Equal(t, "project discovery complete", discoveryProgress.CurrentLabel)
 }
 
+func TestMigrationRunnerStartsDedupPhaseAfterEntitySynthesis(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-dedup-phase")
+	userID := createOpenClawImportTestUser(t, db, orgID, "runner-dedup-phase")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(sessionDir, "main-dedup-phase.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"one"}]}}`,
+	})
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events, err := ParseOpenClawSessionEvents(install)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	backfillRunner := &fakeOpenClawEllieBackfillRunner{
+		result: OpenClawEllieBackfillResult{
+			ProcessedMessages: 2,
+			ExtractedMemories: 1,
+		},
+	}
+	dedupRunner := &fakeOpenClawDedupRunner{
+		result: OpenClawDedupResult{
+			ProcessedClusters: 4,
+			DeprecatedItems:   3,
+		},
+	}
+	projectDiscoveryRunner := &fakeOpenClawProjectDiscoveryRunner{
+		result: OpenClawProjectDiscoveryResult{
+			ProcessedItems: 5,
+		},
+	}
+
+	runner := NewOpenClawMigrationRunner(db)
+	runner.EllieBackfillRunner = backfillRunner
+	runner.DedupRunner = dedupRunner
+	runner.ProjectDiscoveryRunner = projectDiscoveryRunner
+
+	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
+		OrgID:        orgID,
+		UserID:       userID,
+		Installation: install,
+		ParsedEvents: events,
+		HistoryOnly:  false,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, runResult.Dedup)
+	require.Equal(t, 4, runResult.Dedup.ProcessedClusters)
+	require.Equal(t, 3, runResult.Dedup.DeprecatedItems)
+	require.True(t, dedupRunner.called)
+	require.Len(t, dedupRunner.inputs, 1)
+	require.Equal(t, orgID, dedupRunner.inputs[0].OrgID)
+
+	progressStore := store.NewMigrationProgressStore(db)
+	dedupProgress, err := progressStore.GetByType(context.Background(), orgID, "memory_dedup")
+	require.NoError(t, err)
+	require.NotNil(t, dedupProgress)
+	require.Equal(t, store.MigrationProgressStatusCompleted, dedupProgress.Status)
+	require.Equal(t, 4, dedupProgress.ProcessedItems)
+	require.Equal(t, "memory dedup complete", dedupProgress.CurrentLabel)
+}
+
 func TestMigrationRunnerHistoryOnlySkipsEllieAndProjectDiscovery(t *testing.T) {
 	connStr := getOpenClawImportTestDatabaseURL(t)
 	db := setupOpenClawImportTestDatabase(t, connStr)
@@ -311,10 +408,12 @@ func TestMigrationRunnerHistoryOnlySkipsEllieAndProjectDiscovery(t *testing.T) {
 	require.Len(t, events, 1)
 
 	backfillRunner := &fakeOpenClawEllieBackfillRunner{}
+	dedupRunner := &fakeOpenClawDedupRunner{}
 	projectDiscoveryRunner := &fakeOpenClawProjectDiscoveryRunner{}
 
 	runner := NewOpenClawMigrationRunner(db)
 	runner.EllieBackfillRunner = backfillRunner
+	runner.DedupRunner = dedupRunner
 	runner.ProjectDiscoveryRunner = projectDiscoveryRunner
 
 	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
@@ -327,8 +426,10 @@ func TestMigrationRunnerHistoryOnlySkipsEllieAndProjectDiscovery(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, runResult.HistoryBackfill)
 	require.Nil(t, runResult.EllieBackfill)
+	require.Nil(t, runResult.Dedup)
 	require.Nil(t, runResult.ProjectDiscovery)
 	require.False(t, backfillRunner.called)
+	require.False(t, dedupRunner.called)
 	require.False(t, projectDiscoveryRunner.called)
 }
 
@@ -395,4 +496,37 @@ func TestMigrationRunnerResumeDoesNotAutoResetFailedPhase(t *testing.T) {
 	require.ErrorContains(t, runErr, "reset status before rerun")
 	require.Nil(t, result)
 	require.False(t, backfillRunner.called)
+}
+
+func TestMigrationRunnerDedupPhaseFailedStateGuard(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-dedup-failed")
+	progressStore := store.NewMigrationProgressStore(db)
+
+	_, err := progressStore.StartPhase(context.Background(), store.StartMigrationProgressInput{
+		OrgID:         orgID,
+		MigrationType: "memory_dedup",
+	})
+	require.NoError(t, err)
+	_, err = progressStore.SetStatus(context.Background(), store.SetMigrationProgressStatusInput{
+		OrgID:         orgID,
+		MigrationType: "memory_dedup",
+		Status:        store.MigrationProgressStatusFailed,
+		Error:         migrationRunnerStringPtr("boom"),
+	})
+	require.NoError(t, err)
+
+	dedupRunner := &fakeOpenClawDedupRunner{}
+	runner := NewOpenClawMigrationRunner(db)
+	runner.DedupRunner = dedupRunner
+
+	result, runErr := runner.runDedupPhase(context.Background(), RunOpenClawMigrationInput{
+		OrgID: orgID,
+	})
+	require.Error(t, runErr)
+	require.ErrorContains(t, runErr, "reset status before rerun")
+	require.Nil(t, result)
+	require.False(t, dedupRunner.called)
 }
