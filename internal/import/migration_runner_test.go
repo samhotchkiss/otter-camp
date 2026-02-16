@@ -34,6 +34,15 @@ type fakeOpenClawProjectDiscoveryRunner struct {
 	inputs []OpenClawProjectDiscoveryInput
 	result OpenClawProjectDiscoveryResult
 	err    error
+	onCall func()
+}
+
+type fakeOpenClawEntitySynthesisRunner struct {
+	called bool
+	inputs []OpenClawEntitySynthesisInput
+	result OpenClawEntitySynthesisResult
+	err    error
+	onCall func()
 }
 
 type fakeOpenClawDedupRunner struct {
@@ -41,6 +50,7 @@ type fakeOpenClawDedupRunner struct {
 	inputs []OpenClawDedupInput
 	result OpenClawDedupResult
 	err    error
+	onCall func()
 }
 
 func (f *fakeOpenClawProjectDiscoveryRunner) Discover(
@@ -49,8 +59,26 @@ func (f *fakeOpenClawProjectDiscoveryRunner) Discover(
 ) (OpenClawProjectDiscoveryResult, error) {
 	f.called = true
 	f.inputs = append(f.inputs, input)
+	if f.onCall != nil {
+		f.onCall()
+	}
 	if f.err != nil {
 		return OpenClawProjectDiscoveryResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func (f *fakeOpenClawEntitySynthesisRunner) RunSynthesis(
+	_ context.Context,
+	input OpenClawEntitySynthesisInput,
+) (OpenClawEntitySynthesisResult, error) {
+	f.called = true
+	f.inputs = append(f.inputs, input)
+	if f.onCall != nil {
+		f.onCall()
+	}
+	if f.err != nil {
+		return OpenClawEntitySynthesisResult{}, f.err
 	}
 	return f.result, nil
 }
@@ -61,6 +89,9 @@ func (f *fakeOpenClawDedupRunner) RunDedup(
 ) (OpenClawDedupResult, error) {
 	f.called = true
 	f.inputs = append(f.inputs, input)
+	if f.onCall != nil {
+		f.onCall()
+	}
 	if f.err != nil {
 		return OpenClawDedupResult{}, f.err
 	}
@@ -298,6 +329,84 @@ func TestMigrationRunnerStartsProjectDiscoveryPhase(t *testing.T) {
 	require.Equal(t, "project discovery complete", discoveryProgress.CurrentLabel)
 }
 
+func TestMigrationRunnerStartsEntitySynthesisPhase(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-entity-synthesis")
+	userID := createOpenClawImportTestUser(t, db, orgID, "runner-entity-synthesis")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(sessionDir, "main-entity-synthesis.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"one"}]}}`,
+	})
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events, err := ParseOpenClawSessionEvents(install)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	backfillRunner := &fakeOpenClawEllieBackfillRunner{
+		result: OpenClawEllieBackfillResult{
+			ProcessedMessages: 2,
+			ExtractedMemories: 1,
+		},
+	}
+	entityRunner := &fakeOpenClawEntitySynthesisRunner{
+		result: OpenClawEntitySynthesisResult{
+			ProcessedEntities: 3,
+			SynthesizedItems:  2,
+		},
+	}
+	projectDiscoveryRunner := &fakeOpenClawProjectDiscoveryRunner{
+		result: OpenClawProjectDiscoveryResult{
+			ProcessedItems: 5,
+		},
+	}
+
+	runner := NewOpenClawMigrationRunner(db)
+	runner.EllieBackfillRunner = backfillRunner
+	runner.EntitySynthesisRunner = entityRunner
+	runner.ProjectDiscoveryRunner = projectDiscoveryRunner
+
+	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
+		OrgID:        orgID,
+		UserID:       userID,
+		Installation: install,
+		ParsedEvents: events,
+		HistoryOnly:  false,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, runResult.EntitySynthesis)
+	require.Equal(t, 3, runResult.EntitySynthesis.ProcessedEntities)
+	require.Equal(t, 2, runResult.EntitySynthesis.SynthesizedItems)
+	require.True(t, entityRunner.called)
+	require.Len(t, entityRunner.inputs, 1)
+	require.Equal(t, orgID, entityRunner.inputs[0].OrgID)
+
+	progressStore := store.NewMigrationProgressStore(db)
+	entityProgress, err := progressStore.GetByType(context.Background(), orgID, "entity_synthesis")
+	require.NoError(t, err)
+	require.NotNil(t, entityProgress)
+	require.Equal(t, store.MigrationProgressStatusCompleted, entityProgress.Status)
+	require.Equal(t, 3, entityProgress.ProcessedItems)
+	require.Equal(t, "entity synthesis complete", entityProgress.CurrentLabel)
+}
+
 func TestMigrationRunnerStartsDedupPhaseAfterEntitySynthesis(t *testing.T) {
 	connStr := getOpenClawImportTestDatabaseURL(t)
 	db := setupOpenClawImportTestDatabase(t, connStr)
@@ -329,10 +438,14 @@ func TestMigrationRunnerStartsDedupPhaseAfterEntitySynthesis(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 
-	backfillRunner := &fakeOpenClawEllieBackfillRunner{
-		result: OpenClawEllieBackfillResult{
-			ProcessedMessages: 2,
-			ExtractedMemories: 1,
+	callOrder := make([]string, 0, 3)
+	entityRunner := &fakeOpenClawEntitySynthesisRunner{
+		result: OpenClawEntitySynthesisResult{
+			ProcessedEntities: 3,
+			SynthesizedItems:  2,
+		},
+		onCall: func() {
+			callOrder = append(callOrder, "entity")
 		},
 	}
 	dedupRunner := &fakeOpenClawDedupRunner{
@@ -340,15 +453,21 @@ func TestMigrationRunnerStartsDedupPhaseAfterEntitySynthesis(t *testing.T) {
 			ProcessedClusters: 4,
 			DeprecatedItems:   3,
 		},
+		onCall: func() {
+			callOrder = append(callOrder, "dedup")
+		},
 	}
 	projectDiscoveryRunner := &fakeOpenClawProjectDiscoveryRunner{
 		result: OpenClawProjectDiscoveryResult{
 			ProcessedItems: 5,
 		},
+		onCall: func() {
+			callOrder = append(callOrder, "project_discovery")
+		},
 	}
 
 	runner := NewOpenClawMigrationRunner(db)
-	runner.EllieBackfillRunner = backfillRunner
+	runner.EntitySynthesisRunner = entityRunner
 	runner.DedupRunner = dedupRunner
 	runner.ProjectDiscoveryRunner = projectDiscoveryRunner
 
@@ -360,12 +479,12 @@ func TestMigrationRunnerStartsDedupPhaseAfterEntitySynthesis(t *testing.T) {
 		HistoryOnly:  false,
 	})
 	require.NoError(t, err)
+	require.NotNil(t, runResult.EntitySynthesis)
 	require.NotNil(t, runResult.Dedup)
+	require.Equal(t, 3, runResult.EntitySynthesis.ProcessedEntities)
 	require.Equal(t, 4, runResult.Dedup.ProcessedClusters)
 	require.Equal(t, 3, runResult.Dedup.DeprecatedItems)
-	require.True(t, dedupRunner.called)
-	require.Len(t, dedupRunner.inputs, 1)
-	require.Equal(t, orgID, dedupRunner.inputs[0].OrgID)
+	require.Equal(t, []string{"entity", "dedup", "project_discovery"}, callOrder)
 
 	progressStore := store.NewMigrationProgressStore(db)
 	dedupProgress, err := progressStore.GetByType(context.Background(), orgID, "memory_dedup")
@@ -376,7 +495,7 @@ func TestMigrationRunnerStartsDedupPhaseAfterEntitySynthesis(t *testing.T) {
 	require.Equal(t, "memory dedup complete", dedupProgress.CurrentLabel)
 }
 
-func TestMigrationRunnerHistoryOnlySkipsEllieAndProjectDiscovery(t *testing.T) {
+func TestMigrationRunnerSkipsEntitySynthesisWhenHistoryOnly(t *testing.T) {
 	connStr := getOpenClawImportTestDatabaseURL(t)
 	db := setupOpenClawImportTestDatabase(t, connStr)
 
@@ -408,11 +527,13 @@ func TestMigrationRunnerHistoryOnlySkipsEllieAndProjectDiscovery(t *testing.T) {
 	require.Len(t, events, 1)
 
 	backfillRunner := &fakeOpenClawEllieBackfillRunner{}
+	entityRunner := &fakeOpenClawEntitySynthesisRunner{}
 	dedupRunner := &fakeOpenClawDedupRunner{}
 	projectDiscoveryRunner := &fakeOpenClawProjectDiscoveryRunner{}
 
 	runner := NewOpenClawMigrationRunner(db)
 	runner.EllieBackfillRunner = backfillRunner
+	runner.EntitySynthesisRunner = entityRunner
 	runner.DedupRunner = dedupRunner
 	runner.ProjectDiscoveryRunner = projectDiscoveryRunner
 
@@ -426,9 +547,11 @@ func TestMigrationRunnerHistoryOnlySkipsEllieAndProjectDiscovery(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, runResult.HistoryBackfill)
 	require.Nil(t, runResult.EllieBackfill)
+	require.Nil(t, runResult.EntitySynthesis)
 	require.Nil(t, runResult.Dedup)
 	require.Nil(t, runResult.ProjectDiscovery)
 	require.False(t, backfillRunner.called)
+	require.False(t, entityRunner.called)
 	require.False(t, dedupRunner.called)
 	require.False(t, projectDiscoveryRunner.called)
 }
@@ -496,6 +619,39 @@ func TestMigrationRunnerResumeDoesNotAutoResetFailedPhase(t *testing.T) {
 	require.ErrorContains(t, runErr, "reset status before rerun")
 	require.Nil(t, result)
 	require.False(t, backfillRunner.called)
+}
+
+func TestMigrationRunnerEntitySynthesisPhaseFailedStateGuard(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-entity-synthesis-failed")
+	progressStore := store.NewMigrationProgressStore(db)
+
+	_, err := progressStore.StartPhase(context.Background(), store.StartMigrationProgressInput{
+		OrgID:         orgID,
+		MigrationType: "entity_synthesis",
+	})
+	require.NoError(t, err)
+	_, err = progressStore.SetStatus(context.Background(), store.SetMigrationProgressStatusInput{
+		OrgID:         orgID,
+		MigrationType: "entity_synthesis",
+		Status:        store.MigrationProgressStatusFailed,
+		Error:         migrationRunnerStringPtr("boom"),
+	})
+	require.NoError(t, err)
+
+	entityRunner := &fakeOpenClawEntitySynthesisRunner{}
+	runner := NewOpenClawMigrationRunner(db)
+	runner.EntitySynthesisRunner = entityRunner
+
+	result, runErr := runner.runEntitySynthesisPhase(context.Background(), RunOpenClawMigrationInput{
+		OrgID: orgID,
+	})
+	require.Error(t, runErr)
+	require.ErrorContains(t, runErr, "reset status before rerun")
+	require.Nil(t, result)
+	require.False(t, entityRunner.called)
 }
 
 func TestMigrationRunnerDedupPhaseFailedStateGuard(t *testing.T) {
