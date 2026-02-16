@@ -574,17 +574,31 @@ func serveStatic(dir string, w http.ResponseWriter, r *http.Request) {
 	// Try to serve the exact file
 	filePath := dir + path
 	if _, err := os.Stat(filePath); err == nil {
+		setCacheHeaders(w, path)
 		http.ServeFile(w, r, filePath)
 		return
 	}
 
 	// For SPA: serve index.html for all non-asset routes
 	if _, err := os.Stat(dir + "/index.html"); err == nil {
+		// SPA fallback is always index.html — never cache it
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		http.ServeFile(w, r, dir+"/index.html")
 		return
 	}
 
 	http.NotFound(w, r)
+}
+
+// setCacheHeaders sets appropriate cache headers based on file type.
+// Hashed assets (Vite output) get long-lived caches; HTML gets no-cache.
+func setCacheHeaders(w http.ResponseWriter, path string) {
+	if strings.HasSuffix(path, ".html") || path == "/index.html" {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	} else if strings.HasPrefix(path, "/assets/") {
+		// Vite content-hashed assets — cache aggressively
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
 }
 
 func getVersion() string {

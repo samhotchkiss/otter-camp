@@ -218,7 +218,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         try {
           const sessionToken = await validateSessionToken(magicToken);
           if (sessionToken) {
-            void reconcileWorkspaceOrg(sessionToken);
+            await reconcileWorkspaceOrg(sessionToken);
           } else {
             clearStoredAuth();
           }
@@ -241,7 +241,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         try {
           const sessionToken = await validateSessionToken(token);
           if (sessionToken) {
-            void reconcileWorkspaceOrg(sessionToken);
+            await reconcileWorkspaceOrg(sessionToken);
           } else {
             clearStoredAuth();
           }
@@ -267,7 +267,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             if (authToken) {
               const sessionToken = await validateSessionToken(authToken);
               if (sessionToken) {
-                void reconcileWorkspaceOrg(sessionToken);
+                await reconcileWorkspaceOrg(sessionToken);
               }
             }
           }

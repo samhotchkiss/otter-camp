@@ -6,7 +6,9 @@
 import { isDemoMode } from './demo';
 
 const browserOrigin = typeof window !== "undefined" ? window.location.origin : "";
-export const API_URL = import.meta.env.VITE_API_URL || browserOrigin;
+const isLocalhost = typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+export const API_URL = isLocalhost ? browserOrigin : (import.meta.env.VITE_API_URL || browserOrigin);
 
 /**
  * Get query params for API calls that need org_id
