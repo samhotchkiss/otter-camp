@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -16,20 +18,22 @@ import (
 type fakeEllieRetrievalStore struct {
 	mu sync.Mutex
 
-	roomResults        []store.EllieRoomContextResult
-	projectMem         []store.EllieMemorySearchResult
-	orgMem             []store.EllieMemorySearchResult
-	chatHistory        []store.EllieChatHistoryResult
-	semanticProjectMem []store.EllieMemorySearchResult
-	semanticOrgMem     []store.EllieMemorySearchResult
-	semanticChat       []store.EllieChatHistoryResult
-	roomCalls          int
-	projectMemCalls    int
-	orgMemCalls        int
-	chatCalls          int
+	roomResults          []store.EllieRoomContextResult
+	projectMem           []store.EllieMemorySearchResult
+	orgMem               []store.EllieMemorySearchResult
+	chatHistory          []store.EllieChatHistoryResult
+	semanticProjectMem   []store.EllieMemorySearchResult
+	semanticOrgMem       []store.EllieMemorySearchResult
+	semanticChat         []store.EllieChatHistoryResult
+	projectDocs          []store.EllieProjectDocSearchResult
+	roomCalls            int
+	projectMemCalls      int
+	orgMemCalls          int
+	chatCalls            int
 	semanticProjectCalls int
 	semanticOrgCalls     int
 	semanticChatCalls    int
+	projectDocsCalls     int
 	lastSemanticVector   []float64
 }
 
@@ -108,6 +112,23 @@ func (f *fakeEllieRetrievalStore) SearchChatHistoryWithEmbedding(_ context.Conte
 	}
 	out := make([]store.EllieChatHistoryResult, len(source))
 	copy(out, source)
+	return out, nil
+}
+
+func (f *fakeEllieRetrievalStore) SearchProjectDocsByEmbedding(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ string,
+	queryEmbedding []float64,
+	_ int,
+) ([]store.EllieProjectDocSearchResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.projectDocsCalls += 1
+	f.lastSemanticVector = append([]float64(nil), queryEmbedding...)
+	out := make([]store.EllieProjectDocSearchResult, len(f.projectDocs))
+	copy(out, f.projectDocs)
 	return out, nil
 }
 
@@ -362,4 +383,79 @@ func TestEllieRetrievalCascadeFallsBackWhenQueryEmbeddingUnavailable(t *testing.
 	require.Equal(t, 1, embedder.calls)
 	require.Equal(t, 1, retrievalStore.orgMemCalls)
 	require.Equal(t, 0, retrievalStore.semanticOrgCalls)
+}
+
+func TestEllieRetrievalCascadeUsesProjectDocsLayer(t *testing.T) {
+	repoRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "docs", "guide.md"), []byte("# Guide\nFull authored content"), 0o644))
+
+	retrievalStore := &fakeEllieRetrievalStore{
+		projectDocs: []store.EllieProjectDocSearchResult{
+			{
+				DocID:         "doc-1",
+				ProjectID:     "project-1",
+				FilePath:      "docs/guide.md",
+				Title:         "Guide",
+				Summary:       "guide summary",
+				LocalRepoPath: repoRoot,
+			},
+		},
+	}
+	service := NewEllieRetrievalCascadeService(retrievalStore, nil)
+	service.QueryEmbedder = &fakeEllieQueryEmbedder{vectors: [][]float64{{0.9, 0.1}}}
+
+	response, err := service.Retrieve(context.Background(), EllieRetrievalRequest{
+		OrgID:     "org-1",
+		ProjectID: "project-1",
+		Query:     "guide",
+		Limit:     5,
+	})
+	require.NoError(t, err)
+	require.False(t, response.NoInformation)
+	require.Equal(t, 1, response.TierUsed)
+	require.Len(t, response.Items, 1)
+	require.Equal(t, "project_doc", response.Items[0].Source)
+	require.Contains(t, response.Items[0].Snippet, "Full authored content")
+	require.Equal(t, 1, retrievalStore.projectDocsCalls)
+}
+
+func TestEllieRetrievalCascadePrefersProjectDocsOverLayer1Memories(t *testing.T) {
+	repoRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "docs", "architecture.md"), []byte("# Architecture\nAuthoritative architecture doc"), 0o644))
+
+	retrievalStore := &fakeEllieRetrievalStore{
+		roomResults: []store.EllieRoomContextResult{
+			{MessageID: "msg-1", RoomID: "room-1", Body: "conversation snippet"},
+		},
+		projectDocs: []store.EllieProjectDocSearchResult{
+			{
+				DocID:         "doc-arch",
+				ProjectID:     "project-1",
+				FilePath:      "docs/architecture.md",
+				Title:         "Architecture",
+				Summary:       "arch summary",
+				LocalRepoPath: repoRoot,
+			},
+		},
+	}
+	service := NewEllieRetrievalCascadeService(retrievalStore, nil)
+	service.QueryEmbedder = &fakeEllieQueryEmbedder{vectors: [][]float64{{1, 0}}}
+
+	response, err := service.Retrieve(context.Background(), EllieRetrievalRequest{
+		OrgID:     "org-1",
+		ProjectID: "project-1",
+		RoomID:    "room-1",
+		Query:     "architecture",
+		Limit:     5,
+	})
+	require.NoError(t, err)
+	require.False(t, response.NoInformation)
+	require.Equal(t, 1, response.TierUsed)
+	require.Len(t, response.Items, 1)
+	require.Equal(t, "project_doc", response.Items[0].Source)
+	require.Contains(t, response.Items[0].Snippet, "Authoritative architecture doc")
+	require.Equal(t, 1, retrievalStore.projectDocsCalls)
+	require.Equal(t, 0, retrievalStore.roomCalls)
 }

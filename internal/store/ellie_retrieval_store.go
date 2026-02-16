@@ -34,6 +34,16 @@ type EllieChatHistoryResult struct {
 	CreatedAt      time.Time
 }
 
+type EllieProjectDocSearchResult struct {
+	DocID         string
+	ProjectID     string
+	FilePath      string
+	Title         string
+	Summary       string
+	LocalRepoPath string
+	Similarity    float64
+}
+
 type EllieRetrievedMemory struct {
 	ID             string
 	OrgID          string
@@ -319,6 +329,107 @@ func (s *EllieRetrievalStore) queryMemories(
 
 func (s *EllieRetrievalStore) SearchChatHistory(ctx context.Context, orgID, query string, limit int) ([]EllieChatHistoryResult, error) {
 	return s.SearchChatHistoryWithEmbedding(ctx, orgID, query, nil, limit)
+}
+
+func (s *EllieRetrievalStore) SearchProjectDocsByEmbedding(
+	ctx context.Context,
+	orgID,
+	projectID,
+	query string,
+	queryEmbedding []float64,
+	limit int,
+) ([]EllieProjectDocSearchResult, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("ellie retrieval store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	projectID = strings.TrimSpace(projectID)
+	query = strings.TrimSpace(query)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+	if !uuidRegex.MatchString(projectID) {
+		return nil, fmt.Errorf("invalid project_id")
+	}
+	limit = normalizeEllieSearchLimit(limit, 5)
+
+	vectorLiteral, _, hasSemanticLookup, err := normalizeEllieQueryEmbedding(queryEmbedding)
+	if err != nil {
+		return nil, err
+	}
+	if !hasSemanticLookup {
+		return []EllieProjectDocSearchResult{}, nil
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`WITH ranked_docs AS (
+			SELECT
+				d.id::text AS doc_id,
+				d.project_id::text AS project_id,
+				d.file_path,
+				COALESCE(d.title, '') AS title,
+				COALESCE(d.summary, '') AS summary,
+				COALESCE(p.local_repo_path, '') AS local_repo_path,
+				1 - (d.summary_embedding <=> $4::vector) AS semantic_score,
+				CASE
+					WHEN $3 <> ''
+					     AND (
+							COALESCE(d.title, '') ILIKE '%' || $3 || '%' ESCAPE '\'
+							OR COALESCE(d.summary, '') ILIKE '%' || $3 || '%' ESCAPE '\'
+					     )
+					THEN 1.0
+					ELSE 0.0
+				END AS keyword_score
+			FROM ellie_project_docs d
+			JOIN projects p
+			  ON p.id = d.project_id
+			 AND p.org_id = d.org_id
+			WHERE d.org_id = $1
+			  AND d.project_id = $2
+			  AND d.is_active = true
+			  AND d.summary_embedding IS NOT NULL
+		)
+		SELECT doc_id, project_id, file_path, title, summary, local_repo_path, semantic_score
+		FROM ranked_docs
+		ORDER BY
+			((0.80 * semantic_score) + (0.20 * keyword_score)) DESC,
+			keyword_score DESC,
+			semantic_score DESC,
+			file_path ASC
+		LIMIT $5`,
+		orgID,
+		projectID,
+		escapeILIKEPattern(query),
+		vectorLiteral,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search project docs: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]EllieProjectDocSearchResult, 0, limit)
+	for rows.Next() {
+		var row EllieProjectDocSearchResult
+		if err := rows.Scan(
+			&row.DocID,
+			&row.ProjectID,
+			&row.FilePath,
+			&row.Title,
+			&row.Summary,
+			&row.LocalRepoPath,
+			&row.Similarity,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan project doc search result: %w", err)
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading project doc search results: %w", err)
+	}
+
+	return results, nil
 }
 
 func (s *EllieRetrievalStore) SearchChatHistoryWithEmbedding(
