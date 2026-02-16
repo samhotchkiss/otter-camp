@@ -199,6 +199,8 @@ func TestLocalRuntimeDefaults(t *testing.T) {
 		"PORT: '4200'",
 		"VITE_API_URL: http://localhost:4200",
 		"curl -s http://localhost:4200/health",
+		"CONVERSATION_EMBEDDING_WORKER_ENABLED: 'false'",
+		"ELLIE_CONTEXT_INJECTION_WORKER_ENABLED: 'false'",
 	} {
 		if !strings.Contains(ci, snippet) {
 			t.Fatalf("expected .github/workflows/ci.yml to contain %q", snippet)
