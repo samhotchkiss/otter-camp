@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // ContextKey is the type for context keys in this package.
@@ -26,6 +27,13 @@ const (
 var uuidRegex = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
 var hostRegex = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
 var orgSlugRegex = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+type WorkspaceSlugResolver func(ctx context.Context, slug string) (workspaceID string, ok bool)
+
+var (
+	workspaceSlugResolverMu sync.RWMutex
+	workspaceSlugResolver   WorkspaceSlugResolver
+)
 
 // jwtClaims represents minimal JWT claims for workspace extraction.
 type jwtClaims struct {
@@ -105,6 +113,19 @@ func OptionalWorkspace(next http.Handler) http.Handler {
 	})
 }
 
+// SetWorkspaceSlugResolver configures lookup from org slug to workspace UUID.
+func SetWorkspaceSlugResolver(resolver WorkspaceSlugResolver) {
+	workspaceSlugResolverMu.Lock()
+	defer workspaceSlugResolverMu.Unlock()
+	workspaceSlugResolver = resolver
+}
+
+func getWorkspaceSlugResolver() WorkspaceSlugResolver {
+	workspaceSlugResolverMu.RLock()
+	defer workspaceSlugResolverMu.RUnlock()
+	return workspaceSlugResolver
+}
+
 // extractWorkspaceID attempts to extract workspace ID from various sources.
 func extractWorkspaceID(r *http.Request) string {
 	// 1. Optionally try JWT Bearer token claims (disabled by default).
@@ -131,6 +152,11 @@ func extractWorkspaceID(r *http.Request) string {
 
 	// 4. Try query parameter (for specific endpoints that allow it)
 	if id := strings.TrimSpace(r.URL.Query().Get("org_id")); id != "" && uuidRegex.MatchString(id) {
+		return id
+	}
+
+	// 5. Try host/path slug resolution when a resolver is configured.
+	if id := resolveWorkspaceIDFromSlug(r); id != "" {
 		return id
 	}
 
@@ -242,6 +268,51 @@ func configuredOrgBaseDomain() string {
 	return strings.Trim(baseDomain, ".")
 }
 
+func trustProxyHeaders() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TRUST_PROXY_HEADERS")))
+	if raw == "" {
+		raw = strings.ToLower(strings.TrimSpace(os.Getenv("OTTER_TRUST_PROXY_HEADERS")))
+	}
+	return raw == "1" || raw == "true" || raw == "yes"
+}
+
+func requestHostForResolution(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+
+	if trustProxyHeaders() {
+		if forwarded := strings.TrimSpace(r.Header.Get("Forwarded")); forwarded != "" {
+			if host := parseForwardedHost(forwarded); host != "" {
+				return host
+			}
+		}
+		if xForwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); xForwarded != "" {
+			return strings.TrimSpace(strings.SplitN(xForwarded, ",", 2)[0])
+		}
+	}
+
+	return strings.TrimSpace(r.Host)
+}
+
+func parseForwardedHost(forwarded string) string {
+	firstEntry := strings.TrimSpace(strings.SplitN(forwarded, ",", 2)[0])
+	if firstEntry == "" {
+		return ""
+	}
+
+	for _, part := range strings.Split(firstEntry, ";") {
+		part = strings.TrimSpace(part)
+		key, value, ok := strings.Cut(part, "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "host") {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(value), `"`)
+	}
+
+	return ""
+}
+
 func extractOrgSlugFromHost(rawHost string) string {
 	host, ok := normalizeHost(rawHost)
 	if !ok {
@@ -267,6 +338,14 @@ func extractOrgSlugFromHost(rawHost string) string {
 	}
 
 	return slug
+}
+
+func isLocalHostForPathFallback(rawHost string) bool {
+	host, ok := normalizeHost(rawHost)
+	if !ok {
+		return false
+	}
+	return host == "localhost" || host == "127.0.0.1"
 }
 
 func extractOrgSlugFromPath(path string) string {
@@ -303,4 +382,37 @@ func extractOrgSlugFromPath(path string) string {
 		}
 		return slug
 	}
+}
+
+func resolveWorkspaceIDFromSlug(r *http.Request) string {
+	resolver := getWorkspaceSlugResolver()
+	if resolver == nil || r == nil {
+		return ""
+	}
+
+	requestHost := requestHostForResolution(r)
+	if slug := extractOrgSlugFromHost(requestHost); slug != "" {
+		if workspaceID, ok := resolver(r.Context(), slug); ok {
+			workspaceID = strings.TrimSpace(workspaceID)
+			if uuidRegex.MatchString(workspaceID) {
+				return workspaceID
+			}
+		}
+		return ""
+	}
+
+	if !isLocalHostForPathFallback(requestHost) {
+		return ""
+	}
+
+	if slug := extractOrgSlugFromPath(r.URL.Path); slug != "" {
+		if workspaceID, ok := resolver(r.Context(), slug); ok {
+			workspaceID = strings.TrimSpace(workspaceID)
+			if uuidRegex.MatchString(workspaceID) {
+				return workspaceID
+			}
+		}
+	}
+
+	return ""
 }

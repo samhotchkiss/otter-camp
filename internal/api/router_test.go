@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 )
 
 func TestRouterSetup(t *testing.T) {
@@ -31,6 +32,31 @@ func TestRouterSetup(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: expected status %d, got %d", tc.name, http.StatusOK, rec.Code)
 		}
+	}
+}
+
+func TestOrgResolutionFromHost(t *testing.T) {
+	db := setupMessageTestDB(t)
+	insertMessageTestOrganization(t, db, "swh")
+	t.Setenv("OTTER_ORG_BASE_DOMAIN", "otter.camp")
+	t.Cleanup(func() { middleware.SetWorkspaceSlugResolver(nil) })
+
+	router := NewRouter()
+
+	hostScopedReq := httptest.NewRequest(http.MethodGet, "/api/knowledge", nil)
+	hostScopedReq.Host = "swh.otter.camp"
+	hostScopedRec := httptest.NewRecorder()
+	router.ServeHTTP(hostScopedRec, hostScopedReq)
+	if hostScopedRec.Code != http.StatusOK {
+		t.Fatalf("expected host-scoped request to resolve workspace, got status %d body=%s", hostScopedRec.Code, hostScopedRec.Body.String())
+	}
+
+	noWorkspaceReq := httptest.NewRequest(http.MethodGet, "/api/knowledge", nil)
+	noWorkspaceReq.Host = "api.otter.camp"
+	noWorkspaceRec := httptest.NewRecorder()
+	router.ServeHTTP(noWorkspaceRec, noWorkspaceReq)
+	if noWorkspaceRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected non-subdomain request without workspace to be unauthorized, got %d body=%s", noWorkspaceRec.Code, noWorkspaceRec.Body.String())
 	}
 }
 

@@ -150,6 +150,87 @@ func TestRequireWorkspace(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	})
+
+	t.Run("resolves workspace from host slug", func(t *testing.T) {
+		t.Setenv("OTTER_ORG_BASE_DOMAIN", "otter.camp")
+		SetWorkspaceSlugResolver(func(_ context.Context, slug string) (string, bool) {
+			if slug == "swh" {
+				return "550e8400-e29b-41d4-a716-446655440000", true
+			}
+			return "", false
+		})
+		t.Cleanup(func() { SetWorkspaceSlugResolver(nil) })
+
+		req := httptest.NewRequest(http.MethodGet, "http://swh.otter.camp/test", nil)
+		req.Host = "swh.otter.camp"
+		rec := httptest.NewRecorder()
+
+		RequireWorkspace(handler).ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Body.String())
+	})
+
+	t.Run("resolves workspace from path slug on localhost", func(t *testing.T) {
+		SetWorkspaceSlugResolver(func(_ context.Context, slug string) (string, bool) {
+			if slug == "swh" {
+				return "550e8400-e29b-41d4-a716-446655440000", true
+			}
+			return "", false
+		})
+		t.Cleanup(func() { SetWorkspaceSlugResolver(nil) })
+
+		req := httptest.NewRequest(http.MethodGet, "http://localhost:3000/swh/api/test", nil)
+		req.Host = "localhost:3000"
+		rec := httptest.NewRecorder()
+
+		RequireWorkspace(handler).ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Body.String())
+	})
+
+	t.Run("does not trust forwarded host by default", func(t *testing.T) {
+		t.Setenv("OTTER_ORG_BASE_DOMAIN", "otter.camp")
+		SetWorkspaceSlugResolver(func(_ context.Context, slug string) (string, bool) {
+			if slug == "swh" {
+				return "550e8400-e29b-41d4-a716-446655440000", true
+			}
+			return "", false
+		})
+		t.Cleanup(func() { SetWorkspaceSlugResolver(nil) })
+
+		req := httptest.NewRequest(http.MethodGet, "http://api.otter.camp/test", nil)
+		req.Host = "api.otter.camp"
+		req.Header.Set("X-Forwarded-Host", "swh.otter.camp")
+		rec := httptest.NewRecorder()
+
+		RequireWorkspace(handler).ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("trusts forwarded host when enabled", func(t *testing.T) {
+		t.Setenv("TRUST_PROXY_HEADERS", "true")
+		t.Setenv("OTTER_ORG_BASE_DOMAIN", "otter.camp")
+		SetWorkspaceSlugResolver(func(_ context.Context, slug string) (string, bool) {
+			if slug == "swh" {
+				return "550e8400-e29b-41d4-a716-446655440000", true
+			}
+			return "", false
+		})
+		t.Cleanup(func() { SetWorkspaceSlugResolver(nil) })
+
+		req := httptest.NewRequest(http.MethodGet, "http://api.otter.camp/test", nil)
+		req.Host = "api.otter.camp"
+		req.Header.Set("Forwarded", "for=1.2.3.4;host=swh.otter.camp;proto=https")
+		rec := httptest.NewRecorder()
+
+		RequireWorkspace(handler).ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Body.String())
+	})
 }
 
 func TestOptionalWorkspace(t *testing.T) {
