@@ -20,6 +20,7 @@ type EllieEntitySynthesisStore interface {
 	ListCandidates(ctx context.Context, orgID string, minMentions, limit int) ([]store.EllieEntitySynthesisCandidate, error)
 	ListSourceMemories(ctx context.Context, orgID, entityKey string, limit int) ([]store.EllieEntitySynthesisSourceMemory, error)
 	CreateEllieExtractedMemory(ctx context.Context, input store.CreateEllieExtractedMemoryInput) (string, error)
+	UpdateSynthesisMemory(ctx context.Context, input store.UpdateEllieEntitySynthesisMemoryInput) error
 }
 
 type EllieEntitySynthesisEmbeddingStore interface {
@@ -54,6 +55,7 @@ type EllieEntitySynthesisWorkerConfig struct {
 type EllieEntitySynthesisRunResult struct {
 	CandidatesConsidered int
 	CreatedCount         int
+	UpdatedCount         int
 	SkippedExistingCount int
 }
 
@@ -121,11 +123,7 @@ func (w *EllieEntitySynthesisWorker) RunOnce(ctx context.Context, orgID string) 
 	result := EllieEntitySynthesisRunResult{}
 	for _, candidate := range candidates {
 		result.CandidatesConsidered += 1
-		if candidate.ExistingSynthesisMemoryID != nil {
-			result.SkippedExistingCount += 1
-			continue
-		}
-		if candidate.NeedsResynthesis {
+		if candidate.ExistingSynthesisMemoryID != nil && !candidate.NeedsResynthesis {
 			result.SkippedExistingCount += 1
 			continue
 		}
@@ -196,6 +194,34 @@ func (w *EllieEntitySynthesisWorker) RunOnce(ctx context.Context, orgID string) 
 		}
 		metadataRaw, _ := json.Marshal(metadata)
 
+		occurredAt := ellieEntitySynthesisLatestOccurredAt(sourceMemories, now)
+		sourceProjectID := ellieEntitySynthesisFirstProjectID(sourceMemories)
+
+		if candidate.ExistingSynthesisMemoryID != nil && candidate.NeedsResynthesis {
+			memoryID := strings.TrimSpace(*candidate.ExistingSynthesisMemoryID)
+			if memoryID == "" {
+				return result, fmt.Errorf("existing synthesis memory id is empty for entity %q", entityKey)
+			}
+			if err := w.Store.UpdateSynthesisMemory(ctx, store.UpdateEllieEntitySynthesisMemoryInput{
+				OrgID:           orgID,
+				MemoryID:        memoryID,
+				Title:           title,
+				Content:         content,
+				Metadata:        metadataRaw,
+				Importance:      5,
+				Confidence:      0.95,
+				OccurredAt:      occurredAt,
+				SourceProjectID: sourceProjectID,
+			}); err != nil {
+				return result, fmt.Errorf("update synthesis memory for entity %q: %w", entityKey, err)
+			}
+			if err := w.embedMemory(ctx, memoryID, title, content); err != nil {
+				return result, fmt.Errorf("embed synthesis memory for entity %q: %w", entityKey, err)
+			}
+			result.UpdatedCount += 1
+			continue
+		}
+
 		memoryID, err := w.Store.CreateEllieExtractedMemory(ctx, store.CreateEllieExtractedMemoryInput{
 			OrgID:           orgID,
 			Kind:            "fact",
@@ -205,8 +231,8 @@ func (w *EllieEntitySynthesisWorker) RunOnce(ctx context.Context, orgID string) 
 			Importance:      5,
 			Confidence:      0.95,
 			Status:          "active",
-			OccurredAt:      ellieEntitySynthesisLatestOccurredAt(sourceMemories, now),
-			SourceProjectID: ellieEntitySynthesisFirstProjectID(sourceMemories),
+			OccurredAt:      occurredAt,
+			SourceProjectID: sourceProjectID,
 		})
 		if err != nil {
 			return result, fmt.Errorf("create synthesis memory for entity %q: %w", entityKey, err)

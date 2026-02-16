@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -26,6 +28,18 @@ type EllieEntitySynthesisSourceMemory struct {
 	Content         string
 	SourceProjectID *string
 	OccurredAt      time.Time
+}
+
+type UpdateEllieEntitySynthesisMemoryInput struct {
+	OrgID           string
+	MemoryID        string
+	Title           string
+	Content         string
+	Metadata        json.RawMessage
+	Importance      int
+	Confidence      float64
+	OccurredAt      time.Time
+	SourceProjectID *string
 }
 
 type EllieEntitySynthesisStore struct {
@@ -248,4 +262,94 @@ func (s *EllieEntitySynthesisStore) ListSourceMemories(
 	}
 
 	return memories, nil
+}
+
+func (s *EllieEntitySynthesisStore) UpdateSynthesisMemory(
+	ctx context.Context,
+	input UpdateEllieEntitySynthesisMemoryInput,
+) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("ellie entity synthesis store is not configured")
+	}
+
+	orgID := strings.TrimSpace(input.OrgID)
+	if !uuidRegex.MatchString(orgID) {
+		return fmt.Errorf("invalid org_id")
+	}
+	memoryID := strings.TrimSpace(input.MemoryID)
+	if !uuidRegex.MatchString(memoryID) {
+		return fmt.Errorf("invalid memory_id")
+	}
+
+	title := strings.TrimSpace(input.Title)
+	content := strings.TrimSpace(input.Content)
+	if title == "" || content == "" {
+		return fmt.Errorf("title and content are required")
+	}
+
+	importance := input.Importance
+	if importance <= 0 {
+		importance = 3
+	}
+	if importance > 5 {
+		importance = 5
+	}
+
+	confidence := input.Confidence
+	if math.IsNaN(confidence) || confidence < 0 {
+		confidence = 0
+	}
+	if confidence > 1 {
+		confidence = 1
+	}
+
+	occurredAt := input.OccurredAt.UTC()
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+
+	sourceProjectID, err := normalizeOptionalEllieUUID(input.SourceProjectID)
+	if err != nil {
+		return fmt.Errorf("source_project_id: %w", err)
+	}
+
+	metadata := normalizeJSONMap(input.Metadata)
+
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE memories
+		 SET
+		   title = $3,
+		   content = $4,
+		   metadata = $5::jsonb,
+		   importance = $6,
+		   confidence = $7,
+		   occurred_at = $8,
+		   source_project_id = $9,
+		   updated_at = NOW()
+		 WHERE org_id = $1
+		   AND id = $2
+		   AND status = 'active'
+		   AND metadata->>'source_type' = 'synthesis'`,
+		orgID,
+		memoryID,
+		title,
+		content,
+		metadata,
+		importance,
+		confidence,
+		occurredAt,
+		sourceProjectID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update entity synthesis memory: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read entity synthesis update count: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("entity synthesis memory not found")
+	}
+	return nil
 }

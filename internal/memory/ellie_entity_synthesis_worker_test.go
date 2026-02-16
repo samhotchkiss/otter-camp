@@ -15,6 +15,7 @@ type fakeEllieEntitySynthesisStore struct {
 	candidates              []store.EllieEntitySynthesisCandidate
 	sourceMemories          map[string][]store.EllieEntitySynthesisSourceMemory
 	created                 []store.CreateEllieExtractedMemoryInput
+	updated                 []store.UpdateEllieEntitySynthesisMemoryInput
 	autoSuppressAfterCreate bool
 }
 
@@ -50,6 +51,14 @@ func (f *fakeEllieEntitySynthesisStore) CreateEllieExtractedMemory(
 ) (string, error) {
 	f.created = append(f.created, input)
 	return fmt.Sprintf("synth-%d", len(f.created)), nil
+}
+
+func (f *fakeEllieEntitySynthesisStore) UpdateSynthesisMemory(
+	_ context.Context,
+	input store.UpdateEllieEntitySynthesisMemoryInput,
+) error {
+	f.updated = append(f.updated, input)
+	return nil
 }
 
 type fakeEllieEntitySynthesizer struct {
@@ -245,4 +254,93 @@ func TestEllieEntitySynthesisWorkerDoesNotModifySourceMemories(t *testing.T) {
 	_, err := worker.RunOnce(context.Background(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 	require.NoError(t, err)
 	require.Equal(t, before, source)
+}
+
+func TestEllieEntitySynthesisWorkerResynthesizesWhenSourceGrowthReachesThreshold(t *testing.T) {
+	existingSynthesisID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	fakeStore := &fakeEllieEntitySynthesisStore{
+		candidates: []store.EllieEntitySynthesisCandidate{
+			{
+				EntityKey:                 "itsalive",
+				EntityName:                "ItsAlive",
+				MentionCount:              6,
+				ExistingSynthesisMemoryID: &existingSynthesisID,
+				ExistingSourceMemoryCount: 5,
+				NeedsResynthesis:          true,
+			},
+		},
+		sourceMemories: map[string][]store.EllieEntitySynthesisSourceMemory{
+			"itsalive": {
+				{MemoryID: "mem-1", Title: "One", Content: "ItsAlive fact one.", OccurredAt: time.Date(2026, 2, 16, 19, 0, 0, 0, time.UTC)},
+				{MemoryID: "mem-2", Title: "Two", Content: "ItsAlive fact two.", OccurredAt: time.Date(2026, 2, 16, 19, 1, 0, 0, time.UTC)},
+				{MemoryID: "mem-3", Title: "Three", Content: "ItsAlive fact three.", OccurredAt: time.Date(2026, 2, 16, 19, 2, 0, 0, time.UTC)},
+				{MemoryID: "mem-4", Title: "Four", Content: "ItsAlive fact four.", OccurredAt: time.Date(2026, 2, 16, 19, 3, 0, 0, time.UTC)},
+				{MemoryID: "mem-5", Title: "Five", Content: "ItsAlive fact five.", OccurredAt: time.Date(2026, 2, 16, 19, 4, 0, 0, time.UTC)},
+				{MemoryID: "mem-6", Title: "Six", Content: "ItsAlive fact six.", OccurredAt: time.Date(2026, 2, 16, 19, 5, 0, 0, time.UTC)},
+			},
+		},
+	}
+
+	embedding := make([]float64, 1536)
+	embedding[0] = 0.33
+	embeddingStore := &fakeEllieEntityEmbeddingStore{}
+	worker := NewEllieEntitySynthesisWorker(
+		fakeStore,
+		&fakeEllieEntityEmbedder{result: [][]float64{embedding}},
+		embeddingStore,
+		EllieEntitySynthesisWorkerConfig{
+			Synthesizer: &fakeEllieEntitySynthesizer{
+				result: EllieEntitySynthesisOutput{Title: "ItsAlive", Content: "Updated definition"},
+			},
+		},
+	)
+
+	result, err := worker.RunOnce(context.Background(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.UpdatedCount)
+	require.Equal(t, 0, result.CreatedCount)
+	require.Empty(t, fakeStore.created)
+	require.Len(t, fakeStore.updated, 1)
+	require.Equal(t, existingSynthesisID, fakeStore.updated[0].MemoryID)
+	require.Contains(t, embeddingStore.updates, existingSynthesisID)
+}
+
+func TestEllieEntitySynthesisWorkerSkipsResynthesisBelowThreshold(t *testing.T) {
+	existingSynthesisID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	fakeStore := &fakeEllieEntitySynthesisStore{
+		candidates: []store.EllieEntitySynthesisCandidate{
+			{
+				EntityKey:                 "itsalive",
+				EntityName:                "ItsAlive",
+				MentionCount:              5,
+				ExistingSynthesisMemoryID: &existingSynthesisID,
+				ExistingSourceMemoryCount: 5,
+				NeedsResynthesis:          false,
+			},
+		},
+		sourceMemories: map[string][]store.EllieEntitySynthesisSourceMemory{
+			"itsalive": {
+				{MemoryID: "mem-1", Title: "One", Content: "ItsAlive fact one.", OccurredAt: time.Date(2026, 2, 16, 19, 10, 0, 0, time.UTC)},
+			},
+		},
+	}
+
+	worker := NewEllieEntitySynthesisWorker(
+		fakeStore,
+		&fakeEllieEntityEmbedder{result: [][]float64{make([]float64, 1536)}},
+		&fakeEllieEntityEmbeddingStore{},
+		EllieEntitySynthesisWorkerConfig{
+			Synthesizer: &fakeEllieEntitySynthesizer{
+				result: EllieEntitySynthesisOutput{Title: "ItsAlive", Content: "Definition"},
+			},
+		},
+	)
+
+	result, err := worker.RunOnce(context.Background(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	require.NoError(t, err)
+	require.Equal(t, 0, result.UpdatedCount)
+	require.Equal(t, 0, result.CreatedCount)
+	require.Equal(t, 1, result.SkippedExistingCount)
+	require.Empty(t, fakeStore.updated)
+	require.Empty(t, fakeStore.created)
 }
