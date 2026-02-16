@@ -1,7 +1,7 @@
-# Issue #162: LLM-Powered Deduplication Worker
+# Issue #302: LLM-Powered Deduplication Worker
 
 > Priority: P1 (quality improvement, not blocking)
-> Blocked by: #160 (needs 1536d embeddings for similarity)
+> Blocked by: #300 (needs 1536d embeddings for similarity)
 > Blocks: nothing
 
 ## Summary

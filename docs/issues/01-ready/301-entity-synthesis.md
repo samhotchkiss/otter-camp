@@ -1,7 +1,7 @@
-# Issue #161: Entity Synthesis Worker
+# Issue #301: Entity Synthesis Worker
 
 > Priority: P0 (biggest retrieval improvement: +15pp)
-> Blocked by: #160 (needs 1536d embeddings)
+> Blocked by: #300 (needs 1536d embeddings)
 > Blocks: nothing
 
 ## Summary

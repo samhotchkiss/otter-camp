@@ -1,7 +1,7 @@
-# Issue #164: Project Docs Ingestion (Layer 3)
+# Issue #304: Project Docs Ingestion (Layer 3)
 
 > Priority: P1 (Layer 3 of three-layer memory system)
-> Blocked by: #160 (needs 1536d embeddings), #163 (taxonomy nodes for classification)
+> Blocked by: #300 (needs 1536d embeddings), #303 (taxonomy nodes for classification)
 > Blocks: nothing
 
 ## Summary
