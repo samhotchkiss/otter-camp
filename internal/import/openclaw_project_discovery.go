@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 type OpenClawProjectDiscoveryInput struct {
@@ -132,6 +134,9 @@ func DiscoverOpenClawProjects(
 		projectID, created, updated, upsertErr := upsertOpenClawDiscoveredProject(ctx, tx, orgID, candidate)
 		if upsertErr != nil {
 			return OpenClawProjectDiscoveryResult{}, upsertErr
+		}
+		if taxonomyErr := ensureOpenClawProjectTaxonomyNode(ctx, tx, orgID, candidate.Name); taxonomyErr != nil {
+			return OpenClawProjectDiscoveryResult{}, taxonomyErr
 		}
 		if created {
 			result.ProjectsCreated++
@@ -403,4 +408,123 @@ func nullableOpenClawText(value string) any {
 		return nil
 	}
 	return trimmed
+}
+
+func ensureOpenClawProjectTaxonomyNode(ctx context.Context, tx *sql.Tx, orgID, projectName string) error {
+	projectName = strings.TrimSpace(projectName)
+	if projectName == "" {
+		return nil
+	}
+
+	projectsRootID, projectsRootDepth, err := ensureOpenClawProjectsTaxonomyRoot(ctx, tx, orgID)
+	if err != nil {
+		return err
+	}
+
+	projectSlug := normalizeOpenClawProjectTaxonomySlug(projectName)
+	if projectSlug == "" {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO ellie_taxonomy_nodes (org_id, parent_id, slug, display_name, description, depth)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (org_id, parent_id, slug) DO UPDATE
+		 SET display_name = EXCLUDED.display_name`,
+		orgID,
+		projectsRootID,
+		projectSlug,
+		projectName,
+		"Imported from project discovery.",
+		projectsRootDepth+1,
+	); err != nil {
+		return fmt.Errorf("upsert project taxonomy node for %q: %w", projectName, err)
+	}
+
+	return nil
+}
+
+func ensureOpenClawProjectsTaxonomyRoot(ctx context.Context, tx *sql.Tx, orgID string) (string, int, error) {
+	var (
+		rootID    string
+		rootDepth int
+	)
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT id::text, depth
+		   FROM ellie_taxonomy_nodes
+		  WHERE org_id = $1
+		    AND parent_id IS NULL
+		    AND slug = 'projects'
+		  ORDER BY created_at ASC, id ASC
+		  LIMIT 1`,
+		orgID,
+	).Scan(&rootID, &rootDepth)
+	if err == nil {
+		return rootID, rootDepth, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", 0, fmt.Errorf("lookup projects taxonomy root: %w", err)
+	}
+
+	insertErr := tx.QueryRowContext(
+		ctx,
+		`INSERT INTO ellie_taxonomy_nodes (org_id, parent_id, slug, display_name, description, depth)
+		 VALUES ($1, NULL, 'projects', 'Projects', 'Project-specific operational and product memory.', 0)
+		 RETURNING id::text, depth`,
+		orgID,
+	).Scan(&rootID, &rootDepth)
+	if insertErr == nil {
+		return rootID, rootDepth, nil
+	}
+	if !isOpenClawTaxonomyConflict(insertErr) {
+		return "", 0, fmt.Errorf("insert projects taxonomy root: %w", insertErr)
+	}
+
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT id::text, depth
+		   FROM ellie_taxonomy_nodes
+		  WHERE org_id = $1
+		    AND parent_id IS NULL
+		    AND slug = 'projects'
+		  ORDER BY created_at ASC, id ASC
+		  LIMIT 1`,
+		orgID,
+	).Scan(&rootID, &rootDepth); err != nil {
+		return "", 0, fmt.Errorf("reload projects taxonomy root after conflict: %w", err)
+	}
+	return rootID, rootDepth, nil
+}
+
+func normalizeOpenClawProjectTaxonomySlug(name string) string {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if normalized == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	lastWasSeparator := false
+	for _, char := range normalized {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') {
+			builder.WriteRune(char)
+			lastWasSeparator = false
+			continue
+		}
+		if !lastWasSeparator {
+			builder.WriteByte('-')
+			lastWasSeparator = true
+		}
+	}
+
+	return strings.Trim(builder.String(), "-")
+}
+
+func isOpenClawTaxonomyConflict(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	return pqErr.Code == "23505"
 }
