@@ -1,6 +1,6 @@
 # Memories: Recall
 
-> Summary: Retrieval cascade, ranking strategy, hybrid search findings, and the case for query routing.
+> Summary: Retrieval cascade tiers, ranking strategy, taxonomy-assisted recall, and query-routing findings.
 > Last updated: 2026-02-16
 > Audience: Agents modifying recall relevance or debugging missing context.
 
@@ -10,10 +10,15 @@ Main service: `internal/memory/ellie_retrieval_cascade.go`
 
 Tier order:
 1. Room context
-2. Project/org memory search
+2. Project/org memory search (vector/keyword) plus taxonomy subtree supplement
 3. Chat history
 4. JSONL fallback scanner
 5. No-information response
+
+Tier 2 details:
+- Query is embedded for semantic retrieval when available.
+- Query is also classified into taxonomy paths; matching subtree memories are appended.
+- Results are deduped and limited before returning Tier 2 context.
 
 ## Ranking Strategy
 
@@ -102,5 +107,6 @@ When tested with "How many agent profiles exist?", the system answered "20" when
 
 ## Change Log
 
+- 2026-02-16: Documented taxonomy-assisted Tier 2 retrieval (query classification + subtree supplement + dedupe) to match spec 303 implementation.
 - 2026-02-16: Major rewrite with hybrid search findings, query routing design, importance weighting results, and confident-wrong-answer failure mode.
 - 2026-02-16: Created canonical documentation file and migrated relevant legacy content.
