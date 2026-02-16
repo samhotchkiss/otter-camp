@@ -301,3 +301,127 @@ func TestOpenClawProjectDiscoveryIssueNumberUniqueness(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "duplicate key value")
 }
+
+func TestProjectDiscoveryCreatesTaxonomyNode(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-project-taxonomy-node")
+
+	_, err := DiscoverOpenClawProjectsFromHistory(context.Background(), db, OpenClawProjectDiscoveryInput{
+		OrgID: orgID,
+		ParsedEvents: []OpenClawSessionEvent{
+			{
+				AgentSlug: "main",
+				Body:      "project:otter-camp issue: add taxonomy discovery link",
+				CreatedAt: time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC),
+			},
+		},
+		ReferenceTime: time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	var projectsRootID string
+	err = db.QueryRow(
+		`SELECT id::text
+		   FROM ellie_taxonomy_nodes
+		  WHERE org_id = $1
+		    AND parent_id IS NULL
+		    AND slug = 'projects'`,
+		orgID,
+	).Scan(&projectsRootID)
+	require.NoError(t, err)
+
+	var projectNodeCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM ellie_taxonomy_nodes
+		  WHERE org_id = $1
+		    AND parent_id = $2
+		    AND slug = 'otter-camp'`,
+		orgID,
+		projectsRootID,
+	).Scan(&projectNodeCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, projectNodeCount)
+}
+
+func TestProjectDiscoveryTaxonomyIdempotent(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-project-taxonomy-idempotent")
+
+	input := OpenClawProjectDiscoveryInput{
+		OrgID: orgID,
+		ParsedEvents: []OpenClawSessionEvent{
+			{
+				AgentSlug: "main",
+				Body:      "project:otter-camp issue: add taxonomy discovery link",
+				CreatedAt: time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC),
+			},
+		},
+		ReferenceTime: time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC),
+	}
+
+	_, err := DiscoverOpenClawProjectsFromHistory(context.Background(), db, input)
+	require.NoError(t, err)
+	_, err = DiscoverOpenClawProjectsFromHistory(context.Background(), db, input)
+	require.NoError(t, err)
+
+	var count int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM ellie_taxonomy_nodes n
+		   JOIN ellie_taxonomy_nodes p ON p.id = n.parent_id
+		  WHERE n.org_id = $1
+		    AND p.org_id = $1
+		    AND p.slug = 'projects'
+		    AND n.slug = 'otter-camp'`,
+		orgID,
+	).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
+func TestProjectDiscoveryTaxonomyOrgIsolation(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+	orgA := createOpenClawImportTestOrganization(t, db, "openclaw-project-taxonomy-org-a")
+	orgB := createOpenClawImportTestOrganization(t, db, "openclaw-project-taxonomy-org-b")
+
+	_, err := DiscoverOpenClawProjectsFromHistory(context.Background(), db, OpenClawProjectDiscoveryInput{
+		OrgID: orgA,
+		ParsedEvents: []OpenClawSessionEvent{
+			{
+				AgentSlug: "main",
+				Body:      "project:otter-camp issue: add taxonomy discovery link",
+				CreatedAt: time.Date(2026, 2, 10, 12, 0, 0, 0, time.UTC),
+			},
+		},
+		ReferenceTime: time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	var orgARoots int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM ellie_taxonomy_nodes
+		  WHERE org_id = $1
+		    AND parent_id IS NULL
+		    AND slug = 'projects'`,
+		orgA,
+	).Scan(&orgARoots)
+	require.NoError(t, err)
+	require.Equal(t, 1, orgARoots)
+
+	var orgBRoots int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM ellie_taxonomy_nodes
+		  WHERE org_id = $1
+		    AND parent_id IS NULL
+		    AND slug = 'projects'`,
+		orgB,
+	).Scan(&orgBRoots)
+	require.NoError(t, err)
+	require.Equal(t, 0, orgBRoots)
+}
