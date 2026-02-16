@@ -1,7 +1,7 @@
-# Issue #004: Taxonomy Classification for Extracted Memories
+# Issue #163: Taxonomy Classification for Extracted Memories
 
 > Priority: P1 (Layer 2 of three-layer memory system)
-> Blocked by: #001 (needs 1536d embeddings)
+> Blocked by: #160 (needs 1536d embeddings)
 > Blocks: nothing
 
 ## Summary

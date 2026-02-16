@@ -1,8 +1,8 @@
-# Issue #001: Update Embedder Defaults to OpenAI 1536d
+# Issue #160: Update Embedder Defaults to OpenAI 1536d
 
 > Priority: P0 (blocks all other memory work)
 > Blocked by: nothing
-> Blocks: #002, #003, #004, #005
+> Blocks: #161, #162, #163, #164
 
 ## Summary
 
