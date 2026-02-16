@@ -284,6 +284,45 @@ func TestOnboardingBootstrapRejectsSecondSetup(t *testing.T) {
 	require.Equal(t, "onboarding already completed", payload.Error)
 }
 
+func TestOnboardingBootstrapAllowsSecondSetupWhenMultiOrgEnabled(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+	t.Setenv("ONBOARDING_ALLOW_MULTI_ORG", "true")
+	resetOnboardingAuthDB(t)
+
+	first := postOnboardingBootstrap(t, `{"name":"Sam","email":"sam@example.com","organization_name":"First Team"}`)
+	require.Equal(t, http.StatusOK, first.Code)
+	var firstPayload OnboardingBootstrapResponse
+	require.NoError(t, json.NewDecoder(first.Body).Decode(&firstPayload))
+
+	second := postOnboardingBootstrap(t, `{"name":"Ari","email":"ari@example.com","organization_name":"Second Team"}`)
+	require.Equal(t, http.StatusOK, second.Code)
+	var secondPayload OnboardingBootstrapResponse
+	require.NoError(t, json.NewDecoder(second.Body).Decode(&secondPayload))
+
+	require.NotEqual(t, firstPayload.OrgID, secondPayload.OrgID)
+	require.Equal(t, "second-team", secondPayload.OrgSlug)
+}
+
+func TestOnboardingSetupLockEnabled(t *testing.T) {
+	t.Run("enabled by default", func(t *testing.T) {
+		t.Setenv("ONBOARDING_ALLOW_MULTI_ORG", "")
+		t.Setenv("ONBOARDING_SETUP_LOCK_DISABLED", "")
+		require.True(t, onboardingSetupLockEnabled())
+	})
+
+	t.Run("disabled when multi-org flag enabled", func(t *testing.T) {
+		t.Setenv("ONBOARDING_ALLOW_MULTI_ORG", "true")
+		require.False(t, onboardingSetupLockEnabled())
+	})
+
+	t.Run("disabled when explicit lock disable flag enabled", func(t *testing.T) {
+		t.Setenv("ONBOARDING_SETUP_LOCK_DISABLED", "1")
+		require.False(t, onboardingSetupLockEnabled())
+	})
+}
+
 func TestOnboardingBootstrapValidationFailures(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)
