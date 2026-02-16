@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +24,8 @@ const (
 )
 
 var uuidRegex = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
+var hostRegex = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
+var orgSlugRegex = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // jwtClaims represents minimal JWT claims for workspace extraction.
 type jwtClaims struct {
@@ -195,4 +199,108 @@ func firstValidUUID(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeHost(raw string) (string, bool) {
+	host := strings.TrimSpace(strings.ToLower(raw))
+	if host == "" {
+		return "", false
+	}
+	if strings.ContainsAny(host, " \t\r\n/\\") {
+		return "", false
+	}
+	if strings.HasPrefix(host, "[") {
+		return "", false
+	}
+
+	withoutPort := host
+	if strings.Contains(host, ":") {
+		parsedHost, parsedPort, err := net.SplitHostPort(host)
+		if err != nil {
+			return "", false
+		}
+		port, err := strconv.Atoi(parsedPort)
+		if err != nil || port < 1 || port > 65535 {
+			return "", false
+		}
+		withoutPort = parsedHost
+	}
+
+	withoutPort = strings.TrimSuffix(withoutPort, ".")
+	if withoutPort == "" || !hostRegex.MatchString(withoutPort) {
+		return "", false
+	}
+
+	return withoutPort, true
+}
+
+func configuredOrgBaseDomain() string {
+	baseDomain := strings.TrimSpace(strings.ToLower(os.Getenv("OTTER_ORG_BASE_DOMAIN")))
+	if baseDomain == "" {
+		baseDomain = "otter.camp"
+	}
+	return strings.Trim(baseDomain, ".")
+}
+
+func extractOrgSlugFromHost(rawHost string) string {
+	host, ok := normalizeHost(rawHost)
+	if !ok {
+		return ""
+	}
+
+	baseDomain := configuredOrgBaseDomain()
+	if baseDomain == "" || host == baseDomain {
+		return ""
+	}
+
+	suffix := "." + baseDomain
+	if !strings.HasSuffix(host, suffix) {
+		return ""
+	}
+
+	slug := strings.TrimSuffix(host, suffix)
+	if slug == "" || strings.Contains(slug, ".") {
+		return ""
+	}
+	if !orgSlugRegex.MatchString(slug) {
+		return ""
+	}
+
+	return slug
+}
+
+func extractOrgSlugFromPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "/") {
+		return ""
+	}
+
+	parts := strings.Split(strings.TrimPrefix(trimmed, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+
+	switch strings.ToLower(parts[0]) {
+	case "o", "org":
+		if len(parts) < 3 {
+			return ""
+		}
+		if route := strings.ToLower(parts[2]); route != "api" && route != "ws" {
+			return ""
+		}
+		slug := strings.ToLower(strings.TrimSpace(parts[1]))
+		if !orgSlugRegex.MatchString(slug) {
+			return ""
+		}
+		return slug
+	default:
+		if route := strings.ToLower(parts[1]); route != "api" && route != "ws" {
+			return ""
+		}
+		slug := strings.ToLower(strings.TrimSpace(parts[0]))
+		if !orgSlugRegex.MatchString(slug) {
+			return ""
+		}
+		return slug
+	}
 }

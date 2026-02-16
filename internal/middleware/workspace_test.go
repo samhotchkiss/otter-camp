@@ -232,6 +232,30 @@ func TestFirstValidUUID(t *testing.T) {
 	})
 }
 
+func TestOrgResolutionFromHost(t *testing.T) {
+	t.Setenv("OTTER_ORG_BASE_DOMAIN", "otter.camp")
+
+	assert.Equal(t, "swh", extractOrgSlugFromHost("swh.otter.camp"))
+	assert.Equal(t, "swh", extractOrgSlugFromHost("swh.otter.camp:443"))
+	assert.Equal(t, "", extractOrgSlugFromHost("otter.camp"))
+	assert.Equal(t, "", extractOrgSlugFromHost("foo.bar.otter.camp"))
+}
+
+func TestOrgResolutionFallbackToPath(t *testing.T) {
+	assert.Equal(t, "swh", extractOrgSlugFromPath("/swh/api/projects"))
+	assert.Equal(t, "swh", extractOrgSlugFromPath("/swh/ws"))
+	assert.Equal(t, "swh", extractOrgSlugFromPath("/o/swh/api/projects"))
+	assert.Equal(t, "", extractOrgSlugFromPath("/api/projects"))
+	assert.Equal(t, "", extractOrgSlugFromPath("/projects/swh"))
+}
+
+func TestRejectsInvalidHost(t *testing.T) {
+	assert.Equal(t, "", extractOrgSlugFromHost("bad host"))
+	assert.Equal(t, "", extractOrgSlugFromHost("swh.otter.camp:bad-port"))
+	assert.Equal(t, "", extractOrgSlugFromHost("swh..otter.camp"))
+	assert.Equal(t, "", extractOrgSlugFromHost("http://swh.otter.camp"))
+}
+
 // createTestJWT creates a minimal JWT for testing (NOT cryptographically valid)
 func createTestJWT(t *testing.T, claims map[string]string) string {
 	t.Helper()
