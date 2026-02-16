@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/samhotchkiss/otter-camp/internal/memory"
+	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
 const (
@@ -41,16 +44,16 @@ type OnboardingAgent struct {
 }
 
 type OnboardingBootstrapResponse struct {
-	OrgID       string    `json:"org_id"`
-	OrgSlug     string    `json:"org_slug"`
-	UserID      string    `json:"user_id"`
-	Token       string    `json:"token"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	ProjectID   string    `json:"project_id"`
-	ProjectName string    `json:"project_name"`
-	IssueID     string    `json:"issue_id"`
-	IssueNumber int64     `json:"issue_number"`
-	IssueTitle  string    `json:"issue_title"`
+	OrgID       string            `json:"org_id"`
+	OrgSlug     string            `json:"org_slug"`
+	UserID      string            `json:"user_id"`
+	Token       string            `json:"token"`
+	ExpiresAt   time.Time         `json:"expires_at"`
+	ProjectID   string            `json:"project_id"`
+	ProjectName string            `json:"project_name"`
+	IssueID     string            `json:"issue_id"`
+	IssueNumber int64             `json:"issue_number"`
+	IssueTitle  string            `json:"issue_title"`
 	Agents      []OnboardingAgent `json:"agents"`
 }
 
@@ -160,6 +163,11 @@ func bootstrapOnboarding(ctx context.Context, db *sql.DB, name, email, orgName, 
 
 	agents, err := ensureOnboardingAgents(ctx, tx, orgID)
 	if err != nil {
+		return OnboardingBootstrapResponse{}, err
+	}
+
+	taxonomyStore := store.NewEllieTaxonomyStoreTx(tx)
+	if err := memory.SeedDefaultEllieTaxonomy(ctx, taxonomyStore, orgID); err != nil {
 		return OnboardingBootstrapResponse{}, err
 	}
 
