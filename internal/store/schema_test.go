@@ -722,15 +722,15 @@ func TestMigration078Embedding1536ColumnsFilesExistAndContainCoreDDL(t *testing.
 func TestSchemaIncludesEllieProjectDocsMigration(t *testing.T) {
 	migrationsDir := getMigrationsDir(t)
 	files := []string{
-		"079_create_ellie_project_docs.up.sql",
-		"079_create_ellie_project_docs.down.sql",
+		"081_create_ellie_project_docs.up.sql",
+		"081_create_ellie_project_docs.down.sql",
 	}
 	for _, filename := range files {
 		_, err := os.Stat(filepath.Join(migrationsDir, filename))
 		require.NoError(t, err)
 	}
 
-	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "079_create_ellie_project_docs.up.sql"))
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "081_create_ellie_project_docs.up.sql"))
 	require.NoError(t, err)
 	upContent := strings.ToLower(string(upRaw))
 	require.Contains(t, upContent, "create table if not exists ellie_project_docs")
@@ -741,7 +741,7 @@ func TestSchemaIncludesEllieProjectDocsMigration(t *testing.T) {
 	require.Contains(t, upContent, "create trigger ellie_project_docs_updated_at_trg")
 	require.Contains(t, upContent, "create policy ellie_project_docs_org_isolation")
 
-	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "079_create_ellie_project_docs.down.sql"))
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "081_create_ellie_project_docs.down.sql"))
 	require.NoError(t, err)
 	downContent := strings.ToLower(string(downRaw))
 	require.Contains(t, downContent, "drop trigger if exists ellie_project_docs_updated_at_trg")
