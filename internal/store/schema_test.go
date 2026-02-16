@@ -298,6 +298,34 @@ func TestMigration063ConversationSchemaFilesExistAndContainCoreDDL(t *testing.T)
 	require.Contains(t, downContent, "drop table if exists memories")
 }
 
+func TestMigration079TaxonomySchemaFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"079_create_ellie_taxonomy_tables.up.sql",
+		"079_create_ellie_taxonomy_tables.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "079_create_ellie_taxonomy_tables.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists ellie_taxonomy_nodes")
+	require.Contains(t, upContent, "create table if not exists ellie_memory_taxonomy")
+	require.Contains(t, upContent, "unique (org_id, parent_id, slug)")
+	require.Contains(t, upContent, "primary key (memory_id, node_id)")
+	require.Contains(t, upContent, "enable row level security")
+	require.Contains(t, upContent, "ellie_taxonomy_nodes_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "079_create_ellie_taxonomy_tables.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop table if exists ellie_memory_taxonomy")
+	require.Contains(t, downContent, "drop table if exists ellie_taxonomy_nodes")
+}
+
 func TestSchemaConversationCoreTablesCreateAndRollback(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db, err := sql.Open("postgres", connStr)
