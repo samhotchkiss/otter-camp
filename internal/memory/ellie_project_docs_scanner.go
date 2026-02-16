@@ -51,6 +51,41 @@ type EllieProjectDocsScanResult struct {
 	DeletedPaths []string
 }
 
+type EllieProjectDocStoreRecord struct {
+	FilePath    string
+	ContentHash string
+}
+
+type EllieProjectDocStoreUpsertInput struct {
+	OrgID            string
+	ProjectID        string
+	FilePath         string
+	Title            string
+	Summary          string
+	SummaryEmbedding []float64
+	ContentHash      string
+}
+
+type EllieProjectDocsStore interface {
+	ListActiveProjectDocs(ctx context.Context, orgID, projectID string) ([]EllieProjectDocStoreRecord, error)
+	UpsertProjectDoc(ctx context.Context, input EllieProjectDocStoreUpsertInput) (string, error)
+	MarkProjectDocsInactiveExcept(ctx context.Context, orgID, projectID string, keepPaths []string) (int, error)
+}
+
+type EllieProjectDocsScanAndPersistInput struct {
+	OrgID       string
+	ProjectID   string
+	ProjectRoot string
+	Store       EllieProjectDocsStore
+}
+
+type EllieProjectDocsPersistResult struct {
+	ProcessedDocs   int
+	UpdatedDocs     int
+	InactivatedDocs int
+	DeletedPaths    []string
+}
+
 type EllieProjectDocSummarizer interface {
 	Summarize(ctx context.Context, input EllieProjectDocSummaryInput) (string, error)
 }
@@ -250,6 +285,88 @@ func (s *EllieProjectDocsScanner) SummarizeAndEmbedDocuments(
 	}
 
 	return enriched, nil
+}
+
+func (s *EllieProjectDocsScanner) ScanAndPersist(
+	ctx context.Context,
+	input EllieProjectDocsScanAndPersistInput,
+) (EllieProjectDocsPersistResult, error) {
+	if s == nil {
+		return EllieProjectDocsPersistResult{}, fmt.Errorf("project docs scanner is required")
+	}
+	if input.Store == nil {
+		return EllieProjectDocsPersistResult{}, fmt.Errorf("project docs store is required")
+	}
+
+	orgID := strings.TrimSpace(input.OrgID)
+	if orgID == "" {
+		return EllieProjectDocsPersistResult{}, fmt.Errorf("org_id is required")
+	}
+	projectID := strings.TrimSpace(input.ProjectID)
+	if projectID == "" {
+		return EllieProjectDocsPersistResult{}, fmt.Errorf("project_id is required")
+	}
+
+	knownRecords, err := input.Store.ListActiveProjectDocs(ctx, orgID, projectID)
+	if err != nil {
+		return EllieProjectDocsPersistResult{}, fmt.Errorf("list active project docs: %w", err)
+	}
+	knownDocs := make([]EllieKnownProjectDoc, 0, len(knownRecords))
+	for _, record := range knownRecords {
+		knownDocs = append(knownDocs, EllieKnownProjectDoc{
+			FilePath:    record.FilePath,
+			ContentHash: record.ContentHash,
+		})
+	}
+
+	scanResult, err := s.Scan(ctx, EllieProjectDocsScanInput{
+		ProjectRoot: input.ProjectRoot,
+		KnownDocs:   knownDocs,
+	})
+	if err != nil {
+		return EllieProjectDocsPersistResult{}, err
+	}
+
+	docs := scanResult.Documents
+	if s.Summarizer != nil && s.EmbeddingClient != nil {
+		docs, err = s.SummarizeAndEmbedDocuments(ctx, docs)
+		if err != nil {
+			return EllieProjectDocsPersistResult{}, err
+		}
+	}
+
+	keepPaths := make([]string, 0, len(docs))
+	updatedDocs := 0
+	for _, doc := range docs {
+		keepPaths = append(keepPaths, doc.FilePath)
+		if doc.ChangeStatus == EllieProjectDocChangeStatusUnchanged {
+			continue
+		}
+		if _, err := input.Store.UpsertProjectDoc(ctx, EllieProjectDocStoreUpsertInput{
+			OrgID:            orgID,
+			ProjectID:        projectID,
+			FilePath:         doc.FilePath,
+			Title:            doc.Title,
+			Summary:          doc.Summary,
+			SummaryEmbedding: doc.SummaryEmbedding,
+			ContentHash:      doc.ContentHash,
+		}); err != nil {
+			return EllieProjectDocsPersistResult{}, fmt.Errorf("upsert project doc %s: %w", doc.FilePath, err)
+		}
+		updatedDocs += 1
+	}
+
+	inactivatedDocs, err := input.Store.MarkProjectDocsInactiveExcept(ctx, orgID, projectID, keepPaths)
+	if err != nil {
+		return EllieProjectDocsPersistResult{}, fmt.Errorf("mark project docs inactive: %w", err)
+	}
+
+	return EllieProjectDocsPersistResult{
+		ProcessedDocs:   len(docs),
+		UpdatedDocs:     updatedDocs,
+		InactivatedDocs: inactivatedDocs,
+		DeletedPaths:    append([]string(nil), scanResult.DeletedPaths...),
+	}, nil
 }
 
 func discoverStartHereLinkedDocs(

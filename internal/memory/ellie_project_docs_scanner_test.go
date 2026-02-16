@@ -175,6 +175,45 @@ func TestEllieProjectDocsScannerSplitsLargeDocsIntoSections(t *testing.T) {
 	require.Contains(t, enriched[0].Summary, "summary:docs/large.md:2")
 }
 
+func TestEllieProjectDocsScannerRescanUpdatesAndInactivatesDocs(t *testing.T) {
+	projectRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(projectRoot, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectRoot, "docs", "keep.md"), []byte("# Keep\nUpdated"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(projectRoot, "docs", "new.md"), []byte("# New\nAdded"), 0o644))
+
+	fakeStore := &fakeProjectDocsStore{
+		activeDocs: map[string]fakeProjectDocRecord{
+			"docs/keep.md":  {contentHash: "old-hash", active: true},
+			"docs/stale.md": {contentHash: "stale-hash", active: true},
+		},
+	}
+
+	scanner := &EllieProjectDocsScanner{
+		Summarizer:      &fakeProjectDocSummarizer{},
+		EmbeddingClient: &fakeProjectDocEmbedder{},
+		MaxSectionChars: 1024,
+	}
+
+	result, err := scanner.ScanAndPersist(context.Background(), EllieProjectDocsScanAndPersistInput{
+		OrgID:       "org-1",
+		ProjectID:   "project-1",
+		ProjectRoot: projectRoot,
+		Store:       fakeStore,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, result.ProcessedDocs)
+	require.Equal(t, 2, result.UpdatedDocs)
+	require.Equal(t, 1, result.InactivatedDocs)
+	require.Equal(t, []string{"docs/stale.md"}, result.DeletedPaths)
+
+	require.True(t, fakeStore.activeDocs["docs/keep.md"].active)
+	require.True(t, fakeStore.activeDocs["docs/new.md"].active)
+	require.False(t, fakeStore.activeDocs["docs/stale.md"].active)
+	require.Len(t, fakeStore.upserts, 2)
+	require.NotEmpty(t, fakeStore.upserts[0].Summary)
+	require.Len(t, fakeStore.upserts[0].SummaryEmbedding, 1536)
+}
+
 type fakeProjectDocSummarizer struct {
 	calls []EllieProjectDocSummaryInput
 }
@@ -196,4 +235,70 @@ func (f *fakeProjectDocEmbedder) Embed(_ context.Context, inputs []string) ([][]
 	vector := make([]float64, 1536)
 	vector[0] = 1
 	return [][]float64{vector}, nil
+}
+
+type fakeProjectDocRecord struct {
+	contentHash string
+	active      bool
+}
+
+type fakeProjectDocsStore struct {
+	activeDocs map[string]fakeProjectDocRecord
+	upserts    []EllieProjectDocStoreUpsertInput
+}
+
+func (f *fakeProjectDocsStore) ListActiveProjectDocs(
+	_ context.Context,
+	_ string,
+	_ string,
+) ([]EllieProjectDocStoreRecord, error) {
+	rows := make([]EllieProjectDocStoreRecord, 0, len(f.activeDocs))
+	for path, row := range f.activeDocs {
+		if !row.active {
+			continue
+		}
+		rows = append(rows, EllieProjectDocStoreRecord{
+			FilePath:    path,
+			ContentHash: row.contentHash,
+		})
+	}
+	return rows, nil
+}
+
+func (f *fakeProjectDocsStore) UpsertProjectDoc(
+	_ context.Context,
+	input EllieProjectDocStoreUpsertInput,
+) (string, error) {
+	f.upserts = append(f.upserts, input)
+	f.activeDocs[input.FilePath] = fakeProjectDocRecord{
+		contentHash: input.ContentHash,
+		active:      true,
+	}
+	return "doc-id", nil
+}
+
+func (f *fakeProjectDocsStore) MarkProjectDocsInactiveExcept(
+	_ context.Context,
+	_ string,
+	_ string,
+	keepPaths []string,
+) (int, error) {
+	keep := make(map[string]struct{}, len(keepPaths))
+	for _, path := range keepPaths {
+		keep[path] = struct{}{}
+	}
+
+	inactivated := 0
+	for path, row := range f.activeDocs {
+		if !row.active {
+			continue
+		}
+		if _, ok := keep[path]; ok {
+			continue
+		}
+		row.active = false
+		f.activeDocs[path] = row
+		inactivated++
+	}
+	return inactivated, nil
 }

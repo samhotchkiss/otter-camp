@@ -34,6 +34,7 @@ type fakeOpenClawProjectDiscoveryRunner struct {
 	inputs []OpenClawProjectDiscoveryInput
 	result OpenClawProjectDiscoveryResult
 	err    error
+	onCall func()
 }
 
 type fakeOpenClawEntitySynthesisRunner struct {
@@ -43,12 +44,23 @@ type fakeOpenClawEntitySynthesisRunner struct {
 	err    error
 }
 
+type fakeOpenClawProjectDocsScanningRunner struct {
+	called bool
+	inputs []OpenClawProjectDocsScanningInput
+	result OpenClawProjectDocsScanningResult
+	err    error
+	onCall func()
+}
+
 func (f *fakeOpenClawProjectDiscoveryRunner) Discover(
 	_ context.Context,
 	input OpenClawProjectDiscoveryInput,
 ) (OpenClawProjectDiscoveryResult, error) {
 	f.called = true
 	f.inputs = append(f.inputs, input)
+	if f.onCall != nil {
+		f.onCall()
+	}
 	if f.err != nil {
 		return OpenClawProjectDiscoveryResult{}, f.err
 	}
@@ -63,6 +75,21 @@ func (f *fakeOpenClawEntitySynthesisRunner) RunSynthesis(
 	f.inputs = append(f.inputs, input)
 	if f.err != nil {
 		return OpenClawEntitySynthesisResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func (f *fakeOpenClawProjectDocsScanningRunner) RunScan(
+	_ context.Context,
+	input OpenClawProjectDocsScanningInput,
+) (OpenClawProjectDocsScanningResult, error) {
+	f.called = true
+	f.inputs = append(f.inputs, input)
+	if f.onCall != nil {
+		f.onCall()
+	}
+	if f.err != nil {
+		return OpenClawProjectDocsScanningResult{}, f.err
 	}
 	return f.result, nil
 }
@@ -374,6 +401,117 @@ func TestMigrationRunnerStartsEntitySynthesisPhase(t *testing.T) {
 	require.Equal(t, store.MigrationProgressStatusCompleted, entityProgress.Status)
 	require.Equal(t, 3, entityProgress.ProcessedItems)
 	require.Equal(t, "entity synthesis complete", entityProgress.CurrentLabel)
+}
+
+func TestOpenClawMigrationRunnerInvokesProjectDocsScanningAfterProjectDiscovery(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-project-docs-phase")
+	userID := createOpenClawImportTestUser(t, db, orgID, "runner-project-docs-phase")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(sessionDir, "main-project-docs-phase.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"project:otter-camp issue: document architecture"}]}}`,
+	})
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events, err := ParseOpenClawSessionEvents(install)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	callOrder := make([]string, 0, 2)
+	projectDiscoveryRunner := &fakeOpenClawProjectDiscoveryRunner{
+		result: OpenClawProjectDiscoveryResult{
+			ProcessedItems:  3,
+			ProjectsCreated: 1,
+			IssuesCreated:   1,
+		},
+		onCall: func() {
+			callOrder = append(callOrder, "project_discovery")
+		},
+	}
+	projectDocsRunner := &fakeOpenClawProjectDocsScanningRunner{
+		result: OpenClawProjectDocsScanningResult{
+			ProcessedDocs:   4,
+			UpdatedDocs:     3,
+			InactivatedDocs: 1,
+		},
+		onCall: func() {
+			callOrder = append(callOrder, "project_docs_scanning")
+		},
+	}
+
+	runner := NewOpenClawMigrationRunner(db)
+	runner.ProjectDiscoveryRunner = projectDiscoveryRunner
+	runner.ProjectDocsScanningRunner = projectDocsRunner
+
+	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
+		OrgID:        orgID,
+		UserID:       userID,
+		Installation: install,
+		ParsedEvents: events,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, runResult.ProjectDocsScanning)
+	require.Equal(t, 4, runResult.ProjectDocsScanning.ProcessedDocs)
+	require.True(t, projectDiscoveryRunner.called)
+	require.True(t, projectDocsRunner.called)
+	require.Equal(t, []string{"project_discovery", "project_docs_scanning"}, callOrder)
+
+	progressStore := store.NewMigrationProgressStore(db)
+	docsProgress, err := progressStore.GetByType(context.Background(), orgID, "project_docs_scanning")
+	require.NoError(t, err)
+	require.NotNil(t, docsProgress)
+	require.Equal(t, store.MigrationProgressStatusCompleted, docsProgress.Status)
+	require.Equal(t, 4, docsProgress.ProcessedItems)
+	require.Equal(t, "project docs scanning complete", docsProgress.CurrentLabel)
+}
+
+func TestOpenClawMigrationRunnerSkipsCompletedProjectDocsPhase(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-project-docs-complete")
+	progressStore := store.NewMigrationProgressStore(db)
+
+	_, err := progressStore.StartPhase(context.Background(), store.StartMigrationProgressInput{
+		OrgID:         orgID,
+		MigrationType: "project_docs_scanning",
+	})
+	require.NoError(t, err)
+	_, err = progressStore.SetStatus(context.Background(), store.SetMigrationProgressStatusInput{
+		OrgID:         orgID,
+		MigrationType: "project_docs_scanning",
+		Status:        store.MigrationProgressStatusCompleted,
+		CurrentLabel:  migrationRunnerStringPtr("already complete"),
+	})
+	require.NoError(t, err)
+
+	projectDocsRunner := &fakeOpenClawProjectDocsScanningRunner{}
+	runner := NewOpenClawMigrationRunner(db)
+	runner.ProjectDocsScanningRunner = projectDocsRunner
+
+	result, runErr := runner.runProjectDocsScanningPhase(context.Background(), RunOpenClawMigrationInput{
+		OrgID: orgID,
+	})
+	require.NoError(t, runErr)
+	require.Nil(t, result)
+	require.False(t, projectDocsRunner.called)
 }
 
 func TestMigrationRunnerSkipsEntitySynthesisWhenHistoryOnly(t *testing.T) {
