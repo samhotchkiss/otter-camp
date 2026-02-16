@@ -90,6 +90,9 @@ func TestOpenClawMigrationSummaryReport(t *testing.T) {
 		EntitySynthesis: &OpenClawEntitySynthesisResult{
 			ProcessedEntities: 11,
 		},
+		TaxonomyPhase: &OpenClawTaxonomyClassificationResult{
+			ProcessedMemories: 12,
+		},
 		ProjectDiscovery: &OpenClawProjectDiscoveryResult{
 			ProcessedItems: 7,
 		},
@@ -101,6 +104,7 @@ func TestOpenClawMigrationSummaryReport(t *testing.T) {
 	require.Equal(t, 39, report.HistoryMessagesInserted)
 	require.Equal(t, 39, report.MemoryExtractionProcessed)
 	require.Equal(t, 11, report.EntitySynthesisProcessed)
+	require.Equal(t, 12, report.TaxonomyClassificationProcessed)
 	require.Equal(t, 7, report.ProjectDiscoveryProcessed)
 	require.Equal(t, 0, report.FailedItems)
 	require.Len(t, report.Warnings, 1)
@@ -112,6 +116,7 @@ func TestOpenClawMigrationSummaryReport(t *testing.T) {
 		HistoryBackfill:  &OpenClawHistoryBackfillResult{EventsProcessed: 42, MessagesInserted: 39},
 		EllieBackfill:    &OpenClawEllieBackfillResult{ProcessedMessages: 39},
 		EntitySynthesis:  &OpenClawEntitySynthesisResult{ProcessedEntities: 11},
+		TaxonomyPhase:    &OpenClawTaxonomyClassificationResult{ProcessedMemories: 12},
 		ProjectDiscovery: &OpenClawProjectDiscoveryResult{ProcessedItems: 7},
 		Paused:           true,
 	})
