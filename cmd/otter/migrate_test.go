@@ -208,6 +208,7 @@ func TestMigrateFromOpenClawAPITransportNeverOpensDatabase(t *testing.T) {
 	originalImportHistoryAPI := importMigrateOpenClawHistoryBatchAPI
 	originalRunAPI := runMigrateOpenClawAPI
 	originalStatusAPI := statusMigrateOpenClawAPI
+	originalReportAPI := reportMigrateOpenClawAPI
 	originalOpenDB := openMigrateDatabase
 	t.Cleanup(func() {
 		detectMigrateOpenClawInstallation = originalDetect
@@ -220,6 +221,7 @@ func TestMigrateFromOpenClawAPITransportNeverOpensDatabase(t *testing.T) {
 		importMigrateOpenClawHistoryBatchAPI = originalImportHistoryAPI
 		runMigrateOpenClawAPI = originalRunAPI
 		statusMigrateOpenClawAPI = originalStatusAPI
+		reportMigrateOpenClawAPI = originalReportAPI
 		openMigrateDatabase = originalOpenDB
 	})
 
@@ -272,6 +274,17 @@ func TestMigrateFromOpenClawAPITransportNeverOpensDatabase(t *testing.T) {
 	statusMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationStatus, error) {
 		return ottercli.OpenClawMigrationStatus{Active: false}, nil
 	}
+	reportMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationReport, error) {
+		return ottercli.OpenClawMigrationReport{
+			EventsExpected:            1,
+			EventsProcessed:           1,
+			MessagesInserted:          1,
+			EventsSkippedUnknownAgent: 0,
+			FailedItems:               0,
+			CompletenessRatio:         1.0,
+			IsComplete:                true,
+		}, nil
+	}
 
 	openDBCalled := false
 	openMigrateDatabase = func() (*sql.DB, error) {
@@ -300,6 +313,7 @@ func TestMigrateFromOpenClawAPITransportImportsAndRunsMigration(t *testing.T) {
 	originalImportHistoryAPI := importMigrateOpenClawHistoryBatchAPI
 	originalRunAPI := runMigrateOpenClawAPI
 	originalStatusAPI := statusMigrateOpenClawAPI
+	originalReportAPI := reportMigrateOpenClawAPI
 	originalOpenDB := openMigrateDatabase
 	originalBatchSize := migrateOpenClawHistoryBatchSize
 	t.Cleanup(func() {
@@ -313,6 +327,7 @@ func TestMigrateFromOpenClawAPITransportImportsAndRunsMigration(t *testing.T) {
 		importMigrateOpenClawHistoryBatchAPI = originalImportHistoryAPI
 		runMigrateOpenClawAPI = originalRunAPI
 		statusMigrateOpenClawAPI = originalStatusAPI
+		reportMigrateOpenClawAPI = originalReportAPI
 		openMigrateDatabase = originalOpenDB
 		migrateOpenClawHistoryBatchSize = originalBatchSize
 	})
@@ -379,6 +394,17 @@ func TestMigrateFromOpenClawAPITransportImportsAndRunsMigration(t *testing.T) {
 	}
 	statusMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationStatus, error) {
 		return ottercli.OpenClawMigrationStatus{Active: false}, nil
+	}
+	reportMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationReport, error) {
+		return ottercli.OpenClawMigrationReport{
+			EventsExpected:            3,
+			EventsProcessed:           3,
+			MessagesInserted:          3,
+			EventsSkippedUnknownAgent: 0,
+			FailedItems:               0,
+			CompletenessRatio:         1.0,
+			IsComplete:                true,
+		}, nil
 	}
 
 	openMigrateDatabase = func() (*sql.DB, error) {
@@ -994,4 +1020,49 @@ func TestRenderMigrateOpenClawSummaryIncludesSkippedBreakdown(t *testing.T) {
 	require.Contains(t, rendered, "history_backfill.events_skipped=3259")
 	require.Contains(t, rendered, "history_backfill.skipped_unknown_agent.codex=3247")
 	require.Contains(t, rendered, "history_backfill.skipped_unknown_agent.sandbox-bot=12")
+}
+
+func TestMigrateFromOpenClawSummaryPrintsFailureAndCompletenessCounts(t *testing.T) {
+	var out bytes.Buffer
+	renderMigrateOpenClawAPISummary(&out, migrateOpenClawAPISummary{
+		historyImported: true,
+		report: &ottercli.OpenClawMigrationReport{
+			EventsExpected:            10,
+			EventsProcessed:           7,
+			MessagesInserted:          7,
+			EventsSkippedUnknownAgent: 1,
+			FailedItems:               2,
+			CompletenessRatio:         1.0,
+			IsComplete:                true,
+		},
+	})
+
+	rendered := out.String()
+	require.Contains(t, rendered, "history_backfill.events_expected=10")
+	require.Contains(t, rendered, "history_backfill.events_processed=7")
+	require.Contains(t, rendered, "history_backfill.messages_inserted=7")
+	require.Contains(t, rendered, "history_backfill.events_skipped=1")
+	require.Contains(t, rendered, "history_backfill.failed_items=2")
+	require.Contains(t, rendered, "history_backfill.completeness_ratio=1.000")
+	require.Contains(t, rendered, "history_backfill.is_complete=true")
+}
+
+func TestMigrateFromOpenClawSummaryWarnsWhenIncomplete(t *testing.T) {
+	var out bytes.Buffer
+	renderMigrateOpenClawAPISummary(&out, migrateOpenClawAPISummary{
+		historyImported: true,
+		report: &ottercli.OpenClawMigrationReport{
+			EventsExpected:            10,
+			EventsProcessed:           5,
+			MessagesInserted:          5,
+			EventsSkippedUnknownAgent: 1,
+			FailedItems:               1,
+			CompletenessRatio:         0.7,
+			IsComplete:                false,
+		},
+	})
+
+	rendered := out.String()
+	require.Contains(t, rendered, "history_backfill.is_complete=false")
+	require.Contains(t, rendered, "history_backfill.warning=incomplete_reconciliation")
 }
