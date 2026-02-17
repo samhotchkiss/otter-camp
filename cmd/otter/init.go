@@ -26,6 +26,12 @@ type initOptions struct {
 	URL     string
 }
 
+type initImportFlowOptions struct {
+	ForceImport      bool
+	ForceStartBridge bool
+	ProgressPrefix   string
+}
+
 type initBootstrapClient interface {
 	OnboardingBootstrap(input ottercli.OnboardingBootstrapRequest) (ottercli.OnboardingBootstrapResponse, error)
 	CreateAgent(input map[string]any) (map[string]any, error)
@@ -36,8 +42,12 @@ type initBootstrapClient interface {
 var (
 	loadInitConfig = ottercli.LoadConfig
 	saveInitConfig = ottercli.SaveConfig
-	newInitClient  = func(apiBase string) (initBootstrapClient, error) {
-		client, err := ottercli.NewClient(ottercli.Config{APIBaseURL: strings.TrimSpace(apiBase)}, "")
+	newInitClient  = func(cfg ottercli.Config) (initBootstrapClient, error) {
+		client, err := ottercli.NewClient(ottercli.Config{
+			APIBaseURL: strings.TrimSpace(cfg.APIBaseURL),
+			Token:      strings.TrimSpace(cfg.Token),
+			DefaultOrg: strings.TrimSpace(cfg.DefaultOrg),
+		}, strings.TrimSpace(cfg.DefaultOrg))
 		if err != nil {
 			return nil, err
 		}
@@ -179,7 +189,16 @@ func runHostedInit(opts initOptions, out io.Writer) error {
 
 	fmt.Fprintln(out, "Hosted setup configured.")
 	fmt.Fprintln(out, "Next step: otter whoami")
-	return nil
+
+	client, err := newInitClient(cfg)
+	if err != nil {
+		return err
+	}
+	return runInitImportAndBridgeWithOptions(nil, out, client, cfg, initImportFlowOptions{
+		ForceImport:      true,
+		ForceStartBridge: true,
+		ProgressPrefix:   "Hosted",
+	})
 }
 
 func deriveHostedAPIBaseURL(rawURL string) (string, error) {
@@ -253,7 +272,7 @@ func runLocalInit(opts initOptions, reader *bufio.Reader, out io.Writer) error {
 	}
 
 	apiBase := resolveInitAPIBaseURL(cfg.APIBaseURL, opts.APIBase)
-	client, err := newInitClient(apiBase)
+	client, err := newInitClient(ottercli.Config{APIBaseURL: apiBase})
 	if err != nil {
 		return err
 	}
@@ -326,6 +345,24 @@ func collectLocalInitBootstrapInput(opts initOptions, reader *bufio.Reader, out 
 }
 
 func runInitImportAndBridge(reader *bufio.Reader, out io.Writer, client initBootstrapClient, cfg ottercli.Config) error {
+	return runInitImportAndBridgeWithOptions(reader, out, client, cfg, initImportFlowOptions{})
+}
+
+func runInitImportAndBridgeWithOptions(
+	reader *bufio.Reader,
+	out io.Writer,
+	client initBootstrapClient,
+	cfg ottercli.Config,
+	opts initImportFlowOptions,
+) error {
+	phase := func(msg string) {
+		if strings.TrimSpace(opts.ProgressPrefix) == "" {
+			return
+		}
+		fmt.Fprintf(out, "%s phase: %s\n", strings.TrimSpace(opts.ProgressPrefix), msg)
+	}
+
+	phase("Detect OpenClaw")
 	installation, err := detectInitOpenClaw()
 	if err != nil {
 		if errors.Is(err, importer.ErrOpenClawNotFound) {
@@ -337,6 +374,7 @@ func runInitImportAndBridge(reader *bufio.Reader, out io.Writer, client initBoot
 	}
 
 	fmt.Fprintf(out, "Found OpenClaw at %s with %d agent workspaces.\n", installation.RootDir, len(installation.Agents))
+	phase("Ensure required agents")
 	ensureResult, ensureErr := ensureInitOpenClawRequiredAgents(installation, importer.EnsureOpenClawRequiredAgentsOptions{
 		IncludeChameleon: true,
 	})
@@ -354,7 +392,12 @@ func runInitImportAndBridge(reader *bufio.Reader, out io.Writer, client initBoot
 		fmt.Fprintln(out, "Required OpenClaw agents already present. No config changes made.")
 	}
 
-	if promptYesNo(reader, out, "Import agents and projects from OpenClaw? (Y/n): ", true) {
+	shouldImport := opts.ForceImport
+	if !opts.ForceImport {
+		shouldImport = promptYesNo(reader, out, "Import agents and projects from OpenClaw? (Y/n): ", true)
+	}
+	if shouldImport {
+		phase("Import agents/projects from OpenClaw")
 		agentsImported, projectsImported, issuesImported := importOpenClawData(out, client, installation)
 		fmt.Fprintf(out, "Imported %d agents, %d projects, %d issues from OpenClaw.\n", agentsImported, projectsImported, issuesImported)
 	}
@@ -364,13 +407,19 @@ func runInitImportAndBridge(reader *bufio.Reader, out io.Writer, client initBoot
 		repoRoot, _ = os.Getwd()
 	}
 
+	phase("Write bridge config")
 	bridgePath, err := writeInitBridgeEnv(repoRoot, buildBridgeEnvValues(installation, cfg))
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Bridge config written: %s\n", bridgePath)
 
-	if promptYesNo(reader, out, "Start the bridge now? (y/N): ", false) {
+	shouldStartBridge := opts.ForceStartBridge
+	if !opts.ForceStartBridge {
+		shouldStartBridge = promptYesNo(reader, out, "Start the bridge now? (y/N): ", false)
+	}
+	if shouldStartBridge {
+		phase("Start bridge")
 		if err := startInitBridge(repoRoot, out); err != nil {
 			fmt.Fprintf(out, "Unable to start bridge automatically: %v\n", err)
 		}
@@ -467,14 +516,36 @@ func buildBridgeEnvValues(installation *importer.OpenClawInstallation, cfg otter
 		token = initFirstNonEmpty(installation.Gateway.Token, token)
 	}
 
+	ottercampURL := deriveBridgeOttercampURL(cfg.APIBaseURL)
+
 	return map[string]string{
 		"OPENCLAW_HOST":      host,
 		"OPENCLAW_PORT":      fmt.Sprintf("%d", port),
 		"OPENCLAW_TOKEN":     token,
-		"OTTERCAMP_URL":      initFirstNonEmpty(strings.TrimSpace(cfg.APIBaseURL), initLocalDefaultAPIBaseURL),
+		"OTTERCAMP_URL":      initFirstNonEmpty(ottercampURL, initLocalDefaultAPIBaseURL),
 		"OTTERCAMP_TOKEN":    strings.TrimSpace(cfg.Token),
 		"OPENCLAW_WS_SECRET": strings.TrimSpace(os.Getenv("OPENCLAW_WS_SECRET")),
 	}
+}
+
+func deriveBridgeOttercampURL(apiBaseURL string) string {
+	value := strings.TrimSpace(apiBaseURL)
+	if value == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimRight(value, "/")
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	if parsed.Path == "/api" {
+		parsed.Path = ""
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	return strings.TrimRight(parsed.String(), "/")
 }
 
 func writeBridgeEnvFile(repoRoot string, values map[string]string) (string, error) {

@@ -200,6 +200,85 @@ func TestInitHostedWhoamiPersistsOrgContext(t *testing.T) {
 	}
 }
 
+func TestInitHostedRunsImportAndStartsBridge(t *testing.T) {
+	client := &fakeInitClient{}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.hostedValidateOrg = "org-hosted"
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir: "/Users/sam/.openclaw",
+		Gateway: importer.OpenClawGatewayConfig{
+			Host:  "127.0.0.1",
+			Port:  18791,
+			Token: "openclaw-token",
+		},
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", Name: "Frank", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.identities = []importer.ImportedAgentIdentity{
+		{ID: "main", Name: "Frank", Soul: "Chief of Staff"},
+	}
+	state.projects = []importer.OpenClawProjectCandidate{
+		{
+			Key:      "otter-camp",
+			Name:     "Otter Camp",
+			RepoPath: "/Users/sam/dev/otter-camp",
+			Issues: []importer.OpenClawIssueCandidate{
+				{Title: "Review imported context"},
+			},
+		},
+	}
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "hosted", "--token", "oc_sess_hosted", "--url", "https://swh.otter.camp"},
+		strings.NewReader(""),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+
+	if len(client.createAgentInputs) != 1 {
+		t.Fatalf("expected one imported agent call, got %d", len(client.createAgentInputs))
+	}
+	if len(client.createProjectInputs) != 1 {
+		t.Fatalf("expected one imported project call, got %d", len(client.createProjectInputs))
+	}
+	if len(client.createIssueCalls) != 1 {
+		t.Fatalf("expected one imported issue call, got %d", len(client.createIssueCalls))
+	}
+	if !state.bridgeWriteCalled {
+		t.Fatalf("expected bridge env write call")
+	}
+	if !state.bridgeStarted {
+		t.Fatalf("expected hosted init to start bridge non-interactively")
+	}
+	if state.bridgeValues["OTTERCAMP_URL"] != "https://swh.otter.camp" {
+		t.Fatalf("bridge otter URL = %q, want https://swh.otter.camp", state.bridgeValues["OTTERCAMP_URL"])
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "Hosted phase: Detect OpenClaw") {
+		t.Fatalf("expected hosted progress output, got %q", output)
+	}
+	if !strings.Contains(output, "Hosted phase: Start bridge") {
+		t.Fatalf("expected hosted bridge phase output, got %q", output)
+	}
+}
+
+func TestBuildBridgeEnvValuesNormalizesHostedAPIPath(t *testing.T) {
+	values := buildBridgeEnvValues(nil, ottercli.Config{
+		APIBaseURL: "https://swh.otter.camp/api",
+		Token:      "oc_sess_hosted",
+	})
+
+	if values["OTTERCAMP_URL"] != "https://swh.otter.camp" {
+		t.Fatalf("OTTERCAMP_URL = %q, want https://swh.otter.camp", values["OTTERCAMP_URL"])
+	}
+}
+
 func TestHandleInitPromptDefaultsToLocalSelection(t *testing.T) {
 	client := &fakeInitClient{
 		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
@@ -463,9 +542,9 @@ func TestInitAddsRequiredOpenClawAgentsToConfig(t *testing.T) {
 	}
 	state.detectErr = nil
 	state.ensureResult = importer.EnsureOpenClawRequiredAgentsResult{
-		Updated:          true,
-		AddedElephant: true,
-		AddedChameleon:   true,
+		Updated:        true,
+		AddedElephant:  true,
+		AddedChameleon: true,
 	}
 
 	var out bytes.Buffer
@@ -624,8 +703,8 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 		state.savedCfg = cfg
 		return saveErr
 	}
-	newInitClient = func(apiBase string) (initBootstrapClient, error) {
-		state.gotAPIBase = apiBase
+	newInitClient = func(cfg ottercli.Config) (initBootstrapClient, error) {
+		state.gotAPIBase = cfg.APIBaseURL
 		return client, nil
 	}
 	validateHostedInitToken = func(apiBaseURL, token string) (string, error) {

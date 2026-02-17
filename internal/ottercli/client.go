@@ -606,7 +606,7 @@ type whoamiResponse struct {
 	Valid   bool   `json:"valid"`
 	OrgID   string `json:"org_id"`
 	OrgSlug string `json:"org_slug"`
-	User  struct {
+	User    struct {
 		ID    string `json:"id"`
 		Name  string `json:"name"`
 		Email string `json:"email"`
