@@ -211,6 +211,8 @@ func deriveHostedAPIBaseURL(rawURL string) (string, error) {
 		return "", errors.New("--url must be a valid absolute URL")
 	}
 
+	// Do NOT append /api — ottercli.Client already prefixes /api/ on all request paths.
+	// BaseURL should be the bare origin (e.g., https://swh.otter.camp).
 	parsed.Path = ""
 	parsed.RawPath = ""
 	parsed.RawQuery = ""
