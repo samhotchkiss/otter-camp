@@ -12,29 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type fakeOpenClawMigrationProgressStore struct {
-	rowsByOrg      map[string][]store.MigrationProgress
-	listByOrgCalls []string
-	listErr        error
-}
-
-func (f *fakeOpenClawMigrationProgressStore) ListByOrg(_ context.Context, orgID string) ([]store.MigrationProgress, error) {
-	f.listByOrgCalls = append(f.listByOrgCalls, orgID)
-	if f.listErr != nil {
-		return nil, f.listErr
-	}
-	rows := f.rowsByOrg[orgID]
-	cloned := make([]store.MigrationProgress, len(rows))
-	copy(cloned, rows)
-	return cloned, nil
-}
-
 func TestOpenClawMigrationStatusEndpointWorkspaceScoped(t *testing.T) {
 	orgID := "00000000-0000-0000-0000-000000000111"
 	otherOrgID := "00000000-0000-0000-0000-000000000222"
 
-	progressStore := &fakeOpenClawMigrationProgressStore{
-		rowsByOrg: map[string][]store.MigrationProgress{
+	progressStore := newFakeOpenClawMigrationProgressStore(
+		map[string][]store.MigrationProgress{
 			orgID: {
 				{
 					OrgID:          orgID,
@@ -63,7 +46,7 @@ func TestOpenClawMigrationStatusEndpointWorkspaceScoped(t *testing.T) {
 				},
 			},
 		},
-	}
+	)
 	service := newOpenClawMigrationControlPlaneServiceWithStore(progressStore)
 	handler := newOpenClawMigrationControlPlaneHandlerWithService(service)
 
@@ -110,8 +93,8 @@ func TestOpenClawMigrationStatusEndpointWorkspaceScoped(t *testing.T) {
 
 func TestOpenClawMigrationStatusEndpointReturnsKnownPhaseOrder(t *testing.T) {
 	orgID := "00000000-0000-0000-0000-000000000333"
-	progressStore := &fakeOpenClawMigrationProgressStore{
-		rowsByOrg: map[string][]store.MigrationProgress{
+	progressStore := newFakeOpenClawMigrationProgressStore(
+		map[string][]store.MigrationProgress{
 			orgID: {
 				{
 					OrgID:         orgID,
@@ -120,7 +103,7 @@ func TestOpenClawMigrationStatusEndpointReturnsKnownPhaseOrder(t *testing.T) {
 				},
 			},
 		},
-	}
+	)
 	service := newOpenClawMigrationControlPlaneServiceWithStore(progressStore)
 	handler := newOpenClawMigrationControlPlaneHandlerWithService(service)
 
