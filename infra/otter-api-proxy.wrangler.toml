@@ -1,0 +1,6 @@
+name = "otter-api-proxy"
+compatibility_date = "2026-02-17"
+
+[[routes]]
+pattern = "swh.otter.camp/api/*"
+zone_id = "e56e324df6820deb32e1110209051f17"
