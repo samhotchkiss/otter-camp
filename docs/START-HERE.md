@@ -1,7 +1,7 @@
 # Otter Camp: START HERE
 
 > Summary: Canonical map of the current Otter Camp system, how components fit together, and how documentation must be maintained.
-> Last updated: 2026-02-16
+> Last updated: 2026-02-17
 > Audience: Agents first, humans second.
 
 ## What Otter Camp Is
@@ -48,6 +48,7 @@ Key files:
 - `internal/api/openclaw_sync.go`
 - `internal/ws/openclaw_handler.go`
 - `internal/api/admin_connections.go`
+- Hosted setup flow: `curl -sSL otter.camp/install | bash -s -- --token <oc_sess_...> --url https://<slug>.otter.camp`
 
 ## Two Doc Categories
 
@@ -147,6 +148,7 @@ Primary implementation wave came through issue/commit streams around Spec #150-#
 
 ## Change Log
 
+- 2026-02-17: Added hosted CLI setup handoff path (`/install` script + `otter init --mode hosted --token --url` import/bridge flow) for non-interactive hosted onboarding (Spec 312).
 - 2026-02-17: Documented hosted invite onboarding launch flow (`/join/<invite-code>`) and hosted multi-org bootstrap guard configuration (Spec 310).
 - 2026-02-16: Added hosted wildcard DNS/TLS rollout runbook link for `{slug}.otter.camp` operator validation (Spec 311).
 - 2026-02-17: Documented uninstall teardown hardening for local runtime cleanup (server/bridge stop, PID/log cleanup, and port-free verification) from Spec 313.
