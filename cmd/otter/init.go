@@ -410,22 +410,27 @@ func runInitImportAndBridgeWithOptions(
 		fmt.Fprintf(out, "Imported %d agents, %d projects, %d issues from OpenClaw.\n", agentsImported, projectsImported, issuesImported)
 	}
 
-	repoRoot := ""
-	if installation != nil {
-		repoRoot = strings.TrimSpace(installation.RootDir)
-	}
-	if repoRoot == "" {
+	bridgeRoot := strings.TrimSpace(os.Getenv("OTTERCAMP_REPO"))
+	if bridgeRoot == "" {
 		resolved, err := resolveInitRepoRoot()
 		if err == nil && strings.TrimSpace(resolved) != "" {
-			repoRoot = resolved
+			bridgeRoot = resolved
 		}
 	}
-	if repoRoot == "" {
-		repoRoot, _ = os.Getwd()
+	if bridgeRoot == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			candidate := filepath.Join(home, "Documents", "Dev", "otter-camp")
+			if stat, err := os.Stat(candidate); err == nil && stat.IsDir() {
+				bridgeRoot = candidate
+			}
+		}
+	}
+	if bridgeRoot == "" {
+		bridgeRoot, _ = os.Getwd()
 	}
 
 	phase("Write bridge config")
-	bridgePath, err := writeInitBridgeEnv(repoRoot, buildBridgeEnvValues(installation, cfg))
+	bridgePath, err := writeInitBridgeEnv(bridgeRoot, buildBridgeEnvValues(installation, cfg))
 	if err != nil {
 		return err
 	}
@@ -437,7 +442,7 @@ func runInitImportAndBridgeWithOptions(
 	}
 	if shouldStartBridge {
 		phase("Start bridge")
-		if err := startInitBridge(repoRoot, out); err != nil {
+		if err := startInitBridge(bridgeRoot, out); err != nil {
 			fmt.Fprintf(out, "Unable to start bridge automatically: %v\n", err)
 		}
 	}
