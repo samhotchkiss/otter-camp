@@ -56,6 +56,15 @@ func newServerHandler(staticDir string, cfg joinConfig) http.Handler {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
+	mux.HandleFunc("/install", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-sh; charset=utf-8")
+		_, _ = fmt.Fprint(w, renderInstallScript())
+	})
+
 	mux.HandleFunc("/join/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.NotFound(w, r)
@@ -74,6 +83,79 @@ func newServerHandler(staticDir string, cfg joinConfig) http.Handler {
 
 	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
 	return mux
+}
+
+func renderInstallScript() string {
+	return `#!/usr/bin/env bash
+set -euo pipefail
+
+TOKEN=""
+URL=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --token)
+      TOKEN="${2:-}"
+      shift 2
+      ;;
+    --url)
+      URL="${2:-}"
+      shift 2
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$TOKEN" ]]; then
+  echo "missing required --token" >&2
+  exit 1
+fi
+
+if [[ -z "$URL" ]]; then
+  echo "missing required --url" >&2
+  exit 1
+fi
+
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) ARCH="amd64" ;;
+  arm64|aarch64) ARCH="arm64" ;;
+  *) ARCH="" ;;
+esac
+
+OTTER_BIN="otter"
+TARGET_DIR="/usr/local/bin"
+if [[ ! -w "$TARGET_DIR" ]]; then
+  TARGET_DIR="$HOME/.local/bin"
+  mkdir -p "$TARGET_DIR"
+fi
+
+if command -v curl >/dev/null 2>&1 && [[ -n "$ARCH" ]]; then
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TMP_DIR"' EXIT
+  BIN_URL="https://github.com/samhotchkiss/otter-camp/releases/latest/download/otter-${OS}-${ARCH}"
+  if curl -fsSL "$BIN_URL" -o "$TMP_DIR/otter"; then
+    chmod +x "$TMP_DIR/otter"
+    mv "$TMP_DIR/otter" "$TARGET_DIR/otter"
+    OTTER_BIN="$TARGET_DIR/otter"
+  fi
+fi
+
+if ! command -v "$OTTER_BIN" >/dev/null 2>&1; then
+  if ! command -v go >/dev/null 2>&1; then
+    echo "unable to install otter automatically; install Go or place otter on PATH" >&2
+    exit 1
+  fi
+  go install github.com/samhotchkiss/otter-camp/cmd/otter@latest
+  OTTER_BIN="$(go env GOPATH)/bin/otter"
+fi
+
+"$OTTER_BIN" init --mode hosted --token "$TOKEN" --url "$URL"
+`
 }
 
 func renderJoinPage(code string) string {
