@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sort"
 	"strings"
 	"time"
@@ -179,7 +180,7 @@ func discoverOpenClawSessionFiles(root string) ([]string, error) {
 		files = append(files, rootFiles...)
 	}
 	sort.Strings(files)
-	return files, nil
+	return dedupeOpenClawSessionFiles(files)
 }
 
 func resolveOpenClawSessionSearchRoots(root string) ([]string, error) {
@@ -305,6 +306,67 @@ func collectOpenClawJSONLFiles(searchRoot string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+func dedupeOpenClawSessionFiles(files []string) ([]string, error) {
+	if len(files) <= 1 {
+		return files, nil
+	}
+
+	seenCanonical := make(map[string]struct{}, len(files))
+	seenSignature := make(map[string]struct{}, len(files))
+	unique := make([]string, 0, len(files))
+
+	for _, path := range files {
+		cleanPath := filepath.Clean(path)
+		canonicalPath := cleanPath
+		if resolved, err := filepath.EvalSymlinks(cleanPath); err == nil {
+			canonicalPath = filepath.Clean(resolved)
+		}
+		if _, exists := seenCanonical[canonicalPath]; exists {
+			continue
+		}
+
+		signature, err := openClawSessionFileSignature(cleanPath)
+		if err != nil {
+			return nil, err
+		}
+		if signature != "" {
+			if _, exists := seenSignature[signature]; exists {
+				continue
+			}
+			seenSignature[signature] = struct{}{}
+		}
+
+		seenCanonical[canonicalPath] = struct{}{}
+		unique = append(unique, cleanPath)
+	}
+
+	return unique, nil
+}
+
+func openClawSessionFileSignature(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", nil
+	}
+
+	sessionID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if sessionID == "" {
+		sessionID = filepath.Base(path)
+	}
+	hash, err := hashOpenClawFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join([]string{
+		sessionID,
+		strconv.FormatInt(info.Size(), 10),
+		hash,
+	}, "|"), nil
 }
 
 // deriveOpenClawSessionPathMetadata extracts agent slug and session ID from a
