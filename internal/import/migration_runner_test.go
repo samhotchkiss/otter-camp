@@ -19,6 +19,14 @@ type fakeOpenClawEllieBackfillRunner struct {
 	callLog *[]string
 }
 
+type fakeOpenClawEmbeddingPhaseRunner struct {
+	called  bool
+	inputs  []OpenClawEmbeddingPhaseInput
+	result  OpenClawEmbeddingPhaseResult
+	err     error
+	callLog *[]string
+}
+
 func (f *fakeOpenClawEllieBackfillRunner) RunBackfill(
 	_ context.Context,
 	input OpenClawEllieBackfillInput,
@@ -30,6 +38,21 @@ func (f *fakeOpenClawEllieBackfillRunner) RunBackfill(
 	}
 	if f.err != nil {
 		return OpenClawEllieBackfillResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func (f *fakeOpenClawEmbeddingPhaseRunner) RunEmbeddingPhase(
+	_ context.Context,
+	input OpenClawEmbeddingPhaseInput,
+) (OpenClawEmbeddingPhaseResult, error) {
+	f.called = true
+	f.inputs = append(f.inputs, input)
+	if f.callLog != nil {
+		*f.callLog = append(*f.callLog, "history_embedding_1536")
+	}
+	if f.err != nil {
+		return OpenClawEmbeddingPhaseResult{}, f.err
 	}
 	return f.result, nil
 }
@@ -341,8 +364,15 @@ func TestMigrationRunnerStartsEllieBackfillPhase(t *testing.T) {
 			ExtractedMemories: 2,
 		},
 	}
+	embeddingRunner := &fakeOpenClawEmbeddingPhaseRunner{
+		result: OpenClawEmbeddingPhaseResult{
+			ProcessedEmbeddings: 4,
+			RemainingEmbeddings: 0,
+		},
+	}
 
 	runner := NewOpenClawMigrationRunner(db)
+	runner.EmbeddingPhaseRunner = embeddingRunner
 	runner.EllieBackfillRunner = backfillRunner
 
 	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
@@ -354,6 +384,7 @@ func TestMigrationRunnerStartsEllieBackfillPhase(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, runResult.HistoryBackfill)
+	require.NotNil(t, runResult.EmbeddingPhase)
 	require.NotNil(t, runResult.EllieBackfill)
 	require.Equal(t, 4, runResult.EllieBackfill.ProcessedMessages)
 	require.Equal(t, 2, runResult.EllieBackfill.ExtractedMemories)
@@ -361,6 +392,9 @@ func TestMigrationRunnerStartsEllieBackfillPhase(t *testing.T) {
 	require.True(t, backfillRunner.called)
 	require.Len(t, backfillRunner.inputs, 1)
 	require.Equal(t, orgID, backfillRunner.inputs[0].OrgID)
+	require.True(t, embeddingRunner.called)
+	require.Len(t, embeddingRunner.inputs, 1)
+	require.Equal(t, orgID, embeddingRunner.inputs[0].OrgID)
 
 	progressStore := store.NewMigrationProgressStore(db)
 	memoryProgress, err := progressStore.GetByType(context.Background(), orgID, "memory_extraction")
@@ -369,6 +403,125 @@ func TestMigrationRunnerStartsEllieBackfillPhase(t *testing.T) {
 	require.Equal(t, store.MigrationProgressStatusCompleted, memoryProgress.Status)
 	require.Equal(t, 4, memoryProgress.ProcessedItems)
 	require.Equal(t, "memory extraction complete", memoryProgress.CurrentLabel)
+}
+
+func TestOpenClawMigrationRunnerExecutesEmbeddingPhaseBetweenHistoryAndMemoryExtraction(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-embedding-order")
+	userID := createOpenClawImportTestUser(t, db, orgID, "runner-embedding-order")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(sessionDir, "main-embedding-order.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"one"}]}}`,
+	})
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events, err := ParseOpenClawSessionEvents(install)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	callLog := make([]string, 0, 2)
+	runner := NewOpenClawMigrationRunner(db)
+	runner.EmbeddingPhaseRunner = &fakeOpenClawEmbeddingPhaseRunner{
+		result: OpenClawEmbeddingPhaseResult{
+			ProcessedEmbeddings: 1,
+			RemainingEmbeddings: 0,
+		},
+		callLog: &callLog,
+	}
+	runner.EllieBackfillRunner = &fakeOpenClawEllieBackfillRunner{
+		result: OpenClawEllieBackfillResult{
+			ProcessedMessages: 1,
+			ExtractedMemories: 1,
+		},
+		callLog: &callLog,
+	}
+
+	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
+		OrgID:        orgID,
+		UserID:       userID,
+		Installation: install,
+		ParsedEvents: events,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, runResult.EmbeddingPhase)
+	require.NotNil(t, runResult.EllieBackfill)
+	require.Equal(t, []string{"history_embedding_1536", "memory_extraction"}, callLog)
+}
+
+func TestOpenClawMigrationEmbeddingPhaseTracksProcessedAndRemainingCounts(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-embedding-progress")
+	userID := createOpenClawImportTestUser(t, db, orgID, "runner-embedding-progress")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+
+	sessionDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(sessionDir, "main-embedding-progress.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"one"}]}}`,
+	})
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events, err := ParseOpenClawSessionEvents(install)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	runner := NewOpenClawMigrationRunner(db)
+	runner.EmbeddingPhaseRunner = &fakeOpenClawEmbeddingPhaseRunner{
+		result: OpenClawEmbeddingPhaseResult{
+			ProcessedEmbeddings: 5,
+			RemainingEmbeddings: 2,
+		},
+	}
+
+	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
+		OrgID:        orgID,
+		UserID:       userID,
+		Installation: install,
+		ParsedEvents: events,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, runResult.EmbeddingPhase)
+	require.Equal(t, 5, runResult.EmbeddingPhase.ProcessedEmbeddings)
+	require.Equal(t, 2, runResult.EmbeddingPhase.RemainingEmbeddings)
+
+	progressStore := store.NewMigrationProgressStore(db)
+	embeddingProgress, err := progressStore.GetByType(context.Background(), orgID, "history_embedding_1536")
+	require.NoError(t, err)
+	require.NotNil(t, embeddingProgress)
+	require.Equal(t, store.MigrationProgressStatusCompleted, embeddingProgress.Status)
+	require.Equal(t, 5, embeddingProgress.ProcessedItems)
+	require.Equal(t, 2, embeddingProgress.FailedItems)
 }
 
 func TestMigrationRunnerStartsProjectDiscoveryPhase(t *testing.T) {
@@ -777,7 +930,11 @@ func TestMigrationRunnerTaxonomyPhaseOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 
-	callLog := make([]string, 0, 8)
+	callLog := make([]string, 0, 9)
+	embeddingRunner := &fakeOpenClawEmbeddingPhaseRunner{
+		result:  OpenClawEmbeddingPhaseResult{ProcessedEmbeddings: 1, RemainingEmbeddings: 0},
+		callLog: &callLog,
+	}
 	backfillRunner := &fakeOpenClawEllieBackfillRunner{
 		result:  OpenClawEllieBackfillResult{ProcessedMessages: 1, ExtractedMemories: 1},
 		callLog: &callLog,
@@ -796,6 +953,7 @@ func TestMigrationRunnerTaxonomyPhaseOrder(t *testing.T) {
 	}
 
 	runner := NewOpenClawMigrationRunner(db)
+	runner.EmbeddingPhaseRunner = embeddingRunner
 	runner.EllieBackfillRunner = backfillRunner
 	runner.EntitySynthesisRunner = entityRunner
 	runner.TaxonomyRunner = taxonomyRunner
@@ -810,7 +968,7 @@ func TestMigrationRunnerTaxonomyPhaseOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		[]string{"memory_extraction", "entity_synthesis", "taxonomy_classification", "project_discovery"},
+		[]string{"history_embedding_1536", "memory_extraction", "entity_synthesis", "taxonomy_classification", "project_discovery"},
 		callLog,
 	)
 }

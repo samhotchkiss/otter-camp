@@ -20,6 +20,7 @@ import (
 var openClawMigrationPhaseOrder = []string{
 	"agent_import",
 	"history_backfill",
+	"history_embedding_1536",
 	"memory_extraction",
 	"entity_synthesis",
 	"memory_dedup",

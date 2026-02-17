@@ -54,12 +54,12 @@ func TestOpenClawMigrationRunEndpointStartsAndSkipsCompletedPhases(t *testing.T)
 	require.Equal(t, []string{"history_backfill"}, payload.AlreadyRunningPhases)
 	require.ElementsMatch(
 		t,
-		[]string{"memory_extraction", "entity_synthesis", "memory_dedup", "project_discovery", "project_docs_scanning"},
+		[]string{"history_embedding_1536", "memory_extraction", "entity_synthesis", "memory_dedup", "project_discovery", "project_docs_scanning"},
 		payload.StartedPhases,
 	)
 	require.Empty(t, payload.ResumedPhases)
 
-	require.Len(t, progressStore.startPhaseInputs, 5)
+	require.Len(t, progressStore.startPhaseInputs, 6)
 	require.Len(t, progressStore.setStatusInputs, 0)
 }
 

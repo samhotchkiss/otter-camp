@@ -71,7 +71,7 @@ func TestOpenClawMigrationStatusEndpointWorkspaceScoped(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload))
 	require.True(t, payload.Active)
-	require.Len(t, payload.Phases, 8)
+	require.Len(t, payload.Phases, 9)
 
 	require.Equal(t, "agent_import", payload.Phases[0].MigrationType)
 	require.Equal(t, "completed", payload.Phases[0].Status)
@@ -87,8 +87,10 @@ func TestOpenClawMigrationStatusEndpointWorkspaceScoped(t *testing.T) {
 	require.Equal(t, 20, *payload.Phases[1].TotalItems)
 	require.Equal(t, "processed 7/20 events", payload.Phases[1].CurrentLabel)
 
-	require.Equal(t, "memory_extraction", payload.Phases[2].MigrationType)
+	require.Equal(t, "history_embedding_1536", payload.Phases[2].MigrationType)
 	require.Equal(t, "pending", payload.Phases[2].Status)
+	require.Equal(t, "memory_extraction", payload.Phases[3].MigrationType)
+	require.Equal(t, "pending", payload.Phases[3].Status)
 }
 
 func TestOpenClawMigrationStatusEndpointReturnsKnownPhaseOrder(t *testing.T) {
@@ -125,6 +127,7 @@ func TestOpenClawMigrationStatusEndpointReturnsKnownPhaseOrder(t *testing.T) {
 		[]string{
 			"agent_import",
 			"history_backfill",
+			"history_embedding_1536",
 			"memory_extraction",
 			"entity_synthesis",
 			"memory_dedup",
@@ -141,6 +144,7 @@ func TestOpenClawMigrationStatusEndpointReturnsKnownPhaseOrder(t *testing.T) {
 			payload.Phases[5].MigrationType,
 			payload.Phases[6].MigrationType,
 			payload.Phases[7].MigrationType,
+			payload.Phases[8].MigrationType,
 		},
 	)
 }
