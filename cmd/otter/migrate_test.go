@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,46 @@ func TestMigrateFromOpenClawCommandParsesModesAndFlags(t *testing.T) {
 	_, err = parseMigrateFromOpenClawOptions([]string{"--agents-only", "--history-only"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestParseMigrateTransportOptions(t *testing.T) {
+	full, err := parseMigrateFromOpenClawOptions([]string{"--transport", "api"})
+	require.NoError(t, err)
+	require.Equal(t, migrateTransportAPI, full.Transport)
+
+	orgOnly, err := parseMigrateOrgOnlyOptions("migrate status", []string{"--org", "org-1", "--transport", "db"})
+	require.NoError(t, err)
+	require.Equal(t, "org-1", orgOnly.OrgID)
+	require.Equal(t, migrateTransportDB, orgOnly.Transport)
+
+	autoDefault, err := parseMigrateOrgOnlyOptions("migrate pause", []string{"--org", "org-1"})
+	require.NoError(t, err)
+	require.Equal(t, migrateTransportAuto, autoDefault.Transport)
+
+	_, err = parseMigrateFromOpenClawOptions([]string{"--transport", "smtp"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid --transport")
+}
+
+func TestMigrateFromOpenClawAutoSelectsAPITransportForHostedBaseURL(t *testing.T) {
+	resolved := resolveMigrateTransport(migrateTransportAuto, "https://swh.otter.camp")
+	require.Equal(t, migrateTransportAPI, resolved)
+}
+
+func TestMigrateFromOpenClawAutoSelectsDBTransportForLocalhostBaseURL(t *testing.T) {
+	tests := []string{
+		"http://localhost:4200",
+		"http://127.0.0.1:4200/api",
+		"http://[::1]:4200",
+		"http://otter.local:4200",
+	}
+
+	for _, baseURL := range tests {
+		t.Run(baseURL, func(t *testing.T) {
+			resolved := resolveMigrateTransport(migrateTransportAuto, baseURL)
+			require.Equal(t, migrateTransportDB, resolved)
+		})
+	}
 }
 
 func TestResolveMigrateDatabaseURLPrefersEnvOverConfig(t *testing.T) {
@@ -154,6 +195,297 @@ func TestMigrateFromOpenClawDryRunOutput(t *testing.T) {
 	require.Contains(t, rendered, "Agents to import: 2")
 	require.Contains(t, rendered, "Conversation events to import: 3")
 	require.Contains(t, rendered, "Agent slugs: lori, main")
+}
+
+func TestMigrateFromOpenClawAPITransportNeverOpensDatabase(t *testing.T) {
+	originalDetect := detectMigrateOpenClawInstallation
+	originalIdentities := importMigrateOpenClawAgentIdentities
+	originalEvents := parseMigrateOpenClawSessionEvents
+	originalLoadCfg := loadMigrateConfig
+	originalNewClient := newMigrateClient
+	originalImportAgentsAPI := importMigrateOpenClawAgentsAPI
+	originalWhoAmI := migrateWhoAmIUserID
+	originalImportHistoryAPI := importMigrateOpenClawHistoryBatchAPI
+	originalRunAPI := runMigrateOpenClawAPI
+	originalStatusAPI := statusMigrateOpenClawAPI
+	originalOpenDB := openMigrateDatabase
+	t.Cleanup(func() {
+		detectMigrateOpenClawInstallation = originalDetect
+		importMigrateOpenClawAgentIdentities = originalIdentities
+		parseMigrateOpenClawSessionEvents = originalEvents
+		loadMigrateConfig = originalLoadCfg
+		newMigrateClient = originalNewClient
+		importMigrateOpenClawAgentsAPI = originalImportAgentsAPI
+		migrateWhoAmIUserID = originalWhoAmI
+		importMigrateOpenClawHistoryBatchAPI = originalImportHistoryAPI
+		runMigrateOpenClawAPI = originalRunAPI
+		statusMigrateOpenClawAPI = originalStatusAPI
+		openMigrateDatabase = originalOpenDB
+	})
+
+	detectMigrateOpenClawInstallation = func(opts importer.DetectOpenClawOptions) (*importer.OpenClawInstallation, error) {
+		return &importer.OpenClawInstallation{RootDir: opts.HomeDir}, nil
+	}
+	importMigrateOpenClawAgentIdentities = func(_ *importer.OpenClawInstallation) ([]importer.ImportedAgentIdentity, error) {
+		return []importer.ImportedAgentIdentity{{ID: "main", Name: "Frank"}}, nil
+	}
+	parseMigrateOpenClawSessionEvents = func(_ *importer.OpenClawInstallation) ([]importer.OpenClawSessionEvent, error) {
+		return []importer.OpenClawSessionEvent{
+			{AgentSlug: "main", Role: "assistant", Body: "hello", CreatedAt: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)},
+		}, nil
+	}
+	loadMigrateConfig = func() (ottercli.Config, error) {
+		return ottercli.Config{
+			APIBaseURL: "https://swh.otter.camp",
+			Token:      "token-1",
+			DefaultOrg: "org-1",
+		}, nil
+	}
+	newMigrateClient = func(cfg ottercli.Config, orgOverride string) (*ottercli.Client, error) {
+		return &ottercli.Client{BaseURL: cfg.APIBaseURL, Token: cfg.Token, OrgID: orgOverride, HTTP: &http.Client{}}, nil
+	}
+	importMigrateOpenClawAgentsAPI = func(
+		_ *ottercli.Client,
+		_ ottercli.OpenClawMigrationImportAgentsInput,
+	) (ottercli.OpenClawMigrationImportAgentsResult, error) {
+		return ottercli.OpenClawMigrationImportAgentsResult{Processed: 1}, nil
+	}
+	migrateWhoAmIUserID = func(_ *ottercli.Client) (string, error) {
+		return "00000000-0000-0000-0000-000000000111", nil
+	}
+	importMigrateOpenClawHistoryBatchAPI = func(
+		_ *ottercli.Client,
+		_ ottercli.OpenClawMigrationImportHistoryBatchInput,
+	) (ottercli.OpenClawMigrationImportHistoryBatchResult, error) {
+		return ottercli.OpenClawMigrationImportHistoryBatchResult{
+			EventsReceived:   1,
+			EventsProcessed:  1,
+			MessagesInserted: 1,
+		}, nil
+	}
+	runMigrateOpenClawAPI = func(
+		_ *ottercli.Client,
+		_ ottercli.OpenClawMigrationRunRequest,
+	) (ottercli.OpenClawMigrationRunResponse, error) {
+		return ottercli.OpenClawMigrationRunResponse{Accepted: true}, nil
+	}
+	statusMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationStatus, error) {
+		return ottercli.OpenClawMigrationStatus{Active: false}, nil
+	}
+
+	openDBCalled := false
+	openMigrateDatabase = func() (*sql.DB, error) {
+		openDBCalled = true
+		return nil, nil
+	}
+
+	var out bytes.Buffer
+	err := runMigrateFromOpenClaw(&out, migrateFromOpenClawOptions{
+		OpenClawDir: "/tmp/openclaw",
+		OrgID:       "org-1",
+		Transport:   migrateTransportAPI,
+	})
+	require.NoError(t, err)
+	require.False(t, openDBCalled, "api transport must not open DATABASE_URL connection")
+}
+
+func TestMigrateFromOpenClawAPITransportImportsAndRunsMigration(t *testing.T) {
+	originalDetect := detectMigrateOpenClawInstallation
+	originalIdentities := importMigrateOpenClawAgentIdentities
+	originalEvents := parseMigrateOpenClawSessionEvents
+	originalLoadCfg := loadMigrateConfig
+	originalNewClient := newMigrateClient
+	originalImportAgentsAPI := importMigrateOpenClawAgentsAPI
+	originalWhoAmI := migrateWhoAmIUserID
+	originalImportHistoryAPI := importMigrateOpenClawHistoryBatchAPI
+	originalRunAPI := runMigrateOpenClawAPI
+	originalStatusAPI := statusMigrateOpenClawAPI
+	originalOpenDB := openMigrateDatabase
+	originalBatchSize := migrateOpenClawHistoryBatchSize
+	t.Cleanup(func() {
+		detectMigrateOpenClawInstallation = originalDetect
+		importMigrateOpenClawAgentIdentities = originalIdentities
+		parseMigrateOpenClawSessionEvents = originalEvents
+		loadMigrateConfig = originalLoadCfg
+		newMigrateClient = originalNewClient
+		importMigrateOpenClawAgentsAPI = originalImportAgentsAPI
+		migrateWhoAmIUserID = originalWhoAmI
+		importMigrateOpenClawHistoryBatchAPI = originalImportHistoryAPI
+		runMigrateOpenClawAPI = originalRunAPI
+		statusMigrateOpenClawAPI = originalStatusAPI
+		openMigrateDatabase = originalOpenDB
+		migrateOpenClawHistoryBatchSize = originalBatchSize
+	})
+
+	detectMigrateOpenClawInstallation = func(opts importer.DetectOpenClawOptions) (*importer.OpenClawInstallation, error) {
+		return &importer.OpenClawInstallation{RootDir: opts.HomeDir}, nil
+	}
+	importMigrateOpenClawAgentIdentities = func(_ *importer.OpenClawInstallation) ([]importer.ImportedAgentIdentity, error) {
+		return []importer.ImportedAgentIdentity{{ID: "main"}, {ID: "lori"}}, nil
+	}
+	parseMigrateOpenClawSessionEvents = func(_ *importer.OpenClawInstallation) ([]importer.OpenClawSessionEvent, error) {
+		return []importer.OpenClawSessionEvent{
+			{AgentSlug: "main", Role: "assistant", Body: "a", CreatedAt: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)},
+			{AgentSlug: "main", Role: "assistant", Body: "b", CreatedAt: time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC)},
+			{AgentSlug: "lori", Role: "assistant", Body: "c", CreatedAt: time.Date(2026, 1, 1, 10, 0, 2, 0, time.UTC)},
+		}, nil
+	}
+	loadMigrateConfig = func() (ottercli.Config, error) {
+		return ottercli.Config{
+			APIBaseURL: "https://swh.otter.camp",
+			Token:      "token-1",
+		}, nil
+	}
+	newMigrateClient = func(cfg ottercli.Config, orgOverride string) (*ottercli.Client, error) {
+		return &ottercli.Client{BaseURL: cfg.APIBaseURL, Token: cfg.Token, OrgID: orgOverride, HTTP: &http.Client{}}, nil
+	}
+
+	agentsImported := 0
+	importMigrateOpenClawAgentsAPI = func(
+		_ *ottercli.Client,
+		input ottercli.OpenClawMigrationImportAgentsInput,
+	) (ottercli.OpenClawMigrationImportAgentsResult, error) {
+		agentsImported = len(input.Identities)
+		return ottercli.OpenClawMigrationImportAgentsResult{Processed: len(input.Identities)}, nil
+	}
+	migrateWhoAmIUserID = func(_ *ottercli.Client) (string, error) {
+		return "00000000-0000-0000-0000-000000000111", nil
+	}
+
+	historyCalls := 0
+	historyBatchIndexes := make([]int, 0, 2)
+	importMigrateOpenClawHistoryBatchAPI = func(
+		_ *ottercli.Client,
+		input ottercli.OpenClawMigrationImportHistoryBatchInput,
+	) (ottercli.OpenClawMigrationImportHistoryBatchResult, error) {
+		historyCalls++
+		historyBatchIndexes = append(historyBatchIndexes, input.Batch.Index)
+		return ottercli.OpenClawMigrationImportHistoryBatchResult{
+			EventsReceived:   len(input.Events),
+			EventsProcessed:  len(input.Events),
+			MessagesInserted: len(input.Events),
+		}, nil
+	}
+
+	runCalled := false
+	runStartPhase := ""
+	runMigrateOpenClawAPI = func(
+		_ *ottercli.Client,
+		input ottercli.OpenClawMigrationRunRequest,
+	) (ottercli.OpenClawMigrationRunResponse, error) {
+		runCalled = true
+		runStartPhase = input.StartPhase
+		return ottercli.OpenClawMigrationRunResponse{Accepted: true}, nil
+	}
+	statusMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationStatus, error) {
+		return ottercli.OpenClawMigrationStatus{Active: false}, nil
+	}
+
+	openMigrateDatabase = func() (*sql.DB, error) {
+		return nil, errors.New("db should not be opened in api mode")
+	}
+	migrateOpenClawHistoryBatchSize = 2
+
+	var out bytes.Buffer
+	err := runMigrateFromOpenClaw(&out, migrateFromOpenClawOptions{
+		OpenClawDir: "/tmp/openclaw",
+		OrgID:       "org-1",
+		Transport:   migrateTransportAPI,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, agentsImported)
+	require.Equal(t, 2, historyCalls)
+	require.Equal(t, []int{1, 2}, historyBatchIndexes)
+	require.True(t, runCalled)
+	require.Equal(t, "memory_extraction", runStartPhase)
+	require.Contains(t, out.String(), "OpenClaw migration summary:")
+}
+
+func TestMigrateFromOpenClawDryRunSkipsWritesForAllTransports(t *testing.T) {
+	originalDetect := detectMigrateOpenClawInstallation
+	originalIdentities := importMigrateOpenClawAgentIdentities
+	originalEvents := parseMigrateOpenClawSessionEvents
+	originalOpenDB := openMigrateDatabase
+	originalRunRunner := runMigrateRunner
+	originalImportAgentsAPI := importMigrateOpenClawAgentsAPI
+	originalImportHistoryAPI := importMigrateOpenClawHistoryBatchAPI
+	originalRunAPI := runMigrateOpenClawAPI
+	t.Cleanup(func() {
+		detectMigrateOpenClawInstallation = originalDetect
+		importMigrateOpenClawAgentIdentities = originalIdentities
+		parseMigrateOpenClawSessionEvents = originalEvents
+		openMigrateDatabase = originalOpenDB
+		runMigrateRunner = originalRunRunner
+		importMigrateOpenClawAgentsAPI = originalImportAgentsAPI
+		importMigrateOpenClawHistoryBatchAPI = originalImportHistoryAPI
+		runMigrateOpenClawAPI = originalRunAPI
+	})
+
+	detectMigrateOpenClawInstallation = func(opts importer.DetectOpenClawOptions) (*importer.OpenClawInstallation, error) {
+		return &importer.OpenClawInstallation{RootDir: opts.HomeDir}, nil
+	}
+	importMigrateOpenClawAgentIdentities = func(_ *importer.OpenClawInstallation) ([]importer.ImportedAgentIdentity, error) {
+		return []importer.ImportedAgentIdentity{{ID: "main"}}, nil
+	}
+	parseMigrateOpenClawSessionEvents = func(_ *importer.OpenClawInstallation) ([]importer.OpenClawSessionEvent, error) {
+		return []importer.OpenClawSessionEvent{
+			{AgentSlug: "main", Role: "assistant", Body: "hello", CreatedAt: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)},
+		}, nil
+	}
+
+	dbWrites := 0
+	openMigrateDatabase = func() (*sql.DB, error) {
+		dbWrites++
+		return nil, nil
+	}
+	runMigrateRunner = func(
+		_ context.Context,
+		_ *importer.OpenClawMigrationRunner,
+		_ importer.RunOpenClawMigrationInput,
+	) (importer.RunOpenClawMigrationResult, error) {
+		dbWrites++
+		return importer.RunOpenClawMigrationResult{}, nil
+	}
+	apiWrites := 0
+	importMigrateOpenClawAgentsAPI = func(
+		_ *ottercli.Client,
+		_ ottercli.OpenClawMigrationImportAgentsInput,
+	) (ottercli.OpenClawMigrationImportAgentsResult, error) {
+		apiWrites++
+		return ottercli.OpenClawMigrationImportAgentsResult{}, nil
+	}
+	importMigrateOpenClawHistoryBatchAPI = func(
+		_ *ottercli.Client,
+		_ ottercli.OpenClawMigrationImportHistoryBatchInput,
+	) (ottercli.OpenClawMigrationImportHistoryBatchResult, error) {
+		apiWrites++
+		return ottercli.OpenClawMigrationImportHistoryBatchResult{}, nil
+	}
+	runMigrateOpenClawAPI = func(
+		_ *ottercli.Client,
+		_ ottercli.OpenClawMigrationRunRequest,
+	) (ottercli.OpenClawMigrationRunResponse, error) {
+		apiWrites++
+		return ottercli.OpenClawMigrationRunResponse{}, nil
+	}
+
+	transports := []migrateTransport{migrateTransportAuto, migrateTransportAPI, migrateTransportDB}
+	for _, transport := range transports {
+		t.Run(string(transport), func(t *testing.T) {
+			var out bytes.Buffer
+			err := runMigrateFromOpenClaw(&out, migrateFromOpenClawOptions{
+				OpenClawDir: "/tmp/openclaw",
+				DryRun:      true,
+				OrgID:       "org-1",
+				Transport:   transport,
+			})
+			require.NoError(t, err)
+			require.Contains(t, out.String(), "Dry run: otter migrate from-openclaw")
+		})
+	}
+
+	require.Equal(t, 0, dbWrites)
+	require.Equal(t, 0, apiWrites)
 }
 
 func TestMigrateFromOpenClawSinceFilter(t *testing.T) {
@@ -279,6 +611,157 @@ func TestMigrateStatusPauseResumeCommands(t *testing.T) {
 	require.Equal(t, 2, updateContextsWithDeadline)
 }
 
+func TestMigrateStatusPauseResumeUseAPIEndpointsInAPITransport(t *testing.T) {
+	originalLoadCfg := loadMigrateConfig
+	originalNewClient := newMigrateClient
+	originalStatusAPI := statusMigrateOpenClawAPI
+	originalPauseAPI := pauseMigrateOpenClawAPI
+	originalResumeAPI := resumeMigrateOpenClawAPI
+	originalOpenDB := openMigrateDatabase
+	t.Cleanup(func() {
+		loadMigrateConfig = originalLoadCfg
+		newMigrateClient = originalNewClient
+		statusMigrateOpenClawAPI = originalStatusAPI
+		pauseMigrateOpenClawAPI = originalPauseAPI
+		resumeMigrateOpenClawAPI = originalResumeAPI
+		openMigrateDatabase = originalOpenDB
+	})
+
+	loadMigrateConfig = func() (ottercli.Config, error) {
+		return ottercli.Config{
+			APIBaseURL: "https://swh.otter.camp",
+			Token:      "token-1",
+			DefaultOrg: "org-1",
+		}, nil
+	}
+	newMigrateClient = func(cfg ottercli.Config, orgOverride string) (*ottercli.Client, error) {
+		return &ottercli.Client{BaseURL: cfg.APIBaseURL, Token: cfg.Token, OrgID: orgOverride, HTTP: &http.Client{}}, nil
+	}
+	statusMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationStatus, error) {
+		total := 10
+		return ottercli.OpenClawMigrationStatus{
+			Active: true,
+			Phases: []ottercli.OpenClawMigrationPhaseStatus{
+				{
+					MigrationType:  "history_backfill",
+					Status:         "running",
+					TotalItems:     &total,
+					ProcessedItems: 3,
+					CurrentLabel:   "processed 3/10 events",
+				},
+			},
+		}, nil
+	}
+	pauseMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationMutationResponse, error) {
+		return ottercli.OpenClawMigrationMutationResponse{
+			Status:        "paused",
+			UpdatedPhases: 2,
+		}, nil
+	}
+	resumeMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationMutationResponse, error) {
+		return ottercli.OpenClawMigrationMutationResponse{
+			Status:        "running",
+			UpdatedPhases: 1,
+		}, nil
+	}
+
+	dbOpened := false
+	openMigrateDatabase = func() (*sql.DB, error) {
+		dbOpened = true
+		return nil, nil
+	}
+
+	var statusOut bytes.Buffer
+	require.NoError(t, runMigrateStatusWithTransport(&statusOut, "org-1", migrateTransportAPI))
+	require.Contains(t, statusOut.String(), "Migration Status:")
+	require.Contains(t, statusOut.String(), "history_backfill: running (3 / 10)")
+
+	var pauseOut bytes.Buffer
+	require.NoError(t, runMigratePauseWithTransport(&pauseOut, "org-1", migrateTransportAPI))
+	require.Contains(t, pauseOut.String(), "Paused 2 running migration phase(s).")
+
+	var resumeOut bytes.Buffer
+	require.NoError(t, runMigrateResumeWithTransport(&resumeOut, "org-1", migrateTransportAPI))
+	require.Contains(t, resumeOut.String(), "Resumed 1 paused migration phase(s).")
+
+	require.False(t, dbOpened, "api transport should not open database")
+}
+
+func TestMigrateStatusPauseResumeUseDBInDBTransport(t *testing.T) {
+	originalOpenDB := openMigrateDatabase
+	originalList := listMigrateProgressByOrg
+	originalUpdate := updateMigrateProgressByOrgStatus
+	originalStatusAPI := statusMigrateOpenClawAPI
+	originalPauseAPI := pauseMigrateOpenClawAPI
+	originalResumeAPI := resumeMigrateOpenClawAPI
+	t.Cleanup(func() {
+		openMigrateDatabase = originalOpenDB
+		listMigrateProgressByOrg = originalList
+		updateMigrateProgressByOrgStatus = originalUpdate
+		statusMigrateOpenClawAPI = originalStatusAPI
+		pauseMigrateOpenClawAPI = originalPauseAPI
+		resumeMigrateOpenClawAPI = originalResumeAPI
+	})
+
+	openMigrateDatabase = func() (*sql.DB, error) {
+		return nil, nil
+	}
+	total := 4
+	listMigrateProgressByOrg = func(ctx context.Context, _ *sql.DB, _ string) ([]store.MigrationProgress, error) {
+		return []store.MigrationProgress{
+			{
+				MigrationType:  "agent_import",
+				Status:         store.MigrationProgressStatusCompleted,
+				TotalItems:     &total,
+				ProcessedItems: 4,
+			},
+		}, nil
+	}
+	updateMigrateProgressByOrgStatus = func(
+		_ context.Context,
+		_ *sql.DB,
+		_ string,
+		fromStatus store.MigrationProgressStatus,
+		toStatus store.MigrationProgressStatus,
+	) (int, error) {
+		if fromStatus == store.MigrationProgressStatusRunning && toStatus == store.MigrationProgressStatusPaused {
+			return 1, nil
+		}
+		if fromStatus == store.MigrationProgressStatusPaused && toStatus == store.MigrationProgressStatusRunning {
+			return 2, nil
+		}
+		return 0, nil
+	}
+
+	apiCalls := 0
+	statusMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationStatus, error) {
+		apiCalls++
+		return ottercli.OpenClawMigrationStatus{}, nil
+	}
+	pauseMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationMutationResponse, error) {
+		apiCalls++
+		return ottercli.OpenClawMigrationMutationResponse{}, nil
+	}
+	resumeMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationMutationResponse, error) {
+		apiCalls++
+		return ottercli.OpenClawMigrationMutationResponse{}, nil
+	}
+
+	var statusOut bytes.Buffer
+	require.NoError(t, runMigrateStatusWithTransport(&statusOut, "org-1", migrateTransportDB))
+	require.Contains(t, statusOut.String(), "agent_import: completed (4 / 4)")
+
+	var pauseOut bytes.Buffer
+	require.NoError(t, runMigratePauseWithTransport(&pauseOut, "org-1", migrateTransportDB))
+	require.Contains(t, pauseOut.String(), "Paused 1 running migration phase(s).")
+
+	var resumeOut bytes.Buffer
+	require.NoError(t, runMigrateResumeWithTransport(&resumeOut, "org-1", migrateTransportDB))
+	require.Contains(t, resumeOut.String(), "Resumed 2 paused migration phase(s).")
+
+	require.Equal(t, 0, apiCalls, "db transport should not call api endpoints")
+}
+
 func TestMigrateFromOpenClawRunUsesExecutionTimeoutContext(t *testing.T) {
 	originalDetect := detectMigrateOpenClawInstallation
 	originalIdentities := importMigrateOpenClawAgentIdentities
@@ -326,6 +809,7 @@ func TestMigrateFromOpenClawRunUsesExecutionTimeoutContext(t *testing.T) {
 		OpenClawDir: "/tmp/openclaw",
 		AgentsOnly:  true,
 		OrgID:       "org-1",
+		Transport:   migrateTransportDB,
 	})
 	require.Error(t, err)
 	require.True(t, runnerContextHasDeadline)
@@ -381,6 +865,7 @@ func TestMigrateFromOpenClawRendersHistoryProgressWithETA(t *testing.T) {
 	err := runMigrateFromOpenClaw(&out, migrateFromOpenClawOptions{
 		OpenClawDir: "/tmp/openclaw",
 		OrgID:       "org-1",
+		Transport:   migrateTransportDB,
 	})
 	require.NoError(t, err)
 	rendered := out.String()

@@ -31,6 +31,7 @@ type initImportFlowOptions struct {
 	ForceStartBridge bool
 	ForceMigrate     bool
 	ProgressPrefix   string
+	MigrateTransport migrateTransport
 }
 
 type initBootstrapClient interface {
@@ -221,6 +222,7 @@ func runHostedInit(opts initOptions, out io.Writer) error {
 		ForceStartBridge: true,
 		ForceMigrate:     true,
 		ProgressPrefix:   "Hosted",
+		MigrateTransport: migrateTransportAPI,
 	}); err != nil {
 		return err
 	}
@@ -492,12 +494,16 @@ func runInitImportAndBridgeWithOptions(
 	if !opts.ForceMigrate {
 		shouldMigrate = promptYesNo(reader, out, "Migrate OpenClaw history now? (y/N): ", false)
 	}
+	transportHint := opts.MigrateTransport
+	if transportHint == "" {
+		transportHint = migrateTransportDB
+	}
 
 	databaseURL, dbErr := resolveInitMigrateDatabaseURL()
 	if shouldMigrate {
 		if dbErr != nil {
 			fmt.Fprintf(out, "Skipping automatic migration: %v\n", dbErr)
-			fmt.Fprintf(out, "Run this command later to migrate OpenClaw data:\n  %s\n", renderInitMigrationCommand("", cfg.DefaultOrg, installation.RootDir))
+			fmt.Fprintf(out, "Run this command later to migrate OpenClaw data:\n  %s\n", renderInitMigrationCommand("", cfg.DefaultOrg, installation.RootDir, transportHint))
 			return nil
 		}
 		fmt.Fprintln(out, "Migration progress: preparing OpenClaw migration input.")
@@ -505,16 +511,17 @@ func runInitImportAndBridgeWithOptions(
 		if err := runInitOpenClawMigration(out, migrateFromOpenClawOptions{
 			OpenClawDir: installation.RootDir,
 			OrgID:       strings.TrimSpace(cfg.DefaultOrg),
+			Transport:   transportHint,
 		}); err != nil {
 			fmt.Fprintf(out, "Migration progress: failed (%v)\n", err)
-			fmt.Fprintf(out, "Retry with:\n  %s\n", renderInitMigrationCommand(databaseURL, cfg.DefaultOrg, installation.RootDir))
+			fmt.Fprintf(out, "Retry with:\n  %s\n", renderInitMigrationCommand(databaseURL, cfg.DefaultOrg, installation.RootDir, transportHint))
 			return nil
 		}
 		fmt.Fprintln(out, "Migration progress: complete.")
 		return nil
 	}
 
-	fmt.Fprintf(out, "OpenClaw migration skipped. Run later with:\n  %s\n", renderInitMigrationCommand(databaseURL, cfg.DefaultOrg, installation.RootDir))
+	fmt.Fprintf(out, "OpenClaw migration skipped. Run later with:\n  %s\n", renderInitMigrationCommand(databaseURL, cfg.DefaultOrg, installation.RootDir, transportHint))
 	return nil
 }
 
@@ -897,13 +904,18 @@ func normalizeInitAgentSlot(value string) string {
 	return normalized
 }
 
-func renderInitMigrationCommand(databaseURL, orgID, openClawDir string) string {
+func renderInitMigrationCommand(databaseURL, orgID, openClawDir string, transport migrateTransport) string {
 	databaseURL = strings.TrimSpace(databaseURL)
-	if databaseURL == "" {
-		databaseURL = "<database-url>"
+	command := "otter migrate from-openclaw"
+	switch transport {
+	case migrateTransportAPI:
+		command += " --transport api"
+	default:
+		if databaseURL == "" {
+			databaseURL = "<database-url>"
+		}
+		command = fmt.Sprintf("DATABASE_URL=%q %s", databaseURL, command)
 	}
-
-	command := fmt.Sprintf("DATABASE_URL=%q otter migrate from-openclaw", databaseURL)
 	if trimmedOrg := strings.TrimSpace(orgID); trimmedOrg != "" {
 		command += fmt.Sprintf(" --org %q", trimmedOrg)
 	}
