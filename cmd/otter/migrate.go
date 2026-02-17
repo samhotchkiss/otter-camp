@@ -56,6 +56,16 @@ var statusMigrateOpenClawAPI = func(
 ) (ottercli.OpenClawMigrationStatus, error) {
 	return client.GetOpenClawMigrationStatus()
 }
+var pauseMigrateOpenClawAPI = func(
+	client *ottercli.Client,
+) (ottercli.OpenClawMigrationMutationResponse, error) {
+	return client.PauseOpenClawMigration()
+}
+var resumeMigrateOpenClawAPI = func(
+	client *ottercli.Client,
+) (ottercli.OpenClawMigrationMutationResponse, error) {
+	return client.ResumeOpenClawMigration()
+}
 var runMigrateRunner = func(
 	ctx context.Context,
 	runner *importer.OpenClawMigrationRunner,
@@ -143,19 +153,19 @@ func handleMigrate(args []string) {
 		if err != nil {
 			die(err.Error())
 		}
-		dieIf(runMigrateStatus(os.Stdout, opts.OrgID))
+		dieIf(runMigrateStatusWithTransport(os.Stdout, opts.OrgID, opts.Transport))
 	case "pause":
 		opts, err := parseMigrateOrgOnlyOptions("migrate pause", args[1:])
 		if err != nil {
 			die(err.Error())
 		}
-		dieIf(runMigratePause(os.Stdout, opts.OrgID))
+		dieIf(runMigratePauseWithTransport(os.Stdout, opts.OrgID, opts.Transport))
 	case "resume":
 		opts, err := parseMigrateOrgOnlyOptions("migrate resume", args[1:])
 		if err != nil {
 			die(err.Error())
 		}
-		dieIf(runMigrateResume(os.Stdout, opts.OrgID))
+		dieIf(runMigrateResumeWithTransport(os.Stdout, opts.OrgID, opts.Transport))
 	default:
 		fmt.Println("usage: otter migrate <from-openclaw|status|pause|resume> ...")
 		os.Exit(1)
@@ -753,10 +763,25 @@ func resolveMigrateOrgID(flagOrgID string) (string, error) {
 }
 
 func runMigrateStatus(out io.Writer, orgOverride string) error {
+	return runMigrateStatusWithTransport(out, orgOverride, migrateTransportDB)
+}
+
+func runMigrateStatusWithTransport(out io.Writer, orgOverride string, requested migrateTransport) error {
 	orgID, err := resolveMigrateOrgID(orgOverride)
 	if err != nil {
 		return err
 	}
+	transport, err := resolveMigrateTransportForExecution(requested)
+	if err != nil {
+		return err
+	}
+	if transport == migrateTransportAPI {
+		return runMigrateStatusAPI(out, orgID)
+	}
+	return runMigrateStatusDB(out, orgID)
+}
+
+func runMigrateStatusDB(out io.Writer, orgID string) error {
 	db, err := openMigrateDatabase()
 	if err != nil {
 		return err
@@ -793,10 +818,25 @@ func runMigrateStatus(out io.Writer, orgOverride string) error {
 }
 
 func runMigratePause(out io.Writer, orgOverride string) error {
+	return runMigratePauseWithTransport(out, orgOverride, migrateTransportDB)
+}
+
+func runMigratePauseWithTransport(out io.Writer, orgOverride string, requested migrateTransport) error {
 	orgID, err := resolveMigrateOrgID(orgOverride)
 	if err != nil {
 		return err
 	}
+	transport, err := resolveMigrateTransportForExecution(requested)
+	if err != nil {
+		return err
+	}
+	if transport == migrateTransportAPI {
+		return runMigratePauseAPI(out, orgID)
+	}
+	return runMigratePauseDB(out, orgID)
+}
+
+func runMigratePauseDB(out io.Writer, orgID string) error {
 	db, err := openMigrateDatabase()
 	if err != nil {
 		return err
@@ -823,10 +863,25 @@ func runMigratePause(out io.Writer, orgOverride string) error {
 }
 
 func runMigrateResume(out io.Writer, orgOverride string) error {
+	return runMigrateResumeWithTransport(out, orgOverride, migrateTransportDB)
+}
+
+func runMigrateResumeWithTransport(out io.Writer, orgOverride string, requested migrateTransport) error {
 	orgID, err := resolveMigrateOrgID(orgOverride)
 	if err != nil {
 		return err
 	}
+	transport, err := resolveMigrateTransportForExecution(requested)
+	if err != nil {
+		return err
+	}
+	if transport == migrateTransportAPI {
+		return runMigrateResumeAPI(out, orgID)
+	}
+	return runMigrateResumeDB(out, orgID)
+}
+
+func runMigrateResumeDB(out io.Writer, orgID string) error {
 	db, err := openMigrateDatabase()
 	if err != nil {
 		return err
@@ -849,6 +904,72 @@ func runMigrateResume(out io.Writer, orgOverride string) error {
 		return err
 	}
 	fmt.Fprintf(out, "Resumed %d paused migration phase(s).\n", updated)
+	return nil
+}
+
+func runMigrateStatusAPI(out io.Writer, orgID string) error {
+	cfg, err := loadMigrateConfig()
+	if err != nil {
+		return err
+	}
+	client, err := newMigrateClient(cfg, orgID)
+	if err != nil {
+		return err
+	}
+	status, err := statusMigrateOpenClawAPI(client)
+	if err != nil {
+		return err
+	}
+	if len(status.Phases) == 0 {
+		fmt.Fprintln(out, "No migration progress found.")
+		return nil
+	}
+	fmt.Fprintln(out, "Migration Status:")
+	for _, row := range status.Phases {
+		progress := fmt.Sprintf("%d", row.ProcessedItems)
+		if row.TotalItems != nil && *row.TotalItems > 0 {
+			progress = fmt.Sprintf("%d / %d", row.ProcessedItems, *row.TotalItems)
+		}
+		line := fmt.Sprintf("  %s: %s (%s)", row.MigrationType, row.Status, progress)
+		if strings.TrimSpace(row.CurrentLabel) != "" {
+			line += " - " + strings.TrimSpace(row.CurrentLabel)
+		}
+		fmt.Fprintln(out, line)
+	}
+	return nil
+}
+
+func runMigratePauseAPI(out io.Writer, orgID string) error {
+	cfg, err := loadMigrateConfig()
+	if err != nil {
+		return err
+	}
+	client, err := newMigrateClient(cfg, orgID)
+	if err != nil {
+		return err
+	}
+	response, err := pauseMigrateOpenClawAPI(client)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Paused %d running migration phase(s).\n", response.UpdatedPhases)
+	return nil
+}
+
+func runMigrateResumeAPI(out io.Writer, orgID string) error {
+	cfg, err := loadMigrateConfig()
+	if err != nil {
+		return err
+	}
+	client, err := newMigrateClient(cfg, orgID)
+	if err != nil {
+		return err
+	}
+	response, err := resumeMigrateOpenClawAPI(client)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Resumed %d paused migration phase(s).\n", response.UpdatedPhases)
 	return nil
 }
 

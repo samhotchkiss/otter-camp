@@ -611,6 +611,157 @@ func TestMigrateStatusPauseResumeCommands(t *testing.T) {
 	require.Equal(t, 2, updateContextsWithDeadline)
 }
 
+func TestMigrateStatusPauseResumeUseAPIEndpointsInAPITransport(t *testing.T) {
+	originalLoadCfg := loadMigrateConfig
+	originalNewClient := newMigrateClient
+	originalStatusAPI := statusMigrateOpenClawAPI
+	originalPauseAPI := pauseMigrateOpenClawAPI
+	originalResumeAPI := resumeMigrateOpenClawAPI
+	originalOpenDB := openMigrateDatabase
+	t.Cleanup(func() {
+		loadMigrateConfig = originalLoadCfg
+		newMigrateClient = originalNewClient
+		statusMigrateOpenClawAPI = originalStatusAPI
+		pauseMigrateOpenClawAPI = originalPauseAPI
+		resumeMigrateOpenClawAPI = originalResumeAPI
+		openMigrateDatabase = originalOpenDB
+	})
+
+	loadMigrateConfig = func() (ottercli.Config, error) {
+		return ottercli.Config{
+			APIBaseURL: "https://swh.otter.camp",
+			Token:      "token-1",
+			DefaultOrg: "org-1",
+		}, nil
+	}
+	newMigrateClient = func(cfg ottercli.Config, orgOverride string) (*ottercli.Client, error) {
+		return &ottercli.Client{BaseURL: cfg.APIBaseURL, Token: cfg.Token, OrgID: orgOverride, HTTP: &http.Client{}}, nil
+	}
+	statusMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationStatus, error) {
+		total := 10
+		return ottercli.OpenClawMigrationStatus{
+			Active: true,
+			Phases: []ottercli.OpenClawMigrationPhaseStatus{
+				{
+					MigrationType:  "history_backfill",
+					Status:         "running",
+					TotalItems:     &total,
+					ProcessedItems: 3,
+					CurrentLabel:   "processed 3/10 events",
+				},
+			},
+		}, nil
+	}
+	pauseMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationMutationResponse, error) {
+		return ottercli.OpenClawMigrationMutationResponse{
+			Status:        "paused",
+			UpdatedPhases: 2,
+		}, nil
+	}
+	resumeMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationMutationResponse, error) {
+		return ottercli.OpenClawMigrationMutationResponse{
+			Status:        "running",
+			UpdatedPhases: 1,
+		}, nil
+	}
+
+	dbOpened := false
+	openMigrateDatabase = func() (*sql.DB, error) {
+		dbOpened = true
+		return nil, nil
+	}
+
+	var statusOut bytes.Buffer
+	require.NoError(t, runMigrateStatusWithTransport(&statusOut, "org-1", migrateTransportAPI))
+	require.Contains(t, statusOut.String(), "Migration Status:")
+	require.Contains(t, statusOut.String(), "history_backfill: running (3 / 10)")
+
+	var pauseOut bytes.Buffer
+	require.NoError(t, runMigratePauseWithTransport(&pauseOut, "org-1", migrateTransportAPI))
+	require.Contains(t, pauseOut.String(), "Paused 2 running migration phase(s).")
+
+	var resumeOut bytes.Buffer
+	require.NoError(t, runMigrateResumeWithTransport(&resumeOut, "org-1", migrateTransportAPI))
+	require.Contains(t, resumeOut.String(), "Resumed 1 paused migration phase(s).")
+
+	require.False(t, dbOpened, "api transport should not open database")
+}
+
+func TestMigrateStatusPauseResumeUseDBInDBTransport(t *testing.T) {
+	originalOpenDB := openMigrateDatabase
+	originalList := listMigrateProgressByOrg
+	originalUpdate := updateMigrateProgressByOrgStatus
+	originalStatusAPI := statusMigrateOpenClawAPI
+	originalPauseAPI := pauseMigrateOpenClawAPI
+	originalResumeAPI := resumeMigrateOpenClawAPI
+	t.Cleanup(func() {
+		openMigrateDatabase = originalOpenDB
+		listMigrateProgressByOrg = originalList
+		updateMigrateProgressByOrgStatus = originalUpdate
+		statusMigrateOpenClawAPI = originalStatusAPI
+		pauseMigrateOpenClawAPI = originalPauseAPI
+		resumeMigrateOpenClawAPI = originalResumeAPI
+	})
+
+	openMigrateDatabase = func() (*sql.DB, error) {
+		return nil, nil
+	}
+	total := 4
+	listMigrateProgressByOrg = func(ctx context.Context, _ *sql.DB, _ string) ([]store.MigrationProgress, error) {
+		return []store.MigrationProgress{
+			{
+				MigrationType:  "agent_import",
+				Status:         store.MigrationProgressStatusCompleted,
+				TotalItems:     &total,
+				ProcessedItems: 4,
+			},
+		}, nil
+	}
+	updateMigrateProgressByOrgStatus = func(
+		_ context.Context,
+		_ *sql.DB,
+		_ string,
+		fromStatus store.MigrationProgressStatus,
+		toStatus store.MigrationProgressStatus,
+	) (int, error) {
+		if fromStatus == store.MigrationProgressStatusRunning && toStatus == store.MigrationProgressStatusPaused {
+			return 1, nil
+		}
+		if fromStatus == store.MigrationProgressStatusPaused && toStatus == store.MigrationProgressStatusRunning {
+			return 2, nil
+		}
+		return 0, nil
+	}
+
+	apiCalls := 0
+	statusMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationStatus, error) {
+		apiCalls++
+		return ottercli.OpenClawMigrationStatus{}, nil
+	}
+	pauseMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationMutationResponse, error) {
+		apiCalls++
+		return ottercli.OpenClawMigrationMutationResponse{}, nil
+	}
+	resumeMigrateOpenClawAPI = func(_ *ottercli.Client) (ottercli.OpenClawMigrationMutationResponse, error) {
+		apiCalls++
+		return ottercli.OpenClawMigrationMutationResponse{}, nil
+	}
+
+	var statusOut bytes.Buffer
+	require.NoError(t, runMigrateStatusWithTransport(&statusOut, "org-1", migrateTransportDB))
+	require.Contains(t, statusOut.String(), "agent_import: completed (4 / 4)")
+
+	var pauseOut bytes.Buffer
+	require.NoError(t, runMigratePauseWithTransport(&pauseOut, "org-1", migrateTransportDB))
+	require.Contains(t, pauseOut.String(), "Paused 1 running migration phase(s).")
+
+	var resumeOut bytes.Buffer
+	require.NoError(t, runMigrateResumeWithTransport(&resumeOut, "org-1", migrateTransportDB))
+	require.Contains(t, resumeOut.String(), "Resumed 2 paused migration phase(s).")
+
+	require.Equal(t, 0, apiCalls, "db transport should not call api endpoints")
+}
+
 func TestMigrateFromOpenClawRunUsesExecutionTimeoutContext(t *testing.T) {
 	originalDetect := detectMigrateOpenClawInstallation
 	originalIdentities := importMigrateOpenClawAgentIdentities
