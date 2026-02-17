@@ -603,7 +603,9 @@ func (c *Client) FindProject(query string) (Project, error) {
 }
 
 type whoamiResponse struct {
-	Valid bool `json:"valid"`
+	Valid   bool   `json:"valid"`
+	OrgID   string `json:"org_id"`
+	OrgSlug string `json:"org_slug"`
 	User  struct {
 		ID    string `json:"id"`
 		Name  string `json:"name"`

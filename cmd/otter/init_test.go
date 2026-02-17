@@ -119,6 +119,7 @@ func TestParseInitOptionsHostedFlags(t *testing.T) {
 
 func TestInitHostedWithFlagsPersistsConfig(t *testing.T) {
 	state := stubInitDeps(t, ottercli.Config{}, &fakeInitClient{}, nil)
+	state.hostedValidateOrg = "org-hosted"
 
 	var out bytes.Buffer
 	err := runInitCommand(
@@ -138,6 +139,9 @@ func TestInitHostedWithFlagsPersistsConfig(t *testing.T) {
 	if state.savedCfg.APIBaseURL != "https://swh.otter.camp/api" {
 		t.Fatalf("saved api base = %q, want https://swh.otter.camp/api", state.savedCfg.APIBaseURL)
 	}
+	if state.savedCfg.DefaultOrg != "org-hosted" {
+		t.Fatalf("saved default org = %q, want org-hosted", state.savedCfg.DefaultOrg)
+	}
 	if !strings.Contains(out.String(), "Hosted setup configured.") {
 		t.Fatalf("expected hosted setup output, got %q", out.String())
 	}
@@ -156,6 +160,43 @@ func TestInitHostedRequiresTokenAndURLPair(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--mode hosted requires both --token and --url") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitHostedInvalidTokenReturnsClearError(t *testing.T) {
+	state := stubInitDeps(t, ottercli.Config{}, &fakeInitClient{}, nil)
+	state.hostedValidateErr = errors.New("401 unauthorized")
+
+	err := runInitCommand(
+		[]string{"--mode", "hosted", "--token", "oc_sess_hosted", "--url", "https://swh.otter.camp"},
+		strings.NewReader(""),
+		&bytes.Buffer{},
+	)
+	if err == nil {
+		t.Fatalf("expected hosted token validation error")
+	}
+	if !strings.Contains(err.Error(), "401 unauthorized") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state.saveCalled {
+		t.Fatalf("config should not be saved when token validation fails")
+	}
+}
+
+func TestInitHostedWhoamiPersistsOrgContext(t *testing.T) {
+	state := stubInitDeps(t, ottercli.Config{}, &fakeInitClient{}, nil)
+	state.hostedValidateOrg = "org-from-whoami"
+
+	err := runInitCommand(
+		[]string{"--mode", "hosted", "--token", "oc_sess_hosted", "--url", "https://swh.otter.camp"},
+		strings.NewReader(""),
+		&bytes.Buffer{},
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	if state.savedCfg.DefaultOrg != "org-from-whoami" {
+		t.Fatalf("saved default org = %q, want org-from-whoami", state.savedCfg.DefaultOrg)
 	}
 }
 
@@ -532,6 +573,9 @@ type initStubState struct {
 	savedCfg   ottercli.Config
 	saveCalled bool
 
+	hostedValidateOrg string
+	hostedValidateErr error
+
 	detectInstall *importer.OpenClawInstallation
 	detectErr     error
 	ensureCalled  bool
@@ -563,6 +607,7 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 	origLoad := loadInitConfig
 	origSave := saveInitConfig
 	origNewClient := newInitClient
+	origHostedValidate := validateHostedInitToken
 	origDetect := detectInitOpenClaw
 	origEnsure := ensureInitOpenClawRequiredAgents
 	origImport := importInitOpenClawIdentities
@@ -582,6 +627,12 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 	newInitClient = func(apiBase string) (initBootstrapClient, error) {
 		state.gotAPIBase = apiBase
 		return client, nil
+	}
+	validateHostedInitToken = func(apiBaseURL, token string) (string, error) {
+		if state.hostedValidateErr != nil {
+			return "", state.hostedValidateErr
+		}
+		return state.hostedValidateOrg, nil
 	}
 	detectInitOpenClaw = func() (*importer.OpenClawInstallation, error) {
 		if state.detectErr != nil {
@@ -626,6 +677,7 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 		loadInitConfig = origLoad
 		saveInitConfig = origSave
 		newInitClient = origNewClient
+		validateHostedInitToken = origHostedValidate
 		detectInitOpenClaw = origDetect
 		ensureInitOpenClawRequiredAgents = origEnsure
 		importInitOpenClawIdentities = origImport

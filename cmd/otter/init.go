@@ -43,6 +43,23 @@ var (
 		}
 		return client, nil
 	}
+	validateHostedInitToken = func(apiBaseURL, token string) (string, error) {
+		client, err := ottercli.NewClient(ottercli.Config{
+			APIBaseURL: strings.TrimSpace(apiBaseURL),
+			Token:      strings.TrimSpace(token),
+		}, "")
+		if err != nil {
+			return "", err
+		}
+		resp, err := client.WhoAmI()
+		if err != nil {
+			return "", fmt.Errorf("invalid or expired token: %w", err)
+		}
+		if !resp.Valid {
+			return "", errors.New("invalid or expired token")
+		}
+		return initFirstNonEmpty(strings.TrimSpace(resp.OrgID), strings.TrimSpace(resp.OrgSlug)), nil
+	}
 
 	detectInitOpenClaw = func() (*importer.OpenClawInstallation, error) {
 		return importer.DetectOpenClawInstallation(importer.DetectOpenClawOptions{})
@@ -142,12 +159,20 @@ func runHostedInit(opts initOptions, out io.Writer) error {
 		return err
 	}
 
+	defaultOrg, err := validateHostedInitToken(apiBaseURL, token)
+	if err != nil {
+		return err
+	}
+
 	cfg, err := loadInitConfig()
 	if err != nil {
 		return err
 	}
 	cfg.APIBaseURL = apiBaseURL
 	cfg.Token = token
+	if defaultOrg != "" {
+		cfg.DefaultOrg = defaultOrg
+	}
 	if err := saveInitConfig(cfg); err != nil {
 		return err
 	}
