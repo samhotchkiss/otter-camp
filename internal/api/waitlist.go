@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,8 +23,22 @@ type WaitlistResponse struct {
 
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
-// HandleWaitlist handles POST /api/waitlist
-func HandleWaitlist(w http.ResponseWriter, r *http.Request) {
+type WaitlistHandler struct {
+	DB               *sql.DB
+	now              func() time.Time
+	sendNotification func(signupEmail, timestamp string)
+}
+
+func NewWaitlistHandler(db *sql.DB) *WaitlistHandler {
+	return &WaitlistHandler{
+		DB:               db,
+		now:              time.Now,
+		sendNotification: sendNotificationEmail,
+	}
+}
+
+// Handle handles POST /api/waitlist.
+func (h *WaitlistHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -47,18 +62,41 @@ func HandleWaitlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Store in Postgres once DB is wired up
-	// For now, just log and notify
-	timestamp := time.Now().UTC().Format(time.RFC3339)
+	if h.DB == nil {
+		sendJSON(w, http.StatusServiceUnavailable, WaitlistResponse{
+			Success: false,
+			Message: "Waitlist is temporarily unavailable",
+		})
+		return
+	}
+
+	if _, err := h.DB.Exec(
+		`INSERT INTO waitlist (email) VALUES ($1) ON CONFLICT (email) DO NOTHING`,
+		email,
+	); err != nil {
+		sendJSON(w, http.StatusInternalServerError, WaitlistResponse{
+			Success: false,
+			Message: "Unable to save waitlist signup",
+		})
+		return
+	}
+
+	timestamp := h.now().UTC().Format(time.RFC3339)
 	fmt.Printf("🦦 Waitlist signup: %s at %s\n", email, timestamp)
 
-	// Send notification email to Sam
-	go sendNotificationEmail(email, timestamp)
+	if h.sendNotification != nil {
+		go h.sendNotification(email, timestamp)
+	}
 
 	sendJSON(w, http.StatusOK, WaitlistResponse{
 		Success: true,
 		Message: "You're on the list! We'll be in touch soon.",
 	})
+}
+
+// HandleWaitlist handles POST /api/waitlist.
+func HandleWaitlist(w http.ResponseWriter, r *http.Request) {
+	NewWaitlistHandler(nil).Handle(w, r)
 }
 
 func sendNotificationEmail(signupEmail, timestamp string) {
