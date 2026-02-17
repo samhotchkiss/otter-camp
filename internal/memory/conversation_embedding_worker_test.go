@@ -196,6 +196,44 @@ func TestConversationEmbeddingWorkerDetectsVectorCountMismatch(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "returned 0 vectors for 1 rows")
 }
+
+func TestConversationEmbeddingWorkerExponentialBackoffOnFailures(t *testing.T) {
+	queue := newFakeConversationEmbeddingQueue(
+		[]store.PendingChatMessageEmbedding{{ID: "chat-1", Body: "chat body"}},
+		nil,
+	)
+	embedder := &fakeConversationEmbedder{vector: []float64{0.1, 0.2}, failUntil: 2}
+
+	worker := NewConversationEmbeddingWorker(queue, embedder, ConversationEmbeddingWorkerConfig{
+		BatchSize:    10,
+		PollInterval: 10 * time.Millisecond,
+	})
+	worker.Logf = nil
+
+	sleeps := make([]time.Duration, 0, 3)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	worker.sleep = func(_ context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		if len(sleeps) >= 3 {
+			cancel()
+			return context.Canceled
+		}
+		return nil
+	}
+
+	worker.Start(ctx)
+	require.Equal(t, []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 10 * time.Millisecond}, sleeps)
+}
+
+func TestConversationEmbeddingWorkerBackoffResetsAfterSuccess(t *testing.T) {
+	require.Equal(t, 1*time.Second, conversationEmbeddingFailureBackoff(1*time.Second, 1))
+	require.Equal(t, 2*time.Second, conversationEmbeddingFailureBackoff(1*time.Second, 2))
+	require.Equal(t, 4*time.Second, conversationEmbeddingFailureBackoff(1*time.Second, 3))
+	require.Equal(t, 5*time.Minute, conversationEmbeddingFailureBackoff(90*time.Second, 3))
+	require.Equal(t, 5*time.Minute, conversationEmbeddingFailureBackoff(5*time.Minute, 8))
+}
+
 const embeddingWorkerTestDBURLKey = "OTTER_TEST_DATABASE_URL"
 
 func setupEmbeddingWorkerTestDatabase(t *testing.T) *sql.DB {

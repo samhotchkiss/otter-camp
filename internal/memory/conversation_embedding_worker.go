@@ -12,6 +12,7 @@ import (
 const (
 	defaultConversationEmbeddingBatchSize    = 50
 	defaultConversationEmbeddingPollInterval = 5 * time.Second
+	maxConversationEmbeddingBackoff          = 5 * time.Minute
 )
 
 type ConversationEmbeddingQueue interface {
@@ -32,6 +33,7 @@ type ConversationEmbeddingWorker struct {
 	BatchSize    int
 	PollInterval time.Duration
 	Logf         func(format string, args ...any)
+	sleep        func(ctx context.Context, duration time.Duration) error
 }
 
 func NewConversationEmbeddingWorker(
@@ -54,6 +56,7 @@ func NewConversationEmbeddingWorker(
 		BatchSize:    batchSize,
 		PollInterval: pollInterval,
 		Logf:         log.Printf,
+		sleep:        sleepWithContext,
 	}
 }
 
@@ -61,6 +64,7 @@ func (w *ConversationEmbeddingWorker) Start(ctx context.Context) {
 	if w == nil {
 		return
 	}
+	consecutiveFailures := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return
@@ -68,14 +72,27 @@ func (w *ConversationEmbeddingWorker) Start(ctx context.Context) {
 
 		processed, err := w.RunOnce(ctx)
 		if err != nil {
+			consecutiveFailures += 1
 			if w.Logf != nil {
 				w.Logf("conversation embedding worker run failed: %v", err)
 			}
+		} else {
+			consecutiveFailures = 0
 		}
-		if processed > 0 {
+		if err == nil && processed > 0 {
 			continue
 		}
-		if err := sleepWithContext(ctx, w.PollInterval); err != nil {
+
+		delay := w.PollInterval
+		if err != nil {
+			delay = conversationEmbeddingFailureBackoff(w.PollInterval, consecutiveFailures)
+		}
+
+		sleeper := w.sleep
+		if sleeper == nil {
+			sleeper = sleepWithContext
+		}
+		if err := sleeper(ctx, delay); err != nil {
 			return
 		}
 	}
@@ -149,4 +166,31 @@ func (w *ConversationEmbeddingWorker) RunOnce(ctx context.Context) (int, error) 
 	}
 
 	return processed, nil
+}
+
+func conversationEmbeddingFailureBackoff(base time.Duration, consecutiveFailures int) time.Duration {
+	if base <= 0 {
+		base = defaultConversationEmbeddingPollInterval
+	}
+	if base > maxConversationEmbeddingBackoff {
+		base = maxConversationEmbeddingBackoff
+	}
+	if consecutiveFailures <= 1 {
+		return base
+	}
+
+	delay := base
+	for i := 1; i < consecutiveFailures; i += 1 {
+		if delay >= maxConversationEmbeddingBackoff {
+			return maxConversationEmbeddingBackoff
+		}
+		if delay > maxConversationEmbeddingBackoff/2 {
+			return maxConversationEmbeddingBackoff
+		}
+		delay *= 2
+	}
+	if delay > maxConversationEmbeddingBackoff {
+		return maxConversationEmbeddingBackoff
+	}
+	return delay
 }
