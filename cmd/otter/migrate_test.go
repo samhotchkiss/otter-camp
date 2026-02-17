@@ -762,6 +762,111 @@ func TestMigrateStatusPauseResumeUseDBInDBTransport(t *testing.T) {
 	require.Equal(t, 0, apiCalls, "db transport should not call api endpoints")
 }
 
+func TestMigrateFromOpenClawResetCallsAPIEndpoint(t *testing.T) {
+	originalLoadCfg := loadMigrateConfig
+	originalNewClient := newMigrateClient
+	originalResetAPI := resetMigrateOpenClawAPI
+	originalOpenDB := openMigrateDatabase
+	t.Cleanup(func() {
+		loadMigrateConfig = originalLoadCfg
+		newMigrateClient = originalNewClient
+		resetMigrateOpenClawAPI = originalResetAPI
+		openMigrateDatabase = originalOpenDB
+	})
+
+	loadMigrateConfig = func() (ottercli.Config, error) {
+		return ottercli.Config{
+			APIBaseURL: "https://swh.otter.camp",
+			Token:      "token-1",
+			DefaultOrg: "org-1",
+		}, nil
+	}
+	newMigrateClient = func(cfg ottercli.Config, orgOverride string) (*ottercli.Client, error) {
+		return &ottercli.Client{BaseURL: cfg.APIBaseURL, Token: cfg.Token, OrgID: orgOverride, HTTP: &http.Client{}}, nil
+	}
+
+	resetCalled := false
+	resetConfirm := ""
+	resetMigrateOpenClawAPI = func(
+		_ *ottercli.Client,
+		input ottercli.OpenClawMigrationResetRequest,
+	) (ottercli.OpenClawMigrationResetResponse, error) {
+		resetCalled = true
+		resetConfirm = input.Confirm
+		return ottercli.OpenClawMigrationResetResponse{
+			Status:              "reset",
+			PausedPhases:        2,
+			ProgressRowsDeleted: 5,
+			Deleted: map[string]int{
+				"chat_messages": 3,
+				"rooms":         1,
+			},
+			TotalDeleted: 4,
+		}, nil
+	}
+
+	dbOpened := false
+	openMigrateDatabase = func() (*sql.DB, error) {
+		dbOpened = true
+		return nil, nil
+	}
+
+	var out bytes.Buffer
+	err := runMigrateFromOpenClawReset(&out, migrateFromOpenClawResetOptions{
+		Confirm:   true,
+		OrgID:     "org-1",
+		Transport: migrateTransportAPI,
+	})
+	require.NoError(t, err)
+	require.True(t, resetCalled)
+	require.Equal(t, migrateOpenClawResetConfirmToken, resetConfirm)
+	require.False(t, dbOpened, "reset api transport must not open database")
+
+	rendered := out.String()
+	require.Contains(t, rendered, "OpenClaw migration reset complete.")
+	require.Contains(t, rendered, "paused_phases=2")
+	require.Contains(t, rendered, "progress_rows_deleted=5")
+	require.Contains(t, rendered, "deleted.chat_messages=3")
+	require.Contains(t, rendered, "total_deleted=4")
+}
+
+func TestMigrateFromOpenClawResetRequiresConfirmFlag(t *testing.T) {
+	originalResetAPI := resetMigrateOpenClawAPI
+	t.Cleanup(func() {
+		resetMigrateOpenClawAPI = originalResetAPI
+	})
+
+	resetCalled := false
+	resetMigrateOpenClawAPI = func(
+		_ *ottercli.Client,
+		_ ottercli.OpenClawMigrationResetRequest,
+	) (ottercli.OpenClawMigrationResetResponse, error) {
+		resetCalled = true
+		return ottercli.OpenClawMigrationResetResponse{}, nil
+	}
+
+	var out bytes.Buffer
+	err := runMigrateFromOpenClawReset(&out, migrateFromOpenClawResetOptions{
+		Confirm:   false,
+		OrgID:     "org-1",
+		Transport: migrateTransportAPI,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--confirm is required")
+	require.False(t, resetCalled)
+}
+
+func TestMigrateFromOpenClawResetRejectsDBTransport(t *testing.T) {
+	var out bytes.Buffer
+	err := runMigrateFromOpenClawReset(&out, migrateFromOpenClawResetOptions{
+		Confirm:   true,
+		OrgID:     "org-1",
+		Transport: migrateTransportDB,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "only available with api transport")
+}
+
 func TestMigrateFromOpenClawRunUsesExecutionTimeoutContext(t *testing.T) {
 	originalDetect := detectMigrateOpenClawInstallation
 	originalIdentities := importMigrateOpenClawAgentIdentities

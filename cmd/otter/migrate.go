@@ -66,6 +66,12 @@ var resumeMigrateOpenClawAPI = func(
 ) (ottercli.OpenClawMigrationMutationResponse, error) {
 	return client.ResumeOpenClawMigration()
 }
+var resetMigrateOpenClawAPI = func(
+	client *ottercli.Client,
+	input ottercli.OpenClawMigrationResetRequest,
+) (ottercli.OpenClawMigrationResetResponse, error) {
+	return client.ResetOpenClawMigration(input)
+}
 var runMigrateRunner = func(
 	ctx context.Context,
 	runner *importer.OpenClawMigrationRunner,
@@ -113,9 +119,17 @@ const (
 	migrateTransportAuto migrateTransport = "auto"
 	migrateTransportAPI  migrateTransport = "api"
 	migrateTransportDB   migrateTransport = "db"
+
+	migrateOpenClawResetConfirmToken = "RESET_OPENCLAW_MIGRATION"
 )
 
 type migrateOrgOnlyOptions struct {
+	OrgID     string
+	Transport migrateTransport
+}
+
+type migrateFromOpenClawResetOptions struct {
+	Confirm   bool
 	OrgID     string
 	Transport migrateTransport
 }
@@ -136,10 +150,20 @@ func handleMigrate(args []string) {
 
 	switch args[0] {
 	case "from-openclaw":
-		// Sub-subcommand: "from-openclaw cron" imports cron jobs into agent_jobs
-		if len(args) > 1 && args[1] == "cron" {
-			handleMigrateFromOpenClawCron(args[2:])
-			return
+		if len(args) > 1 {
+			switch args[1] {
+			case "cron":
+				// Sub-subcommand: "from-openclaw cron" imports cron jobs into agent_jobs
+				handleMigrateFromOpenClawCron(args[2:])
+				return
+			case "reset":
+				resetOpts, err := parseMigrateFromOpenClawResetOptions(args[2:])
+				if err != nil {
+					die(err.Error())
+				}
+				dieIf(runMigrateFromOpenClawReset(os.Stdout, resetOpts))
+				return
+			}
 		}
 		opts, err := parseMigrateFromOpenClawOptions(args[1:])
 		if err != nil {
@@ -232,6 +256,33 @@ func parseMigrateFromOpenClawOptions(args []string) (migrateFromOpenClawOptions,
 		Since:       since,
 		OrgID:       strings.TrimSpace(*orgID),
 		Transport:   transport,
+	}, nil
+}
+
+func parseMigrateFromOpenClawResetOptions(args []string) (migrateFromOpenClawResetOptions, error) {
+	flags := flag.NewFlagSet("migrate from-openclaw reset", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+
+	confirm := flags.Bool("confirm", false, "confirm destructive OpenClaw migration reset")
+	orgID := flags.String("org", "", "org id override")
+	transportRaw := flags.String("transport", string(migrateTransportAuto), "migration transport (auto|api|db)")
+
+	if err := flags.Parse(args); err != nil {
+		return migrateFromOpenClawResetOptions{}, err
+	}
+	if len(flags.Args()) > 0 {
+		return migrateFromOpenClawResetOptions{}, fmt.Errorf("unexpected positional argument(s): %s", strings.Join(flags.Args(), " "))
+	}
+
+	transport, err := parseMigrateTransport(*transportRaw)
+	if err != nil {
+		return migrateFromOpenClawResetOptions{}, err
+	}
+
+	return migrateFromOpenClawResetOptions{
+		Confirm:   *confirm,
+		OrgID:     strings.TrimSpace(*orgID),
+		Transport: transport,
 	}, nil
 }
 
@@ -355,6 +406,61 @@ func runMigrateFromOpenClaw(out io.Writer, opts migrateFromOpenClawOptions) erro
 	}
 
 	return runMigrateFromOpenClawDB(out, opts, orgID, install, events)
+}
+
+func runMigrateFromOpenClawReset(out io.Writer, opts migrateFromOpenClawResetOptions) error {
+	if !opts.Confirm {
+		return fmt.Errorf("--confirm is required to reset OpenClaw migration artifacts")
+	}
+
+	orgID, err := resolveMigrateOrgID(opts.OrgID)
+	if err != nil {
+		return err
+	}
+
+	transport, err := resolveMigrateTransportForExecution(opts.Transport)
+	if err != nil {
+		return err
+	}
+	if transport != migrateTransportAPI {
+		return fmt.Errorf("openclaw reset is only available with api transport")
+	}
+
+	cfg, err := loadMigrateConfig()
+	if err != nil {
+		return err
+	}
+	client, err := newMigrateClient(cfg, orgID)
+	if err != nil {
+		return err
+	}
+
+	response, err := resetMigrateOpenClawAPI(client, ottercli.OpenClawMigrationResetRequest{
+		Confirm: migrateOpenClawResetConfirmToken,
+	})
+	if err != nil {
+		return err
+	}
+
+	status := strings.TrimSpace(response.Status)
+	if status == "" {
+		status = "reset"
+	}
+	fmt.Fprintf(out, "OpenClaw migration %s complete.\n", status)
+	fmt.Fprintf(out, "  paused_phases=%d\n", response.PausedPhases)
+	fmt.Fprintf(out, "  progress_rows_deleted=%d\n", response.ProgressRowsDeleted)
+	if len(response.Deleted) > 0 {
+		keys := make([]string, 0, len(response.Deleted))
+		for key := range response.Deleted {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(out, "  deleted.%s=%d\n", key, response.Deleted[key])
+		}
+	}
+	fmt.Fprintf(out, "  total_deleted=%d\n", response.TotalDeleted)
+	return nil
 }
 
 func resolveMigrateTransportForExecution(requested migrateTransport) (migrateTransport, error) {
