@@ -9,7 +9,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -27,6 +29,11 @@ var openClawMigrationPhaseOrder = []string{
 }
 
 const openClawMigrationResetConfirmToken = "RESET_OPENCLAW_MIGRATION"
+
+const (
+	defaultOpenClawMigrationFailuresLimit = 100
+	maxOpenClawMigrationFailuresLimit     = 1000
+)
 
 type openClawMigrationStatusResponse struct {
 	Active bool                           `json:"active"`
@@ -48,6 +55,38 @@ type openClawMigrationRunResponse struct {
 	SkippedCompletedPhases []string `json:"skipped_completed_phases,omitempty"`
 	AlreadyRunningPhases   []string `json:"already_running_phases,omitempty"`
 	PausedPhases           []string `json:"paused_phases,omitempty"`
+}
+
+type openClawMigrationReportResponse struct {
+	EventsExpected            int     `json:"events_expected"`
+	EventsProcessed           int     `json:"events_processed"`
+	MessagesInserted          int     `json:"messages_inserted"`
+	EventsSkippedUnknownAgent int     `json:"events_skipped_unknown_agent"`
+	FailedItems               int     `json:"failed_items"`
+	CompletenessRatio         float64 `json:"completeness_ratio"`
+	IsComplete                bool    `json:"is_complete"`
+}
+
+type openClawMigrationFailureItem struct {
+	OrgID              string    `json:"org_id"`
+	MigrationType      string    `json:"migration_type"`
+	BatchID            string    `json:"batch_id"`
+	AgentSlug          string    `json:"agent_slug"`
+	SessionID          string    `json:"session_id"`
+	EventID            string    `json:"event_id"`
+	SessionPath        string    `json:"session_path"`
+	Line               int       `json:"line"`
+	MessageIDCandidate string    `json:"message_id_candidate"`
+	ErrorReason        string    `json:"error_reason"`
+	ErrorMessage       string    `json:"error_message"`
+	FirstSeenAt        time.Time `json:"first_seen_at"`
+	LastSeenAt         time.Time `json:"last_seen_at"`
+	AttemptCount       int       `json:"attempt_count"`
+}
+
+type openClawMigrationFailuresResponse struct {
+	Items []openClawMigrationFailureItem `json:"items"`
+	Total int                            `json:"total"`
 }
 
 type openClawMigrationMutationResponse struct {
@@ -80,12 +119,22 @@ type openClawMigrationProgressStore interface {
 	) (int, error)
 }
 
+type openClawHistoryFailureStore interface {
+	ListByOrg(
+		ctx context.Context,
+		orgID string,
+		opts store.ListOpenClawHistoryFailureOptions,
+	) ([]store.OpenClawHistoryImportFailure, error)
+}
+
 type openClawMigrationResetStore interface {
 	Reset(ctx context.Context, input store.OpenClawMigrationResetInput) (store.OpenClawMigrationResetResult, error)
 }
 
 type openClawMigrationControlPlaneService interface {
 	Status(ctx context.Context, orgID string) (openClawMigrationStatusResponse, error)
+	Report(ctx context.Context, orgID string) (openClawMigrationReportResponse, error)
+	Failures(ctx context.Context, orgID string, limit int) (openClawMigrationFailuresResponse, error)
 	Run(ctx context.Context, orgID string, input openClawMigrationRunRequest) (openClawMigrationRunResponse, error)
 	Pause(ctx context.Context, orgID string) (openClawMigrationMutationResponse, error)
 	Resume(ctx context.Context, orgID string) (openClawMigrationMutationResponse, error)
@@ -95,31 +144,35 @@ type openClawMigrationControlPlaneService interface {
 type defaultOpenClawMigrationControlPlaneService struct {
 	progressStore openClawMigrationProgressStore
 	resetStore    openClawMigrationResetStore
+	failureStore  openClawHistoryFailureStore
 }
 
 func newOpenClawMigrationControlPlaneServiceWithStore(
 	progressStore openClawMigrationProgressStore,
 ) *defaultOpenClawMigrationControlPlaneService {
-	return newOpenClawMigrationControlPlaneServiceWithStores(progressStore, nil)
+	return newOpenClawMigrationControlPlaneServiceWithStores(progressStore, nil, nil)
 }
 
 func newOpenClawMigrationControlPlaneServiceWithStores(
 	progressStore openClawMigrationProgressStore,
 	resetStore openClawMigrationResetStore,
+	failureStore openClawHistoryFailureStore,
 ) *defaultOpenClawMigrationControlPlaneService {
 	return &defaultOpenClawMigrationControlPlaneService{
 		progressStore: progressStore,
 		resetStore:    resetStore,
+		failureStore:  failureStore,
 	}
 }
 
 func newOpenClawMigrationControlPlaneService(db *sql.DB) *defaultOpenClawMigrationControlPlaneService {
 	if db == nil {
-		return newOpenClawMigrationControlPlaneServiceWithStores(nil, nil)
+		return newOpenClawMigrationControlPlaneServiceWithStores(nil, nil, nil)
 	}
 	return newOpenClawMigrationControlPlaneServiceWithStores(
 		store.NewMigrationProgressStore(db),
 		store.NewOpenClawMigrationResetStore(db),
+		store.NewOpenClawHistoryFailureLedgerStore(db),
 	)
 }
 
@@ -175,6 +228,130 @@ func (s *defaultOpenClawMigrationControlPlaneService) Status(
 	return openClawMigrationStatusResponse{
 		Active: active,
 		Phases: phases,
+	}, nil
+}
+
+func (s *defaultOpenClawMigrationControlPlaneService) Report(
+	ctx context.Context,
+	orgID string,
+) (openClawMigrationReportResponse, error) {
+	if s == nil || s.progressStore == nil || s.failureStore == nil {
+		return openClawMigrationReportResponse{}, fmt.Errorf("migration report store not configured")
+	}
+
+	progress, err := s.progressStore.GetByType(ctx, orgID, "history_backfill")
+	if err != nil {
+		return openClawMigrationReportResponse{}, err
+	}
+	failures, err := s.failureStore.ListByOrg(ctx, orgID, store.ListOpenClawHistoryFailureOptions{
+		MigrationType: "history_backfill",
+		Limit:         maxOpenClawMigrationFailuresLimit,
+	})
+	if err != nil {
+		return openClawMigrationReportResponse{}, err
+	}
+
+	eventsExpected := 0
+	failedItems := 0
+	if progress != nil {
+		eventsExpected = progress.ProcessedItems
+		if eventsExpected < 0 {
+			eventsExpected = 0
+		}
+		failedItems = progress.FailedItems
+		if failedItems < 0 {
+			failedItems = 0
+		}
+	}
+
+	skippedUnknownAttempts := 0
+	for _, failure := range failures {
+		if strings.EqualFold(strings.TrimSpace(failure.ErrorReason), "skipped_unknown_agent") {
+			if failure.AttemptCount > 0 {
+				skippedUnknownAttempts += failure.AttemptCount
+			}
+		}
+	}
+
+	messagesInserted := eventsExpected - skippedUnknownAttempts - failedItems
+	if messagesInserted < 0 {
+		messagesInserted = 0
+	}
+	eventsProcessed := messagesInserted
+	numerator := messagesInserted + skippedUnknownAttempts + failedItems
+
+	completenessRatio := 1.0
+	if eventsExpected > 0 {
+		completenessRatio = float64(numerator) / float64(eventsExpected)
+		if completenessRatio < 0 {
+			completenessRatio = 0
+		}
+		if completenessRatio > 1 {
+			completenessRatio = 1
+		}
+	}
+
+	return openClawMigrationReportResponse{
+		EventsExpected:            eventsExpected,
+		EventsProcessed:           eventsProcessed,
+		MessagesInserted:          messagesInserted,
+		EventsSkippedUnknownAgent: skippedUnknownAttempts,
+		FailedItems:               failedItems,
+		CompletenessRatio:         completenessRatio,
+		IsComplete:                numerator == eventsExpected,
+	}, nil
+}
+
+func (s *defaultOpenClawMigrationControlPlaneService) Failures(
+	ctx context.Context,
+	orgID string,
+	limit int,
+) (openClawMigrationFailuresResponse, error) {
+	if s == nil || s.failureStore == nil {
+		return openClawMigrationFailuresResponse{}, fmt.Errorf("migration failure store not configured")
+	}
+
+	if limit <= 0 {
+		limit = defaultOpenClawMigrationFailuresLimit
+	}
+	if limit > maxOpenClawMigrationFailuresLimit {
+		limit = maxOpenClawMigrationFailuresLimit
+	}
+
+	rows, err := s.failureStore.ListByOrg(ctx, orgID, store.ListOpenClawHistoryFailureOptions{
+		MigrationType: "history_backfill",
+		Limit:         limit,
+	})
+	if err != nil {
+		return openClawMigrationFailuresResponse{}, err
+	}
+
+	items := make([]openClawMigrationFailureItem, 0, len(rows))
+	for _, row := range rows {
+		if strings.EqualFold(strings.TrimSpace(row.ErrorReason), "skipped_unknown_agent") {
+			continue
+		}
+		items = append(items, openClawMigrationFailureItem{
+			OrgID:              row.OrgID,
+			MigrationType:      row.MigrationType,
+			BatchID:            row.BatchID,
+			AgentSlug:          row.AgentSlug,
+			SessionID:          row.SessionID,
+			EventID:            row.EventID,
+			SessionPath:        row.SessionPath,
+			Line:               row.Line,
+			MessageIDCandidate: row.MessageIDCandidate,
+			ErrorReason:        row.ErrorReason,
+			ErrorMessage:       row.ErrorMessage,
+			FirstSeenAt:        row.FirstSeenAt,
+			LastSeenAt:         row.LastSeenAt,
+			AttemptCount:       row.AttemptCount,
+		})
+	}
+
+	return openClawMigrationFailuresResponse{
+		Items: items,
+		Total: len(items),
 	}, nil
 }
 
@@ -435,6 +612,54 @@ func (h *OpenClawMigrationControlPlaneHandler) Status(w http.ResponseWriter, r *
 		return
 	}
 	sendJSON(w, http.StatusOK, status)
+}
+
+func (h *OpenClawMigrationControlPlaneHandler) Report(w http.ResponseWriter, r *http.Request) {
+	orgID := middleware.WorkspaceFromContext(r.Context())
+	if strings.TrimSpace(orgID) == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workspace context required"})
+		return
+	}
+	if h == nil || h.service == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "migration control plane unavailable"})
+		return
+	}
+
+	report, err := h.service.Report(r.Context(), orgID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to build migration report"})
+		return
+	}
+	sendJSON(w, http.StatusOK, report)
+}
+
+func (h *OpenClawMigrationControlPlaneHandler) Failures(w http.ResponseWriter, r *http.Request) {
+	orgID := middleware.WorkspaceFromContext(r.Context())
+	if strings.TrimSpace(orgID) == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workspace context required"})
+		return
+	}
+	if h == nil || h.service == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "migration control plane unavailable"})
+		return
+	}
+
+	limit := defaultOpenClawMigrationFailuresLimit
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit <= 0 {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "limit must be a positive integer"})
+			return
+		}
+		limit = parsedLimit
+	}
+
+	failures, err := h.service.Failures(r.Context(), orgID, limit)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list migration failures"})
+		return
+	}
+	sendJSON(w, http.StatusOK, failures)
 }
 
 func (h *OpenClawMigrationControlPlaneHandler) Run(w http.ResponseWriter, r *http.Request) {

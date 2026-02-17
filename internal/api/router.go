@@ -414,6 +414,8 @@ func NewRouter() http.Handler {
 		r.Get("/sync/agents", openclawSyncHandler.GetAgents)
 		r.With(middleware.RequireWorkspace).Get("/migrations/status", handleMigrationStatus(db))
 		r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/status", openClawMigrationHandler.Status)
+		r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/report", openClawMigrationHandler.Report)
+		r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/failures", openClawMigrationHandler.Failures)
 		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/run", openClawMigrationHandler.Run)
 		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/pause", openClawMigrationHandler.Pause)
 		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/resume", openClawMigrationHandler.Resume)

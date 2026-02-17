@@ -227,6 +227,19 @@ func BackfillOpenClawHistory(
 				result.SkippedUnknownAgentCounts = make(map[string]int)
 			}
 			result.SkippedUnknownAgentCounts[event.AgentSlug]++
+			messageID := stableOpenClawBackfillMessageID(orgID, event)
+			if ledgerErr := upsertOpenClawHistoryImportFailure(
+				ctx,
+				tx,
+				orgID,
+				strings.TrimSpace(opts.BatchID),
+				event,
+				messageID,
+				"skipped_unknown_agent",
+				fmt.Errorf("agent %q not imported for org", strings.TrimSpace(event.AgentSlug)),
+			); ledgerErr != nil {
+				return OpenClawHistoryBackfillResult{}, ledgerErr
+			}
 			continue
 		}
 		roomID, ok := roomByAgentSlug[event.AgentSlug]

@@ -122,7 +122,7 @@ func TestOpenClawMigrationImportHistoryBatchUpdatesProgress(t *testing.T) {
 	).Scan(&status, &processed, &failed, &total)
 	require.NoError(t, err)
 	require.Equal(t, "running", status)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 2, processed)
 	require.Equal(t, 0, failed)
 	require.True(t, total.Valid)
 	require.EqualValues(t, 3, total.Int64)
@@ -154,7 +154,7 @@ func TestOpenClawMigrationImportHistoryBatchUpdatesProgressFailedItemsOnInsertFa
 		orgID,
 	).Scan(&processed, &failed)
 	require.NoError(t, err)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 2, processed)
 	require.Equal(t, 1, failed)
 }
 
