@@ -145,6 +145,34 @@ func TestDeriveHostedAPIBaseURLReturnsOrigin(t *testing.T) {
 	}
 }
 
+func TestRenderInitMigrationCommandIncludesTransportHints(t *testing.T) {
+	hosted := renderInitMigrationCommand(
+		"postgres://cfg-user:cfg-pass@localhost:5432/otter?sslmode=disable",
+		"org-hosted",
+		"/Users/sam/.openclaw",
+		migrateTransportAPI,
+	)
+	if !strings.Contains(hosted, "otter migrate from-openclaw --transport api") {
+		t.Fatalf("expected hosted migration command to include api transport hint, got %q", hosted)
+	}
+	if strings.Contains(hosted, "DATABASE_URL=") {
+		t.Fatalf("expected hosted migration command to avoid DATABASE_URL requirement, got %q", hosted)
+	}
+
+	local := renderInitMigrationCommand(
+		"postgres://cfg-user:cfg-pass@localhost:5432/otter?sslmode=disable",
+		"org-local",
+		"/Users/sam/.openclaw",
+		migrateTransportDB,
+	)
+	if !strings.Contains(local, "DATABASE_URL=\"postgres://cfg-user:cfg-pass@localhost:5432/otter?sslmode=disable\" otter migrate from-openclaw") {
+		t.Fatalf("expected local migration command to remain db-compatible, got %q", local)
+	}
+	if strings.Contains(local, "--transport api") {
+		t.Fatalf("expected local migration command not to force api transport, got %q", local)
+	}
+}
+
 func TestInitHostedWithFlagsPersistsConfig(t *testing.T) {
 	state := stubInitDeps(t, ottercli.Config{}, &fakeInitClient{}, nil)
 	state.hostedValidateOrg = "org-hosted"
@@ -422,7 +450,7 @@ func TestInitHostedPrintsMigrationCommandWhenDatabaseUnavailable(t *testing.T) {
 	if !strings.Contains(output, "Run this command later to migrate OpenClaw data:") {
 		t.Fatalf("expected migration follow-up command output, got %q", output)
 	}
-	if !strings.Contains(output, "DATABASE_URL=\"<database-url>\" otter migrate from-openclaw --org \"org-hosted\" --openclaw-dir \"/Users/sam/.openclaw\"") {
+	if !strings.Contains(output, "otter migrate from-openclaw --transport api --org \"org-hosted\" --openclaw-dir \"/Users/sam/.openclaw\"") {
 		t.Fatalf("expected explicit migration command with env vars, got %q", output)
 	}
 }
@@ -501,7 +529,7 @@ func TestInitHostedReportsMigrationFailureAndRetryCommand(t *testing.T) {
 	if !strings.Contains(output, "Retry with:") {
 		t.Fatalf("expected retry command output, got %q", output)
 	}
-	if !strings.Contains(output, "DATABASE_URL=\"postgres://cfg-user:cfg-pass@localhost:5432/otter?sslmode=disable\" otter migrate from-openclaw --org \"org-hosted\" --openclaw-dir \"/Users/sam/.openclaw\"") {
+	if !strings.Contains(output, "otter migrate from-openclaw --transport api --org \"org-hosted\" --openclaw-dir \"/Users/sam/.openclaw\"") {
 		t.Fatalf("expected explicit retry command output, got %q", output)
 	}
 }
