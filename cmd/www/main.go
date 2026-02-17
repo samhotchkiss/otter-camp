@@ -134,24 +134,28 @@ if [[ ! -w "$TARGET_DIR" ]]; then
   mkdir -p "$TARGET_DIR"
 fi
 
-if command -v curl >/dev/null 2>&1 && [[ -n "$ARCH" ]]; then
-  TMP_DIR="$(mktemp -d)"
-  trap 'rm -rf "$TMP_DIR"' EXIT
-  BIN_URL="https://github.com/samhotchkiss/otter-camp/releases/latest/download/otter-${OS}-${ARCH}"
-  if curl -fsSL "$BIN_URL" -o "$TMP_DIR/otter"; then
-    chmod +x "$TMP_DIR/otter"
-    mv "$TMP_DIR/otter" "$TARGET_DIR/otter"
-    OTTER_BIN="$TARGET_DIR/otter"
+if command -v go >/dev/null 2>&1; then
+  if go install github.com/samhotchkiss/otter-camp/cmd/otter@latest; then
+    OTTER_BIN="$(go env GOPATH)/bin/otter"
   fi
 fi
 
 if ! command -v "$OTTER_BIN" >/dev/null 2>&1; then
-  if ! command -v go >/dev/null 2>&1; then
-    echo "unable to install otter automatically; install Go or place otter on PATH" >&2
-    exit 1
+  if command -v curl >/dev/null 2>&1 && [[ -n "$ARCH" ]]; then
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TMP_DIR"' EXIT
+    BIN_URL="https://github.com/samhotchkiss/otter-camp/releases/latest/download/otter-${OS}-${ARCH}"
+    if curl -fsSL "$BIN_URL" -o "$TMP_DIR/otter"; then
+      chmod +x "$TMP_DIR/otter"
+      mv "$TMP_DIR/otter" "$TARGET_DIR/otter"
+      OTTER_BIN="$TARGET_DIR/otter"
+    fi
   fi
-  go install github.com/samhotchkiss/otter-camp/cmd/otter@latest
-  OTTER_BIN="$(go env GOPATH)/bin/otter"
+fi
+
+if ! command -v "$OTTER_BIN" >/dev/null 2>&1; then
+  echo "unable to install otter automatically; install Go or place otter on PATH" >&2
+  exit 1
 fi
 
 "$OTTER_BIN" init --mode hosted --token "$TOKEN" --url "$URL"
