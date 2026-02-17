@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,10 +33,13 @@ var onboardingStarterAgents = []struct {
 	{Slug: "ellie", DisplayName: "Ellie", Status: "active"},
 }
 
+var onboardingOrgSlugRegex = regexp.MustCompile(`^[a-z0-9-]{3,32}$`)
+
 type OnboardingBootstrapRequest struct {
 	Name             string `json:"name"`
 	Email            string `json:"email"`
 	OrganizationName string `json:"organization_name"`
+	OrgSlug          string `json:"org_slug"`
 }
 
 type OnboardingAgent struct {
@@ -115,9 +119,9 @@ func HandleOnboardingBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	orgSlug := slugifyOrg(orgName)
-	if orgSlug == "" {
-		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "organization_name must contain letters or numbers"})
+	orgSlug, errMsg := resolveOnboardingOrgSlug(orgName, req.OrgSlug)
+	if errMsg != "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: errMsg})
 		return
 	}
 
@@ -128,6 +132,29 @@ func HandleOnboardingBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusOK, resp)
+}
+
+func resolveOnboardingOrgSlug(orgName, orgSlugInput string) (string, string) {
+	providedSlug := strings.TrimSpace(orgSlugInput)
+	if providedSlug != "" {
+		if !isValidOnboardingOrgSlug(providedSlug) {
+			return "", "invalid org_slug"
+		}
+		return providedSlug, ""
+	}
+
+	orgSlug := slugifyOrg(orgName)
+	if orgSlug == "" {
+		return "", "organization_name must contain letters or numbers"
+	}
+	return orgSlug, ""
+}
+
+func isValidOnboardingOrgSlug(slug string) bool {
+	if !onboardingOrgSlugRegex.MatchString(slug) {
+		return false
+	}
+	return !strings.HasPrefix(slug, "-") && !strings.HasSuffix(slug, "-")
 }
 
 func bootstrapOnboarding(ctx context.Context, db *sql.DB, name, email, orgName, orgSlug string) (OnboardingBootstrapResponse, error) {
