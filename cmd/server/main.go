@@ -22,6 +22,11 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
+var (
+	openServerDB         = store.DB
+	runServerAutoMigrate = automigrate.Run
+)
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -34,21 +39,12 @@ func main() {
 	defer cancelWorkers()
 	var workerWG sync.WaitGroup
 	startWorker := func(run func(context.Context)) {
-		workerWG.Add(1)
-		go func() {
-			defer workerWG.Done()
-			run(workerCtx)
-		}()
+		startWorkerWithRecovery(workerCtx, &workerWG, "worker", log.Printf, run)
 	}
 
-	// Auto-migrate database on startup
-	if migDB, err := store.DB(); err == nil {
-		if err := automigrate.Run(migDB, "migrations"); err != nil {
-			log.Printf("⚠️  Auto-migration failed: %v", err)
-		}
-	} else {
-		log.Printf("⚠️  Auto-migration skipped; database unavailable: %v", err)
-	}
+	startWorker(func(context.Context) {
+		runServerAutoMigration(log.Printf)
+	})
 
 	router := api.NewRouter()
 
@@ -271,14 +267,61 @@ func main() {
 		}
 	}()
 
-	log.Printf("🦦 Otter Camp starting on port %s", cfg.Port)
+	log.Printf("🦦 Otter Camp starting: bind=%s health=/health", server.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		cancelWorkers()
 		workerWG.Wait()
-		log.Fatalf("server failed: %v", err)
+		log.Fatalf("server failed (addr=%s): %v", server.Addr, err)
 	}
 	cancelWorkers()
 	workerWG.Wait()
+}
+
+func startWorkerWithRecovery(
+	workerCtx context.Context,
+	workerWG *sync.WaitGroup,
+	name string,
+	logf func(string, ...interface{}),
+	run func(context.Context),
+) {
+	if workerWG == nil || run == nil {
+		return
+	}
+	if logf == nil {
+		logf = log.Printf
+	}
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" {
+		trimmedName = "worker"
+	}
+
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logf("❌ worker panic: name=%s error=%v", trimmedName, recovered)
+			}
+		}()
+		run(workerCtx)
+	}()
+}
+
+func runServerAutoMigration(logf func(string, ...interface{})) {
+	if logf == nil {
+		logf = log.Printf
+	}
+
+	migDB, err := openServerDB()
+	if err != nil {
+		logf("⚠️  Auto-migration skipped; database unavailable: %v", err)
+		return
+	}
+	if err := runServerAutoMigrate(migDB, "migrations"); err != nil {
+		logf("⚠️  Auto-migration failed: %v", err)
+		return
+	}
+	logf("✅ Auto-migration complete")
 }
 
 // Deploy trigger: 1770312576

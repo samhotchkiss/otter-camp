@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -273,6 +278,135 @@ func TestMainStartsConversationSegmentationWorkerWhenConfigured(t *testing.T) {
 		"memory.NewConversationSegmentationWorker",
 		"Conversation segmentation worker started",
 		"store.NewConversationSegmentationStore",
+	} {
+		if !strings.Contains(mainContent, snippet) {
+			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
+		}
+	}
+}
+
+func TestRunServerAutoMigrationLogsOutcomes(t *testing.T) {
+	origOpen := openServerDB
+	origRun := runServerAutoMigrate
+	t.Cleanup(func() {
+		openServerDB = origOpen
+		runServerAutoMigrate = origRun
+	})
+
+	logs := make([]string, 0, 3)
+	logf := func(format string, args ...interface{}) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	openServerDB = func() (*sql.DB, error) {
+		return nil, errors.New("db unavailable")
+	}
+	runServerAutoMigration(logf)
+
+	openServerDB = func() (*sql.DB, error) {
+		return &sql.DB{}, nil
+	}
+	runServerAutoMigrate = func(_ *sql.DB, _ string) error {
+		return errors.New("migration failed")
+	}
+	runServerAutoMigration(logf)
+
+	runServerAutoMigrate = func(_ *sql.DB, _ string) error {
+		return nil
+	}
+	runServerAutoMigration(logf)
+
+	joined := strings.Join(logs, "\n")
+	for _, snippet := range []string{
+		"Auto-migration skipped; database unavailable",
+		"Auto-migration failed",
+		"Auto-migration complete",
+	} {
+		if !strings.Contains(joined, snippet) {
+			t.Fatalf("expected log output to contain %q, got %q", snippet, joined)
+		}
+	}
+}
+
+func TestStartWorkerWithRecoveryRecoversPanic(t *testing.T) {
+	var wg sync.WaitGroup
+	logs := make([]string, 0, 1)
+	logf := func(format string, args ...interface{}) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	startWorkerWithRecovery(context.Background(), &wg, "panic-worker", logf, func(context.Context) {
+		panic("boom")
+	})
+	wg.Wait()
+
+	if len(logs) == 0 {
+		t.Fatalf("expected panic log output")
+	}
+	if !strings.Contains(logs[0], "worker panic") || !strings.Contains(logs[0], "panic-worker") || !strings.Contains(logs[0], "boom") {
+		t.Fatalf("unexpected panic log output: %q", logs[0])
+	}
+}
+
+func TestStartWorkerWithRecoveryRunsAsynchronously(t *testing.T) {
+	var wg sync.WaitGroup
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	startWorkerWithRecovery(context.Background(), &wg, "async-worker", nil, func(context.Context) {
+		close(started)
+		<-release
+	})
+
+	select {
+	case <-started:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected worker goroutine to start asynchronously")
+	}
+
+	close(release)
+	wg.Wait()
+}
+
+func TestRailwayHealthcheckContract(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("../../railway.json")
+	if err != nil {
+		t.Fatalf("failed to read railway.json: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("failed to parse railway.json: %v", err)
+	}
+
+	deploy, ok := payload["deploy"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected railway deploy config object")
+	}
+	if got := deploy["startCommand"]; got != "/app/server" {
+		t.Fatalf("expected startCommand /app/server, got %v", got)
+	}
+	if got := deploy["healthcheckPath"]; got != "/health" {
+		t.Fatalf("expected healthcheckPath /health, got %v", got)
+	}
+	if got := deploy["healthcheckTimeout"]; got != float64(30) {
+		t.Fatalf("expected healthcheckTimeout 30, got %v", got)
+	}
+}
+
+func TestMainStartupLogsIncludeBindAndHealth(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	for _, snippet := range []string{
+		"Otter Camp starting: bind=%s health=/health",
+		"server failed (addr=%s): %v",
 	} {
 		if !strings.Contains(mainContent, snippet) {
 			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
