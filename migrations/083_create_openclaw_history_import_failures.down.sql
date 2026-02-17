@@ -1,0 +1,5 @@
+DROP POLICY IF EXISTS openclaw_history_import_failures_org_isolation ON openclaw_history_import_failures;
+DROP TRIGGER IF EXISTS openclaw_history_import_failures_updated_at_trg ON openclaw_history_import_failures;
+DROP INDEX IF EXISTS openclaw_history_import_failures_org_recent_idx;
+DROP INDEX IF EXISTS openclaw_history_import_failures_identity_uidx;
+DROP TABLE IF EXISTS openclaw_history_import_failures;

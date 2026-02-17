@@ -190,3 +190,54 @@ func TestClientOpenClawMigrationEndpointValidation(t *testing.T) {
 		t.Fatalf("expected ResetOpenClawMigration() validation error")
 	}
 }
+
+func TestClientOpenClawMigrationReportAndFailuresEndpoints(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.String()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/migrations/openclaw/report":
+			_, _ = w.Write([]byte(`{"events_expected":10,"events_processed":7,"messages_inserted":7,"events_skipped_unknown_agent":1,"failed_items":2,"completeness_ratio":1.0,"is_complete":true}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/migrations/openclaw/failures":
+			_, _ = w.Write([]byte(`{"items":[{"org_id":"00000000-0000-0000-0000-000000000111","migration_type":"history_backfill","batch_id":"batch-1","agent_slug":"main","session_id":"session-1","event_id":"event-1","session_path":"/tmp/main/session-1.jsonl","line":11,"message_id_candidate":"00000000-0000-0000-0000-000000000777","error_reason":"insert_chat_message","error_message":"forced insert error","attempt_count":2}],"total":1}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "token-1",
+		OrgID:   "00000000-0000-0000-0000-000000000111",
+		HTTP:    srv.Client(),
+	}
+
+	report, err := client.GetOpenClawMigrationReport()
+	if err != nil {
+		t.Fatalf("GetOpenClawMigrationReport() error = %v", err)
+	}
+	if report.EventsExpected != 10 || report.MessagesInserted != 7 || !report.IsComplete {
+		t.Fatalf("GetOpenClawMigrationReport() result = %#v", report)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/migrations/openclaw/report" {
+		t.Fatalf("GetOpenClawMigrationReport request = %s %s", gotMethod, gotPath)
+	}
+
+	failures, err := client.ListOpenClawMigrationFailures(5)
+	if err != nil {
+		t.Fatalf("ListOpenClawMigrationFailures() error = %v", err)
+	}
+	if failures.Total != 1 || len(failures.Items) != 1 || failures.Items[0].EventID != "event-1" {
+		t.Fatalf("ListOpenClawMigrationFailures() result = %#v", failures)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/migrations/openclaw/failures?limit=5" {
+		t.Fatalf("ListOpenClawMigrationFailures request = %s %s", gotMethod, gotPath)
+	}
+}

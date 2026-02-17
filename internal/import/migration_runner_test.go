@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
@@ -165,6 +166,7 @@ func TestMigrationRunnerPauseAndResumeFromCheckpoint(t *testing.T) {
 		Installation: install,
 	})
 	require.NoError(t, err)
+	installOpenClawHistoryInsertFailureTrigger(t, db)
 
 	events, err := ParseOpenClawSessionEvents(install)
 	require.NoError(t, err)
@@ -231,6 +233,75 @@ func TestMigrationRunnerPauseAndResumeFromCheckpoint(t *testing.T) {
 	err = db.QueryRow(`SELECT COUNT(*) FROM chat_messages WHERE org_id = $1`, orgID).Scan(&messageCount)
 	require.NoError(t, err)
 	require.Equal(t, len(events), messageCount)
+}
+
+func TestMigrationRunnerHistoryBackfillAdvancesFailedItemsWithoutAborting(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-migration-runner-history-failed-items")
+	userID := createOpenClawImportTestUser(t, db, orgID, "runner-history-failed-items")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events := []OpenClawSessionEvent{
+		{
+			AgentSlug:   "main",
+			SessionID:   "session-fail",
+			SessionPath: "/tmp/openclaw/agents/main/sessions/main-fail.jsonl",
+			EventID:     "event-fail",
+			Role:        OpenClawSessionEventRoleAssistant,
+			Body:        "bad [FORCE_HISTORY_INSERT_FAILURE] payload",
+			CreatedAt:   time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC),
+			Line:        1,
+		},
+		{
+			AgentSlug:   "main",
+			SessionID:   "session-fail",
+			SessionPath: "/tmp/openclaw/agents/main/sessions/main-fail.jsonl",
+			EventID:     "event-ok",
+			Role:        OpenClawSessionEventRoleAssistant,
+			Body:        "valid payload",
+			CreatedAt:   time.Date(2026, 1, 1, 10, 0, 2, 0, time.UTC),
+			Line:        2,
+		},
+	}
+
+	runner := NewOpenClawMigrationRunner(db)
+	runner.HistoryCheckpoint = 10
+
+	runResult, err := runner.Run(context.Background(), RunOpenClawMigrationInput{
+		OrgID:        orgID,
+		UserID:       userID,
+		Installation: install,
+		ParsedEvents: events,
+		HistoryOnly:  true,
+	})
+	require.NoError(t, err)
+	require.False(t, runResult.Paused)
+	require.NotNil(t, runResult.HistoryBackfill)
+	require.Equal(t, 1, runResult.HistoryBackfill.FailedItems)
+	require.Equal(t, 1, runResult.HistoryBackfill.MessagesInserted)
+
+	progressStore := store.NewMigrationProgressStore(db)
+	historyProgress, err := progressStore.GetByType(context.Background(), orgID, "history_backfill")
+	require.NoError(t, err)
+	require.NotNil(t, historyProgress)
+	require.Equal(t, store.MigrationProgressStatusCompleted, historyProgress.Status)
+	require.Equal(t, 2, historyProgress.ProcessedItems)
+	require.Equal(t, 1, historyProgress.FailedItems)
 }
 
 func TestMigrationRunnerStartsEllieBackfillPhase(t *testing.T) {

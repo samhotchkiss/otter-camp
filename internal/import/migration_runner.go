@@ -512,6 +512,7 @@ func (r *OpenClawMigrationRunner) runHistoryBackfillPhase(
 		aggregated.MessagesInserted += batchResult.MessagesInserted
 		aggregated.EventsProcessed += batchResult.EventsProcessed
 		aggregated.EventsSkippedUnknownAgent += batchResult.EventsSkippedUnknownAgent
+		aggregated.FailedItems += batchResult.FailedItems
 		aggregated.SkippedUnknownAgentCounts = mergeOpenClawSkippedUnknownAgentCounts(
 			aggregated.SkippedUnknownAgentCounts,
 			batchResult.SkippedUnknownAgentCounts,
@@ -521,6 +522,7 @@ func (r *OpenClawMigrationRunner) runHistoryBackfillPhase(
 			OrgID:          input.OrgID,
 			MigrationType:  phaseType,
 			ProcessedDelta: len(batch),
+			FailedDelta:    batchResult.FailedItems,
 			CurrentLabel:   migrationRunnerStringPtr(fmt.Sprintf("processed %d/%d events", end, totalItems)),
 		}); advanceErr != nil {
 			return nil, false, advanceErr

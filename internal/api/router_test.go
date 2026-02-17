@@ -553,6 +553,25 @@ func TestRouterRegistersOpenClawMigrationControlPlaneRoutes(t *testing.T) {
 	assertOpenClawMigrationControlPlaneRoutes(t, string(sourceBytes))
 }
 
+func TestRouterRegistersOpenClawMigrationReportAndFailuresRoutes(t *testing.T) {
+	t.Parallel()
+
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	source := string(sourceBytes)
+	requiredLines := []string{
+		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/report", openClawMigrationHandler.Report)`,
+		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/failures", openClawMigrationHandler.Failures)`,
+	}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected OpenClaw migration report/failures route middleware line: %s", line)
+		}
+	}
+}
+
 func TestRouterRegistersOpenClawMigrationImportRoutes(t *testing.T) {
 	t.Parallel()
 
@@ -591,6 +610,8 @@ func assertOpenClawMigrationControlPlaneRoutes(t *testing.T, source string) {
 
 	requiredLines := []string{
 		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/status", openClawMigrationHandler.Status)`,
+		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/report", openClawMigrationHandler.Report)`,
+		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/failures", openClawMigrationHandler.Failures)`,
 		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/run", openClawMigrationHandler.Run)`,
 		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/pause", openClawMigrationHandler.Pause)`,
 		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/resume", openClawMigrationHandler.Resume)`,

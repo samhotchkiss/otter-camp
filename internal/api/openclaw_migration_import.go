@@ -150,12 +150,13 @@ func (h *OpenClawMigrationImportHandler) ImportHistoryBatch(w http.ResponseWrite
 	}
 
 	totalItems := req.Batch.Total
+	processedDelta := result.EventsProcessed + result.EventsSkippedUnknownAgent + result.FailedItems
 	if err := h.advanceMigrationProgress(
 		r,
 		orgID,
 		"history_backfill",
 		&totalItems,
-		result.EventsProcessed,
+		processedDelta,
 		result.FailedItems,
 		fmt.Sprintf("imported history batch %d/%d", req.Batch.Index, req.Batch.Total),
 	); err != nil {

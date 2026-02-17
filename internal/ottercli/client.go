@@ -495,6 +495,38 @@ type OpenClawMigrationStatus struct {
 	Phases []OpenClawMigrationPhaseStatus `json:"phases"`
 }
 
+type OpenClawMigrationReport struct {
+	EventsExpected            int     `json:"events_expected"`
+	EventsProcessed           int     `json:"events_processed"`
+	MessagesInserted          int     `json:"messages_inserted"`
+	EventsSkippedUnknownAgent int     `json:"events_skipped_unknown_agent"`
+	FailedItems               int     `json:"failed_items"`
+	CompletenessRatio         float64 `json:"completeness_ratio"`
+	IsComplete                bool    `json:"is_complete"`
+}
+
+type OpenClawMigrationFailureItem struct {
+	OrgID              string    `json:"org_id"`
+	MigrationType      string    `json:"migration_type"`
+	BatchID            string    `json:"batch_id"`
+	AgentSlug          string    `json:"agent_slug"`
+	SessionID          string    `json:"session_id"`
+	EventID            string    `json:"event_id"`
+	SessionPath        string    `json:"session_path"`
+	Line               int       `json:"line"`
+	MessageIDCandidate string    `json:"message_id_candidate"`
+	ErrorReason        string    `json:"error_reason"`
+	ErrorMessage       string    `json:"error_message"`
+	FirstSeenAt        time.Time `json:"first_seen_at"`
+	LastSeenAt         time.Time `json:"last_seen_at"`
+	AttemptCount       int       `json:"attempt_count"`
+}
+
+type OpenClawMigrationFailures struct {
+	Items []OpenClawMigrationFailureItem `json:"items"`
+	Total int                            `json:"total"`
+}
+
 type OpenClawMigrationRunRequest struct {
 	AgentsOnly        bool   `json:"agents_only"`
 	HistoryOnly       bool   `json:"history_only"`
@@ -1960,6 +1992,44 @@ func (c *Client) GetOpenClawMigrationStatus() (OpenClawMigrationStatus, error) {
 	var response OpenClawMigrationStatus
 	if err := c.do(req, &response); err != nil {
 		return OpenClawMigrationStatus{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) GetOpenClawMigrationReport() (OpenClawMigrationReport, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationReport{}, err
+	}
+	req, err := c.newRequest(http.MethodGet, "/api/migrations/openclaw/report", nil)
+	if err != nil {
+		return OpenClawMigrationReport{}, err
+	}
+	var response OpenClawMigrationReport
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationReport{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) ListOpenClawMigrationFailures(limit int) (OpenClawMigrationFailures, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationFailures{}, err
+	}
+	if limit < 0 {
+		return OpenClawMigrationFailures{}, errors.New("limit must be >= 0")
+	}
+
+	path := "/api/migrations/openclaw/failures"
+	if limit > 0 {
+		path = path + "?limit=" + url.QueryEscape(strconv.Itoa(limit))
+	}
+	req, err := c.newRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return OpenClawMigrationFailures{}, err
+	}
+	var response OpenClawMigrationFailures
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationFailures{}, err
 	}
 	return response, nil
 }

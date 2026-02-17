@@ -25,6 +25,7 @@ var openClawBackfillMessageIDNamespace = [16]byte{
 type OpenClawHistoryBackfillOptions struct {
 	OrgID         string
 	UserID        string
+	BatchID       string
 	ParsedEvents  []OpenClawSessionEvent
 	SummaryWriter io.Writer
 }
@@ -49,6 +50,7 @@ type OpenClawHistoryBackfillResult struct {
 	MessagesInserted          int
 	EventsProcessed           int
 	EventsSkippedUnknownAgent int
+	FailedItems               int
 	SkippedUnknownAgentCounts map[string]int
 }
 
@@ -98,6 +100,7 @@ func BackfillOpenClawHistoryFromBatchPayload(
 	backfillResult, err := BackfillOpenClawHistory(ctx, db, OpenClawHistoryBackfillOptions{
 		OrgID:        opts.OrgID,
 		UserID:       opts.UserID,
+		BatchID:      opts.Batch.ID,
 		ParsedEvents: validEvents,
 	})
 	if err != nil {
@@ -109,6 +112,7 @@ func BackfillOpenClawHistoryFromBatchPayload(
 	result.RoomsCreated = backfillResult.RoomsCreated
 	result.ParticipantsAdded = backfillResult.ParticipantsAdded
 	result.EventsSkippedUnknownAgent = backfillResult.EventsSkippedUnknownAgent
+	result.FailedItems += backfillResult.FailedItems
 
 	if opts.SummaryWriter != nil {
 		_, _ = fmt.Fprintf(
@@ -223,6 +227,19 @@ func BackfillOpenClawHistory(
 				result.SkippedUnknownAgentCounts = make(map[string]int)
 			}
 			result.SkippedUnknownAgentCounts[event.AgentSlug]++
+			messageID := stableOpenClawBackfillMessageID(orgID, event)
+			if ledgerErr := upsertOpenClawHistoryImportFailure(
+				ctx,
+				tx,
+				orgID,
+				strings.TrimSpace(opts.BatchID),
+				event,
+				messageID,
+				"skipped_unknown_agent",
+				fmt.Errorf("agent %q not imported for org", strings.TrimSpace(event.AgentSlug)),
+			); ledgerErr != nil {
+				return OpenClawHistoryBackfillResult{}, ledgerErr
+			}
 			continue
 		}
 		roomID, ok := roomByAgentSlug[event.AgentSlug]
@@ -232,6 +249,9 @@ func BackfillOpenClawHistory(
 
 		senderID, senderType, messageType := mapOpenClawEventToMessageFields(event, userID, agent.ID)
 		messageID := stableOpenClawBackfillMessageID(orgID, event)
+		if _, savepointErr := tx.ExecContext(ctx, "SAVEPOINT openclaw_history_message_insert"); savepointErr != nil {
+			return OpenClawHistoryBackfillResult{}, fmt.Errorf("failed to create history insert savepoint: %w", savepointErr)
+		}
 
 		insertResult, err := tx.ExecContext(
 			ctx,
@@ -267,7 +287,33 @@ func BackfillOpenClawHistory(
 			event.CreatedAt.UTC(),
 		)
 		if err != nil {
-			return OpenClawHistoryBackfillResult{}, fmt.Errorf("failed to insert chat message for agent %q: %w", event.AgentSlug, err)
+			if _, rollbackErr := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT openclaw_history_message_insert"); rollbackErr != nil {
+				return OpenClawHistoryBackfillResult{}, fmt.Errorf(
+					"failed rolling back history insert savepoint after insert error: %v (original: %w)",
+					rollbackErr,
+					err,
+				)
+			}
+			if _, releaseErr := tx.ExecContext(ctx, "RELEASE SAVEPOINT openclaw_history_message_insert"); releaseErr != nil {
+				return OpenClawHistoryBackfillResult{}, fmt.Errorf("failed releasing history insert savepoint after rollback: %w", releaseErr)
+			}
+			if ledgerErr := upsertOpenClawHistoryImportFailure(
+				ctx,
+				tx,
+				orgID,
+				strings.TrimSpace(opts.BatchID),
+				event,
+				messageID,
+				"insert_chat_message",
+				err,
+			); ledgerErr != nil {
+				return OpenClawHistoryBackfillResult{}, ledgerErr
+			}
+			result.FailedItems++
+			continue
+		}
+		if _, releaseErr := tx.ExecContext(ctx, "RELEASE SAVEPOINT openclaw_history_message_insert"); releaseErr != nil {
+			return OpenClawHistoryBackfillResult{}, fmt.Errorf("failed releasing history insert savepoint: %w", releaseErr)
 		}
 
 		rowsAffected, err := insertResult.RowsAffected()
@@ -504,4 +550,95 @@ func stableOpenClawBackfillMessageID(orgID string, event OpenClawSessionEvent) s
 	id[8] = (id[8] & 0x3f) | 0x80
 
 	return fmt.Sprintf("%x-%x-%x-%x-%x", id[0:4], id[4:6], id[6:8], id[8:10], id[10:16])
+}
+
+func upsertOpenClawHistoryImportFailure(
+	ctx context.Context,
+	tx *sql.Tx,
+	orgID string,
+	batchID string,
+	event OpenClawSessionEvent,
+	messageIDCandidate string,
+	errorReason string,
+	insertErr error,
+) error {
+	if tx == nil {
+		return fmt.Errorf("history import failure upsert requires transaction")
+	}
+
+	eventID := strings.TrimSpace(event.EventID)
+	if eventID == "" {
+		eventID = fmt.Sprintf("line-%d", event.Line)
+	}
+	line := event.Line
+	if line < 0 {
+		line = 0
+	}
+	errorMessage := strings.TrimSpace(insertErr.Error())
+	if errorMessage == "" {
+		errorMessage = "unknown history insert error"
+	}
+	if len(errorMessage) > 4000 {
+		errorMessage = errorMessage[:4000]
+	}
+
+	_, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO openclaw_history_import_failures (
+			org_id,
+			migration_type,
+			batch_id,
+			agent_slug,
+			session_id,
+			event_id,
+			session_path,
+			line,
+			message_id_candidate,
+			error_reason,
+			error_message
+		) VALUES (
+			$1,
+			$2,
+			$3,
+			$4,
+			$5,
+			$6,
+			$7,
+			$8,
+			$9,
+			$10,
+			$11
+		)
+		ON CONFLICT (
+			org_id,
+			migration_type,
+			agent_slug,
+			session_id,
+			event_id,
+			session_path,
+			line
+		) DO UPDATE
+		SET batch_id = EXCLUDED.batch_id,
+		    message_id_candidate = EXCLUDED.message_id_candidate,
+		    error_reason = EXCLUDED.error_reason,
+		    error_message = EXCLUDED.error_message,
+		    attempt_count = openclaw_history_import_failures.attempt_count + 1,
+		    last_seen_at = NOW(),
+		    updated_at = NOW()`,
+		orgID,
+		"history_backfill",
+		batchID,
+		strings.TrimSpace(event.AgentSlug),
+		strings.TrimSpace(event.SessionID),
+		eventID,
+		strings.TrimSpace(event.SessionPath),
+		line,
+		strings.TrimSpace(messageIDCandidate),
+		firstNonEmpty(strings.TrimSpace(errorReason), "insert_chat_message"),
+		errorMessage,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert openclaw history import failure ledger: %w", err)
+	}
+	return nil
 }

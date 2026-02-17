@@ -26,11 +26,18 @@ func BuildOpenClawMigrationSummaryReport(result RunOpenClawMigrationResult) Open
 		report.HistoryEventsProcessed = result.HistoryBackfill.EventsProcessed
 		report.HistoryEventsSkipped = result.HistoryBackfill.EventsSkippedUnknownAgent
 		report.HistoryMessagesInserted = result.HistoryBackfill.MessagesInserted
+		report.FailedItems += result.HistoryBackfill.FailedItems
 		if len(result.HistoryBackfill.SkippedUnknownAgentCounts) > 0 {
 			report.HistorySkippedUnknownAgentCounts = make(map[string]int, len(result.HistoryBackfill.SkippedUnknownAgentCounts))
 			for slug, count := range result.HistoryBackfill.SkippedUnknownAgentCounts {
 				report.HistorySkippedUnknownAgentCounts[slug] = count
 			}
+		}
+		if result.HistoryBackfill.FailedItems > 0 {
+			report.Warnings = append(
+				report.Warnings,
+				"history backfill completed with failed rows recorded in failure ledger",
+			)
 		}
 	}
 	if result.EllieBackfill != nil {

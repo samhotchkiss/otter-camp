@@ -122,10 +122,72 @@ func TestOpenClawMigrationImportHistoryBatchUpdatesProgress(t *testing.T) {
 	).Scan(&status, &processed, &failed, &total)
 	require.NoError(t, err)
 	require.Equal(t, "running", status)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 2, processed)
 	require.Equal(t, 0, failed)
 	require.True(t, total.Valid)
 	require.EqualValues(t, 3, total.Int64)
+}
+
+func TestOpenClawMigrationImportHistoryBatchUpdatesProgressFailedItemsOnInsertFailure(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "openclaw-migration-import-history-progress-failed-items-org")
+	userID := insertTestUserWithRole(t, db, orgID, "user-openclaw-import-history-progress-failed-items", RoleOwner)
+	handler := NewOpenClawMigrationImportHandler(db)
+
+	requireOpenClawImportHistoryAgent(t, db, orgID, "main", "Frank")
+	installOpenClawHistoryInsertFailureTriggerForAPITest(t, db)
+
+	payload := `{"user_id":"` + userID + `","batch":{"id":"batch-progress-failed","index":1,"total":2},"events":[{"agent_slug":"main","role":"assistant","body":"bad [FORCE_HISTORY_INSERT_FAILURE] payload","created_at":"2026-01-01T10:00:01Z"},{"agent_slug":"main","role":"assistant","body":"valid","created_at":"2026-01-01T10:00:02Z"}]}`
+	response := callOpenClawImportHistoryEndpoint(t, handler, orgID, payload)
+	require.Equal(t, 2, response.EventsReceived)
+	require.Equal(t, 1, response.EventsProcessed)
+	require.Equal(t, 1, response.MessagesInserted)
+	require.Equal(t, 1, response.FailedItems)
+
+	var processed int
+	var failed int
+	err := db.QueryRow(
+		`SELECT processed_items, failed_items
+		   FROM migration_progress
+		  WHERE org_id = $1
+		    AND migration_type = 'history_backfill'`,
+		orgID,
+	).Scan(&processed, &failed)
+	require.NoError(t, err)
+	require.Equal(t, 2, processed)
+	require.Equal(t, 1, failed)
+}
+
+func installOpenClawHistoryInsertFailureTriggerForAPITest(t *testing.T, db *sql.DB) {
+	t.Helper()
+	_, err := db.Exec(`
+		CREATE OR REPLACE FUNCTION test_openclaw_fail_chat_message_insert()
+		RETURNS trigger AS $$
+		BEGIN
+			IF NEW.body LIKE '%[FORCE_HISTORY_INSERT_FAILURE]%' THEN
+				RAISE EXCEPTION 'forced history insert failure for testing';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+	`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`DROP TRIGGER IF EXISTS test_openclaw_fail_chat_message_insert_trg ON chat_messages`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`
+		CREATE TRIGGER test_openclaw_fail_chat_message_insert_trg
+		BEFORE INSERT ON chat_messages
+		FOR EACH ROW
+		EXECUTE FUNCTION test_openclaw_fail_chat_message_insert()
+	`)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DROP TRIGGER IF EXISTS test_openclaw_fail_chat_message_insert_trg ON chat_messages`)
+		_, _ = db.Exec(`DROP FUNCTION IF EXISTS test_openclaw_fail_chat_message_insert()`)
+	})
 }
 
 func requireOpenClawImportHistoryAgent(t *testing.T, db *sql.DB, orgID, id, name string) {

@@ -56,6 +56,11 @@ var statusMigrateOpenClawAPI = func(
 ) (ottercli.OpenClawMigrationStatus, error) {
 	return client.GetOpenClawMigrationStatus()
 }
+var reportMigrateOpenClawAPI = func(
+	client *ottercli.Client,
+) (ottercli.OpenClawMigrationReport, error) {
+	return client.GetOpenClawMigrationReport()
+}
 var pauseMigrateOpenClawAPI = func(
 	client *ottercli.Client,
 ) (ottercli.OpenClawMigrationMutationResponse, error) {
@@ -546,6 +551,7 @@ type migrateOpenClawAPISummary struct {
 	messagesInserted int
 	eventsSkipped    int
 	failedItems      int
+	report           *ottercli.OpenClawMigrationReport
 	status           *ottercli.OpenClawMigrationStatus
 	warnings         []string
 }
@@ -639,6 +645,14 @@ func runMigrateFromOpenClawAPI(
 			return statusErr
 		}
 		summary.status = status
+	}
+	if summary.historyImported {
+		report, reportErr := reportMigrateOpenClawAPI(client)
+		if reportErr != nil {
+			summary.warnings = append(summary.warnings, "failed to fetch migration reconciliation report")
+		} else {
+			summary.report = &report
+		}
 	}
 
 	renderMigrateOpenClawAPISummary(out, summary)
@@ -743,11 +757,40 @@ func renderMigrateOpenClawAPISummary(out io.Writer, summary migrateOpenClawAPISu
 		fmt.Fprintf(out, "  agent_import.failed_items=%d\n", summary.agentsSkipped)
 	}
 	if summary.historyImported {
+		expected := summary.eventsProcessed + summary.eventsSkipped + summary.failedItems
+		processed := summary.eventsProcessed
+		inserted := summary.messagesInserted
+		skipped := summary.eventsSkipped
+		failed := summary.failedItems
+		completenessRatio := 1.0
+		isComplete := true
+		if summary.report != nil {
+			expected = summary.report.EventsExpected
+			processed = summary.report.EventsProcessed
+			inserted = summary.report.MessagesInserted
+			skipped = summary.report.EventsSkippedUnknownAgent
+			failed = summary.report.FailedItems
+			completenessRatio = summary.report.CompletenessRatio
+			isComplete = summary.report.IsComplete
+		} else {
+			accounted := inserted + skipped + failed
+			if expected > 0 {
+				completenessRatio = float64(accounted) / float64(expected)
+			}
+			isComplete = accounted == expected
+		}
+
 		fmt.Fprintf(out, "  history_backfill.events_received=%d\n", summary.eventsReceived)
-		fmt.Fprintf(out, "  history_backfill.events_processed=%d\n", summary.eventsProcessed)
-		fmt.Fprintf(out, "  history_backfill.messages_inserted=%d\n", summary.messagesInserted)
-		fmt.Fprintf(out, "  history_backfill.events_skipped=%d\n", summary.eventsSkipped)
-		fmt.Fprintf(out, "  history_backfill.failed_items=%d\n", summary.failedItems)
+		fmt.Fprintf(out, "  history_backfill.events_expected=%d\n", expected)
+		fmt.Fprintf(out, "  history_backfill.events_processed=%d\n", processed)
+		fmt.Fprintf(out, "  history_backfill.messages_inserted=%d\n", inserted)
+		fmt.Fprintf(out, "  history_backfill.events_skipped=%d\n", skipped)
+		fmt.Fprintf(out, "  history_backfill.failed_items=%d\n", failed)
+		fmt.Fprintf(out, "  history_backfill.completeness_ratio=%.3f\n", completenessRatio)
+		fmt.Fprintf(out, "  history_backfill.is_complete=%t\n", isComplete)
+		if !isComplete {
+			fmt.Fprintln(out, "  history_backfill.warning=incomplete_reconciliation")
+		}
 	}
 	if summary.status != nil {
 		for _, phase := range summary.status.Phases {
@@ -778,6 +821,22 @@ func renderMigrateOpenClawSummary(out io.Writer, summary importer.OpenClawMigrat
 	fmt.Fprintf(out, "  history_backfill.events_processed=%d\n", summary.HistoryEventsProcessed)
 	fmt.Fprintf(out, "  history_backfill.events_skipped=%d\n", summary.HistoryEventsSkipped)
 	fmt.Fprintf(out, "  history_backfill.messages_inserted=%d\n", summary.HistoryMessagesInserted)
+	eventsExpected := summary.HistoryEventsProcessed + summary.HistoryEventsSkipped + summary.FailedItems
+	if eventsExpected < 0 {
+		eventsExpected = 0
+	}
+	accounted := summary.HistoryMessagesInserted + summary.HistoryEventsSkipped + summary.FailedItems
+	completenessRatio := 1.0
+	if eventsExpected > 0 {
+		completenessRatio = float64(accounted) / float64(eventsExpected)
+	}
+	isComplete := accounted == eventsExpected
+	fmt.Fprintf(out, "  history_backfill.events_expected=%d\n", eventsExpected)
+	fmt.Fprintf(out, "  history_backfill.completeness_ratio=%.3f\n", completenessRatio)
+	fmt.Fprintf(out, "  history_backfill.is_complete=%t\n", isComplete)
+	if !isComplete {
+		fmt.Fprintln(out, "  history_backfill.warning=incomplete_reconciliation")
+	}
 	if len(summary.HistorySkippedUnknownAgentCounts) > 0 {
 		slugs := make([]string, 0, len(summary.HistorySkippedUnknownAgentCounts))
 		for slug, count := range summary.HistorySkippedUnknownAgentCounts {
