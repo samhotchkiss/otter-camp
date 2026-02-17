@@ -244,6 +244,48 @@ func TestDiscoverOpenClawSessionFilesIncludesBackupLayouts(t *testing.T) {
 	require.Contains(t, bases, "bbb.jsonl")
 }
 
+func TestSessionDiscoveryIncludesDefaultArchiveBackups(t *testing.T) {
+	root := t.TempDir()
+
+	primaryDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(primaryDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(primaryDir, "primary.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	archiveDir := filepath.Join(root, "sessions-backup-20260129-230025", "raw-export", "main")
+	require.NoError(t, os.MkdirAll(archiveDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "archived.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	files, err := discoverOpenClawSessionFiles(root)
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	require.Equal(t, []string{
+		filepath.Join(primaryDir, "primary.jsonl"),
+		filepath.Join(archiveDir, "archived.jsonl"),
+	}, files)
+}
+
+func TestSessionDiscoveryIncludesConfiguredArchiveGlobs(t *testing.T) {
+	root := t.TempDir()
+
+	primaryDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(primaryDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(primaryDir, "primary.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	configuredArchiveDir := filepath.Join(root, "archives-202602", "jsonl-export")
+	require.NoError(t, os.MkdirAll(configuredArchiveDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(configuredArchiveDir, "configured.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	t.Setenv("OPENCLAW_SESSION_ARCHIVE_GLOBS", "archives-*")
+
+	files, err := discoverOpenClawSessionFiles(root)
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	require.Equal(t, []string{
+		filepath.Join(primaryDir, "primary.jsonl"),
+		filepath.Join(root, "archives-202602", "jsonl-export", "configured.jsonl"),
+	}, files)
+}
+
 func TestDeriveMetadataFromBackupLayout(t *testing.T) {
 	// Standard: agents/main/sessions/uuid.jsonl → main, uuid
 	slug, id := deriveOpenClawSessionPathMetadata("/root/agents/main/sessions/abc-123.jsonl")

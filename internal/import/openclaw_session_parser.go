@@ -16,6 +16,7 @@ const (
 	OpenClawSessionEventRoleUser       = "user"
 	OpenClawSessionEventRoleAssistant  = "assistant"
 	OpenClawSessionEventRoleToolResult = "toolResult"
+	openClawSessionArchiveGlobsEnv     = "OPENCLAW_SESSION_ARCHIVE_GLOBS"
 )
 
 type OpenClawSessionEvent struct {
@@ -155,34 +156,148 @@ func parseOpenClawSessionFile(sessionPath string, strict bool) ([]OpenClawSessio
 	return events, nil
 }
 
-// discoverOpenClawSessionFiles walks root recursively for *.jsonl files that
-// live under a directory whose name contains "sessions". This catches both the
-// standard layout (agents/<slug>/sessions/<id>.jsonl) and backup layouts
-// (sessions-backup-*/<slug>-sessions/<id>.jsonl). It explicitly excludes the
-// logs/ directory and known non-session files like config-audit.jsonl.
+// discoverOpenClawSessionFiles resolves deterministic search roots and collects
+// session JSONL files from:
+//   - primary agent sessions: agents/*/sessions
+//   - default archives: sessions-backup-*
+//   - optional env archives: OPENCLAW_SESSION_ARCHIVE_GLOBS
+//
+// Env glob patterns are comma-separated and resolved relative to root unless
+// absolute. Roots outside root are ignored.
 func discoverOpenClawSessionFiles(root string) ([]string, error) {
+	searchRoots, err := resolveOpenClawSessionSearchRoots(root)
+	if err != nil {
+		return nil, err
+	}
+
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	for _, searchRoot := range searchRoots {
+		rootFiles, err := collectOpenClawJSONLFiles(searchRoot)
 		if err != nil {
-			return err
+			return nil, err
+		}
+		files = append(files, rootFiles...)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func resolveOpenClawSessionSearchRoots(root string) ([]string, error) {
+	cleanRoot := filepath.Clean(strings.TrimSpace(root))
+	if cleanRoot == "" {
+		return nil, fmt.Errorf("openclaw root dir is required")
+	}
+
+	rootSet := map[string]struct{}{}
+	addRoot := func(path string) {
+		clean := filepath.Clean(strings.TrimSpace(path))
+		if clean == "" {
+			return
+		}
+		if !isWithinDir(cleanRoot, clean) {
+			return
+		}
+		rootSet[clean] = struct{}{}
+	}
+
+	for _, match := range sortedGlobMatches(filepath.Join(cleanRoot, "agents", "*", "sessions")) {
+		if isDirectory(match) {
+			addRoot(match)
+		}
+	}
+	topLevelSessions := filepath.Join(cleanRoot, "sessions")
+	if isDirectory(topLevelSessions) {
+		addRoot(topLevelSessions)
+	}
+	for _, match := range sortedGlobMatches(filepath.Join(cleanRoot, "sessions-backup-*")) {
+		if isDirectory(match) {
+			addRoot(match)
+		}
+	}
+
+	for _, pattern := range parseOpenClawArchiveGlobEnv(os.Getenv(openClawSessionArchiveGlobsEnv)) {
+		globPattern := pattern
+		if !filepath.IsAbs(globPattern) {
+			globPattern = filepath.Join(cleanRoot, globPattern)
+		}
+		matches, err := filepath.Glob(globPattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s pattern %q: %w", openClawSessionArchiveGlobsEnv, pattern, err)
+		}
+		sort.Strings(matches)
+		for _, match := range matches {
+			if isDirectory(match) || strings.EqualFold(filepath.Ext(match), ".jsonl") {
+				addRoot(match)
+			}
+		}
+	}
+
+	roots := make([]string, 0, len(rootSet))
+	for rootPath := range rootSet {
+		roots = append(roots, rootPath)
+	}
+	sort.Strings(roots)
+	return roots, nil
+}
+
+func parseOpenClawArchiveGlobEnv(raw string) []string {
+	parts := strings.Split(raw, ",")
+	seen := map[string]struct{}{}
+	globs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		globs = append(globs, trimmed)
+	}
+	sort.Strings(globs)
+	return globs
+}
+
+func sortedGlobMatches(pattern string) []string {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil
+	}
+	sort.Strings(matches)
+	return matches
+}
+
+func collectOpenClawJSONLFiles(searchRoot string) ([]string, error) {
+	info, err := os.Stat(searchRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		if strings.EqualFold(filepath.Ext(searchRoot), ".jsonl") {
+			return []string{searchRoot}, nil
+		}
+		return nil, nil
+	}
+
+	files := make([]string, 0)
+	err = filepath.WalkDir(searchRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 		if d.IsDir() {
 			base := d.Name()
-			// Skip known non-session directories
-			if base == "logs" || base == ".git" || base == "node_modules" {
+			if base == ".git" || base == "node_modules" || base == "logs" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if filepath.Ext(path) != ".jsonl" {
-			return nil
+		if strings.EqualFold(filepath.Ext(path), ".jsonl") {
+			files = append(files, path)
 		}
-		// Only include files where the parent directory name contains "sessions"
-		parentDir := filepath.Base(filepath.Dir(path))
-		if !strings.Contains(parentDir, "sessions") {
-			return nil
-		}
-		files = append(files, path)
 		return nil
 	})
 	if err != nil {
