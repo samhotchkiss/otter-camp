@@ -39,6 +39,22 @@ type OpenClawAgentImportResult struct {
 	InactiveAgents int
 }
 
+type OpenClawAgentPayloadImportOptions struct {
+	OrgID         string
+	Identities    []ImportedAgentIdentity
+	SummaryWriter io.Writer
+}
+
+type OpenClawAgentPayloadImportResult struct {
+	Processed      int
+	Inserted       int
+	Updated        int
+	Skipped        int
+	ActiveAgents   int
+	InactiveAgents int
+	Warnings       []string
+}
+
 func ImportOpenClawAgents(
 	ctx context.Context,
 	db *sql.DB,
@@ -55,15 +71,55 @@ func ImportOpenClawAgents(
 	if opts.Installation == nil {
 		return OpenClawAgentImportResult{}, fmt.Errorf("installation is required")
 	}
-
 	identities, err := ImportOpenClawAgentIdentities(opts.Installation)
 	if err != nil {
 		return OpenClawAgentImportResult{}, err
 	}
 
+	result, err := ImportOpenClawAgentsFromPayload(ctx, db, OpenClawAgentPayloadImportOptions{
+		OrgID:      orgID,
+		Identities: identities,
+	})
+	if err != nil {
+		return OpenClawAgentImportResult{}, err
+	}
+
+	legacyResult := OpenClawAgentImportResult{
+		ImportedAgents: result.Processed,
+		ActiveAgents:   result.ActiveAgents,
+		InactiveAgents: result.InactiveAgents,
+	}
+
+	if opts.SummaryWriter != nil {
+		_, _ = fmt.Fprintf(
+			opts.SummaryWriter,
+			"OpenClaw agent import: imported %d agents (%d active, %d inactive)\n",
+			legacyResult.ImportedAgents,
+			legacyResult.ActiveAgents,
+			legacyResult.InactiveAgents,
+		)
+	}
+
+	return legacyResult, nil
+}
+
+func ImportOpenClawAgentsFromPayload(
+	ctx context.Context,
+	db *sql.DB,
+	opts OpenClawAgentPayloadImportOptions,
+) (OpenClawAgentPayloadImportResult, error) {
+	if db == nil {
+		return OpenClawAgentPayloadImportResult{}, fmt.Errorf("database is required")
+	}
+
+	orgID := strings.TrimSpace(opts.OrgID)
+	if !openClawImportUUIDRegex.MatchString(orgID) {
+		return OpenClawAgentPayloadImportResult{}, fmt.Errorf("invalid org_id")
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return OpenClawAgentImportResult{}, fmt.Errorf("failed to start openclaw agent import transaction: %w", err)
+		return OpenClawAgentPayloadImportResult{}, fmt.Errorf("failed to start openclaw agent import transaction: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -72,14 +128,57 @@ func ImportOpenClawAgents(
 		}
 	}()
 
-	result := OpenClawAgentImportResult{}
+	result, err := importOpenClawAgentPayload(ctx, tx, orgID, opts.Identities)
+	if err != nil {
+		return OpenClawAgentPayloadImportResult{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return OpenClawAgentPayloadImportResult{}, fmt.Errorf("failed to commit openclaw agent import transaction: %w", err)
+	}
+	committed = true
+
+	if opts.SummaryWriter != nil {
+		_, _ = fmt.Fprintf(
+			opts.SummaryWriter,
+			"OpenClaw agent payload import: processed=%d inserted=%d updated=%d skipped=%d active=%d inactive=%d\n",
+			result.Processed,
+			result.Inserted,
+			result.Updated,
+			result.Skipped,
+			result.ActiveAgents,
+			result.InactiveAgents,
+		)
+	}
+
+	return result, nil
+}
+
+func importOpenClawAgentPayload(
+	ctx context.Context,
+	tx *sql.Tx,
+	orgID string,
+	identities []ImportedAgentIdentity,
+) (OpenClawAgentPayloadImportResult, error) {
+	result := OpenClawAgentPayloadImportResult{}
 	seenSlugs := make(map[string]struct{}, len(identities))
-	for _, identity := range identities {
-		slug := normalizeOpenClawImportAgentSlug(identity.ID)
+	for idx, identity := range identities {
+		rawID := strings.TrimSpace(identity.ID)
+		if rawID == "" {
+			result.Skipped++
+			result.Warnings = append(result.Warnings, fmt.Sprintf("identity[%d] skipped: missing identity id", idx))
+			continue
+		}
+
+		slug := normalizeOpenClawImportAgentSlug(rawID)
 		if slug == "" {
+			result.Skipped++
+			result.Warnings = append(result.Warnings, fmt.Sprintf("identity[%d] skipped: invalid identity id %q", idx, rawID))
 			continue
 		}
 		if _, seen := seenSlugs[slug]; seen {
+			result.Skipped++
+			result.Warnings = append(result.Warnings, fmt.Sprintf("identity[%d] skipped: duplicate identity slug %q", idx, slug))
 			continue
 		}
 		seenSlugs[slug] = struct{}{}
@@ -92,6 +191,11 @@ func ImportOpenClawAgents(
 		status := deriveOpenClawImportAgentStatus(slug, displayName)
 		role := extractOpenClawImportAgentRole(identity.Soul)
 		emoji := extractOpenClawImportAgentEmoji(displayName)
+
+		exists, err := openClawImportAgentExists(ctx, tx, orgID, slug)
+		if err != nil {
+			return OpenClawAgentPayloadImportResult{}, err
+		}
 
 		if _, err := tx.ExecContext(
 			ctx,
@@ -138,10 +242,15 @@ func ImportOpenClawAgents(
 			openClawImportNullableText(identity.Identity),
 			openClawImportNullableText(identity.Tools),
 		); err != nil {
-			return OpenClawAgentImportResult{}, fmt.Errorf("failed to upsert openclaw agent %q: %w", slug, err)
+			return OpenClawAgentPayloadImportResult{}, fmt.Errorf("failed to upsert openclaw agent %q: %w", slug, err)
 		}
 
-		result.ImportedAgents++
+		result.Processed++
+		if exists {
+			result.Updated++
+		} else {
+			result.Inserted++
+		}
 		if status == "active" {
 			result.ActiveAgents++
 		} else {
@@ -149,22 +258,28 @@ func ImportOpenClawAgents(
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return OpenClawAgentImportResult{}, fmt.Errorf("failed to commit openclaw agent import transaction: %w", err)
-	}
-	committed = true
-
-	if opts.SummaryWriter != nil {
-		_, _ = fmt.Fprintf(
-			opts.SummaryWriter,
-			"OpenClaw agent import: imported %d agents (%d active, %d inactive)\n",
-			result.ImportedAgents,
-			result.ActiveAgents,
-			result.InactiveAgents,
-		)
-	}
-
 	return result, nil
+}
+
+func openClawImportAgentExists(ctx context.Context, tx *sql.Tx, orgID, slug string) (bool, error) {
+	var existing string
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT slug
+		   FROM agents
+		  WHERE org_id = $1
+		    AND slug = $2
+		  LIMIT 1`,
+		orgID,
+		slug,
+	).Scan(&existing)
+	if err == nil {
+		return true, nil
+	}
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return false, fmt.Errorf("failed to check existing openclaw agent %q: %w", slug, err)
 }
 
 func normalizeOpenClawImportAgentSlug(raw string) string {
