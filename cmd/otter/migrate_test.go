@@ -317,3 +317,21 @@ func TestMigrateFromOpenClawRendersHistoryProgressWithETA(t *testing.T) {
 	require.Contains(t, rendered, "History progress: 10/100 (10.0%) ETA")
 	require.Contains(t, rendered, "History progress: 100/100 (100.0%) ETA 0s")
 }
+
+func TestRenderMigrateOpenClawSummaryIncludesSkippedBreakdown(t *testing.T) {
+	var out bytes.Buffer
+	renderMigrateOpenClawSummary(&out, importer.OpenClawMigrationSummaryReport{
+		HistoryEventsProcessed: 100,
+		HistoryEventsSkipped:   3259,
+		HistorySkippedUnknownAgentCounts: map[string]int{
+			"codex":       3247,
+			"sandbox-bot": 12,
+		},
+	})
+
+	rendered := out.String()
+	require.Contains(t, rendered, "history_backfill.events_processed=100")
+	require.Contains(t, rendered, "history_backfill.events_skipped=3259")
+	require.Contains(t, rendered, "history_backfill.skipped_unknown_agent.codex=3247")
+	require.Contains(t, rendered, "history_backfill.skipped_unknown_agent.sandbox-bot=12")
+}

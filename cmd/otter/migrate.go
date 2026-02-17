@@ -268,7 +268,21 @@ func renderMigrateOpenClawSummary(out io.Writer, summary importer.OpenClawMigrat
 	fmt.Fprintln(out, "OpenClaw migration summary:")
 	fmt.Fprintf(out, "  agent_import.processed=%d\n", summary.AgentImportProcessed)
 	fmt.Fprintf(out, "  history_backfill.events_processed=%d\n", summary.HistoryEventsProcessed)
+	fmt.Fprintf(out, "  history_backfill.events_skipped=%d\n", summary.HistoryEventsSkipped)
 	fmt.Fprintf(out, "  history_backfill.messages_inserted=%d\n", summary.HistoryMessagesInserted)
+	if len(summary.HistorySkippedUnknownAgentCounts) > 0 {
+		slugs := make([]string, 0, len(summary.HistorySkippedUnknownAgentCounts))
+		for slug, count := range summary.HistorySkippedUnknownAgentCounts {
+			if strings.TrimSpace(slug) == "" || count <= 0 {
+				continue
+			}
+			slugs = append(slugs, slug)
+		}
+		sort.Strings(slugs)
+		for _, slug := range slugs {
+			fmt.Fprintf(out, "  history_backfill.skipped_unknown_agent.%s=%d\n", slug, summary.HistorySkippedUnknownAgentCounts[slug])
+		}
+	}
 	fmt.Fprintf(out, "  memory_extraction.processed=%d\n", summary.MemoryExtractionProcessed)
 	fmt.Fprintf(out, "  entity_synthesis.processed=%d\n", summary.EntitySynthesisProcessed)
 	fmt.Fprintf(out, "  memory_dedup.processed=%d\n", summary.MemoryDedupProcessed)
