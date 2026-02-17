@@ -1,22 +1,23 @@
-# Simple nginx static file server for sales site
-FROM nginx:alpine
+FROM golang:1.24-alpine AS builder
+WORKDIR /app
 
-# Copy static files
-COPY index.html /usr/share/nginx/html/
-COPY indeed.html /usr/share/nginx/html/
-COPY images/ /usr/share/nginx/html/images/
-COPY personas/ /usr/share/nginx/html/personas/
+RUN apk add --no-cache git ca-certificates
 
-# Custom nginx config for SPA fallback and port
-RUN echo 'server { \
-    listen 8080; \
-    root /usr/share/nginx/html; \
-    index index.html; \
-    location / { \
-        try_files $uri $uri/ /index.html; \
-    } \
-}' > /etc/nginx/conf.d/default.conf
+COPY go.mod go.sum ./
+RUN go mod download
 
+COPY . .
+RUN go build -o /app/out/www-server ./cmd/www
+
+FROM alpine:3.19
+WORKDIR /app
+
+RUN apk add --no-cache ca-certificates
+
+COPY --from=builder /app/out/www-server /app/www-server
+COPY --from=builder /app/www /app/www
+
+ENV PORT=8080
 EXPOSE 8080
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/app/www-server"]
