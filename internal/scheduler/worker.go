@@ -22,6 +22,7 @@ type AgentJobWorkerConfig struct {
 	MaxPerPoll    int
 	RunTimeout    time.Duration
 	MaxRunHistory int
+	WorkspaceID   string
 }
 
 type AgentJobWorker struct {

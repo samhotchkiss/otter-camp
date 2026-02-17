@@ -299,6 +299,8 @@ func TestMainStartsJobSchedulerWorkerWhenConfigured(t *testing.T) {
 		"cfg.JobScheduler.Enabled",
 		"scheduler.NewAgentJobWorker",
 		"store.NewAgentJobStore",
+		"WorkspaceID:",
+		"cfg.OrgID",
 		"Agent job scheduler worker started",
 		"Agent job scheduler worker disabled; database unavailable",
 		"startWorker(worker.Start)",

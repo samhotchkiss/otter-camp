@@ -100,16 +100,17 @@ type GitHubConfig struct {
 }
 
 type Config struct {
-	Port                     string
-	DatabaseURL              string
-	Environment              string
-	GitHub                   GitHubConfig
-	ConversationEmbedding    ConversationEmbeddingConfig
-	ConversationSegmentation ConversationSegmentationConfig
-	EllieIngestion           EllieIngestionConfig
-	EllieContextInjection    EllieContextInjectionConfig
+	OrgID                     string
+	Port                      string
+	DatabaseURL               string
+	Environment               string
+	GitHub                    GitHubConfig
+	ConversationEmbedding     ConversationEmbeddingConfig
+	ConversationSegmentation  ConversationSegmentationConfig
+	EllieIngestion            EllieIngestionConfig
+	EllieContextInjection     EllieContextInjectionConfig
 	ConversationTokenBackfill ConversationTokenBackfillConfig
-	JobScheduler             JobSchedulerConfig
+	JobScheduler              JobSchedulerConfig
 }
 
 type ConversationEmbeddingConfig struct {
@@ -163,6 +164,7 @@ type JobSchedulerConfig struct {
 
 func Load() (Config, error) {
 	cfg := Config{
+		OrgID:       strings.TrimSpace(os.Getenv("OTTER_ORG_ID")),
 		Port:        firstNonEmpty(strings.TrimSpace(os.Getenv("PORT")), defaultPort),
 		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		Environment: resolveEnvironment(),
@@ -199,11 +201,11 @@ func Load() (Config, error) {
 			),
 			OpenAIAPIKey: strings.TrimSpace(os.Getenv("CONVERSATION_EMBEDDER_OPENAI_API_KEY")),
 		},
-		ConversationSegmentation: ConversationSegmentationConfig{},
-		EllieIngestion:           EllieIngestionConfig{},
-		EllieContextInjection:    EllieContextInjectionConfig{},
+		ConversationSegmentation:  ConversationSegmentationConfig{},
+		EllieIngestion:            EllieIngestionConfig{},
+		EllieContextInjection:     EllieContextInjectionConfig{},
 		ConversationTokenBackfill: ConversationTokenBackfillConfig{},
-		JobScheduler:             JobSchedulerConfig{},
+		JobScheduler:              JobSchedulerConfig{},
 	}
 
 	githubEnabled, err := parseBool("GITHUB_INTEGRATION_ENABLED", false)
