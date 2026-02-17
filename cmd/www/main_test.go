@@ -89,3 +89,33 @@ func TestJoinSignupPage(t *testing.T) {
 	require.Contains(t, body, `id="copy-command"`)
 	require.Contains(t, body, `curl -sSL otter.camp/install | bash -s -- --token`)
 }
+
+func TestInstallRoute(t *testing.T) {
+	staticDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("<html><body>landing-page</body></html>"), 0o644))
+
+	handler := newServerHandler(staticDir, joinConfig{})
+
+	t.Run("get returns hosted install script", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/install", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Contains(t, rec.Header().Get("Content-Type"), "application/x-sh")
+
+		body := rec.Body.String()
+		require.Contains(t, body, "#!/usr/bin/env bash")
+		require.Contains(t, body, "init --mode hosted --token \"$TOKEN\" --url \"$URL\"")
+		require.Contains(t, body, "missing required --token")
+		require.Contains(t, body, "missing required --url")
+	})
+
+	t.Run("non-get returns 404", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/install", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusNotFound, rec.Code)
+	})
+}
