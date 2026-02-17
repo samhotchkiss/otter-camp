@@ -51,6 +51,17 @@ func (c joinConfig) isValidInviteCode(code string) bool {
 
 func newServerHandler(staticDir string, cfg joinConfig) http.Handler {
 	mux := http.NewServeMux()
+	staticFileServer := http.FileServer(http.Dir(staticDir))
+
+	serveMarketingPage := func(w http.ResponseWriter, r *http.Request) {
+		clone := r.Clone(r.Context())
+		urlCopy := *clone.URL
+		urlCopy.Path = "/"
+		urlCopy.RawPath = ""
+		clone.URL = &urlCopy
+		staticFileServer.ServeHTTP(w, clone)
+	}
+
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -72,8 +83,12 @@ func newServerHandler(staticDir string, cfg joinConfig) http.Handler {
 		}
 
 		code := strings.TrimPrefix(r.URL.Path, "/join/")
-		if code == "" || strings.Contains(code, "/") || !cfg.isValidInviteCode(code) {
+		if code == "" || strings.Contains(code, "/") {
 			http.NotFound(w, r)
+			return
+		}
+		if !cfg.isValidInviteCode(code) {
+			serveMarketingPage(w, r)
 			return
 		}
 
@@ -81,7 +96,7 @@ func newServerHandler(staticDir string, cfg joinConfig) http.Handler {
 		_, _ = fmt.Fprint(w, renderJoinPage(code))
 	})
 
-	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+	mux.Handle("/", staticFileServer)
 	return mux
 }
 

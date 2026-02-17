@@ -112,6 +112,7 @@ func NewRouter() http.Handler {
 	taxonomyHandler := &TaxonomyHandler{}
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
 	conversationTokenHandler := &ConversationTokenHandler{}
+	waitlistHandler := NewWaitlistHandler(db)
 	// Settings uses standalone handler functions (no struct needed)
 	pipelineRolesHandler := &PipelineRolesHandler{}
 	deployConfigHandler := &DeployConfigHandler{}
@@ -234,7 +235,7 @@ func NewRouter() http.Handler {
 
 	// All API routes under /api prefix
 	r.Route("/api", func(r chi.Router) {
-		r.Post("/waitlist", HandleWaitlist)
+		r.Post("/waitlist", waitlistHandler.Handle)
 		r.Get("/search", SearchHandler)
 		r.Get("/commands/search", CommandSearchHandler)
 		r.Post("/commands/execute", CommandExecuteHandler)
