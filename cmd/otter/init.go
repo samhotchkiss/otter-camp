@@ -410,8 +410,17 @@ func runInitImportAndBridgeWithOptions(
 		fmt.Fprintf(out, "Imported %d agents, %d projects, %d issues from OpenClaw.\n", agentsImported, projectsImported, issuesImported)
 	}
 
-	repoRoot, err := resolveInitRepoRoot()
-	if err != nil || strings.TrimSpace(repoRoot) == "" {
+	repoRoot := ""
+	if installation != nil {
+		repoRoot = strings.TrimSpace(installation.RootDir)
+	}
+	if repoRoot == "" {
+		resolved, err := resolveInitRepoRoot()
+		if err == nil && strings.TrimSpace(resolved) != "" {
+			repoRoot = resolved
+		}
+	}
+	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
 
