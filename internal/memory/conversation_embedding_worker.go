@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultConversationEmbeddingBatchSize    = 50
+	defaultConversationEmbeddingBatchSize    = 20
 	defaultConversationEmbeddingPollInterval = 5 * time.Second
 	maxConversationEmbeddingBackoff          = 5 * time.Minute
 )
