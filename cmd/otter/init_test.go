@@ -136,8 +136,8 @@ func TestInitHostedWithFlagsPersistsConfig(t *testing.T) {
 	if state.savedCfg.Token != "oc_sess_hosted" {
 		t.Fatalf("saved token = %q, want oc_sess_hosted", state.savedCfg.Token)
 	}
-	if state.savedCfg.APIBaseURL != "https://swh.otter.camp/api" {
-		t.Fatalf("saved api base = %q, want https://swh.otter.camp/api", state.savedCfg.APIBaseURL)
+	if state.savedCfg.APIBaseURL != "https://swh.otter.camp" {
+		t.Fatalf("saved api base = %q, want https://swh.otter.camp", state.savedCfg.APIBaseURL)
 	}
 	if state.savedCfg.DefaultOrg != "org-hosted" {
 		t.Fatalf("saved default org = %q, want org-hosted", state.savedCfg.DefaultOrg)
