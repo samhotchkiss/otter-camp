@@ -81,6 +81,8 @@ func TestRequireCapabilityAllowsExpectedRoles(t *testing.T) {
 		{name: "maintainer can publish", role: RoleMaintainer, capability: CapabilityGitHubPublish, wantCode: http.StatusNoContent},
 		{name: "member can run manual sync", role: RoleMember, capability: CapabilityGitHubManualSync, wantCode: http.StatusNoContent},
 		{name: "member cannot publish", role: RoleMember, capability: CapabilityGitHubPublish, wantCode: http.StatusForbidden},
+		{name: "maintainer can manage openclaw migration", role: RoleMaintainer, capability: CapabilityOpenClawMigrationManage, wantCode: http.StatusNoContent},
+		{name: "member cannot manage openclaw migration", role: RoleMember, capability: CapabilityOpenClawMigrationManage, wantCode: http.StatusForbidden},
 	}
 
 	for _, tc := range tests {
@@ -109,6 +111,15 @@ func TestRequireCapabilityAllowsExpectedRoles(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOpenClawMigrationCapabilityAllowsExpectedRoles(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, roleAllowsCapability(RoleOwner, CapabilityOpenClawMigrationManage))
+	require.True(t, roleAllowsCapability(RoleMaintainer, CapabilityOpenClawMigrationManage))
+	require.False(t, roleAllowsCapability(RoleMember, CapabilityOpenClawMigrationManage))
+	require.False(t, roleAllowsCapability(RoleViewer, CapabilityOpenClawMigrationManage))
 }
 
 func TestRequireCapabilityRejectsWorkspaceMismatch(t *testing.T) {
