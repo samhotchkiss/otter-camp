@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -117,6 +118,7 @@ func TestOpenClawMigrationSummaryReport(t *testing.T) {
 	require.Equal(t, map[string]int{"codex": 7}, report.HistorySkippedUnknownAgentCounts)
 	require.Equal(t, 39, report.EmbeddingPhaseProcessed)
 	require.Equal(t, 0, report.EmbeddingPhaseRemaining)
+	require.Equal(t, time.Duration(0), report.EmbeddingPhaseDuration)
 	require.Equal(t, 39, report.MemoryExtractionProcessed)
 	require.Equal(t, 11, report.EntitySynthesisProcessed)
 	require.Equal(t, 12, report.MemoryDedupProcessed)
@@ -160,4 +162,18 @@ func TestOpenClawMigrationSummaryReportIncludesEntityAndDedup(t *testing.T) {
 
 	require.Equal(t, 11, report.EntitySynthesisProcessed)
 	require.Equal(t, 8, report.MemoryDedupProcessed)
+}
+
+func TestOpenClawMigrationEmbeddingPhaseTimeoutSurfacesWarning(t *testing.T) {
+	report := BuildOpenClawMigrationSummaryReport(RunOpenClawMigrationResult{
+		EmbeddingPhase: &OpenClawEmbeddingPhaseResult{
+			ProcessedEmbeddings: 10,
+			RemainingEmbeddings: 4,
+			TimedOut:            true,
+		},
+	})
+
+	require.Equal(t, 10, report.EmbeddingPhaseProcessed)
+	require.Equal(t, 4, report.EmbeddingPhaseRemaining)
+	require.Contains(t, report.Warnings, "history embedding phase timed out with remaining backlog")
 }

@@ -1,5 +1,7 @@
 package importer
 
+import "time"
+
 type OpenClawMigrationSummaryReport struct {
 	AgentImportProcessed             int
 	HistoryEventsProcessed           int
@@ -8,6 +10,7 @@ type OpenClawMigrationSummaryReport struct {
 	HistorySkippedUnknownAgentCounts map[string]int
 	EmbeddingPhaseProcessed          int
 	EmbeddingPhaseRemaining          int
+	EmbeddingPhaseDuration           time.Duration
 	MemoryExtractionProcessed        int
 	EntitySynthesisProcessed         int
 	MemoryDedupProcessed             int
@@ -45,6 +48,13 @@ func BuildOpenClawMigrationSummaryReport(result RunOpenClawMigrationResult) Open
 	if result.EmbeddingPhase != nil {
 		report.EmbeddingPhaseProcessed = result.EmbeddingPhase.ProcessedEmbeddings
 		report.EmbeddingPhaseRemaining = result.EmbeddingPhase.RemainingEmbeddings
+		report.EmbeddingPhaseDuration = result.EmbeddingPhase.Duration
+		if result.EmbeddingPhase.TimedOut {
+			report.Warnings = append(
+				report.Warnings,
+				"history embedding phase timed out with remaining backlog",
+			)
+		}
 	}
 	if result.EllieBackfill != nil {
 		report.MemoryExtractionProcessed = result.EllieBackfill.ProcessedMessages

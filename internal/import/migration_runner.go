@@ -669,7 +669,12 @@ func (r *OpenClawMigrationRunner) runHistoryEmbeddingPhase(
 	}
 
 	completedLabel := "history embedding backfill complete"
-	if embeddingResult.RemainingEmbeddings > 0 {
+	if embeddingResult.TimedOut {
+		completedLabel = fmt.Sprintf(
+			"history embedding timed out with %d remaining",
+			max(embeddingResult.RemainingEmbeddings, 0),
+		)
+	} else if embeddingResult.RemainingEmbeddings > 0 {
 		completedLabel = "history embedding backfill complete with remaining backlog"
 	}
 	if _, err := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{

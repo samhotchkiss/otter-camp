@@ -96,6 +96,47 @@ func (s *ConversationEmbeddingStore) ListPendingChatMessages(ctx context.Context
 	return pending, nil
 }
 
+func (s *ConversationEmbeddingStore) CountPendingEmbeddings(ctx context.Context, orgID string) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("conversation embedding store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	column := s.embeddingColumn()
+	var (
+		query string
+		args  []any
+	)
+	if orgID == "" {
+		query = fmt.Sprintf(
+			`SELECT
+			  (SELECT COUNT(*) FROM chat_messages WHERE %s IS NULL) +
+			  (SELECT COUNT(*) FROM memories WHERE %s IS NULL)`,
+			column,
+			column,
+		)
+		args = nil
+	} else {
+		query = fmt.Sprintf(
+			`SELECT
+			  (SELECT COUNT(*) FROM chat_messages WHERE org_id = $1 AND %s IS NULL) +
+			  (SELECT COUNT(*) FROM memories WHERE org_id = $1 AND %s IS NULL)`,
+			column,
+			column,
+		)
+		args = []any{orgID}
+	}
+
+	var pending int
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&pending); err != nil {
+		return 0, fmt.Errorf("failed to count pending embeddings: %w", err)
+	}
+	if pending < 0 {
+		pending = 0
+	}
+	return pending, nil
+}
+
 func (s *ConversationEmbeddingStore) UpdateChatMessageEmbedding(ctx context.Context, messageID string, embedding []float64) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("conversation embedding store is not configured")
