@@ -618,8 +618,7 @@ func restartOpenClawGateway(out io.Writer) error {
 }
 
 func startBridgeProcess(repoRoot string, out io.Writer) error {
-	cmd := exec.Command("npx", "tsx", "bridge/openclaw-bridge.ts", "--continuous")
-	cmd.Dir = repoRoot
+	cmd := exec.Command("bash", "-lc", buildInitBridgeStartCommand(repoRoot))
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Start(); err != nil {
@@ -629,6 +628,17 @@ func startBridgeProcess(repoRoot string, out io.Writer) error {
 		fmt.Fprintf(out, "Bridge started in background (pid %d).\n", cmd.Process.Pid)
 	}
 	return nil
+}
+
+func buildInitBridgeStartCommand(repoRoot string) string {
+	root := strings.TrimSpace(repoRoot)
+	if root == "" {
+		root = "."
+	}
+	return fmt.Sprintf(
+		"cd %s && set -a && . bridge/.env && set +a && npx tsx bridge/openclaw-bridge.ts --continuous",
+		shellSingleQuote(root),
+	)
 }
 
 func promptRequiredField(reader *bufio.Reader, out io.Writer, label string) string {
