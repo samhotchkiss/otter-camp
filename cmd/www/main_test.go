@@ -66,3 +66,26 @@ func TestJoinRoute(t *testing.T) {
 		require.NotContains(t, string(body), "invite")
 	})
 }
+
+func TestJoinSignupPage(t *testing.T) {
+	staticDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("<html><body>landing-page</body></html>"), 0o644))
+
+	handler := newServerHandler(staticDir, joinConfig{InviteCodes: map[string]struct{}{"valid-code": {}}})
+
+	req := httptest.NewRequest(http.MethodGet, "/join/valid-code", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, `id="join-form"`)
+	require.Contains(t, body, `name="name"`)
+	require.Contains(t, body, `name="email"`)
+	require.Contains(t, body, `name="organization_name"`)
+	require.Contains(t, body, `name="subdomain"`)
+	require.Contains(t, body, `https://api.otter.camp/api/onboarding/bootstrap`)
+	require.Contains(t, body, `^[a-z0-9-]{3,32}$`)
+	require.Contains(t, body, `id="copy-command"`)
+	require.Contains(t, body, `curl -sSL otter.camp/install | bash -s -- --token`)
+}
