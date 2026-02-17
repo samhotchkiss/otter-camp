@@ -2119,3 +2119,32 @@ func TestMigration073AgentJobsFilesExistAndContainCoreDDL(t *testing.T) {
 	require.Contains(t, downContent, "drop table if exists agent_job_runs")
 	require.Contains(t, downContent, "drop table if exists agent_jobs")
 }
+
+func TestSchemaIncludesOpenClawHistoryFailureLedgerMigration(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"083_create_openclaw_history_import_failures.up.sql",
+		"083_create_openclaw_history_import_failures.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "083_create_openclaw_history_import_failures.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "create table if not exists openclaw_history_import_failures")
+	require.Contains(t, upContent, "attempt_count int not null default 1")
+	require.Contains(t, upContent, "first_seen_at timestamptz not null default now()")
+	require.Contains(t, upContent, "last_seen_at timestamptz not null default now()")
+	require.Contains(t, upContent, "create unique index if not exists openclaw_history_import_failures_identity_uidx")
+	require.Contains(t, upContent, "create policy openclaw_history_import_failures_org_isolation")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "083_create_openclaw_history_import_failures.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop policy if exists openclaw_history_import_failures_org_isolation")
+	require.Contains(t, downContent, "drop index if exists openclaw_history_import_failures_identity_uidx")
+	require.Contains(t, downContent, "drop table if exists openclaw_history_import_failures")
+}
