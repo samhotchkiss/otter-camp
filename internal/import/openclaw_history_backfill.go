@@ -29,6 +29,20 @@ type OpenClawHistoryBackfillOptions struct {
 	SummaryWriter io.Writer
 }
 
+type OpenClawHistoryBatch struct {
+	ID    string
+	Index int
+	Total int
+}
+
+type OpenClawHistoryBatchPayloadOptions struct {
+	OrgID         string
+	UserID        string
+	Batch         OpenClawHistoryBatch
+	Events        []OpenClawSessionEvent
+	SummaryWriter io.Writer
+}
+
 type OpenClawHistoryBackfillResult struct {
 	RoomsCreated              int
 	ParticipantsAdded         int
@@ -38,10 +52,82 @@ type OpenClawHistoryBackfillResult struct {
 	SkippedUnknownAgentCounts map[string]int
 }
 
+type OpenClawHistoryBatchPayloadResult struct {
+	Batch                     OpenClawHistoryBatch
+	EventsReceived            int
+	EventsProcessed           int
+	MessagesInserted          int
+	RoomsCreated              int
+	ParticipantsAdded         int
+	EventsSkippedUnknownAgent int
+	FailedItems               int
+	Warnings                  []string
+}
+
 type openClawBackfillAgent struct {
 	ID          string
 	Slug        string
 	DisplayName string
+}
+
+func BackfillOpenClawHistoryFromBatchPayload(
+	ctx context.Context,
+	db *sql.DB,
+	opts OpenClawHistoryBatchPayloadOptions,
+) (OpenClawHistoryBatchPayloadResult, error) {
+	result := OpenClawHistoryBatchPayloadResult{
+		Batch:          opts.Batch,
+		EventsReceived: len(opts.Events),
+	}
+
+	validEvents := make([]OpenClawSessionEvent, 0, len(opts.Events))
+	for idx, event := range opts.Events {
+		if strings.TrimSpace(event.AgentSlug) == "" {
+			result.FailedItems++
+			result.Warnings = append(result.Warnings, fmt.Sprintf("event[%d] skipped: missing agent slug", idx))
+			continue
+		}
+		if strings.TrimSpace(event.Body) == "" {
+			result.FailedItems++
+			result.Warnings = append(result.Warnings, fmt.Sprintf("event[%d] skipped: missing body", idx))
+			continue
+		}
+		validEvents = append(validEvents, event)
+	}
+
+	backfillResult, err := BackfillOpenClawHistory(ctx, db, OpenClawHistoryBackfillOptions{
+		OrgID:        opts.OrgID,
+		UserID:       opts.UserID,
+		ParsedEvents: validEvents,
+	})
+	if err != nil {
+		return OpenClawHistoryBatchPayloadResult{}, err
+	}
+
+	result.EventsProcessed = backfillResult.EventsProcessed
+	result.MessagesInserted = backfillResult.MessagesInserted
+	result.RoomsCreated = backfillResult.RoomsCreated
+	result.ParticipantsAdded = backfillResult.ParticipantsAdded
+	result.EventsSkippedUnknownAgent = backfillResult.EventsSkippedUnknownAgent
+
+	if opts.SummaryWriter != nil {
+		_, _ = fmt.Fprintf(
+			opts.SummaryWriter,
+			"OpenClaw history batch payload import: batch=%s index=%d/%d events_received=%d events_processed=%d messages_inserted=%d rooms_created=%d participants_added=%d events_skipped_unknown_agent=%d failed_items=%d\n",
+			strings.TrimSpace(result.Batch.ID),
+			result.Batch.Index,
+			result.Batch.Total,
+			result.EventsReceived,
+			result.EventsProcessed,
+			result.MessagesInserted,
+			result.RoomsCreated,
+			result.ParticipantsAdded,
+			result.EventsSkippedUnknownAgent,
+			result.FailedItems,
+		)
+	}
+
+	return result, nil
 }
 
 func BackfillOpenClawHistory(
