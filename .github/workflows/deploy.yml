@@ -8,6 +8,8 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       
@@ -15,6 +17,9 @@ jobs:
         run: npm install -g @railway/cli
       
       - name: Deploy to Railway
-        run: railway up --service otter-camp
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        if: ${{ env.RAILWAY_TOKEN != '' }}
+        run: railway up --service api
+
+      - name: Skip deploy when token missing
+        if: ${{ env.RAILWAY_TOKEN == '' }}
+        run: echo "RAILWAY_TOKEN not configured; skipping deploy."

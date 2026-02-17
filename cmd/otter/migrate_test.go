@@ -861,9 +861,10 @@ func TestMigrateFromOpenClawRendersHistoryProgressWithETA(t *testing.T) {
 		}, nil
 	}
 
+	openClawDir := t.TempDir()
 	var out bytes.Buffer
 	err := runMigrateFromOpenClaw(&out, migrateFromOpenClawOptions{
-		OpenClawDir: "/tmp/openclaw",
+		OpenClawDir: openClawDir,
 		OrgID:       "org-1",
 		Transport:   migrateTransportDB,
 	})
