@@ -27,7 +27,11 @@ func TestLandingPageUnchanged(t *testing.T) {
 
 func TestJoinRoute(t *testing.T) {
 	staticDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("<html><body>landing-page</body></html>"), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(staticDir, "index.html"),
+		[]byte(`<html><body>landing-page<form id="waitlist-form"><input type="email" id="email-input" required /></form></body></html>`),
+		0o644,
+	))
 
 	handler := newServerHandler(staticDir, joinConfig{InviteCodes: map[string]struct{}{"valid-code": {}}})
 
@@ -40,12 +44,14 @@ func TestJoinRoute(t *testing.T) {
 		require.Contains(t, rec.Body.String(), "Join Otter Camp")
 	})
 
-	t.Run("invalid invite code returns 404", func(t *testing.T) {
+	t.Run("invalid invite code serves marketing waitlist form", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/join/bad-code", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
-		require.Equal(t, http.StatusNotFound, rec.Code)
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Contains(t, rec.Body.String(), `id="waitlist-form"`)
+		require.Contains(t, rec.Body.String(), `id="email-input"`)
 	})
 
 	t.Run("missing invite code returns 404", func(t *testing.T) {
@@ -56,14 +62,14 @@ func TestJoinRoute(t *testing.T) {
 		require.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
-	t.Run("join route does not leak existence on invalid code", func(t *testing.T) {
+	t.Run("invalid invite code reuses existing static marketing content", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/join/not-real", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
-		require.Equal(t, http.StatusNotFound, rec.Code)
+		require.Equal(t, http.StatusOK, rec.Code)
 		body, _ := io.ReadAll(rec.Body)
-		require.NotContains(t, string(body), "invite")
+		require.Contains(t, string(body), "landing-page")
 	})
 }
 
