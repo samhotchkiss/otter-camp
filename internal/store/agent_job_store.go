@@ -599,7 +599,7 @@ func (s *AgentJobStore) PickupDue(ctx context.Context, limit int, now time.Time)
 		    updated_at = NOW()
 		FROM due_jobs d
 		WHERE j.id = d.id
-		RETURNING`+agentJobColumns,
+		RETURNING j.`+strings.ReplaceAll(strings.TrimSpace(agentJobColumns), ",\n\t", ",\n\tj."),
 		now.UTC(),
 		limit,
 	)
