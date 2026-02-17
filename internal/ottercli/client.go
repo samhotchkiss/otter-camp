@@ -418,6 +418,105 @@ type OpenClawCronJobImportResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
+type OpenClawMigrationImportAgentIdentity struct {
+	ID          string            `json:"id,omitempty"`
+	Slug        string            `json:"slug,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	DisplayName string            `json:"display_name,omitempty"`
+	Workspace   string            `json:"workspace,omitempty"`
+	Soul        string            `json:"soul,omitempty"`
+	Identity    string            `json:"identity,omitempty"`
+	Memory      string            `json:"memory,omitempty"`
+	Tools       string            `json:"tools,omitempty"`
+	SourceFiles map[string]string `json:"source_files,omitempty"`
+}
+
+type OpenClawMigrationImportAgentsInput struct {
+	Identities []OpenClawMigrationImportAgentIdentity `json:"identities"`
+}
+
+type OpenClawMigrationImportAgentsResult struct {
+	Processed      int      `json:"processed"`
+	Inserted       int      `json:"inserted"`
+	Updated        int      `json:"updated"`
+	Skipped        int      `json:"skipped"`
+	ActiveAgents   int      `json:"active_agents"`
+	InactiveAgents int      `json:"inactive_agents"`
+	Warnings       []string `json:"warnings,omitempty"`
+}
+
+type OpenClawMigrationImportBatch struct {
+	ID    string `json:"id"`
+	Index int    `json:"index"`
+	Total int    `json:"total"`
+}
+
+type OpenClawMigrationImportHistoryEvent struct {
+	AgentSlug   string    `json:"agent_slug"`
+	SessionID   string    `json:"session_id,omitempty"`
+	SessionPath string    `json:"session_path,omitempty"`
+	EventID     string    `json:"event_id,omitempty"`
+	ParentID    string    `json:"parent_id,omitempty"`
+	Role        string    `json:"role"`
+	Body        string    `json:"body"`
+	CreatedAt   time.Time `json:"created_at"`
+	Line        int       `json:"line,omitempty"`
+}
+
+type OpenClawMigrationImportHistoryBatchInput struct {
+	UserID string                             `json:"user_id"`
+	Batch  OpenClawMigrationImportBatch       `json:"batch"`
+	Events []OpenClawMigrationImportHistoryEvent `json:"events"`
+}
+
+type OpenClawMigrationImportHistoryBatchResult struct {
+	EventsReceived            int      `json:"events_received"`
+	EventsProcessed           int      `json:"events_processed"`
+	MessagesInserted          int      `json:"messages_inserted"`
+	RoomsCreated              int      `json:"rooms_created"`
+	ParticipantsAdded         int      `json:"participants_added"`
+	EventsSkippedUnknownAgent int      `json:"events_skipped_unknown_agent"`
+	FailedItems               int      `json:"failed_items"`
+	Warnings                  []string `json:"warnings,omitempty"`
+}
+
+type OpenClawMigrationPhaseStatus struct {
+	MigrationType  string `json:"migration_type"`
+	Status         string `json:"status"`
+	TotalItems     *int   `json:"total_items,omitempty"`
+	ProcessedItems int    `json:"processed_items"`
+	FailedItems    int    `json:"failed_items"`
+	CurrentLabel   string `json:"current_label,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+type OpenClawMigrationStatus struct {
+	Active bool                          `json:"active"`
+	Phases []OpenClawMigrationPhaseStatus `json:"phases"`
+}
+
+type OpenClawMigrationRunRequest struct {
+	AgentsOnly        bool   `json:"agents_only"`
+	HistoryOnly       bool   `json:"history_only"`
+	StartPhase        string `json:"start_phase,omitempty"`
+	ForceResumePaused bool   `json:"force_resume_paused"`
+}
+
+type OpenClawMigrationRunResponse struct {
+	Accepted               bool     `json:"accepted"`
+	SelectedPhases         []string `json:"selected_phases,omitempty"`
+	StartedPhases          []string `json:"started_phases,omitempty"`
+	ResumedPhases          []string `json:"resumed_phases,omitempty"`
+	SkippedCompletedPhases []string `json:"skipped_completed_phases,omitempty"`
+	AlreadyRunningPhases   []string `json:"already_running_phases,omitempty"`
+	PausedPhases           []string `json:"paused_phases,omitempty"`
+}
+
+type OpenClawMigrationMutationResponse struct {
+	Status        string `json:"status"`
+	UpdatedPhases int    `json:"updated_phases"`
+}
+
 type PipelineRoleAssignment struct {
 	AgentID *string `json:"agentId"`
 }
@@ -1770,6 +1869,129 @@ func (c *Client) ImportOpenClawCronJobs() (OpenClawCronJobImportResult, error) {
 	var response OpenClawCronJobImportResult
 	if err := c.do(req, &response); err != nil {
 		return OpenClawCronJobImportResult{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) ImportOpenClawMigrationAgents(
+	input OpenClawMigrationImportAgentsInput,
+) (OpenClawMigrationImportAgentsResult, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationImportAgentsResult{}, err
+	}
+	if len(input.Identities) == 0 {
+		return OpenClawMigrationImportAgentsResult{}, errors.New("at least one identity is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return OpenClawMigrationImportAgentsResult{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/migrations/openclaw/import/agents", bytes.NewReader(payload))
+	if err != nil {
+		return OpenClawMigrationImportAgentsResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response OpenClawMigrationImportAgentsResult
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationImportAgentsResult{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) ImportOpenClawMigrationHistoryBatch(
+	input OpenClawMigrationImportHistoryBatchInput,
+) (OpenClawMigrationImportHistoryBatchResult, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationImportHistoryBatchResult{}, err
+	}
+	if strings.TrimSpace(input.UserID) == "" {
+		return OpenClawMigrationImportHistoryBatchResult{}, errors.New("user id is required")
+	}
+	if strings.TrimSpace(input.Batch.ID) == "" {
+		return OpenClawMigrationImportHistoryBatchResult{}, errors.New("batch id is required")
+	}
+	if input.Batch.Index <= 0 {
+		return OpenClawMigrationImportHistoryBatchResult{}, errors.New("batch index must be >= 1")
+	}
+	if input.Batch.Total <= 0 {
+		return OpenClawMigrationImportHistoryBatchResult{}, errors.New("batch total must be >= 1")
+	}
+	if len(input.Events) == 0 {
+		return OpenClawMigrationImportHistoryBatchResult{}, errors.New("at least one history event is required")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return OpenClawMigrationImportHistoryBatchResult{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/migrations/openclaw/import/history/batch", bytes.NewReader(payload))
+	if err != nil {
+		return OpenClawMigrationImportHistoryBatchResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response OpenClawMigrationImportHistoryBatchResult
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationImportHistoryBatchResult{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) GetOpenClawMigrationStatus() (OpenClawMigrationStatus, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationStatus{}, err
+	}
+	req, err := c.newRequest(http.MethodGet, "/api/migrations/openclaw/status", nil)
+	if err != nil {
+		return OpenClawMigrationStatus{}, err
+	}
+	var response OpenClawMigrationStatus
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationStatus{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) RunOpenClawMigration(input OpenClawMigrationRunRequest) (OpenClawMigrationRunResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationRunResponse{}, err
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return OpenClawMigrationRunResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/migrations/openclaw/run", bytes.NewReader(payload))
+	if err != nil {
+		return OpenClawMigrationRunResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response OpenClawMigrationRunResponse
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationRunResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) PauseOpenClawMigration() (OpenClawMigrationMutationResponse, error) {
+	return c.runOpenClawMigrationMutation("/api/migrations/openclaw/pause")
+}
+
+func (c *Client) ResumeOpenClawMigration() (OpenClawMigrationMutationResponse, error) {
+	return c.runOpenClawMigrationMutation("/api/migrations/openclaw/resume")
+}
+
+func (c *Client) runOpenClawMigrationMutation(path string) (OpenClawMigrationMutationResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationMutationResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, path, nil)
+	if err != nil {
+		return OpenClawMigrationMutationResponse{}, err
+	}
+	var response OpenClawMigrationMutationResponse
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationMutationResponse{}, err
 	}
 	return response, nil
 }
