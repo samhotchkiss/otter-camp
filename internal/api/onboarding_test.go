@@ -69,6 +69,27 @@ func TestOnboardingBootstrapCreatesLocalRecords(t *testing.T) {
 	require.Equal(t, "local", issueOrigin)
 }
 
+func TestOnboardingBootstrapUsesProvidedOrgSlug(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+	resetOnboardingAuthDB(t)
+
+	db := openFeedDatabase(t, connStr)
+
+	rec := postOnboardingBootstrap(t, `{"name":"Sam","email":"sam@example.com","organization_name":"My Team","org_slug":"custom-slug"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp OnboardingBootstrapResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	require.Equal(t, "custom-slug", resp.OrgSlug)
+
+	var storedSlug string
+	err := db.QueryRow("SELECT slug FROM organizations WHERE id = $1", resp.OrgID).Scan(&storedSlug)
+	require.NoError(t, err)
+	require.Equal(t, "custom-slug", storedSlug)
+}
+
 func TestOnboardingBootstrapSeedsStarterTrioAgents(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)
@@ -284,6 +305,75 @@ func TestOnboardingBootstrapRejectsSecondSetup(t *testing.T) {
 	require.Equal(t, "onboarding already completed", payload.Error)
 }
 
+func TestOnboardingBootstrapAllowsSecondSetupWhenMultiOrgEnabled(t *testing.T) {
+	connStr := feedTestDatabaseURL(t)
+	resetFeedDatabase(t, connStr)
+	t.Setenv("DATABASE_URL", connStr)
+	t.Setenv("ONBOARDING_ALLOW_MULTI_ORG", "true")
+	resetOnboardingAuthDB(t)
+
+	first := postOnboardingBootstrap(t, `{"name":"Sam","email":"sam@example.com","organization_name":"First Team"}`)
+	require.Equal(t, http.StatusOK, first.Code)
+	var firstPayload OnboardingBootstrapResponse
+	require.NoError(t, json.NewDecoder(first.Body).Decode(&firstPayload))
+
+	second := postOnboardingBootstrap(t, `{"name":"Ari","email":"ari@example.com","organization_name":"Second Team"}`)
+	require.Equal(t, http.StatusOK, second.Code)
+	var secondPayload OnboardingBootstrapResponse
+	require.NoError(t, json.NewDecoder(second.Body).Decode(&secondPayload))
+
+	require.NotEqual(t, firstPayload.OrgID, secondPayload.OrgID)
+	require.Equal(t, "second-team", secondPayload.OrgSlug)
+}
+
+func TestOnboardingSetupLockEnabled(t *testing.T) {
+	t.Run("enabled by default", func(t *testing.T) {
+		t.Setenv("ONBOARDING_ALLOW_MULTI_ORG", "")
+		t.Setenv("ONBOARDING_SETUP_LOCK_DISABLED", "")
+		require.True(t, onboardingSetupLockEnabled())
+	})
+
+	t.Run("disabled when multi-org flag enabled", func(t *testing.T) {
+		t.Setenv("ONBOARDING_ALLOW_MULTI_ORG", "true")
+		require.False(t, onboardingSetupLockEnabled())
+	})
+
+	t.Run("disabled when explicit lock disable flag enabled", func(t *testing.T) {
+		t.Setenv("ONBOARDING_SETUP_LOCK_DISABLED", "1")
+		require.False(t, onboardingSetupLockEnabled())
+	})
+}
+
+func TestOnboardingBootstrapOrgSlug(t *testing.T) {
+	t.Run("uses provided slug when valid", func(t *testing.T) {
+		slug, errMsg := resolveOnboardingOrgSlug("My Team", "custom-slug")
+		require.Equal(t, "", errMsg)
+		require.Equal(t, "custom-slug", slug)
+	})
+
+	t.Run("falls back to organization_name slug when org_slug blank", func(t *testing.T) {
+		slug, errMsg := resolveOnboardingOrgSlug("My Team", "")
+		require.Equal(t, "", errMsg)
+		require.Equal(t, "my-team", slug)
+	})
+
+	t.Run("rejects invalid provided slug", func(t *testing.T) {
+		invalidSlugs := []string{
+			"bad slug",
+			"-starts-with-hyphen",
+			"ends-with-hyphen-",
+			"UPPERCASE",
+			"ab",
+		}
+
+		for _, value := range invalidSlugs {
+			slug, errMsg := resolveOnboardingOrgSlug("My Team", value)
+			require.Equal(t, "", slug)
+			require.Equal(t, "invalid org_slug", errMsg)
+		}
+	})
+}
+
 func TestOnboardingBootstrapValidationFailures(t *testing.T) {
 	connStr := feedTestDatabaseURL(t)
 	resetFeedDatabase(t, connStr)
@@ -314,6 +404,11 @@ func TestOnboardingBootstrapValidationFailures(t *testing.T) {
 			name:       "missing organization",
 			body:       `{"name":"Sam","email":"sam@example.com"}`,
 			errorMatch: "organization_name is required",
+		},
+		{
+			name:       "invalid org slug",
+			body:       `{"name":"Sam","email":"sam@example.com","organization_name":"My Team","org_slug":"bad slug"}`,
+			errorMatch: "invalid org_slug",
 		},
 	}
 
