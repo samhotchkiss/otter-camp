@@ -441,6 +441,9 @@ func runInitImportAndBridgeWithOptions(
 		agentsImported, projectsImported, issuesImported := importOpenClawData(out, client, installation)
 		fmt.Fprintf(out, "Imported %d agents, %d projects, %d issues from OpenClaw.\n", agentsImported, projectsImported, issuesImported)
 	}
+	if err := ensureInitGatewayPortConfigured(installation); err != nil {
+		return err
+	}
 
 	bridgeRoot := strings.TrimSpace(os.Getenv("OTTERCAMP_REPO"))
 	if bridgeRoot == "" {
@@ -591,6 +594,17 @@ func importOpenClawData(out io.Writer, client initBootstrapClient, installation 
 	return agentsImported, projectsImported, issuesImported
 }
 
+func ensureInitGatewayPortConfigured(installation *importer.OpenClawInstallation) error {
+	if installation == nil || installation.Gateway.Port > 0 {
+		return nil
+	}
+	configPath := strings.TrimSpace(installation.ConfigPath)
+	if configPath == "" {
+		configPath = "~/.openclaw/openclaw.json"
+	}
+	return fmt.Errorf("unable to determine OpenClaw gateway port from %s; set gateway.port (or port) in config", configPath)
+}
+
 func buildBridgeEnvValues(installation *importer.OpenClawInstallation, cfg ottercli.Config) map[string]string {
 	host := initDefaultBridgeHost
 	port := initDefaultBridgePort
@@ -670,13 +684,11 @@ func restartOpenClawGateway(out io.Writer) error {
 }
 
 func startBridgeProcess(repoRoot string, out io.Writer) error {
-	scriptPath, err := resolveBridgeScriptPath(repoRoot)
-	if err != nil {
+	if _, err := resolveBridgeScriptPath(repoRoot); err != nil {
 		return err
 	}
 
-	cmd := exec.Command("npx", "tsx", scriptPath, "--continuous")
-	cmd.Dir = repoRoot
+	cmd := exec.Command("bash", "-lc", buildInitBridgeStartCommand(repoRoot))
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Start(); err != nil {
@@ -711,6 +723,17 @@ func resolveBridgeScriptPath(repoRoot string) (string, error) {
 		return "", fmt.Errorf("resolve bridge script: %w", err)
 	}
 	return absPath, nil
+}
+
+func buildInitBridgeStartCommand(repoRoot string) string {
+	root := strings.TrimSpace(repoRoot)
+	if root == "" {
+		root = "."
+	}
+	return fmt.Sprintf(
+		"cd %s && set -a && . bridge/.env && set +a && npx tsx \"${BRIDGE_SCRIPT:-bridge/openclaw-bridge.ts}\" --continuous",
+		shellSingleQuote(root),
+	)
 }
 
 func promptRequiredField(reader *bufio.Reader, out io.Writer, label string) string {
