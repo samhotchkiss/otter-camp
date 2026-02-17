@@ -29,6 +29,7 @@ type initOptions struct {
 type initImportFlowOptions struct {
 	ForceImport      bool
 	ForceStartBridge bool
+	ForceMigrate     bool
 	ProgressPrefix   string
 }
 
@@ -82,6 +83,8 @@ var (
 	resolveInitBridgeScriptPath      = resolveBridgeScriptPath
 	writeInitBridgeEnv               = writeBridgeEnvFile
 	startInitBridge                  = startBridgeProcess
+	resolveInitMigrateDatabaseURL    = resolveMigrateDatabaseURL
+	runInitOpenClawMigration         = runMigrateFromOpenClaw
 )
 
 const (
@@ -199,6 +202,7 @@ func runHostedInit(opts initOptions, out io.Writer) error {
 	if err := runInitImportAndBridgeWithOptions(nil, out, client, cfg, initImportFlowOptions{
 		ForceImport:      true,
 		ForceStartBridge: true,
+		ForceMigrate:     true,
 		ProgressPrefix:   "Hosted",
 	}); err != nil {
 		return err
@@ -464,6 +468,33 @@ func runInitImportAndBridgeWithOptions(
 		}
 	}
 
+	shouldMigrate := opts.ForceMigrate
+	if !opts.ForceMigrate {
+		shouldMigrate = promptYesNo(reader, out, "Migrate OpenClaw history now? (y/N): ", false)
+	}
+
+	databaseURL, dbErr := resolveInitMigrateDatabaseURL()
+	if shouldMigrate {
+		if dbErr != nil {
+			fmt.Fprintf(out, "Skipping automatic migration: %v\n", dbErr)
+			fmt.Fprintf(out, "Run this command later to migrate OpenClaw data:\n  %s\n", renderInitMigrationCommand("", cfg.DefaultOrg, installation.RootDir))
+			return nil
+		}
+		fmt.Fprintln(out, "Migration progress: preparing OpenClaw migration input.")
+		fmt.Fprintln(out, "Migration progress: running otter migrate from-openclaw.")
+		if err := runInitOpenClawMigration(out, migrateFromOpenClawOptions{
+			OpenClawDir: installation.RootDir,
+			OrgID:       strings.TrimSpace(cfg.DefaultOrg),
+		}); err != nil {
+			fmt.Fprintf(out, "Migration progress: failed (%v)\n", err)
+			fmt.Fprintf(out, "Retry with:\n  %s\n", renderInitMigrationCommand(databaseURL, cfg.DefaultOrg, installation.RootDir))
+			return nil
+		}
+		fmt.Fprintln(out, "Migration progress: complete.")
+		return nil
+	}
+
+	fmt.Fprintf(out, "OpenClaw migration skipped. Run later with:\n  %s\n", renderInitMigrationCommand(databaseURL, cfg.DefaultOrg, installation.RootDir))
 	return nil
 }
 
@@ -824,4 +855,20 @@ func normalizeInitAgentSlot(value string) string {
 		normalized = normalized[:63]
 	}
 	return normalized
+}
+
+func renderInitMigrationCommand(databaseURL, orgID, openClawDir string) string {
+	databaseURL = strings.TrimSpace(databaseURL)
+	if databaseURL == "" {
+		databaseURL = "<database-url>"
+	}
+
+	command := fmt.Sprintf("DATABASE_URL=%q otter migrate from-openclaw", databaseURL)
+	if trimmedOrg := strings.TrimSpace(orgID); trimmedOrg != "" {
+		command += fmt.Sprintf(" --org %q", trimmedOrg)
+	}
+	if trimmedOpenClawDir := strings.TrimSpace(openClawDir); trimmedOpenClawDir != "" {
+		command += fmt.Sprintf(" --openclaw-dir %q", trimmedOpenClawDir)
+	}
+	return command
 }

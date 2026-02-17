@@ -297,6 +297,172 @@ func TestInitHostedRunsImportAndStartsBridge(t *testing.T) {
 	}
 }
 
+func TestInitHostedAutomaticallyRunsMigrationWhenDatabaseConfigured(t *testing.T) {
+	client := &fakeInitClient{}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.hostedValidateOrg = "org-hosted"
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir: "/Users/sam/.openclaw",
+		Gateway: importer.OpenClawGatewayConfig{
+			Host:  "127.0.0.1",
+			Port:  18791,
+			Token: "openclaw-token",
+		},
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", Name: "Frank", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.migrateDatabaseURL = "postgres://cfg-user:cfg-pass@localhost:5432/otter?sslmode=disable"
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "hosted", "--token", "oc_sess_hosted", "--url", "https://swh.otter.camp"},
+		strings.NewReader(""),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	if !state.migrateCalled {
+		t.Fatalf("expected hosted init to run migration automatically")
+	}
+	if state.migrateOpts.OpenClawDir != "/Users/sam/.openclaw" {
+		t.Fatalf("migration openclaw dir = %q", state.migrateOpts.OpenClawDir)
+	}
+	if state.migrateOpts.OrgID != "org-hosted" {
+		t.Fatalf("migration org id = %q, want org-hosted", state.migrateOpts.OrgID)
+	}
+	output := out.String()
+	if !strings.Contains(output, "Migration progress: preparing OpenClaw migration input.") {
+		t.Fatalf("expected migration prep progress output, got %q", output)
+	}
+	if !strings.Contains(output, "Migration progress: running otter migrate from-openclaw.") {
+		t.Fatalf("expected migration run progress output, got %q", output)
+	}
+	if !strings.Contains(output, "Migration progress: complete.") {
+		t.Fatalf("expected migration completion output, got %q", output)
+	}
+}
+
+func TestInitHostedPrintsMigrationCommandWhenDatabaseUnavailable(t *testing.T) {
+	client := &fakeInitClient{}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.hostedValidateOrg = "org-hosted"
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir: "/Users/sam/.openclaw",
+		Gateway: importer.OpenClawGatewayConfig{
+			Host:  "127.0.0.1",
+			Port:  18791,
+			Token: "openclaw-token",
+		},
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", Name: "Frank", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.migrateResolveErr = errors.New("DATABASE_URL is required for otter migrate from-openclaw")
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "hosted", "--token", "oc_sess_hosted", "--url", "https://swh.otter.camp"},
+		strings.NewReader(""),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	if state.migrateCalled {
+		t.Fatalf("expected hosted init not to run migration when DATABASE_URL is unavailable")
+	}
+	output := out.String()
+	if !strings.Contains(output, "Run this command later to migrate OpenClaw data:") {
+		t.Fatalf("expected migration follow-up command output, got %q", output)
+	}
+	if !strings.Contains(output, "DATABASE_URL=\"<database-url>\" otter migrate from-openclaw --org \"org-hosted\" --openclaw-dir \"/Users/sam/.openclaw\"") {
+		t.Fatalf("expected explicit migration command with env vars, got %q", output)
+	}
+}
+
+func TestInitLocalRunsMigrationWhenUserAccepts(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir: "/Users/sam/.openclaw",
+		Gateway: importer.OpenClawGatewayConfig{
+			Host:  "127.0.0.1",
+			Port:  18791,
+			Token: "openclaw-token",
+		},
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", Name: "Frank", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.migrateDatabaseURL = "postgres://cfg-user:cfg-pass@localhost:5432/otter?sslmode=disable"
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader("n\nn\ny\n"),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	if !state.migrateCalled {
+		t.Fatalf("expected migration call when user accepts prompt")
+	}
+	if !strings.Contains(out.String(), "Migrate OpenClaw history now? (y/N): ") {
+		t.Fatalf("expected migration prompt in output, got %q", out.String())
+	}
+}
+
+func TestInitHostedReportsMigrationFailureAndRetryCommand(t *testing.T) {
+	client := &fakeInitClient{}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.hostedValidateOrg = "org-hosted"
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir: "/Users/sam/.openclaw",
+		Gateway: importer.OpenClawGatewayConfig{
+			Host:  "127.0.0.1",
+			Port:  18791,
+			Token: "openclaw-token",
+		},
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", Name: "Frank", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.migrateDatabaseURL = "postgres://cfg-user:cfg-pass@localhost:5432/otter?sslmode=disable"
+	state.migrateErr = errors.New("network timeout")
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "hosted", "--token", "oc_sess_hosted", "--url", "https://swh.otter.camp"},
+		strings.NewReader(""),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	output := out.String()
+	if !strings.Contains(output, "Migration progress: failed (network timeout)") {
+		t.Fatalf("expected migration failure progress output, got %q", output)
+	}
+	if !strings.Contains(output, "Retry with:") {
+		t.Fatalf("expected retry command output, got %q", output)
+	}
+	if !strings.Contains(output, "DATABASE_URL=\"postgres://cfg-user:cfg-pass@localhost:5432/otter?sslmode=disable\" otter migrate from-openclaw --org \"org-hosted\" --openclaw-dir \"/Users/sam/.openclaw\"") {
+		t.Fatalf("expected explicit retry command output, got %q", output)
+	}
+}
+
 func TestBuildBridgeEnvValuesNormalizesHostedAPIPath(t *testing.T) {
 	values := buildBridgeEnvValues(nil, ottercli.Config{
 		APIBaseURL: "https://swh.otter.camp/api",
@@ -833,6 +999,12 @@ type initStubState struct {
 
 	restartCalled bool
 	restartErr    error
+
+	migrateDatabaseURL string
+	migrateResolveErr  error
+	migrateCalled      bool
+	migrateOpts        migrateFromOpenClawOptions
+	migrateErr         error
 }
 
 func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient, saveErr error) *initStubState {
@@ -858,6 +1030,8 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 	origResolveBridgeScript := resolveInitBridgeScriptPath
 	origWriteBridge := writeInitBridgeEnv
 	origStartBridge := startInitBridge
+	origResolveMigrateDatabaseURL := resolveInitMigrateDatabaseURL
+	origRunMigrate := runInitOpenClawMigration
 
 	loadInitConfig = func() (ottercli.Config, error) {
 		return loadCfg, nil
@@ -925,6 +1099,17 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 		state.bridgeStarted = true
 		return state.bridgeStartErr
 	}
+	resolveInitMigrateDatabaseURL = func() (string, error) {
+		if state.migrateResolveErr != nil {
+			return "", state.migrateResolveErr
+		}
+		return state.migrateDatabaseURL, nil
+	}
+	runInitOpenClawMigration = func(out io.Writer, opts migrateFromOpenClawOptions) error {
+		state.migrateCalled = true
+		state.migrateOpts = opts
+		return state.migrateErr
+	}
 
 	t.Cleanup(func() {
 		loadInitConfig = origLoad
@@ -940,6 +1125,8 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 		resolveInitBridgeScriptPath = origResolveBridgeScript
 		writeInitBridgeEnv = origWriteBridge
 		startInitBridge = origStartBridge
+		resolveInitMigrateDatabaseURL = origResolveMigrateDatabaseURL
+		runInitOpenClawMigration = origRunMigrate
 	})
 
 	return state
