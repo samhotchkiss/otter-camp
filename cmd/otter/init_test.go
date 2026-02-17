@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,6 +228,47 @@ func TestInitHostedWhoamiPersistsOrgContext(t *testing.T) {
 	}
 	if state.savedCfg.DefaultOrg != "org-from-whoami" {
 		t.Fatalf("saved default org = %q, want org-from-whoami", state.savedCfg.DefaultOrg)
+	}
+}
+
+func TestValidateHostedInitTokenTreatsAuthFailuresAsInvalidToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+
+	_, err := validateHostedInitToken(srv.URL, "oc_sess_auth")
+	if err == nil {
+		t.Fatalf("expected token validation error")
+	}
+	if !strings.Contains(err.Error(), "invalid or expired token") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateHostedInitTokenTreatsServerHTMLAsAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("<!DOCTYPE html><html><body>bad gateway</body></html>"))
+	}))
+	defer srv.Close()
+
+	_, err := validateHostedInitToken(srv.URL, "oc_sess_server")
+	if err == nil {
+		t.Fatalf("expected token validation error")
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "invalid or expired token") {
+		t.Fatalf("error should not blame token: %v", err)
+	}
+	if !strings.Contains(message, "api server returned an error (502)") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(message, "<html") || strings.Contains(message, "<!doctype") {
+		t.Fatalf("error leaked raw HTML: %v", err)
 	}
 }
 
