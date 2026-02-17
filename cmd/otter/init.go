@@ -384,20 +384,30 @@ func runInitImportAndBridgeWithOptions(
 	switch {
 	case ensureErr != nil:
 		fmt.Fprintf(out, "WARNING: OpenClaw config update failed: %v\n", ensureErr)
-	case ensureResult.Updated:
-		if ensureResult.AddedElephant {
-			fmt.Fprintln(out, "Added Ellie (Elephant) to OpenClaw config.")
-		}
-		if ensureResult.AddedChameleon {
-			fmt.Fprintln(out, "Added Chameleon to OpenClaw config.")
-		}
-		if err := restartInitOpenClawGateway(out); err != nil {
-			fmt.Fprintf(out, "WARNING: OpenClaw restart failed: %v\n", err)
-		} else {
-			fmt.Fprintln(out, "OpenClaw restarted to activate new agents.")
-		}
 	default:
-		fmt.Fprintln(out, "Required OpenClaw agents already present. No config changes made.")
+		if len(ensureResult.DroppedUnknownKeys) > 0 {
+			fmt.Fprintf(
+				out,
+				"WARNING: OpenClaw config skipped unsupported agent keys: %s\n",
+				strings.Join(ensureResult.DroppedUnknownKeys, ", "),
+			)
+		}
+
+		if ensureResult.Updated {
+			if ensureResult.AddedElephant {
+				fmt.Fprintln(out, "Added Ellie (Elephant) to OpenClaw config.")
+			}
+			if ensureResult.AddedChameleon {
+				fmt.Fprintln(out, "Added Chameleon to OpenClaw config.")
+			}
+			if err := restartInitOpenClawGateway(out); err != nil {
+				fmt.Fprintf(out, "WARNING: OpenClaw restart failed: %v\n", err)
+			} else {
+				fmt.Fprintln(out, "OpenClaw restarted to activate new agents.")
+			}
+		} else {
+			fmt.Fprintln(out, "Required OpenClaw agents already present. No config changes made.")
+		}
 	}
 
 	shouldImport := opts.ForceImport
