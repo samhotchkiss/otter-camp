@@ -353,6 +353,52 @@ func TestStartWorkerWithRecoveryRunsAsynchronously(t *testing.T) {
 	wg.Wait()
 }
 
+func TestRailwayHealthcheckContract(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("../../railway.json")
+	if err != nil {
+		t.Fatalf("failed to read railway.json: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("failed to parse railway.json: %v", err)
+	}
+
+	deploy, ok := payload["deploy"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected railway deploy config object")
+	}
+	if got := deploy["startCommand"]; got != "/app/server" {
+		t.Fatalf("expected startCommand /app/server, got %v", got)
+	}
+	if got := deploy["healthcheckPath"]; got != "/health" {
+		t.Fatalf("expected healthcheckPath /health, got %v", got)
+	}
+	if got := deploy["healthcheckTimeout"]; got != float64(30) {
+		t.Fatalf("expected healthcheckTimeout 30, got %v", got)
+	}
+}
+
+func TestMainStartupLogsIncludeBindAndHealth(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	for _, snippet := range []string{
+		"Otter Camp starting: bind=%s health=/health",
+		"server failed (addr=%s): %v",
+	} {
+		if !strings.Contains(mainContent, snippet) {
+			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
+		}
+	}
+}
+
 func TestMainStartsEllieIngestionWorkerWhenConfigured(t *testing.T) {
 	t.Parallel()
 
