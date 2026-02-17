@@ -244,6 +244,134 @@ func TestDiscoverOpenClawSessionFilesIncludesBackupLayouts(t *testing.T) {
 	require.Contains(t, bases, "bbb.jsonl")
 }
 
+func TestSessionDiscoveryIncludesDefaultArchiveBackups(t *testing.T) {
+	root := t.TempDir()
+
+	primaryDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(primaryDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(primaryDir, "primary.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	archiveDir := filepath.Join(root, "sessions-backup-20260129-230025", "raw-export", "main")
+	require.NoError(t, os.MkdirAll(archiveDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "archived.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	files, err := discoverOpenClawSessionFiles(root)
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	require.Equal(t, []string{
+		filepath.Join(primaryDir, "primary.jsonl"),
+		filepath.Join(archiveDir, "archived.jsonl"),
+	}, files)
+}
+
+func TestSessionDiscoveryIncludesConfiguredArchiveGlobs(t *testing.T) {
+	root := t.TempDir()
+
+	primaryDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(primaryDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(primaryDir, "primary.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	configuredArchiveDir := filepath.Join(root, "archives-202602", "jsonl-export")
+	require.NoError(t, os.MkdirAll(configuredArchiveDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(configuredArchiveDir, "configured.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	t.Setenv("OPENCLAW_SESSION_ARCHIVE_GLOBS", "archives-*")
+
+	files, err := discoverOpenClawSessionFiles(root)
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	require.Equal(t, []string{
+		filepath.Join(primaryDir, "primary.jsonl"),
+		filepath.Join(root, "archives-202602", "jsonl-export", "configured.jsonl"),
+	}, files)
+}
+
+func TestSessionDiscoveryDedupesArchiveAndPrimary(t *testing.T) {
+	root := t.TempDir()
+
+	primaryDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(primaryDir, 0o755))
+	primaryPath := filepath.Join(primaryDir, "same-session.jsonl")
+	content := []byte(`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:05Z","message":{"role":"user","content":"same"}}` + "\n")
+	require.NoError(t, os.WriteFile(primaryPath, content, 0o644))
+
+	archiveDir := filepath.Join(root, "sessions-backup-20260129-230025", "raw-export")
+	require.NoError(t, os.MkdirAll(archiveDir, 0o755))
+	archivePath := filepath.Join(archiveDir, "same-session.jsonl")
+	require.NoError(t, os.WriteFile(archivePath, content, 0o644))
+
+	files, err := discoverOpenClawSessionFiles(root)
+	require.NoError(t, err)
+	require.Equal(t, []string{primaryPath}, files)
+}
+
+func TestSessionDiscoveryDedupesCanonicalPathAliases(t *testing.T) {
+	root := t.TempDir()
+
+	primaryDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(primaryDir, 0o755))
+	primaryPath := filepath.Join(primaryDir, "alias-session.jsonl")
+	require.NoError(t, os.WriteFile(primaryPath, []byte(`{}`+"\n"), 0o644))
+
+	t.Setenv("OPENCLAW_SESSION_ARCHIVE_GLOBS", "agents/*/sessions/*.jsonl")
+
+	files, err := discoverOpenClawSessionFiles(root)
+	require.NoError(t, err)
+	require.Equal(t, []string{primaryPath}, files)
+}
+
+func TestSessionDiscoverySummaryIncludesArchiveCounts(t *testing.T) {
+	root := t.TempDir()
+
+	primaryDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(primaryDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(primaryDir, "primary.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	archiveDir := filepath.Join(root, "sessions-backup-20260129-230025", "raw-export")
+	require.NoError(t, os.MkdirAll(archiveDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "archive-a.jsonl"), []byte(`{}`+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "archive-b.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	files, summary, err := discoverOpenClawSessionFilesWithSummary(root)
+	require.NoError(t, err)
+	require.Len(t, files, 3)
+	require.Equal(t, 3, summary.UniqueFiles)
+	require.Zero(t, summary.DuplicatesSkipped)
+	require.Equal(t, 1, summary.RootFileCounts[primaryDir])
+	require.Equal(t, 2, summary.RootFileCounts[filepath.Join(root, "sessions-backup-20260129-230025")])
+}
+
+func TestParseOpenClawSessionEventsLogsDiscoverySummary(t *testing.T) {
+	root := t.TempDir()
+
+	primaryDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(primaryDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(primaryDir, "main-001.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:05Z","message":{"role":"user","content":"hello"}}`,
+	})
+
+	archiveDir := filepath.Join(root, "sessions-backup-20260129-230025", "raw-export")
+	require.NoError(t, os.MkdirAll(archiveDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(archiveDir, "main-001.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:05Z","message":{"role":"user","content":"hello"}}`,
+	})
+
+	var logBuf bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	events, err := ParseOpenClawSessionEvents(&OpenClawInstallation{RootDir: root})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	output := logBuf.String()
+	require.Contains(t, output, "openclaw session discovery:")
+	require.Contains(t, output, "unique_files=1")
+	require.Contains(t, output, "duplicates_skipped=1")
+	require.Contains(t, output, "sessions-backup-20260129-230025")
+}
+
 func TestDeriveMetadataFromBackupLayout(t *testing.T) {
 	// Standard: agents/main/sessions/uuid.jsonl → main, uuid
 	slug, id := deriveOpenClawSessionPathMetadata("/root/agents/main/sessions/abc-123.jsonl")

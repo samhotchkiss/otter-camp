@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ const (
 	OpenClawSessionEventRoleUser       = "user"
 	OpenClawSessionEventRoleAssistant  = "assistant"
 	OpenClawSessionEventRoleToolResult = "toolResult"
+	openClawSessionArchiveGlobsEnv     = "OPENCLAW_SESSION_ARCHIVE_GLOBS"
 )
 
 type OpenClawSessionEvent struct {
@@ -28,6 +30,12 @@ type OpenClawSessionEvent struct {
 	Body        string
 	CreatedAt   time.Time
 	Line        int
+}
+
+type openClawSessionDiscoverySummary struct {
+	RootFileCounts    map[string]int
+	UniqueFiles       int
+	DuplicatesSkipped int
 }
 
 type openClawSessionRawEvent struct {
@@ -66,10 +74,11 @@ func parseOpenClawSessionEvents(install *OpenClawInstallation, strict bool) ([]O
 		return nil, err
 	}
 
-	sessionFiles, err := discoverOpenClawSessionFiles(root)
+	sessionFiles, discoverySummary, err := discoverOpenClawSessionFilesWithSummary(root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover openclaw session files: %w", err)
 	}
+	log.Printf("openclaw session discovery: %s", formatOpenClawSessionDiscoverySummary(discoverySummary))
 
 	events := make([]OpenClawSessionEvent, 0)
 	for _, sessionPath := range sessionFiles {
@@ -155,34 +164,165 @@ func parseOpenClawSessionFile(sessionPath string, strict bool) ([]OpenClawSessio
 	return events, nil
 }
 
-// discoverOpenClawSessionFiles walks root recursively for *.jsonl files that
-// live under a directory whose name contains "sessions". This catches both the
-// standard layout (agents/<slug>/sessions/<id>.jsonl) and backup layouts
-// (sessions-backup-*/<slug>-sessions/<id>.jsonl). It explicitly excludes the
-// logs/ directory and known non-session files like config-audit.jsonl.
+// discoverOpenClawSessionFiles resolves deterministic search roots and collects
+// session JSONL files from:
+//   - primary agent sessions: agents/*/sessions
+//   - default archives: sessions-backup-*
+//   - optional env archives: OPENCLAW_SESSION_ARCHIVE_GLOBS
+//
+// Env glob patterns are comma-separated and resolved relative to root unless
+// absolute. Roots outside root are ignored.
 func discoverOpenClawSessionFiles(root string) ([]string, error) {
+	files, _, err := discoverOpenClawSessionFilesWithSummary(root)
+	return files, err
+}
+
+func discoverOpenClawSessionFilesWithSummary(root string) ([]string, openClawSessionDiscoverySummary, error) {
+	summary := openClawSessionDiscoverySummary{
+		RootFileCounts: make(map[string]int),
+	}
+	searchRoots, err := resolveOpenClawSessionSearchRoots(root)
+	if err != nil {
+		return nil, summary, err
+	}
+
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	for _, searchRoot := range searchRoots {
+		rootFiles, err := collectOpenClawJSONLFiles(searchRoot)
 		if err != nil {
-			return err
+			return nil, summary, err
+		}
+		if len(rootFiles) > 0 {
+			summary.RootFileCounts[searchRoot] = len(rootFiles)
+		}
+		files = append(files, rootFiles...)
+	}
+	sort.Strings(files)
+	dedupedFiles, duplicatesSkipped, err := dedupeOpenClawSessionFiles(files)
+	if err != nil {
+		return nil, summary, err
+	}
+	summary.UniqueFiles = len(dedupedFiles)
+	summary.DuplicatesSkipped = duplicatesSkipped
+	return dedupedFiles, summary, nil
+}
+
+func resolveOpenClawSessionSearchRoots(root string) ([]string, error) {
+	cleanRoot := filepath.Clean(strings.TrimSpace(root))
+	if cleanRoot == "" {
+		return nil, fmt.Errorf("openclaw root dir is required")
+	}
+
+	rootSet := map[string]struct{}{}
+	addRoot := func(path string) {
+		clean := filepath.Clean(strings.TrimSpace(path))
+		if clean == "" {
+			return
+		}
+		if !isWithinDir(cleanRoot, clean) {
+			return
+		}
+		rootSet[clean] = struct{}{}
+	}
+
+	for _, match := range sortedGlobMatches(filepath.Join(cleanRoot, "agents", "*", "sessions")) {
+		if isDirectory(match) {
+			addRoot(match)
+		}
+	}
+	topLevelSessions := filepath.Join(cleanRoot, "sessions")
+	if isDirectory(topLevelSessions) {
+		addRoot(topLevelSessions)
+	}
+	for _, match := range sortedGlobMatches(filepath.Join(cleanRoot, "sessions-backup-*")) {
+		if isDirectory(match) {
+			addRoot(match)
+		}
+	}
+
+	for _, pattern := range parseOpenClawArchiveGlobEnv(os.Getenv(openClawSessionArchiveGlobsEnv)) {
+		globPattern := pattern
+		if !filepath.IsAbs(globPattern) {
+			globPattern = filepath.Join(cleanRoot, globPattern)
+		}
+		matches, err := filepath.Glob(globPattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s pattern %q: %w", openClawSessionArchiveGlobsEnv, pattern, err)
+		}
+		sort.Strings(matches)
+		for _, match := range matches {
+			if isDirectory(match) || strings.EqualFold(filepath.Ext(match), ".jsonl") {
+				addRoot(match)
+			}
+		}
+	}
+
+	roots := make([]string, 0, len(rootSet))
+	for rootPath := range rootSet {
+		roots = append(roots, rootPath)
+	}
+	sort.Strings(roots)
+	return roots, nil
+}
+
+func parseOpenClawArchiveGlobEnv(raw string) []string {
+	parts := strings.Split(raw, ",")
+	seen := map[string]struct{}{}
+	globs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		globs = append(globs, trimmed)
+	}
+	sort.Strings(globs)
+	return globs
+}
+
+func sortedGlobMatches(pattern string) []string {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil
+	}
+	sort.Strings(matches)
+	return matches
+}
+
+func collectOpenClawJSONLFiles(searchRoot string) ([]string, error) {
+	info, err := os.Stat(searchRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		if strings.EqualFold(filepath.Ext(searchRoot), ".jsonl") {
+			return []string{searchRoot}, nil
+		}
+		return nil, nil
+	}
+
+	files := make([]string, 0)
+	err = filepath.WalkDir(searchRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 		if d.IsDir() {
 			base := d.Name()
-			// Skip known non-session directories
-			if base == "logs" || base == ".git" || base == "node_modules" {
+			if base == ".git" || base == "node_modules" || base == "logs" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if filepath.Ext(path) != ".jsonl" {
-			return nil
+		if strings.EqualFold(filepath.Ext(path), ".jsonl") {
+			files = append(files, path)
 		}
-		// Only include files where the parent directory name contains "sessions"
-		parentDir := filepath.Base(filepath.Dir(path))
-		if !strings.Contains(parentDir, "sessions") {
-			return nil
-		}
-		files = append(files, path)
 		return nil
 	})
 	if err != nil {
@@ -190,6 +330,89 @@ func discoverOpenClawSessionFiles(root string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+func dedupeOpenClawSessionFiles(files []string) ([]string, int, error) {
+	if len(files) <= 1 {
+		return files, 0, nil
+	}
+
+	seenCanonical := make(map[string]struct{}, len(files))
+	seenSignature := make(map[string]struct{}, len(files))
+	unique := make([]string, 0, len(files))
+	duplicatesSkipped := 0
+
+	for _, path := range files {
+		cleanPath := filepath.Clean(path)
+		canonicalPath := cleanPath
+		if resolved, err := filepath.EvalSymlinks(cleanPath); err == nil {
+			canonicalPath = filepath.Clean(resolved)
+		}
+		if _, exists := seenCanonical[canonicalPath]; exists {
+			duplicatesSkipped++
+			continue
+		}
+
+		signature, err := openClawSessionFileSignature(cleanPath)
+		if err != nil {
+			return nil, 0, err
+		}
+		if signature != "" {
+			if _, exists := seenSignature[signature]; exists {
+				duplicatesSkipped++
+				continue
+			}
+			seenSignature[signature] = struct{}{}
+		}
+
+		seenCanonical[canonicalPath] = struct{}{}
+		unique = append(unique, cleanPath)
+	}
+
+	return unique, duplicatesSkipped, nil
+}
+
+func openClawSessionFileSignature(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", nil
+	}
+
+	sessionID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if sessionID == "" {
+		sessionID = filepath.Base(path)
+	}
+	hash, err := hashOpenClawFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join([]string{
+		sessionID,
+		strconv.FormatInt(info.Size(), 10),
+		hash,
+	}, "|"), nil
+}
+
+func formatOpenClawSessionDiscoverySummary(summary openClawSessionDiscoverySummary) string {
+	roots := make([]string, 0, len(summary.RootFileCounts))
+	for root := range summary.RootFileCounts {
+		roots = append(roots, root)
+	}
+	sort.Strings(roots)
+
+	rootSummaries := make([]string, 0, len(roots))
+	for _, root := range roots {
+		rootSummaries = append(rootSummaries, fmt.Sprintf("%s=%d", root, summary.RootFileCounts[root]))
+	}
+	return fmt.Sprintf(
+		"unique_files=%d duplicates_skipped=%d roots=%s",
+		summary.UniqueFiles,
+		summary.DuplicatesSkipped,
+		strings.Join(rootSummaries, ","),
+	)
 }
 
 // deriveOpenClawSessionPathMetadata extracts agent slug and session ID from a
