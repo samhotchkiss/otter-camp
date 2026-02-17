@@ -261,3 +261,59 @@ func TestMigrateFromOpenClawRunUsesExecutionTimeoutContext(t *testing.T) {
 	require.True(t, runnerContextHasDeadline)
 	require.True(t, errors.Is(err, context.DeadlineExceeded))
 }
+
+func TestMigrateFromOpenClawRendersHistoryProgressWithETA(t *testing.T) {
+	originalDetect := detectMigrateOpenClawInstallation
+	originalIdentities := importMigrateOpenClawAgentIdentities
+	originalOpenDB := openMigrateDatabase
+	originalResolveUser := resolveMigrateBackfillUserIDFn
+	originalNewRunner := newOpenClawMigrationRunner
+	originalRunRunner := runMigrateRunner
+	t.Cleanup(func() {
+		detectMigrateOpenClawInstallation = originalDetect
+		importMigrateOpenClawAgentIdentities = originalIdentities
+		openMigrateDatabase = originalOpenDB
+		resolveMigrateBackfillUserIDFn = originalResolveUser
+		newOpenClawMigrationRunner = originalNewRunner
+		runMigrateRunner = originalRunRunner
+	})
+
+	detectMigrateOpenClawInstallation = func(opts importer.DetectOpenClawOptions) (*importer.OpenClawInstallation, error) {
+		return &importer.OpenClawInstallation{RootDir: opts.HomeDir}, nil
+	}
+	importMigrateOpenClawAgentIdentities = func(_ *importer.OpenClawInstallation) ([]importer.ImportedAgentIdentity, error) {
+		return []importer.ImportedAgentIdentity{{ID: "main"}}, nil
+	}
+	openMigrateDatabase = func() (*sql.DB, error) {
+		return nil, nil
+	}
+	resolveMigrateBackfillUserIDFn = func(_ context.Context, _ *sql.DB, _ string) (string, error) {
+		return "user-1", nil
+	}
+	newOpenClawMigrationRunner = func(_ *sql.DB) *importer.OpenClawMigrationRunner {
+		return &importer.OpenClawMigrationRunner{}
+	}
+	runMigrateRunner = func(
+		_ context.Context,
+		runner *importer.OpenClawMigrationRunner,
+		_ importer.RunOpenClawMigrationInput,
+	) (importer.RunOpenClawMigrationResult, error) {
+		if runner.OnHistoryCheckpoint != nil {
+			runner.OnHistoryCheckpoint(10, 100)
+			runner.OnHistoryCheckpoint(100, 100)
+		}
+		return importer.RunOpenClawMigrationResult{
+			Summary: importer.OpenClawMigrationSummaryReport{},
+		}, nil
+	}
+
+	var out bytes.Buffer
+	err := runMigrateFromOpenClaw(&out, migrateFromOpenClawOptions{
+		OpenClawDir: "/tmp/openclaw",
+		OrgID:       "org-1",
+	})
+	require.NoError(t, err)
+	rendered := out.String()
+	require.Contains(t, rendered, "History progress: 10/100 (10.0%) ETA")
+	require.Contains(t, rendered, "History progress: 100/100 (100.0%) ETA 0s")
+}

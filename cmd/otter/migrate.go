@@ -238,6 +238,12 @@ func runMigrateFromOpenClaw(out io.Writer, opts migrateFromOpenClawOptions) erro
 	}
 
 	runner := newOpenClawMigrationRunner(db)
+	if !opts.AgentsOnly && out != nil {
+		startedAt := time.Now()
+		runner.OnHistoryCheckpoint = func(processed, total int) {
+			renderMigrateHistoryProgress(out, processed, total, startedAt)
+		}
+	}
 	runResult, err := runMigrateRunner(ctx, runner, importer.RunOpenClawMigrationInput{
 		OrgID:        orgID,
 		UserID:       userID,
@@ -276,6 +282,52 @@ func renderMigrateOpenClawSummary(out io.Writer, summary importer.OpenClawMigrat
 	for _, warning := range summary.Warnings {
 		fmt.Fprintf(out, "    - %s\n", strings.TrimSpace(warning))
 	}
+}
+
+func renderMigrateHistoryProgress(out io.Writer, processed, total int, startedAt time.Time) {
+	if out == nil || total <= 0 {
+		return
+	}
+	if processed < 0 {
+		processed = 0
+	}
+	if processed > total {
+		processed = total
+	}
+	percent := (float64(processed) / float64(total)) * 100
+	eta := "unknown"
+	if processed >= total {
+		eta = "0s"
+	} else if processed > 0 {
+		elapsed := time.Since(startedAt)
+		remaining := total - processed
+		etaDuration := time.Duration(float64(elapsed) * float64(remaining) / float64(processed))
+		eta = formatMigrateETA(etaDuration)
+	}
+
+	fmt.Fprintf(out, "\rHistory progress: %d/%d (%.1f%%) ETA %s", processed, total, percent, eta)
+	if processed >= total {
+		fmt.Fprintln(out)
+	}
+}
+
+func formatMigrateETA(duration time.Duration) string {
+	if duration <= 0 {
+		return "0s"
+	}
+	duration = duration.Round(time.Second)
+	seconds := int(duration / time.Second)
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	seconds = seconds % 60
+	if minutes < 60 {
+		return fmt.Sprintf("%dm%02ds", minutes, seconds)
+	}
+	hours := minutes / 60
+	minutes = minutes % 60
+	return fmt.Sprintf("%dh%02dm%02ds", hours, minutes, seconds)
 }
 
 func resolveMigrateOrgID(flagOrgID string) (string, error) {
