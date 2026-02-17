@@ -684,13 +684,11 @@ func restartOpenClawGateway(out io.Writer) error {
 }
 
 func startBridgeProcess(repoRoot string, out io.Writer) error {
-	scriptPath, err := resolveBridgeScriptPath(repoRoot)
-	if err != nil {
+	if _, err := resolveBridgeScriptPath(repoRoot); err != nil {
 		return err
 	}
 
-	cmd := exec.Command("npx", "tsx", scriptPath, "--continuous")
-	cmd.Dir = repoRoot
+	cmd := exec.Command("bash", "-lc", buildInitBridgeStartCommand(repoRoot))
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Start(); err != nil {
@@ -725,6 +723,17 @@ func resolveBridgeScriptPath(repoRoot string) (string, error) {
 		return "", fmt.Errorf("resolve bridge script: %w", err)
 	}
 	return absPath, nil
+}
+
+func buildInitBridgeStartCommand(repoRoot string) string {
+	root := strings.TrimSpace(repoRoot)
+	if root == "" {
+		root = "."
+	}
+	return fmt.Sprintf(
+		"cd %s && set -a && . bridge/.env && set +a && npx tsx \"${BRIDGE_SCRIPT:-bridge/openclaw-bridge.ts}\" --continuous",
+		shellSingleQuote(root),
+	)
 }
 
 func promptRequiredField(reader *bufio.Reader, out io.Writer, label string) string {
