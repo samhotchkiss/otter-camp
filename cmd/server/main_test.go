@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -263,6 +268,89 @@ func TestMainStartsConversationSegmentationWorkerWhenConfigured(t *testing.T) {
 			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
 		}
 	}
+}
+
+func TestRunServerAutoMigrationLogsOutcomes(t *testing.T) {
+	origOpen := openServerDB
+	origRun := runServerAutoMigrate
+	t.Cleanup(func() {
+		openServerDB = origOpen
+		runServerAutoMigrate = origRun
+	})
+
+	logs := make([]string, 0, 3)
+	logf := func(format string, args ...interface{}) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	openServerDB = func() (*sql.DB, error) {
+		return nil, errors.New("db unavailable")
+	}
+	runServerAutoMigration(logf)
+
+	openServerDB = func() (*sql.DB, error) {
+		return &sql.DB{}, nil
+	}
+	runServerAutoMigrate = func(_ *sql.DB, _ string) error {
+		return errors.New("migration failed")
+	}
+	runServerAutoMigration(logf)
+
+	runServerAutoMigrate = func(_ *sql.DB, _ string) error {
+		return nil
+	}
+	runServerAutoMigration(logf)
+
+	joined := strings.Join(logs, "\n")
+	for _, snippet := range []string{
+		"Auto-migration skipped; database unavailable",
+		"Auto-migration failed",
+		"Auto-migration complete",
+	} {
+		if !strings.Contains(joined, snippet) {
+			t.Fatalf("expected log output to contain %q, got %q", snippet, joined)
+		}
+	}
+}
+
+func TestStartWorkerWithRecoveryRecoversPanic(t *testing.T) {
+	var wg sync.WaitGroup
+	logs := make([]string, 0, 1)
+	logf := func(format string, args ...interface{}) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	startWorkerWithRecovery(context.Background(), &wg, "panic-worker", logf, func(context.Context) {
+		panic("boom")
+	})
+	wg.Wait()
+
+	if len(logs) == 0 {
+		t.Fatalf("expected panic log output")
+	}
+	if !strings.Contains(logs[0], "worker panic") || !strings.Contains(logs[0], "panic-worker") || !strings.Contains(logs[0], "boom") {
+		t.Fatalf("unexpected panic log output: %q", logs[0])
+	}
+}
+
+func TestStartWorkerWithRecoveryRunsAsynchronously(t *testing.T) {
+	var wg sync.WaitGroup
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	startWorkerWithRecovery(context.Background(), &wg, "async-worker", nil, func(context.Context) {
+		close(started)
+		<-release
+	})
+
+	select {
+	case <-started:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected worker goroutine to start asynchronously")
+	}
+
+	close(release)
+	wg.Wait()
 }
 
 func TestMainStartsEllieIngestionWorkerWhenConfigured(t *testing.T) {
