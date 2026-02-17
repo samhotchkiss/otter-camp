@@ -23,8 +23,39 @@ var importMigrateOpenClawAgentIdentities = importer.ImportOpenClawAgentIdentitie
 var parseMigrateOpenClawSessionEvents = importer.ParseOpenClawSessionEvents
 var newOpenClawMigrationRunner = importer.NewOpenClawMigrationRunner
 var loadMigrateConfig = ottercli.LoadConfig
+var newMigrateClient = ottercli.NewClient
 var openMigrateDatabase = openMigrateDatabaseFromEnv
 var resolveMigrateBackfillUserIDFn = resolveMigrateBackfillUserID
+var migrateWhoAmIUserID = func(client *ottercli.Client) (string, error) {
+	whoami, err := client.WhoAmI()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(whoami.User.ID), nil
+}
+var importMigrateOpenClawAgentsAPI = func(
+	client *ottercli.Client,
+	input ottercli.OpenClawMigrationImportAgentsInput,
+) (ottercli.OpenClawMigrationImportAgentsResult, error) {
+	return client.ImportOpenClawMigrationAgents(input)
+}
+var importMigrateOpenClawHistoryBatchAPI = func(
+	client *ottercli.Client,
+	input ottercli.OpenClawMigrationImportHistoryBatchInput,
+) (ottercli.OpenClawMigrationImportHistoryBatchResult, error) {
+	return client.ImportOpenClawMigrationHistoryBatch(input)
+}
+var runMigrateOpenClawAPI = func(
+	client *ottercli.Client,
+	input ottercli.OpenClawMigrationRunRequest,
+) (ottercli.OpenClawMigrationRunResponse, error) {
+	return client.RunOpenClawMigration(input)
+}
+var statusMigrateOpenClawAPI = func(
+	client *ottercli.Client,
+) (ottercli.OpenClawMigrationStatus, error) {
+	return client.GetOpenClawMigrationStatus()
+}
 var runMigrateRunner = func(
 	ctx context.Context,
 	runner *importer.OpenClawMigrationRunner,
@@ -48,8 +79,12 @@ var updateMigrateProgressByOrgStatus = func(
 }
 
 var (
-	migrateExecutionTimeout = 30 * time.Minute
-	migrateQueryTimeout     = 30 * time.Second
+	migrateExecutionTimeout         = 30 * time.Minute
+	migrateQueryTimeout             = 30 * time.Second
+	migrateStatusPollInterval       = 500 * time.Millisecond
+	migrateStatusPollAttempts       = 60
+	migrateOpenClawHistoryBatchSize = 1000
+	sleepMigrateStatusPoll          = time.Sleep
 )
 
 type migrateFromOpenClawOptions struct {
@@ -301,6 +336,42 @@ func runMigrateFromOpenClaw(out io.Writer, opts migrateFromOpenClawOptions) erro
 		return err
 	}
 
+	transport, err := resolveMigrateTransportForExecution(opts.Transport)
+	if err != nil {
+		return err
+	}
+	if transport == migrateTransportAPI {
+		return runMigrateFromOpenClawAPI(out, opts, orgID, install, identities, events)
+	}
+
+	return runMigrateFromOpenClawDB(out, opts, orgID, install, events)
+}
+
+func resolveMigrateTransportForExecution(requested migrateTransport) (migrateTransport, error) {
+	switch requested {
+	case migrateTransportAPI:
+		return migrateTransportAPI, nil
+	case migrateTransportDB:
+		return migrateTransportDB, nil
+	case "", migrateTransportAuto:
+		cfg, err := loadMigrateConfig()
+		if err != nil {
+			return "", err
+		}
+		return resolveMigrateTransport(migrateTransportAuto, cfg.APIBaseURL), nil
+	default:
+		return "", fmt.Errorf("invalid migrate transport %q", requested)
+	}
+}
+
+func runMigrateFromOpenClawDB(
+	out io.Writer,
+	opts migrateFromOpenClawOptions,
+	orgID string,
+	install *importer.OpenClawInstallation,
+	events []importer.OpenClawSessionEvent,
+) error {
+
 	db, err := openMigrateDatabase()
 	if err != nil {
 		return err
@@ -345,6 +416,244 @@ func runMigrateFromOpenClaw(out io.Writer, opts migrateFromOpenClawOptions) erro
 	}
 	fmt.Fprintln(out, "OpenClaw migration complete.")
 	return nil
+}
+
+type migrateOpenClawAPISummary struct {
+	agentsImported   bool
+	agentsProcessed  int
+	agentsInserted   int
+	agentsUpdated    int
+	agentsSkipped    int
+	historyImported  bool
+	eventsReceived   int
+	eventsProcessed  int
+	messagesInserted int
+	eventsSkipped    int
+	failedItems      int
+	status           *ottercli.OpenClawMigrationStatus
+	warnings         []string
+}
+
+func runMigrateFromOpenClawAPI(
+	out io.Writer,
+	opts migrateFromOpenClawOptions,
+	orgID string,
+	_ *importer.OpenClawInstallation,
+	identities []importer.ImportedAgentIdentity,
+	events []importer.OpenClawSessionEvent,
+) error {
+	cfg, err := loadMigrateConfig()
+	if err != nil {
+		return err
+	}
+	client, err := newMigrateClient(cfg, orgID)
+	if err != nil {
+		return err
+	}
+
+	summary := migrateOpenClawAPISummary{}
+
+	if !opts.HistoryOnly {
+		agentResult, importErr := importMigrateOpenClawAgentsAPI(
+			client,
+			ottercli.OpenClawMigrationImportAgentsInput{
+				Identities: mapMigrateOpenClawIdentitiesForAPI(identities),
+			},
+		)
+		if importErr != nil {
+			return importErr
+		}
+		summary.agentsImported = true
+		summary.agentsProcessed = agentResult.Processed
+		summary.agentsInserted = agentResult.Inserted
+		summary.agentsUpdated = agentResult.Updated
+		summary.agentsSkipped = agentResult.Skipped
+		summary.warnings = append(summary.warnings, agentResult.Warnings...)
+	}
+
+	if !opts.AgentsOnly {
+		userID, userErr := migrateWhoAmIUserID(client)
+		if userErr != nil {
+			return userErr
+		}
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			return fmt.Errorf("failed to resolve user id for OpenClaw history import")
+		}
+
+		batches := chunkMigrateOpenClawEvents(events, migrateOpenClawHistoryBatchSize)
+		totalBatches := len(batches)
+		batchID := fmt.Sprintf("cli-%d", time.Now().UTC().UnixNano())
+		for idx, batchEvents := range batches {
+			historyResult, importErr := importMigrateOpenClawHistoryBatchAPI(
+				client,
+				ottercli.OpenClawMigrationImportHistoryBatchInput{
+					UserID: userID,
+					Batch: ottercli.OpenClawMigrationImportBatch{
+						ID:    batchID,
+						Index: idx + 1,
+						Total: totalBatches,
+					},
+					Events: mapMigrateOpenClawEventsForAPI(batchEvents),
+				},
+			)
+			if importErr != nil {
+				return importErr
+			}
+			summary.historyImported = true
+			summary.eventsReceived += historyResult.EventsReceived
+			summary.eventsProcessed += historyResult.EventsProcessed
+			summary.messagesInserted += historyResult.MessagesInserted
+			summary.eventsSkipped += historyResult.EventsSkippedUnknownAgent
+			summary.failedItems += historyResult.FailedItems
+			summary.warnings = append(summary.warnings, historyResult.Warnings...)
+		}
+	}
+
+	if !opts.AgentsOnly && !opts.HistoryOnly {
+		_, err = runMigrateOpenClawAPI(
+			client,
+			ottercli.OpenClawMigrationRunRequest{StartPhase: "memory_extraction"},
+		)
+		if err != nil {
+			return err
+		}
+		status, statusErr := pollMigrateOpenClawAPIStatus(client)
+		if statusErr != nil {
+			return statusErr
+		}
+		summary.status = status
+	}
+
+	renderMigrateOpenClawAPISummary(out, summary)
+	if summary.status != nil && summary.status.Active {
+		fmt.Fprintln(out, "OpenClaw migration still active. Re-run `otter migrate status --transport api` to monitor progress.")
+		return nil
+	}
+	fmt.Fprintln(out, "OpenClaw migration complete.")
+	return nil
+}
+
+func chunkMigrateOpenClawEvents(events []importer.OpenClawSessionEvent, chunkSize int) [][]importer.OpenClawSessionEvent {
+	if len(events) == 0 {
+		return nil
+	}
+	if chunkSize <= 0 {
+		chunkSize = len(events)
+	}
+	chunks := make([][]importer.OpenClawSessionEvent, 0, (len(events)+chunkSize-1)/chunkSize)
+	for start := 0; start < len(events); start += chunkSize {
+		end := start + chunkSize
+		if end > len(events) {
+			end = len(events)
+		}
+		chunks = append(chunks, events[start:end])
+	}
+	return chunks
+}
+
+func mapMigrateOpenClawIdentitiesForAPI(
+	identities []importer.ImportedAgentIdentity,
+) []ottercli.OpenClawMigrationImportAgentIdentity {
+	out := make([]ottercli.OpenClawMigrationImportAgentIdentity, 0, len(identities))
+	for _, identity := range identities {
+		out = append(out, ottercli.OpenClawMigrationImportAgentIdentity{
+			ID:          strings.TrimSpace(identity.ID),
+			Name:        strings.TrimSpace(identity.Name),
+			Workspace:   strings.TrimSpace(identity.WorkspaceDir),
+			Soul:        identity.Soul,
+			Identity:    identity.Identity,
+			Memory:      identity.Memory,
+			Tools:       identity.Tools,
+			SourceFiles: identity.SourceFiles,
+		})
+	}
+	return out
+}
+
+func mapMigrateOpenClawEventsForAPI(
+	events []importer.OpenClawSessionEvent,
+) []ottercli.OpenClawMigrationImportHistoryEvent {
+	out := make([]ottercli.OpenClawMigrationImportHistoryEvent, 0, len(events))
+	for _, event := range events {
+		out = append(out, ottercli.OpenClawMigrationImportHistoryEvent{
+			AgentSlug:   strings.TrimSpace(event.AgentSlug),
+			SessionID:   strings.TrimSpace(event.SessionID),
+			SessionPath: strings.TrimSpace(event.SessionPath),
+			EventID:     strings.TrimSpace(event.EventID),
+			ParentID:    strings.TrimSpace(event.ParentID),
+			Role:        strings.TrimSpace(event.Role),
+			Body:        event.Body,
+			CreatedAt:   event.CreatedAt.UTC(),
+			Line:        event.Line,
+		})
+	}
+	return out
+}
+
+func pollMigrateOpenClawAPIStatus(client *ottercli.Client) (*ottercli.OpenClawMigrationStatus, error) {
+	attempts := migrateStatusPollAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	interval := migrateStatusPollInterval
+	if interval < 0 {
+		interval = 0
+	}
+
+	var latest ottercli.OpenClawMigrationStatus
+	for attempt := 0; attempt < attempts; attempt++ {
+		status, err := statusMigrateOpenClawAPI(client)
+		if err != nil {
+			return nil, err
+		}
+		latest = status
+		if !status.Active {
+			return &latest, nil
+		}
+		if attempt+1 < attempts && interval > 0 {
+			sleepMigrateStatusPoll(interval)
+		}
+	}
+	return &latest, nil
+}
+
+func renderMigrateOpenClawAPISummary(out io.Writer, summary migrateOpenClawAPISummary) {
+	fmt.Fprintln(out, "OpenClaw migration summary:")
+	if summary.agentsImported {
+		fmt.Fprintf(out, "  agent_import.processed=%d\n", summary.agentsProcessed)
+		fmt.Fprintf(out, "  agent_import.inserted=%d\n", summary.agentsInserted)
+		fmt.Fprintf(out, "  agent_import.updated=%d\n", summary.agentsUpdated)
+		fmt.Fprintf(out, "  agent_import.failed_items=%d\n", summary.agentsSkipped)
+	}
+	if summary.historyImported {
+		fmt.Fprintf(out, "  history_backfill.events_received=%d\n", summary.eventsReceived)
+		fmt.Fprintf(out, "  history_backfill.events_processed=%d\n", summary.eventsProcessed)
+		fmt.Fprintf(out, "  history_backfill.messages_inserted=%d\n", summary.messagesInserted)
+		fmt.Fprintf(out, "  history_backfill.events_skipped=%d\n", summary.eventsSkipped)
+		fmt.Fprintf(out, "  history_backfill.failed_items=%d\n", summary.failedItems)
+	}
+	if summary.status != nil {
+		for _, phase := range summary.status.Phases {
+			phaseType := strings.TrimSpace(phase.MigrationType)
+			if phaseType == "" {
+				continue
+			}
+			fmt.Fprintf(out, "  %s.processed=%d\n", phaseType, phase.ProcessedItems)
+			fmt.Fprintf(out, "  %s.failed_items=%d\n", phaseType, phase.FailedItems)
+		}
+	}
+	if len(summary.warnings) == 0 {
+		return
+	}
+	fmt.Fprintln(out, "  warnings:")
+	for _, warning := range summary.warnings {
+		trimmed := strings.TrimSpace(warning)
+		if trimmed == "" {
+			continue
+		}
+		fmt.Fprintf(out, "    - %s\n", trimmed)
+	}
 }
 
 func renderMigrateOpenClawSummary(out io.Writer, summary importer.OpenClawMigrationSummaryReport) {
