@@ -146,6 +146,7 @@ Primary implementation wave came through issue/commit streams around Spec #150-#
 
 ## Change Log
 
+- 2026-02-17: Documented uninstall teardown hardening for local runtime cleanup (server/bridge stop, PID/log cleanup, and port-free verification) from Spec 313.
 - 2026-02-16: Added project-docs ingestion architecture updates for scanner, retrieval, and migration runner phases (Spec 304).
 - 2026-02-16: Bug fix in CI test guardrails; no behavior change.
 - 2026-02-16: Added explicit navigation instructions, mandatory docs maintenance policy, and CI docs-guard enforcement guidance.

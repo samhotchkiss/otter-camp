@@ -38,6 +38,7 @@ scripts/*
 !scripts/setup_test.sh
 !scripts/bootstrap.sh
 !scripts/uninstall.sh
+!scripts/uninstall_test.sh
 !scripts/seed/
 !scripts/seed/**
 !scripts/build-indeed.sh
