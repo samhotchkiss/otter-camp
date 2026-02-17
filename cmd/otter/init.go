@@ -79,6 +79,7 @@ var (
 	inferInitOpenClawProjects        = importer.InferOpenClawProjectCandidates
 	restartInitOpenClawGateway       = restartOpenClawGateway
 	resolveInitRepoRoot              = gitRepoRoot
+	resolveInitBridgeScriptPath      = resolveBridgeScriptPath
 	writeInitBridgeEnv               = writeBridgeEnvFile
 	startInitBridge                  = startBridgeProcess
 )
@@ -428,9 +429,15 @@ func runInitImportAndBridgeWithOptions(
 	if bridgeRoot == "" {
 		bridgeRoot, _ = os.Getwd()
 	}
+	bridgeScriptPath, err := resolveInitBridgeScriptPath(bridgeRoot)
+	if err != nil {
+		return err
+	}
 
 	phase("Write bridge config")
-	bridgePath, err := writeInitBridgeEnv(bridgeRoot, buildBridgeEnvValues(installation, cfg))
+	bridgeValues := buildBridgeEnvValues(installation, cfg)
+	bridgeValues["BRIDGE_SCRIPT"] = bridgeScriptPath
+	bridgePath, err := writeInitBridgeEnv(bridgeRoot, bridgeValues)
 	if err != nil {
 		return err
 	}
@@ -588,6 +595,7 @@ func writeBridgeEnvFile(repoRoot string, values map[string]string) (string, erro
 		"OTTERCAMP_URL=" + strings.TrimSpace(values["OTTERCAMP_URL"]),
 		"OTTERCAMP_TOKEN=" + strings.TrimSpace(values["OTTERCAMP_TOKEN"]),
 		"OPENCLAW_WS_SECRET=" + strings.TrimSpace(values["OPENCLAW_WS_SECRET"]),
+		"BRIDGE_SCRIPT=" + strings.TrimSpace(values["BRIDGE_SCRIPT"]),
 		"",
 	}, "\n")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -604,7 +612,12 @@ func restartOpenClawGateway(out io.Writer) error {
 }
 
 func startBridgeProcess(repoRoot string, out io.Writer) error {
-	cmd := exec.Command("npx", "tsx", "bridge/openclaw-bridge.ts", "--continuous")
+	scriptPath, err := resolveBridgeScriptPath(repoRoot)
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command("npx", "tsx", scriptPath, "--continuous")
 	cmd.Dir = repoRoot
 	cmd.Stdout = out
 	cmd.Stderr = out
@@ -615,6 +628,31 @@ func startBridgeProcess(repoRoot string, out io.Writer) error {
 		fmt.Fprintf(out, "Bridge started in background (pid %d).\n", cmd.Process.Pid)
 	}
 	return nil
+}
+
+func resolveBridgeScriptPath(repoRoot string) (string, error) {
+	root := strings.TrimSpace(repoRoot)
+	if root == "" {
+		root = "."
+	}
+
+	candidate := filepath.Join(root, "bridge", "openclaw-bridge.ts")
+	info, err := os.Stat(candidate)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("bridge script not found at %s", candidate)
+		}
+		return "", fmt.Errorf("resolve bridge script: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("bridge script is not a file: %s", candidate)
+	}
+
+	absPath, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve bridge script: %w", err)
+	}
+	return absPath, nil
 }
 
 func promptRequiredField(reader *bufio.Reader, out io.Writer, label string) string {

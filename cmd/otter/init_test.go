@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -306,6 +308,88 @@ func TestBuildBridgeEnvValuesNormalizesHostedAPIPath(t *testing.T) {
 	}
 }
 
+func TestResolveBridgeScriptPath(t *testing.T) {
+	t.Run("returns validated bridge script path", func(t *testing.T) {
+		root := t.TempDir()
+		scriptPath := filepath.Join(root, "bridge", "openclaw-bridge.ts")
+		if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+			t.Fatalf("mkdir bridge dir: %v", err)
+		}
+		if err := os.WriteFile(scriptPath, []byte("console.log('ok')"), 0o644); err != nil {
+			t.Fatalf("write bridge script: %v", err)
+		}
+
+		resolved, err := resolveBridgeScriptPath(root)
+		if err != nil {
+			t.Fatalf("resolveBridgeScriptPath() error = %v", err)
+		}
+		if resolved != scriptPath {
+			t.Fatalf("resolved bridge script = %q, want %q", resolved, scriptPath)
+		}
+	})
+
+	t.Run("returns clear error when script is missing", func(t *testing.T) {
+		root := t.TempDir()
+		_, err := resolveBridgeScriptPath(root)
+		if err == nil {
+			t.Fatalf("expected missing bridge script error")
+		}
+		if !strings.Contains(err.Error(), "bridge script not found") {
+			t.Fatalf("expected clear missing-script error, got %v", err)
+		}
+	})
+}
+
+func TestWriteBridgeEnvFileIncludesBridgeScript(t *testing.T) {
+	root := t.TempDir()
+	scriptPath := filepath.Join(root, "bridge", "openclaw-bridge.ts")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		t.Fatalf("mkdir bridge dir: %v", err)
+	}
+	if err := os.WriteFile(scriptPath, []byte("console.log('ok')"), 0o644); err != nil {
+		t.Fatalf("write bridge script: %v", err)
+	}
+
+	path, err := writeBridgeEnvFile(root, map[string]string{
+		"OPENCLAW_HOST":      "127.0.0.1",
+		"OPENCLAW_PORT":      "18791",
+		"OPENCLAW_TOKEN":     "token",
+		"OTTERCAMP_URL":      "https://swh.otter.camp",
+		"OTTERCAMP_TOKEN":    "otter-token",
+		"OPENCLAW_WS_SECRET": "secret",
+		"BRIDGE_SCRIPT":      scriptPath,
+	})
+	if err != nil {
+		t.Fatalf("writeBridgeEnvFile() error = %v", err)
+	}
+	if path == "" {
+		t.Fatalf("expected bridge env path")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read bridge env: %v", err)
+	}
+	if !strings.Contains(string(raw), "BRIDGE_SCRIPT="+scriptPath) {
+		t.Fatalf("expected bridge script line in env file, got %q", string(raw))
+	}
+}
+
+func TestStartBridgeProcessReportsMissingScript(t *testing.T) {
+	root := t.TempDir()
+	var out bytes.Buffer
+
+	err := startBridgeProcess(root, &out)
+	if err == nil {
+		t.Fatalf("expected missing bridge script error")
+	}
+	if !strings.Contains(err.Error(), "bridge script not found") {
+		t.Fatalf("expected clear missing-script message, got %v", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "err_module_not_found") {
+		t.Fatalf("expected pre-spawn validation error, got node module error: %v", err)
+	}
+}
+
 func TestHandleInitPromptDefaultsToLocalSelection(t *testing.T) {
 	client := &fakeInitClient{
 		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
@@ -592,10 +676,10 @@ func TestInitAddsRequiredOpenClawAgentsToConfig(t *testing.T) {
 	}
 
 	output := out.String()
-	if !strings.Contains(output, "Added Ellie (Elephant) to OpenClaw config. Restart OpenClaw when ready to activate.") {
+	if !strings.Contains(output, "Added Ellie (Elephant) to OpenClaw config.") {
 		t.Fatalf("expected elephant added message, got %q", output)
 	}
-	if !strings.Contains(output, "Added Chameleon to OpenClaw config. Restart OpenClaw when ready to activate.") {
+	if !strings.Contains(output, "Added Chameleon to OpenClaw config.") {
 		t.Fatalf("expected chameleon added message, got %q", output)
 	}
 }
@@ -682,15 +766,17 @@ type initStubState struct {
 	hostedValidateOrg string
 	hostedValidateErr error
 
-	detectInstall *importer.OpenClawInstallation
-	detectErr     error
-	ensureCalled  bool
-	ensureOpts    importer.EnsureOpenClawRequiredAgentsOptions
-	ensureResult  importer.EnsureOpenClawRequiredAgentsResult
-	ensureErr     error
-	identities    []importer.ImportedAgentIdentity
-	projects      []importer.OpenClawProjectCandidate
-	repoRoot      string
+	detectInstall   *importer.OpenClawInstallation
+	detectErr       error
+	ensureCalled    bool
+	ensureOpts      importer.EnsureOpenClawRequiredAgentsOptions
+	ensureResult    importer.EnsureOpenClawRequiredAgentsResult
+	ensureErr       error
+	identities      []importer.ImportedAgentIdentity
+	projects        []importer.OpenClawProjectCandidate
+	repoRoot        string
+	bridgeScript    string
+	bridgeScriptErr error
 
 	bridgeWriteCalled bool
 	bridgeValues      map[string]string
@@ -705,9 +791,10 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 	t.Helper()
 
 	state := &initStubState{
-		detectErr:  importer.ErrOpenClawNotFound,
-		repoRoot:   "/repo",
-		bridgePath: "/repo/bridge/.env",
+		detectErr:    importer.ErrOpenClawNotFound,
+		repoRoot:     "/repo",
+		bridgeScript: "/repo/bridge/openclaw-bridge.ts",
+		bridgePath:   "/repo/bridge/.env",
 	}
 
 	origLoad := loadInitConfig
@@ -719,6 +806,7 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 	origImport := importInitOpenClawIdentities
 	origInfer := inferInitOpenClawProjects
 	origRepoRoot := resolveInitRepoRoot
+	origResolveBridgeScript := resolveInitBridgeScriptPath
 	origWriteBridge := writeInitBridgeEnv
 	origStartBridge := startInitBridge
 
@@ -766,6 +854,12 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 	resolveInitRepoRoot = func() (string, error) {
 		return state.repoRoot, nil
 	}
+	resolveInitBridgeScriptPath = func(repoRoot string) (string, error) {
+		if state.bridgeScriptErr != nil {
+			return "", state.bridgeScriptErr
+		}
+		return state.bridgeScript, nil
+	}
 	writeInitBridgeEnv = func(repoRoot string, values map[string]string) (string, error) {
 		state.bridgeWriteCalled = true
 		state.bridgeValues = values
@@ -789,6 +883,7 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 		importInitOpenClawIdentities = origImport
 		inferInitOpenClawProjects = origInfer
 		resolveInitRepoRoot = origRepoRoot
+		resolveInitBridgeScriptPath = origResolveBridgeScript
 		writeInitBridgeEnv = origWriteBridge
 		startInitBridge = origStartBridge
 	})
