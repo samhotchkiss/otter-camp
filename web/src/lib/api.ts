@@ -9,6 +9,9 @@ const browserOrigin = typeof window !== "undefined" ? window.location.origin : "
 const isLocalhost = typeof window !== "undefined" &&
   (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 export const API_URL = isLocalhost ? browserOrigin : (import.meta.env.VITE_API_URL || browserOrigin);
+const hostedBaseDomain = "otter.camp";
+const hostedReservedSubdomains = new Set(["api", "www"]);
+const hostedOrgSlugPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**
  * Get query params for API calls that need org_id
@@ -26,9 +29,39 @@ export interface ApiError extends Error {
   status: number;
 }
 
+export function hostedOrgSlugFromHostname(hostname: string): string {
+  const normalizedHost = hostname.trim().toLowerCase().replace(/\.$/, "");
+  if (!normalizedHost || normalizedHost === hostedBaseDomain) {
+    return "";
+  }
+
+  const suffix = `.${hostedBaseDomain}`;
+  if (!normalizedHost.endsWith(suffix)) {
+    return "";
+  }
+
+  const slug = normalizedHost.slice(0, -suffix.length);
+  if (!slug || slug.includes(".") || hostedReservedSubdomains.has(slug)) {
+    return "";
+  }
+  if (!hostedOrgSlugPattern.test(slug)) {
+    return "";
+  }
+
+  return slug;
+}
+
+function hostedOrgSlugFromWindow(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return hostedOrgSlugFromHostname(window.location.hostname);
+}
+
 export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('otter_camp_token');
   const orgId = localStorage.getItem('otter-camp-org-id');
+  const hostedOrgSlug = hostedOrgSlugFromWindow();
 
   let res: Response;
   try {
@@ -38,6 +71,7 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
         'Content-Type': 'application/json',
         ...(token && { Authorization: `Bearer ${token}` }),
         ...(orgId && { 'X-Org-ID': orgId }),
+        ...(hostedOrgSlug && { 'X-Otter-Org': hostedOrgSlug }),
         ...options?.headers,
       },
     });
