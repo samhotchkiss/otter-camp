@@ -17,6 +17,14 @@ type fakeOpenClawMigrationProgressStore struct {
 
 	startPhaseInputs []store.StartMigrationProgressInput
 	setStatusInputs  []store.SetMigrationProgressStatusInput
+
+	updateStatusByOrgInputs []fakeOpenClawUpdateStatusByOrgCall
+}
+
+type fakeOpenClawUpdateStatusByOrgCall struct {
+	OrgID      string
+	FromStatus store.MigrationProgressStatus
+	ToStatus   store.MigrationProgressStatus
 }
 
 func newFakeOpenClawMigrationProgressStore(
@@ -115,4 +123,31 @@ func (f *fakeOpenClawMigrationProgressStore) SetStatus(
 	f.rowsByKey[key] = row
 	cloned := row
 	return &cloned, nil
+}
+
+func (f *fakeOpenClawMigrationProgressStore) UpdateStatusByOrg(
+	_ context.Context,
+	orgID string,
+	fromStatus store.MigrationProgressStatus,
+	toStatus store.MigrationProgressStatus,
+) (int, error) {
+	f.updateStatusByOrgInputs = append(f.updateStatusByOrgInputs, fakeOpenClawUpdateStatusByOrgCall{
+		OrgID:      orgID,
+		FromStatus: fromStatus,
+		ToStatus:   toStatus,
+	})
+
+	updated := 0
+	for key, row := range f.rowsByKey {
+		if strings.TrimSpace(row.OrgID) != strings.TrimSpace(orgID) {
+			continue
+		}
+		if row.Status != fromStatus {
+			continue
+		}
+		row.Status = toStatus
+		f.rowsByKey[key] = row
+		updated++
+	}
+	return updated, nil
 }

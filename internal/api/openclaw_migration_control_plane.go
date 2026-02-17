@@ -38,13 +38,18 @@ type openClawMigrationRunRequest struct {
 }
 
 type openClawMigrationRunResponse struct {
-	Accepted              bool     `json:"accepted"`
-	SelectedPhases        []string `json:"selected_phases,omitempty"`
-	StartedPhases         []string `json:"started_phases,omitempty"`
-	ResumedPhases         []string `json:"resumed_phases,omitempty"`
+	Accepted               bool     `json:"accepted"`
+	SelectedPhases         []string `json:"selected_phases,omitempty"`
+	StartedPhases          []string `json:"started_phases,omitempty"`
+	ResumedPhases          []string `json:"resumed_phases,omitempty"`
 	SkippedCompletedPhases []string `json:"skipped_completed_phases,omitempty"`
-	AlreadyRunningPhases  []string `json:"already_running_phases,omitempty"`
-	PausedPhases          []string `json:"paused_phases,omitempty"`
+	AlreadyRunningPhases   []string `json:"already_running_phases,omitempty"`
+	PausedPhases           []string `json:"paused_phases,omitempty"`
+}
+
+type openClawMigrationMutationResponse struct {
+	Status        string `json:"status"`
+	UpdatedPhases int    `json:"updated_phases"`
 }
 
 type openClawMigrationProgressStore interface {
@@ -52,11 +57,19 @@ type openClawMigrationProgressStore interface {
 	GetByType(ctx context.Context, orgID, migrationType string) (*store.MigrationProgress, error)
 	StartPhase(ctx context.Context, input store.StartMigrationProgressInput) (*store.MigrationProgress, error)
 	SetStatus(ctx context.Context, input store.SetMigrationProgressStatusInput) (*store.MigrationProgress, error)
+	UpdateStatusByOrg(
+		ctx context.Context,
+		orgID string,
+		fromStatus store.MigrationProgressStatus,
+		toStatus store.MigrationProgressStatus,
+	) (int, error)
 }
 
 type openClawMigrationControlPlaneService interface {
 	Status(ctx context.Context, orgID string) (openClawMigrationStatusResponse, error)
 	Run(ctx context.Context, orgID string, input openClawMigrationRunRequest) (openClawMigrationRunResponse, error)
+	Pause(ctx context.Context, orgID string) (openClawMigrationMutationResponse, error)
+	Resume(ctx context.Context, orgID string) (openClawMigrationMutationResponse, error)
 }
 
 type defaultOpenClawMigrationControlPlaneService struct {
@@ -231,6 +244,50 @@ func (s *defaultOpenClawMigrationControlPlaneService) Run(
 	return response, nil
 }
 
+func (s *defaultOpenClawMigrationControlPlaneService) Pause(
+	ctx context.Context,
+	orgID string,
+) (openClawMigrationMutationResponse, error) {
+	if s == nil || s.progressStore == nil {
+		return openClawMigrationMutationResponse{}, fmt.Errorf("migration progress store not configured")
+	}
+	updated, err := s.progressStore.UpdateStatusByOrg(
+		ctx,
+		orgID,
+		store.MigrationProgressStatusRunning,
+		store.MigrationProgressStatusPaused,
+	)
+	if err != nil {
+		return openClawMigrationMutationResponse{}, err
+	}
+	return openClawMigrationMutationResponse{
+		Status:        string(store.MigrationProgressStatusPaused),
+		UpdatedPhases: updated,
+	}, nil
+}
+
+func (s *defaultOpenClawMigrationControlPlaneService) Resume(
+	ctx context.Context,
+	orgID string,
+) (openClawMigrationMutationResponse, error) {
+	if s == nil || s.progressStore == nil {
+		return openClawMigrationMutationResponse{}, fmt.Errorf("migration progress store not configured")
+	}
+	updated, err := s.progressStore.UpdateStatusByOrg(
+		ctx,
+		orgID,
+		store.MigrationProgressStatusPaused,
+		store.MigrationProgressStatusRunning,
+	)
+	if err != nil {
+		return openClawMigrationMutationResponse{}, err
+	}
+	return openClawMigrationMutationResponse{
+		Status:        string(store.MigrationProgressStatusRunning),
+		UpdatedPhases: updated,
+	}, nil
+}
+
 func selectOpenClawPhases(input openClawMigrationRunRequest) ([]string, error) {
 	phases := make([]string, 0, len(openClawMigrationPhaseOrder))
 	switch {
@@ -357,10 +414,40 @@ func (h *OpenClawMigrationControlPlaneHandler) Run(w http.ResponseWriter, r *htt
 	sendJSON(w, http.StatusAccepted, response)
 }
 
-func (h *OpenClawMigrationControlPlaneHandler) Pause(w http.ResponseWriter, _ *http.Request) {
-	sendJSON(w, http.StatusNotImplemented, errorResponse{Error: "not implemented"})
+func (h *OpenClawMigrationControlPlaneHandler) Pause(w http.ResponseWriter, r *http.Request) {
+	orgID := middleware.WorkspaceFromContext(r.Context())
+	if strings.TrimSpace(orgID) == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workspace context required"})
+		return
+	}
+	if h == nil || h.service == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "migration control plane unavailable"})
+		return
+	}
+
+	response, err := h.service.Pause(r.Context(), orgID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to pause migration"})
+		return
+	}
+	sendJSON(w, http.StatusOK, response)
 }
 
-func (h *OpenClawMigrationControlPlaneHandler) Resume(w http.ResponseWriter, _ *http.Request) {
-	sendJSON(w, http.StatusNotImplemented, errorResponse{Error: "not implemented"})
+func (h *OpenClawMigrationControlPlaneHandler) Resume(w http.ResponseWriter, r *http.Request) {
+	orgID := middleware.WorkspaceFromContext(r.Context())
+	if strings.TrimSpace(orgID) == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workspace context required"})
+		return
+	}
+	if h == nil || h.service == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "migration control plane unavailable"})
+		return
+	}
+
+	response, err := h.service.Resume(r.Context(), orgID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to resume migration"})
+		return
+	}
+	sendJSON(w, http.StatusOK, response)
 }
