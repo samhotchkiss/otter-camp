@@ -4,11 +4,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/smtp"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +29,14 @@ type WaitlistHandler struct {
 	DB               *sql.DB
 	now              func() time.Time
 	sendNotification func(signupEmail, timestamp string)
+	limiter          *waitlistRateLimiter
+}
+
+type waitlistRateLimiter struct {
+	mu      sync.Mutex
+	limit   int
+	window  time.Duration
+	entries map[string][]time.Time
 }
 
 func NewWaitlistHandler(db *sql.DB) *WaitlistHandler {
@@ -34,6 +44,7 @@ func NewWaitlistHandler(db *sql.DB) *WaitlistHandler {
 		DB:               db,
 		now:              time.Now,
 		sendNotification: sendNotificationEmail,
+		limiter:          newWaitlistRateLimiter(5, 10*time.Minute),
 	}
 }
 
@@ -41,6 +52,19 @@ func NewWaitlistHandler(db *sql.DB) *WaitlistHandler {
 func (h *WaitlistHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	nowFn := h.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+
+	if h.limiter != nil && !h.limiter.allow(waitlistClientKey(r), nowFn()) {
+		sendJSON(w, http.StatusTooManyRequests, WaitlistResponse{
+			Success: false,
+			Message: "Too many waitlist requests, please try again later.",
+		})
 		return
 	}
 
@@ -81,7 +105,7 @@ func (h *WaitlistHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	timestamp := h.now().UTC().Format(time.RFC3339)
+	timestamp := nowFn().UTC().Format(time.RFC3339)
 	fmt.Printf("🦦 Waitlist signup: %s at %s\n", email, timestamp)
 
 	if h.sendNotification != nil {
@@ -97,6 +121,69 @@ func (h *WaitlistHandler) Handle(w http.ResponseWriter, r *http.Request) {
 // HandleWaitlist handles POST /api/waitlist.
 func HandleWaitlist(w http.ResponseWriter, r *http.Request) {
 	NewWaitlistHandler(nil).Handle(w, r)
+}
+
+func newWaitlistRateLimiter(limit int, window time.Duration) *waitlistRateLimiter {
+	if limit < 1 {
+		limit = 1
+	}
+	if window <= 0 {
+		window = time.Minute
+	}
+	return &waitlistRateLimiter{
+		limit:   limit,
+		window:  window,
+		entries: make(map[string][]time.Time),
+	}
+}
+
+func (l *waitlistRateLimiter) allow(client string, now time.Time) bool {
+	if l == nil {
+		return true
+	}
+	if client == "" {
+		client = "unknown"
+	}
+
+	cutoff := now.Add(-l.window)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	history := l.entries[client][:0]
+	for _, ts := range l.entries[client] {
+		if ts.After(cutoff) {
+			history = append(history, ts)
+		}
+	}
+
+	if len(history) >= l.limit {
+		l.entries[client] = history
+		return false
+	}
+
+	l.entries[client] = append(history, now)
+	return true
+}
+
+func waitlistClientKey(r *http.Request) string {
+	xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
+	if xff != "" {
+		first := strings.TrimSpace(strings.Split(xff, ",")[0])
+		if first != "" {
+			return first
+		}
+	}
+
+	remote := strings.TrimSpace(r.RemoteAddr)
+	if remote == "" {
+		return "unknown"
+	}
+	host, _, err := net.SplitHostPort(remote)
+	if err == nil && host != "" {
+		return host
+	}
+	return remote
 }
 
 func sendNotificationEmail(signupEmail, timestamp string) {
