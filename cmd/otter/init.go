@@ -480,14 +480,17 @@ func runInitImportAndBridgeWithOptions(
 			fmt.Fprintf(out, "Run this command later to migrate OpenClaw data:\n  %s\n", renderInitMigrationCommand("", cfg.DefaultOrg, installation.RootDir))
 			return nil
 		}
+		fmt.Fprintln(out, "Migration progress: preparing OpenClaw migration input.")
+		fmt.Fprintln(out, "Migration progress: running otter migrate from-openclaw.")
 		if err := runInitOpenClawMigration(out, migrateFromOpenClawOptions{
 			OpenClawDir: installation.RootDir,
 			OrgID:       strings.TrimSpace(cfg.DefaultOrg),
 		}); err != nil {
-			fmt.Fprintf(out, "Automatic migration failed: %v\n", err)
+			fmt.Fprintf(out, "Migration progress: failed (%v)\n", err)
 			fmt.Fprintf(out, "Retry with:\n  %s\n", renderInitMigrationCommand(databaseURL, cfg.DefaultOrg, installation.RootDir))
 			return nil
 		}
+		fmt.Fprintln(out, "Migration progress: complete.")
 		return nil
 	}
 
