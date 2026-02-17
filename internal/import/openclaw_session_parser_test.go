@@ -210,6 +210,87 @@ func TestOpenClawSessionParserNearBufferLimitLine(t *testing.T) {
 	require.NotEmpty(t, events[0].Body)
 }
 
+func TestDiscoverOpenClawSessionFilesIncludesBackupLayouts(t *testing.T) {
+	root := t.TempDir()
+
+	// Standard layout
+	stdDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(stdDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stdDir, "aaa.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	// Backup layout: <slug>-sessions/
+	backupDir := filepath.Join(root, "sessions-backup-20260129", "essie-sessions")
+	require.NoError(t, os.MkdirAll(backupDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(backupDir, "bbb.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	// Non-session jsonl (should be excluded)
+	logsDir := filepath.Join(root, "logs")
+	require.NoError(t, os.MkdirAll(logsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(logsDir, "config-audit.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	// Jsonl not under a sessions dir (should be excluded)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "random.jsonl"), []byte(`{}`+"\n"), 0o644))
+
+	files, err := discoverOpenClawSessionFiles(root)
+	require.NoError(t, err)
+	require.Len(t, files, 2, "should find standard + backup, exclude logs + root")
+
+	// Check that both are found
+	var bases []string
+	for _, f := range files {
+		bases = append(bases, filepath.Base(f))
+	}
+	require.Contains(t, bases, "aaa.jsonl")
+	require.Contains(t, bases, "bbb.jsonl")
+}
+
+func TestDeriveMetadataFromBackupLayout(t *testing.T) {
+	// Standard: agents/main/sessions/uuid.jsonl → main, uuid
+	slug, id := deriveOpenClawSessionPathMetadata("/root/agents/main/sessions/abc-123.jsonl")
+	require.Equal(t, "main", slug)
+	require.Equal(t, "abc-123", id)
+
+	// Backup: sessions-backup/essie-sessions/uuid.jsonl → essie, uuid
+	slug, id = deriveOpenClawSessionPathMetadata("/root/sessions-backup-20260129/essie-sessions/def-456.jsonl")
+	require.Equal(t, "essie", slug)
+	require.Equal(t, "def-456", id)
+
+	// Backup with compound slug: email-mgmt-sessions/uuid.jsonl → email-mgmt, uuid
+	slug, id = deriveOpenClawSessionPathMetadata("/root/backup/email-mgmt-sessions/xyz.jsonl")
+	require.Equal(t, "email-mgmt", slug)
+	require.Equal(t, "xyz", id)
+}
+
+func TestParseOpenClawSessionEventsIncludesBackupFiles(t *testing.T) {
+	root := t.TempDir()
+
+	// Standard layout
+	stdDir := filepath.Join(root, "agents", "main", "sessions")
+	require.NoError(t, os.MkdirAll(stdDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(stdDir, "s1.jsonl"), []string{
+		`{"type":"message","id":"u1","timestamp":"2026-01-01T10:00:05Z","message":{"role":"user","content":"hello standard"}}`,
+	})
+
+	// Backup layout
+	backupDir := filepath.Join(root, "sessions-backup-20260129", "essie-sessions")
+	require.NoError(t, os.MkdirAll(backupDir, 0o755))
+	writeOpenClawSessionFixture(t, filepath.Join(backupDir, "s2.jsonl"), []string{
+		`{"type":"message","id":"u2","timestamp":"2026-01-02T10:00:05Z","message":{"role":"user","content":"hello backup"}}`,
+	})
+
+	events, err := ParseOpenClawSessionEvents(&OpenClawInstallation{RootDir: root})
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+
+	// Check agent slugs
+	slugs := map[string]bool{}
+	for _, e := range events {
+		slugs[e.AgentSlug] = true
+	}
+	require.True(t, slugs["main"])
+	require.True(t, slugs["essie"])
+}
+
 func writeOpenClawSessionFixture(t *testing.T, path string, lines []string) {
 	t.Helper()
 	content := ""

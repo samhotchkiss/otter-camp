@@ -66,11 +66,10 @@ func parseOpenClawSessionEvents(install *OpenClawInstallation, strict bool) ([]O
 		return nil, err
 	}
 
-	sessionFiles, err := filepath.Glob(filepath.Join(root, "agents", "*", "sessions", "*.jsonl"))
+	sessionFiles, err := discoverOpenClawSessionFiles(root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover openclaw session files: %w", err)
 	}
-	sort.Strings(sessionFiles)
 
 	events := make([]OpenClawSessionEvent, 0)
 	for _, sessionPath := range sessionFiles {
@@ -156,14 +155,70 @@ func parseOpenClawSessionFile(sessionPath string, strict bool) ([]OpenClawSessio
 	return events, nil
 }
 
+// discoverOpenClawSessionFiles walks root recursively for *.jsonl files that
+// live under a directory whose name contains "sessions". This catches both the
+// standard layout (agents/<slug>/sessions/<id>.jsonl) and backup layouts
+// (sessions-backup-*/<slug>-sessions/<id>.jsonl). It explicitly excludes the
+// logs/ directory and known non-session files like config-audit.jsonl.
+func discoverOpenClawSessionFiles(root string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			base := d.Name()
+			// Skip known non-session directories
+			if base == "logs" || base == ".git" || base == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		// Only include files where the parent directory name contains "sessions"
+		parentDir := filepath.Base(filepath.Dir(path))
+		if !strings.Contains(parentDir, "sessions") {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// deriveOpenClawSessionPathMetadata extracts agent slug and session ID from a
+// session file path. It supports two layouts:
+//
+//	Standard:  .../agents/<slug>/sessions/<uuid>.jsonl  → slug, uuid
+//	Backup:    .../<slug>-sessions/<uuid>.jsonl          → slug, uuid
 func deriveOpenClawSessionPathMetadata(sessionPath string) (agentSlug, sessionID string) {
 	clean := filepath.Clean(sessionPath)
 	sessionID = strings.TrimSuffix(filepath.Base(clean), filepath.Ext(clean))
 
 	sessionsDir := filepath.Dir(clean)
-	agentDir := filepath.Dir(sessionsDir)
-	agentSlug = strings.TrimSpace(filepath.Base(agentDir))
+	parentName := filepath.Base(sessionsDir)
 
+	// Standard layout: parent is "sessions", grandparent is agent slug
+	if parentName == "sessions" {
+		agentDir := filepath.Dir(sessionsDir)
+		agentSlug = strings.TrimSpace(filepath.Base(agentDir))
+		return agentSlug, sessionID
+	}
+
+	// Backup layout: parent is "<slug>-sessions"
+	if strings.HasSuffix(parentName, "-sessions") {
+		agentSlug = strings.TrimSuffix(parentName, "-sessions")
+		return agentSlug, sessionID
+	}
+
+	// Fallback: use parent directory name as slug
+	agentSlug = strings.TrimSpace(parentName)
 	return agentSlug, sessionID
 }
 
