@@ -118,6 +118,7 @@ func NewRouter() http.Handler {
 	deployConfigHandler := &DeployConfigHandler{}
 	jobsHandler := &JobsHandler{}
 	openClawMigrationHandler := NewOpenClawMigrationControlPlaneHandler(db)
+	openClawMigrationImportHandler := NewOpenClawMigrationImportHandler(db)
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
@@ -416,6 +417,8 @@ func NewRouter() http.Handler {
 		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/run", openClawMigrationHandler.Run)
 		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/pause", openClawMigrationHandler.Pause)
 		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/resume", openClawMigrationHandler.Resume)
+		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/import/agents", openClawMigrationImportHandler.ImportAgents)
+		r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/import/history/batch", openClawMigrationImportHandler.ImportHistoryBatch)
 		r.Patch("/tasks/{id}", taskHandler.UpdateTask)
 		r.Patch("/tasks/{id}/status", taskHandler.UpdateTaskStatus)
 		r.Get("/messages", messageHandler.ListMessages)

@@ -540,7 +540,55 @@ func TestOpenClawMigrationRoutesUseRequireWorkspaceAndCapabilityMiddleware(t *te
 	if err != nil {
 		t.Fatalf("read router.go: %v", err)
 	}
+	assertOpenClawMigrationControlPlaneRoutes(t, string(sourceBytes))
+}
+
+func TestRouterRegistersOpenClawMigrationControlPlaneRoutes(t *testing.T) {
+	t.Parallel()
+
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	assertOpenClawMigrationControlPlaneRoutes(t, string(sourceBytes))
+}
+
+func TestRouterRegistersOpenClawMigrationImportRoutes(t *testing.T) {
+	t.Parallel()
+
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+
 	source := string(sourceBytes)
+	requiredLines := []string{
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/import/agents", openClawMigrationImportHandler.ImportAgents)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/import/history/batch", openClawMigrationImportHandler.ImportHistoryBatch)`,
+	}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected OpenClaw migration import route middleware line: %s", line)
+		}
+	}
+}
+
+func TestLegacyImportEndpointBehaviorUnchanged(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter()
+	req := httptest.NewRequest(http.MethodPost, "/api/import", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected legacy /api/import endpoint to remain registered")
+	}
+}
+
+func assertOpenClawMigrationControlPlaneRoutes(t *testing.T, source string) {
+	t.Helper()
+
 	requiredLines := []string{
 		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/status", openClawMigrationHandler.Status)`,
 		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/run", openClawMigrationHandler.Run)`,

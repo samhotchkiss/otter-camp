@@ -274,6 +274,200 @@ func TestOpenClawHistoryBackfillIsIdempotent(t *testing.T) {
 	require.Equal(t, 2, messageCount)
 }
 
+func TestBackfillOpenClawHistoryFromBatchPayload(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-history-batch-payload")
+	userID := createOpenClawImportTestUser(t, db, orgID, "sam-history-batch-payload")
+
+	_, err := ImportOpenClawAgentsFromPayload(context.Background(), db, OpenClawAgentPayloadImportOptions{
+		OrgID: orgID,
+		Identities: []ImportedAgentIdentity{
+			{ID: "main", Name: "Frank", Soul: "Chief of Staff", Identity: "Frank Identity"},
+		},
+	})
+	require.NoError(t, err)
+
+	batchResult, err := BackfillOpenClawHistoryFromBatchPayload(
+		context.Background(),
+		db,
+		OpenClawHistoryBatchPayloadOptions{
+			OrgID:  orgID,
+			UserID: userID,
+			Batch: OpenClawHistoryBatch{
+				ID:    "batch-1",
+				Index: 1,
+				Total: 3,
+			},
+			Events: []OpenClawSessionEvent{
+				{
+					AgentSlug: "main",
+					Role:      OpenClawSessionEventRoleUser,
+					Body:      "hello",
+					CreatedAt: time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC),
+				},
+				{
+					AgentSlug: "main",
+					Role:      OpenClawSessionEventRoleAssistant,
+					Body:      "hi",
+					CreatedAt: time.Date(2026, 1, 1, 10, 0, 2, 0, time.UTC),
+				},
+				{
+					AgentSlug: "codex",
+					Role:      OpenClawSessionEventRoleAssistant,
+					Body:      "unknown",
+					CreatedAt: time.Date(2026, 1, 1, 10, 0, 3, 0, time.UTC),
+				},
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 3, batchResult.EventsReceived)
+	require.Equal(t, 2, batchResult.EventsProcessed)
+	require.Equal(t, 2, batchResult.MessagesInserted)
+	require.Equal(t, 1, batchResult.RoomsCreated)
+	require.Equal(t, 2, batchResult.ParticipantsAdded)
+	require.Equal(t, 1, batchResult.EventsSkippedUnknownAgent)
+	require.Equal(t, 0, batchResult.FailedItems)
+}
+
+func TestBackfillOpenClawHistoryFromBatchPayloadIdempotentRetry(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-history-batch-idempotent")
+	userID := createOpenClawImportTestUser(t, db, orgID, "sam-history-batch-idempotent")
+
+	_, err := ImportOpenClawAgentsFromPayload(context.Background(), db, OpenClawAgentPayloadImportOptions{
+		OrgID: orgID,
+		Identities: []ImportedAgentIdentity{
+			{ID: "main", Name: "Frank", Soul: "Chief of Staff", Identity: "Frank Identity"},
+		},
+	})
+	require.NoError(t, err)
+
+	events := []OpenClawSessionEvent{
+		{
+			AgentSlug: "main",
+			Role:      OpenClawSessionEventRoleUser,
+			Body:      "hello",
+			CreatedAt: time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC),
+		},
+		{
+			AgentSlug: "main",
+			Role:      OpenClawSessionEventRoleAssistant,
+			Body:      "hi",
+			CreatedAt: time.Date(2026, 1, 1, 10, 0, 2, 0, time.UTC),
+		},
+	}
+
+	first, err := BackfillOpenClawHistoryFromBatchPayload(
+		context.Background(),
+		db,
+		OpenClawHistoryBatchPayloadOptions{
+			OrgID:  orgID,
+			UserID: userID,
+			Batch: OpenClawHistoryBatch{
+				ID:    "batch-retry",
+				Index: 2,
+				Total: 4,
+			},
+			Events: events,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.EventsReceived)
+	require.Equal(t, 2, first.EventsProcessed)
+	require.Equal(t, 2, first.MessagesInserted)
+	require.Equal(t, 1, first.RoomsCreated)
+
+	second, err := BackfillOpenClawHistoryFromBatchPayload(
+		context.Background(),
+		db,
+		OpenClawHistoryBatchPayloadOptions{
+			OrgID:  orgID,
+			UserID: userID,
+			Batch: OpenClawHistoryBatch{
+				ID:    "batch-retry",
+				Index: 2,
+				Total: 4,
+			},
+			Events: events,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, second.EventsReceived)
+	require.Equal(t, 2, second.EventsProcessed)
+	require.Equal(t, 0, second.MessagesInserted)
+	require.Equal(t, 0, second.RoomsCreated)
+}
+
+func TestBackfillOpenClawHistoryFromBatchPayloadCountsFailedItems(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-history-batch-failed-items")
+	userID := createOpenClawImportTestUser(t, db, orgID, "sam-history-batch-failed-items")
+
+	_, err := ImportOpenClawAgentsFromPayload(context.Background(), db, OpenClawAgentPayloadImportOptions{
+		OrgID: orgID,
+		Identities: []ImportedAgentIdentity{
+			{ID: "main", Name: "Frank", Soul: "Chief of Staff", Identity: "Frank Identity"},
+		},
+	})
+	require.NoError(t, err)
+
+	result, err := BackfillOpenClawHistoryFromBatchPayload(
+		context.Background(),
+		db,
+		OpenClawHistoryBatchPayloadOptions{
+			OrgID:  orgID,
+			UserID: userID,
+			Batch: OpenClawHistoryBatch{
+				ID:    "batch-failed-items",
+				Index: 1,
+				Total: 1,
+			},
+			Events: []OpenClawSessionEvent{
+				{
+					AgentSlug: "",
+					Role:      OpenClawSessionEventRoleUser,
+					Body:      "missing slug",
+					CreatedAt: time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC),
+				},
+				{
+					AgentSlug: "main",
+					Role:      OpenClawSessionEventRoleAssistant,
+					Body:      "",
+					CreatedAt: time.Date(2026, 1, 1, 10, 0, 2, 0, time.UTC),
+				},
+				{
+					AgentSlug: "main",
+					Role:      OpenClawSessionEventRoleAssistant,
+					Body:      "valid",
+					CreatedAt: time.Date(2026, 1, 1, 10, 0, 3, 0, time.UTC),
+				},
+				{
+					AgentSlug: "codex",
+					Role:      OpenClawSessionEventRoleAssistant,
+					Body:      "unknown",
+					CreatedAt: time.Date(2026, 1, 1, 10, 0, 4, 0, time.UTC),
+				},
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 4, result.EventsReceived)
+	require.Equal(t, 1, result.EventsProcessed)
+	require.Equal(t, 1, result.MessagesInserted)
+	require.Equal(t, 1, result.EventsSkippedUnknownAgent)
+	require.Equal(t, 2, result.FailedItems)
+	require.Len(t, result.Warnings, 2)
+	require.Contains(t, result.Warnings[0], "missing agent slug")
+	require.Contains(t, result.Warnings[1], "missing body")
+}
+
 func TestOpenClawHistoryBackfillUsesUserDisplayNameInRoomName(t *testing.T) {
 	connStr := getOpenClawImportTestDatabaseURL(t)
 	db := setupOpenClawImportTestDatabase(t, connStr)

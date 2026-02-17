@@ -190,6 +190,141 @@ func TestOpenClawAgentImportStatusMappingAndIdempotency(t *testing.T) {
 	require.Equal(t, "Max", displayNames["max"])
 }
 
+func TestImportOpenClawAgentsFromPayloadIdempotent(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-agent-payload-idempotent")
+
+	identities := []ImportedAgentIdentity{
+		{
+			ID:       "main",
+			Name:     "Frank",
+			Soul:     "Chief of Staff",
+			Identity: "Frank Identity",
+			Tools:    "plan",
+		},
+		{
+			ID:       "lori",
+			Name:     "Lori",
+			Soul:     "Agent Resources Director",
+			Identity: "Lori Identity",
+			Tools:    "ops",
+		},
+	}
+
+	first, err := ImportOpenClawAgentsFromPayload(context.Background(), db, OpenClawAgentPayloadImportOptions{
+		OrgID:      orgID,
+		Identities: identities,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, first.Processed)
+	require.Equal(t, 2, first.Inserted)
+	require.Equal(t, 0, first.Updated)
+	require.Equal(t, 0, first.Skipped)
+	require.Equal(t, 2, first.ActiveAgents)
+	require.Equal(t, 0, first.InactiveAgents)
+
+	second, err := ImportOpenClawAgentsFromPayload(context.Background(), db, OpenClawAgentPayloadImportOptions{
+		OrgID:      orgID,
+		Identities: identities,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, second.Processed)
+	require.Equal(t, 0, second.Inserted)
+	require.Equal(t, 2, second.Updated)
+	require.Equal(t, 0, second.Skipped)
+	require.Equal(t, 2, second.ActiveAgents)
+	require.Equal(t, 0, second.InactiveAgents)
+
+	var count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM agents WHERE org_id = $1`, orgID).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+}
+
+func TestImportOpenClawAgentsFromPayloadDedupesDuplicateIdentityRecords(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-agent-payload-dedupe")
+
+	result, err := ImportOpenClawAgentsFromPayload(context.Background(), db, OpenClawAgentPayloadImportOptions{
+		OrgID: orgID,
+		Identities: []ImportedAgentIdentity{
+			{
+				ID:       "main",
+				Name:     "Frank",
+				Soul:     "Chief of Staff",
+				Identity: "Frank Identity",
+			},
+			{
+				ID:       "main",
+				Name:     "Frank Duplicate",
+				Soul:     "Should be skipped",
+				Identity: "Should be skipped",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Processed)
+	require.Equal(t, 1, result.Inserted)
+	require.Equal(t, 0, result.Updated)
+	require.Equal(t, 1, result.Skipped)
+	require.Len(t, result.Warnings, 1)
+	require.Contains(t, result.Warnings[0], "duplicate identity")
+	require.Contains(t, result.Warnings[0], "main")
+
+	var displayName string
+	err = db.QueryRow(`SELECT display_name FROM agents WHERE org_id = $1 AND slug = 'main'`, orgID).Scan(&displayName)
+	require.NoError(t, err)
+	require.Equal(t, "Frank", displayName)
+}
+
+func TestImportOpenClawAgentsFromPayloadSkipsMalformedRecordsWithWarnings(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-agent-payload-malformed")
+
+	result, err := ImportOpenClawAgentsFromPayload(context.Background(), db, OpenClawAgentPayloadImportOptions{
+		OrgID: orgID,
+		Identities: []ImportedAgentIdentity{
+			{
+				ID:       "",
+				Name:     "Missing ID",
+				Soul:     "invalid",
+				Identity: "invalid",
+			},
+			{
+				ID:       "   ",
+				Name:     "Whitespace ID",
+				Soul:     "invalid",
+				Identity: "invalid",
+			},
+			{
+				ID:       "valid-agent",
+				Name:     "Valid Agent",
+				Soul:     "Operator",
+				Identity: "Valid Identity",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Processed)
+	require.Equal(t, 1, result.Inserted)
+	require.Equal(t, 0, result.Updated)
+	require.Equal(t, 2, result.Skipped)
+	require.Len(t, result.Warnings, 2)
+	require.Contains(t, result.Warnings[0], "missing identity id")
+	require.Contains(t, result.Warnings[1], "missing identity id")
+
+	var count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM agents WHERE org_id = $1`, orgID).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
 const openClawImportTestDBURLKey = "OTTER_TEST_DATABASE_URL"
 
 func getOpenClawImportTestDatabaseURL(t *testing.T) string {
