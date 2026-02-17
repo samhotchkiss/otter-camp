@@ -15,6 +15,7 @@ const (
 	CapabilityGitHubPublish          = "github.publish"
 	CapabilityGitHubIntegrationAdmin = "github.integration.manage"
 	CapabilityAdminConfigManage      = "admin.config.manage"
+	CapabilityOpenClawMigrationManage = "openclaw.migration.manage"
 )
 
 var roleCapabilityMatrix = map[string]map[string]struct{}{
@@ -24,11 +25,13 @@ var roleCapabilityMatrix = map[string]map[string]struct{}{
 		CapabilityGitHubPublish:          {},
 		CapabilityGitHubIntegrationAdmin: {},
 		CapabilityAdminConfigManage:      {},
+		CapabilityOpenClawMigrationManage: {},
 	},
 	RoleMaintainer: {
 		CapabilityGitHubManualSync:      {},
 		CapabilityGitHubConflictResolve: {},
 		CapabilityGitHubPublish:         {},
+		CapabilityOpenClawMigrationManage: {},
 	},
 	RoleMember: {
 		CapabilityGitHubManualSync: {},

@@ -533,6 +533,27 @@ func TestMigrationStatusRouteUsesRequireWorkspaceMiddleware(t *testing.T) {
 	}
 }
 
+func TestOpenClawMigrationRoutesUseRequireWorkspaceAndCapabilityMiddleware(t *testing.T) {
+	t.Parallel()
+
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	source := string(sourceBytes)
+	requiredLines := []string{
+		`r.With(middleware.RequireWorkspace).Get("/migrations/openclaw/status", openClawMigrationHandler.Status)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/run", openClawMigrationHandler.Run)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/pause", openClawMigrationHandler.Pause)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/resume", openClawMigrationHandler.Resume)`,
+	}
+	for _, line := range requiredLines {
+		if !strings.Contains(source, line) {
+			t.Fatalf("expected OpenClaw migration route middleware line: %s", line)
+		}
+	}
+}
+
 func TestSettingsRoutesAreRegistered(t *testing.T) {
 	t.Parallel()
 
