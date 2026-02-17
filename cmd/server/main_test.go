@@ -221,6 +221,21 @@ func TestLocalRuntimeDefaults(t *testing.T) {
 			t.Fatalf("expected Dockerfile to contain %q", snippet)
 		}
 	}
+
+	railwayBytes, err := os.ReadFile("../../railway.json")
+	if err != nil {
+		t.Fatalf("failed to read railway.json: %v", err)
+	}
+	railway := string(railwayBytes)
+	for _, snippet := range []string{
+		"\"startCommand\": \"/app/server\"",
+		"\"healthcheckPath\": \"/health\"",
+		"\"healthcheckTimeout\": 30",
+	} {
+		if !strings.Contains(railway, snippet) {
+			t.Fatalf("expected railway.json to contain %q", snippet)
+		}
+	}
 }
 
 func TestMainStartsConversationEmbeddingWorkerWhenConfigured(t *testing.T) {

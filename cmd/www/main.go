@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -66,6 +69,16 @@ func newServerHandler(staticDir string, cfg joinConfig) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		status, payload := probeAPIHealth(r.Context(), apiHealthEndpoint())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write(payload)
+	})
 
 	mux.HandleFunc("/install", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -98,6 +111,37 @@ func newServerHandler(staticDir string, cfg joinConfig) http.Handler {
 
 	mux.Handle("/", staticFileServer)
 	return mux
+}
+
+func apiHealthEndpoint() string {
+	if endpoint := strings.TrimSpace(os.Getenv("OTTER_API_HEALTH_URL")); endpoint != "" {
+		return endpoint
+	}
+	return "https://api.otter.camp/health"
+}
+
+func probeAPIHealth(ctx context.Context, endpoint string) (int, []byte) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return http.StatusServiceUnavailable, []byte(`{"status":"unavailable","error":"invalid_upstream_health_endpoint"}`)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return http.StatusServiceUnavailable, []byte(`{"status":"unavailable","error":"upstream_health_unreachable"}`)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return resp.StatusCode, []byte(fmt.Sprintf(`{"status":"unavailable","upstream_status":%d}`, resp.StatusCode))
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil || len(body) == 0 || !json.Valid(body) {
+		return http.StatusOK, []byte(`{"status":"ok"}`)
+	}
+	return http.StatusOK, body
 }
 
 func renderInstallScript() string {

@@ -125,3 +125,45 @@ func TestInstallRoute(t *testing.T) {
 		require.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
+
+func TestAPIHealthRouteReturnsUpstreamJSON(t *testing.T) {
+	staticDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("<html><body>landing-page</body></html>"), 0o644))
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/health", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer upstream.Close()
+
+	t.Setenv("OTTER_API_HEALTH_URL", upstream.URL+"/health")
+	handler := newServerHandler(staticDir, joinConfig{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+	require.Contains(t, rec.Body.String(), `"status":"ok"`)
+	require.NotContains(t, rec.Body.String(), "landing-page")
+}
+
+func TestAPIHealthRouteReturnsServiceUnavailableWhenUpstreamDown(t *testing.T) {
+	staticDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("<html><body>landing-page</body></html>"), 0o644))
+
+	t.Setenv("OTTER_API_HEALTH_URL", "http://127.0.0.1:1/health")
+	handler := newServerHandler(staticDir, joinConfig{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+	require.Contains(t, rec.Body.String(), `"status":"unavailable"`)
+	require.NotContains(t, rec.Body.String(), "landing-page")
+}
