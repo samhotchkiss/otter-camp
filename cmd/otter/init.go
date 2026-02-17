@@ -211,12 +211,8 @@ func deriveHostedAPIBaseURL(rawURL string) (string, error) {
 		return "", errors.New("--url must be a valid absolute URL")
 	}
 
-	parsed.Path = strings.TrimRight(parsed.Path, "/")
-	if parsed.Path == "" {
-		parsed.Path = "/api"
-	} else if parsed.Path != "/api" && !strings.HasPrefix(parsed.Path, "/api/") {
-		parsed.Path += "/api"
-	}
+	parsed.Path = ""
+	parsed.RawPath = ""
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 
