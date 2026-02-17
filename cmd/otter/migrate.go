@@ -635,7 +635,7 @@ func runMigrateFromOpenClawAPI(
 	if !opts.AgentsOnly && !opts.HistoryOnly {
 		_, err = runMigrateOpenClawAPI(
 			client,
-			ottercli.OpenClawMigrationRunRequest{StartPhase: "memory_extraction"},
+			ottercli.OpenClawMigrationRunRequest{StartPhase: "history_embedding_1536"},
 		)
 		if err != nil {
 			return err
@@ -850,6 +850,9 @@ func renderMigrateOpenClawSummary(out io.Writer, summary importer.OpenClawMigrat
 			fmt.Fprintf(out, "  history_backfill.skipped_unknown_agent.%s=%d\n", slug, summary.HistorySkippedUnknownAgentCounts[slug])
 		}
 	}
+	fmt.Fprintf(out, "  history_embedding_1536.processed=%d\n", summary.EmbeddingPhaseProcessed)
+	fmt.Fprintf(out, "  history_embedding_1536.remaining=%d\n", summary.EmbeddingPhaseRemaining)
+	fmt.Fprintf(out, "  history_embedding_1536.duration_ms=%d\n", summary.EmbeddingPhaseDuration.Milliseconds())
 	fmt.Fprintf(out, "  memory_extraction.processed=%d\n", summary.MemoryExtractionProcessed)
 	fmt.Fprintf(out, "  entity_synthesis.processed=%d\n", summary.EntitySynthesisProcessed)
 	fmt.Fprintf(out, "  memory_dedup.processed=%d\n", summary.MemoryDedupProcessed)

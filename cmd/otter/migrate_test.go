@@ -423,7 +423,7 @@ func TestMigrateFromOpenClawAPITransportImportsAndRunsMigration(t *testing.T) {
 	require.Equal(t, 2, historyCalls)
 	require.Equal(t, []int{1, 2}, historyBatchIndexes)
 	require.True(t, runCalled)
-	require.Equal(t, "memory_extraction", runStartPhase)
+	require.Equal(t, "history_embedding_1536", runStartPhase)
 	require.Contains(t, out.String(), "OpenClaw migration summary:")
 }
 
@@ -1021,6 +1021,20 @@ func TestRenderMigrateOpenClawSummaryIncludesSkippedBreakdown(t *testing.T) {
 	require.Contains(t, rendered, "history_backfill.events_skipped=3259")
 	require.Contains(t, rendered, "history_backfill.skipped_unknown_agent.codex=3247")
 	require.Contains(t, rendered, "history_backfill.skipped_unknown_agent.sandbox-bot=12")
+}
+
+func TestRenderMigrateOpenClawSummaryIncludesEmbeddingPhaseMetrics(t *testing.T) {
+	var out bytes.Buffer
+	renderMigrateOpenClawSummary(&out, importer.OpenClawMigrationSummaryReport{
+		EmbeddingPhaseProcessed: 8,
+		EmbeddingPhaseRemaining: 3,
+		EmbeddingPhaseDuration:  1500 * time.Millisecond,
+	})
+
+	rendered := out.String()
+	require.Contains(t, rendered, "history_embedding_1536.processed=8")
+	require.Contains(t, rendered, "history_embedding_1536.remaining=3")
+	require.Contains(t, rendered, "history_embedding_1536.duration_ms=1500")
 }
 
 func TestMigrateFromOpenClawSummaryPrintsFailureAndCompletenessCounts(t *testing.T) {
