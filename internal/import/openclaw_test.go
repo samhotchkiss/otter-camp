@@ -110,6 +110,30 @@ func TestOpenClawAgentImportFallsBackToWorkspaceDiscovery(t *testing.T) {
 	require.Equal(t, "", byID["nova"].Soul)
 }
 
+func TestOpenClawAgentImportGatewayPortFallsBackToTopLevelPort(t *testing.T) {
+	root := t.TempDir()
+	mainWorkspace := filepath.Join(root, "workspaces", "main")
+	require.NoError(t, os.MkdirAll(mainWorkspace, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(mainWorkspace, "IDENTITY.md"), []byte("Frank"), 0o644))
+
+	config := map[string]any{
+		"port":           18888,
+		"workspaces_dir": "./workspaces",
+		"agents": map[string]any{
+			"main": map[string]any{
+				"workspace_dir": "./workspaces/main",
+			},
+		},
+	}
+	configBytes, err := json.Marshal(config)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "openclaw.json"), configBytes, 0o644))
+
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	require.Equal(t, 18888, install.Gateway.Port)
+}
+
 func TestOpenClawAgentImportSkipsNonRegularIdentityFiles(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspaces", "main")

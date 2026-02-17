@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -70,6 +71,10 @@ type openClawConfigFile struct {
 	SessionsDir2   string          `json:"sessionsDir"`
 	WorkspacesDir  string          `json:"workspaces_dir"`
 	WorkspacesDir2 string          `json:"workspacesDir"`
+	Host           string          `json:"host"`
+	Port           int             `json:"port"`
+	Token          string          `json:"token"`
+	APIKey         string          `json:"api_key"`
 	Agents         json.RawMessage `json:"agents"`
 	Slots          json.RawMessage `json:"slots"`
 }
@@ -411,7 +416,7 @@ func DetectOpenClawInstallation(opts DetectOpenClawOptions) (*OpenClawInstallati
 		ConfigPath:    configPath,
 		SessionsDir:   sessionsDir,
 		WorkspacesDir: workspacesDir,
-		Gateway:       parseGatewayConfig(config.Gateway),
+		Gateway:       parseGatewayConfig(config),
 		Agents:        agents,
 	}, nil
 }
@@ -517,15 +522,59 @@ func loadOpenClawConfig(configPath string) (openClawConfigFile, error) {
 	return cfg, nil
 }
 
-func parseGatewayConfig(raw map[string]any) OpenClawGatewayConfig {
-	if len(raw) == 0 {
-		return OpenClawGatewayConfig{}
+func parseGatewayConfig(config openClawConfigFile) OpenClawGatewayConfig {
+	raw := config.Gateway
+	host := lookupString(raw, "host", "hostname")
+	port := lookupInt(raw, "port")
+	token := lookupString(raw, "token", "api_key", "apiKey")
+
+	urlHost, urlPort := parseGatewayURL(lookupString(raw, "url", "ws_url", "wsUrl", "target"))
+	if host == "" {
+		host = urlHost
 	}
+	if port <= 0 {
+		port = urlPort
+	}
+	if host == "" {
+		host = strings.TrimSpace(config.Host)
+	}
+	if port <= 0 {
+		port = config.Port
+	}
+	if token == "" {
+		token = firstNonEmpty(strings.TrimSpace(config.Token), strings.TrimSpace(config.APIKey))
+	}
+
 	return OpenClawGatewayConfig{
-		Host:  lookupString(raw, "host", "hostname"),
-		Port:  lookupInt(raw, "port"),
-		Token: lookupString(raw, "token", "api_key", "apiKey"),
+		Host:  host,
+		Port:  port,
+		Token: token,
 	}
+}
+
+func parseGatewayURL(raw string) (string, int) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", 0
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return "", 0
+	}
+
+	port := 0
+	if parsed.Port() != "" {
+		port = lookupInt(map[string]any{"port": parsed.Port()}, "port")
+	}
+	if port <= 0 {
+		switch strings.ToLower(parsed.Scheme) {
+		case "ws", "http":
+			port = 80
+		case "wss", "https":
+			port = 443
+		}
+	}
+	return parsed.Hostname(), port
 }
 
 func collectOpenClawAgents(rootDir, workspaceRoot string, config openClawConfigFile) ([]OpenClawAgentWorkspace, error) {
