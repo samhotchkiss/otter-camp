@@ -315,3 +315,70 @@ func TestJobSchedulerWorkerPrunesRunHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, runs, 2)
 }
+
+func TestJobSchedulerWorkerRunOnceInjectsConfiguredWorkspaceWithoutHTTPContext(t *testing.T) {
+	db := setupSchedulerTestDB(t)
+	orgID := schedulerCreateOrg(t, db, "scheduler-configured-workspace")
+	agentID := schedulerCreateAgent(t, db, orgID, "scheduler-configured-workspace-agent")
+	scopedCtx := schedulerCtxWithWorkspace(orgID)
+	jobStore := store.NewAgentJobStore(db)
+
+	now := time.Date(2026, 2, 12, 22, 0, 0, 0, time.UTC)
+	runAt := now.Add(-1 * time.Minute)
+	nextRunAt := now.Add(-10 * time.Second)
+	job, err := jobStore.Create(scopedCtx, store.CreateAgentJobInput{
+		AgentID:      agentID,
+		Name:         "Configured Workspace Job",
+		ScheduleKind: store.AgentJobScheduleOnce,
+		RunAt:        &runAt,
+		Timezone:     strPtr("UTC"),
+		PayloadKind:  store.AgentJobPayloadMessage,
+		PayloadText:  "execute from background context",
+		NextRunAt:    &nextRunAt,
+	})
+	require.NoError(t, err)
+
+	worker := NewAgentJobWorker(jobStore, AgentJobWorkerConfig{
+		PollInterval:  10 * time.Millisecond,
+		MaxPerPoll:    5,
+		RunTimeout:    1 * time.Minute,
+		MaxRunHistory: 100,
+		WorkspaceID:   orgID,
+	})
+	worker.Now = func() time.Time { return now }
+
+	processed, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, processed)
+
+	updatedJob, err := jobStore.GetByID(scopedCtx, job.ID)
+	require.NoError(t, err)
+	require.Equal(t, store.AgentJobStatusCompleted, updatedJob.Status)
+}
+
+func TestAgentJobWorkerWorkspaceContext(t *testing.T) {
+	t.Parallel()
+
+	t.Run("preserves existing workspace from context", func(t *testing.T) {
+		t.Parallel()
+
+		worker := NewAgentJobWorker(nil, AgentJobWorkerConfig{
+			WorkspaceID: "11111111-2222-3333-4444-555555555555",
+		})
+		input := schedulerCtxWithWorkspace("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+
+		ctx := worker.workspaceContext(input)
+		require.Equal(t, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", middleware.WorkspaceFromContext(ctx))
+	})
+
+	t.Run("injects configured workspace when missing", func(t *testing.T) {
+		t.Parallel()
+
+		worker := NewAgentJobWorker(nil, AgentJobWorkerConfig{
+			WorkspaceID: "11111111-2222-3333-4444-555555555555",
+		})
+
+		ctx := worker.workspaceContext(context.Background())
+		require.Equal(t, "11111111-2222-3333-4444-555555555555", middleware.WorkspaceFromContext(ctx))
+	})
+}

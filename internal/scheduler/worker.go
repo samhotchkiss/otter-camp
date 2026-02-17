@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
@@ -22,6 +24,7 @@ type AgentJobWorkerConfig struct {
 	MaxPerPoll    int
 	RunTimeout    time.Duration
 	MaxRunHistory int
+	WorkspaceID   string
 }
 
 type AgentJobWorker struct {
@@ -70,6 +73,7 @@ func (w *AgentJobWorker) RunOnce(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("agent job worker is not configured")
 	}
 
+	ctx = w.workspaceContext(ctx)
 	now := w.now()
 	if _, err := w.Store.CleanupStaleRuns(ctx, w.Config.RunTimeout, now); err != nil {
 		return 0, err
@@ -227,4 +231,15 @@ func sleepWithContext(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func (w *AgentJobWorker) workspaceContext(ctx context.Context) context.Context {
+	if strings.TrimSpace(middleware.WorkspaceFromContext(ctx)) != "" {
+		return ctx
+	}
+	workspaceID := strings.TrimSpace(w.Config.WorkspaceID)
+	if workspaceID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, middleware.WorkspaceIDKey, workspaceID)
 }

@@ -296,6 +296,19 @@ func TestLoadParsesJobSchedulerSettings(t *testing.T) {
 	}
 }
 
+func TestLoadParsesWorkerOrgID(t *testing.T) {
+	t.Setenv("OTTER_ORG_ID", "11111111-2222-3333-4444-555555555555")
+
+	cfg, err := loadWithDefaultOpenAIKey(t)
+	if err != nil {
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
+	}
+
+	if cfg.OrgID != "11111111-2222-3333-4444-555555555555" {
+		t.Fatalf("expected org id to be parsed from OTTER_ORG_ID, got %q", cfg.OrgID)
+	}
+}
+
 func TestLoadRejectsInvalidJobSchedulerPollInterval(t *testing.T) {
 	t.Setenv("JOB_SCHEDULER_POLL_INTERVAL", "not-a-duration")
 

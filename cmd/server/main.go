@@ -240,6 +240,7 @@ func main() {
 					MaxPerPoll:    cfg.JobScheduler.MaxPerPoll,
 					RunTimeout:    cfg.JobScheduler.RunTimeout,
 					MaxRunHistory: cfg.JobScheduler.MaxRunHistory,
+					WorkspaceID:   cfg.OrgID,
 				},
 			)
 			worker.Logf = log.Printf
