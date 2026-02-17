@@ -326,7 +326,7 @@ func (e *openAIEmbedder) embedBatchAttempt(ctx context.Context, inputs []string)
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxEmbedderSuccessBodyBytes)).Decode(&payload); err != nil {
-		return nil, false, fmt.Errorf("decode openai response: %w", err)
+		return nil, false, fmt.Errorf("decode openai response: status %d: %w", resp.StatusCode, err)
 	}
 	if len(payload.Data) != len(inputs) {
 		return nil, false, fmt.Errorf("openai response vector count mismatch: expected %d got %d", len(inputs), len(payload.Data))
