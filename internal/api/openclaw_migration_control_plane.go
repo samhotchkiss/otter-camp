@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -24,6 +25,8 @@ var openClawMigrationPhaseOrder = []string{
 	"project_discovery",
 	"project_docs_scanning",
 }
+
+const openClawMigrationResetConfirmToken = "RESET_OPENCLAW_MIGRATION"
 
 type openClawMigrationStatusResponse struct {
 	Active bool                           `json:"active"`
@@ -52,6 +55,18 @@ type openClawMigrationMutationResponse struct {
 	UpdatedPhases int    `json:"updated_phases"`
 }
 
+type openClawMigrationResetRequest struct {
+	Confirm string `json:"confirm"`
+}
+
+type openClawMigrationResetResponse struct {
+	Status              string         `json:"status"`
+	PausedPhases        int            `json:"paused_phases"`
+	ProgressRowsDeleted int            `json:"progress_rows_deleted"`
+	Deleted             map[string]int `json:"deleted"`
+	TotalDeleted        int            `json:"total_deleted"`
+}
+
 type openClawMigrationProgressStore interface {
 	ListByOrg(ctx context.Context, orgID string) ([]store.MigrationProgress, error)
 	GetByType(ctx context.Context, orgID, migrationType string) (*store.MigrationProgress, error)
@@ -65,28 +80,47 @@ type openClawMigrationProgressStore interface {
 	) (int, error)
 }
 
+type openClawMigrationResetStore interface {
+	Reset(ctx context.Context, input store.OpenClawMigrationResetInput) (store.OpenClawMigrationResetResult, error)
+}
+
 type openClawMigrationControlPlaneService interface {
 	Status(ctx context.Context, orgID string) (openClawMigrationStatusResponse, error)
 	Run(ctx context.Context, orgID string, input openClawMigrationRunRequest) (openClawMigrationRunResponse, error)
 	Pause(ctx context.Context, orgID string) (openClawMigrationMutationResponse, error)
 	Resume(ctx context.Context, orgID string) (openClawMigrationMutationResponse, error)
+	Reset(ctx context.Context, orgID string) (openClawMigrationResetResponse, error)
 }
 
 type defaultOpenClawMigrationControlPlaneService struct {
 	progressStore openClawMigrationProgressStore
+	resetStore    openClawMigrationResetStore
 }
 
 func newOpenClawMigrationControlPlaneServiceWithStore(
 	progressStore openClawMigrationProgressStore,
 ) *defaultOpenClawMigrationControlPlaneService {
-	return &defaultOpenClawMigrationControlPlaneService{progressStore: progressStore}
+	return newOpenClawMigrationControlPlaneServiceWithStores(progressStore, nil)
+}
+
+func newOpenClawMigrationControlPlaneServiceWithStores(
+	progressStore openClawMigrationProgressStore,
+	resetStore openClawMigrationResetStore,
+) *defaultOpenClawMigrationControlPlaneService {
+	return &defaultOpenClawMigrationControlPlaneService{
+		progressStore: progressStore,
+		resetStore:    resetStore,
+	}
 }
 
 func newOpenClawMigrationControlPlaneService(db *sql.DB) *defaultOpenClawMigrationControlPlaneService {
 	if db == nil {
-		return newOpenClawMigrationControlPlaneServiceWithStore(nil)
+		return newOpenClawMigrationControlPlaneServiceWithStores(nil, nil)
 	}
-	return newOpenClawMigrationControlPlaneServiceWithStore(store.NewMigrationProgressStore(db))
+	return newOpenClawMigrationControlPlaneServiceWithStores(
+		store.NewMigrationProgressStore(db),
+		store.NewOpenClawMigrationResetStore(db),
+	)
 }
 
 func (s *defaultOpenClawMigrationControlPlaneService) Status(
@@ -288,6 +322,36 @@ func (s *defaultOpenClawMigrationControlPlaneService) Resume(
 	}, nil
 }
 
+func (s *defaultOpenClawMigrationControlPlaneService) Reset(
+	ctx context.Context,
+	orgID string,
+) (openClawMigrationResetResponse, error) {
+	if s == nil || s.resetStore == nil {
+		return openClawMigrationResetResponse{}, fmt.Errorf("migration reset store not configured")
+	}
+
+	result, err := s.resetStore.Reset(ctx, store.OpenClawMigrationResetInput{
+		OrgID:              orgID,
+		OpenClawPhaseTypes: openClawMigrationPhaseOrder,
+	})
+	if err != nil {
+		return openClawMigrationResetResponse{}, err
+	}
+
+	deleted := result.Deleted
+	if deleted == nil {
+		deleted = map[string]int{}
+	}
+
+	return openClawMigrationResetResponse{
+		Status:              "reset",
+		PausedPhases:        result.PausedPhases,
+		ProgressRowsDeleted: result.ProgressRowsDeleted,
+		Deleted:             deleted,
+		TotalDeleted:        result.TotalDeleted,
+	}, nil
+}
+
 func selectOpenClawPhases(input openClawMigrationRunRequest) ([]string, error) {
 	phases := make([]string, 0, len(openClawMigrationPhaseOrder))
 	switch {
@@ -449,5 +513,50 @@ func (h *OpenClawMigrationControlPlaneHandler) Resume(w http.ResponseWriter, r *
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to resume migration"})
 		return
 	}
+	sendJSON(w, http.StatusOK, response)
+}
+
+func (h *OpenClawMigrationControlPlaneHandler) Reset(w http.ResponseWriter, r *http.Request) {
+	orgID := middleware.WorkspaceFromContext(r.Context())
+	if strings.TrimSpace(orgID) == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workspace context required"})
+		return
+	}
+	if h == nil || h.service == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "migration control plane unavailable"})
+		return
+	}
+
+	request := openClawMigrationResetRequest{}
+	if r.Body != nil {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		decodeErr := decoder.Decode(&request)
+		if decodeErr != nil && !errors.Is(decodeErr, io.EOF) {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+			return
+		}
+	}
+
+	if strings.TrimSpace(request.Confirm) != openClawMigrationResetConfirmToken {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "confirm token required"})
+		return
+	}
+
+	response, err := h.service.Reset(r.Context(), orgID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to reset migration state"})
+		return
+	}
+
+	log.Printf(
+		"openclaw migration reset completed: org_id=%s paused_phases=%d progress_rows_deleted=%d total_deleted=%d deleted=%v",
+		orgID,
+		response.PausedPhases,
+		response.ProgressRowsDeleted,
+		response.TotalDeleted,
+		response.Deleted,
+	)
+
 	sendJSON(w, http.StatusOK, response)
 }
