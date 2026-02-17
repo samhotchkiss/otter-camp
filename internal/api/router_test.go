@@ -594,6 +594,7 @@ func assertOpenClawMigrationControlPlaneRoutes(t *testing.T, source string) {
 		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/run", openClawMigrationHandler.Run)`,
 		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/pause", openClawMigrationHandler.Pause)`,
 		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/resume", openClawMigrationHandler.Resume)`,
+		`r.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).Post("/migrations/openclaw/reset", openClawMigrationHandler.Reset)`,
 	}
 	for _, line := range requiredLines {
 		if !strings.Contains(source, line) {

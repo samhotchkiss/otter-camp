@@ -35,6 +35,8 @@ func TestClientOpenClawMigrationImportAndControlEndpoints(t *testing.T) {
 			_, _ = w.Write([]byte(`{"status":"paused","updated_phases":1}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/migrations/openclaw/resume":
 			_, _ = w.Write([]byte(`{"status":"running","updated_phases":1}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/migrations/openclaw/reset":
+			_, _ = w.Write([]byte(`{"status":"reset","paused_phases":1,"progress_rows_deleted":3,"deleted":{"chat_messages":2,"rooms":1},"total_deleted":3}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"not found"}`))
@@ -147,6 +149,22 @@ func TestClientOpenClawMigrationImportAndControlEndpoints(t *testing.T) {
 	if gotMethod != http.MethodPost || gotPath != "/api/migrations/openclaw/resume" {
 		t.Fatalf("ResumeOpenClawMigration request = %s %s", gotMethod, gotPath)
 	}
+
+	resetResult, err := client.ResetOpenClawMigration(OpenClawMigrationResetRequest{
+		Confirm: "RESET_OPENCLAW_MIGRATION",
+	})
+	if err != nil {
+		t.Fatalf("ResetOpenClawMigration() error = %v", err)
+	}
+	if resetResult.Status != "reset" || resetResult.PausedPhases != 1 || resetResult.ProgressRowsDeleted != 3 || resetResult.TotalDeleted != 3 {
+		t.Fatalf("ResetOpenClawMigration() result = %#v", resetResult)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/migrations/openclaw/reset" {
+		t.Fatalf("ResetOpenClawMigration request = %s %s", gotMethod, gotPath)
+	}
+	if gotBody["confirm"] != "RESET_OPENCLAW_MIGRATION" {
+		t.Fatalf("ResetOpenClawMigration payload = %#v", gotBody)
+	}
 }
 
 func TestClientOpenClawMigrationEndpointValidation(t *testing.T) {
@@ -165,5 +183,10 @@ func TestClientOpenClawMigrationEndpointValidation(t *testing.T) {
 	_, err = client.ImportOpenClawMigrationHistoryBatch(OpenClawMigrationImportHistoryBatchInput{})
 	if err == nil {
 		t.Fatalf("expected ImportOpenClawMigrationHistoryBatch() validation error")
+	}
+
+	_, err = client.ResetOpenClawMigration(OpenClawMigrationResetRequest{})
+	if err == nil {
+		t.Fatalf("expected ResetOpenClawMigration() validation error")
 	}
 }

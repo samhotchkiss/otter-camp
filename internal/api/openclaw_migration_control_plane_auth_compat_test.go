@@ -33,6 +33,8 @@ func TestOpenClawMigrationEndpointsRequireWorkspaceAndCapability(t *testing.T) {
 		Post("/api/migrations/openclaw/pause", handler.Pause)
 	router.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).
 		Post("/api/migrations/openclaw/resume", handler.Resume)
+	router.With(middleware.RequireWorkspace, RequireCapability(db, CapabilityOpenClawMigrationManage)).
+		Post("/api/migrations/openclaw/reset", handler.Reset)
 
 	routes := []struct {
 		method string
@@ -42,6 +44,7 @@ func TestOpenClawMigrationEndpointsRequireWorkspaceAndCapability(t *testing.T) {
 		{method: http.MethodPost, path: "/api/migrations/openclaw/run", body: []byte(`{}`)},
 		{method: http.MethodPost, path: "/api/migrations/openclaw/pause", body: nil},
 		{method: http.MethodPost, path: "/api/migrations/openclaw/resume", body: nil},
+		{method: http.MethodPost, path: "/api/migrations/openclaw/reset", body: []byte(`{"confirm":"RESET_OPENCLAW_MIGRATION"}`)},
 	}
 
 	for _, route := range routes {
