@@ -435,6 +435,46 @@ func TestMainStartsEllieIngestionWorkerWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestMainWiresOpenClawLLMExtractorForEllieIngestion(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	for _, snippet := range []string{
+		"memory.NewEllieIngestionOpenClawExtractorFromEnv()",
+		"LLMExtractor:",
+		"Ellie ingestion OpenClaw extractor enabled",
+	} {
+		if !strings.Contains(mainContent, snippet) {
+			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
+		}
+	}
+}
+
+func TestMainKeepsEllieIngestionRunningWhenOpenClawExtractorInitFails(t *testing.T) {
+	t.Parallel()
+
+	mainBytes, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read cmd/server/main.go: %v", err)
+	}
+	mainContent := string(mainBytes)
+
+	for _, snippet := range []string{
+		"Ellie ingestion OpenClaw extractor disabled; init failed",
+		"memory.NewEllieIngestionWorker(",
+		"startWorker(worker.Start)",
+	} {
+		if !strings.Contains(mainContent, snippet) {
+			t.Fatalf("expected cmd/server/main.go to contain %q", snippet)
+		}
+	}
+}
+
 func TestMainStartsJobSchedulerWorkerWhenConfigured(t *testing.T) {
 	t.Parallel()
 

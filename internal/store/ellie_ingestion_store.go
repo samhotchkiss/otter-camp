@@ -104,11 +104,15 @@ func (s *EllieIngestionStore) ListRoomsForIngestion(ctx context.Context, limit i
 		 )
 		 SELECT latest.org_id, latest.room_id
 		 FROM latest_room_messages latest
+		 JOIN rooms room
+		   ON room.org_id = latest.org_id
+		  AND room.id = latest.room_id
 		 LEFT JOIN ellie_ingestion_cursors cursor
 		   ON cursor.org_id = latest.org_id
 		  AND cursor.source_type = 'room'
 		  AND cursor.source_id = latest.room_id::text
-		 WHERE (latest.latest_message_created_at, latest.latest_message_id) >
+		 WHERE room.exclude_from_ingestion = FALSE
+		   AND (latest.latest_message_created_at, latest.latest_message_id) >
 		       (
 		         COALESCE(cursor.last_message_created_at, TIMESTAMPTZ '1970-01-01'),
 		         COALESCE(cursor.last_message_id, '00000000-0000-0000-0000-000000000000'::uuid)

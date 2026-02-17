@@ -123,3 +123,54 @@ func TestEllieIngestionStoreListRoomsForIngestionSkipsUpToDateRooms(t *testing.T
 		{OrgID: orgID, RoomID: noCursorRoomID},
 	}, candidates)
 }
+
+func TestEllieIngestionStoreListRoomsForIngestionSkipsExcludedRooms(t *testing.T) {
+	connStr := getTestDatabaseURL(t)
+	db := setupTestDatabase(t, connStr)
+
+	orgID := createTestOrganization(t, db, "ellie-list-rooms-excluded-org")
+	projectID := createTestProject(t, db, orgID, "Ellie List Rooms Excluded Project")
+
+	createRoom := func(name string, excludeFromIngestion bool) string {
+		t.Helper()
+		var roomID string
+		err := db.QueryRow(
+			`INSERT INTO rooms (org_id, name, type, context_id, exclude_from_ingestion)
+			 VALUES ($1, $2, 'project', $3, $4)
+			 RETURNING id`,
+			orgID,
+			name,
+			projectID,
+			excludeFromIngestion,
+		).Scan(&roomID)
+		require.NoError(t, err)
+		return roomID
+	}
+
+	insertMessage := func(roomID, body string, createdAt time.Time) {
+		t.Helper()
+		_, err := db.Exec(
+			`INSERT INTO chat_messages (org_id, room_id, sender_id, sender_type, body, type, created_at)
+			 VALUES ($1, $2, $3, 'agent', $4, 'message', $5)`,
+			orgID,
+			roomID,
+			"11111111-1111-1111-1111-111111111111",
+			body,
+			createdAt,
+		)
+		require.NoError(t, err)
+	}
+
+	includedRoomID := createRoom("Included room", false)
+	excludedRoomID := createRoom("Excluded room", true)
+	base := time.Date(2026, 2, 12, 9, 0, 0, 0, time.UTC)
+	insertMessage(includedRoomID, "Included room message", base.Add(1*time.Minute))
+	insertMessage(excludedRoomID, "Excluded room message", base.Add(2*time.Minute))
+
+	store := NewEllieIngestionStore(db)
+	candidates, err := store.ListRoomsForIngestion(context.Background(), 20)
+	require.NoError(t, err)
+	require.Equal(t, []EllieRoomIngestionCandidate{
+		{OrgID: orgID, RoomID: includedRoomID},
+	}, candidates)
+}

@@ -53,6 +53,7 @@ Both `pipeline.mjs` and `ingest.mjs` read exclusively from `chat_messages`. Ther
 - Conversation embedding/segmentation quality improves downstream retrieval quality
 - DB availability required for ingest loop
 - Bridge connectivity required for real-time ingestion — **bridge outages create data gaps**
+- OpenClaw gateway access required for LLM extraction path (`ELLIE_INGESTION_OPENCLAW_*` settings); set extraction agent (default `elephant`) to a Haiku-class model for low-cost extraction
 
 ## Extraction Pipeline (from extraction repo)
 
