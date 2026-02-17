@@ -12,6 +12,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func installOpenClawHistoryInsertFailureTrigger(t *testing.T, db *sql.DB) {
+	t.Helper()
+	_, err := db.Exec(`
+		CREATE OR REPLACE FUNCTION test_openclaw_fail_chat_message_insert()
+		RETURNS trigger AS $$
+		BEGIN
+			IF NEW.body LIKE '%[FORCE_HISTORY_INSERT_FAILURE]%' THEN
+				RAISE EXCEPTION 'forced history insert failure for testing';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+	`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`DROP TRIGGER IF EXISTS test_openclaw_fail_chat_message_insert_trg ON chat_messages`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`
+		CREATE TRIGGER test_openclaw_fail_chat_message_insert_trg
+		BEFORE INSERT ON chat_messages
+		FOR EACH ROW
+		EXECUTE FUNCTION test_openclaw_fail_chat_message_insert()
+	`)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DROP TRIGGER IF EXISTS test_openclaw_fail_chat_message_insert_trg ON chat_messages`)
+		_, _ = db.Exec(`DROP FUNCTION IF EXISTS test_openclaw_fail_chat_message_insert()`)
+	})
+}
+
 func TestOpenClawHistoryBackfillCreatesSingleRoomPerAgent(t *testing.T) {
 	connStr := getOpenClawImportTestDatabaseURL(t)
 	db := setupOpenClawImportTestDatabase(t, connStr)
@@ -466,6 +498,136 @@ func TestBackfillOpenClawHistoryFromBatchPayloadCountsFailedItems(t *testing.T) 
 	require.Len(t, result.Warnings, 2)
 	require.Contains(t, result.Warnings[0], "missing agent slug")
 	require.Contains(t, result.Warnings[1], "missing body")
+}
+
+func TestBackfillOpenClawHistoryContinuesAfterSingleMessageInsertFailure(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-history-continue-after-insert-failure")
+	userID := createOpenClawImportTestUser(t, db, orgID, "sam-history-continue-after-insert-failure")
+
+	_, err := ImportOpenClawAgentsFromPayload(context.Background(), db, OpenClawAgentPayloadImportOptions{
+		OrgID: orgID,
+		Identities: []ImportedAgentIdentity{
+			{ID: "main", Name: "Frank", Soul: "Chief of Staff", Identity: "Frank Identity"},
+		},
+	})
+	require.NoError(t, err)
+	installOpenClawHistoryInsertFailureTrigger(t, db)
+
+	result, err := BackfillOpenClawHistory(context.Background(), db, OpenClawHistoryBackfillOptions{
+		OrgID:  orgID,
+		UserID: userID,
+		ParsedEvents: []OpenClawSessionEvent{
+			{
+				AgentSlug:   "main",
+				SessionID:   "session-1",
+				SessionPath: "/tmp/openclaw/agents/main/sessions/main-1.jsonl",
+				EventID:     "event-fail",
+				Role:        OpenClawSessionEventRoleAssistant,
+				Body:        "bad [FORCE_HISTORY_INSERT_FAILURE] payload",
+				CreatedAt:   time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC),
+				Line:        11,
+			},
+			{
+				AgentSlug:   "main",
+				SessionID:   "session-1",
+				SessionPath: "/tmp/openclaw/agents/main/sessions/main-1.jsonl",
+				EventID:     "event-ok",
+				Role:        OpenClawSessionEventRoleAssistant,
+				Body:        "valid payload",
+				CreatedAt:   time.Date(2026, 1, 1, 10, 0, 2, 0, time.UTC),
+				Line:        12,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FailedItems)
+	require.Equal(t, 1, result.MessagesInserted)
+	require.Equal(t, 1, result.EventsProcessed)
+
+	var ledgerCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM openclaw_history_import_failures
+		  WHERE org_id = $1
+		    AND migration_type = 'history_backfill'`,
+		orgID,
+	).Scan(&ledgerCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, ledgerCount)
+
+	var messageCount int
+	err = db.QueryRow(
+		`SELECT COUNT(*)
+		   FROM chat_messages
+		  WHERE org_id = $1`,
+		orgID,
+	).Scan(&messageCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, messageCount)
+}
+
+func TestBackfillOpenClawHistoryRecordsFailureLedgerEntries(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-history-failure-ledger-recording")
+	userID := createOpenClawImportTestUser(t, db, orgID, "sam-history-failure-ledger-recording")
+
+	_, err := ImportOpenClawAgentsFromPayload(context.Background(), db, OpenClawAgentPayloadImportOptions{
+		OrgID: orgID,
+		Identities: []ImportedAgentIdentity{
+			{ID: "main", Name: "Frank", Soul: "Chief of Staff", Identity: "Frank Identity"},
+		},
+	})
+	require.NoError(t, err)
+	installOpenClawHistoryInsertFailureTrigger(t, db)
+
+	event := OpenClawSessionEvent{
+		AgentSlug:   "main",
+		SessionID:   "session-ledger",
+		SessionPath: "/tmp/openclaw/agents/main/sessions/main-ledger.jsonl",
+		EventID:     "event-fail-ledger",
+		Role:        OpenClawSessionEventRoleAssistant,
+		Body:        "bad [FORCE_HISTORY_INSERT_FAILURE] payload",
+		CreatedAt:   time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC),
+		Line:        21,
+	}
+
+	first, err := BackfillOpenClawHistory(context.Background(), db, OpenClawHistoryBackfillOptions{
+		OrgID:        orgID,
+		UserID:       userID,
+		ParsedEvents: []OpenClawSessionEvent{event},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, first.FailedItems)
+
+	second, err := BackfillOpenClawHistory(context.Background(), db, OpenClawHistoryBackfillOptions{
+		OrgID:        orgID,
+		UserID:       userID,
+		ParsedEvents: []OpenClawSessionEvent{event},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, second.FailedItems)
+
+	var attemptCount int
+	var messageIDCandidate string
+	var errorReason string
+	err = db.QueryRow(
+		`SELECT attempt_count, message_id_candidate, error_reason
+		   FROM openclaw_history_import_failures
+		  WHERE org_id = $1
+		    AND migration_type = 'history_backfill'
+		    AND event_id = $2`,
+		orgID,
+		event.EventID,
+	).Scan(&attemptCount, &messageIDCandidate, &errorReason)
+	require.NoError(t, err)
+	require.Equal(t, 2, attemptCount)
+	require.NotEmpty(t, strings.TrimSpace(messageIDCandidate))
+	require.Equal(t, "insert_chat_message", errorReason)
 }
 
 func TestOpenClawHistoryBackfillUsesUserDisplayNameInRoomName(t *testing.T) {
