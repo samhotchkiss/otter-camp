@@ -101,6 +101,64 @@ func TestHandleInitPromptRoutesHostedSelection(t *testing.T) {
 	}
 }
 
+func TestParseInitOptionsHostedFlags(t *testing.T) {
+	opts, err := parseInitOptions([]string{"--mode", "hosted", "--token", "  oc_sess_123  ", "--url", " https://swh.otter.camp "})
+	if err != nil {
+		t.Fatalf("parseInitOptions() error = %v", err)
+	}
+	if opts.Mode != "hosted" {
+		t.Fatalf("mode = %q, want hosted", opts.Mode)
+	}
+	if opts.Token != "oc_sess_123" {
+		t.Fatalf("token = %q, want oc_sess_123", opts.Token)
+	}
+	if opts.URL != "https://swh.otter.camp" {
+		t.Fatalf("url = %q, want https://swh.otter.camp", opts.URL)
+	}
+}
+
+func TestInitHostedWithFlagsPersistsConfig(t *testing.T) {
+	state := stubInitDeps(t, ottercli.Config{}, &fakeInitClient{}, nil)
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "hosted", "--token", "oc_sess_hosted", "--url", "https://swh.otter.camp"},
+		strings.NewReader(""),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+	if !state.saveCalled {
+		t.Fatalf("expected save config to be called")
+	}
+	if state.savedCfg.Token != "oc_sess_hosted" {
+		t.Fatalf("saved token = %q, want oc_sess_hosted", state.savedCfg.Token)
+	}
+	if state.savedCfg.APIBaseURL != "https://swh.otter.camp/api" {
+		t.Fatalf("saved api base = %q, want https://swh.otter.camp/api", state.savedCfg.APIBaseURL)
+	}
+	if !strings.Contains(out.String(), "Hosted setup configured.") {
+		t.Fatalf("expected hosted setup output, got %q", out.String())
+	}
+}
+
+func TestInitHostedRequiresTokenAndURLPair(t *testing.T) {
+	stubInitDeps(t, ottercli.Config{}, &fakeInitClient{}, nil)
+
+	err := runInitCommand(
+		[]string{"--mode", "hosted", "--token", "oc_sess_hosted"},
+		strings.NewReader(""),
+		&bytes.Buffer{},
+	)
+	if err == nil {
+		t.Fatalf("expected hosted argument validation error")
+	}
+	if !strings.Contains(err.Error(), "--mode hosted requires both --token and --url") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestHandleInitPromptDefaultsToLocalSelection(t *testing.T) {
 	client := &fakeInitClient{
 		bootstrapResponse: ottercli.OnboardingBootstrapResponse{

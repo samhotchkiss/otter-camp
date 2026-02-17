@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,8 @@ type initOptions struct {
 	Email   string
 	OrgName string
 	APIBase string
+	Token   string
+	URL     string
 }
 
 type initBootstrapClient interface {
@@ -84,6 +87,9 @@ func runInitCommand(args []string, in io.Reader, out io.Writer) error {
 	case "local":
 		return runLocalInit(opts, reader, out)
 	case "hosted":
+		if strings.TrimSpace(opts.Token) != "" || strings.TrimSpace(opts.URL) != "" {
+			return runHostedInit(opts, out)
+		}
 		fmt.Fprintln(out, "Visit otter.camp/setup to get started.")
 		return nil
 	default:
@@ -99,6 +105,8 @@ func parseInitOptions(args []string) (initOptions, error) {
 	email := flags.String("email", "", "email for local bootstrap")
 	orgName := flags.String("org-name", "", "organization name for local bootstrap")
 	apiBase := flags.String("api", "", "API base URL override")
+	token := flags.String("token", "", "hosted session token")
+	hostedURL := flags.String("url", "", "hosted workspace URL")
 	if err := flags.Parse(args); err != nil {
 		return initOptions{}, err
 	}
@@ -117,7 +125,58 @@ func parseInitOptions(args []string) (initOptions, error) {
 		Email:   strings.TrimSpace(*email),
 		OrgName: strings.TrimSpace(*orgName),
 		APIBase: strings.TrimSpace(*apiBase),
+		Token:   strings.TrimSpace(*token),
+		URL:     strings.TrimSpace(*hostedURL),
 	}, nil
+}
+
+func runHostedInit(opts initOptions, out io.Writer) error {
+	token := strings.TrimSpace(opts.Token)
+	hostedURL := strings.TrimSpace(opts.URL)
+	if token == "" || hostedURL == "" {
+		return errors.New("--mode hosted requires both --token and --url")
+	}
+
+	apiBaseURL, err := deriveHostedAPIBaseURL(hostedURL)
+	if err != nil {
+		return err
+	}
+
+	cfg, err := loadInitConfig()
+	if err != nil {
+		return err
+	}
+	cfg.APIBaseURL = apiBaseURL
+	cfg.Token = token
+	if err := saveInitConfig(cfg); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(out, "Hosted setup configured.")
+	fmt.Fprintln(out, "Next step: otter whoami")
+	return nil
+}
+
+func deriveHostedAPIBaseURL(rawURL string) (string, error) {
+	value := strings.TrimSpace(rawURL)
+	if value == "" {
+		return "", errors.New("--url is required")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", errors.New("--url must be a valid absolute URL")
+	}
+
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	if parsed.Path == "" {
+		parsed.Path = "/api"
+	} else if parsed.Path != "/api" && !strings.HasPrefix(parsed.Path, "/api/") {
+		parsed.Path += "/api"
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 func promptInitMode(reader *bufio.Reader, out io.Writer) (string, error) {
