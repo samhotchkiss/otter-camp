@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -58,6 +59,20 @@ type migrateFromOpenClawOptions struct {
 	DryRun      bool
 	Since       *time.Time
 	OrgID       string
+	Transport   migrateTransport
+}
+
+type migrateTransport string
+
+const (
+	migrateTransportAuto migrateTransport = "auto"
+	migrateTransportAPI  migrateTransport = "api"
+	migrateTransportDB   migrateTransport = "db"
+)
+
+type migrateOrgOnlyOptions struct {
+	OrgID     string
+	Transport migrateTransport
 }
 
 type migrateOpenClawDryRunSummary struct {
@@ -89,40 +104,48 @@ func handleMigrate(args []string) {
 			dieIf(err)
 		}
 	case "status":
-		orgID, err := parseMigrateOrgOnlyOptions("migrate status", args[1:])
+		opts, err := parseMigrateOrgOnlyOptions("migrate status", args[1:])
 		if err != nil {
 			die(err.Error())
 		}
-		dieIf(runMigrateStatus(os.Stdout, orgID))
+		dieIf(runMigrateStatus(os.Stdout, opts.OrgID))
 	case "pause":
-		orgID, err := parseMigrateOrgOnlyOptions("migrate pause", args[1:])
+		opts, err := parseMigrateOrgOnlyOptions("migrate pause", args[1:])
 		if err != nil {
 			die(err.Error())
 		}
-		dieIf(runMigratePause(os.Stdout, orgID))
+		dieIf(runMigratePause(os.Stdout, opts.OrgID))
 	case "resume":
-		orgID, err := parseMigrateOrgOnlyOptions("migrate resume", args[1:])
+		opts, err := parseMigrateOrgOnlyOptions("migrate resume", args[1:])
 		if err != nil {
 			die(err.Error())
 		}
-		dieIf(runMigrateResume(os.Stdout, orgID))
+		dieIf(runMigrateResume(os.Stdout, opts.OrgID))
 	default:
 		fmt.Println("usage: otter migrate <from-openclaw|status|pause|resume> ...")
 		os.Exit(1)
 	}
 }
 
-func parseMigrateOrgOnlyOptions(name string, args []string) (string, error) {
+func parseMigrateOrgOnlyOptions(name string, args []string) (migrateOrgOnlyOptions, error) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	orgID := flags.String("org", "", "org id override")
+	transportRaw := flags.String("transport", string(migrateTransportAuto), "migration transport (auto|api|db)")
 	if err := flags.Parse(args); err != nil {
-		return "", err
+		return migrateOrgOnlyOptions{}, err
 	}
 	if len(flags.Args()) > 0 {
-		return "", fmt.Errorf("unexpected positional argument(s): %s", strings.Join(flags.Args(), " "))
+		return migrateOrgOnlyOptions{}, fmt.Errorf("unexpected positional argument(s): %s", strings.Join(flags.Args(), " "))
 	}
-	return strings.TrimSpace(*orgID), nil
+	transport, err := parseMigrateTransport(*transportRaw)
+	if err != nil {
+		return migrateOrgOnlyOptions{}, err
+	}
+	return migrateOrgOnlyOptions{
+		OrgID:     strings.TrimSpace(*orgID),
+		Transport: transport,
+	}, nil
 }
 
 func parseMigrateFromOpenClawOptions(args []string) (migrateFromOpenClawOptions, error) {
@@ -135,6 +158,7 @@ func parseMigrateFromOpenClawOptions(args []string) (migrateFromOpenClawOptions,
 	dryRun := flags.Bool("dry-run", false, "show migration plan without writing")
 	sinceRaw := flags.String("since", "", "only import session events at/after this timestamp (RFC3339 or YYYY-MM-DD)")
 	orgID := flags.String("org", "", "org id override")
+	transportRaw := flags.String("transport", string(migrateTransportAuto), "migration transport (auto|api|db)")
 
 	if err := flags.Parse(args); err != nil {
 		return migrateFromOpenClawOptions{}, err
@@ -150,6 +174,10 @@ func parseMigrateFromOpenClawOptions(args []string) (migrateFromOpenClawOptions,
 	if err != nil {
 		return migrateFromOpenClawOptions{}, err
 	}
+	transport, err := parseMigrateTransport(*transportRaw)
+	if err != nil {
+		return migrateFromOpenClawOptions{}, err
+	}
 
 	return migrateFromOpenClawOptions{
 		OpenClawDir: strings.TrimSpace(*openClawDir),
@@ -158,7 +186,61 @@ func parseMigrateFromOpenClawOptions(args []string) (migrateFromOpenClawOptions,
 		DryRun:      *dryRun,
 		Since:       since,
 		OrgID:       strings.TrimSpace(*orgID),
+		Transport:   transport,
 	}, nil
+}
+
+func parseMigrateTransport(raw string) (migrateTransport, error) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" {
+		return migrateTransportAuto, nil
+	}
+	switch migrateTransport(value) {
+	case migrateTransportAuto, migrateTransportAPI, migrateTransportDB:
+		return migrateTransport(value), nil
+	default:
+		return "", fmt.Errorf("invalid --transport value %q (expected auto|api|db)", strings.TrimSpace(raw))
+	}
+}
+
+func resolveMigrateTransport(raw migrateTransport, apiBaseURL string) migrateTransport {
+	switch raw {
+	case migrateTransportAPI:
+		return migrateTransportAPI
+	case migrateTransportDB:
+		return migrateTransportDB
+	default:
+		if isLocalMigrateAPIBaseURL(apiBaseURL) {
+			return migrateTransportDB
+		}
+		return migrateTransportAPI
+	}
+}
+
+func isLocalMigrateAPIBaseURL(apiBaseURL string) bool {
+	value := strings.TrimSpace(apiBaseURL)
+	if value == "" {
+		return true
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return true
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" {
+		host = strings.ToLower(strings.TrimSpace(parsed.Host))
+	}
+	if host == "" {
+		return true
+	}
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0" {
+		return true
+	}
+	if strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
+		return true
+	}
+	return false
 }
 
 func parseMigrateSince(raw string) (*time.Time, error) {

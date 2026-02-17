@@ -44,6 +44,46 @@ func TestMigrateFromOpenClawCommandParsesModesAndFlags(t *testing.T) {
 	require.Contains(t, err.Error(), "mutually exclusive")
 }
 
+func TestParseMigrateTransportOptions(t *testing.T) {
+	full, err := parseMigrateFromOpenClawOptions([]string{"--transport", "api"})
+	require.NoError(t, err)
+	require.Equal(t, migrateTransportAPI, full.Transport)
+
+	orgOnly, err := parseMigrateOrgOnlyOptions("migrate status", []string{"--org", "org-1", "--transport", "db"})
+	require.NoError(t, err)
+	require.Equal(t, "org-1", orgOnly.OrgID)
+	require.Equal(t, migrateTransportDB, orgOnly.Transport)
+
+	autoDefault, err := parseMigrateOrgOnlyOptions("migrate pause", []string{"--org", "org-1"})
+	require.NoError(t, err)
+	require.Equal(t, migrateTransportAuto, autoDefault.Transport)
+
+	_, err = parseMigrateFromOpenClawOptions([]string{"--transport", "smtp"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid --transport")
+}
+
+func TestMigrateFromOpenClawAutoSelectsAPITransportForHostedBaseURL(t *testing.T) {
+	resolved := resolveMigrateTransport(migrateTransportAuto, "https://swh.otter.camp")
+	require.Equal(t, migrateTransportAPI, resolved)
+}
+
+func TestMigrateFromOpenClawAutoSelectsDBTransportForLocalhostBaseURL(t *testing.T) {
+	tests := []string{
+		"http://localhost:4200",
+		"http://127.0.0.1:4200/api",
+		"http://[::1]:4200",
+		"http://otter.local:4200",
+	}
+
+	for _, baseURL := range tests {
+		t.Run(baseURL, func(t *testing.T) {
+			resolved := resolveMigrateTransport(migrateTransportAuto, baseURL)
+			require.Equal(t, migrateTransportDB, resolved)
+		})
+	}
+}
+
 func TestResolveMigrateDatabaseURLPrefersEnvOverConfig(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://env-user:env-pass@localhost:5432/envdb?sslmode=disable")
 
