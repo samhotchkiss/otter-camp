@@ -21,6 +21,7 @@ var detectMigrateOpenClawInstallation = importer.DetectOpenClawInstallation
 var importMigrateOpenClawAgentIdentities = importer.ImportOpenClawAgentIdentities
 var parseMigrateOpenClawSessionEvents = importer.ParseOpenClawSessionEvents
 var newOpenClawMigrationRunner = importer.NewOpenClawMigrationRunner
+var loadMigrateConfig = ottercli.LoadConfig
 var openMigrateDatabase = openMigrateDatabaseFromEnv
 var resolveMigrateBackfillUserIDFn = resolveMigrateBackfillUserID
 var runMigrateRunner = func(
@@ -461,9 +462,9 @@ func runMigrateResume(out io.Writer, orgOverride string) error {
 }
 
 func openMigrateDatabaseFromEnv() (*sql.DB, error) {
-	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	if databaseURL == "" {
-		return nil, fmt.Errorf("DATABASE_URL is required for otter migrate from-openclaw")
+	databaseURL, err := resolveMigrateDatabaseURL()
+	if err != nil {
+		return nil, err
 	}
 
 	db, err := sql.Open("postgres", databaseURL)
@@ -477,6 +478,24 @@ func openMigrateDatabaseFromEnv() (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+func resolveMigrateDatabaseURL() (string, error) {
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL != "" {
+		return databaseURL, nil
+	}
+
+	cfg, err := loadMigrateConfig()
+	if err != nil {
+		return "", err
+	}
+	databaseURL = strings.TrimSpace(cfg.DatabaseURL)
+	if databaseURL != "" {
+		return databaseURL, nil
+	}
+
+	return "", fmt.Errorf("DATABASE_URL is required for otter migrate from-openclaw")
 }
 
 func resolveMigrateBackfillUserID(ctx context.Context, db *sql.DB, orgID string) (string, error) {

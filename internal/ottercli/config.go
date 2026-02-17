@@ -12,9 +12,10 @@ const (
 )
 
 type Config struct {
-	APIBaseURL string `json:"apiBaseUrl"`
-	Token      string `json:"token"`
-	DefaultOrg string `json:"defaultOrg"`
+	APIBaseURL  string `json:"apiBaseUrl"`
+	Token       string `json:"token"`
+	DefaultOrg  string `json:"defaultOrg"`
+	DatabaseURL string `json:"databaseUrl,omitempty"`
 }
 
 func ConfigPath() (string, error) {

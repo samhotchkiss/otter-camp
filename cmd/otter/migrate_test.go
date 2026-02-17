@@ -5,11 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	importer "github.com/samhotchkiss/otter-camp/internal/import"
+	"github.com/samhotchkiss/otter-camp/internal/ottercli"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -40,6 +42,74 @@ func TestMigrateFromOpenClawCommandParsesModesAndFlags(t *testing.T) {
 	_, err = parseMigrateFromOpenClawOptions([]string{"--agents-only", "--history-only"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestResolveMigrateDatabaseURLPrefersEnvOverConfig(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://env-user:env-pass@localhost:5432/envdb?sslmode=disable")
+
+	originalLoadCfg := loadMigrateConfig
+	t.Cleanup(func() {
+		loadMigrateConfig = originalLoadCfg
+	})
+	loadMigrateConfig = func() (ottercli.Config, error) {
+		return ottercli.Config{
+			DatabaseURL: "postgres://cfg-user:cfg-pass@localhost:5432/cfgdb?sslmode=disable",
+		}, nil
+	}
+
+	got, err := resolveMigrateDatabaseURL()
+	require.NoError(t, err)
+	require.Equal(t, "postgres://env-user:env-pass@localhost:5432/envdb?sslmode=disable", got)
+}
+
+func TestResolveMigrateDatabaseURLFallsBackToConfig(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+
+	originalLoadCfg := loadMigrateConfig
+	t.Cleanup(func() {
+		loadMigrateConfig = originalLoadCfg
+	})
+	loadMigrateConfig = func() (ottercli.Config, error) {
+		return ottercli.Config{
+			DatabaseURL: "postgres://cfg-user:cfg-pass@localhost:5432/cfgdb?sslmode=disable",
+		}, nil
+	}
+
+	got, err := resolveMigrateDatabaseURL()
+	require.NoError(t, err)
+	require.Equal(t, "postgres://cfg-user:cfg-pass@localhost:5432/cfgdb?sslmode=disable", got)
+}
+
+func TestResolveMigrateDatabaseURLErrorsWhenUnset(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+
+	originalLoadCfg := loadMigrateConfig
+	t.Cleanup(func() {
+		loadMigrateConfig = originalLoadCfg
+	})
+	loadMigrateConfig = func() (ottercli.Config, error) {
+		return ottercli.Config{}, nil
+	}
+
+	_, err := resolveMigrateDatabaseURL()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "DATABASE_URL is required")
+}
+
+func TestResolveMigrateDatabaseURLReturnsConfigLoadError(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+
+	originalLoadCfg := loadMigrateConfig
+	t.Cleanup(func() {
+		loadMigrateConfig = originalLoadCfg
+	})
+	loadMigrateConfig = func() (ottercli.Config, error) {
+		return ottercli.Config{}, fmt.Errorf("permission denied")
+	}
+
+	_, err := resolveMigrateDatabaseURL()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "permission denied")
 }
 
 func TestMigrateFromOpenClawDryRunOutput(t *testing.T) {
