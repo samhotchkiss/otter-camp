@@ -117,6 +117,30 @@ func TestParseInitOptionsHostedFlags(t *testing.T) {
 	}
 }
 
+func TestDeriveHostedAPIBaseURLReturnsOrigin(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "origin", input: "https://swh.otter.camp", want: "https://swh.otter.camp"},
+		{name: "api-path", input: "https://swh.otter.camp/api", want: "https://swh.otter.camp"},
+		{name: "api-path-trailing-slash", input: "https://swh.otter.camp/api/", want: "https://swh.otter.camp"},
+		{name: "extra-path", input: "https://swh.otter.camp/workspace/setup", want: "https://swh.otter.camp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := deriveHostedAPIBaseURL(tt.input)
+			if err != nil {
+				t.Fatalf("deriveHostedAPIBaseURL() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("deriveHostedAPIBaseURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestInitHostedWithFlagsPersistsConfig(t *testing.T) {
 	state := stubInitDeps(t, ottercli.Config{}, &fakeInitClient{}, nil)
 	state.hostedValidateOrg = "org-hosted"
@@ -138,6 +162,9 @@ func TestInitHostedWithFlagsPersistsConfig(t *testing.T) {
 	}
 	if state.savedCfg.APIBaseURL != "https://swh.otter.camp" {
 		t.Fatalf("saved api base = %q, want https://swh.otter.camp", state.savedCfg.APIBaseURL)
+	}
+	if state.gotAPIBase != "https://swh.otter.camp" {
+		t.Fatalf("client api base = %q, want https://swh.otter.camp", state.gotAPIBase)
 	}
 	if state.savedCfg.DefaultOrg != "org-hosted" {
 		t.Fatalf("saved default org = %q, want org-hosted", state.savedCfg.DefaultOrg)

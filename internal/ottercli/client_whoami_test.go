@@ -48,6 +48,32 @@ func TestClientWhoAmIUsesValidateEndpointAndTokenQuery(t *testing.T) {
 	}
 }
 
+func TestClientWhoAmINormalizesConfiguredAPIPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/validate" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"valid":true,"org_id":"org-1","org_slug":"team-a","user":{"id":"u1","name":"Sam","email":"sam@example.com"}}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(Config{
+		APIBaseURL: srv.URL + "/api",
+		Token:      "oc_sess_abc",
+	}, "")
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	client.HTTP = srv.Client()
+
+	if _, err := client.WhoAmI(); err != nil {
+		t.Fatalf("WhoAmI() error = %v", err)
+	}
+}
+
 func TestClientWhoAmIRequiresToken(t *testing.T) {
 	client := &Client{BaseURL: "https://api.otter.camp"}
 	if _, err := client.WhoAmI(); err == nil || !strings.Contains(err.Error(), "missing auth token") {

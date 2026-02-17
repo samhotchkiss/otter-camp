@@ -29,7 +29,7 @@ func NewClient(cfg Config, orgOverride string) (*Client, error) {
 		org = strings.TrimSpace(cfg.DefaultOrg)
 	}
 	return &Client{
-		BaseURL: strings.TrimRight(cfg.APIBaseURL, "/"),
+		BaseURL: normalizeAPIBaseURL(cfg.APIBaseURL),
 		Token:   strings.TrimSpace(cfg.Token),
 		OrgID:   org,
 		HTTP: &http.Client{
@@ -49,10 +49,11 @@ func (c *Client) requireAuth() error {
 }
 
 func (c *Client) newRequest(method, path string, body io.Reader) (*http.Request, error) {
-	if c.BaseURL == "" {
+	baseURL := normalizeAPIBaseURL(c.BaseURL)
+	if baseURL == "" {
 		return nil, errors.New("missing API base URL")
 	}
-	endpoint := c.BaseURL + path
+	endpoint := baseURL + path
 	req, err := http.NewRequest(method, endpoint, body)
 	if err != nil {
 		return nil, err
@@ -643,9 +644,13 @@ func (c *Client) WhoAmI() (whoamiResponse, error) {
 	if strings.TrimSpace(c.Token) == "" {
 		return whoamiResponse{}, errors.New("missing auth token")
 	}
+	baseURL := normalizeAPIBaseURL(c.BaseURL)
+	if baseURL == "" {
+		return whoamiResponse{}, errors.New("missing API base URL")
+	}
 	q := url.Values{}
 	q.Set("token", strings.TrimSpace(c.Token))
-	endpoint := c.BaseURL + "/api/auth/validate?" + q.Encode()
+	endpoint := baseURL + "/api/auth/validate?" + q.Encode()
 	// Build request without Bearer header — validate endpoint reads token from query param only.
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -657,6 +662,29 @@ func (c *Client) WhoAmI() (whoamiResponse, error) {
 		return whoamiResponse{}, err
 	}
 	return resp, nil
+}
+
+func normalizeAPIBaseURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		trimmed := strings.TrimRight(value, "/")
+		return strings.TrimSuffix(trimmed, "/api")
+	}
+
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(parsed.Path, "/api") {
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/api")
+	}
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	return strings.TrimRight(parsed.String(), "/")
 }
 
 func (c *Client) OnboardingBootstrap(input OnboardingBootstrapRequest) (OnboardingBootstrapResponse, error) {
