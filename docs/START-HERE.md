@@ -148,6 +148,7 @@ Primary implementation wave came through issue/commit streams around Spec #150-#
 
 ## Change Log
 
+- 2026-02-17: Bug fix in hosted CLI setup handoff conflict-resolution follow-up; no behavior change.
 - 2026-02-17: Added hosted CLI setup handoff path (`/install` script + `otter init --mode hosted --token --url` import/bridge flow) for non-interactive hosted onboarding (Spec 312).
 - 2026-02-17: Documented hosted invite onboarding launch flow (`/join/<invite-code>`) and hosted multi-org bootstrap guard configuration (Spec 310).
 - 2026-02-16: Added hosted wildcard DNS/TLS rollout runbook link for `{slug}.otter.camp` operator validation (Spec 311).
