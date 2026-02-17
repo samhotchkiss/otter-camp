@@ -32,6 +32,12 @@ type OpenClawSessionEvent struct {
 	Line        int
 }
 
+type openClawSessionDiscoverySummary struct {
+	RootFileCounts    map[string]int
+	UniqueFiles       int
+	DuplicatesSkipped int
+}
+
 type openClawSessionRawEvent struct {
 	Type      string                     `json:"type"`
 	ID        string                     `json:"id"`
@@ -68,10 +74,11 @@ func parseOpenClawSessionEvents(install *OpenClawInstallation, strict bool) ([]O
 		return nil, err
 	}
 
-	sessionFiles, err := discoverOpenClawSessionFiles(root)
+	sessionFiles, discoverySummary, err := discoverOpenClawSessionFilesWithSummary(root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover openclaw session files: %w", err)
 	}
+	log.Printf("openclaw session discovery: %s", formatOpenClawSessionDiscoverySummary(discoverySummary))
 
 	events := make([]OpenClawSessionEvent, 0)
 	for _, sessionPath := range sessionFiles {
@@ -166,21 +173,38 @@ func parseOpenClawSessionFile(sessionPath string, strict bool) ([]OpenClawSessio
 // Env glob patterns are comma-separated and resolved relative to root unless
 // absolute. Roots outside root are ignored.
 func discoverOpenClawSessionFiles(root string) ([]string, error) {
+	files, _, err := discoverOpenClawSessionFilesWithSummary(root)
+	return files, err
+}
+
+func discoverOpenClawSessionFilesWithSummary(root string) ([]string, openClawSessionDiscoverySummary, error) {
+	summary := openClawSessionDiscoverySummary{
+		RootFileCounts: make(map[string]int),
+	}
 	searchRoots, err := resolveOpenClawSessionSearchRoots(root)
 	if err != nil {
-		return nil, err
+		return nil, summary, err
 	}
 
 	var files []string
 	for _, searchRoot := range searchRoots {
 		rootFiles, err := collectOpenClawJSONLFiles(searchRoot)
 		if err != nil {
-			return nil, err
+			return nil, summary, err
+		}
+		if len(rootFiles) > 0 {
+			summary.RootFileCounts[searchRoot] = len(rootFiles)
 		}
 		files = append(files, rootFiles...)
 	}
 	sort.Strings(files)
-	return dedupeOpenClawSessionFiles(files)
+	dedupedFiles, duplicatesSkipped, err := dedupeOpenClawSessionFiles(files)
+	if err != nil {
+		return nil, summary, err
+	}
+	summary.UniqueFiles = len(dedupedFiles)
+	summary.DuplicatesSkipped = duplicatesSkipped
+	return dedupedFiles, summary, nil
 }
 
 func resolveOpenClawSessionSearchRoots(root string) ([]string, error) {
@@ -308,14 +332,15 @@ func collectOpenClawJSONLFiles(searchRoot string) ([]string, error) {
 	return files, nil
 }
 
-func dedupeOpenClawSessionFiles(files []string) ([]string, error) {
+func dedupeOpenClawSessionFiles(files []string) ([]string, int, error) {
 	if len(files) <= 1 {
-		return files, nil
+		return files, 0, nil
 	}
 
 	seenCanonical := make(map[string]struct{}, len(files))
 	seenSignature := make(map[string]struct{}, len(files))
 	unique := make([]string, 0, len(files))
+	duplicatesSkipped := 0
 
 	for _, path := range files {
 		cleanPath := filepath.Clean(path)
@@ -324,15 +349,17 @@ func dedupeOpenClawSessionFiles(files []string) ([]string, error) {
 			canonicalPath = filepath.Clean(resolved)
 		}
 		if _, exists := seenCanonical[canonicalPath]; exists {
+			duplicatesSkipped++
 			continue
 		}
 
 		signature, err := openClawSessionFileSignature(cleanPath)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if signature != "" {
 			if _, exists := seenSignature[signature]; exists {
+				duplicatesSkipped++
 				continue
 			}
 			seenSignature[signature] = struct{}{}
@@ -342,7 +369,7 @@ func dedupeOpenClawSessionFiles(files []string) ([]string, error) {
 		unique = append(unique, cleanPath)
 	}
 
-	return unique, nil
+	return unique, duplicatesSkipped, nil
 }
 
 func openClawSessionFileSignature(path string) (string, error) {
@@ -367,6 +394,25 @@ func openClawSessionFileSignature(path string) (string, error) {
 		strconv.FormatInt(info.Size(), 10),
 		hash,
 	}, "|"), nil
+}
+
+func formatOpenClawSessionDiscoverySummary(summary openClawSessionDiscoverySummary) string {
+	roots := make([]string, 0, len(summary.RootFileCounts))
+	for root := range summary.RootFileCounts {
+		roots = append(roots, root)
+	}
+	sort.Strings(roots)
+
+	rootSummaries := make([]string, 0, len(roots))
+	for _, root := range roots {
+		rootSummaries = append(rootSummaries, fmt.Sprintf("%s=%d", root, summary.RootFileCounts[root]))
+	}
+	return fmt.Sprintf(
+		"unique_files=%d duplicates_skipped=%d roots=%s",
+		summary.UniqueFiles,
+		summary.DuplicatesSkipped,
+		strings.Join(rootSummaries, ","),
+	)
 }
 
 // deriveOpenClawSessionPathMetadata extracts agent slug and session ID from a
