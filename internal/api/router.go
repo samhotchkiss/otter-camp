@@ -119,12 +119,14 @@ func NewRouter() http.Handler {
 
 	// Initialize project store and handler
 	var projectStore *store.ProjectStore
+	var orgStore *store.OrgStore
 	var githubSyncJobStore *store.GitHubSyncJobStore
 	var projectRepoStore *store.ProjectRepoStore
 	var activityStore *store.ActivityStore
 	var chatThreadStore *store.ChatThreadStore
 	if db != nil {
 		projectStore = store.NewProjectStore(db)
+		orgStore = store.NewOrgStore(db)
 		githubSyncJobStore = store.NewGitHubSyncJobStore(db)
 		projectRepoStore = store.NewProjectRepoStore(db)
 		activityStore = store.NewActivityStore(db)
@@ -188,6 +190,19 @@ func NewRouter() http.Handler {
 		memoryEventsHandler.Store = store.NewMemoryEventsStore(db)
 		complianceRulesHandler.Store = store.NewComplianceRuleStore(db)
 	}
+
+	if orgStore != nil {
+		middleware.SetWorkspaceSlugResolver(func(ctx context.Context, slug string) (string, bool) {
+			org, err := orgStore.GetBySlug(ctx, slug)
+			if err != nil {
+				return "", false
+			}
+			return strings.TrimSpace(org.ID), true
+		})
+	} else {
+		middleware.SetWorkspaceSlugResolver(nil)
+	}
+
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db, ChatThreadStore: chatThreadStore}
 	workflowsHandler.ProjectStore = projectStore
 	workflowsHandler.ProjectsHandler = projectsHandler
