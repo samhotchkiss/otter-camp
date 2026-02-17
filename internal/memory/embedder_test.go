@@ -101,6 +101,29 @@ func TestEmbedder(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("openai decode failures include HTTP status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[`))
+		}))
+		defer server.Close()
+
+		embedder, err := NewEmbedder(EmbedderConfig{
+			Provider:      ProviderOpenAI,
+			Model:         "text-embedding-3-small",
+			OpenAIBaseURL: server.URL,
+			OpenAIAPIKey:  "test-key",
+			Dimension:     2,
+			RetryAttempts: 1,
+		}, server.Client())
+		require.NoError(t, err)
+
+		_, err = embedder.Embed(context.Background(), []string{"x"})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "decode openai response")
+		require.Contains(t, err.Error(), "status 200")
+	})
+
 	t.Run("dimension mismatch returns zero vector fallback", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")

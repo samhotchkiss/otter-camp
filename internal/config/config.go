@@ -53,7 +53,7 @@ const (
 
 	defaultConversationEmbeddingEnabled      = true
 	defaultConversationEmbeddingPollInterval = 5 * time.Second
-	defaultConversationEmbeddingBatchSize    = 50
+	defaultConversationEmbeddingBatchSize    = 20
 	defaultConversationEmbeddingProvider     = "openai"
 	defaultConversationEmbeddingModel        = "text-embedding-3-small"
 	defaultConversationEmbeddingDimension    = 1536

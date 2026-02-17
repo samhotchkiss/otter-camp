@@ -419,6 +419,19 @@ func TestLoadParsesConversationEmbeddingSettings(t *testing.T) {
 	}
 }
 
+func TestLoadUsesReducedDefaultConversationEmbeddingBatchSize(t *testing.T) {
+	t.Setenv("CONVERSATION_EMBEDDING_BATCH_SIZE", "")
+
+	cfg, err := loadWithDefaultOpenAIKey(t)
+	if err != nil {
+		t.Fatalf("loadWithDefaultOpenAIKey(t) returned error: %v", err)
+	}
+
+	if cfg.ConversationEmbedding.BatchSize != 20 {
+		t.Fatalf("expected reduced default conversation embedding batch size 20, got %d", cfg.ConversationEmbedding.BatchSize)
+	}
+}
+
 func TestLoadConversationTokenBackfill(t *testing.T) {
 	t.Setenv("CONVERSATION_TOKEN_BACKFILL_WORKER_ENABLED", "true")
 	t.Setenv("CONVERSATION_TOKEN_BACKFILL_POLL_INTERVAL", "11s")
