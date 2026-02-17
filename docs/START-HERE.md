@@ -74,6 +74,7 @@ Use this map:
 - Start at `docs/projects/overview.md`
 - Then issue model and lifecycle (`how-issues-work.md`, `issue-flow.md`)
 - Runtime split (`local-vs-bridge.md`) for deployment-dependent behavior
+- Hosted wildcard routing rollout (`hosted-wildcard-routing.md`) for DNS/TLS setup and verification
 
 3. Agent subsystem: `docs/agents/`
 - Start at `docs/agents/overview.md`
@@ -146,6 +147,7 @@ Primary implementation wave came through issue/commit streams around Spec #150-#
 
 ## Change Log
 
+- 2026-02-16: Added hosted wildcard DNS/TLS rollout runbook link for `{slug}.otter.camp` operator validation (Spec 311).
 - 2026-02-17: Documented uninstall teardown hardening for local runtime cleanup (server/bridge stop, PID/log cleanup, and port-free verification) from Spec 313.
 - 2026-02-16: Added project-docs ingestion architecture updates for scanner, retrieval, and migration runner phases (Spec 304).
 - 2026-02-16: Bug fix in CI test guardrails; no behavior change.
