@@ -23,6 +23,65 @@ type Client struct {
 
 const maxClientResponseBodyBytes = 1 << 20
 
+type RequestError struct {
+	StatusCode int
+	Detail     string
+}
+
+func (e *RequestError) Error() string {
+	if e == nil {
+		return "request failed"
+	}
+	if strings.TrimSpace(e.Detail) == "" {
+		return fmt.Sprintf("request failed (%d)", e.StatusCode)
+	}
+	return fmt.Sprintf("request failed (%d): %s", e.StatusCode, e.Detail)
+}
+
+func (e *RequestError) HTTPStatusCode() int {
+	if e == nil {
+		return 0
+	}
+	return e.StatusCode
+}
+
+type ResponseDecodeError struct {
+	StatusCode int
+	Detail     string
+}
+
+func (e *ResponseDecodeError) Error() string {
+	if e == nil {
+		return "invalid response"
+	}
+	if strings.TrimSpace(e.Detail) == "" {
+		return fmt.Sprintf("invalid response (%d)", e.StatusCode)
+	}
+	return fmt.Sprintf("invalid response (%d): %s", e.StatusCode, e.Detail)
+}
+
+func (e *ResponseDecodeError) HTTPStatusCode() int {
+	if e == nil {
+		return 0
+	}
+	return e.StatusCode
+}
+
+// HTTPStatusCode returns the HTTP status carried by typed client errors.
+func HTTPStatusCode(err error) (int, bool) {
+	var statusErr interface {
+		HTTPStatusCode() int
+	}
+	if !errors.As(err, &statusErr) {
+		return 0, false
+	}
+	status := statusErr.HTTPStatusCode()
+	if status <= 0 {
+		return 0, false
+	}
+	return status, true
+}
+
 func NewClient(cfg Config, orgOverride string) (*Client, error) {
 	org := strings.TrimSpace(orgOverride)
 	if org == "" {
@@ -76,15 +135,133 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 	}
 	defer resp.Body.Close()
 
+	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, maxClientResponseBodyBytes))
+	if readErr != nil {
+		return readErr
+	}
+
 	if resp.StatusCode >= 400 {
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, maxClientResponseBodyBytes))
-		return fmt.Errorf("request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(payload)))
+		return &RequestError{
+			StatusCode: resp.StatusCode,
+			Detail:     summarizeResponseBody(resp.Header.Get("Content-Type"), payload),
+		}
 	}
 
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, maxClientResponseBodyBytes)).Decode(out)
+	if len(bytes.TrimSpace(payload)) == 0 {
+		return io.EOF
+	}
+	if err := json.Unmarshal(payload, out); err != nil {
+		detail := classifyDecodeErrorDetail(resp.Header.Get("Content-Type"), payload)
+		if detail == "" {
+			detail = fmt.Sprintf("invalid JSON response: %v", err)
+		}
+		return &ResponseDecodeError{
+			StatusCode: resp.StatusCode,
+			Detail:     detail,
+		}
+	}
+	return nil
+}
+
+func summarizeResponseBody(contentType string, payload []byte) string {
+	trimmed := strings.TrimSpace(string(payload))
+	if trimmed == "" {
+		return ""
+	}
+	if isLikelyHTMLResponse(contentType, trimmed) {
+		return "html response body omitted"
+	}
+	if msg, ok := extractJSONErrorSummary(payload, contentType); ok {
+		return msg
+	}
+	return truncateResponseText(trimmed, 200)
+}
+
+func classifyDecodeErrorDetail(contentType string, payload []byte) string {
+	trimmed := strings.TrimSpace(string(payload))
+	if trimmed == "" {
+		return "empty response body"
+	}
+	if isLikelyHTMLResponse(contentType, trimmed) {
+		return "expected JSON response but received HTML"
+	}
+	if !looksLikeJSONContent(contentType, trimmed) {
+		return "expected JSON response but received non-JSON body"
+	}
+	return ""
+}
+
+func extractJSONErrorSummary(payload []byte, contentType string) (string, bool) {
+	trimmed := strings.TrimSpace(string(payload))
+	if trimmed == "" || !looksLikeJSONContent(contentType, trimmed) {
+		return "", false
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return "", false
+	}
+
+	for _, key := range []string{"error", "message", "detail"} {
+		raw, ok := body[key]
+		if !ok {
+			continue
+		}
+		switch value := raw.(type) {
+		case string:
+			value = strings.TrimSpace(value)
+			if value != "" {
+				return truncateResponseText(value, 200), true
+			}
+		case map[string]any:
+			if nested, ok := value["message"].(string); ok && strings.TrimSpace(nested) != "" {
+				return truncateResponseText(strings.TrimSpace(nested), 200), true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func looksLikeJSONContent(contentType, body string) bool {
+	if isJSONContentType(contentType) {
+		return true
+	}
+	if body == "" {
+		return false
+	}
+	return strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[")
+}
+
+func isJSONContentType(contentType string) bool {
+	value := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if value == "" {
+		return false
+	}
+	return value == "application/json" || value == "text/json" || strings.HasSuffix(value, "+json")
+}
+
+func isLikelyHTMLResponse(contentType, body string) bool {
+	ct := strings.ToLower(contentType)
+	if strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xhtml+xml") {
+		return true
+	}
+	lowerBody := strings.ToLower(strings.TrimSpace(body))
+	return strings.HasPrefix(lowerBody, "<!doctype html") || strings.HasPrefix(lowerBody, "<html")
+}
+
+func truncateResponseText(value string, max int) string {
+	collapsed := strings.Join(strings.Fields(value), " ")
+	if len(collapsed) <= max {
+		return collapsed
+	}
+	if max <= 3 {
+		return collapsed[:max]
+	}
+	return collapsed[:max-3] + "..."
 }
 
 type Project struct {

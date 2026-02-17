@@ -80,3 +80,66 @@ func TestClientWhoAmIRequiresToken(t *testing.T) {
 		t.Fatalf("expected missing token error, got %v", err)
 	}
 }
+
+func TestClientWhoAmIHTTPErrorSanitizesHTMLBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("<!DOCTYPE html><html><body><h1>Bad Gateway</h1></body></html>"))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "oc_sess_abc",
+		HTTP:    srv.Client(),
+	}
+
+	_, err := client.WhoAmI()
+	if err == nil {
+		t.Fatalf("expected WhoAmI() error")
+	}
+	if !strings.Contains(err.Error(), "request failed (502)") {
+		t.Fatalf("WhoAmI() error = %v, want request failed (502)", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "<html") || strings.Contains(err.Error(), "<!DOCTYPE") {
+		t.Fatalf("WhoAmI() error leaked raw HTML: %v", err)
+	}
+	status, ok := HTTPStatusCode(err)
+	if !ok || status != http.StatusBadGateway {
+		t.Fatalf("HTTPStatusCode() = (%d, %v), want (502, true)", status, ok)
+	}
+}
+
+func TestClientWhoAmIInvalidJSONSuccessResponseDoesNotExposeHTML(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<html><body>temporarily unavailable</body></html>"))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		BaseURL: srv.URL,
+		Token:   "oc_sess_abc",
+		HTTP:    srv.Client(),
+	}
+
+	_, err := client.WhoAmI()
+	if err == nil {
+		t.Fatalf("expected WhoAmI() error")
+	}
+	if !strings.Contains(err.Error(), "invalid response (200)") {
+		t.Fatalf("WhoAmI() error = %v, want invalid response (200)", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "html") {
+		t.Fatalf("WhoAmI() error = %v, want html classification", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "<html") {
+		t.Fatalf("WhoAmI() error leaked raw HTML: %v", err)
+	}
+	status, ok := HTTPStatusCode(err)
+	if !ok || status != http.StatusOK {
+		t.Fatalf("HTTPStatusCode() = (%d, %v), want (200, true)", status, ok)
+	}
+}
