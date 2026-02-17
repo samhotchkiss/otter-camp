@@ -464,8 +464,8 @@ type OpenClawMigrationImportHistoryEvent struct {
 }
 
 type OpenClawMigrationImportHistoryBatchInput struct {
-	UserID string                             `json:"user_id"`
-	Batch  OpenClawMigrationImportBatch       `json:"batch"`
+	UserID string                                `json:"user_id"`
+	Batch  OpenClawMigrationImportBatch          `json:"batch"`
 	Events []OpenClawMigrationImportHistoryEvent `json:"events"`
 }
 
@@ -491,7 +491,7 @@ type OpenClawMigrationPhaseStatus struct {
 }
 
 type OpenClawMigrationStatus struct {
-	Active bool                          `json:"active"`
+	Active bool                           `json:"active"`
 	Phases []OpenClawMigrationPhaseStatus `json:"phases"`
 }
 
@@ -515,6 +515,18 @@ type OpenClawMigrationRunResponse struct {
 type OpenClawMigrationMutationResponse struct {
 	Status        string `json:"status"`
 	UpdatedPhases int    `json:"updated_phases"`
+}
+
+type OpenClawMigrationResetRequest struct {
+	Confirm string `json:"confirm"`
+}
+
+type OpenClawMigrationResetResponse struct {
+	Status              string         `json:"status"`
+	PausedPhases        int            `json:"paused_phases"`
+	ProgressRowsDeleted int            `json:"progress_rows_deleted"`
+	Deleted             map[string]int `json:"deleted"`
+	TotalDeleted        int            `json:"total_deleted"`
 }
 
 type PipelineRoleAssignment struct {
@@ -1979,6 +1991,33 @@ func (c *Client) PauseOpenClawMigration() (OpenClawMigrationMutationResponse, er
 
 func (c *Client) ResumeOpenClawMigration() (OpenClawMigrationMutationResponse, error) {
 	return c.runOpenClawMigrationMutation("/api/migrations/openclaw/resume")
+}
+
+func (c *Client) ResetOpenClawMigration(
+	input OpenClawMigrationResetRequest,
+) (OpenClawMigrationResetResponse, error) {
+	if err := c.requireAuth(); err != nil {
+		return OpenClawMigrationResetResponse{}, err
+	}
+	if strings.TrimSpace(input.Confirm) == "" {
+		return OpenClawMigrationResetResponse{}, errors.New("confirm token is required")
+	}
+
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return OpenClawMigrationResetResponse{}, err
+	}
+	req, err := c.newRequest(http.MethodPost, "/api/migrations/openclaw/reset", bytes.NewReader(payload))
+	if err != nil {
+		return OpenClawMigrationResetResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response OpenClawMigrationResetResponse
+	if err := c.do(req, &response); err != nil {
+		return OpenClawMigrationResetResponse{}, err
+	}
+	return response, nil
 }
 
 func (c *Client) runOpenClawMigrationMutation(path string) (OpenClawMigrationMutationResponse, error) {
