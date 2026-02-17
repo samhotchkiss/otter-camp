@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
 )
@@ -12,6 +13,7 @@ import (
 type OpenClawMigrationRunner struct {
 	DB                        *sql.DB
 	ProgressStore             *store.MigrationProgressStore
+	EmbeddingPhaseRunner      OpenClawEmbeddingPhaseRunner
 	EllieBackfillRunner       OpenClawEllieBackfillRunner
 	EntitySynthesisRunner     OpenClawEntitySynthesisRunner
 	DedupRunner               OpenClawDedupRunner
@@ -29,6 +31,30 @@ type OpenClawEllieBackfillInput struct {
 type OpenClawEllieBackfillResult struct {
 	ProcessedMessages int
 	ExtractedMemories int
+}
+
+type OpenClawEmbeddingPhaseInput struct {
+	OrgID string
+}
+
+type OpenClawEmbeddingPhaseResult struct {
+	ProcessedEmbeddings int
+	RemainingEmbeddings int
+	Duration            time.Duration
+	TimedOut            bool
+}
+
+type OpenClawEmbeddingPhaseRunner interface {
+	RunEmbeddingPhase(ctx context.Context, input OpenClawEmbeddingPhaseInput) (OpenClawEmbeddingPhaseResult, error)
+}
+
+type noopOpenClawEmbeddingPhaseRunner struct{}
+
+func (noopOpenClawEmbeddingPhaseRunner) RunEmbeddingPhase(
+	_ context.Context,
+	_ OpenClawEmbeddingPhaseInput,
+) (OpenClawEmbeddingPhaseResult, error) {
+	return OpenClawEmbeddingPhaseResult{}, nil
 }
 
 type OpenClawEllieBackfillRunner interface {
@@ -146,6 +172,7 @@ type RunOpenClawMigrationInput struct {
 type RunOpenClawMigrationResult struct {
 	AgentImport         *OpenClawAgentImportResult
 	HistoryBackfill     *OpenClawHistoryBackfillResult
+	EmbeddingPhase      *OpenClawEmbeddingPhaseResult
 	EllieBackfill       *OpenClawEllieBackfillResult
 	EntitySynthesis     *OpenClawEntitySynthesisResult
 	Dedup               *OpenClawDedupResult
@@ -160,6 +187,7 @@ func NewOpenClawMigrationRunner(db *sql.DB) *OpenClawMigrationRunner {
 	return &OpenClawMigrationRunner{
 		DB:                        db,
 		ProgressStore:             store.NewMigrationProgressStore(db),
+		EmbeddingPhaseRunner:      noopOpenClawEmbeddingPhaseRunner{},
 		EllieBackfillRunner:       noopOpenClawEllieBackfillRunner{},
 		EntitySynthesisRunner:     noopOpenClawEntitySynthesisRunner{},
 		DedupRunner:               noopOpenClawDedupRunner{},
@@ -224,6 +252,22 @@ func (r *OpenClawMigrationRunner) Run(ctx context.Context, input RunOpenClawMigr
 		}
 	}
 	if !input.AgentsOnly && !input.HistoryOnly && !result.Paused {
+		fmt.Printf("🧬 Phase 2.5: History Embedding (1536)\n")
+		embeddingResult, embeddingErr := r.runHistoryEmbeddingPhase(ctx, input)
+		if embeddingErr != nil {
+			return RunOpenClawMigrationResult{}, embeddingErr
+		}
+		result.EmbeddingPhase = embeddingResult
+		if embeddingResult != nil {
+			fmt.Printf(
+				"   ✅ %d embeddings processed, %d remaining\n\n",
+				embeddingResult.ProcessedEmbeddings,
+				embeddingResult.RemainingEmbeddings,
+			)
+		} else {
+			fmt.Printf("   ⏭️  Already completed\n\n")
+		}
+
 		fmt.Printf("🧠 Phase 3: Memory Extraction\n")
 		ellieResult, err := r.runEllieBackfillPhase(ctx, input)
 		if err != nil {
@@ -551,6 +595,93 @@ func (r *OpenClawMigrationRunner) runHistoryBackfillPhase(
 	}
 
 	return &aggregated, false, nil
+}
+
+func (r *OpenClawMigrationRunner) runHistoryEmbeddingPhase(
+	ctx context.Context,
+	input RunOpenClawMigrationInput,
+) (*OpenClawEmbeddingPhaseResult, error) {
+	if r.EmbeddingPhaseRunner == nil {
+		return nil, nil
+	}
+
+	phaseType := "history_embedding_1536"
+	progress, err := r.ProgressStore.GetByType(ctx, input.OrgID, phaseType)
+	if err != nil {
+		return nil, err
+	}
+	if progress == nil {
+		started, startErr := r.ProgressStore.StartPhase(ctx, store.StartMigrationProgressInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			CurrentLabel:  migrationRunnerStringPtr("starting history embedding backfill"),
+		})
+		if startErr != nil {
+			return nil, startErr
+		}
+		progress = started
+	} else {
+		if progress.Status == store.MigrationProgressStatusCompleted {
+			return nil, nil
+		}
+		if progress.Status == store.MigrationProgressStatusFailed {
+			return nil, fmt.Errorf("migration phase %q is failed; reset status before rerun", phaseType)
+		}
+		if _, setErr := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusRunning,
+			CurrentLabel:  migrationRunnerStringPtr("resuming history embedding backfill"),
+		}); setErr != nil {
+			return nil, setErr
+		}
+	}
+
+	embeddingResult, embeddingErr := r.EmbeddingPhaseRunner.RunEmbeddingPhase(ctx, OpenClawEmbeddingPhaseInput{
+		OrgID: input.OrgID,
+	})
+	if embeddingErr != nil {
+		_, _ = r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         input.OrgID,
+			MigrationType: phaseType,
+			Status:        store.MigrationProgressStatusFailed,
+			Error:         migrationRunnerStringPtr(embeddingErr.Error()),
+		})
+		return nil, embeddingErr
+	}
+
+	if embeddingResult.ProcessedEmbeddings > 0 || embeddingResult.RemainingEmbeddings > 0 {
+		if _, advanceErr := r.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
+			OrgID:          input.OrgID,
+			MigrationType:  phaseType,
+			ProcessedDelta: max(embeddingResult.ProcessedEmbeddings, 0),
+			FailedDelta:    max(embeddingResult.RemainingEmbeddings, 0),
+			CurrentLabel: migrationRunnerStringPtr(
+				fmt.Sprintf(
+					"processed %d embeddings (%d remaining)",
+					max(embeddingResult.ProcessedEmbeddings, 0),
+					max(embeddingResult.RemainingEmbeddings, 0),
+				),
+			),
+		}); advanceErr != nil {
+			return nil, advanceErr
+		}
+	}
+
+	completedLabel := "history embedding backfill complete"
+	if embeddingResult.RemainingEmbeddings > 0 {
+		completedLabel = "history embedding backfill complete with remaining backlog"
+	}
+	if _, err := r.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+		OrgID:         input.OrgID,
+		MigrationType: phaseType,
+		Status:        store.MigrationProgressStatusCompleted,
+		CurrentLabel:  migrationRunnerStringPtr(completedLabel),
+	}); err != nil {
+		return nil, err
+	}
+
+	return &embeddingResult, nil
 }
 
 func mergeOpenClawSkippedUnknownAgentCounts(target map[string]int, source map[string]int) map[string]int {

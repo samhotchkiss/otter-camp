@@ -6,6 +6,8 @@ type OpenClawMigrationSummaryReport struct {
 	HistoryEventsSkipped             int
 	HistoryMessagesInserted          int
 	HistorySkippedUnknownAgentCounts map[string]int
+	EmbeddingPhaseProcessed          int
+	EmbeddingPhaseRemaining          int
 	MemoryExtractionProcessed        int
 	EntitySynthesisProcessed         int
 	MemoryDedupProcessed             int
@@ -39,6 +41,10 @@ func BuildOpenClawMigrationSummaryReport(result RunOpenClawMigrationResult) Open
 				"history backfill completed with failed rows recorded in failure ledger",
 			)
 		}
+	}
+	if result.EmbeddingPhase != nil {
+		report.EmbeddingPhaseProcessed = result.EmbeddingPhase.ProcessedEmbeddings
+		report.EmbeddingPhaseRemaining = result.EmbeddingPhase.RemainingEmbeddings
 	}
 	if result.EllieBackfill != nil {
 		report.MemoryExtractionProcessed = result.EllieBackfill.ProcessedMessages
