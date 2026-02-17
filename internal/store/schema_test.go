@@ -751,6 +751,32 @@ func TestSchemaIncludesEllieProjectDocsMigration(t *testing.T) {
 	require.Contains(t, downContent, "drop table if exists ellie_project_docs")
 }
 
+func TestMigration082RoomsExcludeFromIngestionFilesExistAndContainCoreDDL(t *testing.T) {
+	migrationsDir := getMigrationsDir(t)
+	files := []string{
+		"082_add_rooms_exclude_from_ingestion.up.sql",
+		"082_add_rooms_exclude_from_ingestion.down.sql",
+	}
+	for _, filename := range files {
+		_, err := os.Stat(filepath.Join(migrationsDir, filename))
+		require.NoError(t, err)
+	}
+
+	upRaw, err := os.ReadFile(filepath.Join(migrationsDir, "082_add_rooms_exclude_from_ingestion.up.sql"))
+	require.NoError(t, err)
+	upContent := strings.ToLower(string(upRaw))
+	require.Contains(t, upContent, "alter table rooms")
+	require.Contains(t, upContent, "add column if not exists exclude_from_ingestion")
+	require.Contains(t, upContent, "default false")
+	require.Contains(t, upContent, "create index if not exists rooms_org_exclude_from_ingestion_idx")
+
+	downRaw, err := os.ReadFile(filepath.Join(migrationsDir, "082_add_rooms_exclude_from_ingestion.down.sql"))
+	require.NoError(t, err)
+	downContent := strings.ToLower(string(downRaw))
+	require.Contains(t, downContent, "drop index if exists rooms_org_exclude_from_ingestion_idx")
+	require.Contains(t, downContent, "drop column if exists exclude_from_ingestion")
+}
+
 func TestSchemaConversationsSensitivityColumnAndConstraint(t *testing.T) {
 	connStr := getTestDatabaseURL(t)
 	db := setupTestDatabase(t, connStr)
