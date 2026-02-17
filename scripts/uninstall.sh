@@ -181,6 +181,28 @@ cleanup_runtime_artifacts() {
   done
 }
 
+is_port_in_use() {
+  local port="$1"
+  if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+    return $?
+  fi
+  log_warn "lsof not found; skipping port verification for :$port"
+  return 1
+}
+
+verify_port_released() {
+  local port="${PORT:-4200}"
+  if is_port_in_use "$port"; then
+    log_error "Port $port is still in use after uninstall."
+    return 1
+  fi
+  log_success "Port $port is free."
+}
+
 main() {
   while (($# > 0)); do
     case "$1" in
@@ -211,6 +233,7 @@ main() {
   remove_local_data
   remove_cli_config
   cleanup_runtime_artifacts
+  verify_port_released
 
   echo
   echo -e "${bold}Uninstall complete.${reset}"

@@ -141,12 +141,39 @@ test_cleanup_runtime_artifacts_removes_pid_and_log_files() {
   rm -rf "$tmp"
 }
 
+test_verify_port_released_succeeds_when_free() {
+  (
+    is_port_in_use() {
+      return 1
+    }
+
+    PORT=4200
+    verify_port_released
+  )
+}
+
+test_verify_port_released_fails_when_busy() {
+  (
+    is_port_in_use() {
+      return 0
+    }
+
+    PORT=4200
+    if verify_port_released; then
+      echo "expected verify_port_released to fail when port is busy" >&2
+      exit 1
+    fi
+  )
+}
+
 main() {
   test_remove_local_data_removes_known_paths
   test_remove_cli_config_removes_linux_path
   test_stop_bridge_no_process_is_noop
   test_stop_server_stops_pidfile_process_and_removes_pidfile
   test_cleanup_runtime_artifacts_removes_pid_and_log_files
+  test_verify_port_released_succeeds_when_free
+  test_verify_port_released_fails_when_busy
   echo "uninstall.sh tests passed"
 }
 
