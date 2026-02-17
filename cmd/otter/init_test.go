@@ -599,6 +599,60 @@ func TestStartBridgeProcessReportsMissingScript(t *testing.T) {
 	}
 }
 
+func TestBuildBridgeEnvValuesUsesDetectedGatewayPort(t *testing.T) {
+	values := buildBridgeEnvValues(&importer.OpenClawInstallation{
+		Gateway: importer.OpenClawGatewayConfig{
+			Host:  "127.0.0.1",
+			Port:  18888,
+			Token: "gateway-token",
+		},
+	}, ottercli.Config{
+		APIBaseURL: "https://swh.otter.camp",
+		Token:      "oc_sess_hosted",
+	})
+
+	if values["OPENCLAW_PORT"] != "18888" {
+		t.Fatalf("OPENCLAW_PORT = %q, want 18888", values["OPENCLAW_PORT"])
+	}
+}
+
+func TestInitFailsWhenGatewayPortCannotBeDetermined(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir: "/Users/sam/.openclaw",
+		Gateway: importer.OpenClawGatewayConfig{
+			Host:  "127.0.0.1",
+			Port:  0,
+			Token: "gateway-token",
+		},
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", Name: "Frank", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader("n\n"),
+		&bytes.Buffer{},
+	)
+	if err == nil {
+		t.Fatalf("expected gateway port error")
+	}
+	if !strings.Contains(err.Error(), "unable to determine OpenClaw gateway port") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state.bridgeWriteCalled {
+		t.Fatalf("bridge env should not be written when gateway port is unknown")
+	}
+}
+
 func TestHandleInitPromptDefaultsToLocalSelection(t *testing.T) {
 	client := &fakeInitClient{
 		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
