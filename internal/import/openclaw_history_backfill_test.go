@@ -352,6 +352,68 @@ func TestStableOpenClawBackfillMessageIDUsesUUIDv5(t *testing.T) {
 	require.Contains(t, "89ab", strings.ToLower(parts[3][:1]))
 }
 
+func TestOpenClawHistoryBackfillTracksUnknownAgentSkipCounts(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-history-unknown-agent-skips")
+	userID := createOpenClawImportTestUser(t, db, orgID, "sam-history-unknown-agent-skips")
+	root := t.TempDir()
+
+	writeOpenClawAgentWorkspaceFixture(t, root, "main", "Chief of Staff", "Frank Identity", "tools-main")
+	writeOpenClawAgentConfigFixture(t, root, []map[string]any{
+		{"id": "main", "name": "Frank"},
+	})
+	install, err := DetectOpenClawInstallation(DetectOpenClawOptions{HomeDir: root})
+	require.NoError(t, err)
+	_, err = ImportOpenClawAgents(context.Background(), db, OpenClawAgentImportOptions{
+		OrgID:        orgID,
+		Installation: install,
+	})
+	require.NoError(t, err)
+
+	events := []OpenClawSessionEvent{
+		{
+			AgentSlug: "main",
+			Role:      OpenClawSessionEventRoleUser,
+			Body:      "known",
+			CreatedAt: time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC),
+		},
+		{
+			AgentSlug: "codex",
+			Role:      OpenClawSessionEventRoleUser,
+			Body:      "transient",
+			CreatedAt: time.Date(2026, 1, 1, 10, 0, 2, 0, time.UTC),
+		},
+		{
+			AgentSlug: "codex",
+			Role:      OpenClawSessionEventRoleAssistant,
+			Body:      "transient-assistant",
+			CreatedAt: time.Date(2026, 1, 1, 10, 0, 3, 0, time.UTC),
+		},
+		{
+			AgentSlug: "unknown-sub-agent",
+			Role:      OpenClawSessionEventRoleUser,
+			Body:      "other transient",
+			CreatedAt: time.Date(2026, 1, 1, 10, 0, 4, 0, time.UTC),
+		},
+	}
+
+	result, err := BackfillOpenClawHistory(context.Background(), db, OpenClawHistoryBackfillOptions{
+		OrgID:        orgID,
+		UserID:       userID,
+		ParsedEvents: events,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.EventsProcessed)
+	require.Equal(t, 1, result.MessagesInserted)
+	require.Equal(t, 3, result.EventsSkippedUnknownAgent)
+	require.Equal(t, map[string]int{
+		"codex":             2,
+		"unknown-sub-agent": 1,
+	}, result.SkippedUnknownAgentCounts)
+}
+
 func createOpenClawImportTestUser(t *testing.T, db *sql.DB, orgID, key string) string {
 	t.Helper()
 	return createOpenClawImportTestUserWithDisplayName(t, db, orgID, key, "Sam "+key)

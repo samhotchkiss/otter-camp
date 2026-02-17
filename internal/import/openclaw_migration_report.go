@@ -1,17 +1,19 @@
 package importer
 
 type OpenClawMigrationSummaryReport struct {
-	AgentImportProcessed            int
-	HistoryEventsProcessed          int
-	HistoryMessagesInserted         int
-	MemoryExtractionProcessed       int
-	EntitySynthesisProcessed        int
-	MemoryDedupProcessed            int
-	TaxonomyClassificationProcessed int
-	ProjectDiscoveryProcessed       int
-	ProjectDocsScanningProcessed    int
-	FailedItems                     int
-	Warnings                        []string
+	AgentImportProcessed             int
+	HistoryEventsProcessed           int
+	HistoryEventsSkipped             int
+	HistoryMessagesInserted          int
+	HistorySkippedUnknownAgentCounts map[string]int
+	MemoryExtractionProcessed        int
+	EntitySynthesisProcessed         int
+	MemoryDedupProcessed             int
+	TaxonomyClassificationProcessed  int
+	ProjectDiscoveryProcessed        int
+	ProjectDocsScanningProcessed     int
+	FailedItems                      int
+	Warnings                         []string
 }
 
 func BuildOpenClawMigrationSummaryReport(result RunOpenClawMigrationResult) OpenClawMigrationSummaryReport {
@@ -22,7 +24,14 @@ func BuildOpenClawMigrationSummaryReport(result RunOpenClawMigrationResult) Open
 	}
 	if result.HistoryBackfill != nil {
 		report.HistoryEventsProcessed = result.HistoryBackfill.EventsProcessed
+		report.HistoryEventsSkipped = result.HistoryBackfill.EventsSkippedUnknownAgent
 		report.HistoryMessagesInserted = result.HistoryBackfill.MessagesInserted
+		if len(result.HistoryBackfill.SkippedUnknownAgentCounts) > 0 {
+			report.HistorySkippedUnknownAgentCounts = make(map[string]int, len(result.HistoryBackfill.SkippedUnknownAgentCounts))
+			for slug, count := range result.HistoryBackfill.SkippedUnknownAgentCounts {
+				report.HistorySkippedUnknownAgentCounts[slug] = count
+			}
+		}
 	}
 	if result.EllieBackfill != nil {
 		report.MemoryExtractionProcessed = result.EllieBackfill.ProcessedMessages
