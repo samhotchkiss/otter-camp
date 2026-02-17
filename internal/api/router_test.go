@@ -67,7 +67,7 @@ func TestCORSMiddleware(t *testing.T) {
 	req := httptest.NewRequest(http.MethodOptions, "/health", nil)
 	req.Header.Set("Origin", "https://example.com")
 	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
-	req.Header.Set("Access-Control-Request-Headers", "Content-Type, X-Org-ID")
+	req.Header.Set("Access-Control-Request-Headers", "Content-Type, X-Org-ID, X-Otter-Org")
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -86,6 +86,9 @@ func TestCORSMiddleware(t *testing.T) {
 
 	if allowHeaders := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(strings.ToLower(allowHeaders), "x-org-id") {
 		t.Fatalf("expected Access-Control-Allow-Headers to include X-Org-ID, got %q", allowHeaders)
+	}
+	if allowHeaders := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(strings.ToLower(allowHeaders), "x-otter-org") {
+		t.Fatalf("expected Access-Control-Allow-Headers to include X-Otter-Org, got %q", allowHeaders)
 	}
 }
 

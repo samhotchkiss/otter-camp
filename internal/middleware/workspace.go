@@ -340,6 +340,14 @@ func extractOrgSlugFromHost(rawHost string) string {
 	return slug
 }
 
+func extractOrgSlugFromHeader(rawSlug string) string {
+	slug := strings.TrimSpace(strings.ToLower(rawSlug))
+	if slug == "" || !orgSlugRegex.MatchString(slug) {
+		return ""
+	}
+	return slug
+}
+
 func isLocalHostForPathFallback(rawHost string) bool {
 	host, ok := normalizeHost(rawHost)
 	if !ok {
@@ -388,6 +396,15 @@ func resolveWorkspaceIDFromSlug(r *http.Request) string {
 	resolver := getWorkspaceSlugResolver()
 	if resolver == nil || r == nil {
 		return ""
+	}
+
+	if slug := extractOrgSlugFromHeader(r.Header.Get("X-Otter-Org")); slug != "" {
+		if workspaceID, ok := resolver(r.Context(), slug); ok {
+			workspaceID = strings.TrimSpace(workspaceID)
+			if uuidRegex.MatchString(workspaceID) {
+				return workspaceID
+			}
+		}
 	}
 
 	requestHost := requestHostForResolution(r)

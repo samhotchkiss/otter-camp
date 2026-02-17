@@ -42,7 +42,9 @@ Primary modules:
 - `docs/projects/how-issues-work.md`
 - `docs/projects/issue-flow.md`
 - `docs/projects/local-vs-bridge.md`
+- `docs/projects/hosted-wildcard-routing.md`
 
 ## Change Log
 
+- 2026-02-16: Added hosted wildcard routing runbook link for DNS/TLS and validation workflow (Spec 311).
 - 2026-02-16: Created canonical documentation file and migrated relevant legacy content.

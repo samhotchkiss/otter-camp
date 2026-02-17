@@ -171,6 +171,42 @@ func TestRequireWorkspace(t *testing.T) {
 		assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Body.String())
 	})
 
+	t.Run("resolves workspace from X-Otter-Org slug header", func(t *testing.T) {
+		SetWorkspaceSlugResolver(func(_ context.Context, slug string) (string, bool) {
+			if slug == "swh" {
+				return "550e8400-e29b-41d4-a716-446655440000", true
+			}
+			return "", false
+		})
+		t.Cleanup(func() { SetWorkspaceSlugResolver(nil) })
+
+		req := httptest.NewRequest(http.MethodGet, "http://api.otter.camp/test", nil)
+		req.Host = "api.otter.camp"
+		req.Header.Set("X-Otter-Org", "swh")
+		rec := httptest.NewRecorder()
+
+		RequireWorkspace(handler).ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Body.String())
+	})
+
+	t.Run("rejects invalid X-Otter-Org slug header", func(t *testing.T) {
+		SetWorkspaceSlugResolver(func(_ context.Context, slug string) (string, bool) {
+			return "", false
+		})
+		t.Cleanup(func() { SetWorkspaceSlugResolver(nil) })
+
+		req := httptest.NewRequest(http.MethodGet, "http://api.otter.camp/test", nil)
+		req.Host = "api.otter.camp"
+		req.Header.Set("X-Otter-Org", "bad slug")
+		rec := httptest.NewRecorder()
+
+		RequireWorkspace(handler).ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
 	t.Run("resolves workspace from path slug on localhost", func(t *testing.T) {
 		SetWorkspaceSlugResolver(func(_ context.Context, slug string) (string, bool) {
 			if slug == "swh" {
