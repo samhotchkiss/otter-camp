@@ -64,7 +64,7 @@ var (
 		}
 		resp, err := client.WhoAmI()
 		if err != nil {
-			return "", fmt.Errorf("invalid or expired token: %w", err)
+			return "", mapHostedInitTokenValidationError(err)
 		}
 		if !resp.Valid {
 			return "", errors.New("invalid or expired token")
@@ -86,6 +86,23 @@ var (
 	resolveInitMigrateDatabaseURL    = resolveMigrateDatabaseURL
 	runInitOpenClawMigration         = runMigrateFromOpenClaw
 )
+
+func mapHostedInitTokenValidationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if status, ok := ottercli.HTTPStatusCode(err); ok {
+		switch {
+		case status == 401 || status == 403:
+			return errors.New("invalid or expired token")
+		case status >= 500:
+			return fmt.Errorf("API server returned an error (%d); the service may be down", status)
+		default:
+			return fmt.Errorf("API server returned an invalid response (%d); verify --url and try again", status)
+		}
+	}
+	return fmt.Errorf("unable to validate token with API server: %w", err)
+}
 
 const (
 	initLocalDefaultAPIBaseURL = "http://localhost:4200"
