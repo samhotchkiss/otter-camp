@@ -4,21 +4,22 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
 )
 
 type OpenClawMigrationRunner struct {
-	DB                     *sql.DB
-	ProgressStore          *store.MigrationProgressStore
-	EllieBackfillRunner    OpenClawEllieBackfillRunner
-	EntitySynthesisRunner  OpenClawEntitySynthesisRunner
-	DedupRunner            OpenClawDedupRunner
-	TaxonomyRunner         OpenClawTaxonomyClassificationRunner
+	DB                        *sql.DB
+	ProgressStore             *store.MigrationProgressStore
+	EllieBackfillRunner       OpenClawEllieBackfillRunner
+	EntitySynthesisRunner     OpenClawEntitySynthesisRunner
+	DedupRunner               OpenClawDedupRunner
+	TaxonomyRunner            OpenClawTaxonomyClassificationRunner
 	ProjectDiscoveryRunner    OpenClawProjectDiscoveryRunner
 	ProjectDocsScanningRunner OpenClawProjectDocsScanningRunner
 	HistoryCheckpoint         int
-	OnHistoryCheckpoint    func(processed, total int)
+	OnHistoryCheckpoint       func(processed, total int)
 }
 
 type OpenClawEllieBackfillInput struct {
@@ -143,26 +144,26 @@ type RunOpenClawMigrationInput struct {
 }
 
 type RunOpenClawMigrationResult struct {
-	AgentImport      *OpenClawAgentImportResult
-	HistoryBackfill  *OpenClawHistoryBackfillResult
-	EllieBackfill    *OpenClawEllieBackfillResult
-	EntitySynthesis  *OpenClawEntitySynthesisResult
-	Dedup            *OpenClawDedupResult
-	TaxonomyPhase    *OpenClawTaxonomyClassificationResult
+	AgentImport         *OpenClawAgentImportResult
+	HistoryBackfill     *OpenClawHistoryBackfillResult
+	EllieBackfill       *OpenClawEllieBackfillResult
+	EntitySynthesis     *OpenClawEntitySynthesisResult
+	Dedup               *OpenClawDedupResult
+	TaxonomyPhase       *OpenClawTaxonomyClassificationResult
 	ProjectDiscovery    *OpenClawProjectDiscoveryResult
 	ProjectDocsScanning *OpenClawProjectDocsScanningResult
 	Summary             OpenClawMigrationSummaryReport
-	Paused           bool
+	Paused              bool
 }
 
 func NewOpenClawMigrationRunner(db *sql.DB) *OpenClawMigrationRunner {
 	return &OpenClawMigrationRunner{
-		DB:                     db,
-		ProgressStore:          store.NewMigrationProgressStore(db),
-		EllieBackfillRunner:    noopOpenClawEllieBackfillRunner{},
-		EntitySynthesisRunner:  noopOpenClawEntitySynthesisRunner{},
-		DedupRunner:            noopOpenClawDedupRunner{},
-		TaxonomyRunner:         noopOpenClawTaxonomyClassificationRunner{},
+		DB:                        db,
+		ProgressStore:             store.NewMigrationProgressStore(db),
+		EllieBackfillRunner:       noopOpenClawEllieBackfillRunner{},
+		EntitySynthesisRunner:     noopOpenClawEntitySynthesisRunner{},
+		DedupRunner:               noopOpenClawDedupRunner{},
+		TaxonomyRunner:            noopOpenClawTaxonomyClassificationRunner{},
 		ProjectDiscoveryRunner:    newOpenClawProjectDiscoveryRunner(db),
 		ProjectDocsScanningRunner: noopOpenClawProjectDocsScanningRunner{},
 		HistoryCheckpoint:         100,
@@ -510,6 +511,11 @@ func (r *OpenClawMigrationRunner) runHistoryBackfillPhase(
 		aggregated.ParticipantsAdded += batchResult.ParticipantsAdded
 		aggregated.MessagesInserted += batchResult.MessagesInserted
 		aggregated.EventsProcessed += batchResult.EventsProcessed
+		aggregated.EventsSkippedUnknownAgent += batchResult.EventsSkippedUnknownAgent
+		aggregated.SkippedUnknownAgentCounts = mergeOpenClawSkippedUnknownAgentCounts(
+			aggregated.SkippedUnknownAgentCounts,
+			batchResult.SkippedUnknownAgentCounts,
+		)
 
 		if _, advanceErr := r.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
 			OrgID:          input.OrgID,
@@ -543,6 +549,23 @@ func (r *OpenClawMigrationRunner) runHistoryBackfillPhase(
 	}
 
 	return &aggregated, false, nil
+}
+
+func mergeOpenClawSkippedUnknownAgentCounts(target map[string]int, source map[string]int) map[string]int {
+	if len(source) == 0 {
+		return target
+	}
+	if target == nil {
+		target = make(map[string]int, len(source))
+	}
+	for slug, count := range source {
+		trimmed := strings.TrimSpace(slug)
+		if trimmed == "" || count <= 0 {
+			continue
+		}
+		target[trimmed] += count
+	}
+	return target
 }
 
 func (r *OpenClawMigrationRunner) runEllieBackfillPhase(

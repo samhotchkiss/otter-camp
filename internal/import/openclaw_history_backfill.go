@@ -30,10 +30,12 @@ type OpenClawHistoryBackfillOptions struct {
 }
 
 type OpenClawHistoryBackfillResult struct {
-	RoomsCreated      int
-	ParticipantsAdded int
-	MessagesInserted  int
-	EventsProcessed   int
+	RoomsCreated              int
+	ParticipantsAdded         int
+	MessagesInserted          int
+	EventsProcessed           int
+	EventsSkippedUnknownAgent int
+	SkippedUnknownAgentCounts map[string]int
 }
 
 type openClawBackfillAgent struct {
@@ -130,6 +132,11 @@ func BackfillOpenClawHistory(
 		agent, ok := agentsBySlug[event.AgentSlug]
 		if !ok {
 			// Skip events for agents that weren't imported (e.g. codex)
+			result.EventsSkippedUnknownAgent++
+			if result.SkippedUnknownAgentCounts == nil {
+				result.SkippedUnknownAgentCounts = make(map[string]int)
+			}
+			result.SkippedUnknownAgentCounts[event.AgentSlug]++
 			continue
 		}
 		roomID, ok := roomByAgentSlug[event.AgentSlug]
@@ -192,11 +199,12 @@ func BackfillOpenClawHistory(
 	if opts.SummaryWriter != nil {
 		_, _ = fmt.Fprintf(
 			opts.SummaryWriter,
-			"OpenClaw history backfill: rooms_created=%d participants_added=%d messages_inserted=%d events_processed=%d\n",
+			"OpenClaw history backfill: rooms_created=%d participants_added=%d messages_inserted=%d events_processed=%d events_skipped_unknown_agent=%d\n",
 			result.RoomsCreated,
 			result.ParticipantsAdded,
 			result.MessagesInserted,
 			result.EventsProcessed,
+			result.EventsSkippedUnknownAgent,
 		)
 	}
 
@@ -238,19 +246,6 @@ func loadOpenClawBackfillAgents(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed reading imported agent rows: %w", err)
-	}
-
-	missing := make([]string, 0)
-	for _, slug := range slugs {
-		if _, ok := agentsBySlug[slug]; ok {
-			continue
-		}
-		missing = append(missing, slug)
-	}
-	if len(missing) > 0 {
-		// Warn but don't fail — agents like codex may have session files
-		// but aren't real agents in the OpenClaw config.
-		fmt.Printf("⚠️  Skipping history for agents not in DB: %s\n", strings.Join(missing, ", "))
 	}
 
 	return agentsBySlug, nil

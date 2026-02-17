@@ -81,8 +81,12 @@ func TestOpenClawMigrationSummaryReport(t *testing.T) {
 			ImportedAgents: 6,
 		},
 		HistoryBackfill: &OpenClawHistoryBackfillResult{
-			EventsProcessed:  42,
-			MessagesInserted: 39,
+			EventsProcessed:           42,
+			MessagesInserted:          39,
+			EventsSkippedUnknownAgent: 7,
+			SkippedUnknownAgentCounts: map[string]int{
+				"codex": 7,
+			},
 		},
 		EllieBackfill: &OpenClawEllieBackfillResult{
 			ProcessedMessages: 39,
@@ -105,6 +109,8 @@ func TestOpenClawMigrationSummaryReport(t *testing.T) {
 	require.Equal(t, 6, report.AgentImportProcessed)
 	require.Equal(t, 42, report.HistoryEventsProcessed)
 	require.Equal(t, 39, report.HistoryMessagesInserted)
+	require.Equal(t, 7, report.HistoryEventsSkipped)
+	require.Equal(t, map[string]int{"codex": 7}, report.HistorySkippedUnknownAgentCounts)
 	require.Equal(t, 39, report.MemoryExtractionProcessed)
 	require.Equal(t, 11, report.EntitySynthesisProcessed)
 	require.Equal(t, 12, report.MemoryDedupProcessed)
@@ -116,8 +122,15 @@ func TestOpenClawMigrationSummaryReport(t *testing.T) {
 
 	// Summary generation is deterministic and should not depend on wall-clock time.
 	reportAgain := BuildOpenClawMigrationSummaryReport(RunOpenClawMigrationResult{
-		AgentImport:      &OpenClawAgentImportResult{ImportedAgents: 6},
-		HistoryBackfill:  &OpenClawHistoryBackfillResult{EventsProcessed: 42, MessagesInserted: 39},
+		AgentImport: &OpenClawAgentImportResult{ImportedAgents: 6},
+		HistoryBackfill: &OpenClawHistoryBackfillResult{
+			EventsProcessed:           42,
+			MessagesInserted:          39,
+			EventsSkippedUnknownAgent: 7,
+			SkippedUnknownAgentCounts: map[string]int{
+				"codex": 7,
+			},
+		},
 		EllieBackfill:    &OpenClawEllieBackfillResult{ProcessedMessages: 39},
 		EntitySynthesis:  &OpenClawEntitySynthesisResult{ProcessedEntities: 11},
 		Dedup:            &OpenClawDedupResult{ProcessedClusters: 12},
