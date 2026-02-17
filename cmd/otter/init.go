@@ -77,6 +77,7 @@ var (
 	ensureInitOpenClawRequiredAgents = importer.EnsureOpenClawRequiredAgents
 	importInitOpenClawIdentities     = importer.ImportOpenClawAgentIdentities
 	inferInitOpenClawProjects        = importer.InferOpenClawProjectCandidates
+	restartInitOpenClawGateway       = restartOpenClawGateway
 	resolveInitRepoRoot              = gitRepoRoot
 	writeInitBridgeEnv               = writeBridgeEnvFile
 	startInitBridge                  = startBridgeProcess
@@ -194,11 +195,15 @@ func runHostedInit(opts initOptions, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return runInitImportAndBridgeWithOptions(nil, out, client, cfg, initImportFlowOptions{
+	if err := runInitImportAndBridgeWithOptions(nil, out, client, cfg, initImportFlowOptions{
 		ForceImport:      true,
 		ForceStartBridge: true,
 		ProgressPrefix:   "Hosted",
-	})
+	}); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "Hosted setup complete.")
+	return nil
 }
 
 func deriveHostedAPIBaseURL(rawURL string) (string, error) {
@@ -381,10 +386,15 @@ func runInitImportAndBridgeWithOptions(
 		fmt.Fprintf(out, "WARNING: OpenClaw config update failed: %v\n", ensureErr)
 	case ensureResult.Updated:
 		if ensureResult.AddedElephant {
-			fmt.Fprintln(out, "Added Ellie (Elephant) to OpenClaw config. Restart OpenClaw when ready to activate.")
+			fmt.Fprintln(out, "Added Ellie (Elephant) to OpenClaw config.")
 		}
 		if ensureResult.AddedChameleon {
-			fmt.Fprintln(out, "Added Chameleon to OpenClaw config. Restart OpenClaw when ready to activate.")
+			fmt.Fprintln(out, "Added Chameleon to OpenClaw config.")
+		}
+		if err := restartInitOpenClawGateway(out); err != nil {
+			fmt.Fprintf(out, "WARNING: OpenClaw restart failed: %v\n", err)
+		} else {
+			fmt.Fprintln(out, "OpenClaw restarted to activate new agents.")
 		}
 	default:
 		fmt.Fprintln(out, "Required OpenClaw agents already present. No config changes made.")
@@ -570,6 +580,13 @@ func writeBridgeEnvFile(repoRoot string, values map[string]string) (string, erro
 		return "", err
 	}
 	return path, nil
+}
+
+func restartOpenClawGateway(out io.Writer) error {
+	cmd := exec.Command("openclaw", "gateway", "restart")
+	cmd.Stdout = out
+	cmd.Stderr = out
+	return cmd.Run()
 }
 
 func startBridgeProcess(repoRoot string, out io.Writer) error {
