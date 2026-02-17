@@ -173,6 +173,7 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.True(t, result.Updated)
 		require.True(t, result.AddedElephant)
 		require.True(t, result.AddedChameleon)
+		require.Equal(t, []string{"channels", "thinking"}, result.DroppedUnknownKeys)
 
 		updatedRaw, err := os.ReadFile(configPath)
 		require.NoError(t, err)
@@ -203,10 +204,8 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.Equal(t, "Ellie", memoryAgent["name"])
 		require.Equal(t, "anthropic/claude-sonnet-4-20250514", memoryAgent["model"])
 		require.Equal(t, "~/.openclaw/workspace-elephant", memoryAgent["workspace"])
-		require.Equal(t, "low", memoryAgent["thinking"])
-		channels, ok := memoryAgent["channels"].([]any)
-		require.True(t, ok)
-		require.Len(t, channels, 0)
+		require.NotContains(t, memoryAgent, "thinking")
+		require.NotContains(t, memoryAgent, "channels")
 
 		chameleon := entryByID["chameleon"]
 		require.Equal(t, "Chameleon", chameleon["name"])
@@ -231,6 +230,7 @@ func TestEnsureOpenClawRequiredAgents(t *testing.T) {
 		require.False(t, second.Updated)
 		require.False(t, second.AddedElephant)
 		require.False(t, second.AddedChameleon)
+		require.Empty(t, second.DroppedUnknownKeys)
 	})
 
 	t.Run("can add only memory agent when chameleon is disabled", func(t *testing.T) {

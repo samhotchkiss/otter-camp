@@ -62,6 +62,7 @@ type EnsureOpenClawRequiredAgentsResult struct {
 	AddedElephant      bool
 	AddedChameleon     bool
 	MemoryWorkspaceDir string
+	DroppedUnknownKeys []string
 }
 
 type openClawConfigFile struct {
@@ -108,6 +109,13 @@ var elephantStateTemplate = map[string]any{
 	},
 }
 
+var openClawGeneratedAgentAllowedKeys = map[string]struct{}{
+	"id":        {},
+	"name":      {},
+	"workspace": {},
+	"model":     {},
+}
+
 func EnsureOpenClawRequiredAgents(
 	install *OpenClawInstallation,
 	opts EnsureOpenClawRequiredAgentsOptions,
@@ -135,42 +143,52 @@ func EnsureOpenClawRequiredAgents(
 	switch agents := root["agents"].(type) {
 	case map[string]any:
 		if list, ok := agents["list"].([]any); ok {
-			updatedList, addedMemory, addedChameleon := ensureListAgentSlots(list, opts)
+			updatedList, addedMemory, addedChameleon, droppedUnknown := ensureListAgentSlots(list, opts)
 			agents["list"] = updatedList
 			result.AddedElephant = addedMemory
 			result.AddedChameleon = addedChameleon
 			result.Updated = addedMemory || addedChameleon
+			result.DroppedUnknownKeys = append(result.DroppedUnknownKeys, droppedUnknown...)
 		} else {
 			addedMemory := false
+			droppedUnknown := make([]string, 0, 2)
 			if !mapHasAnyAgentID(agents, "elephant", "ellie") {
-				addedMemory = ensureMapAgentSlot(agents, "elephant", buildElephantSlot())
+				sanitized, dropped := sanitizeGeneratedOpenClawAgentSlot(buildElephantSlot())
+				droppedUnknown = append(droppedUnknown, dropped...)
+				addedMemory = ensureMapAgentSlot(agents, "elephant", sanitized)
 			}
 			addedChameleon := false
 			if opts.IncludeChameleon {
-				addedChameleon = ensureMapAgentSlot(agents, "chameleon", buildChameleonSlot())
+				sanitized, dropped := sanitizeGeneratedOpenClawAgentSlot(buildChameleonSlot())
+				droppedUnknown = append(droppedUnknown, dropped...)
+				addedChameleon = ensureMapAgentSlot(agents, "chameleon", sanitized)
 			}
 			result.AddedElephant = addedMemory
 			result.AddedChameleon = addedChameleon
 			result.Updated = addedMemory || addedChameleon
+			result.DroppedUnknownKeys = append(result.DroppedUnknownKeys, droppedUnknown...)
 		}
 		root["agents"] = agents
 	case []any:
-		updated, addedMemory, addedChameleon := ensureListAgentSlots(agents, opts)
+		updated, addedMemory, addedChameleon, droppedUnknown := ensureListAgentSlots(agents, opts)
 		result.Updated = addedMemory || addedChameleon
 		result.AddedElephant = addedMemory
 		result.AddedChameleon = addedChameleon
+		result.DroppedUnknownKeys = append(result.DroppedUnknownKeys, droppedUnknown...)
 		root["agents"] = updated
 	default:
 		agentsObj := map[string]any{
 			"list": []any{},
 		}
-		updated, addedMemory, addedChameleon := ensureListAgentSlots(agentsObj["list"].([]any), opts)
+		updated, addedMemory, addedChameleon, droppedUnknown := ensureListAgentSlots(agentsObj["list"].([]any), opts)
 		agentsObj["list"] = updated
 		root["agents"] = agentsObj
 		result.Updated = addedMemory || addedChameleon
 		result.AddedElephant = addedMemory
 		result.AddedChameleon = addedChameleon
+		result.DroppedUnknownKeys = append(result.DroppedUnknownKeys, droppedUnknown...)
 	}
+	result.DroppedUnknownKeys = normalizeDroppedUnknownKeys(result.DroppedUnknownKeys)
 
 	if result.AddedElephant {
 		workspaceDir, err := ensureElephantWorkspace(install.RootDir)
@@ -198,17 +216,21 @@ func EnsureOpenClawRequiredAgents(
 func ensureListAgentSlots(
 	agents []any,
 	opts EnsureOpenClawRequiredAgentsOptions,
-) (updated []any, addedMemory bool, addedChameleon bool) {
+) (updated []any, addedMemory bool, addedChameleon bool, droppedUnknown []string) {
 	updated = append([]any{}, agents...)
 	if !listHasAnyAgentID(updated, "elephant", "ellie") {
-		updated = append(updated, buildElephantSlot())
+		sanitized, dropped := sanitizeGeneratedOpenClawAgentSlot(buildElephantSlot())
+		updated = append(updated, sanitized)
+		droppedUnknown = append(droppedUnknown, dropped...)
 		addedMemory = true
 	}
 	if opts.IncludeChameleon && !listHasAgentID(updated, "chameleon") {
-		updated = append(updated, buildChameleonSlot())
+		sanitized, dropped := sanitizeGeneratedOpenClawAgentSlot(buildChameleonSlot())
+		updated = append(updated, sanitized)
+		droppedUnknown = append(droppedUnknown, dropped...)
 		addedChameleon = true
 	}
-	return updated, addedMemory, addedChameleon
+	return updated, addedMemory, addedChameleon, normalizeDroppedUnknownKeys(droppedUnknown)
 }
 
 func listHasAgentID(agents []any, id string) bool {
@@ -299,6 +321,44 @@ func buildChameleonSlot() map[string]any {
 		"name":      "Chameleon",
 		"workspace": "~/.openclaw/workspace-chameleon",
 	}
+}
+
+func sanitizeGeneratedOpenClawAgentSlot(slot map[string]any) (map[string]any, []string) {
+	sanitized := make(map[string]any, len(slot))
+	dropped := make([]string, 0)
+	for key, value := range slot {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		if _, ok := openClawGeneratedAgentAllowedKeys[normalizedKey]; !ok {
+			dropped = append(dropped, normalizedKey)
+			continue
+		}
+		sanitized[normalizedKey] = value
+	}
+	return sanitized, normalizeDroppedUnknownKeys(dropped)
+}
+
+func normalizeDroppedUnknownKeys(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	sort.Strings(normalized)
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func ensureElephantWorkspace(rootDir string) (string, error) {

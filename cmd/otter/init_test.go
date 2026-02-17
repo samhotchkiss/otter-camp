@@ -592,11 +592,56 @@ func TestInitAddsRequiredOpenClawAgentsToConfig(t *testing.T) {
 	}
 
 	output := out.String()
-	if !strings.Contains(output, "Added Ellie (Elephant) to OpenClaw config. Restart OpenClaw when ready to activate.") {
+	if !strings.Contains(output, "Added Ellie (Elephant) to OpenClaw config.") {
 		t.Fatalf("expected elephant added message, got %q", output)
 	}
-	if !strings.Contains(output, "Added Chameleon to OpenClaw config. Restart OpenClaw when ready to activate.") {
+	if !strings.Contains(output, "Added Chameleon to OpenClaw config.") {
 		t.Fatalf("expected chameleon added message, got %q", output)
+	}
+	if !strings.Contains(output, "OpenClaw restarted to activate new agents.") {
+		t.Fatalf("expected restart message, got %q", output)
+	}
+	if !state.restartCalled {
+		t.Fatalf("expected OpenClaw gateway restart to be attempted")
+	}
+}
+
+func TestInitWarnsWhenUnsupportedOpenClawKeysAreSkipped(t *testing.T) {
+	client := &fakeInitClient{
+		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
+			OrgID: "org-bootstrap",
+			Token: "oc_sess_bootstrap",
+		},
+	}
+	state := stubInitDeps(t, ottercli.Config{}, client, nil)
+	state.detectInstall = &importer.OpenClawInstallation{
+		RootDir:    "/Users/sam/.openclaw",
+		ConfigPath: "/Users/sam/.openclaw/openclaw.json",
+		Agents: []importer.OpenClawAgentWorkspace{
+			{ID: "main", WorkspaceDir: "/Users/sam/.openclaw/workspaces/main"},
+		},
+	}
+	state.detectErr = nil
+	state.ensureResult = importer.EnsureOpenClawRequiredAgentsResult{
+		Updated:            true,
+		AddedElephant:      true,
+		AddedChameleon:     true,
+		DroppedUnknownKeys: []string{"channels", "thinking"},
+	}
+
+	var out bytes.Buffer
+	err := runInitCommand(
+		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
+		strings.NewReader("n\nn\n"),
+		&out,
+	)
+	if err != nil {
+		t.Fatalf("runInitCommand() error = %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "WARNING: OpenClaw config skipped unsupported agent keys: channels, thinking") {
+		t.Fatalf("expected skipped-key warning, got %q", output)
 	}
 }
 
@@ -699,6 +744,9 @@ type initStubState struct {
 
 	bridgeStarted  bool
 	bridgeStartErr error
+
+	restartCalled bool
+	restartErr    error
 }
 
 func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient, saveErr error) *initStubState {
@@ -718,6 +766,7 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 	origEnsure := ensureInitOpenClawRequiredAgents
 	origImport := importInitOpenClawIdentities
 	origInfer := inferInitOpenClawProjects
+	origRestartGateway := restartInitOpenClawGateway
 	origRepoRoot := resolveInitRepoRoot
 	origWriteBridge := writeInitBridgeEnv
 	origStartBridge := startInitBridge
@@ -763,6 +812,10 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 	inferInitOpenClawProjects = func(input importer.OpenClawProjectImportInput) []importer.OpenClawProjectCandidate {
 		return state.projects
 	}
+	restartInitOpenClawGateway = func(out io.Writer) error {
+		state.restartCalled = true
+		return state.restartErr
+	}
 	resolveInitRepoRoot = func() (string, error) {
 		return state.repoRoot, nil
 	}
@@ -788,6 +841,7 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 		ensureInitOpenClawRequiredAgents = origEnsure
 		importInitOpenClawIdentities = origImport
 		inferInitOpenClawProjects = origInfer
+		restartInitOpenClawGateway = origRestartGateway
 		resolveInitRepoRoot = origRepoRoot
 		writeInitBridgeEnv = origWriteBridge
 		startInitBridge = origStartBridge
