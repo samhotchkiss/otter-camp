@@ -323,6 +323,20 @@ func TestBuildBridgeEnvValuesUsesDetectedGatewayPort(t *testing.T) {
 	}
 }
 
+func TestStartBridgeProcessCommandSourcesBridgeEnv(t *testing.T) {
+	repoRoot := "/tmp/otter camp/repo"
+	command := buildInitBridgeStartCommand(repoRoot)
+	if !strings.Contains(command, "set -a && . bridge/.env && set +a") {
+		t.Fatalf("expected bridge env sourcing in command, got %q", command)
+	}
+	if !strings.Contains(command, "npx tsx bridge/openclaw-bridge.ts --continuous") {
+		t.Fatalf("expected bridge start command, got %q", command)
+	}
+	if !strings.Contains(command, "cd "+shellSingleQuote(repoRoot)) {
+		t.Fatalf("expected shell-quoted repo root, got %q", command)
+	}
+}
+
 func TestInitFailsWhenGatewayPortCannotBeDetermined(t *testing.T) {
 	client := &fakeInitClient{
 		bootstrapResponse: ottercli.OnboardingBootstrapResponse{
