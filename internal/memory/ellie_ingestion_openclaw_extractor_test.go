@@ -161,3 +161,32 @@ func TestEllieIngestionOpenClawExtractorReturnsErrorWhenGatewayCallFails(t *test
 	})
 	require.ErrorContains(t, err, "openclaw gateway agent call failed")
 }
+
+func TestNewEllieIngestionOpenClawExtractorFromEnv(t *testing.T) {
+	t.Setenv("ELLIE_INGESTION_OPENCLAW_BINARY", "openclaw-custom")
+	t.Setenv("ELLIE_INGESTION_OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:19001")
+	t.Setenv("ELLIE_INGESTION_OPENCLAW_GATEWAY_TOKEN", "")
+	t.Setenv("OPENCLAW_TOKEN", "fallback-token")
+	t.Setenv("ELLIE_INGESTION_OPENCLAW_AGENT", "Elephant")
+	t.Setenv("ELLIE_INGESTION_OPENCLAW_SESSION_NAMESPACE", "Ellie Ingestion")
+	t.Setenv("ELLIE_INGESTION_OPENCLAW_EXPECT_MODEL_CONTAINS", "haiku")
+	t.Setenv("ELLIE_INGESTION_OPENCLAW_TIMEOUT", "45s")
+	t.Setenv("ELLIE_INGESTION_OPENCLAW_MAX_CANDIDATE_CHARS", "512")
+
+	extractor, err := NewEllieIngestionOpenClawExtractorFromEnv()
+	require.NoError(t, err)
+	require.Equal(t, "openclaw-custom", extractor.openClawBinary)
+	require.Equal(t, "ws://127.0.0.1:19001", extractor.gatewayURL)
+	require.Equal(t, "fallback-token", extractor.gatewayToken)
+	require.Equal(t, "elephant", extractor.agentID)
+	require.Equal(t, "ellie-ingestion", extractor.sessionNamespace)
+	require.Equal(t, "haiku", extractor.expectedModelContains)
+	require.Equal(t, 45*time.Second, extractor.gatewayCallTimeout)
+	require.Equal(t, 512, extractor.maxResponseCandidateLength)
+}
+
+func TestNewEllieIngestionOpenClawExtractorFromEnvRejectsInvalidTimeout(t *testing.T) {
+	t.Setenv("ELLIE_INGESTION_OPENCLAW_TIMEOUT", "not-a-duration")
+	_, err := NewEllieIngestionOpenClawExtractorFromEnv()
+	require.ErrorContains(t, err, "ELLIE_INGESTION_OPENCLAW_TIMEOUT")
+}

@@ -74,12 +74,22 @@ func main() {
 		if err != nil {
 			log.Printf("⚠️  Ellie ingestion worker disabled; database unavailable: %v", err)
 		} else {
+			var llmExtractor memory.EllieIngestionLLMExtractor
+			openClawExtractor, extractorErr := memory.NewEllieIngestionOpenClawExtractorFromEnv()
+			if extractorErr != nil {
+				log.Printf("⚠️  Ellie ingestion OpenClaw extractor disabled; init failed: %v", extractorErr)
+			} else {
+				llmExtractor = openClawExtractor
+				log.Printf("✅ Ellie ingestion OpenClaw extractor enabled")
+			}
+
 			worker := memory.NewEllieIngestionWorker(
 				store.NewEllieIngestionStore(db),
 				memory.EllieIngestionWorkerConfig{
-					Interval:   cfg.EllieIngestion.Interval,
-					BatchSize:  cfg.EllieIngestion.BatchSize,
-					MaxPerRoom: cfg.EllieIngestion.MaxPerRoom,
+					Interval:     cfg.EllieIngestion.Interval,
+					BatchSize:    cfg.EllieIngestion.BatchSize,
+					MaxPerRoom:   cfg.EllieIngestion.MaxPerRoom,
+					LLMExtractor: llmExtractor,
 				},
 			)
 			startWorker(worker.Start)
