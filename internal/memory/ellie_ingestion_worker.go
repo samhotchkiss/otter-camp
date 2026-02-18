@@ -796,7 +796,9 @@ func normalizeEllieLLMExtractedCandidate(
 	score, decision := ellieIngestionStage2Decision(kind, title, content, metadata, window)
 	metadata["accept_score"] = score
 	metadata["accept_decision"] = decision
-	if decision != "accept" {
+	// Keep review-scored candidates to match local high-recall behavior.
+	// Only hard rejects are discarded here.
+	if decision == "reject" {
 		return store.CreateEllieExtractedMemoryInput{}, false
 	}
 
@@ -1005,19 +1007,22 @@ func ellieIngestionStage2EvidenceScore(metadata map[string]any, window []store.E
 func ellieIngestionIsArtifactMessage(msg store.EllieIngestionMessage) bool {
 	body := strings.TrimSpace(msg.Body)
 	lower := strings.ToLower(body)
+	senderType := strings.TrimSpace(strings.ToLower(msg.SenderType))
 	if strings.HasPrefix(body, "[Queued") || strings.Contains(body, "Queued #") {
 		return true
 	}
-	if strings.TrimSpace(strings.ToLower(msg.SenderType)) == "system" {
+	if senderType == "system" {
 		return true
 	}
 	if strings.Contains(lower, "heartbeat") || strings.Contains(lower, "no_reply") {
 		return true
 	}
-	if strings.HasPrefix(body, "System:") {
+	// Slack bridge can wrap human messages as "System: [ts] Slack message ...".
+	// Treat these as artifacts only when the sender itself is system.
+	if strings.HasPrefix(body, "System:") && senderType == "system" {
 		return true
 	}
-	if strings.HasPrefix(body, "Tool ") && strings.Contains(lower, "result:") {
+	if strings.HasPrefix(body, "Tool ") && strings.Contains(lower, "result:") && senderType == "system" {
 		return true
 	}
 	return false
