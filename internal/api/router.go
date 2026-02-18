@@ -114,6 +114,7 @@ func NewRouter() http.Handler {
 	agentActivityHandler := &AgentActivityHandler{DB: db, Hub: hub}
 	conversationTokenHandler := &ConversationTokenHandler{}
 	waitlistHandler := NewWaitlistHandler(db)
+	adminEllieIngestionHandler := &AdminEllieIngestionHandler{}
 	// Settings uses standalone handler functions (no struct needed)
 	pipelineRolesHandler := &PipelineRolesHandler{}
 	deployConfigHandler := &DeployConfigHandler{}
@@ -193,6 +194,7 @@ func NewRouter() http.Handler {
 		memoryHandler.DB = db
 		memoryEventsHandler.Store = store.NewMemoryEventsStore(db)
 		complianceRulesHandler.Store = store.NewComplianceRuleStore(db)
+		adminEllieIngestionHandler.Store = store.NewEllieIngestionStore(db)
 	}
 
 	if orgStore != nil {
@@ -480,6 +482,7 @@ func NewRouter() http.Handler {
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/release-gate", adminConfigHandler.ReleaseGate)
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/cutover", adminConfigHandler.Cutover)
 		r.With(RequireCapability(db, CapabilityAdminConfigManage)).Post("/admin/config/rollback", adminConfigHandler.Rollback)
+		r.With(middleware.RequireWorkspace).Get("/admin/ellie/ingestion/coverage", adminEllieIngestionHandler.GetCoverage)
 	})
 
 	// WebSocket handlers

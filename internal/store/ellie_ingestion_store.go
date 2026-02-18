@@ -26,8 +26,10 @@ type EllieIngestionMessage struct {
 	ID             string
 	OrgID          string
 	RoomID         string
+	SenderType     string
 	Body           string
 	CreatedAt      time.Time
+	TokenCount     int
 	ConversationID *string
 }
 
@@ -36,6 +38,47 @@ type UpsertEllieRoomCursorInput struct {
 	RoomID               string
 	LastMessageID        string
 	LastMessageCreatedAt time.Time
+}
+
+type CreateEllieIngestionWindowRunInput struct {
+	OrgID            string
+	RoomID           string
+	WindowStartAt    time.Time
+	WindowEndAt      time.Time
+	FirstMessageID   *string
+	LastMessageID    *string
+	MessageCount     int
+	TokenCount       int
+	LLMUsed          bool
+	LLMModel         string
+	LLMTraceID       string
+	LLMAttempts      int
+	OK               bool
+	Error            string
+	DurationMS       int
+	InsertedTotal    int
+	InsertedMemories int
+	InsertedProjects int
+	InsertedIssues   int
+}
+
+type EllieIngestionCoverageDay struct {
+	Day               time.Time  `json:"day"`
+	TotalMessages     int        `json:"totalMessages"`
+	ProcessedMessages int        `json:"processedMessages"`
+	Windows           int        `json:"windows"`
+	WindowsOK         int        `json:"windowsOK"`
+	WindowsFailed     int        `json:"windowsFailed"`
+	Retries           int        `json:"retries"`
+	InsertedTotal     int        `json:"insertedTotal"`
+	InsertedMemories  int        `json:"insertedMemories"`
+	InsertedProjects  int        `json:"insertedProjects"`
+	InsertedIssues    int        `json:"insertedIssues"`
+	LastOKAt          *time.Time `json:"lastOKAt,omitempty"`
+}
+
+type EllieIngestionCoverageSummary struct {
+	ExtractedUpTo *time.Time `json:"extractedUpTo,omitempty"`
 }
 
 var validEllieMemoryKinds = map[string]struct{}{
@@ -329,7 +372,14 @@ func (s *EllieIngestionStore) ListRoomMessagesSince(
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, org_id, room_id, body, created_at, conversation_id::text
+		`SELECT id,
+		        org_id,
+		        room_id,
+		        sender_type,
+		        body,
+		        created_at,
+		        COALESCE(token_count, 0)::INT,
+		        conversation_id::text
 		 FROM chat_messages
 		 `+where+`
 		 ORDER BY created_at ASC, id ASC
@@ -347,7 +397,16 @@ func (s *EllieIngestionStore) ListRoomMessagesSince(
 			row            EllieIngestionMessage
 			conversationID sql.NullString
 		)
-		if err := rows.Scan(&row.ID, &row.OrgID, &row.RoomID, &row.Body, &row.CreatedAt, &conversationID); err != nil {
+		if err := rows.Scan(
+			&row.ID,
+			&row.OrgID,
+			&row.RoomID,
+			&row.SenderType,
+			&row.Body,
+			&row.CreatedAt,
+			&row.TokenCount,
+			&conversationID,
+		); err != nil {
 			return nil, fmt.Errorf("failed to scan ellie room message: %w", err)
 		}
 		if conversationID.Valid {
@@ -629,6 +688,291 @@ func (s *EllieIngestionStore) UpsertRoomCursor(ctx context.Context, input Upsert
 		return fmt.Errorf("failed to upsert ellie room cursor: %w", err)
 	}
 	return nil
+}
+
+func (s *EllieIngestionStore) CreateWindowRun(ctx context.Context, input CreateEllieIngestionWindowRunInput) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("ellie ingestion store is not configured")
+	}
+
+	orgID := strings.TrimSpace(input.OrgID)
+	roomID := strings.TrimSpace(input.RoomID)
+	if !uuidRegex.MatchString(orgID) {
+		return fmt.Errorf("invalid org_id")
+	}
+	if !uuidRegex.MatchString(roomID) {
+		return fmt.Errorf("invalid room_id")
+	}
+
+	startAt := input.WindowStartAt.UTC()
+	endAt := input.WindowEndAt.UTC()
+	if startAt.IsZero() || endAt.IsZero() {
+		return fmt.Errorf("window_start_at and window_end_at are required")
+	}
+
+	messageCount := input.MessageCount
+	if messageCount < 0 {
+		messageCount = 0
+	}
+	tokenCount := input.TokenCount
+	if tokenCount < 0 {
+		tokenCount = 0
+	}
+
+	var firstMessageID any
+	if input.FirstMessageID != nil && strings.TrimSpace(*input.FirstMessageID) != "" {
+		trimmed := strings.TrimSpace(*input.FirstMessageID)
+		if uuidRegex.MatchString(trimmed) {
+			firstMessageID = trimmed
+		}
+	}
+	var lastMessageID any
+	if input.LastMessageID != nil && strings.TrimSpace(*input.LastMessageID) != "" {
+		trimmed := strings.TrimSpace(*input.LastMessageID)
+		if uuidRegex.MatchString(trimmed) {
+			lastMessageID = trimmed
+		}
+	}
+
+	llmModel := strings.TrimSpace(input.LLMModel)
+	if llmModel == "" {
+		llmModel = ""
+	}
+	llmTraceID := strings.TrimSpace(input.LLMTraceID)
+	if llmTraceID == "" {
+		llmTraceID = ""
+	}
+
+	llmAttempts := input.LLMAttempts
+	if llmAttempts < 0 {
+		llmAttempts = 0
+	}
+
+	durationMS := input.DurationMS
+	if durationMS < 0 {
+		durationMS = 0
+	}
+
+	insertedTotal := input.InsertedTotal
+	if insertedTotal < 0 {
+		insertedTotal = 0
+	}
+	insertedMemories := input.InsertedMemories
+	if insertedMemories < 0 {
+		insertedMemories = 0
+	}
+	insertedProjects := input.InsertedProjects
+	if insertedProjects < 0 {
+		insertedProjects = 0
+	}
+	insertedIssues := input.InsertedIssues
+	if insertedIssues < 0 {
+		insertedIssues = 0
+	}
+
+	errText := strings.TrimSpace(input.Error)
+	if len(errText) > 2000 {
+		errText = errText[:2000]
+	}
+
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO ellie_ingestion_window_runs (
+			org_id,
+			room_id,
+			window_start_at,
+			window_end_at,
+			first_message_id,
+			last_message_id,
+			message_count,
+			token_count,
+			llm_used,
+			llm_model,
+			llm_trace_id,
+			llm_attempts,
+			ok,
+			error,
+			duration_ms,
+			inserted_total,
+			inserted_memories,
+			inserted_projects,
+			inserted_issues
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8,
+			$9, NULLIF($10, ''), NULLIF($11, ''), $12,
+			$13, NULLIF($14, ''), $15,
+			$16, $17, $18, $19
+		)`,
+		orgID,
+		roomID,
+		startAt,
+		endAt,
+		firstMessageID,
+		lastMessageID,
+		messageCount,
+		tokenCount,
+		input.LLMUsed,
+		llmModel,
+		llmTraceID,
+		llmAttempts,
+		input.OK,
+		errText,
+		durationMS,
+		insertedTotal,
+		insertedMemories,
+		insertedProjects,
+		insertedIssues,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert ellie ingestion window run: %w", err)
+	}
+	return nil
+}
+
+func (s *EllieIngestionStore) ListCoverageByDay(ctx context.Context, orgID string, days int) ([]EllieIngestionCoverageDay, EllieIngestionCoverageSummary, error) {
+	if s == nil || s.db == nil {
+		return nil, EllieIngestionCoverageSummary{}, fmt.Errorf("ellie ingestion store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, EllieIngestionCoverageSummary{}, fmt.Errorf("invalid org_id")
+	}
+	if days <= 0 {
+		days = 30
+	}
+	if days > 365 {
+		days = 365
+	}
+	startDay := time.Now().UTC().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`WITH msg_days AS (
+		     SELECT (created_at AT TIME ZONE 'UTC')::date AS day,
+		            COUNT(*)::int AS total_messages
+		     FROM chat_messages
+		     WHERE org_id = $1
+		       AND (created_at AT TIME ZONE 'UTC')::date >= $2::date
+		     GROUP BY day
+		 ),
+		 run_days AS (
+		     SELECT (window_end_at AT TIME ZONE 'UTC')::date AS day,
+		            SUM(message_count)::int AS processed_messages,
+		            COUNT(*)::int AS windows,
+		            SUM(CASE WHEN ok THEN 1 ELSE 0 END)::int AS windows_ok,
+		            SUM(CASE WHEN ok THEN 0 ELSE 1 END)::int AS windows_failed,
+		            SUM(GREATEST(llm_attempts - 1, 0))::int AS retries,
+		            SUM(inserted_total)::int AS inserted_total,
+		            SUM(inserted_memories)::int AS inserted_memories,
+		            SUM(inserted_projects)::int AS inserted_projects,
+		            SUM(inserted_issues)::int AS inserted_issues,
+		            MAX(window_end_at) FILTER (WHERE ok) AS last_ok_at
+		     FROM ellie_ingestion_window_runs
+		     WHERE org_id = $1
+		       AND (window_end_at AT TIME ZONE 'UTC')::date >= $2::date
+		     GROUP BY day
+		 ),
+		 days AS (
+		     SELECT day FROM msg_days
+		     UNION
+		     SELECT day FROM run_days
+		 )
+		 SELECT d.day,
+		        COALESCE(m.total_messages, 0)::int,
+		        COALESCE(r.processed_messages, 0)::int,
+		        COALESCE(r.windows, 0)::int,
+		        COALESCE(r.windows_ok, 0)::int,
+		        COALESCE(r.windows_failed, 0)::int,
+		        COALESCE(r.retries, 0)::int,
+		        COALESCE(r.inserted_total, 0)::int,
+		        COALESCE(r.inserted_memories, 0)::int,
+		        COALESCE(r.inserted_projects, 0)::int,
+		        COALESCE(r.inserted_issues, 0)::int,
+		        r.last_ok_at
+		 FROM days d
+		 LEFT JOIN msg_days m ON m.day = d.day
+		 LEFT JOIN run_days r ON r.day = d.day
+		 ORDER BY d.day ASC`,
+		orgID,
+		startDay,
+	)
+	if err != nil {
+		return nil, EllieIngestionCoverageSummary{}, fmt.Errorf("failed to list ellie ingestion coverage: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]EllieIngestionCoverageDay, 0, days)
+	for rows.Next() {
+		var (
+			day               time.Time
+			totalMessages     int
+			processedMessages int
+			windows           int
+			windowsOK         int
+			windowsFailed     int
+			retries           int
+			insertedTotal     int
+			insertedMemories  int
+			insertedProjects  int
+			insertedIssues    int
+			lastOKAt          sql.NullTime
+		)
+		if err := rows.Scan(
+			&day,
+			&totalMessages,
+			&processedMessages,
+			&windows,
+			&windowsOK,
+			&windowsFailed,
+			&retries,
+			&insertedTotal,
+			&insertedMemories,
+			&insertedProjects,
+			&insertedIssues,
+			&lastOKAt,
+		); err != nil {
+			return nil, EllieIngestionCoverageSummary{}, fmt.Errorf("failed to scan ellie ingestion coverage: %w", err)
+		}
+		row := EllieIngestionCoverageDay{
+			Day:               day,
+			TotalMessages:     totalMessages,
+			ProcessedMessages: processedMessages,
+			Windows:           windows,
+			WindowsOK:         windowsOK,
+			WindowsFailed:     windowsFailed,
+			Retries:           retries,
+			InsertedTotal:     insertedTotal,
+			InsertedMemories:  insertedMemories,
+			InsertedProjects:  insertedProjects,
+			InsertedIssues:    insertedIssues,
+		}
+		if lastOKAt.Valid {
+			v := lastOKAt.Time.UTC()
+			row.LastOKAt = &v
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, EllieIngestionCoverageSummary{}, fmt.Errorf("failed reading ellie ingestion coverage: %w", err)
+	}
+
+	var extractedUpTo sql.NullTime
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT MAX(window_end_at) FILTER (WHERE ok)
+		 FROM ellie_ingestion_window_runs
+		 WHERE org_id = $1`,
+		orgID,
+	).Scan(&extractedUpTo); err != nil {
+		return out, EllieIngestionCoverageSummary{}, fmt.Errorf("failed to read ellie ingestion extracted_up_to: %w", err)
+	}
+	var summary EllieIngestionCoverageSummary
+	if extractedUpTo.Valid {
+		v := extractedUpTo.Time.UTC()
+		summary.ExtractedUpTo = &v
+	}
+
+	return out, summary, nil
 }
 
 func (s *EllieIngestionStore) HasComplianceFingerprint(ctx context.Context, orgID, fingerprint string) (bool, error) {

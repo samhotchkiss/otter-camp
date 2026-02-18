@@ -3,14 +3,17 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 const (
@@ -36,6 +39,7 @@ type EllieIngestionStore interface {
 	GetRoomCursor(ctx context.Context, orgID, roomID string) (*store.EllieRoomCursor, error)
 	ListRoomMessagesSince(ctx context.Context, orgID, roomID string, afterCreatedAt *time.Time, afterMessageID *string, limit int) ([]store.EllieIngestionMessage, error)
 	InsertExtractedMemory(ctx context.Context, input store.CreateEllieExtractedMemoryInput) (bool, error)
+	CreateWindowRun(ctx context.Context, input store.CreateEllieIngestionWindowRunInput) error
 	UpsertRoomCursor(ctx context.Context, input store.UpsertEllieRoomCursorInput) error
 }
 
@@ -250,6 +254,11 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (EllieIngestionRunRe
 		}
 
 		result.RoomsProcessed++
+		var lastSuccessful store.EllieIngestionMessage
+		var hasLastSuccessful bool
+		var sawAnyLLMFailure bool
+		var sawRetriableLLMFailure bool
+		var lastLLMErr error
 
 		var windows [][]store.EllieIngestionMessage
 		if mode == EllieIngestionModeBackfill && w.BackfillWindowSize > 0 {
@@ -258,58 +267,223 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (EllieIngestionRunRe
 			windows = groupEllieIngestionMessagesByWindow(messages, w.WindowGap)
 		}
 		for _, window := range windows {
-			result.WindowsProcessed++
-			result.ProcessedMessages += len(window)
+			subWindows := [][]store.EllieIngestionMessage{window}
 			if w.LLMExtractor != nil {
-				llmCandidates, err := w.extractLLMMemoryCandidates(ctx, room, window)
-				if err != nil {
-					if w.Logf != nil {
-						w.Logf("ellie ingestion llm extraction failed room=%s: %v (falling back to heuristics)", room.RoomID, err)
+				if budgeter, ok := w.LLMExtractor.(EllieIngestionLLMBudgeter); ok {
+					maxPromptChars, maxMessageChars := budgeter.PromptBudget()
+					subWindows = splitEllieIngestionWindowByPromptBudget(room.OrgID, room.RoomID, window, maxPromptChars, maxMessageChars)
+				}
+			}
+
+			for _, subWindow := range subWindows {
+				if len(subWindow) == 0 {
+					continue
+				}
+
+				// Record run metrics for observability and for the ingestion coverage dashboard.
+				runStarted := time.Now()
+				windowStartAt := subWindow[0].CreatedAt
+				windowEndAt := subWindow[len(subWindow)-1].CreatedAt
+				firstMessageID := strings.TrimSpace(subWindow[0].ID)
+				lastMessageID := strings.TrimSpace(subWindow[len(subWindow)-1].ID)
+				messageCount := len(subWindow)
+				tokenCount := 0
+				for _, msg := range subWindow {
+					if msg.TokenCount > 0 {
+						tokenCount += msg.TokenCount
 					}
-				} else if len(llmCandidates) > 0 {
+				}
+
+				if w.LLMExtractor != nil {
+					llmCandidates, llmResult, llmAttempts, err := w.extractLLMMemoryCandidatesWithRetry(ctx, room, subWindow)
+					if err != nil {
+						if w.Logf != nil {
+							w.Logf("ellie ingestion llm extraction failed room=%s: %v", room.RoomID, err)
+						}
+
+						_ = w.Store.CreateWindowRun(ctx, store.CreateEllieIngestionWindowRunInput{
+							OrgID:          room.OrgID,
+							RoomID:         room.RoomID,
+							WindowStartAt:  windowStartAt,
+							WindowEndAt:    windowEndAt,
+							FirstMessageID: &firstMessageID,
+							LastMessageID:  &lastMessageID,
+							MessageCount:   messageCount,
+							TokenCount:     tokenCount,
+							LLMUsed:        true,
+							LLMModel:       llmResult.Model,
+							LLMTraceID:     llmResult.TraceID,
+							LLMAttempts:    llmAttempts,
+							OK:             false,
+							Error:          err.Error(),
+							DurationMS:     int(time.Since(runStarted).Milliseconds()),
+						})
+
+						// Do not advance cursors past failing windows. We'll retry on the next run.
+						if isRetriableEllieIngestionLLMError(err) {
+							sawRetriableLLMFailure = true
+						}
+						sawAnyLLMFailure = true
+						lastLLMErr = err
+						break
+					}
+
+					result.WindowsProcessed++
+					result.ProcessedMessages += len(subWindow)
+
+					insertedTotal := 0
+					insertedMemories := 0
+					insertedProjects := 0
+					insertedIssues := 0
 					for _, candidate := range llmCandidates {
 						inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
 						if err != nil {
 							return result, fmt.Errorf("insert llm extracted memory for room %s: %w", room.RoomID, err)
 						}
-						if inserted {
-							result.InsertedMemories++
-							result.InsertedLLMMemories++
+						if !inserted {
+							continue
 						}
-						if inserted && w.Logf != nil {
+						insertedTotal++
+						result.InsertedMemories++
+						result.InsertedLLMMemories++
+
+						metaType := ""
+						if raw := candidate.Metadata; len(raw) > 0 {
+							var meta map[string]any
+							_ = json.Unmarshal(raw, &meta)
+							if v, ok := meta["type"].(string); ok {
+								metaType = strings.TrimSpace(strings.ToLower(v))
+							}
+						}
+						switch metaType {
+						case "project":
+							insertedProjects++
+						case "issue":
+							insertedIssues++
+						default:
+							insertedMemories++
+						}
+
+						if w.Logf != nil {
 							w.Logf("ellie ingestion extracted llm memory kind=%s room=%s", candidate.Kind, room.RoomID)
 						}
 					}
+
+					_ = w.Store.CreateWindowRun(ctx, store.CreateEllieIngestionWindowRunInput{
+						OrgID:            room.OrgID,
+						RoomID:           room.RoomID,
+						WindowStartAt:    windowStartAt,
+						WindowEndAt:      windowEndAt,
+						FirstMessageID:   &firstMessageID,
+						LastMessageID:    &lastMessageID,
+						MessageCount:     messageCount,
+						TokenCount:       tokenCount,
+						LLMUsed:          true,
+						LLMModel:         llmResult.Model,
+						LLMTraceID:       llmResult.TraceID,
+						LLMAttempts:      llmAttempts,
+						OK:               true,
+						DurationMS:       int(time.Since(runStarted).Milliseconds()),
+						InsertedTotal:    insertedTotal,
+						InsertedMemories: insertedMemories,
+						InsertedProjects: insertedProjects,
+						InsertedIssues:   insertedIssues,
+					})
+
+					// Success: we can safely advance to the end of this subwindow.
+					lastSuccessful = subWindow[len(subWindow)-1]
+					hasLastSuccessful = true
 					continue
 				}
+
+				// No LLM extractor configured; heuristic mode.
+				result.WindowsProcessed++
+				result.ProcessedMessages += len(subWindow)
+
+				candidate, ok := deriveEllieMemoryCandidateFromWindow(subWindow)
+				if !ok {
+					_ = w.Store.CreateWindowRun(ctx, store.CreateEllieIngestionWindowRunInput{
+						OrgID:          room.OrgID,
+						RoomID:         room.RoomID,
+						WindowStartAt:  windowStartAt,
+						WindowEndAt:    windowEndAt,
+						FirstMessageID: &firstMessageID,
+						LastMessageID:  &lastMessageID,
+						MessageCount:   messageCount,
+						TokenCount:     tokenCount,
+						LLMUsed:        false,
+						OK:             true,
+						DurationMS:     int(time.Since(runStarted).Milliseconds()),
+					})
+					lastSuccessful = subWindow[len(subWindow)-1]
+					hasLastSuccessful = true
+					continue
+				}
+
+				inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
+				if err != nil {
+					return result, fmt.Errorf("insert ellie extracted memory for room %s: %w", room.RoomID, err)
+				}
+				if inserted {
+					result.InsertedMemories++
+					result.InsertedHeuristicMemories++
+				}
+				if inserted && w.Logf != nil {
+					w.Logf("ellie ingestion extracted memory kind=%s room=%s", candidate.Kind, room.RoomID)
+				}
+
+				_ = w.Store.CreateWindowRun(ctx, store.CreateEllieIngestionWindowRunInput{
+					OrgID:            room.OrgID,
+					RoomID:           room.RoomID,
+					WindowStartAt:    windowStartAt,
+					WindowEndAt:      windowEndAt,
+					FirstMessageID:   &firstMessageID,
+					LastMessageID:    &lastMessageID,
+					MessageCount:     messageCount,
+					TokenCount:       tokenCount,
+					LLMUsed:          false,
+					OK:               true,
+					DurationMS:       int(time.Since(runStarted).Milliseconds()),
+					InsertedTotal:    boolToInt(inserted),
+					InsertedMemories: boolToInt(inserted),
+				})
+
+				lastSuccessful = subWindow[len(subWindow)-1]
+				hasLastSuccessful = true
 			}
 
-			candidate, ok := deriveEllieMemoryCandidateFromWindow(window)
-			if !ok {
-				continue
-			}
-
-			inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
-			if err != nil {
-				return result, fmt.Errorf("insert ellie extracted memory for room %s: %w", room.RoomID, err)
-			}
-			if inserted {
-				result.InsertedMemories++
-				result.InsertedHeuristicMemories++
-			}
-			if inserted && w.Logf != nil {
-				w.Logf("ellie ingestion extracted memory kind=%s room=%s", candidate.Kind, room.RoomID)
+			// If an LLM failure occurred for this room, stop processing without advancing the
+			// cursor past the last successful subwindow.
+			if w.LLMExtractor != nil && sawAnyLLMFailure {
+				break
 			}
 		}
 
-		last := messages[len(messages)-1]
-		if err := w.Store.UpsertRoomCursor(ctx, store.UpsertEllieRoomCursorInput{
-			OrgID:                room.OrgID,
-			RoomID:               room.RoomID,
-			LastMessageID:        last.ID,
-			LastMessageCreatedAt: last.CreatedAt,
-		}); err != nil {
-			return result, fmt.Errorf("upsert ellie room cursor %s/%s: %w", room.OrgID, room.RoomID, err)
+		// Only advance the cursor to the last successfully processed message. If the LLM
+		// failed mid-batch, we intentionally leave the cursor behind so the worker retries
+		// on the next run.
+		if hasLastSuccessful {
+			if err := w.Store.UpsertRoomCursor(ctx, store.UpsertEllieRoomCursorInput{
+				OrgID:                room.OrgID,
+				RoomID:               room.RoomID,
+				LastMessageID:        lastSuccessful.ID,
+				LastMessageCreatedAt: lastSuccessful.CreatedAt,
+			}); err != nil {
+				return result, fmt.Errorf("upsert ellie room cursor %s/%s: %w", room.OrgID, room.RoomID, err)
+			}
+		}
+
+		// If OpenClaw is down, stop the whole run early so we don't spam failures across rooms.
+		if sawRetriableLLMFailure {
+			return result, ws.ErrOpenClawNotConnected
+		}
+		// If the LLM failed for other reasons, stop after persisting progress so the next
+		// run can retry (or surface the error to operators).
+		if sawAnyLLMFailure {
+			if lastLLMErr != nil {
+				return result, lastLLMErr
+			}
+			return result, fmt.Errorf("ellie ingestion llm extraction failed")
 		}
 	}
 
@@ -320,9 +494,9 @@ func (w *EllieIngestionWorker) extractLLMMemoryCandidates(
 	ctx context.Context,
 	room store.EllieRoomIngestionCandidate,
 	window []store.EllieIngestionMessage,
-) ([]store.CreateEllieExtractedMemoryInput, error) {
+) ([]store.CreateEllieExtractedMemoryInput, EllieIngestionLLMExtractionResult, error) {
 	if w == nil || w.LLMExtractor == nil || len(window) == 0 {
-		return nil, nil
+		return nil, EllieIngestionLLMExtractionResult{}, nil
 	}
 	result, err := w.LLMExtractor.Extract(ctx, EllieIngestionLLMExtractionInput{
 		OrgID:    room.OrgID,
@@ -330,7 +504,7 @@ func (w *EllieIngestionWorker) extractLLMMemoryCandidates(
 		Messages: window,
 	})
 	if err != nil {
-		return nil, err
+		return nil, EllieIngestionLLMExtractionResult{}, err
 	}
 
 	candidates := make([]store.CreateEllieExtractedMemoryInput, 0, len(result.Candidates))
@@ -341,7 +515,76 @@ func (w *EllieIngestionWorker) extractLLMMemoryCandidates(
 		}
 		candidates = append(candidates, normalized)
 	}
-	return candidates, nil
+	return candidates, result, nil
+}
+
+func (w *EllieIngestionWorker) extractLLMMemoryCandidatesWithRetry(
+	ctx context.Context,
+	room store.EllieRoomIngestionCandidate,
+	window []store.EllieIngestionMessage,
+) ([]store.CreateEllieExtractedMemoryInput, EllieIngestionLLMExtractionResult, int, error) {
+	if w == nil || w.LLMExtractor == nil {
+		return nil, EllieIngestionLLMExtractionResult{}, 0, nil
+	}
+
+	const maxAttempts = 3
+	var lastErr error
+	var lastResult EllieIngestionLLMExtractionResult
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		candidates, result, err := w.extractLLMMemoryCandidates(ctx, room, window)
+		if err == nil {
+			return candidates, result, attempt, nil
+		}
+		lastErr = err
+		lastResult = result
+		if !isRetriableEllieIngestionLLMError(err) || attempt == maxAttempts {
+			break
+		}
+
+		// Exponential backoff with jitter so we play nicely with transient bridge failures.
+		backoff := time.Duration(500*(1<<uint(attempt-1))) * time.Millisecond
+		if backoff > 8*time.Second {
+			backoff = 8 * time.Second
+		}
+		jitter := time.Duration(rand.Intn(250)) * time.Millisecond
+		if err := sleepWithContext(ctx, backoff+jitter); err != nil {
+			return nil, lastResult, attempt, err
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("llm extraction failed")
+	}
+	return nil, lastResult, maxAttempts, lastErr
+}
+
+func isRetriableEllieIngestionLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ws.ErrOpenClawNotConnected) {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	// Conservatively retry gateway-size errors and transient websocket close codes.
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "websocket") && (strings.Contains(msg, "1006") || strings.Contains(msg, "1001") || strings.Contains(msg, "timeout")) {
+		return true
+	}
+	if strings.Contains(msg, "openclaw bridge call failed") {
+		return true
+	}
+	return false
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func normalizeEllieIngestionMode(mode EllieIngestionMode) EllieIngestionMode {
@@ -458,6 +701,11 @@ func normalizeEllieLLMExtractedCandidate(
 	if content == "" {
 		return store.CreateEllieExtractedMemoryInput{}, false
 	}
+	if ellieIngestionHasSensitiveLeak(title) || ellieIngestionHasSensitiveLeak(content) {
+		// Never persist secrets/PII (even redacted markers). This keeps the DB safe even if
+		// upstream extraction produces unsafe candidates.
+		return store.CreateEllieExtractedMemoryInput{}, false
+	}
 	if len([]rune(content)) > 400 {
 		content = string([]rune(content)[:400])
 	}
@@ -491,14 +739,63 @@ func normalizeEllieLLMExtractedCandidate(
 		metadata["extraction_trace_id"] = traceID
 	}
 	if candidate.Metadata != nil && len(candidate.Metadata) > 0 {
-		metadata["llm_metadata"] = candidate.Metadata
+		// Prefer "flattened" metadata for downstream retrieval and auditing.
+		for k, v := range candidate.Metadata {
+			if strings.TrimSpace(k) == "" || v == nil {
+				continue
+			}
+			metadata[k] = v
+		}
 	}
-	metadataRaw, _ := json.Marshal(metadata)
 
 	sourceConversationID := normalizeEllieOptionalID(candidate.SourceConversationID)
 	if sourceConversationID == nil {
 		sourceConversationID = firstEllieConversationID(window)
 	}
+
+	// Stage 2-lite: score and filter candidates so hosted and local run the same
+	// "high recall -> deterministic keep" pipeline.
+	score, decision := ellieIngestionStage2Decision(kind, title, content, metadata, window)
+	metadata["accept_score"] = score
+	metadata["accept_decision"] = decision
+	if decision != "accept" {
+		return store.CreateEllieExtractedMemoryInput{}, false
+	}
+
+	// Stage 2-lite: prevent "topic ideas / queued output / system logs" from becoming
+	// autobiographical durable memories unless there is user-authored evidence in the cited sources.
+	if metaType, _ := metadata["type"].(string); strings.TrimSpace(metaType) == "" {
+		originHint, _ := metadata["origin_hint"].(string)
+		switch strings.TrimSpace(strings.ToLower(originHint)) {
+		case "queued_task", "system_artifact", "log_output":
+			if !ellieIngestionCandidateHasUserEvidence(metadata, window) {
+				return store.CreateEllieExtractedMemoryInput{}, false
+			}
+		}
+	}
+
+	// Map pipeline-style sensitivity to the DB enum (normal|sensitive).
+	sensitivity := "normal"
+	if raw, ok := metadata["sensitivity"]; ok {
+		if s, ok := raw.(string); ok {
+			switch strings.TrimSpace(strings.ToLower(s)) {
+			case "high", "medium", "sensitive":
+				sensitivity = "sensitive"
+			}
+		}
+	}
+	if flags, ok := metadata["pii_flags"]; ok {
+		if list, ok := flags.([]any); ok {
+			for _, v := range list {
+				if strings.TrimSpace(strings.ToLower(fmt.Sprint(v))) == "medical" {
+					sensitivity = "sensitive"
+					break
+				}
+			}
+		}
+	}
+
+	metadataRaw, _ := json.Marshal(metadata)
 
 	return store.CreateEllieExtractedMemoryInput{
 		OrgID:                room.OrgID,
@@ -510,7 +807,251 @@ func normalizeEllieLLMExtractedCandidate(
 		Confidence:           confidence,
 		SourceConversationID: sourceConversationID,
 		OccurredAt:           window[len(window)-1].CreatedAt,
+		Sensitivity:          sensitivity,
 	}, true
+}
+
+func ellieIngestionHasSensitiveLeak(text string) bool {
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "[redacted_secret]") || strings.Contains(lower, "[pii_redacted]") {
+		return true
+	}
+	// Token-like patterns (keep conservative).
+	if strings.Contains(lower, "ghp_") || strings.Contains(lower, "sk-") || strings.Contains(lower, "xoxb-") || strings.Contains(lower, "xoxp-") {
+		return true
+	}
+	if strings.Contains(lower, "api key") || strings.Contains(lower, "password") || strings.Contains(lower, "pairing code") || strings.Contains(lower, "token:") {
+		return true
+	}
+	return false
+}
+
+func ellieIngestionCandidateHasUserEvidence(metadata map[string]any, window []store.EllieIngestionMessage) bool {
+	rawIDs, ok := metadata["source_message_ids"]
+	if !ok || rawIDs == nil {
+		return false
+	}
+	sourceIDs := map[string]struct{}{}
+	switch v := rawIDs.(type) {
+	case []string:
+		for _, id := range v {
+			sourceIDs[strings.TrimSpace(id)] = struct{}{}
+		}
+	case []any:
+		for _, item := range v {
+			id := strings.TrimSpace(fmt.Sprint(item))
+			if id != "" {
+				sourceIDs[id] = struct{}{}
+			}
+		}
+	}
+	if len(sourceIDs) == 0 {
+		return false
+	}
+	for _, msg := range window {
+		if strings.TrimSpace(strings.ToLower(msg.SenderType)) != "user" {
+			continue
+		}
+		if _, ok := sourceIDs[strings.TrimSpace(msg.ID)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func ellieIngestionStage2Decision(kind, title, content string, metadata map[string]any, window []store.EllieIngestionMessage) (int, string) {
+	// Context entries (projects/issues) are accepted as long as they are non-empty and safe.
+	if metaType, _ := metadata["type"].(string); strings.TrimSpace(metaType) != "" {
+		return 80, "accept"
+	}
+
+	score := 50
+
+	// Evidence quality.
+	score += ellieIngestionStage2EvidenceScore(metadata, window)
+
+	// Durability.
+	score += ellieIngestionStage2DurabilityScore(title, content)
+
+	// Atomicity/specificity.
+	score += ellieIngestionStage2AtomicityScore(title, content)
+
+	// Sensitivity penalty (conservative).
+	if strings.TrimSpace(strings.ToLower(fmt.Sprint(metadata["sensitivity"]))) == "high" {
+		score -= 20
+	}
+	if flags, ok := metadata["pii_flags"]; ok {
+		if list, ok := flags.([]any); ok {
+			for _, v := range list {
+				if strings.TrimSpace(strings.ToLower(fmt.Sprint(v))) == "medical" {
+					score -= 20
+					break
+				}
+			}
+		}
+	}
+
+	// Thresholds (match Stage2 spec defaults).
+	switch {
+	case score >= 65:
+		return score, "accept"
+	case score >= 45:
+		return score, "review"
+	default:
+		return score, "reject"
+	}
+}
+
+func ellieIngestionStage2EvidenceScore(metadata map[string]any, window []store.EllieIngestionMessage) int {
+	sourceIDs := map[string]struct{}{}
+	switch v := metadata["source_message_ids"].(type) {
+	case []string:
+		for _, id := range v {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				sourceIDs[id] = struct{}{}
+			}
+		}
+	case []any:
+		for _, item := range v {
+			id := strings.TrimSpace(fmt.Sprint(item))
+			if id != "" {
+				sourceIDs[id] = struct{}{}
+			}
+		}
+	}
+	if len(sourceIDs) == 0 {
+		return 0
+	}
+
+	total := 0
+	user := 0
+	artifact := 0
+	for _, msg := range window {
+		if _, ok := sourceIDs[strings.TrimSpace(msg.ID)]; !ok {
+			continue
+		}
+		total++
+		if strings.TrimSpace(strings.ToLower(msg.SenderType)) == "user" {
+			user++
+		}
+		if ellieIngestionIsArtifactMessage(msg) {
+			artifact++
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+
+	score := 0
+	ratio := float64(user) / float64(total)
+	switch {
+	case ratio >= 0.5:
+		score += 15
+	case ratio >= 0.2:
+		score += 8
+	case ratio == 0:
+		score -= 10
+	}
+
+	artifactRatio := float64(artifact) / float64(total)
+	switch {
+	case artifactRatio > 0.5:
+		score -= 25
+	case artifactRatio > 0.2:
+		score -= 10
+	}
+	return score
+}
+
+func ellieIngestionIsArtifactMessage(msg store.EllieIngestionMessage) bool {
+	body := strings.TrimSpace(msg.Body)
+	lower := strings.ToLower(body)
+	if strings.HasPrefix(body, "[Queued") || strings.Contains(body, "Queued #") {
+		return true
+	}
+	if strings.TrimSpace(strings.ToLower(msg.SenderType)) == "system" {
+		return true
+	}
+	if strings.Contains(lower, "heartbeat") || strings.Contains(lower, "no_reply") {
+		return true
+	}
+	if strings.HasPrefix(body, "System:") {
+		return true
+	}
+	if strings.HasPrefix(body, "Tool ") && strings.Contains(lower, "result:") {
+		return true
+	}
+	return false
+}
+
+func ellieIngestionStage2DurabilityScore(title, content string) int {
+	text := strings.ToLower(strings.TrimSpace(title + " " + content))
+	score := 0
+
+	// Durable patterns.
+	if regexp.MustCompile(`\b(prefers?|doesn'?t like|always|never|from now on)\b`).MatchString(text) {
+		score += 15
+	} else if regexp.MustCompile(`\b(migrat|architect|infrastructure|deploy|configur|set up|install|uses? .+ for)\b`).MatchString(text) {
+		score += 15
+	} else if regexp.MustCompile(`\b(family|wife|husband|partner|son|daughter|lives? in|based in|works? at|role is)\b`).MatchString(text) {
+		score += 15
+	}
+
+	// Ephemeral patterns.
+	if regexp.MustCompile(`\b(today|right now|this week|this morning|this afternoon)\b`).MatchString(text) &&
+		!regexp.MustCompile(`\b(always|never|rule|from now on|every)\b`).MatchString(text) {
+		score -= 15
+	}
+	if regexp.MustCompile(`\b(done and documented|waiting on|in progress|currently running|status:|working on it)\b`).MatchString(text) {
+		score -= 15
+	}
+	if regexp.MustCompile(`\b(exec failed|stack trace|error:|exception:|enoent|econnrefused|timeout)\b`).MatchString(text) {
+		score -= 15
+	}
+
+	// Draft/brainstorm.
+	if regexp.MustCompile(`\b(topic idea|blog post idea|draft|outline|brainstorm|could write about|potential topic)\b`).MatchString(text) {
+		score -= 25
+	}
+
+	if score < -25 {
+		return -25
+	}
+	if score > 25 {
+		return 25
+	}
+	return score
+}
+
+func ellieIngestionStage2AtomicityScore(title, content string) int {
+	text := strings.TrimSpace(title + " " + content)
+	score := 0
+	sentences := regexp.MustCompile(`[.!?]`).Split(text, -1)
+	meaningful := 0
+	for _, s := range sentences {
+		if len(strings.TrimSpace(s)) > 5 {
+			meaningful++
+		}
+	}
+	if meaningful <= 2 {
+		score += 10
+	} else if meaningful > 5 {
+		score -= 15
+	}
+	if regexp.MustCompile(`[A-Z][a-z]+`).MatchString(title) {
+		score += 5
+	}
+	if regexp.MustCompile(`^(Work style|Communication style|General|Preferences|Notes|Misc)`).MatchString(title) {
+		score -= 5
+	}
+	if score < -20 {
+		return -20
+	}
+	if score > 15 {
+		return 15
+	}
+	return score
 }
 
 func groupEllieIngestionMessagesByWindow(messages []store.EllieIngestionMessage, gap time.Duration) [][]store.EllieIngestionMessage {
@@ -572,6 +1113,69 @@ func groupEllieIngestionMessagesByCount(
 		}
 	}
 	return windows
+}
+
+func splitEllieIngestionWindowByPromptBudget(
+	orgID string,
+	roomID string,
+	window []store.EllieIngestionMessage,
+	maxPromptChars int,
+	maxMessageChars int,
+) [][]store.EllieIngestionMessage {
+	if len(window) == 0 {
+		return [][]store.EllieIngestionMessage{}
+	}
+	if maxPromptChars <= 0 {
+		return [][]store.EllieIngestionMessage{window}
+	}
+	if maxMessageChars <= 0 {
+		maxMessageChars = defaultEllieIngestionOpenClawMaxMessageChars
+	}
+
+	// Measure the fixed prompt overhead (no messages).
+	baseLen := len(buildEllieIngestionOpenClawPrompt(EllieIngestionLLMExtractionInput{
+		OrgID:    orgID,
+		RoomID:   roomID,
+		Messages: nil,
+	}, 0, maxMessageChars))
+	if baseLen >= maxPromptChars {
+		// Misconfigured budget; fall back to single-message windows.
+		return groupEllieIngestionMessagesByCount(window, 1, 1)
+	}
+
+	chunks := make([][]store.EllieIngestionMessage, 0, 4)
+	i := 0
+	for i < len(window) {
+		j := i
+		for j < len(window) {
+			candidate := window[i : j+1]
+			promptLen := len(buildEllieIngestionOpenClawPrompt(EllieIngestionLLMExtractionInput{
+				OrgID:    orgID,
+				RoomID:   roomID,
+				Messages: candidate,
+			}, 0, maxMessageChars))
+			if promptLen <= maxPromptChars {
+				j++
+				continue
+			}
+			break
+		}
+
+		if j == i {
+			// Single message still doesn't fit; the prompt builder has a final safeguard
+			// to shrink the message further, but we still need forward progress.
+			j = i + 1
+		}
+
+		out := make([]store.EllieIngestionMessage, j-i)
+		copy(out, window[i:j])
+		chunks = append(chunks, out)
+		i = j
+	}
+	if len(chunks) == 0 {
+		return [][]store.EllieIngestionMessage{window}
+	}
+	return chunks
 }
 
 func joinEllieWindowBodies(messages []store.EllieIngestionMessage) string {

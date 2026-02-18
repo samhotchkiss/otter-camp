@@ -281,6 +281,18 @@ export default function KnowledgePage() {
         )}
       </section>
 
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-[var(--text)]">Ingestion Coverage</h2>
+          <Link to="/knowledge/ingestion" className="text-xs font-medium text-[#C9A86C] hover:underline">
+            View coverage
+          </Link>
+        </div>
+        <p className="mt-2 text-sm text-[var(--text-muted)]">
+          See what day extraction has reached, plus per-day message counts, window counts, retries, and extracted memories.
+        </p>
+      </section>
+
       {/* Tag Filters (search handled by magic bar ⌘K) */}
       <div className="knowledge-controls">
         <div className="tag-filters">

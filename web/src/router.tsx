@@ -22,6 +22,7 @@ const ProjectDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/Pr
 const WorkflowsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/WorkflowsPage")));
 const KnowledgePage = lazy(() => lazyWithChunkRetry(() => import("./pages/KnowledgePage")));
 const MemoryEvaluationPage = lazy(() => lazyWithChunkRetry(() => import("./pages/MemoryEvaluationPage")));
+const EllieIngestionCoveragePage = lazy(() => lazyWithChunkRetry(() => import("./pages/EllieIngestionCoveragePage")));
 const ConnectionsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ConnectionsPage")));
 const ArchivedChatsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ArchivedChatsPage")));
 
@@ -133,6 +134,10 @@ export const router = createBrowserRouter([
       {
         path: "knowledge/evaluation",
         element: <MemoryEvaluationPage />,
+      },
+      {
+        path: "knowledge/ingestion",
+        element: <EllieIngestionCoveragePage />,
       },
       {
         path: "connections",

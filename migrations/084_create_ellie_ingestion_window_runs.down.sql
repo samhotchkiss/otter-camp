@@ -1,0 +1,5 @@
+DROP POLICY IF EXISTS ellie_ingestion_window_runs_org_isolation ON ellie_ingestion_window_runs;
+DROP INDEX IF EXISTS ellie_ingestion_window_runs_org_day_idx;
+DROP INDEX IF EXISTS ellie_ingestion_window_runs_org_end_idx;
+DROP TABLE IF EXISTS ellie_ingestion_window_runs;
+
