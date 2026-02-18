@@ -27,7 +27,7 @@ func TestRequireOpenClawSyncAuth_NoSecretConfigured(t *testing.T) {
 	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", nil)
-	status, err := requireOpenClawSyncAuth(req)
+	status, err := requireOpenClawSyncAuth(req.Context(), nil, req)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -42,7 +42,7 @@ func TestRequireOpenClawSyncAuth_MissingToken(t *testing.T) {
 	t.Setenv("OPENCLAW_WEBHOOK_SECRET", "")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", nil)
-	status, err := requireOpenClawSyncAuth(req)
+	status, err := requireOpenClawSyncAuth(req.Context(), nil, req)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -59,7 +59,7 @@ func TestRequireOpenClawSyncAuth_ValidBearerToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", nil)
 	req.Header.Set("Authorization", "Bearer sync-secret")
 
-	status, err := requireOpenClawSyncAuth(req)
+	status, err := requireOpenClawSyncAuth(req.Context(), nil, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestRequireOpenClawSyncAuth_FallbackToWebhookSecret(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", nil)
 	req.Header.Set("X-OpenClaw-Token", "webhook-secret")
 
-	status, err := requireOpenClawSyncAuth(req)
+	status, err := requireOpenClawSyncAuth(req.Context(), nil, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestRequireOpenClawSyncAuth_BackwardCompatibleTokenVariable(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/sync/openclaw", nil)
 	req.Header.Set("X-OpenClaw-Token", "legacy-sync-secret")
 
-	status, err := requireOpenClawSyncAuth(req)
+	status, err := requireOpenClawSyncAuth(req.Context(), nil, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

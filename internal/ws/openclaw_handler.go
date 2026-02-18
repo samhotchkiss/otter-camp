@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -21,6 +22,7 @@ import (
 // Unlike browser clients, OpenClaw is the source of truth for agent data.
 type OpenClawHandler struct {
 	Hub        *Hub
+	DB         *sql.DB
 	conn       *websocket.Conn
 	mu         sync.RWMutex
 	writeMu    sync.Mutex
@@ -40,13 +42,48 @@ type openClawRequestResult struct {
 }
 
 // NewOpenClawHandler creates a handler for OpenClaw connections.
-func NewOpenClawHandler(hub *Hub) *OpenClawHandler {
+func NewOpenClawHandler(hub *Hub, db *sql.DB) *OpenClawHandler {
 	secret := strings.TrimSpace(os.Getenv("OPENCLAW_WS_SECRET"))
 	return &OpenClawHandler{
 		Hub:        hub,
+		DB:         db,
 		requests:   make(map[string]chan openClawRequestResult),
 		authSecret: secret,
 	}
+}
+
+func extractOpenClawBridgeAuthToken(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		token = strings.TrimSpace(r.Header.Get("X-OpenClaw-Token"))
+	}
+	if token == "" {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		}
+	}
+	return strings.TrimSpace(token)
+}
+
+func (h *OpenClawHandler) isValidSessionToken(ctx context.Context, token string) bool {
+	if token == "" || h == nil || h.DB == nil {
+		return false
+	}
+	var ignored string
+	err := h.DB.QueryRowContext(
+		ctx,
+		`SELECT org_id::text
+		   FROM sessions
+		  WHERE token = $1
+		    AND revoked_at IS NULL
+		    AND expires_at > NOW()`,
+		token,
+	).Scan(&ignored)
+	return err == nil
 }
 
 // OpenClawEvent represents an event from OpenClaw.
@@ -80,20 +117,28 @@ type FeedItemEvent struct {
 
 // ServeHTTP handles WebSocket upgrade for OpenClaw connections.
 func (h *OpenClawHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.authSecret == "" {
-		log.Printf("[openclaw-ws] OPENCLAW_WS_SECRET is not configured")
+	if h == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if h.authSecret == "" && h.DB == nil {
+		log.Printf("[openclaw-ws] OPENCLAW_WS_SECRET is not configured and DB auth unavailable")
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Validate auth token
-	token := r.URL.Query().Get("token")
+	// Validate auth token.
+	// Prefer OPENCLAW_WS_SECRET when configured, but also allow a valid OtterCamp session token
+	// (hosted bridge only has the user's session token).
+	token := extractOpenClawBridgeAuthToken(r)
 	if token == "" {
-		token = r.Header.Get("X-OpenClaw-Token")
+		log.Printf("[openclaw-ws] Auth failed: missing token")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
-
-	token = strings.TrimSpace(token)
-	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(h.authSecret)) != 1 {
+	secretOK := h.authSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(h.authSecret)) == 1
+	sessionOK := !secretOK && h.isValidSessionToken(r.Context(), token)
+	if !secretOK && !sessionOK {
 		log.Printf("[openclaw-ws] Auth failed: invalid token")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return

@@ -15,7 +15,7 @@ import (
 
 func TestOpenClawHandlerRejectsWhenSecretMissing(t *testing.T) {
 	t.Setenv("OPENCLAW_WS_SECRET", "")
-	handler := NewOpenClawHandler(NewHub())
+	handler := NewOpenClawHandler(NewHub(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/ws/openclaw", nil)
 	rec := httptest.NewRecorder()
@@ -26,7 +26,7 @@ func TestOpenClawHandlerRejectsWhenSecretMissing(t *testing.T) {
 
 func TestOpenClawHandlerRejectsInvalidToken(t *testing.T) {
 	t.Setenv("OPENCLAW_WS_SECRET", "expected-secret")
-	handler := NewOpenClawHandler(NewHub())
+	handler := NewOpenClawHandler(NewHub(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/ws/openclaw?token=wrong-secret", nil)
 	rec := httptest.NewRecorder()
@@ -40,7 +40,7 @@ func TestOpenClawHandlerAcceptsValidToken(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
 
-	handler := NewOpenClawHandler(hub)
+	handler := NewOpenClawHandler(hub, nil)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -61,7 +61,7 @@ func TestOpenClawHandlerRequestRoundTrip(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
 
-	handler := NewOpenClawHandler(hub)
+	handler := NewOpenClawHandler(hub, nil)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -138,7 +138,7 @@ func TestOpenClawHandlerRequestRoundTrip(t *testing.T) {
 
 func TestOpenClawHandlerRequestReturnsNotConnectedError(t *testing.T) {
 	t.Setenv("OPENCLAW_WS_SECRET", "valid-secret")
-	handler := NewOpenClawHandler(NewHub())
+	handler := NewOpenClawHandler(NewHub(), nil)
 
 	_, err := handler.Request(
 		context.Background(),
@@ -154,7 +154,7 @@ func TestOpenClawHandlerRequestWaitsForConnection(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
 
-	handler := NewOpenClawHandler(hub)
+	handler := NewOpenClawHandler(hub, nil)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=valid-secret"

@@ -79,7 +79,7 @@ func NewRouter() http.Handler {
 	feedPushHandler := NewFeedPushHandler(hub)
 	execApprovalsHandler := &ExecApprovalsHandler{Hub: hub}
 	taskHandler := &TaskHandler{Hub: hub}
-	openClawWSHandler := ws.NewOpenClawHandler(hub)
+	openClawWSHandler := ws.NewOpenClawHandler(hub, db)
 	registerOpenClawHandler(openClawWSHandler)
 	emissionBuffer := NewEmissionBuffer(defaultEmissionBufferSize)
 	emissionsHandler := &EmissionsHandler{Buffer: emissionBuffer, Hub: hub}

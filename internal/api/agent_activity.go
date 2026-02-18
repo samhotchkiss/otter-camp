@@ -144,7 +144,13 @@ func (h *AgentActivityHandler) IngestEvents(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if status, err := requireOpenClawSyncAuth(r); err != nil {
+	db := h.DB
+	if db == nil {
+		if dbConn, err := store.DB(); err == nil {
+			db = dbConn
+		}
+	}
+	if status, err := requireOpenClawSyncAuth(r.Context(), db, r); err != nil {
 		sendJSON(w, status, errorResponse{Error: err.Error()})
 		return
 	}
