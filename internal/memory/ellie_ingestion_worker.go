@@ -609,10 +609,17 @@ func isRetriableEllieIngestionLLMError(err error) bool {
 	}
 	// Conservatively retry gateway-size errors and transient websocket close codes.
 	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "websocket") && (strings.Contains(msg, "1006") || strings.Contains(msg, "1001") || strings.Contains(msg, "timeout")) {
+	if strings.Contains(msg, "websocket") &&
+		(strings.Contains(msg, "1006") || strings.Contains(msg, "1001") || strings.Contains(msg, "1012") || strings.Contains(msg, "timeout")) {
 		return true
 	}
 	if strings.Contains(msg, "openclaw bridge call failed") {
+		return true
+	}
+	if strings.Contains(msg, "econnrefused") || strings.Contains(msg, "connection refused") {
+		return true
+	}
+	if strings.Contains(msg, "unexpected server response: 502") || strings.Contains(msg, "bad gateway") {
 		return true
 	}
 	return false
@@ -853,9 +860,6 @@ func normalizeEllieLLMExtractedCandidate(
 
 func ellieIngestionHasSensitiveLeak(text string) bool {
 	lower := strings.ToLower(text)
-	if strings.Contains(lower, "[redacted_secret]") || strings.Contains(lower, "[pii_redacted]") {
-		return true
-	}
 	// Token-like patterns (keep conservative).
 	if strings.Contains(lower, "ghp_") || strings.Contains(lower, "sk-") || strings.Contains(lower, "xoxb-") || strings.Contains(lower, "xoxp-") {
 		return true

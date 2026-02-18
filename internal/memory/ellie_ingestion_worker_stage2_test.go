@@ -67,3 +67,8 @@ func TestNormalizeEllieLLMExtractedCandidateKeepsReviewDecisions(t *testing.T) {
 	require.Equal(t, "review", metadata["accept_decision"])
 }
 
+func TestEllieIngestionHasSensitiveLeakAllowsRedactionMarkers(t *testing.T) {
+	require.False(t, ellieIngestionHasSensitiveLeak("Uses [PII_REDACTED] for location details."))
+	require.False(t, ellieIngestionHasSensitiveLeak("Token value was [REDACTED_SECRET] and should remain redacted."))
+	require.True(t, ellieIngestionHasSensitiveLeak("Use sk-1234567890abcdefghijklmnop as API key"))
+}

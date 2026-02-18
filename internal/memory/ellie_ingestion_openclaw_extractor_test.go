@@ -292,3 +292,28 @@ func TestEllieIngestionOpenClawExtractorDoesNotFallBackToExecWhenBridgeIsConfigu
 	require.Contains(t, err.Error(), "openclaw bridge call failed")
 	require.Empty(t, execRunner.args)
 }
+
+func TestNormalizeEllieIngestionPromptMessageExtractsSlackContent(t *testing.T) {
+	msg := store.EllieIngestionMessage{
+		SenderType: "user",
+		Body: `System: [2026-01-29 18:44:26 MST] Slack DM from Sam: I'm connected via tailscale
+
+[Slack Sam +22s 2026-01-29 18:44 MST] I'm connected via tailscale [slack message id: 1769737465.571049 channel: D0ABF8X5TM2]
+[message_id: 1769737465.571049]`,
+	}
+
+	normalized, ok := normalizeEllieIngestionPromptMessage(msg)
+	require.True(t, ok)
+	require.Equal(t, "user", normalized.SenderType)
+	require.Equal(t, "I'm connected via tailscale", normalized.Body)
+}
+
+func TestNormalizeEllieIngestionPromptMessageDropsOperationalNoise(t *testing.T) {
+	msg := store.EllieIngestionMessage{
+		SenderType: "user",
+		Body:       "System: [2026-01-29 18:44:26 MST] AGENT STATUS CHECK: Read last 1-2 messages from each project channel.",
+	}
+
+	_, ok := normalizeEllieIngestionPromptMessage(msg)
+	require.False(t, ok)
+}

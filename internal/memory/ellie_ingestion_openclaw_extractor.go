@@ -30,6 +30,10 @@ const (
 )
 
 var ellieIngestionOpenClawSessionTokenPattern = regexp.MustCompile(`[^a-z0-9_-]+`)
+var (
+	ellieIngestionSlackLinePattern = regexp.MustCompile(`(?m)^\[Slack[^\]]*\]\s*(.+?)\s*\[slack message id:.*$`)
+	ellieIngestionSystemSlackHead  = regexp.MustCompile(`(?i)^System:\s*\[[^\]]+\]\s*Slack (?:DM from|message in [^ ]+ from)\s+[^:]+:\s*(.+)$`)
+)
 
 type EllieIngestionOpenClawRunner interface {
 	Run(ctx context.Context, args []string) ([]byte, error)
@@ -463,7 +467,11 @@ func buildEllieIngestionOpenClawPrompt(
 	baseLen := builder.Len()
 	entries := make([]string, 0, len(input.Messages))
 	for _, message := range input.Messages {
-		entries = append(entries, formatEllieIngestionPromptMessage(message, maxMessageChars))
+		normalized, ok := normalizeEllieIngestionPromptMessage(message)
+		if !ok {
+			continue
+		}
+		entries = append(entries, formatEllieIngestionPromptMessage(normalized, maxMessageChars))
 	}
 
 	// Cap prompt size to avoid websocket close code 1009 (message too large).
@@ -529,6 +537,80 @@ func formatEllieIngestionPromptMessage(message store.EllieIngestionMessage, maxB
 	builder.WriteString(body)
 	builder.WriteString("\n")
 	return builder.String()
+}
+
+func normalizeEllieIngestionPromptMessage(message store.EllieIngestionMessage) (store.EllieIngestionMessage, bool) {
+	body := strings.TrimSpace(message.Body)
+	if body == "" {
+		return store.EllieIngestionMessage{}, false
+	}
+	lower := strings.ToLower(body)
+	senderType := strings.TrimSpace(strings.ToLower(message.SenderType))
+
+	// Drop known ingestion noise before it ever reaches the LLM.
+	if strings.Contains(lower, "agent status check") ||
+		strings.Contains(lower, "read heartbeat.md") ||
+		strings.Contains(lower, "heartbeat_ok") ||
+		strings.Contains(lower, "exec completed") ||
+		strings.Contains(lower, "bridge heartbeat") ||
+		strings.Contains(lower, "health sweep") ||
+		strings.Contains(lower, "no_reply") {
+		return store.EllieIngestionMessage{}, false
+	}
+
+	// Convert Slack-wrapped bridge payloads into human-readable conversational text.
+	var extracted []string
+	for _, match := range ellieIngestionSlackLinePattern.FindAllStringSubmatch(body, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		line := strings.TrimSpace(match[1])
+		if line != "" {
+			extracted = append(extracted, line)
+		}
+	}
+	if len(extracted) == 0 {
+		if match := ellieIngestionSystemSlackHead.FindStringSubmatch(body); len(match) >= 2 {
+			line := strings.TrimSpace(match[1])
+			if line != "" {
+				extracted = append(extracted, line)
+			}
+		}
+	}
+	if len(extracted) > 0 {
+		body = strings.Join(extracted, "\n")
+		if senderType == "system" {
+			// Bridge wrappers often misclassify Slack-human payloads as system.
+			senderType = "user"
+		}
+	}
+
+	// Drop internal wrapper crumbs.
+	lines := strings.Split(body, "\n")
+	clean := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		l := strings.ToLower(trimmed)
+		if strings.HasPrefix(trimmed, "[message_id:") || strings.HasPrefix(trimmed, "[slack message id:") {
+			continue
+		}
+		if strings.HasPrefix(l, "system: [") && strings.Contains(l, "] slack ") {
+			continue
+		}
+		clean = append(clean, trimmed)
+	}
+	body = strings.TrimSpace(strings.Join(clean, "\n"))
+	if body == "" {
+		return store.EllieIngestionMessage{}, false
+	}
+
+	out := message
+	out.Body = body
+	out.SenderType = senderType
+	return out, true
 }
 
 var (
