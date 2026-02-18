@@ -1206,7 +1206,10 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
   }
 
   return (
-    <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+    <section
+      data-testid="issue-thread-shell"
+      className="rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm"
+    >
       <WebSocketIssueSubscriber issueID={issueID} />
       {loading && (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] p-4 text-sm text-[var(--text-muted)]">
