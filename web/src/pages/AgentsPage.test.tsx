@@ -96,6 +96,7 @@ describe("AgentsPage", () => {
     render(<AgentsPage apiEndpoint="https://api.otter.camp/api/sync/agents" />);
 
     expect(await screen.findByText("Frank")).toBeInTheDocument();
+    expect(screen.getByTestId("agents-shell")).toBeInTheDocument();
     expect(await screen.findByText("Active in #engineering")).toBeInTheDocument();
     expect(await screen.findByText("Responded to Sam in #leadership")).toBeInTheDocument();
     expect(screen.getByText("Slack")).toBeInTheDocument();

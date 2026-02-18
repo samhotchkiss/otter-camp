@@ -68,6 +68,7 @@ describe("WorkflowsPage", () => {
     render(<WorkflowsPage />);
 
     expect(await screen.findByRole("heading", { level: 1, name: "Workflows" })).toBeInTheDocument();
+    expect(screen.getByTestId("workflows-shell")).toBeInTheDocument();
     expect(screen.getByText("2 workflow projects · 1 active · 1 paused")).toBeInTheDocument();
     expect(screen.getByText("Morning Briefing")).toBeInTheDocument();
     expect(screen.getByText("System Heartbeat")).toBeInTheDocument();
