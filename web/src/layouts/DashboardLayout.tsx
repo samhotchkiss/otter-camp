@@ -411,7 +411,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             >
               {item.label}
               {item.id === "inbox" && inboxCount !== null && (
-                <span className="nav-badge" aria-label={`Inbox count ${inboxCount}`}>
+                <span className="nav-badge oc-chip" aria-label={`Inbox count ${inboxCount}`}>
                   {inboxCount}
                 </span>
               )}
@@ -421,7 +421,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       </aside>
 
       <div className="shell-main">
-        <header className="shell-header" data-testid="shell-header">
+        <header className="shell-header oc-toolbar" data-testid="shell-header">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -440,7 +440,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             <button
               type="button"
               onClick={openCommandPalette}
-              className="search-trigger"
+              className="search-trigger oc-toolbar-input"
             >
               <span className="search-icon">🔍</span>
               <span className="search-text">Search or command...</span>
@@ -450,11 +450,11 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
           <div className="topbar-right">
             <div
-              className={`connection-status ${bridgeStatusClass}`}
+              className={`connection-status oc-chip ${bridgeStatusClass}`}
               aria-label={bridgeStatusLabel}
               role="status"
             >
-              <span className={`status-dot ${bridgeDotClass}`}></span>
+              <span className={`status-dot oc-status-dot ${bridgeDotClass}`}></span>
               <span className="status-text">{bridgeStatusLabel}</span>
             </div>
             <button
