@@ -1640,7 +1640,7 @@ describe("bridge memory extraction dispatch helpers", () => {
     );
     const parsed = JSON.parse(compacted) as Record<string, unknown>;
     const payloads = ((parsed.result as Record<string, unknown>).payloads ?? []) as Array<Record<string, unknown>>;
-    assert.equal(String(payloads[0]?.text || "").length, 8000);
+    assert.equal(String(payloads[0]?.text || "").length, 2000);
   });
 
   it("extracts a compact response from noisy command output", () => {
@@ -1658,5 +1658,26 @@ describe("bridge memory extraction dispatch helpers", () => {
     const payloads = ((parsed.result as Record<string, unknown>).payloads ?? []) as Array<Record<string, unknown>>;
     assert.equal(payloads.length, 1);
     assert.equal(String(payloads[0]?.text || "").includes('"candidates"'), true);
+  });
+
+  it("sanitizes oversized command errors before sending memory.extract.response", async () => {
+    const hugeError = `Command failed: openclaw gateway call agent --params ${"x".repeat(12000)}`;
+    setExecFileForTest((_cmd, _args, _options, callback) => {
+      callback(new Error(hugeError));
+    });
+
+    await dispatchInboundEventForTest("memory.extract.request", {
+      type: "memory.extract.request",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        request_id: "req-oversized-error",
+        args: ["gateway", "call", "agent", "--json"],
+      },
+    });
+
+    assert.equal(sentMessages.length, 1);
+    const data = sentMessages[0]?.data as Record<string, unknown>;
+    assert.equal(data.ok, false);
+    assert.equal(String(data.error || "").length <= 1003, true);
   });
 });

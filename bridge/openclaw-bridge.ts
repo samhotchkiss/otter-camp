@@ -5741,9 +5741,11 @@ export function ensureGatewayCallCredentials(args: string[], tokenRaw: string = 
   return [...sanitized, '--token', token];
 }
 
-const MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS = 8000;
+const MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS = 2000;
 const MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT = '{"candidates":[]}';
 const MEMORY_EXTRACT_DEFAULT_MODEL = 'claude-haiku-4-5';
+const MEMORY_EXTRACT_MAX_ERROR_CHARS = 1000;
+const MEMORY_EXTRACT_MAX_OUTPUT_CHARS = 6000;
 
 function truncateMemoryExtractPayloadText(text: string): string {
   if (text.length <= MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS) {
@@ -5792,6 +5794,32 @@ function extractFirstJSONStringField(raw: string, field: string): string {
     return '';
   }
   return decodeJSONStringLiteral(match[1]).trim();
+}
+
+function compactMemoryExtractFallbackEnvelope(): string {
+  return JSON.stringify({
+    runId: '',
+    status: 'ok',
+    result: {
+      payloads: [{ text: MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT }],
+      meta: {
+        agentMeta: {
+          model: MEMORY_EXTRACT_DEFAULT_MODEL,
+        },
+      },
+    },
+  });
+}
+
+function sanitizeMemoryExtractErrorDetail(rawDetail: string): string {
+  const compact = rawDetail.replace(/\s+/g, ' ').trim();
+  if (!compact) {
+    return 'memory extraction command failed';
+  }
+  if (compact.length <= MEMORY_EXTRACT_MAX_ERROR_CHARS) {
+    return compact;
+  }
+  return `${compact.slice(0, MEMORY_EXTRACT_MAX_ERROR_CHARS)}...`;
 }
 
 export function compactMemoryExtractOutput(rawOutput: string): string {
@@ -5856,6 +5884,11 @@ async function handleMemoryExtractDispatchEvent(event: MemoryExtractDispatchEven
   const args = normalizeDispatchArgs(event.data?.args);
 
   const sendResponse = (payload: { ok: boolean; output?: string; error?: string }): void => {
+    let output = payload.output;
+    if (output && output.length > MEMORY_EXTRACT_MAX_OUTPUT_CHARS) {
+      output = compactMemoryExtractFallbackEnvelope();
+    }
+    const error = payload.error ? sanitizeMemoryExtractErrorDetail(payload.error) : undefined;
     const sent = sendOtterCampSocketEvent({
       type: 'memory.extract.response',
       timestamp: new Date().toISOString(),
@@ -5863,8 +5896,8 @@ async function handleMemoryExtractDispatchEvent(event: MemoryExtractDispatchEven
       data: {
         request_id: requestID,
         ok: payload.ok,
-        ...(payload.output !== undefined ? { output: payload.output } : {}),
-        ...(payload.error ? { error: payload.error } : {}),
+        ...(output !== undefined ? { output } : {}),
+        ...(error ? { error } : {}),
       },
     });
     if (!sent) {
