@@ -42,6 +42,24 @@ function renderTaskDetail(pathname: string) {
   return render(<RouterProvider router={router} />);
 }
 
+function renderIssueDetail(pathname: string) {
+  const router = createMemoryRouter(
+    [
+      {
+        path: "/projects/:id/issues/:issueId",
+        element: <TaskDetailPage />,
+      },
+      {
+        path: "/issue/:issueId",
+        element: <TaskDetailPage />,
+      },
+    ],
+    { initialEntries: [pathname] }
+  );
+
+  return render(<RouterProvider router={router} />);
+}
+
 describe("TaskDetailPage", () => {
   beforeEach(() => {
     localStorageMock.clear();
@@ -138,5 +156,15 @@ describe("TaskDetailPage", () => {
       "/projects/550e8400-e29b-41d4-a716-446655440010",
     );
     expect(screen.queryByRole("link", { name: "Back to Dashboard" })).not.toBeInTheDocument();
+  });
+
+  it("renders dedicated issue-detail shell on project issue route", async () => {
+    renderIssueDetail("/projects/550e8400-e29b-41d4-a716-446655440010/issues/issue-123");
+    expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
+  });
+
+  it("renders dedicated issue-detail shell on issue alias route", async () => {
+    renderIssueDetail("/issue/issue-123");
+    expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
   });
 });
