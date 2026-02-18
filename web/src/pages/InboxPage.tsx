@@ -191,13 +191,23 @@ export default function InboxPage() {
 
   return (
     <div className="inbox-container">
-      <div className="mb-6">
-        <h1 className="page-title">
-          Inbox
-        </h1>
-        <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-          {filteredItems.length} items requiring your attention
-        </p>
+      <div className="inbox-header" data-testid="inbox-header">
+        <div className="inbox-header-main">
+          <h1 className="page-title">
+            Inbox
+          </h1>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            {filteredItems.length} items requiring your attention
+          </p>
+        </div>
+        <div className="inbox-header-actions" aria-label="Inbox actions">
+          <button type="button" className="inbox-icon-action" aria-label="Filter inbox">
+            Filter
+          </button>
+          <button type="button" className="inbox-icon-action" aria-label="Archive inbox">
+            Archive
+          </button>
+        </div>
       </div>
 
       <div className="inbox-filter-tabs" role="tablist" aria-label="Inbox filters">
@@ -230,7 +240,8 @@ export default function InboxPage() {
         </button>
       </div>
 
-      <div className="inbox-list">
+      <div className="inbox-list-container oc-panel" data-testid="inbox-list-container">
+        <div className="inbox-list">
         {filteredItems.length === 0 ? (
           <div className="inbox-empty oc-panel">
             <span className="inbox-empty-icon">📭</span>
@@ -240,7 +251,8 @@ export default function InboxPage() {
           filteredItems.map((item) => (
             <div
               key={item.id}
-              className={`inbox-item oc-card oc-card-interactive ${item.urgent ? "urgent" : ""}`}
+              className={`inbox-row inbox-item oc-card oc-card-interactive ${item.urgent ? "urgent" : ""}`}
+              data-testid="inbox-row"
             >
               <div className="item-header">
                 <div className={`item-icon ${item.itemType}`}>
@@ -261,6 +273,11 @@ export default function InboxPage() {
                     <span className="item-time">{formatTime(item.createdAt)}</span>
                   </div>
                 </div>
+              </div>
+              <div className="inbox-row-meta" data-testid="inbox-row-meta">
+                <span className="inbox-row-type">{item.type}</span>
+                <span className="inbox-row-from">from {item.agent}</span>
+                <span className="inbox-row-timestamp">{formatTime(item.createdAt)}</span>
               </div>
               <div className="item-body">
                 <p className="item-desc">{item.description}</p>
@@ -284,6 +301,7 @@ export default function InboxPage() {
             </div>
           ))
         )}
+        </div>
       </div>
     </div>
   );
