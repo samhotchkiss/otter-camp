@@ -63,4 +63,15 @@ describe("design system stylesheet contract", () => {
     expect(foundationDocs).toContain("Do:");
     expect(foundationDocs).toContain("Don't:");
   });
+
+  it("shell layout primitives are defined for sidebar/header/workspace/chat", () => {
+    const themeCss = readFixture("../theme.css");
+
+    expect(themeCss).toContain(".shell-layout");
+    expect(themeCss).toContain(".shell-sidebar");
+    expect(themeCss).toContain(".shell-header");
+    expect(themeCss).toContain(".shell-workspace");
+    expect(themeCss).toContain(".shell-chat-slot");
+    expect(themeCss).toContain("@media (max-width: 1024px)");
+  });
 });
