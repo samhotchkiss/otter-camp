@@ -3,6 +3,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useNavigate } from "react-router-dom";
 import { API_URL } from "../../lib/api";
+import { buildReviewDocumentId } from "../content-review/markdownAsset";
 import MarkdownPreview from "../content-review/MarkdownPreview";
 import { resolveEditorForPath } from "../content-review/editorModeResolver";
 import ProjectCommitBrowser from "./ProjectCommitBrowser";
@@ -107,9 +108,11 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
   const [mode, setMode] = useState<BrowserMode>("files");
   const [currentPath, setCurrentPath] = useState("/");
   const [entries, setEntries] = useState<ProjectTreeEntry[]>([]);
+  const [treeRef, setTreeRef] = useState("main");
   const [treeLoading, setTreeLoading] = useState(true);
   const [treeError, setTreeError] = useState<string | null>(null);
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [blob, setBlob] = useState<ProjectBlobResponse | null>(null);
@@ -151,6 +154,7 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
         }
         const payload = (await response.json()) as ProjectTreeResponse;
         if (!cancelled) {
+          setTreeRef(payload.ref || "main");
           setEntries(Array.isArray(payload.entries) ? payload.entries : []);
         }
       } catch (error) {
@@ -233,9 +237,18 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
     () => (selectedFilePath ? resolveEditorForPath(selectedFilePath) : null),
     [selectedFilePath],
   );
+  const filteredEntries = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return entries;
+    return entries.filter((entry) => entry.name.toLowerCase().includes(query));
+  }, [entries, searchQuery]);
   const canCreateLinkedIssue = useMemo(
     () => Boolean(selectedFilePath && /^\/posts\/.+\.md$/i.test(selectedFilePath)),
     [selectedFilePath],
+  );
+  const canOpenInReview = useMemo(
+    () => Boolean(selectedFilePath && selectedResolution?.editorMode === "markdown"),
+    [selectedFilePath, selectedResolution],
   );
 
   const prefersDark = useMemo(() => {
@@ -317,23 +330,38 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
 
   return (
     <section className="space-y-3" data-testid="project-file-browser">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-[var(--text)]">Files</h3>
-        <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-1">
-          <button
-            type="button"
-            className="rounded-md bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text)]"
-            onClick={() => setMode("files")}
-          >
-            Files
-          </button>
-          <button
-            type="button"
-            className="rounded-md px-3 py-1 text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text)]"
-            onClick={() => setMode("commits")}
-          >
-            Commit history
-          </button>
+      <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-[var(--text)]">Files</h3>
+          <div className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-muted)]">
+            <span aria-hidden="true">⑂</span>
+            <span>{treeRef}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search files..."
+            className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface-alt)] px-2 text-xs text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[#C9A86C] focus:outline-none"
+          />
+          <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] p-1">
+            <button
+              type="button"
+              className="rounded-md bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text)]"
+              onClick={() => setMode("files")}
+            >
+              Files
+            </button>
+            <button
+              type="button"
+              className="rounded-md px-3 py-1 text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text)]"
+              onClick={() => setMode("commits")}
+            >
+              Commit history
+            </button>
+          </div>
         </div>
       </div>
 
@@ -388,29 +416,29 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
             )
           )}
 
-          {!treeLoading && !treeError && entries.length === 0 && (
+          {!treeLoading && !treeError && filteredEntries.length === 0 && (
             <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-sm text-[var(--text-muted)]">
-              No files found.
+              {searchQuery.trim() ? "No files match search." : "No files found."}
             </p>
           )}
 
-          {!treeLoading && !treeError && entries.length > 0 && (
+          {!treeLoading && !treeError && filteredEntries.length > 0 && (
             <ul className="space-y-1">
-              {entries.map((entry) => {
+              {filteredEntries.map((entry) => {
                 const isActive = selectedFilePath === normalizeAbsolutePath(entry.path);
                 return (
                   <li key={`${entry.type}-${entry.path}`}>
                     <button
                       type="button"
                       onClick={() => handleOpenEntry(entry)}
-                      className={`flex w-full items-center justify-between rounded-lg border px-2 py-1.5 text-left text-sm ${
+                      className={`flex w-full items-center justify-between rounded-lg border px-2 py-1 text-left text-xs ${
                         isActive
                           ? "border-[#C9A86C] bg-[#C9A86C]/20 text-[var(--text)]"
                           : "border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)] hover:bg-[var(--surface)]"
                       }`}
                     >
-                      <span className="truncate">
-                        {entry.type === "dir" ? "📁 " : "📄 "}
+                      <span className="truncate font-medium">
+                        {entry.type === "dir" ? "▸ " : "• "}
                         {entry.name}
                       </span>
                       {entry.type === "file" && (
@@ -445,6 +473,18 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
                       disabled={creatingIssue}
                     >
                       {creatingIssue ? "Creating issue..." : "Create issue for this file"}
+                    </button>
+                  )}
+                  {canOpenInReview && (
+                    <button
+                      type="button"
+                      className="rounded border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-1 text-xs text-[var(--text)] hover:border-[#C9A86C] hover:text-[#C9A86C]"
+                      onClick={() => {
+                        if (!selectedFilePath) return;
+                        navigate(`/review/${buildReviewDocumentId(selectedFilePath)}`);
+                      }}
+                    >
+                      Open in Review
                     </button>
                   )}
                   <button

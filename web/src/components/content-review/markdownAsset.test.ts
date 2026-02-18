@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildMarkdownImageLink, insertMarkdownImageLinkAtSelection } from "./markdownAsset";
+import {
+  buildMarkdownImageLink,
+  buildReviewDocumentId,
+  insertMarkdownImageLinkAtSelection,
+} from "./markdownAsset";
 
 describe("markdown asset helpers", () => {
   it("builds normalized markdown image links", () => {
@@ -22,5 +26,14 @@ describe("markdown asset helpers", () => {
     expect(result.imageMarkdown).toBe("![Cover](/assets/cover.png)");
     expect(result.markdown).toContain("![Cover](/assets/cover.png)");
     expect(result.cursor).toBeGreaterThan(7);
+  });
+
+  it("builds URL-safe review document ids from file paths", () => {
+    expect(buildReviewDocumentId("/posts/2026-02-18 Draft.md")).toBe(
+      "posts%2F2026-02-18%20Draft.md",
+    );
+    expect(decodeURIComponent(buildReviewDocumentId("docs/README.md"))).toBe(
+      "docs/README.md",
+    );
   });
 });
