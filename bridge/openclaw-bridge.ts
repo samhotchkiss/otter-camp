@@ -5713,6 +5713,83 @@ function normalizeDispatchArgs(value: unknown): string[] {
   return args;
 }
 
+export function ensureGatewayCallCredentials(args: string[], tokenRaw: string = OPENCLAW_TOKEN): string[] {
+  const normalized = normalizeDispatchArgs(args);
+  const sanitized: string[] = [];
+  for (let idx = 0; idx < normalized.length; idx += 1) {
+    const arg = normalized[idx];
+    if (arg === '--url') {
+      idx += 1; // Drop explicit URL override for local bridge execution.
+      continue;
+    }
+    sanitized.push(arg);
+  }
+
+  if (sanitized.length < 3) {
+    return sanitized;
+  }
+  if (sanitized[0] !== 'gateway' || sanitized[1] !== 'call' || sanitized[2] !== 'agent') {
+    return sanitized;
+  }
+  if (sanitized.includes('--token') || sanitized.includes('--password')) {
+    return sanitized;
+  }
+  const token = tokenRaw.trim();
+  if (!token) {
+    return sanitized;
+  }
+  return [...sanitized, '--token', token];
+}
+
+export function compactMemoryExtractOutput(rawOutput: string): string {
+  const trimmed = rawOutput.trim();
+  if (!trimmed) {
+    return rawOutput;
+  }
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return rawOutput;
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return rawOutput;
+  }
+
+  const result = asRecord(parsed.result);
+  const payloadsRaw = Array.isArray(result?.payloads) ? result?.payloads : [];
+  const payloads = payloadsRaw
+    .map((entry) => {
+      const record = asRecord(entry);
+      const text = getTrimmedString(record?.text);
+      if (!text) {
+        return null;
+      }
+      return { text };
+    })
+    .filter((entry): entry is { text: string } => entry !== null);
+
+  const model = getTrimmedString(
+    asRecord(asRecord(result?.meta)?.agentMeta)?.model,
+  );
+
+  const compact: Record<string, unknown> = {
+    runId: getTrimmedString(parsed.runId),
+    status: getTrimmedString(parsed.status) || 'ok',
+    result: {
+      payloads,
+      meta: {
+        agentMeta: {
+          model,
+        },
+      },
+    },
+  };
+
+  return JSON.stringify(compact);
+}
+
 function sendOtterCampSocketEvent(event: Record<string, unknown>): boolean {
   if (!otterCampWS || otterCampWS.readyState !== WebSocket.OPEN) {
     return false;
@@ -5752,8 +5829,8 @@ async function handleMemoryExtractDispatchEvent(event: MemoryExtractDispatchEven
   }
 
   try {
-    const output = await runOpenClawCommandCapture(args);
-    sendResponse({ ok: true, output });
+    const output = await runOpenClawCommandCapture(ensureGatewayCallCredentials(args));
+    sendResponse({ ok: true, output: compactMemoryExtractOutput(output) });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     sendResponse({ ok: false, error: detail });

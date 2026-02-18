@@ -8,6 +8,8 @@ import {
   buildGatewayConnectCapsForTest,
   buildCompletionActivityEventFromProgressLineForTest,
   buildIdentityPreamble,
+  compactMemoryExtractOutput,
+  ensureGatewayCallCredentials,
   ensureChameleonWorkspaceGuideInstalledForTest,
   ensureChameleonWorkspaceOtterCLIConfigInstalledForTest,
   formatSessionContextMessageForTest,
@@ -1533,8 +1535,15 @@ describe("bridge memory extraction dispatch helpers", () => {
   it("executes memory.extract.request and sends success response", async () => {
     setExecFileForTest((cmd, args, _options, callback) => {
       assert.equal(cmd, "openclaw");
-      assert.deepEqual(args, ["gateway", "call", "agent", "--json"]);
-      callback(null, '{"runId":"trace-1","status":"ok"}', "");
+      assert.equal(args[0], "gateway");
+      assert.equal(args[1], "call");
+      assert.equal(args[2], "agent");
+      assert.ok(args.includes("--json"));
+      callback(
+        null,
+        '{"runId":"trace-1","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"},"systemPromptReport":{"chars":99999}}}}',
+        "",
+      );
     });
 
     await dispatchInboundEventForTest("memory.extract.request", {
@@ -1551,7 +1560,20 @@ describe("bridge memory extraction dispatch helpers", () => {
     const data = sentMessages[0]?.data as Record<string, unknown>;
     assert.equal(data.request_id, "req-1");
     assert.equal(data.ok, true);
-    assert.equal(data.output, '{"runId":"trace-1","status":"ok"}');
+    const output = JSON.parse(String(data.output || "{}")) as Record<string, unknown>;
+    assert.equal(output.runId, "trace-1");
+    assert.equal(output.status, "ok");
+    assert.deepEqual(
+      (output.result as Record<string, unknown>)?.payloads,
+      [{ text: '{"candidates":[]}' }],
+    );
+    assert.equal(
+      ((output.result as Record<string, unknown>)?.meta as Record<string, unknown>)?.agentMeta
+        ? ((output.result as Record<string, unknown>)?.meta as Record<string, unknown>).agentMeta.model
+        : undefined,
+      "claude-haiku-4-5",
+    );
+    assert.equal(String(data.output || "").includes("systemPromptReport"), false);
   });
 
   it("rejects unsupported memory.extract.request commands with error response", async () => {
@@ -1569,5 +1591,45 @@ describe("bridge memory extraction dispatch helpers", () => {
     assert.equal(data.request_id, "req-2");
     assert.equal(data.ok, false);
     assert.match(String(data.error || ""), /requires args beginning/);
+  });
+
+  it("injects gateway token when credentials are missing", () => {
+    const args = ensureGatewayCallCredentials(
+      ["gateway", "call", "agent", "--json"],
+      "token-123",
+    );
+    assert.deepEqual(args, ["gateway", "call", "agent", "--json", "--token", "token-123"]);
+  });
+
+  it("preserves explicit gateway credentials", () => {
+    const withToken = ensureGatewayCallCredentials(
+      ["gateway", "call", "agent", "--json", "--token", "token-abc"],
+      "token-123",
+    );
+    assert.deepEqual(withToken, ["gateway", "call", "agent", "--json", "--token", "token-abc"]);
+
+    const withPassword = ensureGatewayCallCredentials(
+      ["gateway", "call", "agent", "--json", "--password", "secret"],
+      "token-123",
+    );
+    assert.deepEqual(withPassword, ["gateway", "call", "agent", "--json", "--password", "secret"]);
+  });
+
+  it("strips explicit --url overrides for bridge-side gateway execution", () => {
+    const args = ensureGatewayCallCredentials(
+      ["gateway", "call", "agent", "--json", "--url", "ws://127.0.0.1:18791"],
+      "token-123",
+    );
+    assert.deepEqual(args, ["gateway", "call", "agent", "--json", "--token", "token-123"]);
+  });
+
+  it("compacts oversized gateway output payloads", () => {
+    const compacted = compactMemoryExtractOutput(
+      '{"runId":"trace-2","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[{\\"kind\\":\\"fact\\"}]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"},"systemPromptReport":{"chars":999999}}}}',
+    );
+    assert.equal(compacted.includes("systemPromptReport"), false);
+    const parsed = JSON.parse(compacted) as Record<string, unknown>;
+    assert.equal(parsed.runId, "trace-2");
+    assert.equal(parsed.status, "ok");
   });
 });
