@@ -272,7 +272,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     setAvatarMenuOpen(false);
   }, [location.pathname]);
 
-  // Close avatar menu on click outside or Escape
+  // Close avatar menu on click outside.
   useEffect(() => {
     if (!avatarMenuOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
@@ -280,14 +280,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         setAvatarMenuOpen(false);
       }
     };
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setAvatarMenuOpen(false);
-    };
     document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleEscape);
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEscape);
     };
   }, [avatarMenuOpen]);
 
