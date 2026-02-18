@@ -53,4 +53,14 @@ describe("design system stylesheet contract", () => {
     expect(primitivesCss).toContain(".oc-toolbar-button");
     expect(primitivesCss).toContain("var(--oc-shadow-focus)");
   });
+
+  it("foundation documentation includes token and primitive migration guidance", () => {
+    const foundationDocs = readFixture("./FOUNDATION.md");
+
+    expect(foundationDocs).toContain("`--oc-*`");
+    expect(foundationDocs).toContain("`oc-panel`");
+    expect(foundationDocs).toContain("`oc-toolbar-button`");
+    expect(foundationDocs).toContain("Do:");
+    expect(foundationDocs).toContain("Don't:");
+  });
 });
