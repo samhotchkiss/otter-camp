@@ -3,6 +3,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useNavigate } from "react-router-dom";
 import { API_URL } from "../../lib/api";
+import { buildReviewDocumentId } from "../content-review/markdownAsset";
 import MarkdownPreview from "../content-review/MarkdownPreview";
 import { resolveEditorForPath } from "../content-review/editorModeResolver";
 import ProjectCommitBrowser from "./ProjectCommitBrowser";
@@ -245,6 +246,10 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
     () => Boolean(selectedFilePath && /^\/posts\/.+\.md$/i.test(selectedFilePath)),
     [selectedFilePath],
   );
+  const canOpenInReview = useMemo(
+    () => Boolean(selectedFilePath && selectedResolution?.editorMode === "markdown"),
+    [selectedFilePath, selectedResolution],
+  );
 
   const prefersDark = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -468,6 +473,18 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
                       disabled={creatingIssue}
                     >
                       {creatingIssue ? "Creating issue..." : "Create issue for this file"}
+                    </button>
+                  )}
+                  {canOpenInReview && (
+                    <button
+                      type="button"
+                      className="rounded border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-1 text-xs text-[var(--text)] hover:border-[#C9A86C] hover:text-[#C9A86C]"
+                      onClick={() => {
+                        if (!selectedFilePath) return;
+                        navigate(`/review/${buildReviewDocumentId(selectedFilePath)}`);
+                      }}
+                    >
+                      Open in Review
                     </button>
                   )}
                   <button

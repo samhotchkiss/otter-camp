@@ -43,10 +43,20 @@ function deriveAltText(assetPath: string, altText?: string): string {
   return withoutExt || "image";
 }
 
+function normalizeReviewPath(input: string): string {
+  const trimmed = (input ?? "").trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/^\/+/, "").replace(/\/+/g, "/");
+}
+
 export function buildMarkdownImageLink(assetPath: string, altText?: string): string {
   const normalizedPath = normalizeAssetPath(assetPath);
   const normalizedAlt = deriveAltText(normalizedPath, altText);
   return `![${normalizedAlt}](${normalizedPath})`;
+}
+
+export function buildReviewDocumentId(filePath: string): string {
+  return encodeURIComponent(normalizeReviewPath(filePath));
 }
 
 export function insertMarkdownImageLinkAtSelection(
