@@ -395,7 +395,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <button
             type="button"
             className="mobile-menu-btn"
-            aria-label="Toggle menu"
+            aria-label="Close menu"
             onClick={() => setMobileMenuOpen(false)}
           >
             ✕
