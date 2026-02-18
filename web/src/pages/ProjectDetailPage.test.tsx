@@ -78,6 +78,7 @@ describe("ProjectDetailPage files tab", () => {
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    expect(screen.getByTestId("project-detail-shell")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Chat" })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "+ New Task" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();

@@ -274,7 +274,10 @@ export default function ProjectIssuesList({
   }, [agentNameByID, items]);
 
   return (
-    <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+    <section
+      data-testid="project-issues-shell"
+      className="rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm"
+    >
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <div className="flex flex-col gap-1">
           <label className="text-xs font-semibold text-[var(--text-muted)]" htmlFor="issues-state-filter">
@@ -367,20 +370,20 @@ export default function ProjectIssuesList({
                   className={`w-full rounded-xl border px-4 py-3 text-left transition ${
                     selected
                       ? "border-amber-500 bg-[var(--surface)] shadow-[0_0_0_1px_rgba(201,168,108,0.22)]"
-                      : "border-[var(--border)] hover:border-amber-300 hover:bg-[var(--surface-alt)]"
+                      : "border-[var(--border)] bg-[var(--surface)] hover:border-amber-300 hover:bg-[var(--surface-alt)]"
                   }`}
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-semibold text-[var(--text)]">
                       #{issue.issue_number} {issue.title}
                     </span>
-                    <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
+                    <span className="rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
                       {normalizeIssueKindLabel(issue.kind)}
                     </span>
-                    <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
+                    <span className="rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
                       {normalizeOriginLabel(issue.origin)}
                     </span>
-                    <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
+                    <span className="rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
                       {issue.state === "open" ? "Open" : "Closed"}
                     </span>
                     <span
