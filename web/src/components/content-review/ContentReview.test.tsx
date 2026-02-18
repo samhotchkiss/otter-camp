@@ -4,6 +4,15 @@ import userEvent from "@testing-library/user-event";
 import ContentReview from "./ContentReview";
 
 describe("ContentReview state workflow", () => {
+  it("renders redesigned review shell scaffolding for stats, line lane, and sidebar", () => {
+    render(<ContentReview initialMarkdown="# Title\n\nBody" reviewerName="Sam" />);
+
+    expect(screen.getByTestId("content-review-shell")).toBeInTheDocument();
+    expect(screen.getByTestId("review-stats-grid")).toBeInTheDocument();
+    expect(screen.getByTestId("review-line-lane")).toBeInTheDocument();
+    expect(screen.getByTestId("review-comment-sidebar")).toBeInTheDocument();
+  });
+
   it("starts in Draft and requires Ready-for-Review before approval actions", () => {
     render(<ContentReview initialMarkdown="# Title\n\nBody" reviewerName="Sam" />);
 
