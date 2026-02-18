@@ -19,6 +19,7 @@ const TaskDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/TaskD
 const NotFoundPage = lazy(() => lazyWithChunkRetry(() => import("./pages/NotFoundPage")));
 const InboxPage = lazy(() => lazyWithChunkRetry(() => import("./pages/InboxPage")));
 const ProjectDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ProjectDetailPage")));
+const IssueDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/IssueDetailPage")));
 const WorkflowsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/WorkflowsPage")));
 const KnowledgePage = lazy(() => lazyWithChunkRetry(() => import("./pages/KnowledgePage")));
 const MemoryEvaluationPage = lazy(() => lazyWithChunkRetry(() => import("./pages/MemoryEvaluationPage")));
@@ -56,14 +57,6 @@ function ProjectAliasAdapter() {
     return <Navigate to="/projects" replace />;
   }
   return <Navigate to={`/projects/${encodeURIComponent(projectId)}`} replace />;
-}
-
-function IssueAliasAdapter() {
-  const { issueId } = useParams<{ issueId?: string }>();
-  if (!issueId) {
-    return <Navigate to="/tasks" replace />;
-  }
-  return <Navigate to={`/tasks/${encodeURIComponent(issueId)}`} replace />;
 }
 
 export const router = createBrowserRouter([
@@ -134,11 +127,11 @@ export const router = createBrowserRouter([
       },
       {
         path: "issue/:issueId",
-        element: <IssueAliasAdapter />,
+        element: <IssueDetailPage />,
       },
       {
         path: "projects/:id/issues/:issueId",
-        element: <ProjectDetailPage />,
+        element: <IssueDetailPage />,
       },
       {
         path: "review/:documentId",

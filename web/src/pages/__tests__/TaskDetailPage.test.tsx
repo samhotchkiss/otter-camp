@@ -3,6 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import TaskDetailPage from "../TaskDetailPage";
+import IssueDetailPage from "../IssueDetailPage";
+
+vi.mock("../../contexts/WebSocketContext", () => ({
+  useWS: () => ({
+    connected: false,
+    lastMessage: null,
+    sendMessage: vi.fn(() => true),
+  }),
+  useOptionalWS: () => null,
+}));
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -47,11 +57,11 @@ function renderIssueDetail(pathname: string) {
     [
       {
         path: "/projects/:id/issues/:issueId",
-        element: <TaskDetailPage />,
+        element: <IssueDetailPage />,
       },
       {
         path: "/issue/:issueId",
-        element: <TaskDetailPage />,
+        element: <IssueDetailPage />,
       },
     ],
     { initialEntries: [pathname] }
