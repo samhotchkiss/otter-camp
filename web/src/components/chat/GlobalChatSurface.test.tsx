@@ -130,6 +130,13 @@ describe("GlobalChatSurface", () => {
     expect(screen.getByText("Project context")).toBeInTheDocument();
   });
 
+  it("shows a DM context cue in the chat surface", async () => {
+    render(<GlobalChatSurface conversation={baseConversation} />);
+
+    await screen.findByPlaceholderText("Message Stone...");
+    expect(screen.getByText("DM context")).toBeInTheDocument();
+  });
+
   it("refetches when conversation identity changes", async () => {
     const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
 

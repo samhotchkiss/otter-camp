@@ -344,4 +344,34 @@ describe("GlobalChatDock", () => {
 
     expect(screen.getByText("Project context")).toBeInTheDocument();
   });
+
+  it("shows a DM context cue for selected direct conversations", () => {
+    globalChatState.conversations = [
+      {
+        key: "dm:dm_stone",
+        type: "dm",
+        threadId: "dm_stone",
+        title: "Stone",
+        contextLabel: "Direct message",
+        subtitle: "Agent chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T10:00:00.000Z",
+        agent: {
+          id: "stone",
+          name: "Stone",
+          status: "online",
+        },
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    render(
+      <MemoryRouter initialEntries={["/chats"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("DM context")).toBeInTheDocument();
+  });
 });

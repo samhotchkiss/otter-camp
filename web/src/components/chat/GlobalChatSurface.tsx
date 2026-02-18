@@ -1456,6 +1456,9 @@ export default function GlobalChatSurface({
     if (conversationType === "issue") {
       return "Issue context";
     }
+    if (conversationType === "dm") {
+      return "DM context";
+    }
     return "Main context";
   }, [conversationType]);
 

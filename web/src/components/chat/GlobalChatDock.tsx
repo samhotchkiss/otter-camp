@@ -112,7 +112,7 @@ export default function GlobalChatDock() {
     if (selectedConversation.type === "issue") {
       return "Issue context";
     }
-    return "Direct context";
+    return "DM context";
   }, [selectedConversation]);
 
   useEffect(() => {
