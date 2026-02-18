@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,8 +99,11 @@ func TestEllieIngestionOpenClawExtractorBuildsGatewayAgentCall(t *testing.T) {
 	var params map[string]any
 	require.NoError(t, json.Unmarshal([]byte(runner.args[6]), &params))
 	require.Equal(t, false, params["deliver"])
-	require.Equal(t, "agent:elephant:main:ellie-ingestion:0d86d9e4-b8a1-46cf-aed1-c666123c2d1f", params["sessionKey"])
-	require.NotEmpty(t, params["idempotencyKey"])
+	sessionKey, _ := params["sessionKey"].(string)
+	require.Contains(t, sessionKey, "agent:elephant:main:ellie-ingestion:0d86d9e4-b8a1-46cf-aed1-c666123c2d1f-")
+	idempotencyKey, _ := params["idempotencyKey"].(string)
+	require.NotEmpty(t, idempotencyKey)
+	require.Contains(t, sessionKey, strings.TrimPrefix(idempotencyKey, "ellie-ingestion-"))
 	require.Contains(t, params["message"], "Return strict JSON only")
 	require.Contains(t, params["message"], "We decided to keep explicit SQL migrations.")
 }

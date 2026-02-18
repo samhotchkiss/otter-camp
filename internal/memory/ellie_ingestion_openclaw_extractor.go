@@ -22,7 +22,7 @@ const (
 	defaultEllieIngestionOpenClawGatewayURL         = "ws://127.0.0.1:18791"
 	defaultEllieIngestionOpenClawAgentID            = "elephant"
 	defaultEllieIngestionOpenClawSessionNamespace   = "ellie-ingestion"
-	defaultEllieIngestionOpenClawGatewayCallTimeout = 90 * time.Second
+	defaultEllieIngestionOpenClawGatewayCallTimeout = 3 * time.Minute
 	defaultEllieIngestionOpenClawMaxCandidateChars  = 800
 	defaultEllieIngestionOpenClawMaxPromptChars     = 18000
 	defaultEllieIngestionOpenClawMaxMessageChars    = 1200
@@ -306,7 +306,7 @@ func (e *EllieIngestionOpenClawExtractor) Extract(
 
 	paramsRaw, err := json.Marshal(map[string]any{
 		"idempotencyKey": e.idempotencyKey(orgID, roomID, input.Messages),
-		"sessionKey":     e.sessionKey(orgID),
+		"sessionKey":     e.sessionKey(orgID, roomID, input.Messages),
 		"message":        buildEllieIngestionOpenClawPrompt(input, e.maxPromptChars, e.maxMessageChars),
 		"deliver":        false,
 	})
@@ -374,12 +374,14 @@ func (e *EllieIngestionOpenClawExtractor) Extract(
 	}, nil
 }
 
-func (e *EllieIngestionOpenClawExtractor) sessionKey(orgID string) string {
+func (e *EllieIngestionOpenClawExtractor) sessionKey(orgID, roomID string, messages []store.EllieIngestionMessage) string {
+	windowHash := e.windowFingerprint(orgID, roomID, messages)
 	return fmt.Sprintf(
-		"agent:%s:main:%s:%s",
+		"agent:%s:main:%s:%s-%s",
 		e.agentID,
 		e.sessionNamespace,
 		normalizeEllieIngestionOpenClawSessionToken(orgID, "org"),
+		windowHash,
 	)
 }
 
@@ -422,12 +424,14 @@ func (e *EllieIngestionOpenClawExtractor) runGatewayAgentCall(
 }
 
 func (e *EllieIngestionOpenClawExtractor) idempotencyKey(orgID, roomID string, messages []store.EllieIngestionMessage) string {
+	return "ellie-ingestion-" + e.windowFingerprint(orgID, roomID, messages)
+}
+
+func (e *EllieIngestionOpenClawExtractor) windowFingerprint(orgID, roomID string, messages []store.EllieIngestionMessage) string {
 	var builder strings.Builder
 	builder.WriteString(strings.TrimSpace(orgID))
 	builder.WriteString("|")
 	builder.WriteString(strings.TrimSpace(roomID))
-	builder.WriteString("|")
-	builder.WriteString(e.now().UTC().Format(time.RFC3339Nano))
 	for _, message := range messages {
 		builder.WriteString("|")
 		builder.WriteString(strings.TrimSpace(message.ID))
@@ -435,7 +439,7 @@ func (e *EllieIngestionOpenClawExtractor) idempotencyKey(orgID, roomID string, m
 		builder.WriteString(message.CreatedAt.UTC().Format(time.RFC3339Nano))
 	}
 	sum := sha1.Sum([]byte(builder.String()))
-	return fmt.Sprintf("ellie-ingestion-%x", sum[:8])
+	return fmt.Sprintf("%x", sum[:8])
 }
 
 func buildEllieIngestionOpenClawPrompt(
