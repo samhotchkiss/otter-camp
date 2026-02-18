@@ -950,8 +950,10 @@ func fallbackDMDispatchSessionKey(
 	if err != nil {
 		return "", err
 	}
-	if strings.EqualFold(agentSlug, openClawSystemAgentElephant) {
-		return "agent:elephant:main", nil
+	// Route agents with known slugs to their own OpenClaw session.
+	// Only fall back to chameleon for agents without a slug or the chameleon agent itself.
+	if agentSlug != "" && !strings.EqualFold(agentSlug, openClawSystemAgentChameleon) {
+		return "agent:" + strings.ToLower(agentSlug) + ":main", nil
 	}
 	return canonicalChameleonSessionKey(agentID), nil
 }
@@ -972,8 +974,10 @@ func normalizeDMDispatchSessionKey(
 	if err != nil {
 		return "", err
 	}
-	if strings.EqualFold(agentSlug, openClawSystemAgentElephant) && ValidateChameleonSessionKey(normalizedSessionKey) {
-		return "agent:elephant:main", nil
+	// If the existing session key is a chameleon key but the agent has its own
+	// OpenClaw slot, override to the agent's real session key.
+	if agentSlug != "" && !strings.EqualFold(agentSlug, openClawSystemAgentChameleon) && ValidateChameleonSessionKey(normalizedSessionKey) {
+		return "agent:" + strings.ToLower(agentSlug) + ":main", nil
 	}
 	return normalizedSessionKey, nil
 }
