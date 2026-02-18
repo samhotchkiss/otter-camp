@@ -102,6 +102,18 @@ export default function GlobalChatDock() {
     }
     return null;
   }, [routeProjectID, selectedConversation]);
+  const selectedContextCue = useMemo(() => {
+    if (!selectedConversation) {
+      return "Main context";
+    }
+    if (selectedConversation.type === "project") {
+      return "Project context";
+    }
+    if (selectedConversation.type === "issue") {
+      return "Issue context";
+    }
+    return "Direct context";
+  }, [selectedConversation]);
 
   useEffect(() => {
     if (isOpen && selectedKey) {
@@ -379,6 +391,9 @@ export default function GlobalChatDock() {
         <header className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-semibold text-[var(--text)]">Global Chat</h2>
+            <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">
+              {selectedContextCue}
+            </span>
             {unreadBadge}
           </div>
           <div className="flex items-center gap-2">
