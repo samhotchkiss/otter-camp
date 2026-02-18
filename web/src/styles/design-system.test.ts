@@ -34,4 +34,23 @@ describe("design system stylesheet contract", () => {
     expect(tokensCss).toContain("--font: var(--oc-font-sans);");
     expect(tokensCss).toContain("--font-mono: var(--oc-font-mono);");
   });
+
+  it("shared primitives define panel, card, chip, and status-dot contracts", () => {
+    const primitivesCss = readFixture("./primitives.css");
+
+    expect(primitivesCss).toContain(".oc-panel");
+    expect(primitivesCss).toContain(".oc-card");
+    expect(primitivesCss).toContain(".oc-chip");
+    expect(primitivesCss).toContain(".oc-status-dot");
+    expect(primitivesCss).toContain("var(--oc-color-surface-default)");
+  });
+
+  it("toolbar primitives provide reusable input/button patterns", () => {
+    const primitivesCss = readFixture("./primitives.css");
+
+    expect(primitivesCss).toContain(".oc-toolbar");
+    expect(primitivesCss).toContain(".oc-toolbar-input");
+    expect(primitivesCss).toContain(".oc-toolbar-button");
+    expect(primitivesCss).toContain("var(--oc-shadow-focus)");
+  });
 });

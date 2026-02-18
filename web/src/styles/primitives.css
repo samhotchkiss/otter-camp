@@ -1,0 +1,134 @@
+/* Shared shell/page primitives built on canonical --oc-* tokens. */
+
+.oc-panel {
+  background: var(--oc-color-surface-default);
+  border: 1px solid var(--oc-color-border-default);
+  border-radius: var(--oc-radius-md);
+  box-shadow: var(--oc-shadow-panel);
+}
+
+.oc-panel-muted {
+  background: var(--oc-color-surface-muted);
+}
+
+.oc-card {
+  border-radius: var(--oc-radius-md);
+  border: 1px solid var(--oc-color-border-default);
+  background: var(--oc-color-surface-default);
+  padding: var(--oc-space-lg);
+}
+
+.oc-card-interactive {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.oc-card-interactive:hover {
+  border-color: var(--oc-color-accent);
+}
+
+.oc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--oc-space-2xs);
+  border-radius: var(--oc-radius-pill);
+  border: 1px solid var(--oc-color-border-default);
+  background: var(--oc-color-surface-muted);
+  color: var(--oc-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+}
+
+.oc-chip--success {
+  color: var(--oc-color-status-success);
+}
+
+.oc-chip--warning {
+  color: var(--oc-color-status-warning);
+}
+
+.oc-chip--danger {
+  color: var(--oc-color-status-danger);
+}
+
+.oc-chip--info {
+  color: var(--oc-color-status-info);
+}
+
+.oc-status-dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--oc-color-text-muted);
+}
+
+.oc-status-dot--success {
+  background: var(--oc-color-status-success);
+}
+
+.oc-status-dot--warning {
+  background: var(--oc-color-status-warning);
+}
+
+.oc-status-dot--danger {
+  background: var(--oc-color-status-danger);
+}
+
+.oc-status-dot--info {
+  background: var(--oc-color-status-info);
+}
+
+.oc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--oc-space-sm);
+}
+
+.oc-toolbar-input {
+  width: 100%;
+  min-height: 2.5rem;
+  border: 1px solid var(--oc-color-border-default);
+  border-radius: var(--oc-radius-sm);
+  background: var(--oc-color-surface-muted);
+  color: var(--oc-color-text-primary);
+  font-family: var(--oc-font-sans);
+  font-size: 0.875rem;
+  padding: 0.5rem 0.75rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.oc-toolbar-input:focus,
+.oc-toolbar-input:focus-visible {
+  border-color: var(--oc-color-accent);
+  box-shadow: var(--oc-shadow-focus);
+  outline: none;
+}
+
+.oc-toolbar-button {
+  min-height: 2.5rem;
+  border: 1px solid var(--oc-color-border-default);
+  border-radius: var(--oc-radius-sm);
+  background: var(--oc-color-surface-muted);
+  color: var(--oc-color-text-primary);
+  font-family: var(--oc-font-sans);
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 0.5rem 0.875rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.oc-toolbar-button:hover {
+  border-color: var(--oc-color-accent);
+}
+
+.oc-toolbar-button--primary {
+  background: var(--oc-color-accent);
+  color: var(--oc-color-bg-canvas);
+  border-color: transparent;
+}
+
+.oc-toolbar-button--primary:hover {
+  background: var(--oc-color-accent-hover);
+}
