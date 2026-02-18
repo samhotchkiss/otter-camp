@@ -286,6 +286,44 @@ describe("InboxPage", () => {
     expect(approveItemMock).toHaveBeenCalledWith("approval-2");
   });
 
+  it("disables actions while reject is processing and removes item after success", async () => {
+    inboxMock.mockResolvedValue({
+      items: [
+        {
+          id: "approval-3",
+          type: "Deploy",
+          command: "deploy service",
+          agent: "Agent-128",
+          status: "pending",
+          createdAt: "2026-02-18T20:00:00Z",
+        },
+      ],
+    });
+
+    const pendingReject = deferred<{ success: boolean }>();
+    rejectItemMock.mockReturnValue(pendingReject.promise);
+
+    render(<InboxPage />);
+
+    const rejectButton = await screen.findByRole("button", { name: "Reject" });
+    const approveButton = screen.getByRole("button", { name: "Approve" });
+
+    fireEvent.click(rejectButton);
+
+    const processingButtons = await screen.findAllByRole("button", { name: "Processing..." });
+    expect(processingButtons).toHaveLength(2);
+    expect(processingButtons[0]).toBeDisabled();
+    expect(processingButtons[1]).toBeDisabled();
+    expect(approveButton).toBeDisabled();
+
+    pendingReject.resolve({ success: true });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: /Deploy.*Agent-128/ })).not.toBeInTheDocument();
+    });
+    expect(rejectItemMock).toHaveBeenCalledWith("approval-3");
+  });
+
   it("renders error state when inbox request fails", async () => {
     inboxMock.mockRejectedValue(new Error("Failed to fetch approvals"));
 
