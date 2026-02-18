@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/json"
@@ -683,26 +684,44 @@ type ellieIngestionStage1Envelope struct {
 	SummaryText string `json:"Summary"`
 	Candidates  struct {
 		Memories []ellieIngestionStage1Candidate `json:"memories"`
-		Projects []struct {
-			Name             string   `json:"name"`
-			Description      string   `json:"description"`
-			Status           string   `json:"status"`
-			SourceMessageIDs []string `json:"source_message_ids"`
-			SourceIDsCamel   []string `json:"sourceMessageIds"`
-			Confidence       *float64 `json:"confidence"`
-		} `json:"projects"`
-		Issues []struct {
-			Title            string   `json:"title"`
-			Description      string   `json:"description"`
-			Status           string   `json:"status"`
-			Project          *string  `json:"project"`
-			SourceMessageIDs []string `json:"source_message_ids"`
-			SourceIDsCamel   []string `json:"sourceMessageIds"`
-			SourceQuotes     []string `json:"source_quotes"`
-			QuotesCamel      []string `json:"sourceQuotes"`
-			Confidence       *float64 `json:"confidence"`
-		} `json:"issues"`
+		Projects []ellieIngestionStage1Project   `json:"projects"`
+		Issues   []ellieIngestionStage1Issue     `json:"issues"`
 	} `json:"candidates"`
+}
+
+type ellieIngestionStage1Project struct {
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	Status           string   `json:"status"`
+	SourceMessageIDs []string `json:"source_message_ids"`
+	SourceIDsCamel   []string `json:"sourceMessageIds"`
+	Confidence       *float64 `json:"confidence"`
+}
+
+type ellieIngestionStage1Issue struct {
+	Title            string   `json:"title"`
+	Description      string   `json:"description"`
+	Status           string   `json:"status"`
+	Project          *string  `json:"project"`
+	SourceMessageIDs []string `json:"source_message_ids"`
+	SourceIDsCamel   []string `json:"sourceMessageIds"`
+	SourceQuotes     []string `json:"source_quotes"`
+	QuotesCamel      []string `json:"sourceQuotes"`
+	Confidence       *float64 `json:"confidence"`
+}
+
+type ellieIngestionStage1CandidatesObject struct {
+	Memories json.RawMessage `json:"memories"`
+	Memory   json.RawMessage `json:"memory"`
+	Projects json.RawMessage `json:"projects"`
+	Project  json.RawMessage `json:"project"`
+	Issues   json.RawMessage `json:"issues"`
+	Issue    json.RawMessage `json:"issue"`
+}
+
+type ellieIngestionOpenClawFlexibleEnvelope struct {
+	Candidates json.RawMessage `json:"candidates"`
+	Memories   json.RawMessage `json:"memories"`
 }
 
 func parseEllieIngestionOpenClawCandidates(raw string, maxCandidateChars int) ([]EllieIngestionLLMCandidate, error) {
@@ -718,137 +737,12 @@ func parseEllieIngestionOpenClawCandidates(raw string, maxCandidateChars int) ([
 	if strings.HasPrefix(trimmed, "{") {
 		var stage1 ellieIngestionStage1Envelope
 		if err := json.Unmarshal([]byte(trimmed), &stage1); err == nil {
-			out := make([]EllieIngestionLLMCandidate, 0, len(stage1.Candidates.Memories)+len(stage1.Candidates.Projects)+len(stage1.Candidates.Issues))
-
-			for _, row := range stage1.Candidates.Memories {
-				content := strings.TrimSpace(row.Content)
-				if content == "" {
-					continue
-				}
-				if len([]rune(content)) > maxCandidateChars {
-					content = string([]rune(content)[:maxCandidateChars])
-				}
-
-				importance := 3
-				if row.Importance != nil && *row.Importance > 0 {
-					importance = *row.Importance
-				}
-				confidence := 0.7
-				if row.Confidence != nil {
-					confidence = *row.Confidence
-				}
-
-				sourceIDs := row.SourceMessageIDs
-				if len(sourceIDs) == 0 {
-					sourceIDs = row.SourceIDsCamel
-				}
-				quotes := row.SourceQuotes
-				if len(quotes) == 0 {
-					quotes = row.QuotesCamel
-				}
-				originHint := strings.TrimSpace(firstNonEmpty(row.OriginHint, row.OriginCamel))
-				pii := row.PIIFlags
-				if len(pii) == 0 {
-					pii = row.PIICamel
-				}
-				sensitivity := strings.TrimSpace(row.Sensitivity)
-
-				meta := map[string]any{
-					"source_message_ids": sourceIDs,
-					"source_quotes":      quotes,
-					"origin_hint":        originHint,
-					"pii_flags":          pii,
-					"sensitivity":        sensitivity,
-				}
-				if status := strings.TrimSpace(row.Status); status != "" {
-					meta["status"] = status
-				}
-				if project := strings.TrimSpace(row.Project); project != "" {
-					meta["project"] = project
-				}
-
-				out = append(out, EllieIngestionLLMCandidate{
-					Kind:       strings.TrimSpace(row.Kind),
-					Title:      strings.TrimSpace(row.Title),
-					Content:    content,
-					Importance: importance,
-					Confidence: confidence,
-					Metadata:   meta,
-				})
-			}
-
-			// Flatten projects/issues as context candidates for now.
-			for _, proj := range stage1.Candidates.Projects {
-				title := strings.TrimSpace(proj.Name)
-				content := strings.TrimSpace(proj.Description)
-				if title == "" || content == "" {
-					continue
-				}
-				if len([]rune(content)) > maxCandidateChars {
-					content = string([]rune(content)[:maxCandidateChars])
-				}
-				conf := 0.7
-				if proj.Confidence != nil {
-					conf = *proj.Confidence
-				}
-				sourceIDs := proj.SourceMessageIDs
-				if len(sourceIDs) == 0 {
-					sourceIDs = proj.SourceIDsCamel
-				}
-				out = append(out, EllieIngestionLLMCandidate{
-					Kind:       "context",
-					Title:      title,
-					Content:    content,
-					Importance: 4,
-					Confidence: conf,
-					Metadata: map[string]any{
-						"type":               "project",
-						"status":             strings.TrimSpace(proj.Status),
-						"source_message_ids": sourceIDs,
-					},
-				})
-			}
-			for _, iss := range stage1.Candidates.Issues {
-				title := strings.TrimSpace(iss.Title)
-				content := strings.TrimSpace(iss.Description)
-				if title == "" || content == "" {
-					continue
-				}
-				if len([]rune(content)) > maxCandidateChars {
-					content = string([]rune(content)[:maxCandidateChars])
-				}
-				conf := 0.7
-				if iss.Confidence != nil {
-					conf = *iss.Confidence
-				}
-				sourceIDs := iss.SourceMessageIDs
-				if len(sourceIDs) == 0 {
-					sourceIDs = iss.SourceIDsCamel
-				}
-				quotes := iss.SourceQuotes
-				if len(quotes) == 0 {
-					quotes = iss.QuotesCamel
-				}
-				var project string
-				if iss.Project != nil {
-					project = strings.TrimSpace(*iss.Project)
-				}
-				out = append(out, EllieIngestionLLMCandidate{
-					Kind:       "context",
-					Title:      title,
-					Content:    content,
-					Importance: 3,
-					Confidence: conf,
-					Metadata: map[string]any{
-						"type":               "issue",
-						"status":             strings.TrimSpace(iss.Status),
-						"project":            project,
-						"source_message_ids": sourceIDs,
-						"source_quotes":      quotes,
-					},
-				})
-			}
-
+			out := flattenStage1Candidates(
+				stage1.Candidates.Memories,
+				stage1.Candidates.Projects,
+				stage1.Candidates.Issues,
+				maxCandidateChars,
+			)
 			if len(out) > 0 {
 				return out, nil
 			}
@@ -861,13 +755,26 @@ func parseEllieIngestionOpenClawCandidates(raw string, maxCandidateChars int) ([
 			return nil, err
 		}
 	} else {
-		var envelope ellieIngestionOpenClawCandidatesEnvelope
+		var envelope ellieIngestionOpenClawFlexibleEnvelope
 		if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
 			return nil, err
 		}
-		rows = envelope.Candidates
-		if len(rows) == 0 {
-			rows = envelope.Memories
+
+		if len(bytes.TrimSpace(envelope.Candidates)) > 0 {
+			if mem, proj, iss, ok := parseStage1CandidatesObject(envelope.Candidates); ok {
+				out := flattenStage1Candidates(mem, proj, iss, maxCandidateChars)
+				if len(out) > 0 {
+					return out, nil
+				}
+			}
+			if parsed, err := decodeOneOrManyJSON[ellieIngestionOpenClawCandidateJSON](envelope.Candidates); err == nil {
+				rows = parsed
+			}
+		}
+		if len(rows) == 0 && len(bytes.TrimSpace(envelope.Memories)) > 0 {
+			if parsed, err := decodeOneOrManyJSON[ellieIngestionOpenClawCandidateJSON](envelope.Memories); err == nil {
+				rows = parsed
+			}
 		}
 	}
 
@@ -906,6 +813,194 @@ func parseEllieIngestionOpenClawCandidates(raw string, maxCandidateChars int) ([
 		})
 	}
 	return out, nil
+}
+
+func flattenStage1Candidates(
+	memories []ellieIngestionStage1Candidate,
+	projects []ellieIngestionStage1Project,
+	issues []ellieIngestionStage1Issue,
+	maxCandidateChars int,
+) []EllieIngestionLLMCandidate {
+	out := make([]EllieIngestionLLMCandidate, 0, len(memories)+len(projects)+len(issues))
+
+	for _, row := range memories {
+		content := strings.TrimSpace(row.Content)
+		if content == "" {
+			continue
+		}
+		if len([]rune(content)) > maxCandidateChars {
+			content = string([]rune(content)[:maxCandidateChars])
+		}
+
+		importance := 3
+		if row.Importance != nil && *row.Importance > 0 {
+			importance = *row.Importance
+		}
+		confidence := 0.7
+		if row.Confidence != nil {
+			confidence = *row.Confidence
+		}
+
+		sourceIDs := row.SourceMessageIDs
+		if len(sourceIDs) == 0 {
+			sourceIDs = row.SourceIDsCamel
+		}
+		quotes := row.SourceQuotes
+		if len(quotes) == 0 {
+			quotes = row.QuotesCamel
+		}
+		originHint := strings.TrimSpace(firstNonEmpty(row.OriginHint, row.OriginCamel))
+		pii := row.PIIFlags
+		if len(pii) == 0 {
+			pii = row.PIICamel
+		}
+		sensitivity := strings.TrimSpace(row.Sensitivity)
+
+		meta := map[string]any{
+			"source_message_ids": sourceIDs,
+			"source_quotes":      quotes,
+			"origin_hint":        originHint,
+			"pii_flags":          pii,
+			"sensitivity":        sensitivity,
+		}
+		if status := strings.TrimSpace(row.Status); status != "" {
+			meta["status"] = status
+		}
+		if project := strings.TrimSpace(row.Project); project != "" {
+			meta["project"] = project
+		}
+
+		out = append(out, EllieIngestionLLMCandidate{
+			Kind:       strings.TrimSpace(row.Kind),
+			Title:      strings.TrimSpace(row.Title),
+			Content:    content,
+			Importance: importance,
+			Confidence: confidence,
+			Metadata:   meta,
+		})
+	}
+
+	// Flatten projects/issues as context candidates for now.
+	for _, proj := range projects {
+		title := strings.TrimSpace(proj.Name)
+		content := strings.TrimSpace(proj.Description)
+		if title == "" || content == "" {
+			continue
+		}
+		if len([]rune(content)) > maxCandidateChars {
+			content = string([]rune(content)[:maxCandidateChars])
+		}
+		conf := 0.7
+		if proj.Confidence != nil {
+			conf = *proj.Confidence
+		}
+		sourceIDs := proj.SourceMessageIDs
+		if len(sourceIDs) == 0 {
+			sourceIDs = proj.SourceIDsCamel
+		}
+		out = append(out, EllieIngestionLLMCandidate{
+			Kind:       "context",
+			Title:      title,
+			Content:    content,
+			Importance: 4,
+			Confidence: conf,
+			Metadata: map[string]any{
+				"type":               "project",
+				"status":             strings.TrimSpace(proj.Status),
+				"source_message_ids": sourceIDs,
+			},
+		})
+	}
+	for _, iss := range issues {
+		title := strings.TrimSpace(iss.Title)
+		content := strings.TrimSpace(iss.Description)
+		if title == "" || content == "" {
+			continue
+		}
+		if len([]rune(content)) > maxCandidateChars {
+			content = string([]rune(content)[:maxCandidateChars])
+		}
+		conf := 0.7
+		if iss.Confidence != nil {
+			conf = *iss.Confidence
+		}
+		sourceIDs := iss.SourceMessageIDs
+		if len(sourceIDs) == 0 {
+			sourceIDs = iss.SourceIDsCamel
+		}
+		quotes := iss.SourceQuotes
+		if len(quotes) == 0 {
+			quotes = iss.QuotesCamel
+		}
+		var project string
+		if iss.Project != nil {
+			project = strings.TrimSpace(*iss.Project)
+		}
+		out = append(out, EllieIngestionLLMCandidate{
+			Kind:       "context",
+			Title:      title,
+			Content:    content,
+			Importance: 3,
+			Confidence: conf,
+			Metadata: map[string]any{
+				"type":               "issue",
+				"status":             strings.TrimSpace(iss.Status),
+				"project":            project,
+				"source_message_ids": sourceIDs,
+				"source_quotes":      quotes,
+			},
+		})
+	}
+
+	return out
+}
+
+func parseStage1CandidatesObject(raw json.RawMessage) ([]ellieIngestionStage1Candidate, []ellieIngestionStage1Project, []ellieIngestionStage1Issue, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil, nil, false
+	}
+	if trimmed[0] != '{' {
+		return nil, nil, nil, false
+	}
+
+	var obj ellieIngestionStage1CandidatesObject
+	if err := json.Unmarshal(trimmed, &obj); err != nil {
+		return nil, nil, nil, false
+	}
+
+	memories, _ := decodeOneOrManyJSON[ellieIngestionStage1Candidate](firstNonEmptyRaw(obj.Memories, obj.Memory))
+	projects, _ := decodeOneOrManyJSON[ellieIngestionStage1Project](firstNonEmptyRaw(obj.Projects, obj.Project))
+	issues, _ := decodeOneOrManyJSON[ellieIngestionStage1Issue](firstNonEmptyRaw(obj.Issues, obj.Issue))
+	return memories, projects, issues, true
+}
+
+func firstNonEmptyRaw(values ...json.RawMessage) json.RawMessage {
+	for _, value := range values {
+		if len(bytes.TrimSpace(value)) > 0 {
+			return value
+		}
+	}
+	return nil
+}
+
+func decodeOneOrManyJSON[T any](raw json.RawMessage) ([]T, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if trimmed[0] == '[' {
+		var out []T
+		if err := json.Unmarshal(trimmed, &out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+	var one T
+	if err := json.Unmarshal(trimmed, &one); err != nil {
+		return nil, err
+	}
+	return []T{one}, nil
 }
 
 func ellieIngestionOpenClawOutputSnippet(raw []byte) string {
