@@ -1,0 +1,6 @@
+node_modules
+.git
+bridge/logs
+*.log
+web/node_modules
+web/dist

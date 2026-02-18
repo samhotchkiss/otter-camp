@@ -18,7 +18,7 @@ RUN npm ci
 COPY . .
 
 # Build args for environment
-ARG VITE_API_URL=https://api.otter.camp
+ARG VITE_API_URL=
 ENV VITE_API_URL=$VITE_API_URL
 
 # Build the app (skip tsc, use vite directly)
