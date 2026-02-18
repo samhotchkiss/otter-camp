@@ -32,6 +32,8 @@ type OpenClawHandler struct {
 
 var ErrOpenClawNotConnected = errors.New("openclaw bridge not connected")
 
+const openClawConnectionWait = 2 * time.Second
+
 type openClawRequestResult struct {
 	data json.RawMessage
 	err  error
@@ -254,30 +256,72 @@ func (h *OpenClawHandler) Request(
 		return nil, err
 	}
 
-	resultCh := make(chan openClawRequestResult, 1)
-	h.requestMu.Lock()
-	h.requests[requestID] = resultCh
-	h.requestMu.Unlock()
-	defer h.removeRequest(requestID)
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := h.waitForConnection(ctx); err != nil {
+			return nil, err
+		}
 
-	sendErr := h.SendToOpenClaw(OpenClawEvent{
-		Type:      requestType,
-		Timestamp: time.Now().UTC(),
-		OrgID:     strings.TrimSpace(orgID),
-		Data:      payload,
-	})
-	if sendErr != nil {
-		return nil, sendErr
+		resultCh := make(chan openClawRequestResult, 1)
+		h.requestMu.Lock()
+		h.requests[requestID] = resultCh
+		h.requestMu.Unlock()
+
+		sendErr := h.SendToOpenClaw(OpenClawEvent{
+			Type:      requestType,
+			Timestamp: time.Now().UTC(),
+			OrgID:     strings.TrimSpace(orgID),
+			Data:      payload,
+		})
+		if sendErr != nil {
+			h.removeRequest(requestID)
+			if errors.Is(sendErr, ErrOpenClawNotConnected) && attempt == 0 {
+				continue
+			}
+			return nil, sendErr
+		}
+
+		select {
+		case <-ctx.Done():
+			h.removeRequest(requestID)
+			return nil, ctx.Err()
+		case result := <-resultCh:
+			h.removeRequest(requestID)
+			if result.err != nil {
+				if errors.Is(result.err, ErrOpenClawNotConnected) && attempt == 0 {
+					continue
+				}
+				return nil, result.err
+			}
+			return append(json.RawMessage(nil), result.data...), nil
+		}
+	}
+	return nil, ErrOpenClawNotConnected
+}
+
+func (h *OpenClawHandler) waitForConnection(ctx context.Context) error {
+	if h == nil {
+		return errors.New("openclaw handler is nil")
+	}
+	if h.IsConnected() {
+		return nil
 	}
 
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case result := <-resultCh:
-		if result.err != nil {
-			return nil, result.err
+	timeout := time.NewTimer(openClawConnectionWait)
+	defer timeout.Stop()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout.C:
+			return ErrOpenClawNotConnected
+		case <-ticker.C:
+			if h.IsConnected() {
+				return nil
+			}
 		}
-		return append(json.RawMessage(nil), result.data...), nil
 	}
 }
 

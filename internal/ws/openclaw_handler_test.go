@@ -148,3 +148,74 @@ func TestOpenClawHandlerRequestReturnsNotConnectedError(t *testing.T) {
 	)
 	require.ErrorIs(t, err, ErrOpenClawNotConnected)
 }
+
+func TestOpenClawHandlerRequestWaitsForConnection(t *testing.T) {
+	t.Setenv("OPENCLAW_WS_SECRET", "valid-secret")
+	hub := NewHub()
+	go hub.Run()
+
+	handler := NewOpenClawHandler(hub)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=valid-secret"
+
+	resultCh := make(chan json.RawMessage, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		payload, requestErr := handler.Request(
+			ctx,
+			"memory.extract.request",
+			"org-1",
+			map[string]any{"args": []string{"gateway", "call", "agent"}},
+		)
+		if requestErr != nil {
+			errCh <- requestErr
+			return
+		}
+		resultCh <- payload
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, err = conn.ReadMessage() // connected event
+	require.NoError(t, err)
+
+	_, requestMessage, err := conn.ReadMessage()
+	require.NoError(t, err)
+	var request struct {
+		Data struct {
+			RequestID string `json:"request_id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(requestMessage, &request))
+	require.NotEmpty(t, request.Data.RequestID)
+
+	reply := map[string]any{
+		"type":   "memory.extract.response",
+		"org_id": "org-1",
+		"data": map[string]any{
+			"request_id": request.Data.RequestID,
+			"ok":         true,
+			"output":     "{}",
+		},
+	}
+	replyRaw, marshalErr := json.Marshal(reply)
+	require.NoError(t, marshalErr)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, replyRaw))
+
+	select {
+	case requestErr := <-errCh:
+		require.NoError(t, requestErr)
+	case payload := <-resultCh:
+		require.NotEmpty(t, payload)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for request response")
+	}
+}
