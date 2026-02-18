@@ -94,10 +94,12 @@ describe("InboxPage", () => {
 
     render(<InboxPage />);
 
-    expect(await screen.findByText(/Code review/)).toBeInTheDocument();
+    const reviewHeading = await screen.findByRole("heading", { name: /Code review.*Agent-007/ });
+    expect(reviewHeading).toBeInTheDocument();
 
-    const card = screen.getByText(/Code review/).closest(".inbox-item");
-    expect(card).toHaveClass("inbox-item");
+    const card = reviewHeading.closest(".inbox-item");
+    expect(card).toHaveClass("oc-card");
+    expect(card).toHaveClass("oc-card-interactive");
 
     const typeBadge = screen.getByText("review");
     expect(typeBadge).toHaveClass("badge-type");
@@ -142,20 +144,20 @@ describe("InboxPage", () => {
 
     render(<InboxPage />);
 
-    expect(await screen.findByText(/Code review/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Code review.*Agent-007/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "All (3)" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Unread (1)" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Urgent (2)" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Unread (1)" }));
-    expect(screen.getByText(/Code review/)).toBeInTheDocument();
-    expect(screen.queryByText(/Deploy approval/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Blocked release/)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Code review.*Agent-007/ })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Deploy approval.*Agent-127/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Blocked release.*Agent-300/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Urgent (2)" }));
-    expect(screen.getByText(/Code review/)).toBeInTheDocument();
-    expect(screen.getByText(/Blocked release/)).toBeInTheDocument();
-    expect(screen.queryByText(/Deploy approval/)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Code review.*Agent-007/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Blocked release.*Agent-300/ })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Deploy approval.*Agent-127/ })).not.toBeInTheDocument();
   });
 
   it("shows derived metadata from status for unread and urgency", async () => {
@@ -182,12 +184,56 @@ describe("InboxPage", () => {
 
     render(<InboxPage />);
 
-    expect(await screen.findByText(/Code review/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Code review.*Agent-007/ })).toBeInTheDocument();
 
-    const cards = screen.getAllByText(/Agent-/).map((node) => node.closest(".inbox-item"));
-    expect(cards[0]).toHaveClass("urgent");
-    expect(cards[1]).not.toHaveClass("urgent");
+    const pendingCard = screen.getByRole("heading", { name: /Code review.*Agent-007/ }).closest(".inbox-item");
+    const approvedCard = screen.getByRole("heading", { name: /Deploy approval.*Agent-127/ }).closest(".inbox-item");
+    expect(pendingCard).toHaveClass("urgent");
+    expect(approvedCard).not.toHaveClass("urgent");
     expect(screen.getByText("Unread")).toBeInTheDocument();
+  });
+
+  it("renders redesigned structure hooks for inbox header and row list", async () => {
+    inboxMock.mockResolvedValue({
+      items: [
+        {
+          id: "approval-30",
+          type: "Code review",
+          command: "npm run lint",
+          agent: "Agent-007",
+          status: "pending",
+          createdAt: "2026-02-18T20:00:00Z",
+        },
+      ],
+    });
+
+    render(<InboxPage />);
+
+    expect(await screen.findByRole("heading", { name: /Code review.*Agent-007/ })).toBeInTheDocument();
+    expect(screen.getByTestId("inbox-header")).toBeInTheDocument();
+    expect(screen.getByTestId("inbox-list-container")).toBeInTheDocument();
+    expect(screen.getAllByTestId("inbox-row")).toHaveLength(1);
+  });
+
+  it("renders redesigned metadata lane with agent and timestamp context", async () => {
+    inboxMock.mockResolvedValue({
+      items: [
+        {
+          id: "approval-31",
+          type: "Code review",
+          command: "npm run lint",
+          agent: "Agent-007",
+          status: "pending",
+          createdAt: "2026-02-18T20:00:00Z",
+        },
+      ],
+    });
+
+    render(<InboxPage />);
+
+    expect(await screen.findByRole("heading", { name: /Code review.*Agent-007/ })).toBeInTheDocument();
+    expect(screen.getByText("from Agent-007")).toBeInTheDocument();
+    expect(screen.getByTestId("inbox-row-meta")).toBeInTheDocument();
   });
 
   it("disables actions while approve is processing and removes item after success", async () => {
@@ -223,7 +269,7 @@ describe("InboxPage", () => {
     pendingApprove.resolve({ success: true });
 
     await waitFor(() => {
-      expect(screen.queryByText(/Deploy/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: /Deploy.*Agent-127/ })).not.toBeInTheDocument();
     });
     expect(approveItemMock).toHaveBeenCalledWith("approval-2");
   });
