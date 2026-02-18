@@ -35,6 +35,10 @@ describe("router", () => {
     expect(hasPath(router.routes as RouteNode[], "projects/:id/tasks/:taskId")).toBe(true);
   });
 
+  it("registers the project issue detail route", () => {
+    expect(hasPath(router.routes as RouteNode[], "projects/:id/issues/:issueId")).toBe(true);
+  });
+
   it("registers the memory evaluation dashboard route", () => {
     expect(hasPath(router.routes as RouteNode[], "knowledge/evaluation")).toBe(true);
   });

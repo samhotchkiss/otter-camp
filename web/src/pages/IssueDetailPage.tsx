@@ -128,10 +128,14 @@ export default function IssueDetailPage() {
           <p className="mt-3 text-xs text-amber-700">Set an organization to enable approval actions.</p>
         )}
         {approvalStatus && (
-          <p className="mt-3 text-xs text-emerald-700">{approvalStatus}</p>
+          <p className="mt-3 text-xs text-emerald-700" role="status">
+            {approvalStatus}
+          </p>
         )}
         {approvalError && (
-          <p className="mt-3 text-xs text-red-700">{approvalError}</p>
+          <p className="mt-3 text-xs text-red-700" role="alert">
+            {approvalError}
+          </p>
         )}
       </header>
 
