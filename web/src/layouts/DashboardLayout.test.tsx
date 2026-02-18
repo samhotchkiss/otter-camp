@@ -86,6 +86,7 @@ describe("DashboardLayout", () => {
     const badges = await screen.findAllByText("0");
     expect(badges.length).toBeGreaterThanOrEqual(1);
     expect(badges[0]).toHaveClass("nav-badge");
+    expect(badges[0]).toHaveClass("oc-chip");
   });
 
   it("renders non-zero inbox count in the badge", async () => {
@@ -104,6 +105,33 @@ describe("DashboardLayout", () => {
     const badges = await screen.findAllByText("3");
     expect(badges.length).toBeGreaterThanOrEqual(1);
     expect(badges[0]).toHaveClass("nav-badge");
+    expect(badges[0]).toHaveClass("oc-chip");
+  });
+
+  it("applies shell primitive classes to toolbar and bridge status affordances", async () => {
+    adminConnectionsMock.mockResolvedValue({
+      bridge: { connected: true, sync_healthy: true, status: "healthy" },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <KeyboardShortcutsProvider>
+          <DashboardLayout>
+            <div>child</div>
+          </DashboardLayout>
+        </KeyboardShortcutsProvider>
+      </MemoryRouter>,
+    );
+
+    const header = screen.getByRole("banner");
+    expect(header).toHaveClass("oc-toolbar");
+
+    const searchTrigger = screen.getByRole("button", { name: /Search or command/i });
+    expect(searchTrigger).toHaveClass("oc-toolbar-input");
+
+    const bridgeStatus = await screen.findByRole("status", { name: "Bridge healthy" });
+    expect(bridgeStatus).toHaveClass("oc-chip");
+    expect(bridgeStatus.querySelector(".status-dot")).toHaveClass("oc-status-dot");
   });
 
   it("renders healthy bridge indicator without delay banner", async () => {

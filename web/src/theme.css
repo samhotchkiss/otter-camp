@@ -5,50 +5,7 @@
  * Variable names match mockups exactly for easy CSS copy-paste
  */
 
-/* ========================================
-   DARK THEME (DEFAULT)
-   ======================================== */
-
-:root {
-  /* Backgrounds */
-  --bg: #1A1918;
-  --surface: #252422;
-  --surface-alt: #2D2B28;
-  --border: #3D3A36;
-
-  /* Text */
-  --text: #FAF8F5;
-  --text-muted: #A69582;
-
-  /* Accent */
-  --accent: #C9A86C;
-  --accent-hover: #D4B87A;
-
-  /* Status Colors */
-  --orange: #C87941;
-  --green: #5A7A5C;
-  --red: #B85C38;
-  --blue: #4A6D7C;
-
-  /* Typography */
-  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
-}
-
-/* ========================================
-   LIGHT THEME
-   ======================================== */
-
-[data-theme="light"] {
-  --bg: #FAF8F5;
-  --surface: #FFFFFF;
-  --surface-alt: #F5F2ED;
-  --border: #E8E2D9;
-  --text: #2D2A26;
-  --text-muted: #8B7355;
-  --accent: #5C4A3D;
-  --accent-hover: #4A3C31;
-}
+@import './styles/design-tokens.css';
 
 /* ========================================
    BASE STYLES
