@@ -18,6 +18,7 @@ import (
 
 const (
 	defaultEllieIngestionInterval           = 5 * time.Minute
+	defaultEllieIngestionBridgeRetry        = 10 * time.Second
 	defaultEllieIngestionBatchSize          = 100
 	defaultEllieIngestionMaxPerRoom         = 200
 	defaultEllieIngestionBackfillMaxPerRoom = 250
@@ -81,6 +82,7 @@ type EllieIngestionLLMExtractor interface {
 type EllieIngestionWorkerConfig struct {
 	OrgID                string
 	Interval             time.Duration
+	BridgeRetryInterval  time.Duration
 	BatchSize            int
 	MaxPerRoom           int
 	BackfillMaxPerRoom   int
@@ -95,6 +97,7 @@ type EllieIngestionWorker struct {
 	Store                EllieIngestionStore
 	OrgID                string
 	Interval             time.Duration
+	BridgeRetryInterval  time.Duration
 	BatchSize            int
 	MaxPerRoom           int
 	BackfillMaxPerRoom   int
@@ -110,6 +113,10 @@ func NewEllieIngestionWorker(store EllieIngestionStore, cfg EllieIngestionWorker
 	interval := cfg.Interval
 	if interval <= 0 {
 		interval = defaultEllieIngestionInterval
+	}
+	bridgeRetryInterval := cfg.BridgeRetryInterval
+	if bridgeRetryInterval <= 0 {
+		bridgeRetryInterval = defaultEllieIngestionBridgeRetry
 	}
 	batchSize := cfg.BatchSize
 	if batchSize <= 0 {
@@ -140,6 +147,7 @@ func NewEllieIngestionWorker(store EllieIngestionStore, cfg EllieIngestionWorker
 		Store:                store,
 		OrgID:                strings.TrimSpace(cfg.OrgID),
 		Interval:             interval,
+		BridgeRetryInterval:  bridgeRetryInterval,
 		BatchSize:            batchSize,
 		MaxPerRoom:           maxPerRoom,
 		BackfillMaxPerRoom:   backfillMaxPerRoom,
@@ -179,7 +187,11 @@ func (w *EllieIngestionWorker) Start(ctx context.Context) {
 			if w.Logf != nil {
 				w.Logf("ellie ingestion worker run failed: %v", err)
 			}
-			if err := sleepWithContext(ctx, w.Interval); err != nil {
+			sleepDuration := w.Interval
+			if errors.Is(err, ws.ErrOpenClawNotConnected) {
+				sleepDuration = w.BridgeRetryInterval
+			}
+			if err := sleepWithContext(ctx, sleepDuration); err != nil {
 				return
 			}
 			continue

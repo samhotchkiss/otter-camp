@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 	"github.com/stretchr/testify/require"
 )
 
@@ -601,4 +602,38 @@ func TestEllieIngestionWorkerStartSleepsAfterProcessedError(t *testing.T) {
 	fakeStore.mu.Lock()
 	defer fakeStore.mu.Unlock()
 	require.LessOrEqual(t, fakeStore.listRoomsCalls, 5)
+}
+
+func TestEllieIngestionWorkerStartRetriesQuicklyWhenOpenClawDisconnected(t *testing.T) {
+	fakeStore := newFakeEllieIngestionStore()
+	base := time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC)
+	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
+	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
+		{
+			ID:        "msg-1",
+			OrgID:     "org-1",
+			RoomID:    "room-1",
+			Body:      "Any content",
+			CreatedAt: base,
+		},
+	}
+	fakeStore.upsertErr = ws.ErrOpenClawNotConnected
+
+	worker := NewEllieIngestionWorker(fakeStore, EllieIngestionWorkerConfig{
+		Interval:            200 * time.Millisecond,
+		BridgeRetryInterval: 20 * time.Millisecond,
+		BatchSize:           10,
+		MaxPerRoom:          10,
+	})
+	worker.Logf = nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Millisecond)
+	defer cancel()
+	worker.Start(ctx)
+
+	fakeStore.mu.Lock()
+	defer fakeStore.mu.Unlock()
+	// With normal interval (200ms), we'd only run once before timeout.
+	// A shorter bridge retry interval should allow multiple attempts.
+	require.GreaterOrEqual(t, fakeStore.listRoomsCalls, 2)
 }
