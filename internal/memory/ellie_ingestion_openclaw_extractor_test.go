@@ -25,6 +25,28 @@ func (f *fakeEllieIngestionOpenClawRunner) Run(_ context.Context, args []string)
 	return append([]byte(nil), f.output...), nil
 }
 
+type fakeEllieIngestionOpenClawBridgeRequester struct {
+	eventType string
+	orgID     string
+	data      map[string]any
+	response  json.RawMessage
+	err       error
+}
+
+func (f *fakeEllieIngestionOpenClawBridgeRequester) Request(
+	_ context.Context,
+	eventType, orgID string,
+	data map[string]any,
+) (json.RawMessage, error) {
+	f.eventType = eventType
+	f.orgID = orgID
+	f.data = data
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append(json.RawMessage(nil), f.response...), nil
+}
+
 func TestEllieIngestionOpenClawExtractorBuildsGatewayAgentCall(t *testing.T) {
 	runner := &fakeEllieIngestionOpenClawRunner{
 		output: []byte(`{"runId":"run-1","status":"ok","result":{"payloads":[{"text":"{\"candidates\":[]}"}],"meta":{"agentMeta":{"model":"anthropic/claude-3-5-haiku-latest"}}}}`),
@@ -189,4 +211,50 @@ func TestNewEllieIngestionOpenClawExtractorFromEnvRejectsInvalidTimeout(t *testi
 	t.Setenv("ELLIE_INGESTION_OPENCLAW_TIMEOUT", "not-a-duration")
 	_, err := NewEllieIngestionOpenClawExtractorFromEnv()
 	require.ErrorContains(t, err, "ELLIE_INGESTION_OPENCLAW_TIMEOUT")
+}
+
+func TestEllieIngestionOpenClawBridgeRunnerRoutesGatewayCall(t *testing.T) {
+	requester := &fakeEllieIngestionOpenClawBridgeRequester{
+		response: json.RawMessage(`{"request_id":"req-1","ok":true,"output":"{\"runId\":\"trace-99\",\"status\":\"ok\"}"}`),
+	}
+	runner, err := NewEllieIngestionOpenClawBridgeRunner(requester)
+	require.NoError(t, err)
+
+	output, err := runner.Run(context.Background(), "org-1", []string{
+		"gateway",
+		"call",
+		"agent",
+		"--json",
+	})
+	require.NoError(t, err)
+	require.Equal(t, `{"runId":"trace-99","status":"ok"}`, string(output))
+	require.Equal(t, "memory.extract.request", requester.eventType)
+	require.Equal(t, "org-1", requester.orgID)
+	require.Equal(t, []string{"gateway", "call", "agent", "--json"}, requester.data["args"])
+}
+
+func TestEllieIngestionOpenClawExtractorFallsBackToExecWhenBridgeFails(t *testing.T) {
+	bridgeRequester := &fakeEllieIngestionOpenClawBridgeRequester{
+		err: errors.New("bridge unavailable"),
+	}
+	bridgeRunner, err := NewEllieIngestionOpenClawBridgeRunner(bridgeRequester)
+	require.NoError(t, err)
+
+	execRunner := &fakeEllieIngestionOpenClawRunner{
+		output: []byte(`{"runId":"run-1","status":"ok","result":{"payloads":[{"text":"{\"candidates\":[]}"}],"meta":{"agentMeta":{"model":"anthropic/claude-3-5-haiku-latest"}}}}`),
+	}
+	extractor, err := NewEllieIngestionOpenClawExtractor(EllieIngestionOpenClawExtractorConfig{
+		Runner:                execRunner,
+		BridgeRunner:          bridgeRunner,
+		ExpectedModelContains: "haiku",
+	})
+	require.NoError(t, err)
+
+	_, err = extractor.Extract(context.Background(), EllieIngestionLLMExtractionInput{
+		OrgID:    "org-1",
+		RoomID:   "room-1",
+		Messages: []store.EllieIngestionMessage{{ID: "msg-1", Body: "Any content."}},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, execRunner.args)
 }

@@ -24,6 +24,7 @@ const (
 	defaultEllieIngestionOpenClawExpectedModelToken = "haiku"
 	defaultEllieIngestionOpenClawGatewayCallTimeout = 90 * time.Second
 	defaultEllieIngestionOpenClawMaxCandidateChars  = 800
+	ellieIngestionOpenClawBridgeRequestEventType    = "memory.extract.request"
 )
 
 var ellieIngestionOpenClawSessionTokenPattern = regexp.MustCompile(`[^a-z0-9_-]+`)
@@ -32,8 +33,17 @@ type EllieIngestionOpenClawRunner interface {
 	Run(ctx context.Context, args []string) ([]byte, error)
 }
 
+type EllieIngestionOpenClawBridgeRunner interface {
+	Run(ctx context.Context, orgID string, args []string) ([]byte, error)
+}
+
+type EllieIngestionOpenClawBridgeRequester interface {
+	Request(ctx context.Context, eventType, orgID string, data map[string]any) (json.RawMessage, error)
+}
+
 type EllieIngestionOpenClawExtractorConfig struct {
 	Runner                     EllieIngestionOpenClawRunner
+	BridgeRunner               EllieIngestionOpenClawBridgeRunner
 	OpenClawBinary             string
 	GatewayURL                 string
 	GatewayToken               string
@@ -47,6 +57,7 @@ type EllieIngestionOpenClawExtractorConfig struct {
 
 type EllieIngestionOpenClawExtractor struct {
 	runner                     EllieIngestionOpenClawRunner
+	bridgeRunner               EllieIngestionOpenClawBridgeRunner
 	openClawBinary             string
 	gatewayURL                 string
 	gatewayToken               string
@@ -65,6 +76,64 @@ type ellieIngestionOpenClawExecRunner struct {
 func (r ellieIngestionOpenClawExecRunner) Run(ctx context.Context, args []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, r.binary, args...)
 	return cmd.CombinedOutput()
+}
+
+type ellieIngestionOpenClawBridgeRunner struct {
+	requester EllieIngestionOpenClawBridgeRequester
+}
+
+func NewEllieIngestionOpenClawBridgeRunner(
+	requester EllieIngestionOpenClawBridgeRequester,
+) (EllieIngestionOpenClawBridgeRunner, error) {
+	if requester == nil {
+		return nil, errors.New("bridge requester is required")
+	}
+	return &ellieIngestionOpenClawBridgeRunner{requester: requester}, nil
+}
+
+func (r *ellieIngestionOpenClawBridgeRunner) Run(ctx context.Context, orgID string, args []string) ([]byte, error) {
+	if r == nil || r.requester == nil {
+		return nil, errors.New("bridge requester is required")
+	}
+	trimmedOrgID := strings.TrimSpace(orgID)
+	if trimmedOrgID == "" {
+		return nil, errors.New("org_id is required")
+	}
+	normalizedArgs := make([]string, 0, len(args))
+	for _, arg := range args {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" {
+			continue
+		}
+		normalizedArgs = append(normalizedArgs, trimmed)
+	}
+	if len(normalizedArgs) == 0 {
+		return nil, errors.New("openclaw args are required")
+	}
+	if normalizedArgs[0] != "gateway" {
+		return nil, errors.New("unsupported openclaw command; expected gateway args")
+	}
+
+	responseRaw, err := r.requester.Request(ctx, ellieIngestionOpenClawBridgeRequestEventType, trimmedOrgID, map[string]any{
+		"args": normalizedArgs,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var response struct {
+		Output string `json:"output"`
+		Stdout string `json:"stdout"`
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(responseRaw, &response); err != nil {
+		return nil, fmt.Errorf("decode openclaw bridge response: %w", err)
+	}
+	output := firstNonEmpty(response.Output, response.Stdout, response.Result)
+	if output == "" {
+		return nil, errors.New("openclaw bridge response output is empty")
+	}
+	return []byte(output), nil
 }
 
 func NewEllieIngestionOpenClawExtractorFromEnv() (*EllieIngestionOpenClawExtractor, error) {
@@ -139,6 +208,7 @@ func NewEllieIngestionOpenClawExtractor(cfg EllieIngestionOpenClawExtractorConfi
 
 	return &EllieIngestionOpenClawExtractor{
 		runner:                     runner,
+		bridgeRunner:               cfg.BridgeRunner,
 		openClawBinary:             openClawBinary,
 		gatewayURL:                 gatewayURL,
 		gatewayToken:               strings.TrimSpace(cfg.GatewayToken),
@@ -149,6 +219,13 @@ func NewEllieIngestionOpenClawExtractor(cfg EllieIngestionOpenClawExtractorConfi
 		now:                        now,
 		maxResponseCandidateLength: maxCandidateChars,
 	}, nil
+}
+
+func (e *EllieIngestionOpenClawExtractor) SetBridgeRunner(runner EllieIngestionOpenClawBridgeRunner) {
+	if e == nil {
+		return
+	}
+	e.bridgeRunner = runner
 }
 
 func (e *EllieIngestionOpenClawExtractor) Extract(
@@ -200,13 +277,9 @@ func (e *EllieIngestionOpenClawExtractor) Extract(
 		args = append(args, "--token", token)
 	}
 
-	output, err := e.runner.Run(timeoutCtx, args)
+	output, err := e.runGatewayAgentCall(timeoutCtx, orgID, args)
 	if err != nil {
-		return EllieIngestionLLMExtractionResult{}, fmt.Errorf(
-			"openclaw gateway agent call failed: %w (%s)",
-			err,
-			ellieIngestionOpenClawOutputSnippet(output),
-		)
+		return EllieIngestionLLMExtractionResult{}, err
 	}
 
 	response, err := parseEllieIngestionOpenClawGatewayResponse(output)
@@ -251,6 +324,51 @@ func (e *EllieIngestionOpenClawExtractor) sessionKey(orgID string) string {
 		e.sessionNamespace,
 		normalizeEllieIngestionOpenClawSessionToken(orgID, "org"),
 	)
+}
+
+func (e *EllieIngestionOpenClawExtractor) runGatewayAgentCall(
+	ctx context.Context,
+	orgID string,
+	args []string,
+) ([]byte, error) {
+	if e == nil {
+		return nil, errors.New("openclaw extractor is nil")
+	}
+	trimmedOrgID := strings.TrimSpace(orgID)
+	if trimmedOrgID == "" {
+		return nil, errors.New("org_id is required")
+	}
+	if e.runner == nil {
+		return nil, errors.New("openclaw extractor runner is required")
+	}
+
+	if e.bridgeRunner != nil {
+		output, err := e.bridgeRunner.Run(ctx, trimmedOrgID, args)
+		if err == nil {
+			return output, nil
+		}
+
+		fallbackOutput, fallbackErr := e.runner.Run(ctx, args)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf(
+				"openclaw bridge call failed: %w; openclaw gateway agent call failed: %w (%s)",
+				err,
+				fallbackErr,
+				ellieIngestionOpenClawOutputSnippet(fallbackOutput),
+			)
+		}
+		return fallbackOutput, nil
+	}
+
+	output, err := e.runner.Run(ctx, args)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"openclaw gateway agent call failed: %w (%s)",
+			err,
+			ellieIngestionOpenClawOutputSnippet(output),
+		)
+	}
+	return output, nil
 }
 
 func (e *EllieIngestionOpenClawExtractor) idempotencyKey(orgID, roomID string, messages []store.EllieIngestionMessage) string {

@@ -1,14 +1,17 @@
 package ws
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,16 +23,26 @@ type OpenClawHandler struct {
 	Hub        *Hub
 	conn       *websocket.Conn
 	mu         sync.RWMutex
+	writeMu    sync.Mutex
+	requestMu  sync.Mutex
+	requestSeq uint64
+	requests   map[string]chan openClawRequestResult
 	authSecret string
 }
 
 var ErrOpenClawNotConnected = errors.New("openclaw bridge not connected")
+
+type openClawRequestResult struct {
+	data json.RawMessage
+	err  error
+}
 
 // NewOpenClawHandler creates a handler for OpenClaw connections.
 func NewOpenClawHandler(hub *Hub) *OpenClawHandler {
 	secret := strings.TrimSpace(os.Getenv("OPENCLAW_WS_SECRET"))
 	return &OpenClawHandler{
 		Hub:        hub,
+		requests:   make(map[string]chan openClawRequestResult),
 		authSecret: secret,
 	}
 }
@@ -119,6 +132,7 @@ func (h *OpenClawHandler) readPump(conn *websocket.Conn) {
 			h.conn = nil
 		}
 		h.mu.Unlock()
+		h.failPendingRequests(ErrOpenClawNotConnected)
 		conn.Close()
 		log.Printf("[openclaw-ws] OpenClaw disconnected")
 	}()
@@ -161,6 +175,10 @@ func (h *OpenClawHandler) readPump(conn *websocket.Conn) {
 
 // handleEvent processes an event from OpenClaw.
 func (h *OpenClawHandler) handleEvent(event OpenClawEvent) {
+	if h.tryResolveRequest(event) {
+		return
+	}
+
 	log.Printf("[openclaw-ws] Event: %s (org: %s)", event.Type, event.OrgID)
 
 	// Re-broadcast to browser clients
@@ -199,6 +217,8 @@ func (h *OpenClawHandler) SendToOpenClaw(event interface{}) error {
 		return err
 	}
 
+	h.writeMu.Lock()
+	defer h.writeMu.Unlock()
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
@@ -207,4 +227,131 @@ func (h *OpenClawHandler) IsConnected() bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.conn != nil
+}
+
+func (h *OpenClawHandler) Request(
+	ctx context.Context,
+	eventType, orgID string,
+	data map[string]any,
+) (json.RawMessage, error) {
+	if h == nil {
+		return nil, errors.New("openclaw handler is nil")
+	}
+	requestType := strings.TrimSpace(eventType)
+	if requestType == "" {
+		return nil, errors.New("event type is required")
+	}
+
+	requestID := h.nextRequestID()
+	payloadMap := make(map[string]any, len(data)+1)
+	for key, value := range data {
+		payloadMap[key] = value
+	}
+	payloadMap["request_id"] = requestID
+
+	payload, err := json.Marshal(payloadMap)
+	if err != nil {
+		return nil, err
+	}
+
+	resultCh := make(chan openClawRequestResult, 1)
+	h.requestMu.Lock()
+	h.requests[requestID] = resultCh
+	h.requestMu.Unlock()
+	defer h.removeRequest(requestID)
+
+	sendErr := h.SendToOpenClaw(OpenClawEvent{
+		Type:      requestType,
+		Timestamp: time.Now().UTC(),
+		OrgID:     strings.TrimSpace(orgID),
+		Data:      payload,
+	})
+	if sendErr != nil {
+		return nil, sendErr
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultCh:
+		if result.err != nil {
+			return nil, result.err
+		}
+		return append(json.RawMessage(nil), result.data...), nil
+	}
+}
+
+func (h *OpenClawHandler) nextRequestID() string {
+	seq := atomic.AddUint64(&h.requestSeq, 1)
+	return "bridge-req-" + strconv.FormatUint(seq, 10)
+}
+
+func (h *OpenClawHandler) removeRequest(requestID string) {
+	h.requestMu.Lock()
+	delete(h.requests, requestID)
+	h.requestMu.Unlock()
+}
+
+func (h *OpenClawHandler) tryResolveRequest(event OpenClawEvent) bool {
+	var envelope struct {
+		RequestID string          `json:"request_id"`
+		OK        *bool           `json:"ok"`
+		Error     string          `json:"error"`
+		Data      json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(event.Data, &envelope); err != nil {
+		return false
+	}
+	requestID := strings.TrimSpace(envelope.RequestID)
+	if requestID == "" {
+		return false
+	}
+
+	h.requestMu.Lock()
+	resultCh, ok := h.requests[requestID]
+	if ok {
+		delete(h.requests, requestID)
+	}
+	h.requestMu.Unlock()
+	if !ok {
+		return false
+	}
+
+	result := openClawRequestResult{
+		data: append(json.RawMessage(nil), envelope.Data...),
+	}
+	if len(result.data) == 0 {
+		result.data = append(json.RawMessage(nil), event.Data...)
+	}
+	if envelope.OK != nil && !*envelope.OK {
+		message := strings.TrimSpace(envelope.Error)
+		if message == "" {
+			message = "openclaw bridge request failed"
+		}
+		result.err = errors.New(message)
+	}
+
+	select {
+	case resultCh <- result:
+	default:
+	}
+	return true
+}
+
+func (h *OpenClawHandler) failPendingRequests(err error) {
+	if err == nil {
+		err = ErrOpenClawNotConnected
+	}
+
+	h.requestMu.Lock()
+	requests := h.requests
+	h.requests = make(map[string]chan openClawRequestResult)
+	h.requestMu.Unlock()
+
+	for _, resultCh := range requests {
+		select {
+		case resultCh <- openClawRequestResult{err: err}:
+		default:
+		}
+	}
 }

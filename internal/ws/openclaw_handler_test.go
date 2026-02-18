@@ -1,6 +1,8 @@
 package ws
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,4 +54,97 @@ func TestOpenClawHandlerAcceptsValidToken(t *testing.T) {
 	_, message, err := conn.ReadMessage()
 	require.NoError(t, err)
 	require.Contains(t, string(message), "\"type\":\"connected\"")
+}
+
+func TestOpenClawHandlerRequestRoundTrip(t *testing.T) {
+	t.Setenv("OPENCLAW_WS_SECRET", "valid-secret")
+	hub := NewHub()
+	go hub.Run()
+
+	handler := NewOpenClawHandler(hub)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?token=valid-secret"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, err = conn.ReadMessage() // connected event
+	require.NoError(t, err)
+
+	responseCh := make(chan json.RawMessage, 1)
+	requestErrCh := make(chan error, 1)
+	go func() {
+		payload, requestErr := handler.Request(
+			context.Background(),
+			"memory.extract.request",
+			"org-1",
+			map[string]any{"args": []string{"gateway", "call", "agent"}},
+		)
+		if requestErr != nil {
+			requestErrCh <- requestErr
+			return
+		}
+		responseCh <- payload
+	}()
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, requestMessage, err := conn.ReadMessage()
+	require.NoError(t, err)
+	var request struct {
+		Type string `json:"type"`
+		Data struct {
+			RequestID string   `json:"request_id"`
+			Args      []string `json:"args"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(requestMessage, &request))
+	require.Equal(t, "memory.extract.request", request.Type)
+	require.NotEmpty(t, request.Data.RequestID)
+	require.Equal(t, []string{"gateway", "call", "agent"}, request.Data.Args)
+
+	reply := map[string]any{
+		"type":   "memory.extract.response",
+		"org_id": "org-1",
+		"data": map[string]any{
+			"request_id": request.Data.RequestID,
+			"ok":         true,
+			"output":     `{"runId":"trace-1","status":"ok"}`,
+		},
+	}
+	replyRaw, marshalErr := json.Marshal(reply)
+	require.NoError(t, marshalErr)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, replyRaw))
+
+	select {
+	case requestErr := <-requestErrCh:
+		require.NoError(t, requestErr)
+	case payload := <-responseCh:
+		var response struct {
+			RequestID string `json:"request_id"`
+			OK        bool   `json:"ok"`
+			Output    string `json:"output"`
+		}
+		require.NoError(t, json.Unmarshal(payload, &response))
+		require.Equal(t, request.Data.RequestID, response.RequestID)
+		require.True(t, response.OK)
+		require.Equal(t, `{"runId":"trace-1","status":"ok"}`, response.Output)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for request response")
+	}
+}
+
+func TestOpenClawHandlerRequestReturnsNotConnectedError(t *testing.T) {
+	t.Setenv("OPENCLAW_WS_SECRET", "valid-secret")
+	handler := NewOpenClawHandler(NewHub())
+
+	_, err := handler.Request(
+		context.Background(),
+		"memory.extract.request",
+		"org-1",
+		map[string]any{"args": []string{"gateway", "call", "agent"}},
+	)
+	require.ErrorIs(t, err, ErrOpenClawNotConnected)
 }

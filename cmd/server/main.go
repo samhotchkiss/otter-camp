@@ -79,6 +79,15 @@ func main() {
 			if extractorErr != nil {
 				log.Printf("⚠️  Ellie ingestion OpenClaw extractor disabled; init failed: %v", extractorErr)
 			} else {
+				if openClawHandler := api.OpenClawHandlerForRuntime(); openClawHandler != nil {
+					bridgeRunner, bridgeErr := memory.NewEllieIngestionOpenClawBridgeRunner(openClawHandler)
+					if bridgeErr != nil {
+						log.Printf("⚠️  Ellie ingestion OpenClaw bridge runner disabled; init failed: %v", bridgeErr)
+					} else {
+						openClawExtractor.SetBridgeRunner(bridgeRunner)
+						log.Printf("✅ Ellie ingestion OpenClaw bridge runner enabled")
+					}
+				}
 				llmExtractor = openClawExtractor
 				log.Printf("✅ Ellie ingestion OpenClaw extractor enabled")
 			}

@@ -98,6 +98,7 @@ const SUPPORTED_DISPATCH_EVENT_TYPES = new Set([
   'project.chat.message',
   'issue.comment.message',
   'admin.command',
+  'memory.extract.request',
 ]);
 const IGNORED_OTTERCAMP_SOCKET_EVENT_TYPES = new Set([
   'connected',
@@ -330,6 +331,15 @@ type AdminCommandDispatchEvent = {
     config_hash?: string;
     confirm?: boolean;
     dry_run?: boolean;
+  };
+};
+
+type MemoryExtractDispatchEvent = {
+  type?: string;
+  org_id?: string;
+  data?: {
+    request_id?: string;
+    args?: unknown;
   };
 };
 
@@ -5578,6 +5588,10 @@ async function dispatchInboundEvent(
       await handleAdminCommandDispatchEvent(record as AdminCommandDispatchEvent);
       return true;
     }
+    if (normalizedType === 'memory.extract.request') {
+      await handleMemoryExtractDispatchEvent(record as MemoryExtractDispatchEvent);
+      return true;
+    }
     return false;
   };
 
@@ -5675,6 +5689,75 @@ export async function runSerializedSyncOperationForTest(operation: () => Promise
 
 export function resetPeriodicSyncGuardForTest(): void {
   isPeriodicSyncRunning = false;
+}
+
+export function setOtterCampSocketForTest(socket: { readyState: number; send: (payload: string) => void } | null): void {
+  otterCampWS = socket as unknown as WebSocket | null;
+}
+
+function normalizeDispatchArgs(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const args: string[] = [];
+  for (const rawArg of value) {
+    if (typeof rawArg !== 'string') {
+      return [];
+    }
+    const arg = rawArg.trim();
+    if (!arg) {
+      return [];
+    }
+    args.push(arg);
+  }
+  return args;
+}
+
+function sendOtterCampSocketEvent(event: Record<string, unknown>): boolean {
+  if (!otterCampWS || otterCampWS.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  otterCampWS.send(JSON.stringify(event));
+  return true;
+}
+
+async function handleMemoryExtractDispatchEvent(event: MemoryExtractDispatchEvent): Promise<void> {
+  const orgID = getTrimmedString(event.org_id);
+  const requestID = getTrimmedString(event.data?.request_id) || genId();
+  const args = normalizeDispatchArgs(event.data?.args);
+
+  const sendResponse = (payload: { ok: boolean; output?: string; error?: string }): void => {
+    const sent = sendOtterCampSocketEvent({
+      type: 'memory.extract.response',
+      timestamp: new Date().toISOString(),
+      org_id: orgID,
+      data: {
+        request_id: requestID,
+        ok: payload.ok,
+        ...(payload.output !== undefined ? { output: payload.output } : {}),
+        ...(payload.error ? { error: payload.error } : {}),
+      },
+    });
+    if (!sent) {
+      console.warn(`[bridge] failed to deliver memory.extract.response for request_id=${requestID}; socket unavailable`);
+    }
+  };
+
+  if (args.length < 3 || args[0] !== 'gateway' || args[1] !== 'call' || args[2] !== 'agent') {
+    sendResponse({
+      ok: false,
+      error: 'memory.extract.request requires args beginning with: gateway call agent',
+    });
+    return;
+  }
+
+  try {
+    const output = await runOpenClawCommandCapture(args);
+    sendResponse({ ok: true, output });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    sendResponse({ ok: false, error: detail });
+  }
 }
 
 async function handleDMDispatchEvent(event: DMDispatchEvent): Promise<void> {
@@ -5872,10 +5955,17 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
 }
 
 async function runOpenClawCommandCapture(args: string[]): Promise<string> {
-  const { stdout, stderr } = await execFileAsync('openclaw', args, {
+  const result = await execFileAsync('openclaw', args, {
     timeout: 60_000,
     maxBuffer: 2 * 1024 * 1024,
   });
+  const resultRecord = asRecord(result);
+  const stdout = typeof result === 'string'
+    ? result
+    : getTrimmedString(resultRecord?.stdout) || '';
+  const stderr = typeof result === 'string'
+    ? ''
+    : getTrimmedString(resultRecord?.stderr) || '';
   if (stdout?.trim()) {
     console.log(`[bridge] openclaw ${args.join(' ')} stdout: ${stdout.trim()}`);
   }

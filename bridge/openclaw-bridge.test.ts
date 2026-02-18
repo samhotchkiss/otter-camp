@@ -26,6 +26,7 @@ import {
   parseNumberedAnswers,
   parseNumberedQuestionnaireResponse,
   parseQuestionnaireAnswer,
+  dispatchInboundEventForTest,
   resetBufferedActivityEventsForTest,
   resetIngestedToolEventsForTest,
   resetMutationEnforcementStateForTest,
@@ -36,6 +37,8 @@ import {
   resetReconnectStateForTest,
   resolveOtterCampWSSecret,
   resetSessionContextsForTest,
+  setExecFileForTest,
+  setOtterCampSocketForTest,
   runSerializedSyncOperationForTest,
   setContinuousModeEnabledForTest,
   setPathWithinProjectRootForTest,
@@ -1506,5 +1509,65 @@ describe("bridge questionnaire helpers", () => {
       ],
       responses: undefined,
     });
+  });
+});
+
+describe("bridge memory extraction dispatch helpers", () => {
+  const sentMessages: Record<string, unknown>[] = [];
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    setOtterCampSocketForTest({
+      readyState: 1,
+      send: (payload: string) => {
+        sentMessages.push(JSON.parse(payload) as Record<string, unknown>);
+      },
+    });
+  });
+
+  afterEach(() => {
+    setExecFileForTest(null);
+    setOtterCampSocketForTest(null);
+  });
+
+  it("executes memory.extract.request and sends success response", async () => {
+    setExecFileForTest((cmd, args, _options, callback) => {
+      assert.equal(cmd, "openclaw");
+      assert.deepEqual(args, ["gateway", "call", "agent", "--json"]);
+      callback(null, '{"runId":"trace-1","status":"ok"}', "");
+    });
+
+    await dispatchInboundEventForTest("memory.extract.request", {
+      type: "memory.extract.request",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        request_id: "req-1",
+        args: ["gateway", "call", "agent", "--json"],
+      },
+    });
+
+    assert.equal(sentMessages.length, 1);
+    assert.equal(sentMessages[0]?.type, "memory.extract.response");
+    const data = sentMessages[0]?.data as Record<string, unknown>;
+    assert.equal(data.request_id, "req-1");
+    assert.equal(data.ok, true);
+    assert.equal(data.output, '{"runId":"trace-1","status":"ok"}');
+  });
+
+  it("rejects unsupported memory.extract.request commands with error response", async () => {
+    await dispatchInboundEventForTest("memory.extract.request", {
+      type: "memory.extract.request",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        request_id: "req-2",
+        args: ["chat", "send"],
+      },
+    });
+
+    assert.equal(sentMessages.length, 1);
+    const data = sentMessages[0]?.data as Record<string, unknown>;
+    assert.equal(data.request_id, "req-2");
+    assert.equal(data.ok, false);
+    assert.match(String(data.error || ""), /requires args beginning/);
   });
 });
