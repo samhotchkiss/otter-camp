@@ -30,9 +30,15 @@ var orgSlugRegex = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 type WorkspaceSlugResolver func(ctx context.Context, slug string) (workspaceID string, ok bool)
 
+// SessionTokenResolver resolves a session token to (workspaceID, userID).
+type SessionTokenResolver func(ctx context.Context, token string) (workspaceID string, userID string, ok bool)
+
 var (
 	workspaceSlugResolverMu sync.RWMutex
 	workspaceSlugResolver   WorkspaceSlugResolver
+
+	sessionTokenResolverMu sync.RWMutex
+	sessionTokenResolver   SessionTokenResolver
 )
 
 // jwtClaims represents minimal JWT claims for workspace extraction.
@@ -105,7 +111,13 @@ func OptionalWorkspace(next http.Handler) http.Handler {
 			ctx = context.WithValue(ctx, WorkspaceIDKey, workspaceID)
 		}
 
-		if userID := extractUserID(r); userID != "" {
+		userID := extractUserID(r)
+		if userID == "" {
+			if _, uid := resolveSessionToken(r); uid != "" {
+				userID = uid
+			}
+		}
+		if userID != "" {
 			ctx = context.WithValue(ctx, UserIDKey, userID)
 		}
 
@@ -124,6 +136,19 @@ func getWorkspaceSlugResolver() WorkspaceSlugResolver {
 	workspaceSlugResolverMu.RLock()
 	defer workspaceSlugResolverMu.RUnlock()
 	return workspaceSlugResolver
+}
+
+// SetSessionTokenResolver configures lookup from session token to workspace+user.
+func SetSessionTokenResolver(resolver SessionTokenResolver) {
+	sessionTokenResolverMu.Lock()
+	defer sessionTokenResolverMu.Unlock()
+	sessionTokenResolver = resolver
+}
+
+func getSessionTokenResolver() SessionTokenResolver {
+	sessionTokenResolverMu.RLock()
+	defer sessionTokenResolverMu.RUnlock()
+	return sessionTokenResolver
 }
 
 // extractWorkspaceID attempts to extract workspace ID from various sources.
@@ -160,7 +185,38 @@ func extractWorkspaceID(r *http.Request) string {
 		return id
 	}
 
+	// 6. Try session token resolution (Bearer token or cookie).
+	if wid, _ := resolveSessionToken(r); wid != "" {
+		return wid
+	}
+
 	return ""
+}
+
+func extractBearerOrCookieToken(r *http.Request) string {
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	if c, err := r.Cookie("otter_auth"); err == nil {
+		return strings.TrimSpace(c.Value)
+	}
+	return ""
+}
+
+func resolveSessionToken(r *http.Request) (workspaceID string, userID string) {
+	resolver := getSessionTokenResolver()
+	if resolver == nil {
+		return "", ""
+	}
+	token := extractBearerOrCookieToken(r)
+	if token == "" {
+		return "", ""
+	}
+	wid, uid, ok := resolver(r.Context(), token)
+	if !ok || !uuidRegex.MatchString(wid) {
+		return "", ""
+	}
+	return wid, uid
 }
 
 // extractUserID attempts to extract user ID from JWT.

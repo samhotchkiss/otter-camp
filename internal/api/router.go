@@ -209,6 +209,23 @@ func NewRouter() http.Handler {
 		middleware.SetWorkspaceSlugResolver(nil)
 	}
 
+	if db != nil {
+		middleware.SetSessionTokenResolver(func(ctx context.Context, token string) (string, string, bool) {
+			token = strings.TrimSpace(token)
+			if token == "" {
+				return "", "", false
+			}
+			var orgID, userID string
+			err := db.QueryRowContext(ctx,
+				`SELECT s.org_id, s.user_id FROM sessions s WHERE s.token = $1 AND s.expires_at > NOW()`,
+				token).Scan(&orgID, &userID)
+			if err != nil {
+				return "", "", false
+			}
+			return strings.TrimSpace(orgID), strings.TrimSpace(userID), true
+		})
+	}
+
 	projectsHandler := &ProjectsHandler{Store: projectStore, DB: db, ChatThreadStore: chatThreadStore}
 	workflowsHandler.ProjectStore = projectStore
 	workflowsHandler.ProjectsHandler = projectsHandler
