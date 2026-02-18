@@ -646,6 +646,9 @@ func (h *AdminAgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Status:      "active",
 		IsEphemeral: req.IsEphemeral,
 		ProjectID:   projectID,
+		Role:        req.Role,
+		SoulMD:      req.Soul,
+		IdentityMD:  req.Identity,
 	})
 	if err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to create agent"})

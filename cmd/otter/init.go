@@ -710,6 +710,12 @@ func importOpenClawData(out io.Writer, client initBootstrapClient, installation 
 		if role := extractInitRole(identity.Soul); role != "" {
 			payload["role"] = role
 		}
+		if identity.Soul != "" {
+			payload["soul"] = identity.Soul
+		}
+		if identity.Identity != "" {
+			payload["identity"] = identity.Identity
+		}
 		if _, err := client.CreateAgent(payload); err == nil {
 			agentsImported++
 		}

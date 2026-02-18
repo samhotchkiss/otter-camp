@@ -168,6 +168,11 @@ type CreateAgentInput struct {
 	SessionPattern *string
 	IsEphemeral    bool
 	ProjectID      *string
+	Role           string
+	Emoji          string
+	SoulMD         string
+	IdentityMD     string
+	InstructionsMD string
 }
 
 // Create creates a new agent in the current workspace.
@@ -184,8 +189,9 @@ func (s *AgentStore) Create(ctx context.Context, input CreateAgentInput) (*Agent
 	defer conn.Close()
 
 	query := `INSERT INTO agents (
-		org_id, slug, display_name, avatar_url, webhook_url, status, session_pattern, is_ephemeral, project_id
-	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		org_id, slug, display_name, avatar_url, webhook_url, status, session_pattern, is_ephemeral, project_id,
+		role, emoji, soul_md, identity_md, instructions_md
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	RETURNING ` + agentSelectColumns
 
 	args := []interface{}{
@@ -198,6 +204,11 @@ func (s *AgentStore) Create(ctx context.Context, input CreateAgentInput) (*Agent
 		nullableString(input.SessionPattern),
 		input.IsEphemeral,
 		nullableString(input.ProjectID),
+		nullableText(input.Role),
+		nullableText(input.Emoji),
+		nullableText(input.SoulMD),
+		nullableText(input.IdentityMD),
+		nullableText(input.InstructionsMD),
 	}
 
 	agent, err := scanAgent(conn.QueryRowContext(ctx, query, args...))
