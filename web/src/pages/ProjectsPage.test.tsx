@@ -142,6 +142,53 @@ describe("ProjectsPage", () => {
     });
   });
 
+  it("shows filtered-empty state and clears label filters back to full list", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const labels = url.searchParams.getAll("label").sort();
+
+      if (labels.length === 2 && labels[0] === "label-content" && labels[1] === "label-product") {
+        return response({ projects: [] });
+      }
+
+      if (labels.length === 1 && labels[0] === "label-product") {
+        return response({ projects: [PROJECTS[0], PROJECTS[1]] });
+      }
+
+      if (labels.length === 1 && labels[0] === "label-content") {
+        return response({ projects: [PROJECTS[1], PROJECTS[2]] });
+      }
+
+      return response({ projects: PROJECTS });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(
+      <MemoryRouter>
+        <ProjectsPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Otter Camp")).toBeInTheDocument();
+    expect(screen.getByText("Website")).toBeInTheDocument();
+    expect(screen.getByText("Three Stones")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle label product" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Three Stones")).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle label content" }));
+    expect(await screen.findByText("No projects match the selected labels.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    await waitFor(() => {
+      expect(screen.getByText("Otter Camp")).toBeInTheDocument();
+      expect(screen.getByText("Website")).toBeInTheDocument();
+      expect(screen.getByText("Three Stones")).toBeInTheDocument();
+    });
+  });
+
   it("renders redesigned card metric/status surface fields", async () => {
     const fetchMock = vi.fn(async () => response({
       projects: [
