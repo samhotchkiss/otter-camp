@@ -370,7 +370,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       <DemoBanner />
       
       {/* ========== TOPBAR ========== */}
-      <header className="topbar">
+      <header className="topbar oc-toolbar">
         {/* Logo */}
         <Link to="/" className="logo">
           <span className="logo-icon">🦦</span>
@@ -381,7 +381,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         <button
           type="button"
           onClick={openCommandPalette}
-          className="search-trigger"
+          className="search-trigger oc-toolbar-input"
         >
           <span className="search-icon">🔍</span>
           <span className="search-text">Search or command...</span>
@@ -398,7 +398,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             >
               {item.label}
               {item.id === "inbox" && inboxCount !== null && (
-                <span className="nav-badge" aria-label={`Inbox count ${inboxCount}`}>
+                <span className="nav-badge oc-chip" aria-label={`Inbox count ${inboxCount}`}>
                   {inboxCount}
                 </span>
               )}
@@ -407,14 +407,14 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         </nav>
 
         {/* Right Side */}
-        <div className="topbar-right">
+        <div className="topbar-right oc-toolbar">
           {/* Connection Status */}
           <div
-            className={`connection-status ${bridgeStatusClass}`}
+            className={`connection-status oc-chip ${bridgeStatusClass}`}
             aria-label={bridgeStatusLabel}
             role="status"
           >
-            <span className={`status-dot ${bridgeDotClass}`}></span>
+            <span className={`status-dot oc-status-dot ${bridgeDotClass}`}></span>
             <span className="status-text">{bridgeStatusLabel}</span>
           </div>
 
@@ -494,7 +494,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             >
               {item.label}
               {item.id === "inbox" && inboxCount !== null && (
-                <span className="nav-badge" aria-label={`Inbox count ${inboxCount}`}>
+                <span className="nav-badge oc-chip" aria-label={`Inbox count ${inboxCount}`}>
                   {inboxCount}
                 </span>
               )}
