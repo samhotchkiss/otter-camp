@@ -4,7 +4,7 @@ import AgentActivityTimeline from "../components/agents/AgentActivityTimeline";
 import AgentIdentityEditor from "../components/agents/AgentIdentityEditor";
 import AgentMemoryBrowser from "../components/agents/AgentMemoryBrowser";
 import { useAgentActivity } from "../hooks/useAgentActivity";
-import { API_URL } from "../lib/api";
+import { API_URL, apiFetch } from "../lib/api";
 
 const STATUS_OPTIONS = ["started", "completed", "failed", "timeout"];
 
@@ -100,11 +100,7 @@ export default function AgentDetailPage() {
     setDetailLoading(true);
     setDetailError(null);
     try {
-      const response = await fetch(`${API_URL}/api/admin/agents/${encodeURIComponent(id)}`);
-      if (!response.ok) {
-        throw new Error(`Failed to load agent detail (${response.status})`);
-      }
-      const payload = (await response.json()) as AgentDetailPayload;
+      const payload = await apiFetch<AgentDetailPayload>(`/api/admin/agents/${encodeURIComponent(id)}`);
       setAgentDetail(payload);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load agent detail";
@@ -366,14 +362,7 @@ export default function AgentDetailPage() {
                       setIsLifecyclePending(true);
                       setLifecycleMessage(null);
                       try {
-                        const response = await fetch(
-                          `${API_URL}/api/admin/agents/${encodeURIComponent(id)}/${action}`,
-                          { method: "POST" },
-                        );
-                        if (!response.ok) {
-                          const payload = (await response.json().catch(() => ({}))) as { error?: string };
-                          throw new Error(payload.error || `Failed to ${action} agent (${response.status})`);
-                        }
+                        await apiFetch(`/api/admin/agents/${encodeURIComponent(id)}/${action}`, { method: "POST" });
                         setLifecycleMessage(`${label} request sent.`);
                         await loadAgentDetail();
                       } catch (lifecycleError) {
