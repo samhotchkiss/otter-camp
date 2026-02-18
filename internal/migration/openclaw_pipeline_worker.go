@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 	importer "github.com/samhotchkiss/otter-camp/internal/import"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/store"
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 var openClawPipelinePhaseOrder = []string{
@@ -234,7 +236,7 @@ func (w *OpenClawPipelineWorker) reconcileMemoryExtraction(ctx context.Context, 
 	w.IngestionWorker.SetMode(memory.EllieIngestionModeBackfill)
 	runResult, runErr := w.IngestionWorker.RunOnce(ctx)
 	if runErr != nil {
-		return w.failPhase(ctx, orgID, "memory_extraction", runErr)
+		return w.handlePhaseError(ctx, orgID, "memory_extraction", runErr)
 	}
 
 	// Refresh pending room count after ingest work.
@@ -284,7 +286,7 @@ func (w *OpenClawPipelineWorker) reconcileEntitySynthesis(ctx context.Context, o
 	}
 	result, err := w.EntityWorker.RunOnce(ctx, orgID)
 	if err != nil {
-		return w.failPhase(ctx, orgID, "entity_synthesis", err)
+		return w.handlePhaseError(ctx, orgID, "entity_synthesis", err)
 	}
 	if result.CandidatesConsidered == 0 {
 		_, err := w.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
@@ -319,7 +321,7 @@ func (w *OpenClawPipelineWorker) reconcileMemoryDedup(ctx context.Context, orgID
 	}
 	result, err := w.DedupWorker.RunOnce(ctx, orgID)
 	if err != nil {
-		return w.failPhase(ctx, orgID, "memory_dedup", err)
+		return w.handlePhaseError(ctx, orgID, "memory_dedup", err)
 	}
 	if result.PairsDiscovered == 0 && result.ClustersReviewed == 0 {
 		_, err := w.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
@@ -359,7 +361,7 @@ func (w *OpenClawPipelineWorker) reconcileTaxonomy(ctx context.Context, orgID st
 	}
 	result, err := w.TaxonomyWorker.RunOnce(ctx, orgID)
 	if err != nil {
-		return w.failPhase(ctx, orgID, "taxonomy_classification", err)
+		return w.handlePhaseError(ctx, orgID, "taxonomy_classification", err)
 	}
 	if result.PendingMemories == 0 {
 		_, err := w.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
@@ -470,7 +472,7 @@ func (w *OpenClawPipelineWorker) reconcileProjectDocs(ctx context.Context, orgID
 			Store:       w.ProjectDocsStore,
 		})
 		if err != nil {
-			return w.failPhase(ctx, orgID, "project_docs_scanning", err)
+			return w.handlePhaseError(ctx, orgID, "project_docs_scanning", err)
 		}
 		processedDocs += res.ProcessedDocs
 		updatedDocs += res.UpdatedDocs
@@ -504,6 +506,55 @@ func (w *OpenClawPipelineWorker) failPhase(ctx context.Context, orgID, phase str
 		CurrentLabel:  stringPtr("failed"),
 	})
 	return err
+}
+
+func (w *OpenClawPipelineWorker) handlePhaseError(ctx context.Context, orgID, phase string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if !isOpenClawPipelineTransientError(err) {
+		return w.failPhase(ctx, orgID, phase, err)
+	}
+
+	label := "waiting for openclaw bridge retry"
+	if trimmed := strings.TrimSpace(err.Error()); trimmed != "" {
+		if len(trimmed) > 220 {
+			trimmed = trimmed[:220] + "..."
+		}
+		label = fmt.Sprintf("retrying after transient error: %s", trimmed)
+	}
+	_, setErr := w.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+		OrgID:         orgID,
+		MigrationType: phase,
+		Status:        store.MigrationProgressStatusRunning,
+		CurrentLabel:  stringPtr(label),
+		Error:         nil,
+	})
+	if setErr != nil {
+		return setErr
+	}
+	return nil
+}
+
+func isOpenClawPipelineTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ws.ErrOpenClawNotConnected) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "openclaw bridge call failed") ||
+		strings.Contains(msg, "openclaw bridge not connected") ||
+		strings.Contains(msg, "websocket") ||
+		strings.Contains(msg, "econnrefused") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "bad gateway") ||
+		strings.Contains(msg, "unexpected server response: 502") ||
+		strings.Contains(msg, "executable file not found in $path") {
+		return true
+	}
+	return false
 }
 
 func stringPtr(value string) *string {
