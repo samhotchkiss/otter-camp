@@ -35,6 +35,7 @@ type OpenClawHandler struct {
 var ErrOpenClawNotConnected = errors.New("openclaw bridge not connected")
 
 const openClawConnectionWait = 10 * time.Second
+const openClawMaxMessageSize = 4 * 1024 * 1024
 
 type openClawRequestResult struct {
 	data json.RawMessage
@@ -195,7 +196,10 @@ func (h *OpenClawHandler) readPump(conn *websocket.Conn) {
 		log.Printf("[openclaw-ws] OpenClaw disconnected (active=%t)", wasActive)
 	}()
 
-	conn.SetReadLimit(maxMessageSize * 10) // Allow larger messages from OpenClaw
+	// OpenClaw bridge responses (especially memory extraction payloads) can be much larger
+	// than browser WS messages. Keep this independent from browser maxMessageSize to avoid
+	// 1009 "message too big" disconnect churn.
+	conn.SetReadLimit(openClawMaxMessageSize)
 	conn.SetReadDeadline(time.Now().Add(pongWait * 2))
 	defaultPingHandler := conn.PingHandler()
 	conn.SetPingHandler(func(appData string) error {
