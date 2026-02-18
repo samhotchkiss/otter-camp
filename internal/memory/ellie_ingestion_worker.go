@@ -239,6 +239,11 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (EllieIngestionRunRe
 	}
 
 	result := EllieIngestionRunResult{}
+	var (
+		runSawRetriableFailure bool
+		runSawAnyFailure       bool
+		runLastErr             error
+	)
 	for _, room := range rooms {
 		cursor, err := w.Store.GetRoomCursor(ctx, room.OrgID, room.RoomID)
 		if err != nil {
@@ -485,18 +490,39 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (EllieIngestionRunRe
 			}
 		}
 
-		// If OpenClaw is down, stop the whole run early so we don't spam failures across rooms.
+		// Do not abort the entire run on a single-room failure. Continue other rooms so one
+		// flaky bridge/session does not starve ingestion coverage for the whole org.
 		if sawRetriableLLMFailure {
+			runSawRetriableFailure = true
+			runSawAnyFailure = true
+			if lastLLMErr != nil {
+				runLastErr = lastLLMErr
+			} else {
+				runLastErr = ws.ErrOpenClawNotConnected
+			}
+			continue
+		}
+		if sawAnyLLMFailure {
+			runSawAnyFailure = true
+			if lastLLMErr != nil {
+				runLastErr = lastLLMErr
+			} else {
+				runLastErr = fmt.Errorf("ellie ingestion llm extraction failed")
+			}
+			continue
+		}
+	}
+
+	// Only surface a run-level error when nothing at all was processed; this preserves
+	// fast retry behavior while still allowing partial progress when some rooms succeed.
+	if result.ProcessedMessages == 0 && runSawAnyFailure {
+		if runSawRetriableFailure {
 			return result, ws.ErrOpenClawNotConnected
 		}
-		// If the LLM failed for other reasons, stop after persisting progress so the next
-		// run can retry (or surface the error to operators).
-		if sawAnyLLMFailure {
-			if lastLLMErr != nil {
-				return result, lastLLMErr
-			}
-			return result, fmt.Errorf("ellie ingestion llm extraction failed")
+		if runLastErr != nil {
+			return result, runLastErr
 		}
+		return result, fmt.Errorf("ellie ingestion llm extraction failed")
 	}
 
 	return result, nil

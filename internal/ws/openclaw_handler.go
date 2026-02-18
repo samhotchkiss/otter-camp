@@ -34,7 +34,7 @@ type OpenClawHandler struct {
 
 var ErrOpenClawNotConnected = errors.New("openclaw bridge not connected")
 
-const openClawConnectionWait = 2 * time.Second
+const openClawConnectionWait = 10 * time.Second
 
 type openClawRequestResult struct {
 	data json.RawMessage
@@ -151,9 +151,14 @@ func (h *OpenClawHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var previous *websocket.Conn
 	h.mu.Lock()
+	previous = h.conn
 	h.conn = conn
 	h.mu.Unlock()
+	if previous != nil && previous != conn {
+		_ = previous.Close()
+	}
 
 	log.Printf("[openclaw-ws] OpenClaw connected from %s", r.RemoteAddr)
 
@@ -176,14 +181,18 @@ func (h *OpenClawHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // readPump handles incoming messages from OpenClaw.
 func (h *OpenClawHandler) readPump(conn *websocket.Conn) {
 	defer func() {
+		wasActive := false
 		h.mu.Lock()
 		if h.conn == conn {
 			h.conn = nil
+			wasActive = true
 		}
 		h.mu.Unlock()
-		h.failPendingRequests(ErrOpenClawNotConnected)
+		if wasActive {
+			h.failPendingRequests(ErrOpenClawNotConnected)
+		}
 		conn.Close()
-		log.Printf("[openclaw-ws] OpenClaw disconnected")
+		log.Printf("[openclaw-ws] OpenClaw disconnected (active=%t)", wasActive)
 	}()
 
 	conn.SetReadLimit(maxMessageSize * 10) // Allow larger messages from OpenClaw
@@ -204,7 +213,9 @@ func (h *OpenClawHandler) readPump(conn *websocket.Conn) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+			if closeErr, ok := err.(*websocket.CloseError); ok {
+				log.Printf("[openclaw-ws] Read close: code=%d text=%q", closeErr.Code, closeErr.Text)
+			} else if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("[openclaw-ws] Read error: %v", err)
 			}
 			break
