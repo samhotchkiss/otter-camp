@@ -319,4 +319,29 @@ describe("GlobalChatDock", () => {
     await user.click(screen.getByRole("button", { name: "Minimize global chat" }));
     expect(globalChatState.setDockOpen).toHaveBeenCalledWith(false);
   });
+
+  it("shows a context cue for selected project conversations", () => {
+    globalChatState.conversations = [
+      {
+        key: "project:project-1",
+        type: "project",
+        projectId: "project-1",
+        title: "Otter Camp",
+        contextLabel: "Project • Otter Camp",
+        subtitle: "Project chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T10:00:00.000Z",
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("Project context")).toBeInTheDocument();
+  });
 });

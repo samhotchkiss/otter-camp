@@ -112,6 +112,24 @@ describe("GlobalChatSurface", () => {
     });
   });
 
+  it("shows a project context cue in the chat surface", async () => {
+    const projectConversation: GlobalProjectConversation = {
+      key: "project:project-1",
+      type: "project",
+      projectId: "project-1",
+      title: "Project One",
+      contextLabel: "Project • Project One",
+      subtitle: "Team thread",
+      unreadCount: 0,
+      updatedAt: "2026-02-07T00:00:00.000Z",
+    };
+
+    render(<GlobalChatSurface conversation={projectConversation} />);
+
+    await screen.findByPlaceholderText("Message Project One...");
+    expect(screen.getByText("Project context")).toBeInTheDocument();
+  });
+
   it("refetches when conversation identity changes", async () => {
     const { rerender } = render(<GlobalChatSurface conversation={baseConversation} />);
 
