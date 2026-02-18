@@ -142,6 +142,30 @@ func (f *fakeEllieLLMExtractor) Extract(_ context.Context, _ EllieIngestionLLMEx
 	return f.result, nil
 }
 
+type fakeEllieLLMExtractorWithBudget struct {
+	maxPromptChars  int
+	maxMessageChars int
+
+	result EllieIngestionLLMExtractionResult
+
+	calls int
+	seen  [][]string
+}
+
+func (f *fakeEllieLLMExtractorWithBudget) PromptBudget() (int, int) {
+	return f.maxPromptChars, f.maxMessageChars
+}
+
+func (f *fakeEllieLLMExtractorWithBudget) Extract(_ context.Context, input EllieIngestionLLMExtractionInput) (EllieIngestionLLMExtractionResult, error) {
+	f.calls += 1
+	ids := make([]string, 0, len(input.Messages))
+	for _, msg := range input.Messages {
+		ids = append(ids, msg.ID)
+	}
+	f.seen = append(f.seen, ids)
+	return f.result, nil
+}
+
 func TestEllieIngestionWorkerExtractsMemoriesFromChatMessages(t *testing.T) {
 	fakeStore := newFakeEllieIngestionStore()
 	base := time.Date(2026, 2, 12, 12, 0, 0, 0, time.UTC)
@@ -169,6 +193,61 @@ func TestEllieIngestionWorkerExtractsMemoriesFromChatMessages(t *testing.T) {
 	require.Len(t, fakeStore.created, 1)
 	require.Equal(t, "technical_decision", fakeStore.created[0].Kind)
 	require.Equal(t, "org-1", fakeStore.created[0].OrgID)
+}
+
+func TestEllieIngestionWorkerSplitsLLMWindowsByPromptBudget(t *testing.T) {
+	fakeStore := newFakeEllieIngestionStore()
+	base := time.Date(2026, 2, 13, 9, 0, 0, 0, time.UTC)
+	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
+
+	body := strings.Repeat("x", 200)
+	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
+		{ID: "msg-1", OrgID: "org-1", RoomID: "room-1", Body: body, CreatedAt: base},
+		{ID: "msg-2", OrgID: "org-1", RoomID: "room-1", Body: body, CreatedAt: base.Add(1 * time.Minute)},
+		{ID: "msg-3", OrgID: "org-1", RoomID: "room-1", Body: body, CreatedAt: base.Add(2 * time.Minute)},
+		{ID: "msg-4", OrgID: "org-1", RoomID: "room-1", Body: body, CreatedAt: base.Add(3 * time.Minute)},
+		{ID: "msg-5", OrgID: "org-1", RoomID: "room-1", Body: body, CreatedAt: base.Add(4 * time.Minute)},
+	}
+
+	maxMessageChars := 50
+	baseLen := len(buildEllieIngestionOpenClawPrompt(EllieIngestionLLMExtractionInput{
+		OrgID:    "org-1",
+		RoomID:   "room-1",
+		Messages: nil,
+	}, 0, maxMessageChars))
+	entryLen := len(formatEllieIngestionPromptMessage(fakeStore.messages[roomCursorKey("org-1", "room-1")][0], maxMessageChars))
+
+	// Make the prompt budget fit at most 2 messages per call.
+	maxPromptChars := baseLen + (2 * entryLen) + 1
+	extractor := &fakeEllieLLMExtractorWithBudget{
+		maxPromptChars:  maxPromptChars,
+		maxMessageChars: maxMessageChars,
+		result: EllieIngestionLLMExtractionResult{
+			Model:   "gpt-4.1-mini",
+			TraceID: "trace-split-1",
+			Candidates: []EllieIngestionLLMCandidate{
+				{Kind: "fact", Title: "Any", Content: "Any", Importance: 3, Confidence: 0.5},
+			},
+		},
+	}
+
+	worker := NewEllieIngestionWorker(fakeStore, EllieIngestionWorkerConfig{
+		BatchSize:    50,
+		Interval:     time.Second,
+		MaxPerRoom:   50,
+		LLMExtractor: extractor,
+	})
+	worker.Logf = nil
+
+	run, err := worker.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 5, run.ProcessedMessages)
+	require.Equal(t, 3, extractor.calls)
+	require.Equal(t, [][]string{
+		{"msg-1", "msg-2"},
+		{"msg-3", "msg-4"},
+		{"msg-5"},
+	}, extractor.seen)
 }
 
 func TestEllieIngestionWorkerAdvancesCursorAfterSuccessfulWrite(t *testing.T) {

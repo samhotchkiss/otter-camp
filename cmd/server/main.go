@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
@@ -88,9 +89,23 @@ func main() {
 						openClawExtractor.SetBridgeRunner(bridgeRunner)
 						log.Printf("✅ Ellie ingestion OpenClaw bridge runner enabled")
 					}
+				} else {
+					// Without a runtime OpenClaw handler, the extractor will fall back to exec'ing the
+					// OpenClaw binary directly. In hosted deployments this is often unavailable, which
+					// would cause repeated LLM extraction failures and heuristic-only ingestion.
+					openClawBinary := strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_BINARY"))
+					if openClawBinary == "" {
+						openClawBinary = "openclaw"
+					}
+					if _, err := exec.LookPath(openClawBinary); err != nil {
+						log.Printf("⚠️  Ellie ingestion OpenClaw extractor disabled; no OpenClaw bridge handler and %q not found in PATH (heuristic-only ingestion would produce very few memories)", openClawBinary)
+						openClawExtractor = nil
+					}
 				}
-				llmExtractor = openClawExtractor
-				log.Printf("✅ Ellie ingestion OpenClaw extractor enabled")
+				if openClawExtractor != nil {
+					llmExtractor = openClawExtractor
+					log.Printf("✅ Ellie ingestion OpenClaw extractor enabled")
+				}
 			}
 
 			worker := memory.NewEllieIngestionWorker(

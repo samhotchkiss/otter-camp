@@ -74,6 +74,14 @@ type EllieIngestionOpenClawExtractor struct {
 	maxMessageChars            int
 }
 
+// EllieIngestionLLMBudgeter is an optional interface Ellie ingestion extractors
+// can implement to expose their prompt/message size constraints. The ingestion
+// worker uses this to split windows deterministically instead of silently
+// dropping messages when prompts exceed transport limits.
+type EllieIngestionLLMBudgeter interface {
+	PromptBudget() (maxPromptChars int, maxMessageChars int)
+}
+
 type ellieIngestionOpenClawExecRunner struct {
 	binary string
 }
@@ -263,6 +271,13 @@ func (e *EllieIngestionOpenClawExtractor) SetBridgeRunner(runner EllieIngestionO
 		return
 	}
 	e.bridgeRunner = runner
+}
+
+func (e *EllieIngestionOpenClawExtractor) PromptBudget() (int, int) {
+	if e == nil {
+		return 0, 0
+	}
+	return e.maxPromptChars, e.maxMessageChars
 }
 
 func (e *EllieIngestionOpenClawExtractor) Extract(
@@ -459,10 +474,39 @@ func buildEllieIngestionOpenClawPrompt(
 			entry := entries[i]
 			nextUsed := used + len(entry)
 			if nextUsed > maxPromptChars {
-				continue
+				// Keep a contiguous suffix of messages so we don't silently skip
+				// items in the middle of a window. The ingestion worker should
+				// split windows ahead of time using the same budget.
+				break
 			}
 			allowed = append(allowed, entry)
 			used = nextUsed
+		}
+		if len(allowed) == 0 && len(input.Messages) > 0 {
+			// Ensure forward progress even if a single formatted message cannot
+			// fit (e.g. misconfigured maxMessageChars vs maxPromptChars).
+			// Shrink the body for the last message until the entry fits.
+			last := input.Messages[len(input.Messages)-1]
+			available := maxPromptChars - baseLen
+			if available > 0 {
+				lo, hi := 1, maxMessageChars
+				best := 0
+				for lo <= hi {
+					mid := (lo + hi) / 2
+					candidate := formatEllieIngestionPromptMessage(last, mid)
+					if len(candidate) <= available {
+						best = mid
+						lo = mid + 1
+					} else {
+						hi = mid - 1
+					}
+				}
+				if best <= 0 {
+					best = 1
+				}
+				builder.WriteString(formatEllieIngestionPromptMessage(last, best))
+				return builder.String()
+			}
 		}
 		for i := len(allowed) - 1; i >= 0; i-- {
 			builder.WriteString(allowed[i])

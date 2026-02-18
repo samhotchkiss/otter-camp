@@ -258,47 +258,68 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (EllieIngestionRunRe
 			windows = groupEllieIngestionMessagesByWindow(messages, w.WindowGap)
 		}
 		for _, window := range windows {
-			result.WindowsProcessed++
-			result.ProcessedMessages += len(window)
+			subWindows := [][]store.EllieIngestionMessage{window}
 			if w.LLMExtractor != nil {
-				llmCandidates, err := w.extractLLMMemoryCandidates(ctx, room, window)
+				if budgeter, ok := w.LLMExtractor.(EllieIngestionLLMBudgeter); ok {
+					maxPromptChars, maxMessageChars := budgeter.PromptBudget()
+					subWindows = splitEllieIngestionWindowByPromptBudget(
+						room.OrgID,
+						room.RoomID,
+						window,
+						maxPromptChars,
+						maxMessageChars,
+					)
+				}
+			}
+
+			for _, subWindow := range subWindows {
+				if len(subWindow) == 0 {
+					continue
+				}
+
+				result.WindowsProcessed++
+				result.ProcessedMessages += len(subWindow)
+
+				if w.LLMExtractor != nil {
+					llmCandidates, err := w.extractLLMMemoryCandidates(ctx, room, subWindow)
 				if err != nil {
 					if w.Logf != nil {
 						w.Logf("ellie ingestion llm extraction failed room=%s: %v (falling back to heuristics)", room.RoomID, err)
 					}
-				} else if len(llmCandidates) > 0 {
-					for _, candidate := range llmCandidates {
-						inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
-						if err != nil {
-							return result, fmt.Errorf("insert llm extracted memory for room %s: %w", room.RoomID, err)
+					} else if len(llmCandidates) > 0 {
+						for _, candidate := range llmCandidates {
+							inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
+							if err != nil {
+								return result, fmt.Errorf("insert llm extracted memory for room %s: %w", room.RoomID, err)
+							}
+							if inserted {
+								result.InsertedMemories++
+								result.InsertedLLMMemories++
+							}
+							if inserted && w.Logf != nil {
+								w.Logf("ellie ingestion extracted llm memory kind=%s room=%s", candidate.Kind, room.RoomID)
+							}
 						}
-						if inserted {
-							result.InsertedMemories++
-							result.InsertedLLMMemories++
-						}
-						if inserted && w.Logf != nil {
-							w.Logf("ellie ingestion extracted llm memory kind=%s room=%s", candidate.Kind, room.RoomID)
-						}
+						continue
 					}
+				}
+
+				candidate, ok := deriveEllieMemoryCandidateFromWindow(subWindow)
+				if !ok {
 					continue
 				}
-			}
 
-			candidate, ok := deriveEllieMemoryCandidateFromWindow(window)
-			if !ok {
-				continue
-			}
-
-			inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
-			if err != nil {
-				return result, fmt.Errorf("insert ellie extracted memory for room %s: %w", room.RoomID, err)
-			}
-			if inserted {
-				result.InsertedMemories++
-				result.InsertedHeuristicMemories++
-			}
-			if inserted && w.Logf != nil {
-				w.Logf("ellie ingestion extracted memory kind=%s room=%s", candidate.Kind, room.RoomID)
+				inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
+				if err != nil {
+					return result, fmt.Errorf("insert ellie extracted memory for room %s: %w", room.RoomID, err)
+				}
+				if inserted {
+					result.InsertedMemories++
+					result.InsertedHeuristicMemories++
+				}
+				if inserted && w.Logf != nil {
+					w.Logf("ellie ingestion extracted memory kind=%s room=%s", candidate.Kind, room.RoomID)
+				}
 			}
 		}
 
@@ -511,6 +532,73 @@ func normalizeEllieLLMExtractedCandidate(
 		SourceConversationID: sourceConversationID,
 		OccurredAt:           window[len(window)-1].CreatedAt,
 	}, true
+}
+
+func splitEllieIngestionWindowByPromptBudget(
+	orgID string,
+	roomID string,
+	window []store.EllieIngestionMessage,
+	maxPromptChars int,
+	maxMessageChars int,
+) [][]store.EllieIngestionMessage {
+	if len(window) == 0 {
+		return [][]store.EllieIngestionMessage{}
+	}
+	if maxPromptChars <= 0 {
+		return [][]store.EllieIngestionMessage{window}
+	}
+	if maxMessageChars <= 0 {
+		maxMessageChars = defaultEllieIngestionOpenClawMaxMessageChars
+	}
+
+	// Use the actual prompt builder with maxPromptChars disabled to measure the
+	// full prompt size deterministically. This avoids subtle drift between the
+	// worker's window sizing and the extractor's prompt packing logic.
+	baseLen := len(buildEllieIngestionOpenClawPrompt(EllieIngestionLLMExtractionInput{
+		OrgID:    orgID,
+		RoomID:   roomID,
+		Messages: nil,
+	}, 0, maxMessageChars))
+	if baseLen >= maxPromptChars {
+		return groupEllieIngestionMessagesByCount(window, 1, 1)
+	}
+
+	chunks := make([][]store.EllieIngestionMessage, 0, 4)
+	i := 0
+	for i < len(window) {
+		j := i
+		// Grow [i:j] while the full formatted prompt stays within budget.
+		for j < len(window) {
+			candidate := window[i : j+1]
+			promptLen := len(buildEllieIngestionOpenClawPrompt(EllieIngestionLLMExtractionInput{
+				OrgID:    orgID,
+				RoomID:   roomID,
+				Messages: candidate,
+			}, 0, maxMessageChars))
+			if promptLen <= maxPromptChars {
+				j++
+				continue
+			}
+			break
+		}
+
+		if j == i {
+			// Single-message chunk doesn't fit even after maxMessageChars trimming.
+			// Keep making forward progress; the extractor has a final safeguard
+			// to shrink the message further.
+			j = i + 1
+		}
+
+		out := make([]store.EllieIngestionMessage, j-i)
+		copy(out, window[i:j])
+		chunks = append(chunks, out)
+		i = j
+	}
+
+	if len(chunks) == 0 {
+		return [][]store.EllieIngestionMessage{window}
+	}
+	return chunks
 }
 
 func groupEllieIngestionMessagesByWindow(messages []store.EllieIngestionMessage, gap time.Duration) [][]store.EllieIngestionMessage {

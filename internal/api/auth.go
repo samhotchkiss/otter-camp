@@ -605,7 +605,7 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 		if expiresAt, ok := lookupActiveSessionExpiry(r.Context(), db, localAuthToken); ok {
 			baseURL := getPublicBaseURL(r)
 			if strings.Contains(baseURL, "api.otter.camp") {
-				baseURL = "https://sam.otter.camp"
+				baseURL = "https://swh.otter.camp"
 			}
 			magicURL := baseURL + "/?auth=" + localAuthToken
 			sendJSON(w, http.StatusOK, MagicLinkResponse{
@@ -672,9 +672,9 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 
 	// Build the magic link URL
 	baseURL := getPublicBaseURL(r)
-	// Use sam.otter.camp if we detect we're in production
+	// Use swh.otter.camp if we detect we're in production
 	if strings.Contains(baseURL, "api.otter.camp") {
-		baseURL = "https://sam.otter.camp"
+		baseURL = "https://swh.otter.camp"
 	}
 	magicURL := baseURL + "/?auth=" + authToken
 
