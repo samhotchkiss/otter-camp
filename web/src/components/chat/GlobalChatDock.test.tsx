@@ -345,6 +345,32 @@ describe("GlobalChatDock", () => {
     expect(screen.getByText("Project context")).toBeInTheDocument();
   });
 
+  it("shows a context cue for selected issue conversations", () => {
+    globalChatState.conversations = [
+      {
+        key: "issue:issue-9",
+        type: "issue",
+        issueId: "issue-9",
+        projectId: "project-1",
+        title: "Fix context labels",
+        contextLabel: "Issue • Fix context labels",
+        subtitle: "Issue conversation",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T10:00:00.000Z",
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1/issues/issue-9"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("Issue context")).toBeInTheDocument();
+  });
+
   it("shows a DM context cue for selected direct conversations", () => {
     globalChatState.conversations = [
       {
@@ -373,5 +399,15 @@ describe("GlobalChatDock", () => {
     );
 
     expect(screen.getByText("DM context")).toBeInTheDocument();
+  });
+
+  it("shows a main context cue when no conversation is selected", () => {
+    render(
+      <MemoryRouter initialEntries={["/chats"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("Main context")).toBeInTheDocument();
   });
 });
