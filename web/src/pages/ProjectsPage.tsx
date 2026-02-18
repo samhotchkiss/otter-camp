@@ -152,6 +152,67 @@ const getUpdatedAtMs = (project: Project) => {
   return Number.isNaN(ms) ? 0 : ms;
 };
 
+type ProjectActivityItem = {
+  id: string;
+  projectName: string;
+  summary: string;
+  status: "in-progress" | "needs-approval" | "todo" | "done";
+  priority: "critical" | "high" | "medium" | "low";
+  assignee: string;
+};
+
+const buildRecentActivity = (projects: Project[]): ProjectActivityItem[] => {
+  return projects.slice(0, 5).map((project) => {
+    const taskCount = project.taskCount ?? 0;
+    const completedCount = project.completedCount ?? 0;
+    const openIssues = project.openIssues ?? taskCount;
+    const inProgress = project.inProgress ?? Math.max(taskCount - completedCount, 0);
+    const needsApproval = project.needsApproval ?? 0;
+
+    if (needsApproval > 0) {
+      return {
+        id: `${project.id}-review`,
+        projectName: project.name,
+        summary: `${needsApproval} item${needsApproval === 1 ? "" : "s"} waiting for approval`,
+        status: "needs-approval",
+        priority: "high",
+        assignee: project.assignee || "Unassigned",
+      };
+    }
+
+    if (inProgress > 0) {
+      return {
+        id: `${project.id}-active`,
+        projectName: project.name,
+        summary: `${inProgress} issue${inProgress === 1 ? "" : "s"} actively in progress`,
+        status: "in-progress",
+        priority: "medium",
+        assignee: project.assignee || "Unassigned",
+      };
+    }
+
+    if (openIssues > 0) {
+      return {
+        id: `${project.id}-todo`,
+        projectName: project.name,
+        summary: `${openIssues} open issue${openIssues === 1 ? "" : "s"} remaining`,
+        status: "todo",
+        priority: project.priority === "urgent" ? "critical" : "low",
+        assignee: project.assignee || "Unassigned",
+      };
+    }
+
+    return {
+      id: `${project.id}-done`,
+      projectName: project.name,
+      summary: "No open issues",
+      status: "done",
+      priority: "low",
+      assignee: project.assignee || "Unassigned",
+    };
+  });
+};
+
 const normalizeProjectLabel = (label: LabelOption): LabelOption | null => {
   const id = typeof label.id === "string" ? label.id.trim() : "";
   const name = typeof label.name === "string" ? label.name.trim() : "";
@@ -428,6 +489,7 @@ export default function ProjectsPage({
   const sortedProjects = useMemo(() => {
     return [...projects].sort((a, b) => getUpdatedAtMs(b) - getUpdatedAtMs(a));
   }, [projects]);
+  const recentActivity = useMemo(() => buildRecentActivity(sortedProjects), [sortedProjects]);
 
   if (isLoading) {
     return (
@@ -573,6 +635,46 @@ export default function ProjectsPage({
           <span className="mt-3 text-sm font-medium">Create a new project</span>
         </button>
       </div>
+
+      <section className="mt-6 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm">
+        <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface-alt)]/40 px-5 py-4">
+          <h2 className="text-sm font-semibold text-[var(--text)]">Recent Activity</h2>
+          <button
+            type="button"
+            className="text-xs font-medium text-[var(--accent)] transition hover:opacity-80"
+          >
+            View All
+          </button>
+        </div>
+        <div className="divide-y divide-[var(--border)]/60">
+          {recentActivity.map((item) => (
+            <div
+              key={item.id}
+              className="flex items-center justify-between gap-3 px-5 py-3 transition hover:bg-[var(--surface-alt)]/30"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-[var(--text)]">{item.summary}</p>
+                <p className="mt-1 text-xs text-[var(--text-muted)]">
+                  {item.projectName} • {item.assignee}
+                </p>
+              </div>
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                  item.status === "needs-approval"
+                    ? "border-orange-500/30 bg-orange-500/10 text-orange-500"
+                    : item.status === "in-progress"
+                      ? "border-amber-500/30 bg-amber-500/10 text-amber-500"
+                      : item.status === "todo"
+                        ? "border-slate-500/30 bg-slate-500/10 text-slate-500"
+                        : "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
+                }`}
+              >
+                {item.status.replace("-", " ")}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
