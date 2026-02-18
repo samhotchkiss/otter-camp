@@ -60,6 +60,7 @@ describe("IssueThreadPanel", () => {
 
     render(<IssueThreadPanel issueID="issue-1" />);
 
+    expect(screen.getByTestId("issue-thread-shell")).toBeInTheDocument();
     expect(await screen.findByText("Comment 25")).toBeInTheDocument();
     expect(screen.queryByText("Comment 1")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Load older comments" })).toBeInTheDocument();

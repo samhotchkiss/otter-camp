@@ -74,6 +74,7 @@ describe("ProjectIssuesList", () => {
     render(<ProjectIssuesList projectId="project-1" />);
 
     const row = await screen.findByRole("button", { name: /#77 Imported bug/i });
+    expect(screen.getByTestId("project-issues-shell")).toBeInTheDocument();
     expect(within(row).getByText("Issue")).toBeInTheDocument();
     expect(within(row).getByText("GitHub")).toBeInTheDocument();
     expect(within(row).getByText("Open", { selector: "span" })).toBeInTheDocument();
