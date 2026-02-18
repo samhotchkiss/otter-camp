@@ -221,4 +221,33 @@ describe("DashboardLayout", () => {
     expect(screen.queryByText("Bridge offline - reconnecting")).not.toBeInTheDocument();
     expect(screen.queryByText("Last successful sync 1h ago")).not.toBeInTheDocument();
   });
+
+  it("supports mobile sidebar and chat slot toggles while preserving shell stability", async () => {
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <KeyboardShortcutsProvider>
+          <DashboardLayout>
+            <div>child</div>
+          </DashboardLayout>
+        </KeyboardShortcutsProvider>
+      </MemoryRouter>,
+    );
+
+    const sidebar = await screen.findByTestId("shell-sidebar");
+    const chatSlot = screen.getByTestId("shell-chat-slot");
+    expect(chatSlot).not.toHaveClass("hidden");
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle menu" }));
+    expect(sidebar).toHaveClass("open");
+    fireEvent.click(screen.getByRole("button", { name: "Close navigation" }));
+    expect(sidebar).not.toHaveClass("open");
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
+    expect(chatSlot).toHaveClass("hidden");
+    fireEvent.click(screen.getByRole("button", { name: "Toggle chat panel" }));
+    expect(chatSlot).not.toHaveClass("hidden");
+
+    fireEvent.click(screen.getByRole("link", { name: /Inbox/ }));
+    expect(screen.getByTestId("shell-layout")).toBeInTheDocument();
+  });
 });
