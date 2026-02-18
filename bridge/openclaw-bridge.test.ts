@@ -39,6 +39,7 @@ import {
   resetReconnectStateForTest,
   resolveOtterCampWSSecret,
   resetSessionContextsForTest,
+  resolveOpenClawCommandTimeoutMSForTest,
   setExecFileForTest,
   setOtterCampSocketForTest,
   runSerializedSyncOperationForTest,
@@ -1613,6 +1614,44 @@ describe("bridge memory extraction dispatch helpers", () => {
       "token-123",
     );
     assert.deepEqual(withPassword, ["gateway", "call", "agent", "--json", "--password", "secret"]);
+  });
+
+  it("resolves gateway command timeout from --timeout with safety headroom", () => {
+    assert.equal(
+      resolveOpenClawCommandTimeoutMSForTest(["gateway", "call", "agent", "--json"]),
+      60000,
+    );
+    assert.equal(
+      resolveOpenClawCommandTimeoutMSForTest(["gateway", "call", "agent", "--timeout", "90000"]),
+      105000,
+    );
+    assert.equal(
+      resolveOpenClawCommandTimeoutMSForTest(["gateway", "call", "agent", "--timeout", "9999999"]),
+      300000,
+    );
+  });
+
+  it("passes computed timeout to openclaw command execution", async () => {
+    let capturedTimeout: number | undefined;
+    setExecFileForTest((_cmd, _args, options, callback) => {
+      capturedTimeout = options?.timeout;
+      callback(
+        null,
+        '{"runId":"trace-timeout","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}',
+        "",
+      );
+    });
+
+    await dispatchInboundEventForTest("memory.extract.request", {
+      type: "memory.extract.request",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        request_id: "req-timeout-1",
+        args: ["gateway", "call", "agent", "--json", "--timeout", "90000"],
+      },
+    });
+
+    assert.equal(capturedTimeout, 105000);
   });
 
   it("strips explicit --url overrides for bridge-side gateway execution", () => {
