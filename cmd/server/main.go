@@ -95,15 +95,21 @@ func main() {
 			worker := memory.NewEllieIngestionWorker(
 				store.NewEllieIngestionStore(db),
 				memory.EllieIngestionWorkerConfig{
-					Interval:     cfg.EllieIngestion.Interval,
-					BatchSize:    cfg.EllieIngestion.BatchSize,
-					MaxPerRoom:   cfg.EllieIngestion.MaxPerRoom,
-					LLMExtractor: llmExtractor,
+					Interval:             cfg.EllieIngestion.Interval,
+					BatchSize:            cfg.EllieIngestion.BatchSize,
+					MaxPerRoom:           cfg.EllieIngestion.MaxPerRoom,
+					BackfillMaxPerRoom:   cfg.EllieIngestion.BackfillMaxPerRoom,
+					BackfillWindowSize:   cfg.EllieIngestion.BackfillWindowSize,
+					BackfillWindowStride: cfg.EllieIngestion.BackfillWindowStride,
+					WindowGap:            cfg.EllieIngestion.WindowGap,
+					Mode:                 memory.EllieIngestionMode(cfg.EllieIngestion.Mode),
+					LLMExtractor:         llmExtractor,
 				},
 			)
 			startWorker(worker.Start)
 			log.Printf(
-				"✅ Ellie ingestion worker started (interval=%s batch=%d max_per_room=%d)",
+				"✅ Ellie ingestion worker started (mode=%s interval=%s batch=%d max_per_room=%d)",
+				cfg.EllieIngestion.Mode,
 				cfg.EllieIngestion.Interval,
 				cfg.EllieIngestion.BatchSize,
 				cfg.EllieIngestion.MaxPerRoom,

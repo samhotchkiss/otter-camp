@@ -138,6 +138,21 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.EllieIngestion.MaxPerRoom != defaultEllieIngestionMaxPerRoom {
 		t.Fatalf("expected default ellie ingestion max_per_room %d, got %d", defaultEllieIngestionMaxPerRoom, cfg.EllieIngestion.MaxPerRoom)
 	}
+	if cfg.EllieIngestion.Mode != defaultEllieIngestionMode {
+		t.Fatalf("expected default ellie ingestion mode %q, got %q", defaultEllieIngestionMode, cfg.EllieIngestion.Mode)
+	}
+	if cfg.EllieIngestion.WindowGap != defaultEllieIngestionWindowGap {
+		t.Fatalf("expected default ellie ingestion window gap %v, got %v", defaultEllieIngestionWindowGap, cfg.EllieIngestion.WindowGap)
+	}
+	if cfg.EllieIngestion.BackfillMaxPerRoom != defaultEllieIngestionBackfillMaxPerRoom {
+		t.Fatalf("expected default ellie ingestion backfill max_per_room %d, got %d", defaultEllieIngestionBackfillMaxPerRoom, cfg.EllieIngestion.BackfillMaxPerRoom)
+	}
+	if cfg.EllieIngestion.BackfillWindowSize != defaultEllieIngestionBackfillWindowSize {
+		t.Fatalf("expected default ellie ingestion backfill window size %d, got %d", defaultEllieIngestionBackfillWindowSize, cfg.EllieIngestion.BackfillWindowSize)
+	}
+	if cfg.EllieIngestion.BackfillWindowStride != defaultEllieIngestionBackfillWindowStride {
+		t.Fatalf("expected default ellie ingestion backfill window stride %d, got %d", defaultEllieIngestionBackfillWindowStride, cfg.EllieIngestion.BackfillWindowStride)
+	}
 
 	if !cfg.EllieContextInjection.Enabled {
 		t.Fatalf("expected ellie context injection worker enabled by default")
@@ -509,6 +524,11 @@ func TestLoadParsesEllieIngestionSettings(t *testing.T) {
 	t.Setenv("ELLIE_INGESTION_INTERVAL", "2m")
 	t.Setenv("ELLIE_INGESTION_BATCH_SIZE", "80")
 	t.Setenv("ELLIE_INGESTION_MAX_PER_ROOM", "120")
+	t.Setenv("ELLIE_INGESTION_MODE", "backfill")
+	t.Setenv("ELLIE_INGESTION_WINDOW_GAP", "10m")
+	t.Setenv("ELLIE_INGESTION_BACKFILL_MAX_PER_ROOM", "333")
+	t.Setenv("ELLIE_INGESTION_BACKFILL_WINDOW_SIZE", "44")
+	t.Setenv("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE", "22")
 
 	cfg, err := loadWithDefaultOpenAIKey(t)
 	if err != nil {
@@ -526,6 +546,21 @@ func TestLoadParsesEllieIngestionSettings(t *testing.T) {
 	}
 	if cfg.EllieIngestion.MaxPerRoom != 120 {
 		t.Fatalf("expected ellie ingestion max per room 120, got %d", cfg.EllieIngestion.MaxPerRoom)
+	}
+	if cfg.EllieIngestion.Mode != "backfill" {
+		t.Fatalf("expected ellie ingestion mode backfill, got %q", cfg.EllieIngestion.Mode)
+	}
+	if cfg.EllieIngestion.WindowGap != 10*time.Minute {
+		t.Fatalf("expected ellie ingestion window gap 10m, got %v", cfg.EllieIngestion.WindowGap)
+	}
+	if cfg.EllieIngestion.BackfillMaxPerRoom != 333 {
+		t.Fatalf("expected ellie ingestion backfill max per room 333, got %d", cfg.EllieIngestion.BackfillMaxPerRoom)
+	}
+	if cfg.EllieIngestion.BackfillWindowSize != 44 {
+		t.Fatalf("expected ellie ingestion backfill window size 44, got %d", cfg.EllieIngestion.BackfillWindowSize)
+	}
+	if cfg.EllieIngestion.BackfillWindowStride != 22 {
+		t.Fatalf("expected ellie ingestion backfill window stride 22, got %d", cfg.EllieIngestion.BackfillWindowStride)
 	}
 }
 

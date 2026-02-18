@@ -69,6 +69,12 @@ const (
 	defaultEllieIngestionInterval   = 5 * time.Minute
 	defaultEllieIngestionBatchSize  = 100
 	defaultEllieIngestionMaxPerRoom = 200
+	defaultEllieIngestionMode       = "normal"
+	defaultEllieIngestionWindowGap  = 15 * time.Minute
+	// Backfill defaults are higher-throughput and use count-based windows.
+	defaultEllieIngestionBackfillMaxPerRoom      = 250
+	defaultEllieIngestionBackfillWindowSize      = 30
+	defaultEllieIngestionBackfillWindowStride    = 30
 
 	defaultEllieContextInjectionEnabled          = true
 	defaultEllieContextInjectionPollInterval     = 3 * time.Second
@@ -133,10 +139,15 @@ type ConversationSegmentationConfig struct {
 }
 
 type EllieIngestionConfig struct {
-	Enabled    bool
-	Interval   time.Duration
-	BatchSize  int
-	MaxPerRoom int
+	Enabled              bool
+	Interval             time.Duration
+	BatchSize            int
+	MaxPerRoom           int
+	Mode                 string
+	WindowGap            time.Duration
+	BackfillMaxPerRoom   int
+	BackfillWindowSize   int
+	BackfillWindowStride int
 }
 
 type EllieContextInjectionConfig struct {
@@ -292,6 +303,35 @@ func Load() (Config, error) {
 	}
 	cfg.EllieIngestion.MaxPerRoom = ellieIngestionMaxPerRoom
 
+	cfg.EllieIngestion.Mode = firstNonEmpty(
+		strings.TrimSpace(os.Getenv("ELLIE_INGESTION_MODE")),
+		defaultEllieIngestionMode,
+	)
+
+	ellieIngestionWindowGap, err := parseDuration("ELLIE_INGESTION_WINDOW_GAP", defaultEllieIngestionWindowGap)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.WindowGap = ellieIngestionWindowGap
+
+	ellieIngestionBackfillMaxPerRoom, err := parseInt("ELLIE_INGESTION_BACKFILL_MAX_PER_ROOM", defaultEllieIngestionBackfillMaxPerRoom)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.BackfillMaxPerRoom = ellieIngestionBackfillMaxPerRoom
+
+	ellieIngestionBackfillWindowSize, err := parseInt("ELLIE_INGESTION_BACKFILL_WINDOW_SIZE", defaultEllieIngestionBackfillWindowSize)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.BackfillWindowSize = ellieIngestionBackfillWindowSize
+
+	ellieIngestionBackfillWindowStride, err := parseInt("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE", defaultEllieIngestionBackfillWindowStride)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.EllieIngestion.BackfillWindowStride = ellieIngestionBackfillWindowStride
+
 	ellieContextInjectionEnabled, err := parseBool("ELLIE_CONTEXT_INJECTION_WORKER_ENABLED", defaultEllieContextInjectionEnabled)
 	if err != nil {
 		return Config{}, err
@@ -429,6 +469,35 @@ func (c Config) Validate() error {
 		}
 		if c.EllieIngestion.MaxPerRoom <= 0 {
 			return fmt.Errorf("ELLIE_INGESTION_MAX_PER_ROOM must be greater than zero")
+		}
+		switch strings.ToLower(strings.TrimSpace(c.EllieIngestion.Mode)) {
+		case "normal", "backfill":
+		default:
+			return fmt.Errorf("ELLIE_INGESTION_MODE must be either normal or backfill")
+		}
+		if c.EllieIngestion.WindowGap <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_WINDOW_GAP must be greater than zero")
+		}
+		if c.EllieIngestion.BackfillMaxPerRoom <= 0 {
+			return fmt.Errorf("ELLIE_INGESTION_BACKFILL_MAX_PER_ROOM must be greater than zero")
+		}
+		if c.EllieIngestion.BackfillWindowSize < 0 {
+			return fmt.Errorf("ELLIE_INGESTION_BACKFILL_WINDOW_SIZE must be greater than or equal to zero")
+		}
+		if c.EllieIngestion.BackfillWindowStride < 0 {
+			return fmt.Errorf("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE must be greater than or equal to zero")
+		}
+		if c.EllieIngestion.BackfillWindowSize == 0 {
+			if c.EllieIngestion.BackfillWindowStride != 0 {
+				return fmt.Errorf("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE must be zero when ELLIE_INGESTION_BACKFILL_WINDOW_SIZE is zero")
+			}
+		} else {
+			if c.EllieIngestion.BackfillWindowStride <= 0 {
+				return fmt.Errorf("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE must be greater than zero")
+			}
+			if c.EllieIngestion.BackfillWindowStride > c.EllieIngestion.BackfillWindowSize {
+				return fmt.Errorf("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE must be less than or equal to ELLIE_INGESTION_BACKFILL_WINDOW_SIZE")
+			}
 		}
 	}
 

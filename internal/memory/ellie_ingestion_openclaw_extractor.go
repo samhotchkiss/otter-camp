@@ -21,9 +21,10 @@ const (
 	defaultEllieIngestionOpenClawGatewayURL         = "ws://127.0.0.1:18791"
 	defaultEllieIngestionOpenClawAgentID            = "elephant"
 	defaultEllieIngestionOpenClawSessionNamespace   = "ellie-ingestion"
-	defaultEllieIngestionOpenClawExpectedModelToken = "haiku"
 	defaultEllieIngestionOpenClawGatewayCallTimeout = 90 * time.Second
 	defaultEllieIngestionOpenClawMaxCandidateChars  = 800
+	defaultEllieIngestionOpenClawMaxPromptChars     = 18000
+	defaultEllieIngestionOpenClawMaxMessageChars    = 1200
 	ellieIngestionOpenClawBridgeRequestEventType    = "memory.extract.request"
 )
 
@@ -53,6 +54,8 @@ type EllieIngestionOpenClawExtractorConfig struct {
 	GatewayCallTimeout         time.Duration
 	Now                        func() time.Time
 	MaxResponseCandidateLength int
+	MaxPromptChars             int
+	MaxMessageChars            int
 }
 
 type EllieIngestionOpenClawExtractor struct {
@@ -67,6 +70,8 @@ type EllieIngestionOpenClawExtractor struct {
 	gatewayCallTimeout         time.Duration
 	now                        func() time.Time
 	maxResponseCandidateLength int
+	maxPromptChars             int
+	maxMessageChars            int
 }
 
 type ellieIngestionOpenClawExecRunner struct {
@@ -155,6 +160,24 @@ func NewEllieIngestionOpenClawExtractorFromEnv() (*EllieIngestionOpenClawExtract
 		maxCandidateChars = parsed
 	}
 
+	maxPromptChars := defaultEllieIngestionOpenClawMaxPromptChars
+	if raw := strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_MAX_PROMPT_CHARS")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("ELLIE_INGESTION_OPENCLAW_MAX_PROMPT_CHARS: %w", err)
+		}
+		maxPromptChars = parsed
+	}
+
+	maxMessageChars := defaultEllieIngestionOpenClawMaxMessageChars
+	if raw := strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_MAX_MESSAGE_CHARS")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("ELLIE_INGESTION_OPENCLAW_MAX_MESSAGE_CHARS: %w", err)
+		}
+		maxMessageChars = parsed
+	}
+
 	return NewEllieIngestionOpenClawExtractor(EllieIngestionOpenClawExtractorConfig{
 		OpenClawBinary:             strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_BINARY")),
 		GatewayURL:                 strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_GATEWAY_URL")),
@@ -164,6 +187,8 @@ func NewEllieIngestionOpenClawExtractorFromEnv() (*EllieIngestionOpenClawExtract
 		ExpectedModelContains:      strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_EXPECT_MODEL_CONTAINS")),
 		GatewayCallTimeout:         timeout,
 		MaxResponseCandidateLength: maxCandidateChars,
+		MaxPromptChars:             maxPromptChars,
+		MaxMessageChars:            maxMessageChars,
 	})
 }
 
@@ -181,10 +206,10 @@ func NewEllieIngestionOpenClawExtractor(cfg EllieIngestionOpenClawExtractorConfi
 	agentID := normalizeEllieIngestionOpenClawSessionToken(cfg.AgentID, defaultEllieIngestionOpenClawAgentID)
 	sessionNamespace := normalizeEllieIngestionOpenClawSessionToken(cfg.SessionNamespace, defaultEllieIngestionOpenClawSessionNamespace)
 
+	// If configured, enforce that the OpenClaw agent model contains this token.
+	// Default is no enforcement; OtterCamp should never hard-fail extraction just because
+	// the user picked a different model in OpenClaw.
 	expectedModel := strings.TrimSpace(strings.ToLower(cfg.ExpectedModelContains))
-	if expectedModel == "" {
-		expectedModel = defaultEllieIngestionOpenClawExpectedModelToken
-	}
 
 	callTimeout := cfg.GatewayCallTimeout
 	if callTimeout <= 0 {
@@ -194,6 +219,16 @@ func NewEllieIngestionOpenClawExtractor(cfg EllieIngestionOpenClawExtractorConfi
 	maxCandidateChars := cfg.MaxResponseCandidateLength
 	if maxCandidateChars <= 0 {
 		maxCandidateChars = defaultEllieIngestionOpenClawMaxCandidateChars
+	}
+
+	maxPromptChars := cfg.MaxPromptChars
+	if maxPromptChars <= 0 {
+		maxPromptChars = defaultEllieIngestionOpenClawMaxPromptChars
+	}
+
+	maxMessageChars := cfg.MaxMessageChars
+	if maxMessageChars <= 0 {
+		maxMessageChars = defaultEllieIngestionOpenClawMaxMessageChars
 	}
 
 	now := cfg.Now
@@ -218,6 +253,8 @@ func NewEllieIngestionOpenClawExtractor(cfg EllieIngestionOpenClawExtractorConfi
 		gatewayCallTimeout:         callTimeout,
 		now:                        now,
 		maxResponseCandidateLength: maxCandidateChars,
+		maxPromptChars:             maxPromptChars,
+		maxMessageChars:            maxMessageChars,
 	}, nil
 }
 
@@ -250,7 +287,7 @@ func (e *EllieIngestionOpenClawExtractor) Extract(
 	paramsRaw, err := json.Marshal(map[string]any{
 		"idempotencyKey": e.idempotencyKey(orgID, roomID, input.Messages),
 		"sessionKey":     e.sessionKey(orgID),
-		"message":        buildEllieIngestionOpenClawPrompt(input),
+		"message":        buildEllieIngestionOpenClawPrompt(input, e.maxPromptChars, e.maxMessageChars),
 		"deliver":        false,
 	})
 	if err != nil {
@@ -388,34 +425,76 @@ func (e *EllieIngestionOpenClawExtractor) idempotencyKey(orgID, roomID string, m
 	return fmt.Sprintf("ellie-ingestion-%x", sum[:8])
 }
 
-func buildEllieIngestionOpenClawPrompt(input EllieIngestionLLMExtractionInput) string {
+func buildEllieIngestionOpenClawPrompt(
+	input EllieIngestionLLMExtractionInput,
+	maxPromptChars int,
+	maxMessageChars int,
+) string {
 	var builder strings.Builder
 	builder.WriteString("You extract durable engineering memories from chat messages.\n")
 	builder.WriteString("Return strict JSON only. Do not include markdown or commentary.\n")
 	builder.WriteString("Output schema: {\"candidates\":[{\"kind\":\"...\",\"title\":\"...\",\"content\":\"...\",\"importance\":1-5,\"confidence\":0-1,\"source_conversation_id\":\"uuid|null\",\"metadata\":{}}]}\n")
 	builder.WriteString("Allowed kinds: technical_decision, process_decision, preference, fact, lesson, pattern, anti_pattern, correction, process_outcome, context.\n")
-	builder.WriteString("Only include concrete, durable facts/decisions/preferences. Skip low-signal chatter.\n")
+	builder.WriteString("Goal: high recall. Prefer producing multiple small memories over one vague summary.\n")
+	builder.WriteString("Extract concrete facts, decisions, constraints, invariants, warnings, commands, file paths, API routes, table names, and \"this is how it works\" explanations.\n")
+	builder.WriteString("Each candidate should be 1-3 sentences, specific, and standalone. Avoid generic statements.\n")
 	builder.WriteString("If nothing is durable, return {\"candidates\":[]}.\n\n")
 	builder.WriteString("Context:\n")
 	builder.WriteString(fmt.Sprintf("- org_id: %s\n", strings.TrimSpace(input.OrgID)))
 	builder.WriteString(fmt.Sprintf("- room_id: %s\n\n", strings.TrimSpace(input.RoomID)))
 	builder.WriteString("Messages:\n")
+
+	baseLen := builder.Len()
+	entries := make([]string, 0, len(input.Messages))
 	for _, message := range input.Messages {
-		builder.WriteString("- id=")
-		builder.WriteString(strings.TrimSpace(message.ID))
-		builder.WriteString(" created_at=")
-		builder.WriteString(message.CreatedAt.UTC().Format(time.RFC3339))
-		if message.ConversationID != nil {
-			conversationID := strings.TrimSpace(*message.ConversationID)
-			if conversationID != "" {
-				builder.WriteString(" conversation_id=")
-				builder.WriteString(conversationID)
-			}
-		}
-		builder.WriteString("\n  ")
-		builder.WriteString(strings.TrimSpace(message.Body))
-		builder.WriteString("\n")
+		entries = append(entries, formatEllieIngestionPromptMessage(message, maxMessageChars))
 	}
+
+	// Cap prompt size to avoid websocket close code 1009 (message too large).
+	if maxPromptChars > 0 && baseLen < maxPromptChars && len(entries) > 0 {
+		allowed := make([]string, 0, len(entries))
+		used := baseLen
+		for i := len(entries) - 1; i >= 0; i-- {
+			entry := entries[i]
+			nextUsed := used + len(entry)
+			if nextUsed > maxPromptChars {
+				continue
+			}
+			allowed = append(allowed, entry)
+			used = nextUsed
+		}
+		for i := len(allowed) - 1; i >= 0; i-- {
+			builder.WriteString(allowed[i])
+		}
+		return builder.String()
+	}
+
+	for _, entry := range entries {
+		builder.WriteString(entry)
+	}
+	return builder.String()
+}
+
+func formatEllieIngestionPromptMessage(message store.EllieIngestionMessage, maxBodyChars int) string {
+	var builder strings.Builder
+	builder.WriteString("- id=")
+	builder.WriteString(strings.TrimSpace(message.ID))
+	builder.WriteString(" created_at=")
+	builder.WriteString(message.CreatedAt.UTC().Format(time.RFC3339))
+	if message.ConversationID != nil {
+		conversationID := strings.TrimSpace(*message.ConversationID)
+		if conversationID != "" {
+			builder.WriteString(" conversation_id=")
+			builder.WriteString(conversationID)
+		}
+	}
+	builder.WriteString("\n  ")
+	body := strings.TrimSpace(message.Body)
+	if maxBodyChars > 0 && len([]rune(body)) > maxBodyChars {
+		body = string([]rune(body)[:maxBodyChars]) + "..."
+	}
+	builder.WriteString(body)
+	builder.WriteString("\n")
 	return builder.String()
 }
 

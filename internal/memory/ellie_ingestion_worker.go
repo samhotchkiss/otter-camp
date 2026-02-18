@@ -69,6 +69,9 @@ type EllieIngestionWorkerConfig struct {
 	BatchSize          int
 	MaxPerRoom         int
 	BackfillMaxPerRoom int
+	BackfillWindowSize int
+	BackfillWindowStride int
+	WindowGap          time.Duration
 	Mode               EllieIngestionMode
 	LLMExtractor       EllieIngestionLLMExtractor
 }
@@ -79,6 +82,9 @@ type EllieIngestionWorker struct {
 	BatchSize          int
 	MaxPerRoom         int
 	BackfillMaxPerRoom int
+	BackfillWindowSize int
+	BackfillWindowStride int
+	WindowGap          time.Duration
 	Mode               EllieIngestionMode
 	LLMExtractor       EllieIngestionLLMExtractor
 	Logf               func(format string, args ...any)
@@ -101,6 +107,18 @@ func NewEllieIngestionWorker(store EllieIngestionStore, cfg EllieIngestionWorker
 	if backfillMaxPerRoom <= 0 {
 		backfillMaxPerRoom = defaultEllieIngestionBackfillMaxPerRoom
 	}
+	windowGap := cfg.WindowGap
+	if windowGap <= 0 {
+		windowGap = ellieIngestionWindowGap
+	}
+	backfillWindowSize := cfg.BackfillWindowSize
+	if backfillWindowSize <= 0 {
+		backfillWindowSize = 0
+	}
+	backfillWindowStride := cfg.BackfillWindowStride
+	if backfillWindowStride <= 0 {
+		backfillWindowStride = backfillWindowSize
+	}
 	mode := normalizeEllieIngestionMode(cfg.Mode)
 	return &EllieIngestionWorker{
 		Store:              store,
@@ -108,6 +126,9 @@ func NewEllieIngestionWorker(store EllieIngestionStore, cfg EllieIngestionWorker
 		BatchSize:          batchSize,
 		MaxPerRoom:         maxPerRoom,
 		BackfillMaxPerRoom: backfillMaxPerRoom,
+		BackfillWindowSize: backfillWindowSize,
+		BackfillWindowStride: backfillWindowStride,
+		WindowGap:          windowGap,
 		Mode:               mode,
 		LLMExtractor:       cfg.LLMExtractor,
 		Logf:               log.Printf,
@@ -202,7 +223,12 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 			continue
 		}
 
-		windows := groupEllieIngestionMessagesByWindow(messages, ellieIngestionWindowGap)
+		var windows [][]store.EllieIngestionMessage
+		if mode == EllieIngestionModeBackfill && w.BackfillWindowSize > 0 {
+			windows = groupEllieIngestionMessagesByCount(messages, w.BackfillWindowSize, w.BackfillWindowStride)
+		} else {
+			windows = groupEllieIngestionMessagesByWindow(messages, w.WindowGap)
+		}
 		for _, window := range windows {
 			processed += len(window)
 			if w.LLMExtractor != nil {
@@ -475,6 +501,38 @@ func groupEllieIngestionMessagesByWindow(messages []store.EllieIngestionMessage,
 	}
 	if len(current) > 0 {
 		windows = append(windows, current)
+	}
+	return windows
+}
+
+func groupEllieIngestionMessagesByCount(
+	messages []store.EllieIngestionMessage,
+	windowSize int,
+	stride int,
+) [][]store.EllieIngestionMessage {
+	if len(messages) == 0 {
+		return [][]store.EllieIngestionMessage{}
+	}
+	if windowSize <= 0 {
+		return [][]store.EllieIngestionMessage{messages}
+	}
+	if stride <= 0 {
+		stride = windowSize
+	}
+	if stride > windowSize {
+		stride = windowSize
+	}
+
+	windows := make([][]store.EllieIngestionMessage, 0, (len(messages)+stride-1)/stride)
+	for start := 0; start < len(messages); start += stride {
+		end := start + windowSize
+		if end > len(messages) {
+			end = len(messages)
+		}
+		windows = append(windows, messages[start:end])
+		if end >= len(messages) {
+			break
+		}
 	}
 	return windows
 }
