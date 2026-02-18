@@ -103,7 +103,7 @@ describe("ContentReview markdown source/render toggle", () => {
 
     await user.click(screen.getByRole("button", { name: "Rendered" }));
 
-    expect(screen.getByText("Heading")).toBeInTheDocument();
+    expect(screen.getAllByText("Heading").length).toBeGreaterThan(0);
     expect(screen.getByText("one")).toBeInTheDocument();
     expect(screen.getByText((content) => content.includes("value"))).toBeInTheDocument();
   });
@@ -206,5 +206,28 @@ describe("ContentReview read-only snapshots", () => {
 
     await user.click(screen.getByRole("button", { name: "Rendered" }));
     expect(await screen.findByText("old feedback")).toBeInTheDocument();
+  });
+});
+
+describe("ContentReview sidebar navigation", () => {
+  it("renders section navigation with comment counts and updates active section", async () => {
+    const user = userEvent.setup();
+    const markdown = [
+      "# Intro",
+      "",
+      "Body {>>Sam: intro note<<}",
+      "",
+      "## Details",
+      "",
+      "More body text.",
+    ].join("\n");
+    render(<ContentReview initialMarkdown={markdown} reviewerName="Sam" />);
+
+    expect(screen.getByRole("button", { name: "Open section Intro" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open section Details" })).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("1 comment"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Open section Details" }));
+    expect(screen.getByTestId("active-review-section")).toHaveTextContent("details");
   });
 });

@@ -83,6 +83,7 @@ export default function ContentReview({
   const [imagePathDraft, setImagePathDraft] = useState("");
   const [imageAltDraft, setImageAltDraft] = useState("");
   const [pendingSelection, setPendingSelection] = useState<TextSelection | null>(null);
+  const [activeSectionId, setActiveSectionId] = useState<string>("document");
 
   const sourceRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -95,10 +96,39 @@ export default function ContentReview({
     [reviewComments],
   );
   const unresolvedCommentCount = reviewComments.length - resolvedCommentCount;
+  const commentLineLocations = useMemo(
+    () =>
+      inlineComments.map((comment) => ({
+        comment,
+        line: markdown.slice(0, comment.start).split("\n").length,
+      })),
+    [inlineComments, markdown],
+  );
+  const sectionCommentCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    sections.forEach((section) => {
+      counts[section.id] = 0;
+    });
+    sections.forEach((section, index) => {
+      const nextStartLine = sections[index + 1]?.startLine ?? Number.MAX_SAFE_INTEGER;
+      const sectionCount = commentLineLocations.filter(
+        ({ line }) => line >= section.startLine && line < nextStartLine,
+      ).length;
+      counts[section.id] = sectionCount;
+    });
+    return counts;
+  }, [sections, commentLineLocations]);
 
   useEffect(() => {
     setMarkdown(initialMarkdown);
   }, [initialMarkdown]);
+
+  useEffect(() => {
+    const fallbackSectionID = sections[0]?.id ?? "document";
+    setActiveSectionId((current) =>
+      sections.some((section) => section.id === current) ? current : fallbackSectionID,
+    );
+  }, [sections]);
 
   useEffect(() => {
     if (documentView !== "source" || composerOpen || imageComposerOpen) {
@@ -250,6 +280,11 @@ export default function ContentReview({
   const handleMarkReadyForReview = () => {
     if (!canTransitionReviewState(reviewState, "ready_for_review")) return;
     setReviewState(transitionReviewState(reviewState, "ready_for_review"));
+  };
+
+  const handleSectionSelect = (sectionId: string) => {
+    setActiveSectionId(sectionId);
+    setDocumentView("rendered");
   };
 
   return (
@@ -492,7 +527,12 @@ export default function ContentReview({
             </div>
           ) : (
             <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-900/40">
-              <MarkdownPreview markdown={markdown} />
+              <MarkdownPreview
+                markdown={markdown}
+                activeSectionId={activeSectionId}
+                commentCounts={sectionCommentCounts}
+                onSectionSelect={handleSectionSelect}
+              />
             </div>
           )}
         </div>
@@ -505,6 +545,34 @@ export default function ContentReview({
           <p className="text-xs text-slate-500 dark:text-slate-300">
             {reviewComments.length} total · {unresolvedCommentCount} unresolved
           </p>
+          <p className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400" data-testid="active-review-section">
+            {activeSectionId}
+          </p>
+          <ul className="space-y-2">
+            {sections.map((section) => {
+              const count = sectionCommentCounts[section.id] ?? 0;
+              return (
+                <li key={`section-${section.id}`}>
+                  <button
+                    type="button"
+                    onClick={() => handleSectionSelect(section.id)}
+                    className={`w-full rounded-xl border px-3 py-2 text-left text-xs transition ${
+                      activeSectionId === section.id
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-900 dark:border-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200"
+                        : "border-slate-200 bg-white text-slate-700 hover:border-indigo-200 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                    }`}
+                    aria-label={`Open section ${section.title}`}
+                  >
+                    <p className="font-semibold">{section.title}</p>
+                    <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                      Line {section.startLine}
+                      {count > 0 ? ` · ${count} comment${count === 1 ? "" : "s"}` : ""}
+                    </p>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
           {reviewComments.length === 0 ? (
             <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900/30 dark:text-slate-300">
               No inline comments yet.
