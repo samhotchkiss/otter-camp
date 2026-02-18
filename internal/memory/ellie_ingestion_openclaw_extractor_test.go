@@ -139,6 +139,39 @@ func TestEllieIngestionOpenClawExtractorParsesFencedJSONCandidates(t *testing.T)
 	require.Equal(t, "window-1", result.Candidates[0].Metadata["evidence"])
 }
 
+func TestEllieIngestionOpenClawExtractorParsesStage1CandidatesWithObjectShapes(t *testing.T) {
+	runner := &fakeEllieIngestionOpenClawRunner{
+		output: []byte(`{"runId":"trace-obj","status":"ok","result":{"payloads":[{"text":"{\"summary\":\"ok\",\"candidates\":{\"memories\":{\"kind\":\"fact\",\"title\":\"User preference\",\"content\":\"The user prefers concise output.\",\"importance\":4,\"confidence\":0.9,\"source_message_ids\":[\"m1\"]},\"projects\":{\"name\":\"Otter Camp\",\"description\":\"Agent orchestration platform.\",\"status\":\"active\",\"source_message_ids\":[\"m2\"]},\"issues\":{\"title\":\"Retry bridge call\",\"description\":\"Implement bridge retry with backoff.\",\"status\":\"open\",\"project\":\"otter-camp\",\"source_message_ids\":[\"m3\"],\"source_quotes\":[\"retry bridge\"]}}}"}],"meta":{"agentMeta":{"model":"anthropic/claude-3-5-haiku-latest"}}}}`),
+	}
+	extractor, err := NewEllieIngestionOpenClawExtractor(EllieIngestionOpenClawExtractorConfig{
+		Runner:                runner,
+		ExpectedModelContains: "haiku",
+	})
+	require.NoError(t, err)
+
+	result, err := extractor.Extract(context.Background(), EllieIngestionLLMExtractionInput{
+		OrgID:  "0d86d9e4-b8a1-46cf-aed1-c666123c2d1f",
+		RoomID: "ab86d9e4-b8a1-46cf-aed1-c666123c2d1a",
+		Messages: []store.EllieIngestionMessage{
+			{
+				ID:        "bb86d9e4-b8a1-46cf-aed1-c666123c2d1a",
+				OrgID:     "0d86d9e4-b8a1-46cf-aed1-c666123c2d1f",
+				RoomID:    "ab86d9e4-b8a1-46cf-aed1-c666123c2d1a",
+				Body:      "Any content.",
+				CreatedAt: time.Date(2026, 2, 17, 5, 58, 0, 0, time.UTC),
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "trace-obj", result.TraceID)
+	require.Len(t, result.Candidates, 3)
+	require.Equal(t, "fact", result.Candidates[0].Kind)
+	require.Equal(t, "context", result.Candidates[1].Kind)
+	require.Equal(t, "project", result.Candidates[1].Metadata["type"])
+	require.Equal(t, "context", result.Candidates[2].Kind)
+	require.Equal(t, "issue", result.Candidates[2].Metadata["type"])
+}
+
 func TestEllieIngestionOpenClawExtractorReturnsErrorOnMalformedOutput(t *testing.T) {
 	runner := &fakeEllieIngestionOpenClawRunner{
 		output: []byte(`{"runId":"trace-160","status":"ok","result":{"payloads":[{"text":"not-json"}],"meta":{"agentMeta":{"model":"anthropic/claude-3-5-haiku-latest"}}}}`),
