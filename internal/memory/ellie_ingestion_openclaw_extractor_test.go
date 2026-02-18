@@ -233,7 +233,7 @@ func TestEllieIngestionOpenClawBridgeRunnerRoutesGatewayCall(t *testing.T) {
 	require.Equal(t, []string{"gateway", "call", "agent", "--json"}, requester.data["args"])
 }
 
-func TestEllieIngestionOpenClawExtractorFallsBackToExecWhenBridgeFails(t *testing.T) {
+func TestEllieIngestionOpenClawExtractorDoesNotFallBackToExecWhenBridgeIsConfigured(t *testing.T) {
 	bridgeRequester := &fakeEllieIngestionOpenClawBridgeRequester{
 		err: errors.New("bridge unavailable"),
 	}
@@ -255,6 +255,7 @@ func TestEllieIngestionOpenClawExtractorFallsBackToExecWhenBridgeFails(t *testin
 		RoomID:   "room-1",
 		Messages: []store.EllieIngestionMessage{{ID: "msg-1", Body: "Any content."}},
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, execRunner.args)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "openclaw bridge call failed")
+	require.Empty(t, execRunner.args)
 }

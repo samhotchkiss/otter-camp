@@ -258,11 +258,26 @@ func NewEllieIngestionOpenClawExtractor(cfg EllieIngestionOpenClawExtractorConfi
 	}, nil
 }
 
+// EllieIngestionLLMBudgeter is an optional interface Ellie ingestion extractors
+// can implement to expose their prompt/message size constraints. The ingestion
+// worker uses this to split windows deterministically instead of silently
+// dropping messages when prompts exceed transport limits.
+type EllieIngestionLLMBudgeter interface {
+	PromptBudget() (maxPromptChars int, maxMessageChars int)
+}
+
 func (e *EllieIngestionOpenClawExtractor) SetBridgeRunner(runner EllieIngestionOpenClawBridgeRunner) {
 	if e == nil {
 		return
 	}
 	e.bridgeRunner = runner
+}
+
+func (e *EllieIngestionOpenClawExtractor) PromptBudget() (int, int) {
+	if e == nil {
+		return 0, 0
+	}
+	return e.maxPromptChars, e.maxMessageChars
 }
 
 func (e *EllieIngestionOpenClawExtractor) Extract(
@@ -380,21 +395,14 @@ func (e *EllieIngestionOpenClawExtractor) runGatewayAgentCall(
 	}
 
 	if e.bridgeRunner != nil {
+		// When the bridge runner is configured, ALL calls must route through OpenClaw via
+		// the bridge (hosted parity with local OpenClaw execution). If the bridge is down,
+		// fail and let the worker retry later without advancing cursors.
 		output, err := e.bridgeRunner.Run(ctx, trimmedOrgID, args)
-		if err == nil {
-			return output, nil
+		if err != nil {
+			return nil, fmt.Errorf("openclaw bridge call failed: %w", err)
 		}
-
-		fallbackOutput, fallbackErr := e.runner.Run(ctx, args)
-		if fallbackErr != nil {
-			return nil, fmt.Errorf(
-				"openclaw bridge call failed: %w; openclaw gateway agent call failed: %w (%s)",
-				err,
-				fallbackErr,
-				ellieIngestionOpenClawOutputSnippet(fallbackOutput),
-			)
-		}
-		return fallbackOutput, nil
+		return output, nil
 	}
 
 	output, err := e.runner.Run(ctx, args)
@@ -431,19 +439,25 @@ func buildEllieIngestionOpenClawPrompt(
 	maxMessageChars int,
 ) string {
 	var builder strings.Builder
-	builder.WriteString("You extract durable engineering memories from chat messages.\n")
-	builder.WriteString("Return strict JSON only. Do not include markdown or commentary.\n")
-	builder.WriteString("Output schema: {\"candidates\":[{\"kind\":\"...\",\"title\":\"...\",\"content\":\"...\",\"importance\":1-5,\"confidence\":0-1,\"source_conversation_id\":\"uuid|null\",\"metadata\":{}}]}\n")
-	builder.WriteString("Allowed kinds: technical_decision, process_decision, preference, fact, lesson, pattern, anti_pattern, correction, process_outcome, context.\n")
-	builder.WriteString("Goal: high recall. Prefer producing multiple small memories over one vague summary.\n")
-	builder.WriteString("When there is enough signal, aim for 8-20 candidates per window.\n")
-	builder.WriteString("Extract concrete facts, decisions, constraints, invariants, warnings, commands, file paths, API routes, table names, and \"this is how it works\" explanations.\n")
-	builder.WriteString("Each candidate should be 1-3 sentences, specific, and standalone. Avoid generic statements.\n")
-	builder.WriteString("If nothing is durable, return {\"candidates\":[]}.\n\n")
-	builder.WriteString("Context:\n")
+	builder.WriteString("You are a knowledge extraction tool. You produce CANDIDATE extractions from conversation logs.\n")
+	builder.WriteString("Your goal is HIGH RECALL. A later filtering stage will remove noise.\n")
+	builder.WriteString("Return strict JSON only. Do not include markdown or commentary.\n\n")
+	builder.WriteString("OUTPUT FORMAT:\n")
+	builder.WriteString("{\"summary\":\"...\",\"candidates\":{\"memories\":[...],\"projects\":[...],\"issues\":[...]}}\n\n")
+	builder.WriteString("CANDIDATE MEMORIES:\n")
+	builder.WriteString("- Extract potential durable facts, preferences, decisions, and lessons.\n")
+	builder.WriteString("- Each memory MUST include: kind, title, content, importance(1-5), confidence(0-1), source_message_ids, source_quotes(<=25 words), origin_hint, pii_flags, sensitivity.\n")
+	builder.WriteString("- Allowed kinds: preference, technical_decision, process_decision, fact, lesson.\n")
+	builder.WriteString("- Each memory should be atomic (one fact per memory) and 1-2 sentences.\n")
+	builder.WriteString("- NEVER include raw secrets (tokens/passwords/API keys) in content or quotes. If present, redact the value.\n\n")
+	builder.WriteString("CANDIDATE PROJECTS:\n")
+	builder.WriteString("- Real ongoing products/books/software. Include: name, description, status, source_message_ids, confidence.\n\n")
+	builder.WriteString("CANDIDATE ISSUES/TASKS:\n")
+	builder.WriteString("- Extract explicit and implicit tasks aggressively. Include: title, description, status(open|in_progress|blocked|completed), project (name or null), source_message_ids, source_quotes, confidence.\n\n")
+	builder.WriteString("CONTEXT:\n")
 	builder.WriteString(fmt.Sprintf("- org_id: %s\n", strings.TrimSpace(input.OrgID)))
 	builder.WriteString(fmt.Sprintf("- room_id: %s\n\n", strings.TrimSpace(input.RoomID)))
-	builder.WriteString("Messages:\n")
+	builder.WriteString("CONVERSATION:\n")
 
 	baseLen := builder.Len()
 	entries := make([]string, 0, len(input.Messages))
@@ -478,25 +492,76 @@ func buildEllieIngestionOpenClawPrompt(
 
 func formatEllieIngestionPromptMessage(message store.EllieIngestionMessage, maxBodyChars int) string {
 	var builder strings.Builder
-	builder.WriteString("- id=")
-	builder.WriteString(strings.TrimSpace(message.ID))
-	builder.WriteString(" created_at=")
-	builder.WriteString(message.CreatedAt.UTC().Format(time.RFC3339))
-	if message.ConversationID != nil {
-		conversationID := strings.TrimSpace(*message.ConversationID)
-		if conversationID != "" {
-			builder.WriteString(" conversation_id=")
-			builder.WriteString(conversationID)
-		}
+	id := strings.TrimSpace(message.ID)
+	if id == "" {
+		id = "unknown"
 	}
-	builder.WriteString("\n  ")
+
 	body := strings.TrimSpace(message.Body)
+	body = ellieIngestionPreRedact(body)
+
+	senderType := strings.TrimSpace(strings.ToLower(message.SenderType))
+	label := "[AGENT]"
+	switch senderType {
+	case "user":
+		label = "[USER]"
+	case "system":
+		label = "[SYSTEM]"
+	case "agent":
+		label = "[AGENT]"
+	}
+	if strings.HasPrefix(body, "[Queued") || strings.Contains(body, "Queued #") {
+		label = "[QUEUED]"
+	}
+
+	builder.WriteString("[")
+	builder.WriteString(message.CreatedAt.UTC().Format("2006-01-02 15:04:05"))
+	builder.WriteString("] (")
+	builder.WriteString(id)
+	builder.WriteString(") ")
+	builder.WriteString(label)
+	builder.WriteString(": ")
+
 	if maxBodyChars > 0 && len([]rune(body)) > maxBodyChars {
 		body = string([]rune(body)[:maxBodyChars]) + "..."
 	}
 	builder.WriteString(body)
 	builder.WriteString("\n")
 	return builder.String()
+}
+
+var (
+	ellieIngestionSecretPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`\b(ghp_[A-Za-z0-9]{20,})\b`),
+		regexp.MustCompile(`\b(sk-[A-Za-z0-9_\-]{20,})\b`),
+		regexp.MustCompile(`\b(xox[bpsr]-[A-Za-z0-9\-]{10,})\b`),
+		regexp.MustCompile(`\b(AKIA[A-Z0-9]{16})\b`),
+		regexp.MustCompile(`\b(ops_[A-Za-z0-9+/=]{20,})\b`),
+		regexp.MustCompile(`\b(eyJ[A-Za-z0-9+/=_\\-]{40,})\b`),
+		regexp.MustCompile(`(?i)password:\\s*\\S+`),
+		regexp.MustCompile(`(?i)token:\\s*\\S{20,}`),
+		regexp.MustCompile(`(?i)api[_-]?key:\\s*\\S{10,}`),
+		regexp.MustCompile(`(?i)secret:\\s*\\S{10,}`),
+		regexp.MustCompile(`(?i)pairing code:\\s*\\S+`),
+	}
+	ellieIngestionPIIPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`\\b\\d{1,5}\\s+[A-Z][a-z]+\\s+(Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Trail|Way|Boulevard|Blvd|Circle|Cir|Court|Ct|Place|Pl)\\b`),
+		regexp.MustCompile(`\\b(\\+?1[-.\\s]?)?[(]?\\d{3}[)]?[-.\\s]?\\d{3}[-.\\s]?\\d{4}\\b`),
+		regexp.MustCompile(`\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b`),
+		regexp.MustCompile(`(?i)\\b(dob|born|birthday|birth date)[:\\s]*\\d{1,2}[\\/\\-\\.]\\d{1,2}[\\/\\-\\.]\\d{2,4}\\b`),
+		regexp.MustCompile(`\\b(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{1,2},?\\s+\\d{4}\\b`),
+	}
+)
+
+func ellieIngestionPreRedact(text string) string {
+	out := text
+	for _, pat := range ellieIngestionSecretPatterns {
+		out = pat.ReplaceAllString(out, "[REDACTED_SECRET]")
+	}
+	for _, pat := range ellieIngestionPIIPatterns {
+		out = pat.ReplaceAllString(out, "[PII_REDACTED]")
+	}
+	return out
 }
 
 type ellieIngestionOpenClawGatewayResponse struct {
@@ -592,6 +657,54 @@ type ellieIngestionOpenClawCandidatesEnvelope struct {
 	Memories   []ellieIngestionOpenClawCandidateJSON `json:"memories"`
 }
 
+type ellieIngestionStage1Candidate struct {
+	Kind        string   `json:"kind"`
+	Title       string   `json:"title"`
+	Content     string   `json:"content"`
+	Importance  *int     `json:"importance"`
+	Confidence  *float64 `json:"confidence"`
+	OriginHint  string   `json:"origin_hint"`
+	OriginCamel string   `json:"originHint"`
+	Sensitivity string   `json:"sensitivity"`
+
+	SourceMessageIDs []string `json:"source_message_ids"`
+	SourceIDsCamel   []string `json:"sourceMessageIds"`
+	SourceQuotes     []string `json:"source_quotes"`
+	QuotesCamel      []string `json:"sourceQuotes"`
+	PIIFlags         []string `json:"pii_flags"`
+	PIICamel         []string `json:"piiFlags"`
+
+	Status  string `json:"status"`
+	Project string `json:"project"`
+}
+
+type ellieIngestionStage1Envelope struct {
+	Summary     string `json:"summary"`
+	SummaryText string `json:"Summary"`
+	Candidates  struct {
+		Memories []ellieIngestionStage1Candidate `json:"memories"`
+		Projects []struct {
+			Name             string   `json:"name"`
+			Description      string   `json:"description"`
+			Status           string   `json:"status"`
+			SourceMessageIDs []string `json:"source_message_ids"`
+			SourceIDsCamel   []string `json:"sourceMessageIds"`
+			Confidence       *float64 `json:"confidence"`
+		} `json:"projects"`
+		Issues []struct {
+			Title            string   `json:"title"`
+			Description      string   `json:"description"`
+			Status           string   `json:"status"`
+			Project          *string  `json:"project"`
+			SourceMessageIDs []string `json:"source_message_ids"`
+			SourceIDsCamel   []string `json:"sourceMessageIds"`
+			SourceQuotes     []string `json:"source_quotes"`
+			QuotesCamel      []string `json:"sourceQuotes"`
+			Confidence       *float64 `json:"confidence"`
+		} `json:"issues"`
+	} `json:"candidates"`
+}
+
 func parseEllieIngestionOpenClawCandidates(raw string, maxCandidateChars int) ([]EllieIngestionLLMCandidate, error) {
 	if maxCandidateChars <= 0 {
 		maxCandidateChars = defaultEllieIngestionOpenClawMaxCandidateChars
@@ -599,6 +712,147 @@ func parseEllieIngestionOpenClawCandidates(raw string, maxCandidateChars int) ([
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return nil, nil
+	}
+
+	// Stage 1 style envelope: {"summary":"...","candidates":{"memories":[...],"projects":[...],"issues":[...]}}
+	if strings.HasPrefix(trimmed, "{") {
+		var stage1 ellieIngestionStage1Envelope
+		if err := json.Unmarshal([]byte(trimmed), &stage1); err == nil {
+			out := make([]EllieIngestionLLMCandidate, 0, len(stage1.Candidates.Memories)+len(stage1.Candidates.Projects)+len(stage1.Candidates.Issues))
+
+			for _, row := range stage1.Candidates.Memories {
+				content := strings.TrimSpace(row.Content)
+				if content == "" {
+					continue
+				}
+				if len([]rune(content)) > maxCandidateChars {
+					content = string([]rune(content)[:maxCandidateChars])
+				}
+
+				importance := 3
+				if row.Importance != nil && *row.Importance > 0 {
+					importance = *row.Importance
+				}
+				confidence := 0.7
+				if row.Confidence != nil {
+					confidence = *row.Confidence
+				}
+
+				sourceIDs := row.SourceMessageIDs
+				if len(sourceIDs) == 0 {
+					sourceIDs = row.SourceIDsCamel
+				}
+				quotes := row.SourceQuotes
+				if len(quotes) == 0 {
+					quotes = row.QuotesCamel
+				}
+				originHint := strings.TrimSpace(firstNonEmpty(row.OriginHint, row.OriginCamel))
+				pii := row.PIIFlags
+				if len(pii) == 0 {
+					pii = row.PIICamel
+				}
+				sensitivity := strings.TrimSpace(row.Sensitivity)
+
+				meta := map[string]any{
+					"source_message_ids": sourceIDs,
+					"source_quotes":      quotes,
+					"origin_hint":        originHint,
+					"pii_flags":          pii,
+					"sensitivity":        sensitivity,
+				}
+				if status := strings.TrimSpace(row.Status); status != "" {
+					meta["status"] = status
+				}
+				if project := strings.TrimSpace(row.Project); project != "" {
+					meta["project"] = project
+				}
+
+				out = append(out, EllieIngestionLLMCandidate{
+					Kind:       strings.TrimSpace(row.Kind),
+					Title:      strings.TrimSpace(row.Title),
+					Content:    content,
+					Importance: importance,
+					Confidence: confidence,
+					Metadata:   meta,
+				})
+			}
+
+			// Flatten projects/issues as context candidates for now.
+			for _, proj := range stage1.Candidates.Projects {
+				title := strings.TrimSpace(proj.Name)
+				content := strings.TrimSpace(proj.Description)
+				if title == "" || content == "" {
+					continue
+				}
+				if len([]rune(content)) > maxCandidateChars {
+					content = string([]rune(content)[:maxCandidateChars])
+				}
+				conf := 0.7
+				if proj.Confidence != nil {
+					conf = *proj.Confidence
+				}
+				sourceIDs := proj.SourceMessageIDs
+				if len(sourceIDs) == 0 {
+					sourceIDs = proj.SourceIDsCamel
+				}
+				out = append(out, EllieIngestionLLMCandidate{
+					Kind:       "context",
+					Title:      title,
+					Content:    content,
+					Importance: 4,
+					Confidence: conf,
+					Metadata: map[string]any{
+						"type":               "project",
+						"status":             strings.TrimSpace(proj.Status),
+						"source_message_ids": sourceIDs,
+					},
+				})
+			}
+			for _, iss := range stage1.Candidates.Issues {
+				title := strings.TrimSpace(iss.Title)
+				content := strings.TrimSpace(iss.Description)
+				if title == "" || content == "" {
+					continue
+				}
+				if len([]rune(content)) > maxCandidateChars {
+					content = string([]rune(content)[:maxCandidateChars])
+				}
+				conf := 0.7
+				if iss.Confidence != nil {
+					conf = *iss.Confidence
+				}
+				sourceIDs := iss.SourceMessageIDs
+				if len(sourceIDs) == 0 {
+					sourceIDs = iss.SourceIDsCamel
+				}
+				quotes := iss.SourceQuotes
+				if len(quotes) == 0 {
+					quotes = iss.QuotesCamel
+				}
+				var project string
+				if iss.Project != nil {
+					project = strings.TrimSpace(*iss.Project)
+				}
+				out = append(out, EllieIngestionLLMCandidate{
+					Kind:       "context",
+					Title:      title,
+					Content:    content,
+					Importance: 3,
+					Confidence: conf,
+					Metadata: map[string]any{
+						"type":               "issue",
+						"status":             strings.TrimSpace(iss.Status),
+						"project":            project,
+						"source_message_ids": sourceIDs,
+						"source_quotes":      quotes,
+					},
+				})
+			}
+
+			if len(out) > 0 {
+				return out, nil
+			}
+		}
 	}
 
 	rows := make([]ellieIngestionOpenClawCandidateJSON, 0)

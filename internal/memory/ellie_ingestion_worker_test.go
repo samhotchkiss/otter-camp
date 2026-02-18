@@ -113,6 +113,10 @@ func (f *fakeEllieIngestionStore) InsertExtractedMemory(_ context.Context, input
 	return true, nil
 }
 
+func (f *fakeEllieIngestionStore) CreateWindowRun(_ context.Context, _ store.CreateEllieIngestionWindowRunInput) error {
+	return nil
+}
+
 func (f *fakeEllieIngestionStore) UpsertRoomCursor(_ context.Context, input store.UpsertEllieRoomCursorInput) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -229,11 +233,12 @@ func TestEllieIngestionWorkerUsesLLMExtractionWhenConfigured(t *testing.T) {
 	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
 	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
 		{
-			ID:        "msg-1",
-			OrgID:     "org-1",
-			RoomID:    "room-1",
-			Body:      "We talked about the database migration approach.",
-			CreatedAt: base,
+			ID:         "msg-1",
+			OrgID:      "org-1",
+			RoomID:     "room-1",
+			SenderType: "user",
+			Body:       "We talked about the database migration approach.",
+			CreatedAt:  base,
 		},
 	}
 
@@ -281,6 +286,7 @@ func TestEllieIngestionWorkerLLMExtractionMetadataIncludesTraceability(t *testin
 			ID:             "msg-1",
 			OrgID:          "org-1",
 			RoomID:         "room-1",
+			SenderType:     "user",
 			Body:           "Finalized database migration sequencing decisions.",
 			CreatedAt:      base,
 			ConversationID: &conversationID,
@@ -335,9 +341,7 @@ func TestEllieIngestionWorkerLLMExtractionMetadataIncludesTraceability(t *testin
 	require.Len(t, sourceIDs, 1)
 	require.Equal(t, "msg-1", sourceIDs[0])
 
-	llmMetadata, ok := metadata["llm_metadata"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "message-window-1", llmMetadata["evidence"])
+	require.Equal(t, "message-window-1", metadata["evidence"])
 }
 
 func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMUnavailable(t *testing.T) {
@@ -368,7 +372,7 @@ func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMUnavailable(t *testing.
 	require.Equal(t, "technical_decision", fakeStore.created[0].Kind)
 }
 
-func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMExtractorErrors(t *testing.T) {
+func TestEllieIngestionWorkerDoesNotAdvanceCursorWhenLLMExtractorErrors(t *testing.T) {
 	fakeStore := newFakeEllieIngestionStore()
 	base := time.Date(2026, 2, 13, 9, 22, 0, 0, time.UTC)
 	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
@@ -392,11 +396,12 @@ func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMExtractorErrors(t *test
 	worker.Logf = nil
 
 	run, err := worker.RunOnce(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, 1, run.ProcessedMessages)
+	require.Error(t, err)
+	require.Equal(t, 0, run.ProcessedMessages)
 	require.Equal(t, 1, extractor.calls)
-	require.Len(t, fakeStore.created, 1)
-	require.Equal(t, "preference", fakeStore.created[0].Kind)
+	require.Len(t, fakeStore.created, 0)
+	_, ok := fakeStore.cursors[roomCursorKey("org-1", "room-1")]
+	require.False(t, ok)
 }
 
 func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMReturnsNoCandidates(t *testing.T) {
@@ -405,11 +410,12 @@ func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMReturnsNoCandidates(t *
 	fakeStore.rooms = []store.EllieRoomIngestionCandidate{{OrgID: "org-1", RoomID: "room-1"}}
 	fakeStore.messages[roomCursorKey("org-1", "room-1")] = []store.EllieIngestionMessage{
 		{
-			ID:        "msg-1",
-			OrgID:     "org-1",
-			RoomID:    "room-1",
-			Body:      "Lesson learned: keep migrations reversible.",
-			CreatedAt: base,
+			ID:         "msg-1",
+			OrgID:      "org-1",
+			RoomID:     "room-1",
+			SenderType: "user",
+			Body:       "Lesson learned: keep migrations reversible.",
+			CreatedAt:  base,
 		},
 	}
 	extractor := &fakeEllieLLMExtractor{result: EllieIngestionLLMExtractionResult{Candidates: nil}}
@@ -426,8 +432,7 @@ func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMReturnsNoCandidates(t *
 	require.NoError(t, err)
 	require.Equal(t, 1, run.ProcessedMessages)
 	require.Equal(t, 1, extractor.calls)
-	require.Len(t, fakeStore.created, 1)
-	require.Equal(t, "lesson", fakeStore.created[0].Kind)
+	require.Len(t, fakeStore.created, 0)
 }
 
 func TestEllieIngestionWorkerAvoidsFalsePositiveDecisionAndFactClassification(t *testing.T) {
