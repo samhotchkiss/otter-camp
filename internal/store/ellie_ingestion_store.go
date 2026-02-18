@@ -140,6 +140,54 @@ func (s *EllieIngestionStore) ListRoomsForIngestion(ctx context.Context, limit i
 	return candidates, nil
 }
 
+func (s *EllieIngestionStore) CountRoomsForIngestion(ctx context.Context, orgID string) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("ellie ingestion store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return 0, fmt.Errorf("invalid org_id")
+	}
+
+	var count int
+	err := s.db.QueryRowContext(
+		ctx,
+		`WITH latest_room_messages AS (
+		     SELECT DISTINCT ON (org_id, room_id)
+		       org_id,
+		       room_id,
+		       id AS latest_message_id,
+		       created_at AS latest_message_created_at
+		     FROM chat_messages
+		     WHERE org_id = $1
+		     ORDER BY org_id, room_id, created_at DESC, id DESC
+		 )
+		 SELECT COUNT(*)
+		 FROM latest_room_messages latest
+		 JOIN rooms room
+		   ON room.org_id = latest.org_id
+		  AND room.id = latest.room_id
+		 LEFT JOIN ellie_ingestion_cursors cursor
+		   ON cursor.org_id = latest.org_id
+		  AND cursor.source_type = 'room'
+		  AND cursor.source_id = latest.room_id::text
+		 WHERE room.exclude_from_ingestion = FALSE
+		   AND (latest.latest_message_created_at, latest.latest_message_id) >
+		       (
+		         COALESCE(cursor.last_message_created_at, TIMESTAMPTZ '1970-01-01'),
+		         COALESCE(cursor.last_message_id, '00000000-0000-0000-0000-000000000000'::uuid)
+		       )`,
+		orgID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count ellie ingestion rooms: %w", err)
+	}
+	if count < 0 {
+		count = 0
+	}
+	return count, nil
+}
+
 func (s *EllieIngestionStore) GetRoomCursor(ctx context.Context, orgID, roomID string) (*EllieRoomCursor, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("ellie ingestion store is not configured")

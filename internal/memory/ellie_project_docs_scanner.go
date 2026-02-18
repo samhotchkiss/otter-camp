@@ -95,6 +95,7 @@ type EllieProjectDocEmbeddingClient interface {
 }
 
 type EllieProjectDocSummaryInput struct {
+	OrgID         string
 	FilePath     string
 	Title        string
 	Content      string
@@ -217,6 +218,7 @@ func (s *EllieProjectDocsScanner) Scan(
 
 func (s *EllieProjectDocsScanner) SummarizeAndEmbedDocuments(
 	ctx context.Context,
+	orgID string,
 	documents []EllieDiscoveredProjectDoc,
 ) ([]EllieDiscoveredProjectDoc, error) {
 	if len(documents) == 0 {
@@ -224,6 +226,10 @@ func (s *EllieProjectDocsScanner) SummarizeAndEmbedDocuments(
 	}
 	if s == nil {
 		return nil, fmt.Errorf("project docs scanner is required")
+	}
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, fmt.Errorf("org_id is required")
 	}
 	if s.Summarizer == nil {
 		return nil, fmt.Errorf("project docs summarizer is required")
@@ -252,6 +258,7 @@ func (s *EllieProjectDocsScanner) SummarizeAndEmbedDocuments(
 		sectionSummaries := make([]string, 0, len(sections))
 		for sectionIndex, section := range sections {
 			summary, err := s.Summarizer.Summarize(ctx, EllieProjectDocSummaryInput{
+				OrgID:         orgID,
 				FilePath:     enriched[i].FilePath,
 				Title:        enriched[i].Title,
 				Content:      section,
@@ -329,7 +336,7 @@ func (s *EllieProjectDocsScanner) ScanAndPersist(
 
 	docs := scanResult.Documents
 	if s.Summarizer != nil && s.EmbeddingClient != nil {
-		docs, err = s.SummarizeAndEmbedDocuments(ctx, docs)
+		docs, err = s.SummarizeAndEmbedDocuments(ctx, orgID, docs)
 		if err != nil {
 			return EllieProjectDocsPersistResult{}, err
 		}

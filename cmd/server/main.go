@@ -17,6 +17,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/github"
 	"github.com/samhotchkiss/otter-camp/internal/githubsync"
+	"github.com/samhotchkiss/otter-camp/internal/migration"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/scheduler"
 	"github.com/samhotchkiss/otter-camp/internal/store"
@@ -222,6 +223,73 @@ func main() {
 					cfg.ConversationEmbedding.BatchSize,
 					cfg.ConversationEmbedding.PollInterval,
 				)
+			}
+		}
+	}
+
+	// OpenClaw migration pipeline (hosted: driven via API progress rows; local: can be driven via CLI).
+	// This worker only acts when migration_progress has phases in status=running.
+	{
+		db, err := store.DB()
+		if err != nil {
+			log.Printf("⚠️  OpenClaw migration pipeline disabled; database unavailable: %v", err)
+		} else {
+			embedder, embedErr := getConversationEmbedder()
+			if embedErr != nil {
+				log.Printf("⚠️  OpenClaw migration pipeline disabled; embedder init failed: %v", embedErr)
+			} else {
+				gatewayCaller := memory.NewOpenClawGatewayCallerFromEnv()
+				if openClawHandler := api.OpenClawHandlerForRuntime(); openClawHandler != nil {
+					bridgeRunner, runnerErr := memory.NewOpenClawGatewayCallBridgeRunner(openClawHandler)
+					if runnerErr != nil {
+						log.Printf("⚠️  OpenClaw migration pipeline bridge runner disabled; init failed: %v", runnerErr)
+					} else {
+						gatewayCaller.SetBridgeRunner(bridgeRunner)
+						log.Printf("✅ OpenClaw migration pipeline bridge runner enabled")
+					}
+				}
+
+				entityWorker := memory.NewEllieEntitySynthesisWorker(
+					store.NewEllieEntitySynthesisStore(db),
+					embedder,
+					store.NewConversationEmbeddingStoreWithDimension(db, cfg.ConversationEmbedding.Dimension),
+					memory.EllieEntitySynthesisWorkerConfig{
+						Synthesizer: &memory.EllieOpenClawEntitySynthesizer{Caller: gatewayCaller},
+					},
+				)
+				taxonomyWorker := memory.NewEllieTaxonomyClassifierWorker(
+					store.NewEllieTaxonomyStore(db),
+					memory.EllieTaxonomyClassifierWorkerConfig{
+						LLM: &memory.EllieOpenClawTaxonomyClassifier{Caller: gatewayCaller},
+					},
+				)
+				dedupWorker := memory.NewEllieDedupWorker(
+					&memory.EllieDedupStoreAdapter{Store: store.NewEllieDedupStore(db)},
+					memory.EllieDedupWorkerConfig{
+						Reviewer:          &memory.EllieOpenClawDedupReviewer{Caller: gatewayCaller},
+						MaxClustersPerRun: 2,
+					},
+				)
+				docsScanner := &memory.EllieProjectDocsScanner{
+					Summarizer:      &memory.EllieOpenClawProjectDocSummarizer{Caller: gatewayCaller},
+					EmbeddingClient: embedder,
+				}
+
+				pipeline := &migration.OpenClawPipelineWorker{
+					DB:               db,
+					ProgressStore:    store.NewMigrationProgressStore(db),
+					EmbeddingStore:   store.NewConversationEmbeddingStoreWithDimension(db, cfg.ConversationEmbedding.Dimension),
+					IngestionStore:   store.NewEllieIngestionStore(db),
+					EntityWorker:     entityWorker,
+					DedupWorker:      dedupWorker,
+					TaxonomyWorker:   taxonomyWorker,
+					ProjectDocsScanner: docsScanner,
+					ProjectDocsStore: &memory.EllieProjectDocsStoreAdapter{Store: store.NewEllieProjectDocsStore(db)},
+					PollInterval:     3 * time.Second,
+					Logf:             log.Printf,
+				}
+				startWorker(pipeline.Start)
+				log.Printf("✅ OpenClaw migration pipeline worker started")
 			}
 		}
 	}

@@ -106,7 +106,7 @@ func TestEllieProjectDocsScannerSummarizesAndEmbedsChangedDocs(t *testing.T) {
 		},
 	}
 
-	enriched, err := scanner.SummarizeAndEmbedDocuments(context.Background(), docs)
+	enriched, err := scanner.SummarizeAndEmbedDocuments(context.Background(), "org-1", docs)
 	require.NoError(t, err)
 	require.Len(t, enriched, 2)
 	require.Equal(t, "summary:docs/changed.md:1", enriched[0].Summary)
@@ -134,7 +134,7 @@ func TestEllieProjectDocsScannerSkipsUnchangedDocs(t *testing.T) {
 		},
 	}
 
-	enriched, err := scanner.SummarizeAndEmbedDocuments(context.Background(), docs)
+	enriched, err := scanner.SummarizeAndEmbedDocuments(context.Background(), "org-1", docs)
 	require.NoError(t, err)
 	require.Len(t, enriched, 1)
 	require.Empty(t, enriched[0].Summary)
@@ -166,7 +166,7 @@ func TestEllieProjectDocsScannerSplitsLargeDocsIntoSections(t *testing.T) {
 		},
 	}
 
-	enriched, err := scanner.SummarizeAndEmbedDocuments(context.Background(), docs)
+	enriched, err := scanner.SummarizeAndEmbedDocuments(context.Background(), "org-1", docs)
 	require.NoError(t, err)
 	require.Len(t, enriched, 1)
 	require.Greater(t, len(summarizer.calls), 1)

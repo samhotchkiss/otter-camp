@@ -32,6 +32,7 @@ type EllieEntitySynthesizer interface {
 }
 
 type EllieEntitySynthesisInput struct {
+	OrgID          string
 	EntityKey      string
 	EntityName     string
 	Prompt         string
@@ -159,6 +160,7 @@ func (w *EllieEntitySynthesisWorker) RunOnce(ctx context.Context, orgID string) 
 		})
 
 		synthesis, err := w.Synthesizer.Synthesize(ctx, EllieEntitySynthesisInput{
+			OrgID:          orgID,
 			EntityKey:      entityKey,
 			EntityName:     entityName,
 			Prompt:         prompt,
