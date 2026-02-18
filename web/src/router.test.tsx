@@ -44,4 +44,10 @@ describe("router", () => {
     expect(hasPath(router.routes as RouteNode[], "chats/:chatId")).toBe(true);
     expect(hasPath(router.routes as RouteNode[], "chats/archived")).toBe(true);
   });
+
+  it("registers design alias routes for project, issue, and review paths", () => {
+    expect(hasPath(router.routes as RouteNode[], "project/:projectId")).toBe(true);
+    expect(hasPath(router.routes as RouteNode[], "issue/:issueId")).toBe(true);
+    expect(hasPath(router.routes as RouteNode[], "review/:documentId")).toBe(true);
+  });
 });
