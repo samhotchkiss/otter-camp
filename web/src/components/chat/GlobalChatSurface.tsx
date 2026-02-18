@@ -1449,6 +1449,15 @@ export default function GlobalChatSurface({
     }),
     [conversationContextLabel, conversationKey, conversationTitle],
   );
+  const surfaceContextCue = useMemo(() => {
+    if (conversationType === "project") {
+      return "Project context";
+    }
+    if (conversationType === "issue") {
+      return "Issue context";
+    }
+    return "Main context";
+  }, [conversationType]);
 
   if (loading) {
     return (
@@ -1468,6 +1477,13 @@ export default function GlobalChatSurface({
       onDragLeave={onContainerDragLeave}
       onDrop={onContainerDrop}
     >
+      <div className="border-b border-[var(--border)]/70 bg-[var(--surface-alt)]/40 px-4 py-2">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+          {surfaceContextCue}
+        </p>
+        <p className="truncate text-xs text-[var(--text-muted)]">{conversationContextLabel}</p>
+      </div>
+
       <MessageHistory
         messages={messages}
         currentUserId={conversationType === "issue" ? issueAuthorID || currentUserID : currentUserID}
