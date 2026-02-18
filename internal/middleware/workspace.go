@@ -165,29 +165,71 @@ func extractWorkspaceID(r *http.Request) string {
 		}
 	}
 
-	// 2. Try explicit workspace header
+	// 2. On hosted org subdomains (or localhost org-path routing), pin workspace
+	// resolution to the request slug to prevent stale client-side org headers from
+	// silently switching tenants.
+	if id := resolveWorkspaceIDFromRequestSlug(r); id != "" {
+		return id
+	}
+
+	// 3. Try explicit workspace header
 	if id := strings.TrimSpace(r.Header.Get("X-Workspace-ID")); id != "" && uuidRegex.MatchString(id) {
 		return id
 	}
 
-	// 3. Try legacy org header
+	// 4. Try legacy org header
 	if id := strings.TrimSpace(r.Header.Get("X-Org-ID")); id != "" && uuidRegex.MatchString(id) {
 		return id
 	}
 
-	// 4. Try query parameter (for specific endpoints that allow it)
+	// 5. Try query parameter (for specific endpoints that allow it)
 	if id := strings.TrimSpace(r.URL.Query().Get("org_id")); id != "" && uuidRegex.MatchString(id) {
 		return id
 	}
 
-	// 5. Try host/path slug resolution when a resolver is configured.
+	// 6. Try host/path/header slug resolution when a resolver is configured.
 	if id := resolveWorkspaceIDFromSlug(r); id != "" {
 		return id
 	}
 
-	// 6. Try session token resolution (Bearer token or cookie).
+	// 7. Try session token resolution (Bearer token or cookie).
 	if wid, _ := resolveSessionToken(r); wid != "" {
 		return wid
+	}
+
+	return ""
+}
+
+func resolveWorkspaceIDFromRequestSlug(r *http.Request) string {
+	resolver := getWorkspaceSlugResolver()
+	if resolver == nil || r == nil {
+		return ""
+	}
+
+	resolve := func(slug string) string {
+		if slug == "" {
+			return ""
+		}
+		workspaceID, ok := resolver(r.Context(), slug)
+		if !ok {
+			return ""
+		}
+		workspaceID = strings.TrimSpace(workspaceID)
+		if !uuidRegex.MatchString(workspaceID) {
+			return ""
+		}
+		return workspaceID
+	}
+
+	requestHost := requestHostForResolution(r)
+	if slug := extractOrgSlugFromHost(requestHost); slug != "" {
+		return resolve(slug)
+	}
+
+	if isLocalHostForPathFallback(requestHost) {
+		if slug := extractOrgSlugFromPath(r.URL.Path); slug != "" {
+			return resolve(slug)
+		}
 	}
 
 	return ""

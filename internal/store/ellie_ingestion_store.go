@@ -123,6 +123,17 @@ func NewEllieIngestionStore(db *sql.DB) *EllieIngestionStore {
 	return &EllieIngestionStore{db: db}
 }
 
+func (s *EllieIngestionStore) withWorkspaceConn(ctx context.Context, orgID string) (*sql.Conn, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("ellie ingestion store is not configured")
+	}
+	conn, err := WithWorkspaceID(ctx, s.db, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scope workspace connection: %w", err)
+	}
+	return conn, nil
+}
+
 func (s *EllieIngestionStore) ListRoomsForIngestion(ctx context.Context, limit int) ([]EllieRoomIngestionCandidate, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("ellie ingestion store is not configured")
@@ -198,7 +209,13 @@ func (s *EllieIngestionStore) ListRoomsForIngestionByOrg(ctx context.Context, or
 		limit = 2000
 	}
 
-	rows, err := s.db.QueryContext(
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	rows, err := conn.QueryContext(
 		ctx,
 		`WITH latest_room_messages AS (
 		     SELECT DISTINCT ON (org_id, room_id)
@@ -259,7 +276,13 @@ func (s *EllieIngestionStore) CountRoomsForIngestion(ctx context.Context, orgID 
 	}
 
 	var count int
-	err := s.db.QueryRowContext(
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	err = conn.QueryRowContext(
 		ctx,
 		`WITH latest_room_messages AS (
 		     SELECT DISTINCT ON (org_id, room_id)
@@ -314,7 +337,13 @@ func (s *EllieIngestionStore) GetRoomCursor(ctx context.Context, orgID, roomID s
 		row           EllieRoomCursor
 		lastMessageID sql.NullString
 	)
-	err := s.db.QueryRowContext(
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	err = conn.QueryRowContext(
 		ctx,
 		`SELECT org_id, source_id, last_message_id::text, COALESCE(last_message_created_at, TIMESTAMPTZ '1970-01-01')
 		 FROM ellie_ingestion_cursors
@@ -370,7 +399,13 @@ func (s *EllieIngestionStore) ListRoomMessagesSince(
 	}
 	args = append(args, limit)
 
-	rows, err := s.db.QueryContext(
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	rows, err := conn.QueryContext(
 		ctx,
 		`SELECT id,
 		        org_id,
@@ -492,7 +527,13 @@ func (s *EllieIngestionStore) InsertExtractedMemory(ctx context.Context, input C
 
 	metadata := normalizeJSONMap(input.Metadata)
 
-	result, err := s.db.ExecContext(
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+
+	result, err := conn.ExecContext(
 		ctx,
 		`INSERT INTO memories (
 			org_id,
@@ -604,7 +645,13 @@ func (s *EllieIngestionStore) CreateEllieExtractedMemory(ctx context.Context, in
 	metadata := normalizeJSONMap(input.Metadata)
 
 	var memoryID string
-	err = s.db.QueryRowContext(
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	err = conn.QueryRowContext(
 		ctx,
 		`INSERT INTO memories (
 			org_id, kind, title, content, metadata, importance, confidence,
@@ -659,7 +706,13 @@ func (s *EllieIngestionStore) UpsertRoomCursor(ctx context.Context, input Upsert
 		lastMessageID = trimmedMessageID
 	}
 
-	_, err := s.db.ExecContext(
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	_, err = conn.ExecContext(
 		ctx,
 		`INSERT INTO ellie_ingestion_cursors (
 			org_id,
@@ -775,7 +828,13 @@ func (s *EllieIngestionStore) CreateWindowRun(ctx context.Context, input CreateE
 		errText = errText[:2000]
 	}
 
-	_, err := s.db.ExecContext(
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	_, err = conn.ExecContext(
 		ctx,
 		`INSERT INTO ellie_ingestion_window_runs (
 			org_id,
@@ -845,7 +904,13 @@ func (s *EllieIngestionStore) ListCoverageByDay(ctx context.Context, orgID strin
 	}
 	startDay := time.Now().UTC().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
 
-	rows, err := s.db.QueryContext(
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return nil, EllieIngestionCoverageSummary{}, err
+	}
+	defer conn.Close()
+
+	rows, err := conn.QueryContext(
 		ctx,
 		`WITH msg_days AS (
 		     SELECT (created_at AT TIME ZONE 'UTC')::date AS day,
@@ -957,7 +1022,7 @@ func (s *EllieIngestionStore) ListCoverageByDay(ctx context.Context, orgID strin
 	}
 
 	var extractedUpTo sql.NullTime
-	if err := s.db.QueryRowContext(
+	if err := conn.QueryRowContext(
 		ctx,
 		`SELECT MAX(window_end_at) FILTER (WHERE ok)
 		 FROM ellie_ingestion_window_runs
@@ -990,8 +1055,14 @@ func (s *EllieIngestionStore) HasComplianceFingerprint(ctx context.Context, orgI
 		return false, fmt.Errorf("compliance fingerprint is required")
 	}
 
+	conn, err := s.withWorkspaceConn(ctx, orgID)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+
 	var exists bool
-	if err := s.db.QueryRowContext(
+	if err := conn.QueryRowContext(
 		ctx,
 		`SELECT EXISTS(
 			SELECT 1

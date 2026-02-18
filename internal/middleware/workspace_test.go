@@ -171,6 +171,27 @@ func TestRequireWorkspace(t *testing.T) {
 		assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Body.String())
 	})
 
+	t.Run("host slug resolution overrides conflicting org header", func(t *testing.T) {
+		t.Setenv("OTTER_ORG_BASE_DOMAIN", "otter.camp")
+		SetWorkspaceSlugResolver(func(_ context.Context, slug string) (string, bool) {
+			if slug == "swh" {
+				return "550e8400-e29b-41d4-a716-446655440000", true
+			}
+			return "", false
+		})
+		t.Cleanup(func() { SetWorkspaceSlugResolver(nil) })
+
+		req := httptest.NewRequest(http.MethodGet, "http://swh.otter.camp/test", nil)
+		req.Host = "swh.otter.camp"
+		req.Header.Set("X-Org-ID", "11111111-1111-1111-1111-111111111111")
+		rec := httptest.NewRecorder()
+
+		RequireWorkspace(handler).ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", rec.Body.String())
+	})
+
 	t.Run("resolves workspace from X-Otter-Org slug header", func(t *testing.T) {
 		SetWorkspaceSlugResolver(func(_ context.Context, slug string) (string, bool) {
 			if slug == "swh" {

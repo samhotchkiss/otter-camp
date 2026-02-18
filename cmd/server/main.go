@@ -115,6 +115,7 @@ func main() {
 			worker := memory.NewEllieIngestionWorker(
 				store.NewEllieIngestionStore(db),
 				memory.EllieIngestionWorkerConfig{
+					OrgID:                cfg.OrgID,
 					Interval:             cfg.EllieIngestion.Interval,
 					BatchSize:            cfg.EllieIngestion.BatchSize,
 					MaxPerRoom:           cfg.EllieIngestion.MaxPerRoom,
@@ -287,6 +288,7 @@ func main() {
 				migrationIngestionWorker := memory.NewEllieIngestionWorker(
 					store.NewEllieIngestionStore(db),
 					memory.EllieIngestionWorkerConfig{
+						OrgID:                cfg.OrgID,
 						Interval:             cfg.EllieIngestion.Interval,
 						BatchSize:            cfg.EllieIngestion.BatchSize,
 						MaxPerRoom:           cfg.EllieIngestion.MaxPerRoom,

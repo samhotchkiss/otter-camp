@@ -62,6 +62,7 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
   const token = localStorage.getItem('otter_camp_token');
   const orgId = localStorage.getItem('otter-camp-org-id');
   const hostedOrgSlug = hostedOrgSlugFromWindow();
+  const shouldSendOrgHeader = !hostedOrgSlug;
 
   let res: Response;
   try {
@@ -70,7 +71,7 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
       headers: {
         'Content-Type': 'application/json',
         ...(token && { Authorization: `Bearer ${token}` }),
-        ...(orgId && { 'X-Org-ID': orgId }),
+        ...(shouldSendOrgHeader && orgId && { 'X-Org-ID': orgId }),
         ...(hostedOrgSlug && { 'X-Otter-Org': hostedOrgSlug }),
         ...options?.headers,
       },

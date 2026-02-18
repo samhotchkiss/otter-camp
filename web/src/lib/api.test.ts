@@ -54,7 +54,7 @@ describe("apiFetch hosted org headers", () => {
     window.localStorage.clear();
   });
 
-  it("sends X-Org-ID and X-Otter-Org for hosted org subdomains", async () => {
+  it("pins hosted org subdomains to X-Otter-Org and does not send X-Org-ID", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), {
         status: 200,
@@ -71,7 +71,7 @@ describe("apiFetch hosted org headers", () => {
 
     const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = requestInit.headers as Record<string, string>;
-    expect(headers["X-Org-ID"]).toBe("550e8400-e29b-41d4-a716-446655440000");
+    expect(headers["X-Org-ID"]).toBeUndefined();
     expect(headers["X-Otter-Org"]).toBe("swh");
   });
 
