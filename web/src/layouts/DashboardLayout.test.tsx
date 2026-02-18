@@ -69,6 +69,25 @@ describe("DashboardLayout", () => {
     expect(await screen.findByRole("button", { name: "Connections" })).toBeInTheDocument();
   });
 
+  it("renders three-zone shell layout landmarks", async () => {
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <KeyboardShortcutsProvider>
+          <DashboardLayout>
+            <div>child</div>
+          </DashboardLayout>
+        </KeyboardShortcutsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId("shell-layout")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-sidebar")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-header")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-workspace")).toBeInTheDocument();
+    expect(screen.getByTestId("shell-chat-slot")).toBeInTheDocument();
+    expect(screen.getByText("child")).toBeInTheDocument();
+  });
+
   it("renders inbox count as a separate badge even when count is zero", async () => {
     inboxMock.mockResolvedValue({ items: [] });
 

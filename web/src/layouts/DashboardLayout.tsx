@@ -147,6 +147,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(true);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
   const [inboxCount, setInboxCount] = useState<number | null>(null);
@@ -205,6 +206,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         else if (isShortcutsHelpOpen) closeShortcutsHelp();
         else if (selectedTaskId) closeTaskDetail();
         else if (isNewTaskOpen) closeNewTask();
+        else if (avatarMenuOpen) setAvatarMenuOpen(false);
+        else if (chatOpen && typeof window !== "undefined" && window.innerWidth < 1024) setChatOpen(false);
         else if (mobileMenuOpen) setMobileMenuOpen(false);
       },
     },
@@ -254,6 +257,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const getActiveNavId = () => {
     const path = location.pathname;
     if (path === "/") return null;
+    if (path.startsWith("/project/")) return "projects";
+    if (path.startsWith("/issue/")) return "inbox";
+    if (path.startsWith("/review/")) return "knowledge";
     const item = ALL_NAV_ITEMS.find((item) => path.startsWith(item.href) && item.href !== "/");
     return item?.id ?? null;
   };
@@ -365,163 +371,161 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const bridgeLastSyncLabel = formatLastSyncLabel(bridgeLastSyncAgeSeconds);
 
   return (
-    <div className="app">
-      {/* ========== DEMO BANNER ========== */}
+    <div className="app shell-layout" data-testid="shell-layout">
       <DemoBanner />
-      
-      {/* ========== TOPBAR ========== */}
-      <header className="topbar oc-toolbar">
-        {/* Logo */}
-        <Link to="/" className="logo">
-          <span className="logo-icon">🦦</span>
-          <span className="logo-text">otter.camp</span>
-        </Link>
 
-        {/* Search Trigger */}
+      {mobileMenuOpen && (
         <button
           type="button"
-          onClick={openCommandPalette}
-          className="search-trigger oc-toolbar-input"
-        >
-          <span className="search-icon">🔍</span>
-          <span className="search-text">Search or command...</span>
-          <kbd>⌘K</kbd>
-        </button>
+          className="shell-sidebar-overlay"
+          aria-label="Close navigation"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
 
-        {/* Desktop Navigation */}
-        <nav className="nav-links">
+      <aside
+        className={`shell-sidebar ${mobileMenuOpen ? "open" : ""}`}
+        data-testid="shell-sidebar"
+      >
+        <div className="card-header flex items-center justify-between">
+          <Link to="/" className="logo">
+            <span className="logo-icon">🦦</span>
+            <span className="logo-text">otter.camp</span>
+          </Link>
+          <button
+            type="button"
+            className="mobile-menu-btn"
+            aria-label="Close menu"
+            onClick={() => setMobileMenuOpen(false)}
+          >
+            ✕
+          </button>
+        </div>
+        <nav className="p-3">
           {NAV_ITEMS.map((item) => (
             <Link
               key={item.id}
               to={item.href}
               className={`nav-link ${activeNavId === item.id ? "active" : ""}`}
+              onClick={() => setMobileMenuOpen(false)}
             >
               {item.label}
               {item.id === "inbox" && inboxCount !== null && (
-                <span className="nav-badge oc-chip" aria-label={`Inbox count ${inboxCount}`}>
+                <span className="nav-badge" aria-label={`Inbox count ${inboxCount}`}>
                   {inboxCount}
                 </span>
               )}
             </Link>
           ))}
         </nav>
+      </aside>
 
-        {/* Right Side */}
-        <div className="topbar-right oc-toolbar">
-          {/* Connection Status */}
-          <div
-            className={`connection-status oc-chip ${bridgeStatusClass}`}
-            aria-label={bridgeStatusLabel}
-            role="status"
-          >
-            <span className={`status-dot oc-status-dot ${bridgeDotClass}`}></span>
-            <span className="status-text">{bridgeStatusLabel}</span>
-          </div>
-
-          {/* User Avatar + Dropdown */}
-          <div className="avatar-menu-container" ref={avatarMenuRef}>
+      <div className="shell-main">
+        <header className="shell-header" data-testid="shell-header">
+          <div className="flex items-center gap-3">
             <button
               type="button"
-              className="avatar"
-              aria-label="User menu"
-              aria-expanded={avatarMenuOpen}
-              onClick={() => setAvatarMenuOpen(!avatarMenuOpen)}
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="mobile-menu-btn"
+              aria-label="Toggle menu"
             >
-              S
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                {mobileMenuOpen ? (
+                  <path d="M6 18L18 6M6 6l12 12" />
+                ) : (
+                  <path d="M4 6h16M4 12h16M4 18h16" />
+                )}
+              </svg>
             </button>
-            {avatarMenuOpen && (
-              <div className="avatar-dropdown">
-                {AVATAR_MENU_ITEMS.map((item) => (
+            <button
+              type="button"
+              onClick={openCommandPalette}
+              className="search-trigger"
+            >
+              <span className="search-icon">🔍</span>
+              <span className="search-text">Search or command...</span>
+              <kbd>⌘K</kbd>
+            </button>
+          </div>
+
+          <div className="topbar-right">
+            <div
+              className={`connection-status ${bridgeStatusClass}`}
+              aria-label={bridgeStatusLabel}
+              role="status"
+            >
+              <span className={`status-dot ${bridgeDotClass}`}></span>
+              <span className="status-text">{bridgeStatusLabel}</span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              aria-label="Toggle chat panel"
+              onClick={() => setChatOpen((open) => !open)}
+            >
+              {chatOpen ? "Hide chat" : "Show chat"}
+            </button>
+            <div className="avatar-menu-container" ref={avatarMenuRef}>
+              <button
+                type="button"
+                className="avatar"
+                aria-label="User menu"
+                aria-expanded={avatarMenuOpen}
+                onClick={() => setAvatarMenuOpen(!avatarMenuOpen)}
+              >
+                S
+              </button>
+              {avatarMenuOpen && (
+                <div className="avatar-dropdown">
+                  {AVATAR_MENU_ITEMS.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`avatar-dropdown-item ${activeNavId === item.id ? "active" : ""}`}
+                      onClick={() => {
+                        navigate(item.href);
+                        setAvatarMenuOpen(false);
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                  <div className="avatar-dropdown-divider" />
                   <button
-                    key={item.id}
                     type="button"
-                    className={`avatar-dropdown-item ${activeNavId === item.id ? "active" : ""}`}
-                    onClick={() => {
-                      navigate(item.href);
-                      setAvatarMenuOpen(false);
-                    }}
+                    className="avatar-dropdown-item avatar-dropdown-logout"
+                    onClick={logOut}
                   >
-                    {item.label}
+                    Log Out
                   </button>
-                ))}
-                <div className="avatar-dropdown-divider" />
-                <button
-                  type="button"
-                  className="avatar-dropdown-item avatar-dropdown-logout"
-                  onClick={logOut}
-                >
-                  Log Out
-                </button>
-              </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </header>
+
+        {showBridgeDelayBanner && (
+          <div className={`bridge-delay-banner ${bridgeStatus}`} role="status" aria-live="polite">
+            <span>{bridgeDelayBannerMessage}</span>
+            {bridgeLastSyncLabel && (
+              <span className="bridge-delay-detail">{bridgeLastSyncLabel}</span>
             )}
           </div>
+        )}
+
+        <div className="shell-workspace" data-testid="shell-workspace">
+          <main className="shell-content main" id="main-content">
+            {children}
+          </main>
+          <aside
+            className={`shell-chat-slot ${chatOpen ? "" : "hidden"}`.trim()}
+            data-testid="shell-chat-slot"
+            aria-hidden={!chatOpen}
+          >
+            {chatOpen && <GlobalChatDock />}
+          </aside>
         </div>
-
-        {/* Mobile Menu Button */}
-        <button
-          type="button"
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="mobile-menu-btn"
-          aria-label="Toggle menu"
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            {mobileMenuOpen ? (
-              <path d="M6 18L18 6M6 6l12 12" />
-            ) : (
-              <path d="M4 6h16M4 12h16M4 18h16" />
-            )}
-          </svg>
-        </button>
-      </header>
-
-      {showBridgeDelayBanner && (
-        <div className={`bridge-delay-banner ${bridgeStatus}`} role="status" aria-live="polite">
-          <span>{bridgeDelayBannerMessage}</span>
-          {bridgeLastSyncLabel && (
-            <span className="bridge-delay-detail">{bridgeLastSyncLabel}</span>
-          )}
-        </div>
-      )}
-
-      {/* Mobile Navigation */}
-      {mobileMenuOpen && (
-        <nav className="mobile-nav">
-          {[...NAV_ITEMS, ...AVATAR_MENU_ITEMS].map((item) => (
-            <Link
-              key={item.id}
-              to={item.href}
-              className={`mobile-nav-link ${activeNavId === item.id ? "active" : ""}`}
-            >
-              {item.label}
-              {item.id === "inbox" && inboxCount !== null && (
-                <span className="nav-badge oc-chip" aria-label={`Inbox count ${inboxCount}`}>
-                  {inboxCount}
-                </span>
-              )}
-            </Link>
-          ))}
-          <button type="button" className="mobile-nav-link mobile-logout" onClick={logOut}>
-            Log Out
-          </button>
-        </nav>
-      )}
-
-      {/* ========== MAIN CONTENT ========== */}
-      <main className="main" id="main-content">
-        {children}
-      </main>
-
-      {/* ========== FOOTER ========== */}
-      <footer className="footer">
-        <div className="footer-fact">
-          <span>🦦</span>
-          <span>
-            <strong>Otter fact:</strong> Sea otters have the densest fur of any mammal — about 1 million hairs per square inch.
-          </span>
-        </div>
-      </footer>
-
-      <GlobalChatDock />
+      </div>
 
       {/* Keyboard Shortcuts Help Modal */}
       <ShortcutsHelpModal isOpen={isShortcutsHelpOpen} onClose={closeShortcutsHelp} />
