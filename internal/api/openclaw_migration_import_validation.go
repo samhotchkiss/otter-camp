@@ -11,7 +11,10 @@ import (
 )
 
 const (
-	maxOpenClawMigrationImportBodyBytes       int64 = 4 * 1024 * 1024
+	// Needs to be large enough for hosted backfills where a single batch can contain
+	// large message bodies (code blocks, diffs, etc.). The client still batches by item
+	// count, but payload size can vary significantly.
+	maxOpenClawMigrationImportBodyBytes       int64 = 12 * 1024 * 1024
 	maxOpenClawMigrationImportAgentIdentities       = 1000
 	maxOpenClawMigrationImportHistoryEvents         = 5000
 )
