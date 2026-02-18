@@ -5741,15 +5741,24 @@ export function ensureGatewayCallCredentials(args: string[], tokenRaw: string = 
   return [...sanitized, '--token', token];
 }
 
-const MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS = 2000;
+const MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS = 8000;
 const MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT = '{"candidates":[]}';
 const MEMORY_EXTRACT_DEFAULT_MODEL = 'claude-haiku-4-5';
 const MEMORY_EXTRACT_MAX_ERROR_CHARS = 1000;
-const MEMORY_EXTRACT_MAX_OUTPUT_CHARS = 6000;
+const MEMORY_EXTRACT_MAX_OUTPUT_CHARS = 12000;
 
 function truncateMemoryExtractPayloadText(text: string): string {
   if (text.length <= MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS) {
     return text;
+  }
+  const normalized = text.trim();
+  if (
+    normalized.startsWith('{')
+    || normalized.startsWith('[')
+    || normalized.startsWith('```')
+  ) {
+    // Avoid returning truncated JSON payload fragments that decode as invalid JSON upstream.
+    return MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT;
   }
   return text.slice(0, MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS);
 }

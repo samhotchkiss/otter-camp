@@ -1640,7 +1640,17 @@ describe("bridge memory extraction dispatch helpers", () => {
     );
     const parsed = JSON.parse(compacted) as Record<string, unknown>;
     const payloads = ((parsed.result as Record<string, unknown>).payloads ?? []) as Array<Record<string, unknown>>;
-    assert.equal(String(payloads[0]?.text || "").length, 2000);
+    assert.equal(String(payloads[0]?.text || "").length, 8000);
+  });
+
+  it("replaces oversized json payload text with an empty candidates envelope", () => {
+    const hugeJsonPayload = `{"candidates":[{"kind":"fact","title":"${"t".repeat(12000)}"}]}`;
+    const compacted = compactMemoryExtractOutput(
+      `{"runId":"trace-3b","status":"ok","result":{"payloads":[{"text":"${hugeJsonPayload.replace(/"/g, '\\"')}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}`,
+    );
+    const parsed = JSON.parse(compacted) as Record<string, unknown>;
+    const payloads = ((parsed.result as Record<string, unknown>).payloads ?? []) as Array<Record<string, unknown>>;
+    assert.equal(String(payloads[0]?.text || ""), '{"candidates":[]}');
   });
 
   it("extracts a compact response from noisy command output", () => {
