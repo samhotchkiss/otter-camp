@@ -110,6 +110,86 @@ describe("InboxPage", () => {
     expect(screen.getAllByRole("button", { name: "Reject" }).length).toBeGreaterThan(0);
   });
 
+  it("renders filter tabs with counts and filters visible inbox items", async () => {
+    inboxMock.mockResolvedValue({
+      items: [
+        {
+          id: "approval-10",
+          type: "Code review",
+          command: "npm run lint",
+          agent: "Agent-007",
+          status: "pending",
+          createdAt: "2026-02-18T20:00:00Z",
+        },
+        {
+          id: "approval-11",
+          type: "Deploy approval",
+          command: "deploy service",
+          agent: "Agent-127",
+          status: "approved",
+          createdAt: "2026-02-18T19:00:00Z",
+        },
+        {
+          id: "approval-12",
+          type: "Blocked release",
+          command: "release train",
+          agent: "Agent-300",
+          status: "blocked",
+          createdAt: "2026-02-18T18:00:00Z",
+        },
+      ],
+    });
+
+    render(<InboxPage />);
+
+    expect(await screen.findByText(/Code review/)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "All (3)" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Unread (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Urgent (2)" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Unread (1)" }));
+    expect(screen.getByText(/Code review/)).toBeInTheDocument();
+    expect(screen.queryByText(/Deploy approval/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Blocked release/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Urgent (2)" }));
+    expect(screen.getByText(/Code review/)).toBeInTheDocument();
+    expect(screen.getByText(/Blocked release/)).toBeInTheDocument();
+    expect(screen.queryByText(/Deploy approval/)).not.toBeInTheDocument();
+  });
+
+  it("shows derived metadata from status for unread and urgency", async () => {
+    inboxMock.mockResolvedValue({
+      items: [
+        {
+          id: "approval-20",
+          type: "Code review",
+          command: "npm run lint",
+          agent: "Agent-007",
+          status: "pending",
+          createdAt: "2026-02-18T20:00:00Z",
+        },
+        {
+          id: "approval-21",
+          type: "Deploy approval",
+          command: "deploy service",
+          agent: "Agent-127",
+          status: "approved",
+          createdAt: "2026-02-18T19:00:00Z",
+        },
+      ],
+    });
+
+    render(<InboxPage />);
+
+    expect(await screen.findByText(/Code review/)).toBeInTheDocument();
+
+    const cards = screen.getAllByText(/Agent-/).map((node) => node.closest(".inbox-item"));
+    expect(cards[0]).toHaveClass("urgent");
+    expect(cards[1]).not.toHaveClass("urgent");
+    expect(screen.getByText("Unread")).toBeInTheDocument();
+  });
+
   it("disables actions while approve is processing and removes item after success", async () => {
     inboxMock.mockResolvedValue({
       items: [
