@@ -32,6 +32,20 @@ function getItemIcon(itemType: ItemType): string {
   }
 }
 
+function getChipVariant(itemType: ItemType): string {
+  switch (itemType) {
+    case "review":
+      return "oc-chip--info";
+    case "decision":
+      return "oc-chip--success";
+    case "blocked":
+      return "oc-chip--danger";
+    case "approval":
+    default:
+      return "oc-chip--warning";
+  }
+}
+
 function mapToInboxItem(approval: Approval): InboxItem {
   const itemType = getItemType(approval);
   return {
@@ -130,7 +144,7 @@ export default function InboxPage() {
           </p>
         </div>
         <div className="inbox-list">
-          <div className="inbox-loading">Loading...</div>
+          <div className="inbox-loading oc-panel">Loading...</div>
         </div>
       </div>
     );
@@ -148,10 +162,10 @@ export default function InboxPage() {
           </p>
         </div>
         <div className="inbox-list">
-          <div className="inbox-error">
+          <div className="inbox-error oc-panel">
             <p>Error: {error}</p>
             <button
-              className="btn btn-secondary mt-4"
+              className="btn btn-secondary oc-toolbar-button mt-4"
               onClick={() => window.location.reload()}
             >
               Retry
@@ -175,7 +189,7 @@ export default function InboxPage() {
 
       <div className="inbox-list">
         {items.length === 0 ? (
-          <div className="inbox-empty">
+          <div className="inbox-empty oc-panel">
             <span className="inbox-empty-icon">📭</span>
             <p>No pending items</p>
           </div>
@@ -183,7 +197,7 @@ export default function InboxPage() {
           items.map((item) => (
             <div
               key={item.id}
-              className={`inbox-item ${item.urgent ? "urgent" : ""}`}
+              className={`inbox-item oc-card oc-card-interactive ${item.urgent ? "urgent" : ""}`}
             >
               <div className="item-header">
                 <div className={`item-icon ${item.itemType}`}>
@@ -194,7 +208,7 @@ export default function InboxPage() {
                     {item.type} — {item.agent}
                   </h3>
                   <div className="item-meta">
-                    <span className={`badge-type badge-${item.itemType}`}>
+                    <span className={`badge-type badge-${item.itemType} oc-chip ${getChipVariant(item.itemType)}`}>
                       {item.itemType}
                     </span>
                     <span className={`item-status ${item.status}`}>
@@ -206,16 +220,16 @@ export default function InboxPage() {
               </div>
               <div className="item-body">
                 <p className="item-desc">{item.description}</p>
-                <div className="item-actions">
+                <div className="item-actions oc-toolbar">
                   <button
-                    className="btn btn-primary"
+                    className="btn btn-primary oc-toolbar-button oc-toolbar-button--primary"
                     onClick={() => handleApprove(item.id)}
                     disabled={processingId === item.id}
                   >
                     {processingId === item.id ? "Processing..." : "Approve"}
                   </button>
                   <button
-                    className="btn btn-secondary"
+                    className="btn btn-secondary oc-toolbar-button"
                     onClick={() => handleReject(item.id)}
                     disabled={processingId === item.id}
                   >
