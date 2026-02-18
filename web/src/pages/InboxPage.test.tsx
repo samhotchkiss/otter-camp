@@ -70,7 +70,7 @@ describe("InboxPage", () => {
     expect(await screen.findByText("No pending items")).toBeInTheDocument();
   });
 
-  it("renders inbox items with updated badge class hooks", async () => {
+  it("renders inbox items with shared primitive class hooks", async () => {
     inboxMock.mockResolvedValue({
       items: [
         {
@@ -80,6 +80,14 @@ describe("InboxPage", () => {
           agent: "Agent-007",
           status: "pending",
           createdAt: "2026-02-18T20:00:00Z",
+        },
+        {
+          id: "approval-2",
+          type: "Command",
+          command: "npm run test",
+          agent: "Agent-009",
+          status: "pending",
+          createdAt: "2026-02-18T19:00:00Z",
         },
       ],
     });
@@ -94,9 +102,12 @@ describe("InboxPage", () => {
     const typeBadge = screen.getByText("review");
     expect(typeBadge).toHaveClass("badge-type");
     expect(typeBadge).toHaveClass("badge-review");
+    const approvalBadge = screen.getByText("approval");
+    expect(approvalBadge).toHaveClass("badge-type");
+    expect(approvalBadge).toHaveClass("badge-approval");
 
-    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Approve" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Reject" }).length).toBeGreaterThan(0);
   });
 
   it("disables actions while approve is processing and removes item after success", async () => {

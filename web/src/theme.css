@@ -1249,6 +1249,11 @@ body.has-demo-banner .topbar {
   color: var(--accent);
 }
 
+.badge-approval {
+  background: rgba(200, 121, 65, 0.15);
+  color: var(--orange);
+}
+
 .badge-decision {
   background: rgba(186, 104, 200, 0.15);
   color: #BA68C8;
