@@ -565,7 +565,7 @@ func buildProjectURL(r *http.Request, projectID string) string {
 	}
 	base := getPublicBaseURL(r)
 	if strings.Contains(base, "api.otter.camp") {
-		base = "https://sam.otter.camp"
+		base = "https://swh.otter.camp"
 	}
 	return strings.TrimRight(base, "/") + "/projects/" + projectID
 }
