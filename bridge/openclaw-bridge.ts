@@ -5741,44 +5741,96 @@ export function ensureGatewayCallCredentials(args: string[], tokenRaw: string = 
   return [...sanitized, '--token', token];
 }
 
+const MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS = 8000;
+const MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT = '{"candidates":[]}';
+const MEMORY_EXTRACT_DEFAULT_MODEL = 'claude-haiku-4-5';
+
+function truncateMemoryExtractPayloadText(text: string): string {
+  if (text.length <= MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS) {
+    return text;
+  }
+  return text.slice(0, MEMORY_EXTRACT_MAX_PAYLOAD_TEXT_CHARS);
+}
+
+function parseMemoryExtractGatewayResponse(raw: string): Record<string, unknown> | null {
+  const direct = raw.trim();
+  if (!direct) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(direct) as unknown;
+    return asRecord(parsed);
+  } catch {
+    // Fall through to best-effort object extraction.
+  }
+
+  const objectStart = direct.indexOf('{');
+  const objectEnd = direct.lastIndexOf('}');
+  if (objectStart < 0 || objectEnd <= objectStart) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(direct.slice(objectStart, objectEnd + 1)) as unknown;
+    return asRecord(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function decodeJSONStringLiteral(rawValue: string): string {
+  try {
+    return JSON.parse(`"${rawValue}"`) as string;
+  } catch {
+    return rawValue;
+  }
+}
+
+function extractFirstJSONStringField(raw: string, field: string): string {
+  const pattern = new RegExp(`"${field}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`);
+  const match = raw.match(pattern);
+  if (!match?.[1]) {
+    return '';
+  }
+  return decodeJSONStringLiteral(match[1]).trim();
+}
+
 export function compactMemoryExtractOutput(rawOutput: string): string {
   const trimmed = rawOutput.trim();
   if (!trimmed) {
     return rawOutput;
   }
 
-  let parsed: Record<string, unknown> | null = null;
-  try {
-    parsed = JSON.parse(trimmed) as Record<string, unknown>;
-  } catch {
-    return rawOutput;
-  }
-  if (!parsed || typeof parsed !== 'object') {
-    return rawOutput;
-  }
-
-  const result = asRecord(parsed.result);
+  const parsed = parseMemoryExtractGatewayResponse(trimmed);
+  const result = asRecord(parsed?.result);
   const payloadsRaw = Array.isArray(result?.payloads) ? result?.payloads : [];
-  const payloads = payloadsRaw
+  const payloadText = payloadsRaw
     .map((entry) => {
       const record = asRecord(entry);
       const text = getTrimmedString(record?.text);
       if (!text) {
         return null;
       }
-      return { text };
+      return text;
     })
-    .filter((entry): entry is { text: string } => entry !== null);
+    .find((entry): entry is string => typeof entry === 'string')
+    || extractFirstJSONStringField(trimmed, 'text')
+    || MEMORY_EXTRACT_DEFAULT_PAYLOAD_TEXT;
 
   const model = getTrimmedString(
     asRecord(asRecord(result?.meta)?.agentMeta)?.model,
-  );
+  ) || extractFirstJSONStringField(trimmed, 'model') || MEMORY_EXTRACT_DEFAULT_MODEL;
+
+  const status = getTrimmedString(parsed?.status)
+    || extractFirstJSONStringField(trimmed, 'status')
+    || 'ok';
+  const runID = getTrimmedString(parsed?.runId)
+    || extractFirstJSONStringField(trimmed, 'runId');
 
   const compact: Record<string, unknown> = {
-    runId: getTrimmedString(parsed.runId),
-    status: getTrimmedString(parsed.status) || 'ok',
+    runId: runID,
+    status,
     result: {
-      payloads,
+      payloads: [{ text: truncateMemoryExtractPayloadText(payloadText) }],
       meta: {
         agentMeta: {
           model,

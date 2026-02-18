@@ -1632,4 +1632,31 @@ describe("bridge memory extraction dispatch helpers", () => {
     assert.equal(parsed.runId, "trace-2");
     assert.equal(parsed.status, "ok");
   });
+
+  it("truncates oversized payload text for websocket safety", () => {
+    const longText = "a".repeat(20000);
+    const compacted = compactMemoryExtractOutput(
+      `{"runId":"trace-3","status":"ok","result":{"payloads":[{"text":"${longText}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}`,
+    );
+    const parsed = JSON.parse(compacted) as Record<string, unknown>;
+    const payloads = ((parsed.result as Record<string, unknown>).payloads ?? []) as Array<Record<string, unknown>>;
+    assert.equal(String(payloads[0]?.text || "").length, 8000);
+  });
+
+  it("extracts a compact response from noisy command output", () => {
+    const noisyOutput = `warning: retrying\n{"runId":"trace-4","status":"ok","result":{"payloads":[{"text":"{\\"candidates\\":[]}"}],"meta":{"agentMeta":{"model":"claude-haiku-4-5"}}}}`;
+    const compacted = compactMemoryExtractOutput(noisyOutput);
+    const parsed = JSON.parse(compacted) as Record<string, unknown>;
+    assert.equal(parsed.runId, "trace-4");
+    assert.equal(parsed.status, "ok");
+  });
+
+  it("falls back to a minimal compact envelope when output is not json", () => {
+    const compacted = compactMemoryExtractOutput("bridge output unavailable");
+    const parsed = JSON.parse(compacted) as Record<string, unknown>;
+    assert.equal(parsed.status, "ok");
+    const payloads = ((parsed.result as Record<string, unknown>).payloads ?? []) as Array<Record<string, unknown>>;
+    assert.equal(payloads.length, 1);
+    assert.equal(String(payloads[0]?.text || "").includes('"candidates"'), true);
+  });
 });
