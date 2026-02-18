@@ -1,8 +1,20 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ProjectsPage from "./ProjectsPage";
+
+const { mockNavigate } = vi.hoisted(() => ({
+  mockNavigate: vi.fn(),
+}));
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  };
+});
 
 type MockLabel = {
   id: string;
@@ -15,6 +27,12 @@ type MockProject = {
   name: string;
   description?: string;
   status?: string;
+  priority?: string;
+  repo?: string;
+  githubSync?: boolean;
+  openIssues?: number;
+  inProgress?: number;
+  needsApproval?: number;
   labels?: MockLabel[];
   updated_at?: string;
 };
@@ -57,6 +75,7 @@ function response(body: unknown): Response {
 describe("ProjectsPage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    mockNavigate.mockReset();
     localStorage.setItem("otter-camp-org-id", "org-123");
   });
 
@@ -121,5 +140,64 @@ describe("ProjectsPage", () => {
         }),
       ).toBe(true);
     });
+  });
+
+  it("renders redesigned card metric/status surface fields", async () => {
+    const fetchMock = vi.fn(async () => response({
+      projects: [
+        {
+          ...PROJECTS[0],
+          status: "active",
+          priority: "high",
+          repo: "ottercamp/otter-camp",
+          githubSync: true,
+          openIssues: 12,
+          inProgress: 4,
+          needsApproval: 2,
+        },
+      ],
+    }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(
+      <MemoryRouter>
+        <ProjectsPage />
+      </MemoryRouter>,
+    );
+
+    const card = await screen.findByTestId("project-card-project-1");
+    expect(within(card).getByText("ottercamp/otter-camp")).toBeInTheDocument();
+    expect(within(card).getByText("Open")).toBeInTheDocument();
+    expect(within(card).getByText("Active")).toBeInTheDocument();
+    expect(within(card).getByText("Review")).toBeInTheDocument();
+    expect(within(card).getByText("Synced")).toBeInTheDocument();
+  });
+
+  it("renders a recent activity surface derived from loaded projects", async () => {
+    const fetchMock = vi.fn(async () => response({ projects: PROJECTS }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(
+      <MemoryRouter>
+        <ProjectsPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Recent Activity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View All" })).toBeInTheDocument();
+  });
+
+  it("navigates to project detail when clicking a project card", async () => {
+    const fetchMock = vi.fn(async () => response({ projects: PROJECTS }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(
+      <MemoryRouter>
+        <ProjectsPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByTestId("project-card-project-2"));
+    expect(mockNavigate).toHaveBeenCalledWith("/projects/project-2");
   });
 });
