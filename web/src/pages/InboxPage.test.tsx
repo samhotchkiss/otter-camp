@@ -236,6 +236,30 @@ describe("InboxPage", () => {
     expect(screen.getByTestId("inbox-row-meta")).toBeInTheDocument();
   });
 
+  it("applies inbox redesign class hooks for header, tabs, and rows", async () => {
+    inboxMock.mockResolvedValue({
+      items: [
+        {
+          id: "approval-32",
+          type: "Code review",
+          command: "npm run lint",
+          agent: "Agent-007",
+          status: "pending",
+          createdAt: "2026-02-18T20:00:00Z",
+        },
+      ],
+    });
+
+    render(<InboxPage />);
+
+    await screen.findByRole("heading", { name: /Code review.*Agent-007/ });
+    expect(screen.getByTestId("inbox-header")).toHaveClass("inbox-header");
+    expect(screen.getByRole("tablist", { name: "Inbox filters" })).toHaveClass("inbox-filter-tabs");
+    expect(screen.getByTestId("inbox-list-container")).toHaveClass("inbox-list-container");
+    expect(screen.getByTestId("inbox-row")).toHaveClass("inbox-row");
+    expect(screen.getByTestId("inbox-row-meta")).toHaveClass("inbox-row-meta");
+  });
+
   it("disables actions while approve is processing and removes item after success", async () => {
     inboxMock.mockResolvedValue({
       items: [

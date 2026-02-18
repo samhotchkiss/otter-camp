@@ -84,4 +84,17 @@ describe("design system stylesheet contract", () => {
     expect(shellGuide).toContain("Do:");
     expect(shellGuide).toContain("Don't:");
   });
+
+  it("inbox redesign primitives define header, tabs, and row metadata hooks", () => {
+    const indexCss = readFixture("../index.css");
+
+    expect(indexCss).toContain(".inbox-header");
+    expect(indexCss).toContain(".inbox-header-actions");
+    expect(indexCss).toContain(".inbox-icon-action");
+    expect(indexCss).toContain(".inbox-filter-tab.active");
+    expect(indexCss).toContain(".inbox-list-container");
+    expect(indexCss).toContain(".inbox-row");
+    expect(indexCss).toContain(".inbox-row-meta");
+    expect(indexCss).toContain("@media (max-width: 640px)");
+  });
 });
