@@ -99,6 +99,7 @@ const SUPPORTED_DISPATCH_EVENT_TYPES = new Set([
   'issue.comment.message',
   'admin.command',
   'memory.extract.request',
+  'openclaw.gateway.call.request',
 ]);
 const IGNORED_OTTERCAMP_SOCKET_EVENT_TYPES = new Set([
   'connected',
@@ -335,6 +336,15 @@ type AdminCommandDispatchEvent = {
 };
 
 type MemoryExtractDispatchEvent = {
+  type?: string;
+  org_id?: string;
+  data?: {
+    request_id?: string;
+    args?: unknown;
+  };
+};
+
+type OpenClawGatewayCallDispatchEvent = {
   type?: string;
   org_id?: string;
   data?: {
@@ -5592,6 +5602,10 @@ async function dispatchInboundEvent(
       await handleMemoryExtractDispatchEvent(record as MemoryExtractDispatchEvent);
       return true;
     }
+    if (normalizedType === 'openclaw.gateway.call.request') {
+      await handleOpenClawGatewayCallDispatchEvent(record as OpenClawGatewayCallDispatchEvent);
+      return true;
+    }
     return false;
   };
 
@@ -5879,6 +5893,80 @@ export function compactMemoryExtractOutput(rawOutput: string): string {
   return JSON.stringify(compact);
 }
 
+const GATEWAY_CALL_MAX_PAYLOAD_TEXT_CHARS = 20000;
+const GATEWAY_CALL_MAX_OUTPUT_CHARS = 35000;
+const GATEWAY_CALL_MAX_ERROR_CHARS = 1000;
+
+function sanitizeGatewayCallErrorDetail(rawDetail: string): string {
+  const compact = rawDetail.replace(/\\s+/g, ' ').trim();
+  if (!compact) {
+    return 'openclaw gateway call failed';
+  }
+  if (compact.length <= GATEWAY_CALL_MAX_ERROR_CHARS) {
+    return compact;
+  }
+  return `${compact.slice(0, GATEWAY_CALL_MAX_ERROR_CHARS)}...`;
+}
+
+function compactGatewayCallOutput(rawOutput: string): { ok: true; output: string } | { ok: false; error: string } {
+  const trimmed = rawOutput.trim();
+  if (!trimmed) {
+    return { ok: false, error: 'openclaw gateway call returned empty output' };
+  }
+
+  const parsed = parseMemoryExtractGatewayResponse(trimmed);
+  const result = asRecord(parsed?.result);
+  const payloadsRaw = Array.isArray(result?.payloads) ? result?.payloads : [];
+  const payloadText = payloadsRaw
+    .map((entry) => {
+      const record = asRecord(entry);
+      const text = getTrimmedString(record?.text);
+      if (!text) {
+        return null;
+      }
+      return text;
+    })
+    .find((entry): entry is string => typeof entry === 'string')
+    || extractFirstJSONStringField(trimmed, 'text');
+
+  const model = getTrimmedString(
+    asRecord(asRecord(result?.meta)?.agentMeta)?.model,
+  ) || extractFirstJSONStringField(trimmed, 'model');
+
+  const status = getTrimmedString(parsed?.status)
+    || extractFirstJSONStringField(trimmed, 'status')
+    || 'ok';
+  const runID = getTrimmedString(parsed?.runId)
+    || extractFirstJSONStringField(trimmed, 'runId');
+
+  const safePayloadText = payloadText ?? '';
+  if (safePayloadText.length > GATEWAY_CALL_MAX_PAYLOAD_TEXT_CHARS) {
+    return {
+      ok: false,
+      error: `openclaw gateway call payload too large (${safePayloadText.length} chars); reduce output size`,
+    };
+  }
+
+  const compact: Record<string, unknown> = {
+    runId: runID,
+    status,
+    result: {
+      payloads: [{ text: safePayloadText }],
+      meta: {
+        agentMeta: {
+          model: model || undefined,
+        },
+      },
+    },
+  };
+
+  const output = JSON.stringify(compact);
+  if (output.length > GATEWAY_CALL_MAX_OUTPUT_CHARS) {
+    return { ok: false, error: 'openclaw gateway call output too large; reduce output size' };
+  }
+  return { ok: true, output };
+}
+
 function sendOtterCampSocketEvent(event: Record<string, unknown>): boolean {
   if (!otterCampWS || otterCampWS.readyState !== WebSocket.OPEN) {
     return false;
@@ -5925,6 +6013,51 @@ async function handleMemoryExtractDispatchEvent(event: MemoryExtractDispatchEven
   try {
     const output = await runOpenClawCommandCapture(ensureGatewayCallCredentials(args));
     sendResponse({ ok: true, output: compactMemoryExtractOutput(output) });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    sendResponse({ ok: false, error: detail });
+  }
+}
+
+async function handleOpenClawGatewayCallDispatchEvent(event: OpenClawGatewayCallDispatchEvent): Promise<void> {
+  const orgID = getTrimmedString(event.org_id);
+  const requestID = getTrimmedString(event.data?.request_id) || genId();
+  const args = normalizeDispatchArgs(event.data?.args);
+
+  const sendResponse = (payload: { ok: boolean; output?: string; error?: string }): void => {
+    const error = payload.error ? sanitizeGatewayCallErrorDetail(payload.error) : undefined;
+    const sent = sendOtterCampSocketEvent({
+      type: 'openclaw.gateway.call.response',
+      timestamp: new Date().toISOString(),
+      org_id: orgID,
+      data: {
+        request_id: requestID,
+        ok: payload.ok,
+        ...(payload.output !== undefined ? { output: payload.output } : {}),
+        ...(error ? { error } : {}),
+      },
+    });
+    if (!sent) {
+      console.warn(`[bridge] failed to deliver openclaw.gateway.call.response for request_id=${requestID}; socket unavailable`);
+    }
+  };
+
+  if (args.length < 3 || args[0] !== 'gateway' || args[1] !== 'call' || args[2] !== 'agent') {
+    sendResponse({
+      ok: false,
+      error: 'openclaw.gateway.call.request requires args beginning with: gateway call agent',
+    });
+    return;
+  }
+
+  try {
+    const raw = await runOpenClawCommandCapture(ensureGatewayCallCredentials(args));
+    const compacted = compactGatewayCallOutput(raw);
+    if (!compacted.ok) {
+      sendResponse({ ok: false, error: compacted.error });
+      return;
+    }
+    sendResponse({ ok: true, output: compacted.output });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     sendResponse({ ok: false, error: detail });

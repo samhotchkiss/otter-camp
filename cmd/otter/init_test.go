@@ -480,7 +480,7 @@ func TestInitLocalRunsMigrationWhenUserAccepts(t *testing.T) {
 	var out bytes.Buffer
 	err := runInitCommand(
 		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
-		strings.NewReader("n\nn\ny\n"),
+		strings.NewReader("2\nn\ny\n"),
 		&out,
 	)
 	if err != nil {
@@ -489,8 +489,8 @@ func TestInitLocalRunsMigrationWhenUserAccepts(t *testing.T) {
 	if !state.migrateCalled {
 		t.Fatalf("expected migration call when user accepts prompt")
 	}
-	if !strings.Contains(out.String(), "Migrate OpenClaw history now? (y/N): ") {
-		t.Fatalf("expected migration prompt in output, got %q", out.String())
+	if !strings.Contains(out.String(), "Proceed with OpenClaw history import? (Y/n): ") {
+		t.Fatalf("expected history import confirmation prompt in output, got %q", out.String())
 	}
 }
 
@@ -873,7 +873,7 @@ func TestInitImportAndBridgeApprovedFlowImportsAndStartsBridge(t *testing.T) {
 	var out bytes.Buffer
 	err := runInitCommand(
 		[]string{"--mode", "local", "--name", "Sam", "--email", "sam@example.com", "--org-name", "My Team"},
-		strings.NewReader("y\ny\n"),
+		strings.NewReader("2\ny\n"),
 		&out,
 	)
 	if err != nil {
@@ -1143,6 +1143,7 @@ type initStubState struct {
 	ensureResult    importer.EnsureOpenClawRequiredAgentsResult
 	ensureErr       error
 	identities      []importer.ImportedAgentIdentity
+	sessionEvents   []importer.OpenClawSessionEvent
 	projects        []importer.OpenClawProjectCandidate
 	repoRoot        string
 	bridgeScript    string
@@ -1181,6 +1182,7 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 	origNewClient := newInitClient
 	origHostedValidate := validateHostedInitToken
 	origDetect := detectInitOpenClaw
+	origParseSessions := parseInitOpenClawSessionEvents
 	origEnsure := ensureInitOpenClawRequiredAgents
 	origImport := importInitOpenClawIdentities
 	origInfer := inferInitOpenClawProjects
@@ -1215,6 +1217,9 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 			return nil, state.detectErr
 		}
 		return state.detectInstall, nil
+	}
+	parseInitOpenClawSessionEvents = func(_ *importer.OpenClawInstallation) ([]importer.OpenClawSessionEvent, error) {
+		return append([]importer.OpenClawSessionEvent(nil), state.sessionEvents...), nil
 	}
 	ensureInitOpenClawRequiredAgents = func(
 		install *importer.OpenClawInstallation,
@@ -1276,6 +1281,7 @@ func stubInitDeps(t *testing.T, loadCfg ottercli.Config, client *fakeInitClient,
 		newInitClient = origNewClient
 		validateHostedInitToken = origHostedValidate
 		detectInitOpenClaw = origDetect
+		parseInitOpenClawSessionEvents = origParseSessions
 		ensureInitOpenClawRequiredAgents = origEnsure
 		importInitOpenClawIdentities = origImport
 		inferInitOpenClawProjects = origInfer

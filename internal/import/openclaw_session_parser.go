@@ -124,7 +124,10 @@ func parseOpenClawSessionFile(sessionPath string, strict bool) ([]OpenClawSessio
 
 	agentSlug, sessionID := deriveOpenClawSessionPathMetadata(sessionPath)
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	// OpenClaw JSONL lines can occasionally exceed the default 64K token limit
+	// (e.g. large tool payloads). Increase the max token size to keep migration
+	// robust for large histories.
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
 
 	events := make([]OpenClawSessionEvent, 0)
 	lineNo := 0

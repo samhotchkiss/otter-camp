@@ -6,10 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	importer "github.com/samhotchkiss/otter-camp/internal/import"
@@ -24,6 +26,7 @@ type initOptions struct {
 	APIBase string
 	Token   string
 	URL     string
+	Data    string
 }
 
 type initImportFlowOptions struct {
@@ -32,6 +35,7 @@ type initImportFlowOptions struct {
 	ForceMigrate     bool
 	ProgressPrefix   string
 	MigrateTransport migrateTransport
+	DataMode         string
 }
 
 type initBootstrapClient interface {
@@ -76,6 +80,7 @@ var (
 	detectInitOpenClaw = func() (*importer.OpenClawInstallation, error) {
 		return importer.DetectOpenClawInstallation(importer.DetectOpenClawOptions{})
 	}
+	parseInitOpenClawSessionEvents = importer.ParseOpenClawSessionEvents
 	ensureInitOpenClawRequiredAgents = importer.EnsureOpenClawRequiredAgents
 	importInitOpenClawIdentities     = importer.ImportOpenClawAgentIdentities
 	inferInitOpenClawProjects        = importer.InferOpenClawProjectCandidates
@@ -110,6 +115,8 @@ const (
 	initDefaultAgentModel      = "gpt-5.2-codex"
 	initDefaultBridgeHost      = "127.0.0.1"
 	initDefaultBridgePort      = 18791
+	initDefaultBackfillWindowSize   = 30
+	initDefaultBackfillWindowStride = 30
 )
 
 func handleInit(args []string) {
@@ -138,7 +145,7 @@ func runInitCommand(args []string, in io.Reader, out io.Writer) error {
 		return runLocalInit(opts, reader, out)
 	case "hosted":
 		if strings.TrimSpace(opts.Token) != "" || strings.TrimSpace(opts.URL) != "" {
-			return runHostedInit(opts, out)
+			return runHostedInit(opts, reader, out)
 		}
 		fmt.Fprintln(out, "Visit otter.camp/setup to get started.")
 		return nil
@@ -157,6 +164,7 @@ func parseInitOptions(args []string) (initOptions, error) {
 	apiBase := flags.String("api", "", "API base URL override")
 	token := flags.String("token", "", "hosted session token")
 	hostedURL := flags.String("url", "", "hosted workspace URL")
+	dataMode := flags.String("data", "", "data mode (fresh|import)")
 	if err := flags.Parse(args); err != nil {
 		return initOptions{}, err
 	}
@@ -169,6 +177,11 @@ func parseInitOptions(args []string) (initOptions, error) {
 		return initOptions{}, errors.New("--mode must be local or hosted")
 	}
 
+	normalizedData := strings.ToLower(strings.TrimSpace(*dataMode))
+	if normalizedData != "" && normalizedData != "fresh" && normalizedData != "import" {
+		return initOptions{}, errors.New("--data must be fresh or import")
+	}
+
 	return initOptions{
 		Mode:    normalizedMode,
 		Name:    strings.TrimSpace(*name),
@@ -177,10 +190,11 @@ func parseInitOptions(args []string) (initOptions, error) {
 		APIBase: strings.TrimSpace(*apiBase),
 		Token:   strings.TrimSpace(*token),
 		URL:     strings.TrimSpace(*hostedURL),
+		Data:    normalizedData,
 	}, nil
 }
 
-func runHostedInit(opts initOptions, out io.Writer) error {
+func runHostedInit(opts initOptions, reader *bufio.Reader, out io.Writer) error {
 	token := strings.TrimSpace(opts.Token)
 	hostedURL := strings.TrimSpace(opts.URL)
 	if token == "" || hostedURL == "" {
@@ -217,12 +231,11 @@ func runHostedInit(opts initOptions, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := runInitImportAndBridgeWithOptions(nil, out, client, cfg, initImportFlowOptions{
-		ForceImport:      true,
+	if err := runInitImportAndBridgeWithOptions(reader, out, client, cfg, initImportFlowOptions{
 		ForceStartBridge: true,
-		ForceMigrate:     true,
 		ProgressPrefix:   "Hosted",
 		MigrateTransport: migrateTransportAPI,
+		DataMode:         opts.Data,
 	}); err != nil {
 		return err
 	}
@@ -434,11 +447,20 @@ func runInitImportAndBridgeWithOptions(
 		}
 	}
 
-	shouldImport := opts.ForceImport
-	if !opts.ForceImport {
-		shouldImport = promptYesNo(reader, out, "Import agents and projects from OpenClaw? (Y/n): ", true)
+	dataMode := strings.ToLower(strings.TrimSpace(opts.DataMode))
+	if dataMode == "" {
+		dataMode = promptInitDataMode(reader, out)
 	}
-	if shouldImport {
+	switch dataMode {
+	case "fresh":
+		fmt.Fprintln(out, "Data mode: start fresh (skipping OpenClaw history import).")
+	case "import":
+		fmt.Fprintln(out, "Data mode: import OpenClaw history (this may take hours).")
+	default:
+		return fmt.Errorf("invalid data mode %q (expected fresh|import)", strings.TrimSpace(dataMode))
+	}
+
+	if dataMode == "import" {
 		phase("Import agents/projects from OpenClaw")
 		agentsImported, projectsImported, issuesImported := importOpenClawData(out, client, installation)
 		fmt.Fprintf(out, "Imported %d agents, %d projects, %d issues from OpenClaw.\n", agentsImported, projectsImported, issuesImported)
@@ -490,16 +512,23 @@ func runInitImportAndBridgeWithOptions(
 		}
 	}
 
-	shouldMigrate := opts.ForceMigrate
-	if !opts.ForceMigrate {
-		shouldMigrate = promptYesNo(reader, out, "Migrate OpenClaw history now? (y/N): ", false)
-	}
 	transportHint := opts.MigrateTransport
 	if transportHint == "" {
 		transportHint = migrateTransportDB
 	}
 
 	databaseURL, dbErr := resolveInitMigrateDatabaseURL()
+	shouldMigrate := dataMode == "import" || opts.ForceMigrate
+	if shouldMigrate && dataMode == "import" {
+		renderInitImportEstimate(out, installation)
+		if reader != nil && !opts.ForceMigrate {
+			if !promptYesNo(reader, out, "Proceed with OpenClaw history import? (Y/n): ", true) {
+				fmt.Fprintln(out, "OpenClaw history import skipped.")
+				return nil
+			}
+		}
+	}
+
 	if shouldMigrate {
 		if dbErr != nil {
 			fmt.Fprintf(out, "Skipping automatic migration: %v\n", dbErr)
@@ -523,6 +552,143 @@ func runInitImportAndBridgeWithOptions(
 
 	fmt.Fprintf(out, "OpenClaw migration skipped. Run later with:\n  %s\n", renderInitMigrationCommand(databaseURL, cfg.DefaultOrg, installation.RootDir, transportHint))
 	return nil
+}
+
+func promptInitDataMode(reader *bufio.Reader, out io.Writer) string {
+	if reader == nil {
+		// Preserve prior behavior for non-interactive runs.
+		return "import"
+	}
+	for {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "How should Otter Camp initialize your data?")
+		fmt.Fprintln(out, "  [1] Start fresh (skip importing past OpenClaw activity)")
+		fmt.Fprintln(out, "  [2] Import everything (import all OpenClaw history and bootstrap memories)")
+		fmt.Fprint(out, "> ")
+
+		line, err := reader.ReadString('\n')
+		choice := strings.ToLower(strings.TrimSpace(line))
+		switch choice {
+		case "", "2", "import":
+			return "import"
+		case "1", "fresh":
+			return "fresh"
+		}
+		if errors.Is(err, io.EOF) {
+			return "import"
+		}
+		fmt.Fprintln(out, "Please enter 1 for fresh or 2 for import.")
+	}
+}
+
+type initImportEstimate struct {
+	Agents                int
+	Events                int
+	TotalChars            int
+	ApproxTokens          int
+	EstimatedExtractCalls int
+	WindowSize            int
+	WindowStride          int
+}
+
+func renderInitImportEstimate(out io.Writer, installation *importer.OpenClawInstallation) {
+	if out == nil || installation == nil {
+		return
+	}
+
+	events, err := parseInitOpenClawSessionEvents(installation)
+	if err != nil {
+		fmt.Fprintf(out, "Estimate: unable to parse OpenClaw sessions (%v)\n", err)
+		return
+	}
+
+	windowSize := initDefaultBackfillWindowSize
+	if raw := strings.TrimSpace(os.Getenv("ELLIE_INGESTION_BACKFILL_WINDOW_SIZE")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			windowSize = parsed
+		}
+	}
+	windowStride := initDefaultBackfillWindowStride
+	if raw := strings.TrimSpace(os.Getenv("ELLIE_INGESTION_BACKFILL_WINDOW_STRIDE")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			windowStride = parsed
+		}
+	}
+	if windowStride <= 0 {
+		windowStride = windowSize
+	}
+
+	estimate := buildInitImportEstimate(installation, events, windowSize, windowStride)
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Import estimate (rough):")
+	fmt.Fprintf(out, "  agents=%d\n", estimate.Agents)
+	fmt.Fprintf(out, "  events=%d\n", estimate.Events)
+	fmt.Fprintf(out, "  total_chars=%d\n", estimate.TotalChars)
+	fmt.Fprintf(out, "  approx_tokens=%d\n", estimate.ApproxTokens)
+	fmt.Fprintf(out, "  ellie_extract_calls~=%d (window_size=%d stride=%d)\n", estimate.EstimatedExtractCalls, estimate.WindowSize, estimate.WindowStride)
+	fmt.Fprintln(out, "Notes:")
+	fmt.Fprintln(out, "  - Embeddings will run on all imported chat messages (and later on extracted memories).")
+	fmt.Fprintln(out, "  - Ellie extraction/dedup/taxonomy costs depend on your OpenClaw model and rate limits.")
+	fmt.Fprintln(out, "  - Large histories can take hours to fully backfill.")
+}
+
+func buildInitImportEstimate(
+	installation *importer.OpenClawInstallation,
+	events []importer.OpenClawSessionEvent,
+	windowSize int,
+	windowStride int,
+) initImportEstimate {
+	agents := 0
+	if installation != nil {
+		agents = len(installation.Agents)
+	}
+	totalChars := 0
+	byAgent := make(map[string]int, 16)
+	for _, event := range events {
+		body := event.Body
+		totalChars += len(body)
+		slug := strings.TrimSpace(event.AgentSlug)
+		if slug == "" {
+			slug = "unknown"
+		}
+		byAgent[slug]++
+	}
+
+	extractCalls := 0
+	if windowSize > 0 && windowStride > 0 {
+		for _, count := range byAgent {
+			extractCalls += estimateSlidingWindows(count, windowSize, windowStride)
+		}
+	}
+
+	approxTokens := totalChars / 4
+	if approxTokens < 0 {
+		approxTokens = 0
+	}
+
+	return initImportEstimate{
+		Agents:                agents,
+		Events:                len(events),
+		TotalChars:            totalChars,
+		ApproxTokens:          approxTokens,
+		EstimatedExtractCalls: extractCalls,
+		WindowSize:            windowSize,
+		WindowStride:          windowStride,
+	}
+}
+
+func estimateSlidingWindows(count, windowSize, windowStride int) int {
+	if count <= 0 {
+		return 0
+	}
+	if windowSize <= 0 || windowStride <= 0 {
+		return 0
+	}
+	if count <= windowSize {
+		return 1
+	}
+	remaining := count - windowSize
+	return 1 + int(math.Ceil(float64(remaining)/float64(windowStride)))
 }
 
 func importOpenClawData(out io.Writer, client initBootstrapClient, installation *importer.OpenClawInstallation) (int, int, int) {
