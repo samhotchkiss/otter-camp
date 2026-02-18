@@ -157,6 +157,48 @@ describe("ProjectFileBrowser", () => {
     expect(await screen.findByText("Unable to render file preview for this payload.")).toBeInTheDocument();
   });
 
+  it("renders branch and search affordances in files mode header", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockJSONResponse({
+        ref: "main",
+        path: "/",
+        entries: [],
+      }),
+    );
+
+    render(<ProjectFileBrowser projectId="project-1" />);
+
+    expect(await screen.findByText("main")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search files...")).toBeInTheDocument();
+  });
+
+  it("opens markdown files in review route with encoded document ids", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          ref: "main",
+          path: "/",
+          entries: [{ name: "2026-02-07 Draft.md", type: "file", path: "posts/2026-02-07 Draft.md", size: 42 }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          ref: "main",
+          path: "/posts/2026-02-07 Draft.md",
+          content: "# Draft",
+          size: 7,
+          encoding: "utf-8",
+        }),
+      );
+
+    render(<ProjectFileBrowser projectId="project-1" />);
+    await user.click(await screen.findByRole("button", { name: /2026-02-07 Draft\.md/i }));
+    await user.click(await screen.findByRole("button", { name: "Open in Review" }));
+
+    expect(navigateMock).toHaveBeenCalledWith("/review/posts%2F2026-02-07%20Draft.md");
+  });
+
   it("creates a linked issue from eligible files and navigates to the issue thread", async () => {
     const user = userEvent.setup();
     fetchMock
