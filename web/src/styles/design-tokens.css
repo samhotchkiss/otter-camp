@@ -1,0 +1,73 @@
+/*
+ * Canonical frontend design tokens.
+ * New specs should use `--oc-*` variables directly.
+ * Legacy `--bg`/`--surface`/`--text` variables are kept as aliases.
+ */
+
+:root {
+  color-scheme: dark light;
+
+  /* Typography */
+  --oc-font-sans: 'Inter', system-ui, sans-serif;
+  --oc-font-mono: 'JetBrains Mono', monospace;
+
+  /* Core surfaces */
+  --oc-color-bg-canvas: #1a1918;
+  --oc-color-surface-default: #252422;
+  --oc-color-surface-muted: #2d2b28;
+  --oc-color-border-default: #3d3a36;
+
+  /* Text */
+  --oc-color-text-primary: #faf8f5;
+  --oc-color-text-muted: #a69582;
+
+  /* Accent and status */
+  --oc-color-accent: #c9a86c;
+  --oc-color-accent-hover: #d4b87a;
+  --oc-color-status-warning: #c87941;
+  --oc-color-status-success: #5a7a5c;
+  --oc-color-status-danger: #b85c38;
+  --oc-color-status-info: #4a6d7c;
+
+  /* Spacing intent */
+  --oc-space-2xs: 0.25rem;
+  --oc-space-xs: 0.5rem;
+  --oc-space-sm: 0.75rem;
+  --oc-space-md: 1rem;
+  --oc-space-lg: 1.5rem;
+  --oc-space-xl: 2rem;
+
+  /* Radius + shadows */
+  --oc-radius-sm: 0.5rem;
+  --oc-radius-md: 0.75rem;
+  --oc-radius-pill: 9999px;
+  --oc-shadow-panel: 0 8px 24px rgba(0, 0, 0, 0.15);
+  --oc-shadow-focus: 0 0 0 3px rgba(201, 168, 108, 0.2);
+
+  /* Legacy aliases (compatibility) */
+  --bg: var(--oc-color-bg-canvas);
+  --surface: var(--oc-color-surface-default);
+  --surface-alt: var(--oc-color-surface-muted);
+  --border: var(--oc-color-border-default);
+  --text: var(--oc-color-text-primary);
+  --text-muted: var(--oc-color-text-muted);
+  --accent: var(--oc-color-accent);
+  --accent-hover: var(--oc-color-accent-hover);
+  --orange: var(--oc-color-status-warning);
+  --green: var(--oc-color-status-success);
+  --red: var(--oc-color-status-danger);
+  --blue: var(--oc-color-status-info);
+  --font: var(--oc-font-sans);
+  --font-mono: var(--oc-font-mono);
+}
+
+[data-theme="light"] {
+  --oc-color-bg-canvas: #faf8f5;
+  --oc-color-surface-default: #ffffff;
+  --oc-color-surface-muted: #f5f2ed;
+  --oc-color-border-default: #e8e2d9;
+  --oc-color-text-primary: #2d2a26;
+  --oc-color-text-muted: #8b7355;
+  --oc-color-accent: #5c4a3d;
+  --oc-color-accent-hover: #4a3c31;
+}
