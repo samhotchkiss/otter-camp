@@ -965,7 +965,7 @@ export default function ProjectDetailPage() {
   };
 
   return (
-    <div className="flex min-h-full flex-col">
+    <div data-testid="project-detail-shell" className="mx-auto flex min-h-full w-full max-w-[1360px] flex-col">
       {/* Breadcrumb */}
       <nav className="mb-4 flex items-center gap-2 text-sm text-[var(--text-muted)]">
         <Link to="/projects" className="hover:text-[var(--text)]">
@@ -976,8 +976,8 @@ export default function ProjectDetailPage() {
       </nav>
 
       {/* Project Header */}
-      <header className="mb-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
-        <div className="flex items-center gap-5">
+      <header className="mb-6 rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm">
+        <div className="flex items-start gap-5">
           <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--surface-alt)] text-4xl">
             {emoji}
           </div>
@@ -1006,6 +1006,29 @@ export default function ProjectDetailPage() {
             {project.description && (
               <p className="mt-2 text-sm text-[var(--text-muted)]">{project.description}</p>
             )}
+            <div
+              data-testid="project-header-stats"
+              className="mt-4 grid gap-2 sm:grid-cols-3"
+            >
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Waiting</p>
+                <p className="mt-1 text-sm font-semibold text-[var(--text)]">
+                  {waitingCount} issue{waitingCount !== 1 ? "s" : ""}
+                </p>
+              </div>
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Active</p>
+                <p className="mt-1 text-sm font-semibold text-[var(--text)]">
+                  {activeTaskCount} issue{activeTaskCount !== 1 ? "s" : ""}
+                </p>
+              </div>
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Lead</p>
+                <p className="mt-1 text-sm font-semibold text-[var(--text)]">
+                  {primaryAgentName || "No lead"}
+                </p>
+              </div>
+            </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button
