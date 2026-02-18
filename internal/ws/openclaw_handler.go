@@ -119,7 +119,9 @@ func (h *OpenClawHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"message":   "OtterCamp API connected",
 	}
 	if data, err := json.Marshal(welcome); err == nil {
-		conn.WriteMessage(websocket.TextMessage, data)
+		h.writeMu.Lock()
+		_ = conn.WriteMessage(websocket.TextMessage, data)
+		h.writeMu.Unlock()
 	}
 
 	// Start read pump
