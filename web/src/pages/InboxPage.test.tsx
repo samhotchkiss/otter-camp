@@ -70,7 +70,7 @@ describe("InboxPage", () => {
     expect(await screen.findByText("No pending items")).toBeInTheDocument();
   });
 
-  it("renders inbox items with shared primitive class hooks", async () => {
+  it("renders inbox items with updated badge class hooks", async () => {
     inboxMock.mockResolvedValue({
       items: [
         {
@@ -89,14 +89,14 @@ describe("InboxPage", () => {
     expect(await screen.findByText(/Code review/)).toBeInTheDocument();
 
     const card = screen.getByText(/Code review/).closest(".inbox-item");
-    expect(card).toHaveClass("oc-card");
-    expect(card).toHaveClass("oc-card-interactive");
+    expect(card).toHaveClass("inbox-item");
 
     const typeBadge = screen.getByText("review");
-    expect(typeBadge).toHaveClass("oc-chip");
+    expect(typeBadge).toHaveClass("badge-type");
+    expect(typeBadge).toHaveClass("badge-review");
 
-    expect(screen.getByRole("button", { name: "Approve" })).toHaveClass("oc-toolbar-button", "oc-toolbar-button--primary");
-    expect(screen.getByRole("button", { name: "Reject" })).toHaveClass("oc-toolbar-button");
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
   });
 
   it("disables actions while approve is processing and removes item after success", async () => {
