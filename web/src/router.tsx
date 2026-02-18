@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { createBrowserRouter, Outlet } from "react-router-dom";
+import { createBrowserRouter, Navigate, Outlet, useParams } from "react-router-dom";
 import DashboardLayout from "./layouts/DashboardLayout";
 import LoadingSpinner from "./components/LoadingSpinner";
 import RouteErrorFallback from "./components/RouteErrorFallback";
@@ -25,6 +25,7 @@ const MemoryEvaluationPage = lazy(() => lazyWithChunkRetry(() => import("./pages
 const EllieIngestionCoveragePage = lazy(() => lazyWithChunkRetry(() => import("./pages/EllieIngestionCoveragePage")));
 const ConnectionsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ConnectionsPage")));
 const ArchivedChatsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ArchivedChatsPage")));
+const ContentReviewPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ContentReviewPage")));
 
 /**
  * Suspense wrapper for lazy-loaded routes with loading fallback.
@@ -47,6 +48,22 @@ function DashboardRoot() {
       </DashboardLayout>
     </KeyboardShortcutsProvider>
   );
+}
+
+function ProjectAliasAdapter() {
+  const { projectId } = useParams<{ projectId?: string }>();
+  if (!projectId) {
+    return <Navigate to="/projects" replace />;
+  }
+  return <Navigate to={`/projects/${encodeURIComponent(projectId)}`} replace />;
+}
+
+function IssueAliasAdapter() {
+  const { issueId } = useParams<{ issueId?: string }>();
+  if (!issueId) {
+    return <Navigate to="/tasks" replace />;
+  }
+  return <Navigate to={`/tasks/${encodeURIComponent(issueId)}`} replace />;
 }
 
 export const router = createBrowserRouter([
@@ -112,8 +129,20 @@ export const router = createBrowserRouter([
         element: <TaskDetailPage />,
       },
       {
+        path: "project/:projectId",
+        element: <ProjectAliasAdapter />,
+      },
+      {
+        path: "issue/:issueId",
+        element: <IssueAliasAdapter />,
+      },
+      {
         path: "projects/:id/issues/:issueId",
         element: <ProjectDetailPage />,
+      },
+      {
+        path: "review/:documentId",
+        element: <ContentReviewPage />,
       },
       {
         path: "notifications",
