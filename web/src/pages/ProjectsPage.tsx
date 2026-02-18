@@ -16,6 +16,12 @@ type Project = {
   id: string;
   name: string;
   description?: string | null;
+  repo?: string | null;
+  githubSync?: boolean;
+  openIssues?: number;
+  inProgress?: number;
+  needsApproval?: number;
+  techStack?: string[];
   taskCount?: number;
   completedCount?: number;
   color?: string;
@@ -35,6 +41,12 @@ const SAMPLE_PROJECTS: Project[] = [
     id: "1",
     name: "Pearl Proxy",
     description: "Memory and routing infrastructure",
+    repo: "ottercamp/pearl-proxy",
+    githubSync: true,
+    openIssues: 12,
+    inProgress: 5,
+    needsApproval: 2,
+    techStack: ["TypeScript", "Redis", "Postgres"],
     taskCount: 12,
     completedCount: 5,
     color: "amber",
@@ -48,6 +60,12 @@ const SAMPLE_PROJECTS: Project[] = [
     id: "2",
     name: "Otter Camp",
     description: "Project and issue tracking for AI agent teams",
+    repo: "ottercamp/otter-camp",
+    githubSync: true,
+    openIssues: 24,
+    inProgress: 6,
+    needsApproval: 3,
+    techStack: ["Go", "React", "Postgres"],
     taskCount: 24,
     completedCount: 18,
     color: "amber",
@@ -61,6 +79,12 @@ const SAMPLE_PROJECTS: Project[] = [
     id: "3",
     name: "ItsAlive",
     description: "Static site deployment platform",
+    repo: "ottercamp/itsalive",
+    githubSync: true,
+    openIssues: 8,
+    inProgress: 0,
+    needsApproval: 0,
+    techStack: ["Node.js", "Docker", "Cloudflare"],
     taskCount: 8,
     completedCount: 8,
     color: "amber",
@@ -74,6 +98,12 @@ const SAMPLE_PROJECTS: Project[] = [
     id: "4",
     name: "Three Stones",
     description: "Educational content and presentations",
+    repo: "local/three-stones",
+    githubSync: false,
+    openIssues: 15,
+    inProgress: 2,
+    needsApproval: 1,
+    techStack: ["Markdown", "Astro", "Vite"],
     taskCount: 15,
     completedCount: 10,
     color: "amber",
@@ -169,6 +199,12 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
   const colors = colorClasses[project.color ?? "sky"] ?? colorClasses.sky;
   const updatedAt = project.updatedAt ?? project.updated_at ?? project.createdAt ?? project.created_at;
   const isArchived = (project.status || "").toLowerCase() === "archived";
+  const fallbackRepo = `local/${project.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`;
+  const repoName = (project.repo || "").trim() || fallbackRepo;
+  const githubSync = project.githubSync ?? !repoName.startsWith("local/");
+  const openIssues = project.openIssues ?? taskCount;
+  const inProgress = project.inProgress ?? Math.max(taskCount - completedCount, 0);
+  const needsApproval = project.needsApproval ?? 0;
 
   return (
     <div
@@ -178,10 +214,48 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
         isArchived ? "opacity-70" : ""
       }`}
     >
-      <div className="flex items-start justify-between">
-        <div className={`flex h-12 w-12 items-center justify-center rounded-xl text-2xl ${colors.bg}`}>
-          {project.emoji || "📁"}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <h3 className="truncate text-lg font-semibold text-[var(--text)]">
+            {project.name}
+          </h3>
+          <p className="mt-1 flex items-center gap-1 truncate text-xs font-mono text-[var(--text-muted)]">
+            <span aria-hidden="true">⑂</span>
+            {repoName}
+          </p>
         </div>
+
+        <div
+          className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+            githubSync
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
+              : "border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text-muted)]"
+          }`}
+        >
+          {githubSync ? "Synced" : "Local"}
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)]/40 px-2 py-2">
+          <p className="text-base font-semibold text-[var(--text)]">{openIssues}</p>
+          <p className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Open</p>
+        </div>
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)]/40 px-2 py-2">
+          <p className="text-base font-semibold text-amber-500">{inProgress}</p>
+          <p className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Active</p>
+        </div>
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)]/40 px-2 py-2">
+          <p className="text-base font-semibold text-orange-500">{needsApproval}</p>
+          <p className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Review</p>
+        </div>
+      </div>
+
+      <p className="mt-3 text-sm text-[var(--text-muted)]">
+        {project.description ?? ""}
+      </p>
+
+      <div className="mt-3 flex items-center justify-between">
         <button
           type="button"
           onClick={(e) => e.stopPropagation()}
@@ -192,14 +266,10 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
           </svg>
         </button>
+        <div className={`flex h-9 w-9 items-center justify-center rounded-lg text-base ${colors.bg}`}>
+          {project.emoji || "📁"}
+        </div>
       </div>
-
-      <h3 className="mt-4 text-lg font-semibold text-[var(--text)]">
-        {project.name}
-      </h3>
-      <p className="mt-1 text-sm text-[var(--text-muted)]">
-        {project.description ?? ""}
-      </p>
 
       {(project.labels ?? []).length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
@@ -260,6 +330,18 @@ function ProjectCard({ project, onClick }: { project: Project; onClick: () => vo
           <p className="mt-3 text-xs text-[var(--text-muted)]">
             Updated {new Date(updatedAt).toLocaleString()}
           </p>
+        )}
+        {(project.techStack ?? []).length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {(project.techStack ?? []).map((tech) => (
+              <span
+                key={`${project.id}-${tech}`}
+                className="rounded bg-[var(--surface-alt)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]"
+              >
+                {tech}
+              </span>
+            ))}
+          </div>
         )}
       </div>
     </div>
