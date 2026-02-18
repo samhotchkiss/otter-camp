@@ -436,6 +436,7 @@ func buildEllieIngestionOpenClawPrompt(
 	builder.WriteString("Output schema: {\"candidates\":[{\"kind\":\"...\",\"title\":\"...\",\"content\":\"...\",\"importance\":1-5,\"confidence\":0-1,\"source_conversation_id\":\"uuid|null\",\"metadata\":{}}]}\n")
 	builder.WriteString("Allowed kinds: technical_decision, process_decision, preference, fact, lesson, pattern, anti_pattern, correction, process_outcome, context.\n")
 	builder.WriteString("Goal: high recall. Prefer producing multiple small memories over one vague summary.\n")
+	builder.WriteString("When there is enough signal, aim for 8-20 candidates per window.\n")
 	builder.WriteString("Extract concrete facts, decisions, constraints, invariants, warnings, commands, file paths, API routes, table names, and \"this is how it works\" explanations.\n")
 	builder.WriteString("Each candidate should be 1-3 sentences, specific, and standalone. Avoid generic statements.\n")
 	builder.WriteString("If nothing is durable, return {\"candidates\":[]}.\n\n")

@@ -416,16 +416,16 @@ func (s *EllieTaxonomyStore) MarkMemoryTaxonomyClassified(
 		ctx,
 		`UPDATE memories
 		    SET metadata = metadata || jsonb_strip_nulls(jsonb_build_object(
-		            'taxonomy_classified_at', $3,
-		            'taxonomy_classifier_model', NULLIF($4, ''),
-		            'taxonomy_classifier_trace_id', NULLIF($5, '')
+		            'taxonomy_classified_at', $3::timestamptz,
+		            'taxonomy_classifier_model', NULLIF($4::text, ''),
+		            'taxonomy_classifier_trace_id', NULLIF($5::text, '')
 		        )),
 		        updated_at = NOW()
 		  WHERE org_id = $1
 		    AND id = $2`,
 		orgID,
 		memoryID,
-		classifiedAt.UTC().Format(time.RFC3339Nano),
+		classifiedAt.UTC(),
 		strings.TrimSpace(classifierModel),
 		strings.TrimSpace(classifierTraceID),
 	)

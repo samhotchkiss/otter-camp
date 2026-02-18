@@ -17,8 +17,8 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/config"
 	"github.com/samhotchkiss/otter-camp/internal/github"
 	"github.com/samhotchkiss/otter-camp/internal/githubsync"
-	"github.com/samhotchkiss/otter-camp/internal/migration"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
+	"github.com/samhotchkiss/otter-camp/internal/migration"
 	"github.com/samhotchkiss/otter-camp/internal/scheduler"
 	"github.com/samhotchkiss/otter-camp/internal/store"
 )
@@ -249,6 +249,37 @@ func main() {
 					}
 				}
 
+				// Use a backfill-mode ingestion worker for the migration pipeline so we use
+				// count-based windows rather than collapsing long rooms into a few 15m windows.
+				var migrationIngestionExtractor memory.EllieIngestionLLMExtractor
+				if extractor, err := memory.NewEllieIngestionOpenClawExtractorFromEnv(); err != nil {
+					log.Printf("⚠️  OpenClaw migration ingestion extractor disabled; init failed: %v", err)
+				} else {
+					if openClawHandler := api.OpenClawHandlerForRuntime(); openClawHandler != nil {
+						bridgeRunner, bridgeErr := memory.NewEllieIngestionOpenClawBridgeRunner(openClawHandler)
+						if bridgeErr != nil {
+							log.Printf("⚠️  OpenClaw migration ingestion bridge runner disabled; init failed: %v", bridgeErr)
+						} else {
+							extractor.SetBridgeRunner(bridgeRunner)
+						}
+					}
+					migrationIngestionExtractor = extractor
+				}
+				migrationIngestionWorker := memory.NewEllieIngestionWorker(
+					store.NewEllieIngestionStore(db),
+					memory.EllieIngestionWorkerConfig{
+						Interval:             cfg.EllieIngestion.Interval,
+						BatchSize:            cfg.EllieIngestion.BatchSize,
+						MaxPerRoom:           cfg.EllieIngestion.MaxPerRoom,
+						BackfillMaxPerRoom:   cfg.EllieIngestion.BackfillMaxPerRoom,
+						BackfillWindowSize:   cfg.EllieIngestion.BackfillWindowSize,
+						BackfillWindowStride: cfg.EllieIngestion.BackfillWindowStride,
+						WindowGap:            cfg.EllieIngestion.WindowGap,
+						Mode:                 memory.EllieIngestionModeBackfill,
+						LLMExtractor:         migrationIngestionExtractor,
+					},
+				)
+
 				entityWorker := memory.NewEllieEntitySynthesisWorker(
 					store.NewEllieEntitySynthesisStore(db),
 					embedder,
@@ -276,17 +307,18 @@ func main() {
 				}
 
 				pipeline := &migration.OpenClawPipelineWorker{
-					DB:               db,
-					ProgressStore:    store.NewMigrationProgressStore(db),
-					EmbeddingStore:   store.NewConversationEmbeddingStoreWithDimension(db, cfg.ConversationEmbedding.Dimension),
-					IngestionStore:   store.NewEllieIngestionStore(db),
-					EntityWorker:     entityWorker,
-					DedupWorker:      dedupWorker,
-					TaxonomyWorker:   taxonomyWorker,
+					DB:                 db,
+					ProgressStore:      store.NewMigrationProgressStore(db),
+					EmbeddingStore:     store.NewConversationEmbeddingStoreWithDimension(db, cfg.ConversationEmbedding.Dimension),
+					IngestionStore:     store.NewEllieIngestionStore(db),
+					IngestionWorker:    migrationIngestionWorker,
+					EntityWorker:       entityWorker,
+					DedupWorker:        dedupWorker,
+					TaxonomyWorker:     taxonomyWorker,
 					ProjectDocsScanner: docsScanner,
-					ProjectDocsStore: &memory.EllieProjectDocsStoreAdapter{Store: store.NewEllieProjectDocsStore(db)},
-					PollInterval:     3 * time.Second,
-					Logf:             log.Printf,
+					ProjectDocsStore:   &memory.EllieProjectDocsStoreAdapter{Store: store.NewEllieProjectDocsStore(db)},
+					PollInterval:       3 * time.Second,
+					Logf:               log.Printf,
 				}
 				startWorker(pipeline.Start)
 				log.Printf("✅ OpenClaw migration pipeline worker started")

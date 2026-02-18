@@ -3,10 +3,12 @@ package importer
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -197,7 +199,8 @@ func importOpenClawAgentPayload(
 			return OpenClawAgentPayloadImportResult{}, err
 		}
 
-		if _, err := tx.ExecContext(
+		var agentID string
+		if err := tx.QueryRowContext(
 			ctx,
 			`INSERT INTO agents (
 				org_id,
@@ -231,7 +234,8 @@ func importOpenClawAgentPayload(
 				identity_md = COALESCE(EXCLUDED.identity_md, agents.identity_md),
 				instructions_md = COALESCE(EXCLUDED.instructions_md, agents.instructions_md),
 				is_ephemeral = false,
-				updated_at = NOW()`,
+				updated_at = NOW()
+			RETURNING id::text`,
 			orgID,
 			slug,
 			displayName,
@@ -241,8 +245,16 @@ func importOpenClawAgentPayload(
 			openClawImportNullableText(identity.Soul),
 			openClawImportNullableText(identity.Identity),
 			openClawImportNullableText(identity.Tools),
-		); err != nil {
+		).Scan(&agentID); err != nil {
 			return OpenClawAgentPayloadImportResult{}, fmt.Errorf("failed to upsert openclaw agent %q: %w", slug, err)
+		}
+
+		// Index agent MEMORY.md as first-class memories. This is curated, high-signal context.
+		// We keep ingestion deterministic here (split into bullet/paragraph chunks) and rely on
+		// embedding + dedup downstream to normalize.
+		if err := upsertOpenClawAgentMemoryMarkdown(ctx, tx, orgID, agentID, slug, identity); err != nil {
+			// Never fail the whole agent import because one agent memory file is malformed.
+			result.Warnings = append(result.Warnings, fmt.Sprintf("agent %q MEMORY.md ingest failed: %v", slug, err))
 		}
 
 		result.Processed++
@@ -259,6 +271,158 @@ func importOpenClawAgentPayload(
 	}
 
 	return result, nil
+}
+
+func upsertOpenClawAgentMemoryMarkdown(
+	ctx context.Context,
+	tx *sql.Tx,
+	orgID string,
+	agentID string,
+	agentSlug string,
+	identity ImportedAgentIdentity,
+) error {
+	if tx == nil {
+		return fmt.Errorf("transaction is required")
+	}
+	orgID = strings.TrimSpace(orgID)
+	agentID = strings.TrimSpace(agentID)
+	agentSlug = strings.TrimSpace(agentSlug)
+	if orgID == "" || agentID == "" || agentSlug == "" {
+		return nil
+	}
+
+	raw := strings.TrimSpace(identity.Memory)
+	if raw == "" {
+		return nil
+	}
+
+	sourcePath := ""
+	if identity.SourceFiles != nil {
+		sourcePath = strings.TrimSpace(identity.SourceFiles["MEMORY.md"])
+	}
+
+	chunks := splitAgentMemoryMarkdown(raw)
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	for _, chunk := range chunks {
+		content := strings.TrimSpace(chunk)
+		if content == "" {
+			continue
+		}
+		kind, title := deriveAgentMemoryKindAndTitle(agentSlug, content)
+
+		metadataRaw, _ := json.Marshal(map[string]any{
+			"source_table": "agent_memory_md",
+			"agent_id":     agentID,
+			"agent_slug":   agentSlug,
+			"file_name":    "MEMORY.md",
+			"file_path":    sourcePath,
+		})
+
+		_, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO memories (
+				org_id, kind, title, content, metadata, importance, confidence, status,
+				source_conversation_id, source_project_id, occurred_at, sensitivity
+			) VALUES (
+				$1, $2, $3, $4, $5::jsonb, $6, $7, 'active',
+				NULL, NULL, $8, 'internal'
+			)
+			ON CONFLICT (org_id, content_hash) WHERE status = 'active' DO NOTHING`,
+			orgID,
+			kind,
+			title,
+			content,
+			metadataRaw,
+			5,
+			0.95,
+			now,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func splitAgentMemoryMarkdown(raw string) []string {
+	lines := strings.Split(raw, "\n")
+	out := make([]string, 0, len(lines))
+	var para []string
+
+	flush := func() {
+		if len(para) == 0 {
+			return
+		}
+		text := strings.TrimSpace(strings.Join(para, " "))
+		para = para[:0]
+		if text != "" {
+			out = append(out, text)
+		}
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			flush()
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			flush()
+			continue
+		}
+
+		// Prefer bullets as atomic memories.
+		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+			flush()
+			item := strings.TrimSpace(trimmed[2:])
+			if item != "" {
+				out = append(out, item)
+			}
+			continue
+		}
+
+		para = append(para, trimmed)
+	}
+	flush()
+
+	// Cap size; memory rows should be small and standalone.
+	capped := make([]string, 0, len(out))
+	for _, item := range out {
+		runes := []rune(strings.TrimSpace(item))
+		if len(runes) == 0 {
+			continue
+		}
+		if len(runes) > 400 {
+			item = string(runes[:400])
+		}
+		capped = append(capped, item)
+	}
+	return capped
+}
+
+func deriveAgentMemoryKindAndTitle(agentSlug string, content string) (string, string) {
+	lower := strings.ToLower(content)
+	kind := "fact"
+	title := "Agent memory"
+	switch {
+	case strings.Contains(lower, "prefer") || strings.Contains(lower, "preference"):
+		kind = "preference"
+		title = "Agent preference"
+	case strings.Contains(lower, "avoid") || strings.Contains(lower, "don't") || strings.Contains(lower, "do not"):
+		kind = "anti_pattern"
+		title = "Agent anti-pattern"
+	case strings.Contains(lower, "decide") || strings.Contains(lower, "decision:"):
+		kind = "technical_decision"
+		title = "Agent decision"
+	}
+	if strings.TrimSpace(agentSlug) != "" {
+		title = fmt.Sprintf("%s (%s)", title, strings.TrimSpace(agentSlug))
+	}
+	return kind, title
 }
 
 func openClawImportAgentExists(ctx context.Context, tx *sql.Tx, orgID, slug string) (bool, error) {

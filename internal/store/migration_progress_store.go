@@ -354,6 +354,55 @@ func (s *MigrationProgressStore) UpdateStatusByOrg(
 	return int(rowsAffected), nil
 }
 
+func (s *MigrationProgressStore) DeleteByOrgAndTypes(
+	ctx context.Context,
+	orgID string,
+	migrationTypes []string,
+) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("migration progress store is not configured")
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return 0, fmt.Errorf("invalid org_id")
+	}
+	if len(migrationTypes) == 0 {
+		return 0, nil
+	}
+
+	placeholders := make([]string, 0, len(migrationTypes))
+	args := make([]any, 0, len(migrationTypes)+1)
+	args = append(args, orgID)
+	for i, phaseType := range migrationTypes {
+		trimmed := strings.TrimSpace(phaseType)
+		if trimmed == "" {
+			continue
+		}
+		placeholders = append(placeholders, fmt.Sprintf("$%d", i+2))
+		args = append(args, trimmed)
+	}
+	if len(placeholders) == 0 {
+		return 0, nil
+	}
+
+	query := fmt.Sprintf(
+		`DELETE FROM migration_progress
+		  WHERE org_id = $1
+		    AND migration_type IN (%s)`,
+		strings.Join(placeholders, ","),
+	)
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete migration progress rows: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read deleted migration progress row count: %w", err)
+	}
+	return int(rowsAffected), nil
+}
+
 type migrationProgressRowScanner interface {
 	Scan(dest ...interface{}) error
 }

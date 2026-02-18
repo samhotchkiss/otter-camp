@@ -100,7 +100,7 @@ type openClawMigrationResetRequest struct {
 }
 
 type openClawMigrationMemoryResetResponse struct {
-	Status                 string `json:"status"`
+	Status                  string `json:"status"`
 	DeletedMemories         int    `json:"deleted_memories"`
 	DeletedIngestionCursors int    `json:"deleted_ingestion_cursors"`
 	DeletedDedupReviewed    int    `json:"deleted_dedup_reviewed"`
@@ -126,6 +126,7 @@ type openClawMigrationProgressStore interface {
 		fromStatus store.MigrationProgressStatus,
 		toStatus store.MigrationProgressStatus,
 	) (int, error)
+	DeleteByOrgAndTypes(ctx context.Context, orgID string, migrationTypes []string) (int, error)
 }
 
 type openClawHistoryFailureStore interface {
@@ -554,18 +555,38 @@ func (s *defaultOpenClawMigrationControlPlaneService) ResetMemoryExtraction(
 	if s == nil || s.memoryReset == nil {
 		return openClawMigrationMemoryResetResponse{}, fmt.Errorf("memory reset store not configured")
 	}
+	if s.progressStore == nil {
+		return openClawMigrationMemoryResetResponse{}, fmt.Errorf("migration progress store not configured")
+	}
 
 	result, err := s.memoryReset.ResetMemoryExtractionState(ctx, orgID)
 	if err != nil {
 		return openClawMigrationMemoryResetResponse{}, err
 	}
 
+	// Allow re-running extraction and all dependent phases without a full org wipe.
+	// We intentionally keep agent_import + history_backfill intact.
+	progressDeleted, err := s.progressStore.DeleteByOrgAndTypes(ctx, orgID, []string{
+		"history_embedding_1536",
+		"memory_extraction",
+		"entity_synthesis",
+		"memory_dedup",
+		"taxonomy_classification",
+		"project_discovery",
+		"project_docs_scanning",
+	})
+	if err != nil {
+		return openClawMigrationMemoryResetResponse{}, err
+	}
+	_ = progressDeleted
+
 	return openClawMigrationMemoryResetResponse{
-		Status:                 "reset",
+		Status:                  "reset",
 		DeletedMemories:         result.DeletedMemories,
 		DeletedIngestionCursors: result.DeletedIngestionCursors,
 		DeletedDedupReviewed:    result.DeletedDedupReviewed,
 		DeletedDedupCursors:     result.DeletedDedupCursors,
+		// Reuse unused fields? Keep API stable by adding fields later if needed.
 	}, nil
 }
 

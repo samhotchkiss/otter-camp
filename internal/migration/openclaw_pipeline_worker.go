@@ -29,11 +29,12 @@ type OpenClawPipelineWorker struct {
 
 	ProgressStore *store.MigrationProgressStore
 
-	EmbeddingStore *store.ConversationEmbeddingStore
-	IngestionStore *store.EllieIngestionStore
+	EmbeddingStore  *store.ConversationEmbeddingStore
+	IngestionStore  *store.EllieIngestionStore
+	IngestionWorker *memory.EllieIngestionWorker
 
-	EntityWorker  *memory.EllieEntitySynthesisWorker
-	DedupWorker   *memory.EllieDedupWorker
+	EntityWorker   *memory.EllieEntitySynthesisWorker
+	DedupWorker    *memory.EllieDedupWorker
 	TaxonomyWorker *memory.EllieTaxonomyClassifierWorker
 
 	ProjectDocsScanner *memory.EllieProjectDocsScanner
@@ -209,6 +210,10 @@ func (w *OpenClawPipelineWorker) reconcileMemoryExtraction(ctx context.Context, 
 	if w.IngestionStore == nil {
 		w.IngestionStore = store.NewEllieIngestionStore(w.DB)
 	}
+	if w.IngestionWorker == nil {
+		// This should be injected from runtime so it can use the OpenClaw bridge runner.
+		return w.failPhase(ctx, orgID, "memory_extraction", fmt.Errorf("ellie ingestion worker not configured"))
+	}
 	pendingRooms, err := w.IngestionStore.CountRoomsForIngestion(ctx, orgID)
 	if err != nil {
 		return err
@@ -222,11 +227,53 @@ func (w *OpenClawPipelineWorker) reconcileMemoryExtraction(ctx context.Context, 
 		})
 		return err
 	}
+
+	// During migration backfill, we want count-based windows (sliding windows) rather than
+	// large time-gap windows so we don't collapse long rooms into a handful of memories.
+	w.IngestionWorker.SetOrgID(orgID)
+	w.IngestionWorker.SetMode(memory.EllieIngestionModeBackfill)
+	runResult, runErr := w.IngestionWorker.RunOnce(ctx)
+	if runErr != nil {
+		return w.failPhase(ctx, orgID, "memory_extraction", runErr)
+	}
+
+	// Refresh pending room count after ingest work.
+	pendingRoomsAfter, err := w.IngestionStore.CountRoomsForIngestion(ctx, orgID)
+	if err != nil {
+		return err
+	}
+	if pendingRoomsAfter == 0 {
+		_, err := w.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
+			OrgID:         orgID,
+			MigrationType: "memory_extraction",
+			Status:        store.MigrationProgressStatusCompleted,
+			CurrentLabel:  stringPtr("memory extraction complete"),
+		})
+		return err
+	}
+
+	if runResult.ProcessedMessages > 0 || runResult.InsertedMemories > 0 {
+		_, _ = w.ProgressStore.Advance(ctx, store.AdvanceMigrationProgressInput{
+			OrgID:          orgID,
+			MigrationType:  "memory_extraction",
+			ProcessedDelta: max(runResult.ProcessedMessages, 0),
+			CurrentLabel: stringPtr(fmt.Sprintf(
+				"rooms_pending=%d processed_msgs=%d windows=%d inserted=%d (llm=%d heuristic=%d)",
+				pendingRoomsAfter,
+				runResult.ProcessedMessages,
+				runResult.WindowsProcessed,
+				runResult.InsertedMemories,
+				runResult.InsertedLLMMemories,
+				runResult.InsertedHeuristicMemories,
+			)),
+		})
+	}
+
 	_, err = w.ProgressStore.SetStatus(ctx, store.SetMigrationProgressStatusInput{
 		OrgID:         orgID,
 		MigrationType: "memory_extraction",
 		Status:        store.MigrationProgressStatusRunning,
-		CurrentLabel:  stringPtr(fmt.Sprintf("rooms pending ingestion: %d", pendingRooms)),
+		CurrentLabel:  stringPtr(fmt.Sprintf("rooms pending ingestion: %d", pendingRoomsAfter)),
 	})
 	return err
 }

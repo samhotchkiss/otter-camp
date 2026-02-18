@@ -151,3 +151,30 @@ func (f *fakeOpenClawMigrationProgressStore) UpdateStatusByOrg(
 	}
 	return updated, nil
 }
+
+func (f *fakeOpenClawMigrationProgressStore) DeleteByOrgAndTypes(
+	_ context.Context,
+	orgID string,
+	migrationTypes []string,
+) (int, error) {
+	orgID = strings.TrimSpace(orgID)
+	types := make(map[string]struct{}, len(migrationTypes))
+	for _, t := range migrationTypes {
+		trimmed := strings.TrimSpace(t)
+		if trimmed != "" {
+			types[trimmed] = struct{}{}
+		}
+	}
+	deleted := 0
+	for key, row := range f.rowsByKey {
+		if strings.TrimSpace(row.OrgID) != orgID {
+			continue
+		}
+		if _, ok := types[strings.TrimSpace(row.MigrationType)]; !ok {
+			continue
+		}
+		delete(f.rowsByKey, key)
+		deleted++
+	}
+	return deleted, nil
+}

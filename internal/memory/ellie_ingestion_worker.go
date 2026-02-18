@@ -32,10 +32,20 @@ const (
 
 type EllieIngestionStore interface {
 	ListRoomsForIngestion(ctx context.Context, limit int) ([]store.EllieRoomIngestionCandidate, error)
+	ListRoomsForIngestionByOrg(ctx context.Context, orgID string, limit int) ([]store.EllieRoomIngestionCandidate, error)
 	GetRoomCursor(ctx context.Context, orgID, roomID string) (*store.EllieRoomCursor, error)
 	ListRoomMessagesSince(ctx context.Context, orgID, roomID string, afterCreatedAt *time.Time, afterMessageID *string, limit int) ([]store.EllieIngestionMessage, error)
 	InsertExtractedMemory(ctx context.Context, input store.CreateEllieExtractedMemoryInput) (bool, error)
 	UpsertRoomCursor(ctx context.Context, input store.UpsertEllieRoomCursorInput) error
+}
+
+type EllieIngestionRunResult struct {
+	ProcessedMessages         int
+	WindowsProcessed          int
+	RoomsProcessed            int
+	InsertedMemories          int
+	InsertedLLMMemories       int
+	InsertedHeuristicMemories int
 }
 
 type EllieIngestionLLMExtractionInput struct {
@@ -65,29 +75,31 @@ type EllieIngestionLLMExtractor interface {
 }
 
 type EllieIngestionWorkerConfig struct {
-	Interval           time.Duration
-	BatchSize          int
-	MaxPerRoom         int
-	BackfillMaxPerRoom int
-	BackfillWindowSize int
+	OrgID                string
+	Interval             time.Duration
+	BatchSize            int
+	MaxPerRoom           int
+	BackfillMaxPerRoom   int
+	BackfillWindowSize   int
 	BackfillWindowStride int
-	WindowGap          time.Duration
-	Mode               EllieIngestionMode
-	LLMExtractor       EllieIngestionLLMExtractor
+	WindowGap            time.Duration
+	Mode                 EllieIngestionMode
+	LLMExtractor         EllieIngestionLLMExtractor
 }
 
 type EllieIngestionWorker struct {
-	Store              EllieIngestionStore
-	Interval           time.Duration
-	BatchSize          int
-	MaxPerRoom         int
-	BackfillMaxPerRoom int
-	BackfillWindowSize int
+	Store                EllieIngestionStore
+	OrgID                string
+	Interval             time.Duration
+	BatchSize            int
+	MaxPerRoom           int
+	BackfillMaxPerRoom   int
+	BackfillWindowSize   int
 	BackfillWindowStride int
-	WindowGap          time.Duration
-	Mode               EllieIngestionMode
-	LLMExtractor       EllieIngestionLLMExtractor
-	Logf               func(format string, args ...any)
+	WindowGap            time.Duration
+	Mode                 EllieIngestionMode
+	LLMExtractor         EllieIngestionLLMExtractor
+	Logf                 func(format string, args ...any)
 }
 
 func NewEllieIngestionWorker(store EllieIngestionStore, cfg EllieIngestionWorkerConfig) *EllieIngestionWorker {
@@ -121,17 +133,18 @@ func NewEllieIngestionWorker(store EllieIngestionStore, cfg EllieIngestionWorker
 	}
 	mode := normalizeEllieIngestionMode(cfg.Mode)
 	return &EllieIngestionWorker{
-		Store:              store,
-		Interval:           interval,
-		BatchSize:          batchSize,
-		MaxPerRoom:         maxPerRoom,
-		BackfillMaxPerRoom: backfillMaxPerRoom,
-		BackfillWindowSize: backfillWindowSize,
+		Store:                store,
+		OrgID:                strings.TrimSpace(cfg.OrgID),
+		Interval:             interval,
+		BatchSize:            batchSize,
+		MaxPerRoom:           maxPerRoom,
+		BackfillMaxPerRoom:   backfillMaxPerRoom,
+		BackfillWindowSize:   backfillWindowSize,
 		BackfillWindowStride: backfillWindowStride,
-		WindowGap:          windowGap,
-		Mode:               mode,
-		LLMExtractor:       cfg.LLMExtractor,
-		Logf:               log.Printf,
+		WindowGap:            windowGap,
+		Mode:                 mode,
+		LLMExtractor:         cfg.LLMExtractor,
+		Logf:                 log.Printf,
 	}
 }
 
@@ -142,6 +155,13 @@ func (w *EllieIngestionWorker) SetMode(mode EllieIngestionMode) {
 	w.Mode = normalizeEllieIngestionMode(mode)
 }
 
+func (w *EllieIngestionWorker) SetOrgID(orgID string) {
+	if w == nil {
+		return
+	}
+	w.OrgID = strings.TrimSpace(orgID)
+}
+
 func (w *EllieIngestionWorker) Start(ctx context.Context) {
 	if w == nil {
 		return
@@ -150,7 +170,7 @@ func (w *EllieIngestionWorker) Start(ctx context.Context) {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		processed, err := w.RunOnce(ctx)
+		result, err := w.RunOnce(ctx)
 		if err != nil {
 			if w.Logf != nil {
 				w.Logf("ellie ingestion worker run failed: %v", err)
@@ -160,7 +180,7 @@ func (w *EllieIngestionWorker) Start(ctx context.Context) {
 			}
 			continue
 		}
-		if processed > 0 {
+		if result.ProcessedMessages > 0 {
 			continue
 		}
 		if err := sleepWithContext(ctx, w.Interval); err != nil {
@@ -169,12 +189,12 @@ func (w *EllieIngestionWorker) Start(ctx context.Context) {
 	}
 }
 
-func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
+func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (EllieIngestionRunResult, error) {
 	if w == nil {
-		return 0, fmt.Errorf("ellie ingestion worker is nil")
+		return EllieIngestionRunResult{}, fmt.Errorf("ellie ingestion worker is nil")
 	}
 	if w.Store == nil {
-		return 0, fmt.Errorf("ellie ingestion store is required")
+		return EllieIngestionRunResult{}, fmt.Errorf("ellie ingestion store is required")
 	}
 	if w.BatchSize <= 0 {
 		w.BatchSize = defaultEllieIngestionBatchSize
@@ -191,16 +211,22 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 		maxPerRoom = w.BackfillMaxPerRoom
 	}
 
-	rooms, err := w.Store.ListRoomsForIngestion(ctx, w.BatchSize)
+	var rooms []store.EllieRoomIngestionCandidate
+	var err error
+	if strings.TrimSpace(w.OrgID) != "" {
+		rooms, err = w.Store.ListRoomsForIngestionByOrg(ctx, w.OrgID, w.BatchSize)
+	} else {
+		rooms, err = w.Store.ListRoomsForIngestion(ctx, w.BatchSize)
+	}
 	if err != nil {
-		return 0, fmt.Errorf("list rooms for ellie ingestion: %w", err)
+		return EllieIngestionRunResult{}, fmt.Errorf("list rooms for ellie ingestion: %w", err)
 	}
 
-	processed := 0
+	result := EllieIngestionRunResult{}
 	for _, room := range rooms {
 		cursor, err := w.Store.GetRoomCursor(ctx, room.OrgID, room.RoomID)
 		if err != nil {
-			return processed, fmt.Errorf("load ellie room cursor %s/%s: %w", room.OrgID, room.RoomID, err)
+			return result, fmt.Errorf("load ellie room cursor %s/%s: %w", room.OrgID, room.RoomID, err)
 		}
 
 		var (
@@ -217,11 +243,13 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 
 		messages, err := w.Store.ListRoomMessagesSince(ctx, room.OrgID, room.RoomID, afterCreatedAt, afterMessageID, maxPerRoom)
 		if err != nil {
-			return processed, fmt.Errorf("list room messages for ellie ingestion %s/%s: %w", room.OrgID, room.RoomID, err)
+			return result, fmt.Errorf("list room messages for ellie ingestion %s/%s: %w", room.OrgID, room.RoomID, err)
 		}
 		if len(messages) == 0 {
 			continue
 		}
+
+		result.RoomsProcessed++
 
 		var windows [][]store.EllieIngestionMessage
 		if mode == EllieIngestionModeBackfill && w.BackfillWindowSize > 0 {
@@ -230,7 +258,8 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 			windows = groupEllieIngestionMessagesByWindow(messages, w.WindowGap)
 		}
 		for _, window := range windows {
-			processed += len(window)
+			result.WindowsProcessed++
+			result.ProcessedMessages += len(window)
 			if w.LLMExtractor != nil {
 				llmCandidates, err := w.extractLLMMemoryCandidates(ctx, room, window)
 				if err != nil {
@@ -241,7 +270,11 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 					for _, candidate := range llmCandidates {
 						inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
 						if err != nil {
-							return processed, fmt.Errorf("insert llm extracted memory for room %s: %w", room.RoomID, err)
+							return result, fmt.Errorf("insert llm extracted memory for room %s: %w", room.RoomID, err)
+						}
+						if inserted {
+							result.InsertedMemories++
+							result.InsertedLLMMemories++
 						}
 						if inserted && w.Logf != nil {
 							w.Logf("ellie ingestion extracted llm memory kind=%s room=%s", candidate.Kind, room.RoomID)
@@ -258,7 +291,11 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 
 			inserted, err := w.Store.InsertExtractedMemory(ctx, candidate)
 			if err != nil {
-				return processed, fmt.Errorf("insert ellie extracted memory for room %s: %w", room.RoomID, err)
+				return result, fmt.Errorf("insert ellie extracted memory for room %s: %w", room.RoomID, err)
+			}
+			if inserted {
+				result.InsertedMemories++
+				result.InsertedHeuristicMemories++
 			}
 			if inserted && w.Logf != nil {
 				w.Logf("ellie ingestion extracted memory kind=%s room=%s", candidate.Kind, room.RoomID)
@@ -272,11 +309,11 @@ func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (int, error) {
 			LastMessageID:        last.ID,
 			LastMessageCreatedAt: last.CreatedAt,
 		}); err != nil {
-			return processed, fmt.Errorf("upsert ellie room cursor %s/%s: %w", room.OrgID, room.RoomID, err)
+			return result, fmt.Errorf("upsert ellie room cursor %s/%s: %w", room.OrgID, room.RoomID, err)
 		}
 	}
 
-	return processed, nil
+	return result, nil
 }
 
 func (w *EllieIngestionWorker) extractLLMMemoryCandidates(

@@ -57,6 +57,20 @@ func (f *fakeEllieIngestionStore) ListRoomsForIngestion(_ context.Context, _ int
 	return out, nil
 }
 
+func (f *fakeEllieIngestionStore) ListRoomsForIngestionByOrg(_ context.Context, orgID string, _ int) ([]store.EllieRoomIngestionCandidate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listRoomsCalls += 1
+	orgID = strings.TrimSpace(orgID)
+	out := make([]store.EllieRoomIngestionCandidate, 0, len(f.rooms))
+	for _, room := range f.rooms {
+		if strings.TrimSpace(room.OrgID) == orgID {
+			out = append(out, room)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeEllieIngestionStore) GetRoomCursor(_ context.Context, orgID, roomID string) (*store.EllieRoomCursor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -149,9 +163,9 @@ func TestEllieIngestionWorkerExtractsMemoriesFromChatMessages(t *testing.T) {
 	})
 	worker.Logf = nil
 
-	processed, err := worker.RunOnce(context.Background())
+	run, err := worker.RunOnce(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 1, run.ProcessedMessages)
 	require.Len(t, fakeStore.created, 1)
 	require.Equal(t, "technical_decision", fakeStore.created[0].Kind)
 	require.Equal(t, "org-1", fakeStore.created[0].OrgID)
@@ -174,9 +188,9 @@ func TestEllieIngestionWorkerAdvancesCursorAfterSuccessfulWrite(t *testing.T) {
 	})
 	worker.Logf = nil
 
-	processed, err := worker.RunOnce(context.Background())
+	run, err := worker.RunOnce(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 2, processed)
+	require.Equal(t, 2, run.ProcessedMessages)
 
 	cursor, ok := fakeStore.cursors[roomCursorKey("org-1", "room-1")]
 	require.True(t, ok)
@@ -201,9 +215,9 @@ func TestEllieIngestionWorkerGroupsMessagesWithinTimeWindow(t *testing.T) {
 	})
 	worker.Logf = nil
 
-	processed, err := worker.RunOnce(context.Background())
+	run, err := worker.RunOnce(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 3, processed)
+	require.Equal(t, 3, run.ProcessedMessages)
 	require.Len(t, fakeStore.created, 1)
 	require.Equal(t, "technical_decision", fakeStore.created[0].Kind)
 	require.Contains(t, fakeStore.created[0].Content, "We decided to keep Postgres")
@@ -247,9 +261,9 @@ func TestEllieIngestionWorkerUsesLLMExtractionWhenConfigured(t *testing.T) {
 	})
 	worker.Logf = nil
 
-	processed, err := worker.RunOnce(context.Background())
+	run, err := worker.RunOnce(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 1, run.ProcessedMessages)
 	require.Equal(t, 1, extractor.calls)
 	require.Len(t, fakeStore.created, 1)
 	require.Equal(t, "lesson", fakeStore.created[0].Kind)
@@ -300,9 +314,9 @@ func TestEllieIngestionWorkerLLMExtractionMetadataIncludesTraceability(t *testin
 	})
 	worker.Logf = nil
 
-	processed, err := worker.RunOnce(context.Background())
+	run, err := worker.RunOnce(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 1, run.ProcessedMessages)
 	require.Len(t, fakeStore.created, 1)
 	require.NotNil(t, fakeStore.created[0].SourceConversationID)
 	require.Equal(t, "conv-1", *fakeStore.created[0].SourceConversationID)
@@ -347,9 +361,9 @@ func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMUnavailable(t *testing.
 	})
 	worker.Logf = nil
 
-	processed, err := worker.RunOnce(context.Background())
+	run, err := worker.RunOnce(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 1, run.ProcessedMessages)
 	require.Len(t, fakeStore.created, 1)
 	require.Equal(t, "technical_decision", fakeStore.created[0].Kind)
 }
@@ -377,9 +391,9 @@ func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMExtractorErrors(t *test
 	})
 	worker.Logf = nil
 
-	processed, err := worker.RunOnce(context.Background())
+	run, err := worker.RunOnce(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 1, run.ProcessedMessages)
 	require.Equal(t, 1, extractor.calls)
 	require.Len(t, fakeStore.created, 1)
 	require.Equal(t, "preference", fakeStore.created[0].Kind)
@@ -408,9 +422,9 @@ func TestEllieIngestionWorkerFallsBackToHeuristicsWhenLLMReturnsNoCandidates(t *
 	})
 	worker.Logf = nil
 
-	processed, err := worker.RunOnce(context.Background())
+	run, err := worker.RunOnce(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 1, run.ProcessedMessages)
 	require.Equal(t, 1, extractor.calls)
 	require.Len(t, fakeStore.created, 1)
 	require.Equal(t, "lesson", fakeStore.created[0].Kind)
@@ -493,9 +507,9 @@ func TestEllieIngestionWorkerBackfillModeStartsFromEpoch(t *testing.T) {
 	})
 	worker.Logf = nil
 
-	processed, err := worker.RunOnce(context.Background())
+	run, err := worker.RunOnce(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 1, run.ProcessedMessages)
 	require.Len(t, fakeStore.listCalls, 1)
 	require.Equal(t, 80, fakeStore.listCalls[0].Limit)
 	require.NotNil(t, fakeStore.listCalls[0].AfterCreatedAt)
@@ -540,9 +554,9 @@ func TestEllieIngestionWorkerBackfillModeResumesNormalCursoring(t *testing.T) {
 		},
 	}
 	worker.SetMode(EllieIngestionModeNormal)
-	processed, err := worker.RunOnce(context.Background())
+	run, err := worker.RunOnce(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 1, processed)
+	require.Equal(t, 1, run.ProcessedMessages)
 
 	require.Len(t, fakeStore.listCalls, 2)
 	require.Equal(t, 90, fakeStore.listCalls[0].Limit)

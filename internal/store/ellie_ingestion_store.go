@@ -140,6 +140,72 @@ func (s *EllieIngestionStore) ListRoomsForIngestion(ctx context.Context, limit i
 	return candidates, nil
 }
 
+func (s *EllieIngestionStore) ListRoomsForIngestionByOrg(ctx context.Context, orgID string, limit int) ([]EllieRoomIngestionCandidate, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("ellie ingestion store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	if !uuidRegex.MatchString(orgID) {
+		return nil, fmt.Errorf("invalid org_id")
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`WITH latest_room_messages AS (
+		     SELECT DISTINCT ON (org_id, room_id)
+		       org_id,
+		       room_id,
+		       id AS latest_message_id,
+		       created_at AS latest_message_created_at
+		     FROM chat_messages
+		     WHERE org_id = $1
+		     ORDER BY org_id, room_id, created_at DESC, id DESC
+		 )
+		 SELECT latest.org_id, latest.room_id
+		 FROM latest_room_messages latest
+		 JOIN rooms room
+		   ON room.org_id = latest.org_id
+		  AND room.id = latest.room_id
+		 LEFT JOIN ellie_ingestion_cursors cursor
+		   ON cursor.org_id = latest.org_id
+		  AND cursor.source_type = 'room'
+		  AND cursor.source_id = latest.room_id::text
+		 WHERE room.exclude_from_ingestion = FALSE
+		   AND (latest.latest_message_created_at, latest.latest_message_id) >
+		       (
+		         COALESCE(cursor.last_message_created_at, TIMESTAMPTZ '1970-01-01'),
+		         COALESCE(cursor.last_message_id, '00000000-0000-0000-0000-000000000000'::uuid)
+		       )
+		 ORDER BY latest.latest_message_created_at ASC, latest.room_id ASC
+		 LIMIT $2`,
+		orgID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list ellie ingestion rooms: %w", err)
+	}
+	defer rows.Close()
+
+	candidates := make([]EllieRoomIngestionCandidate, 0, limit)
+	for rows.Next() {
+		var row EllieRoomIngestionCandidate
+		if err := rows.Scan(&row.OrgID, &row.RoomID); err != nil {
+			return nil, fmt.Errorf("failed to scan ellie ingestion room: %w", err)
+		}
+		candidates = append(candidates, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed reading ellie ingestion rooms: %w", err)
+	}
+	return candidates, nil
+}
+
 func (s *EllieIngestionStore) CountRoomsForIngestion(ctx context.Context, orgID string) (int, error) {
 	if s == nil || s.db == nil {
 		return 0, fmt.Errorf("ellie ingestion store is not configured")
