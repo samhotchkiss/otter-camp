@@ -539,40 +539,6 @@ body {
 }
 
 /* ========================================
-   FOOTER
-   ======================================== */
-
-.footer {
-  background: var(--surface-alt);
-  border-top: 1px solid var(--border);
-  padding: 20px 24px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.otter-fact {
-  margin-bottom: 4px;
-}
-
-.footer-fact {
-  font-size: 13px;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.footer-fact strong {
-  color: var(--accent);
-}
-
-.footer-tagline {
-  font-size: 12px;
-}
-
-/* ========================================
    FORMS
    ======================================== */
 
