@@ -852,7 +852,7 @@ func (s *EllieIngestionStore) ListCoverageByDay(ctx context.Context, orgID strin
 		            COUNT(*)::int AS total_messages
 		     FROM chat_messages
 		     WHERE org_id = $1
-		       AND (created_at AT TIME ZONE 'UTC')::date >= $2::date
+		       AND created_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
 		     GROUP BY day
 		 ),
 		 run_days AS (
@@ -869,7 +869,7 @@ func (s *EllieIngestionStore) ListCoverageByDay(ctx context.Context, orgID strin
 		            MAX(window_end_at) FILTER (WHERE ok) AS last_ok_at
 		     FROM ellie_ingestion_window_runs
 		     WHERE org_id = $1
-		       AND (window_end_at AT TIME ZONE 'UTC')::date >= $2::date
+		       AND window_end_at >= ($2::date::timestamp AT TIME ZONE 'UTC')
 		     GROUP BY day
 		 ),
 		 days AS (

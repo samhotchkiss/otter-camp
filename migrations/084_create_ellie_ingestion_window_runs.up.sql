@@ -25,8 +25,9 @@ CREATE TABLE IF NOT EXISTS ellie_ingestion_window_runs (
 CREATE INDEX IF NOT EXISTS ellie_ingestion_window_runs_org_end_idx
     ON ellie_ingestion_window_runs (org_id, window_end_at DESC);
 
-CREATE INDEX IF NOT EXISTS ellie_ingestion_window_runs_org_day_idx
-    ON ellie_ingestion_window_runs (org_id, (window_end_at::date) DESC);
+-- NOTE: Expression indexes require IMMUTABLE functions. Casting timestamptz to date is
+-- timezone-sensitive (STABLE), so we intentionally avoid a day-level expression index here.
+-- The coverage query is written to use the (org_id, window_end_at) index via timestamp bounds.
 
 ALTER TABLE ellie_ingestion_window_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ellie_ingestion_window_runs FORCE ROW LEVEL SECURITY;
@@ -34,4 +35,3 @@ DROP POLICY IF EXISTS ellie_ingestion_window_runs_org_isolation ON ellie_ingesti
 CREATE POLICY ellie_ingestion_window_runs_org_isolation ON ellie_ingestion_window_runs
     USING (org_id = current_org_id())
     WITH CHECK (org_id = current_org_id());
-
