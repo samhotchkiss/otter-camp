@@ -1,10 +1,26 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import IssueThreadPanel from "../components/project/IssueThreadPanel";
+import { API_URL } from "../lib/api";
+
+const ORG_STORAGE_KEY = "otter-camp-org-id";
+
+type ApprovalAction = "needs_changes" | "approved";
+
+function getOrgID(): string {
+  return (window.localStorage.getItem(ORG_STORAGE_KEY) ?? "").trim();
+}
 
 export default function IssueDetailPage() {
   const { id: projectId, issueId } = useParams<{ id?: string; issueId?: string }>();
   const resolvedIssueId = (issueId ?? "").trim();
   const resolvedProjectId = (projectId ?? "").trim();
+  const [pendingAction, setPendingAction] = useState<ApprovalAction | null>(null);
+  const [approvalStatus, setApprovalStatus] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+
+  const orgID = getOrgID();
+  const orgMissing = orgID === "";
 
   if (!resolvedIssueId) {
     return (
@@ -14,6 +30,39 @@ export default function IssueDetailPage() {
         </div>
       </div>
     );
+  }
+
+  async function handleApprovalAction(action: ApprovalAction): Promise<void> {
+    if (orgMissing) {
+      setApprovalError("Set an organization to use approval actions.");
+      return;
+    }
+
+    setPendingAction(action);
+    setApprovalError(null);
+    setApprovalStatus(null);
+    try {
+      const endpoint = action === "approved"
+        ? `${API_URL}/api/issues/${encodeURIComponent(resolvedIssueId)}/approve?org_id=${encodeURIComponent(orgID)}`
+        : `${API_URL}/api/issues/${encodeURIComponent(resolvedIssueId)}/approval-state?org_id=${encodeURIComponent(orgID)}`;
+      const requestInit: RequestInit = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      };
+      if (action === "needs_changes") {
+        requestInit.body = JSON.stringify({ approval_state: "needs_changes" });
+      }
+      const response = await fetch(endpoint, requestInit);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Failed to update issue approval state");
+      }
+      setApprovalStatus(action === "approved" ? "Issue approved." : "Changes requested.");
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : "Failed to update issue approval state");
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   return (
@@ -43,6 +92,22 @@ export default function IssueDetailPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => void handleApprovalAction("needs_changes")}
+              disabled={pendingAction !== null || orgMissing}
+            >
+              {pendingAction === "needs_changes" ? "Updating..." : "Request Changes"}
+            </button>
+            <button
+              type="button"
+              className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => void handleApprovalAction("approved")}
+              disabled={pendingAction !== null || orgMissing}
+            >
+              {pendingAction === "approved" ? "Updating..." : "Approve"}
+            </button>
             {resolvedProjectId ? (
               <Link
                 to={`/projects/${encodeURIComponent(resolvedProjectId)}`}
@@ -59,6 +124,15 @@ export default function IssueDetailPage() {
             </Link>
           </div>
         </div>
+        {orgMissing && (
+          <p className="mt-3 text-xs text-amber-700">Set an organization to enable approval actions.</p>
+        )}
+        {approvalStatus && (
+          <p className="mt-3 text-xs text-emerald-700">{approvalStatus}</p>
+        )}
+        {approvalError && (
+          <p className="mt-3 text-xs text-red-700">{approvalError}</p>
+        )}
       </header>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(260px,320px)_1fr]">
@@ -75,7 +149,7 @@ export default function IssueDetailPage() {
             </div>
             <div>
               <dt className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Controls</dt>
-              <dd className="text-[var(--text-muted)]">Approval and review controls are available in the thread panel.</dd>
+              <dd className="text-[var(--text-muted)]">Approve and request-change actions are pinned in the issue header.</dd>
             </div>
           </dl>
         </aside>
