@@ -42,6 +42,7 @@ type EllieDedupReviewer interface {
 }
 
 type EllieDedupReviewInput struct {
+	OrgID    string
 	Cluster  EllieDedupCluster
 	Memories []EllieDedupReviewMemory
 	Prompt   string
@@ -160,6 +161,7 @@ func (w *EllieDedupWorker) RunOnce(ctx context.Context, orgID string) (EllieDedu
 		}
 		prompt := BuildEllieDedupReviewPrompt(memories)
 		decision, err := w.Reviewer.Review(ctx, EllieDedupReviewInput{
+			OrgID:    orgID,
 			Cluster:  cluster,
 			Memories: memories,
 			Prompt:   prompt,
