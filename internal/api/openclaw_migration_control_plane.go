@@ -99,6 +99,14 @@ type openClawMigrationResetRequest struct {
 	Confirm string `json:"confirm"`
 }
 
+type openClawMigrationMemoryResetResponse struct {
+	Status                 string `json:"status"`
+	DeletedMemories         int    `json:"deleted_memories"`
+	DeletedIngestionCursors int    `json:"deleted_ingestion_cursors"`
+	DeletedDedupReviewed    int    `json:"deleted_dedup_reviewed"`
+	DeletedDedupCursors     int    `json:"deleted_dedup_cursors"`
+}
+
 type openClawMigrationResetResponse struct {
 	Status              string         `json:"status"`
 	PausedPhases        int            `json:"paused_phases"`
@@ -132,6 +140,10 @@ type openClawMigrationResetStore interface {
 	Reset(ctx context.Context, input store.OpenClawMigrationResetInput) (store.OpenClawMigrationResetResult, error)
 }
 
+type openClawMigrationMemoryResetStore interface {
+	ResetMemoryExtractionState(ctx context.Context, orgID string) (store.EllieIngestionResetResult, error)
+}
+
 type openClawMigrationControlPlaneService interface {
 	Status(ctx context.Context, orgID string) (openClawMigrationStatusResponse, error)
 	Report(ctx context.Context, orgID string) (openClawMigrationReportResponse, error)
@@ -140,39 +152,44 @@ type openClawMigrationControlPlaneService interface {
 	Pause(ctx context.Context, orgID string) (openClawMigrationMutationResponse, error)
 	Resume(ctx context.Context, orgID string) (openClawMigrationMutationResponse, error)
 	Reset(ctx context.Context, orgID string) (openClawMigrationResetResponse, error)
+	ResetMemoryExtraction(ctx context.Context, orgID string) (openClawMigrationMemoryResetResponse, error)
 }
 
 type defaultOpenClawMigrationControlPlaneService struct {
 	progressStore openClawMigrationProgressStore
 	resetStore    openClawMigrationResetStore
+	memoryReset   openClawMigrationMemoryResetStore
 	failureStore  openClawHistoryFailureStore
 }
 
 func newOpenClawMigrationControlPlaneServiceWithStore(
 	progressStore openClawMigrationProgressStore,
 ) *defaultOpenClawMigrationControlPlaneService {
-	return newOpenClawMigrationControlPlaneServiceWithStores(progressStore, nil, nil)
+	return newOpenClawMigrationControlPlaneServiceWithStores(progressStore, nil, nil, nil)
 }
 
 func newOpenClawMigrationControlPlaneServiceWithStores(
 	progressStore openClawMigrationProgressStore,
 	resetStore openClawMigrationResetStore,
+	memoryResetStore openClawMigrationMemoryResetStore,
 	failureStore openClawHistoryFailureStore,
 ) *defaultOpenClawMigrationControlPlaneService {
 	return &defaultOpenClawMigrationControlPlaneService{
 		progressStore: progressStore,
 		resetStore:    resetStore,
+		memoryReset:   memoryResetStore,
 		failureStore:  failureStore,
 	}
 }
 
 func newOpenClawMigrationControlPlaneService(db *sql.DB) *defaultOpenClawMigrationControlPlaneService {
 	if db == nil {
-		return newOpenClawMigrationControlPlaneServiceWithStores(nil, nil, nil)
+		return newOpenClawMigrationControlPlaneServiceWithStores(nil, nil, nil, nil)
 	}
 	return newOpenClawMigrationControlPlaneServiceWithStores(
 		store.NewMigrationProgressStore(db),
 		store.NewOpenClawMigrationResetStore(db),
+		store.NewEllieIngestionResetStore(db),
 		store.NewOpenClawHistoryFailureLedgerStore(db),
 	)
 }
@@ -530,6 +547,28 @@ func (s *defaultOpenClawMigrationControlPlaneService) Reset(
 	}, nil
 }
 
+func (s *defaultOpenClawMigrationControlPlaneService) ResetMemoryExtraction(
+	ctx context.Context,
+	orgID string,
+) (openClawMigrationMemoryResetResponse, error) {
+	if s == nil || s.memoryReset == nil {
+		return openClawMigrationMemoryResetResponse{}, fmt.Errorf("memory reset store not configured")
+	}
+
+	result, err := s.memoryReset.ResetMemoryExtractionState(ctx, orgID)
+	if err != nil {
+		return openClawMigrationMemoryResetResponse{}, err
+	}
+
+	return openClawMigrationMemoryResetResponse{
+		Status:                 "reset",
+		DeletedMemories:         result.DeletedMemories,
+		DeletedIngestionCursors: result.DeletedIngestionCursors,
+		DeletedDedupReviewed:    result.DeletedDedupReviewed,
+		DeletedDedupCursors:     result.DeletedDedupCursors,
+	}, nil
+}
+
 func selectOpenClawPhases(input openClawMigrationRunRequest) ([]string, error) {
 	phases := make([]string, 0, len(openClawMigrationPhaseOrder))
 	switch {
@@ -782,6 +821,51 @@ func (h *OpenClawMigrationControlPlaneHandler) Reset(w http.ResponseWriter, r *h
 		response.ProgressRowsDeleted,
 		response.TotalDeleted,
 		response.Deleted,
+	)
+
+	sendJSON(w, http.StatusOK, response)
+}
+
+func (h *OpenClawMigrationControlPlaneHandler) ResetMemoryExtraction(w http.ResponseWriter, r *http.Request) {
+	orgID := middleware.WorkspaceFromContext(r.Context())
+	if strings.TrimSpace(orgID) == "" {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "workspace context required"})
+		return
+	}
+	if h == nil || h.service == nil {
+		sendJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "migration control plane unavailable"})
+		return
+	}
+
+	request := openClawMigrationResetRequest{}
+	if r.Body != nil {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		decodeErr := decoder.Decode(&request)
+		if decodeErr != nil && !errors.Is(decodeErr, io.EOF) {
+			sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
+			return
+		}
+	}
+
+	if strings.TrimSpace(request.Confirm) != openClawMigrationResetConfirmToken {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "confirm token required"})
+		return
+	}
+
+	response, err := h.service.ResetMemoryExtraction(r.Context(), orgID)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to reset memory extraction state"})
+		return
+	}
+
+	log.Printf(
+		"openclaw memory extraction reset completed: org_id=%s deleted_memories=%d deleted_ingestion_cursors=%d deleted_dedup_reviewed=%d deleted_dedup_cursors=%d",
+		orgID,
+		response.DeletedMemories,
+		response.DeletedIngestionCursors,
+		response.DeletedDedupReviewed,
+		response.DeletedDedupCursors,
 	)
 
 	sendJSON(w, http.StatusOK, response)
