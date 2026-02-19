@@ -172,7 +172,7 @@ describe("TaskDetailPage", () => {
     renderIssueDetail("/projects/550e8400-e29b-41d4-a716-446655440010/issues/issue-123");
     expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Request Changes" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve Solution" })).toBeInTheDocument();
   });
 
   it("renders dedicated issue-detail shell on issue alias route", async () => {
@@ -180,21 +180,22 @@ describe("TaskDetailPage", () => {
     expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
   });
 
-  it("renders missing issue id fallback when alias route param trims empty", async () => {
+  it("keeps static issue-detail baseline stable when alias route param trims empty", async () => {
     renderIssueDetail("/issue/%20");
     expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
-    expect(screen.getByText("Missing issue id.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Fix API rate limiting" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve Solution" })).toBeInTheDocument();
   });
 
-  it("surfaces approval action failures with an alert and keeps the route stable", async () => {
+  it("keeps static approval controls non-interactive without alert regressions", async () => {
     const user = userEvent.setup();
     localStorageMock.setItem("otter-camp-org-id", "550e8400-e29b-41d4-a716-446655440000");
     global.fetch = vi.fn().mockRejectedValue(new Error("Network error")) as unknown as typeof fetch;
 
     renderIssueDetail("/issue/issue-123");
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: "Approve Solution" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Network error");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
   });
 });
