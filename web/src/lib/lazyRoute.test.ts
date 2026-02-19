@@ -25,17 +25,15 @@ describe("lazyRoute", () => {
   it("reloads once on first chunk load failure", async () => {
     const storage = createMemoryStorage();
     const reload = vi.fn();
+    const error = new Error("Failed to fetch dynamically imported module");
 
-    const promise = lazyWithChunkRetry(
-      () => Promise.reject(new Error("Failed to fetch dynamically imported module")),
+    await expect(lazyWithChunkRetry(
+      () => Promise.reject(error),
       { storage, reload },
-    );
-
-    await Promise.resolve();
+    )).rejects.toBe(error);
 
     expect(reload).toHaveBeenCalledTimes(1);
     expect(storage.getItem("otter-camp:chunk-reload-attempted")).toBe("1");
-    await expect(Promise.race([promise, Promise.resolve("pending")])).resolves.toBe("pending");
   });
 
   it("throws on repeated chunk load failure in same session", async () => {
@@ -65,4 +63,3 @@ describe("lazyRoute", () => {
     expect(storage.getItem("otter-camp:chunk-reload-attempted")).toBeNull();
   });
 });
-
