@@ -1422,6 +1422,51 @@ export function parseAgentIDFromSessionKeyForTest(sessionKey: string): string {
   return parseAgentIDFromSessionKey(sessionKey);
 }
 
+/**
+ * Attempt to reconstruct a minimal SessionContext from a session key pattern.
+ * This handles cases where the bridge receives a gateway event for a session
+ * whose context was lost (e.g. after a project chat session reset).
+ *
+ * Recognised patterns:
+ *   agent:<agentId>:project:<projectId>[:session:<sessionId>]
+ *   agent:<agentId>:issue:<issueId>[:session:<sessionId>]
+ */
+function inferSessionContextFromKey(sessionKey: string): SessionContext | null {
+  const key = getTrimmedString(sessionKey).toLowerCase();
+
+  // Match project chat session keys: agent:<id>:project:<uuid>[...]
+  const projectMatch = /^agent:([^:]+):project:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(key);
+  if (projectMatch && projectMatch[1] && projectMatch[2]) {
+    const agentID = projectMatch[1];
+    const projectID = projectMatch[2];
+    return {
+      kind: 'project_chat',
+      orgID: OTTERCAMP_ORG_ID || undefined,
+      agentID,
+      projectID,
+    };
+  }
+
+  // Match issue comment session keys: agent:<id>:issue:<uuid>[...]
+  const issueMatch = /^agent:([^:]+):issue:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(key);
+  if (issueMatch && issueMatch[1] && issueMatch[2]) {
+    const agentID = issueMatch[1];
+    const issueID = issueMatch[2];
+    return {
+      kind: 'issue_comment',
+      orgID: OTTERCAMP_ORG_ID || undefined,
+      agentID,
+      issueID,
+    };
+  }
+
+  return null;
+}
+
+export function inferSessionContextFromKeyForTest(sessionKey: string): SessionContext | null {
+  return inferSessionContextFromKey(sessionKey);
+}
+
 function parseAgentSlotFromSessionKey(sessionKey: string): string {
   const match = /^agent:([^:]+):/i.exec(getTrimmedString(sessionKey));
   if (!match || !match[1]) {
@@ -5158,7 +5203,15 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
     return;
   }
   if (!sessionContexts.has(sessionKey)) {
-    return;
+    // Attempt to reconstruct context from session key pattern so replies for
+    // sessions created after a project-chat reset (or any session where the
+    // dispatch context was lost) can still be persisted back to OtterCamp.
+    const inferred = inferSessionContextFromKey(sessionKey);
+    if (inferred) {
+      setSessionContext(sessionKey, inferred);
+    } else {
+      return;
+    }
   }
 
   const runID = getTrimmedString(payload.runId) || getTrimmedString(payload.run_id);

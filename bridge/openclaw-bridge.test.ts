@@ -54,6 +54,7 @@ import {
   getIngestedToolEventsStateForTest,
   getMutationEnforcementStateForTest,
   validateMutationToolTargetsWithinProjectRootForTest,
+  inferSessionContextFromKeyForTest,
   type QuestionnairePayload,
   type QuestionnaireQuestion,
 } from "./openclaw-bridge";
@@ -1740,5 +1741,43 @@ describe("bridge memory extraction dispatch helpers", () => {
     const data = sentMessages[0]?.data as Record<string, unknown>;
     assert.equal(data.ok, false);
     assert.equal(String(data.error || "").length <= 1003, true);
+  });
+});
+
+describe("bridge inferSessionContextFromKey", () => {
+  it("infers project_chat context from project session key", () => {
+    const ctx = inferSessionContextFromKeyForTest(
+      "agent:technonymous:project:9f3dcf92-df30-4cf4-a264-ccff1a271056:session:dgj6jjueemz0"
+    );
+    assert.ok(ctx);
+    assert.equal(ctx.kind, "project_chat");
+    assert.equal(ctx.agentID, "technonymous");
+    assert.equal(ctx.projectID, "9f3dcf92-df30-4cf4-a264-ccff1a271056");
+  });
+
+  it("infers project_chat context from project key without session suffix", () => {
+    const ctx = inferSessionContextFromKeyForTest(
+      "agent:main:project:aaaabbbb-cccc-dddd-eeee-ffffffffffff"
+    );
+    assert.ok(ctx);
+    assert.equal(ctx.kind, "project_chat");
+    assert.equal(ctx.agentID, "main");
+    assert.equal(ctx.projectID, "aaaabbbb-cccc-dddd-eeee-ffffffffffff");
+  });
+
+  it("infers issue_comment context from issue session key", () => {
+    const ctx = inferSessionContextFromKeyForTest(
+      "agent:derek:issue:11112222-3333-4444-5555-666677778888:session:abc123"
+    );
+    assert.ok(ctx);
+    assert.equal(ctx.kind, "issue_comment");
+    assert.equal(ctx.agentID, "derek");
+    assert.equal(ctx.issueID, "11112222-3333-4444-5555-666677778888");
+  });
+
+  it("returns null for non-project/issue session keys", () => {
+    assert.equal(inferSessionContextFromKeyForTest("agent:main:main"), null);
+    assert.equal(inferSessionContextFromKeyForTest("agent:main:thread:123"), null);
+    assert.equal(inferSessionContextFromKeyForTest(""), null);
   });
 });
