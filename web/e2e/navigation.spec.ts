@@ -6,6 +6,32 @@ test.describe("Navigation", () => {
     await bootstrapAuthenticatedSession(page);
   });
 
+  test("figma-parity-shell baseline scaffold renders", async ({ page }) => {
+    await page.goto("/inbox");
+
+    await expect(page.getByTestId("shell-layout")).toBeVisible();
+    await expect(page.getByTestId("shell-sidebar")).toBeVisible();
+    await expect(page.getByTestId("shell-header")).toBeVisible();
+    await expect(page.getByTestId("shell-workspace")).toBeVisible();
+    await expect(page.getByTestId("shell-chat-slot")).toBeVisible();
+    await expect(page.getByText("Otter Camp")).toBeVisible();
+    await expect(page.getByText("Agent Ops")).toBeVisible();
+    await expect(page.getByPlaceholder("Search...")).toBeVisible();
+  });
+
+  test("figma-parity-inbox baseline content and filters render", async ({ page }) => {
+    await page.goto("/inbox");
+
+    await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "All (6)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Unread (3)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Starred (1)" })).toBeVisible();
+    await expect(page.getByText("PR #234 awaiting approval")).toBeVisible();
+
+    await page.getByRole("tab", { name: "Starred (1)" }).click();
+    await expect(page.getByText("Critical: API rate limit exceeded")).toBeVisible();
+  });
+
   test("shows primary topbar links", async ({ page }) => {
     await page.goto("/");
 

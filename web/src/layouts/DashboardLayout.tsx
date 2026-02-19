@@ -1,25 +1,15 @@
-/**
- * DashboardLayout - Main layout component matching Jeff G's design mockups
- * 
- * Key design elements:
- * - Topbar with accent background (warm gold)
- * - Horizontal navigation in topbar
- * - Search trigger as centered pill
- * - Connection status + avatar on right
- * - No sidebar - clean topbar-based navigation
- */
-
-import { useState, useEffect, useRef, type ReactNode } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
-import { useWS } from "../contexts/WebSocketContext";
 import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
 import DemoBanner from "../components/DemoBanner";
 import GlobalSearch from "../components/GlobalSearch";
 import GlobalChatDock from "../components/chat/GlobalChatDock";
-import { isDemoMode } from "../lib/demo";
-import { api } from "../lib/api";
+
+type DashboardLayoutProps = {
+  children: ReactNode;
+};
 
 type NavItem = {
   id: string;
@@ -27,12 +17,20 @@ type NavItem = {
   href: string;
 };
 
-const NAV_ITEMS: NavItem[] = [
-  { id: "inbox", label: "Inbox", href: "/inbox" },
-  { id: "projects", label: "Projects", href: "/projects" },
-  { id: "workflows", label: "Workflows", href: "/workflows" },
-  { id: "knowledge", label: "Knowledge", href: "/knowledge" },
-];
+type SidebarInboxItem = {
+  id: string;
+  title: string;
+  project: string;
+  priority: "critical" | "high" | "medium" | "low";
+};
+
+type SidebarProjectItem = {
+  id: string;
+  name: string;
+  status: "active" | "review" | "idle";
+  issueCount: number;
+  lastAccessed: string;
+};
 
 const AVATAR_MENU_ITEMS: NavItem[] = [
   { id: "agents", label: "Agents", href: "/agents" },
@@ -41,106 +39,84 @@ const AVATAR_MENU_ITEMS: NavItem[] = [
   { id: "settings", label: "Settings", href: "/settings" },
 ];
 
-// All nav items for active detection
-const ALL_NAV_ITEMS = [...NAV_ITEMS, ...AVATAR_MENU_ITEMS];
+const SIDEBAR_INBOX_ITEMS: SidebarInboxItem[] = [
+  {
+    id: "ISS-209",
+    title: "Fix API rate limiting",
+    project: "API Gateway",
+    priority: "critical",
+  },
+  {
+    id: "ISS-234",
+    title: "Auth flow refactor",
+    project: "Customer Portal",
+    priority: "high",
+  },
+  {
+    id: "ISS-445",
+    title: "Memory sync error",
+    project: "Internal Tools",
+    priority: "medium",
+  },
+];
 
-type DashboardLayoutProps = {
-  children: ReactNode;
-};
-
-type BridgeStatus = "healthy" | "degraded" | "unhealthy";
-
-type AdminConnectionsBridgePayload = {
-  connected?: boolean;
-  sync_healthy?: boolean;
-  status?: string;
-  last_sync?: string;
-  last_sync_age_seconds?: number;
-};
-
-type AdminConnectionsPayload = {
-  bridge?: AdminConnectionsBridgePayload;
-};
-
-function normalizeBridgeStatus(
-  bridge: AdminConnectionsBridgePayload | undefined,
-  wsConnectedFallback: boolean,
-): BridgeStatus {
-  const rawStatus = (bridge?.status || "").trim().toLowerCase();
-  if (rawStatus === "healthy" || rawStatus === "degraded" || rawStatus === "unhealthy") {
-    return rawStatus;
-  }
-  if (bridge?.connected === false) {
-    return "unhealthy";
-  }
-  if (bridge?.sync_healthy === true) {
-    return "healthy";
-  }
-  if (bridge?.connected === true || wsConnectedFallback) {
-    return "degraded";
-  }
-  return "unhealthy";
-}
-
-function getBridgeStatusLabel(status: BridgeStatus): string {
-  if (status === "healthy") {
-    return "Bridge healthy";
-  }
-  if (status === "degraded") {
-    return "Bridge connected, OpenClaw unreachable";
-  }
-  return "Bridge offline";
-}
-
-function getBridgeDelayBannerMessage(status: BridgeStatus): string {
-  if (status === "degraded") {
-    return "Bridge connected but OpenClaw unreachable";
-  }
-  return "Bridge offline - reconnecting";
-}
-
-function normalizeLastSyncAgeSeconds(bridge: AdminConnectionsBridgePayload | undefined): number | null {
-  if (typeof bridge?.last_sync_age_seconds === "number" && Number.isFinite(bridge.last_sync_age_seconds) && bridge.last_sync_age_seconds >= 0) {
-    return Math.floor(bridge.last_sync_age_seconds);
-  }
-  const lastSyncISO = (bridge?.last_sync || "").trim();
-  if (!lastSyncISO) {
-    return null;
-  }
-  const parsed = Date.parse(lastSyncISO);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return Math.max(0, Math.floor((Date.now() - parsed) / 1000));
-}
-
-function formatLastSyncLabel(ageSeconds: number | null): string | null {
-  if (!Number.isFinite(ageSeconds) || ageSeconds === null || ageSeconds < 0) {
-    return null;
-  }
-  if (ageSeconds < 60) {
-    return `Last successful sync ${ageSeconds}s ago`;
-  }
-  const minutes = Math.floor(ageSeconds / 60);
-  if (minutes < 60) {
-    return `Last successful sync ${minutes}m ago`;
-  }
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    return `Last successful sync ${hours}h ago`;
-  }
-  const days = Math.floor(hours / 24);
-  return `Last successful sync ${days}d ago`;
-}
+const SIDEBAR_PROJECT_ITEMS: SidebarProjectItem[] = [
+  {
+    id: "project-api-gateway",
+    name: "API Gateway",
+    status: "active",
+    issueCount: 5,
+    lastAccessed: "2 days ago",
+  },
+  {
+    id: "project-customer-portal",
+    name: "Customer Portal",
+    status: "review",
+    issueCount: 3,
+    lastAccessed: "1 week ago",
+  },
+  {
+    id: "project-internal-tools",
+    name: "Internal Tools",
+    status: "active",
+    issueCount: 8,
+    lastAccessed: "3 days ago",
+  },
+];
 
 function logOut() {
-  // Clear auth cookies
   document.cookie = "otter_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-  // Clear localStorage
   const keysToRemove = ["otter-camp-org-id", "otter-camp-token", "otter_camp_token", "otter-camp-theme"];
   keysToRemove.forEach((key) => localStorage.removeItem(key));
-  // Redirect
   window.location.href = "/";
+}
+
+function priorityClass(priority: SidebarInboxItem["priority"]): string {
+  if (priority === "critical") {
+    return "bg-rose-500";
+  }
+  if (priority === "high") {
+    return "bg-orange-500";
+  }
+  if (priority === "medium") {
+    return "bg-amber-500";
+  }
+  return "bg-stone-600";
+}
+
+function projectStatusClass(status: SidebarProjectItem["status"]): string {
+  if (status === "active") {
+    return "bg-lime-500";
+  }
+  if (status === "review") {
+    return "bg-amber-500";
+  }
+  return "bg-stone-600";
+}
+
+function routeLabel(pathname: string): string {
+  const firstSegment = pathname.split("/").filter(Boolean)[0] ?? "inbox";
+  return decodeURIComponent(firstSegment);
 }
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
@@ -150,13 +126,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const [chatOpen, setChatOpen] = useState(true);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
-  const [inboxCount, setInboxCount] = useState<number | null>(null);
-  const { connected: wsConnected } = useWS();
-  // In demo mode, always show as connected for better UX
-  const connected = isDemoMode() || wsConnected;
-  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(connected ? "healthy" : "unhealthy");
-  const [bridgeLastSyncAgeSeconds, setBridgeLastSyncAgeSeconds] = useState<number | null>(null);
-  
+
   const {
     openCommandPalette,
     isShortcutsHelpOpen,
@@ -174,7 +144,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     isNewTaskOpen,
   } = useKeyboardShortcutsContext();
 
-  // Keyboard shortcuts
   const shortcuts: Shortcut[] = [
     {
       key: "k",
@@ -207,7 +176,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         else if (selectedTaskId) closeTaskDetail();
         else if (isNewTaskOpen) closeNewTask();
         else if (avatarMenuOpen) setAvatarMenuOpen(false);
-        else if (chatOpen && typeof window !== "undefined" && window.innerWidth < 1024) setChatOpen(false);
+        else if (chatOpen) setChatOpen(false);
         else if (mobileMenuOpen) setMobileMenuOpen(false);
       },
     },
@@ -245,38 +214,21 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       description: "Go to inbox",
       category: "Navigation",
       skipInInput: true,
-      action: () => {
-        window.location.href = "/inbox";
-      },
+      action: () => navigate("/inbox"),
     },
   ];
 
   useKeyboardShortcuts(shortcuts);
 
-  // Get active nav item
-  const getActiveNavId = () => {
-    const path = location.pathname;
-    if (path === "/") return null;
-    if (path.startsWith("/project/")) return "projects";
-    if (path.startsWith("/issue/")) return "inbox";
-    if (path.startsWith("/review/")) return "knowledge";
-    const item = ALL_NAV_ITEMS.find((item) => path.startsWith(item.href) && item.href !== "/");
-    return item?.id ?? null;
-  };
-
-  const activeNavId = getActiveNavId();
-
-  // Close menus on navigation
   useEffect(() => {
     setMobileMenuOpen(false);
     setAvatarMenuOpen(false);
   }, [location.pathname]);
 
-  // Close avatar menu on click outside.
   useEffect(() => {
     if (!avatarMenuOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (avatarMenuRef.current && !avatarMenuRef.current.contains(e.target as Node)) {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (avatarMenuRef.current && !avatarMenuRef.current.contains(event.target as Node)) {
         setAvatarMenuOpen(false);
       }
     };
@@ -286,250 +238,291 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     };
   }, [avatarMenuOpen]);
 
-  // Load inbox count for nav badge
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadInboxCount() {
-      try {
-        if (isDemoMode()) {
-          setInboxCount(null);
-          return;
-        }
-        const response = await api.inbox();
-        if (cancelled) return;
-        setInboxCount(response.items?.length ?? 0);
-      } catch {
-        if (!cancelled) setInboxCount(null);
-      }
-    }
-
-    loadInboxCount();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    let pollTimer: number | undefined;
-
-    async function loadBridgeStatus() {
-      if (isDemoMode()) {
-        if (!cancelled) {
-          setBridgeStatus("healthy");
-        }
-        return;
-      }
-      try {
-        const payload = await api.adminConnections() as AdminConnectionsPayload;
-        if (cancelled) {
-          return;
-        }
-        setBridgeStatus(normalizeBridgeStatus(payload.bridge, connected));
-        setBridgeLastSyncAgeSeconds(normalizeLastSyncAgeSeconds(payload.bridge));
-      } catch {
-        if (!cancelled) {
-          setBridgeStatus((previous) => previous || (connected ? "healthy" : "unhealthy"));
-        }
-      }
-    }
-
-    void loadBridgeStatus();
-    pollTimer = window.setInterval(() => {
-      void loadBridgeStatus();
-    }, 15000);
-
-    return () => {
-      cancelled = true;
-      if (pollTimer) {
-        window.clearInterval(pollTimer);
-      }
-    };
-  }, [connected]);
-
-  const bridgeStatusLabel = getBridgeStatusLabel(bridgeStatus);
-  const bridgeStatusClass = bridgeStatus === "healthy"
-    ? "connected"
-    : bridgeStatus === "degraded"
-      ? "degraded"
-      : "disconnected";
-  const bridgeDotClass = bridgeStatus === "healthy"
-    ? "status-live"
-    : bridgeStatus === "degraded"
-      ? "status-degraded"
-      : "status-offline";
-  const isLocalDev = typeof window !== "undefined" &&
-    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-  const showBridgeDelayBanner = bridgeStatus !== "healthy" && !isLocalDev;
-  const bridgeDelayBannerMessage = getBridgeDelayBannerMessage(bridgeStatus);
-  const bridgeLastSyncLabel = formatLastSyncLabel(bridgeLastSyncAgeSeconds);
+  const currentRouteLabel = useMemo(() => routeLabel(location.pathname), [location.pathname]);
 
   return (
-    <div className="app shell-layout" data-testid="shell-layout">
+    <div className="shell-layout flex h-screen overflow-hidden bg-stone-950 text-stone-200 font-sans" data-testid="shell-layout">
       <DemoBanner />
 
       {mobileMenuOpen && (
         <button
           type="button"
-          className="shell-sidebar-overlay"
+          className="shell-sidebar-overlay fixed inset-0 z-40 bg-black/50 lg:hidden"
           aria-label="Close navigation"
           onClick={() => setMobileMenuOpen(false)}
         />
       )}
 
       <aside
-        className={`shell-sidebar ${mobileMenuOpen ? "open" : ""}`}
+        className={`shell-sidebar ${mobileMenuOpen ? "open translate-x-0" : "-translate-x-full lg:translate-x-0"} fixed lg:relative z-50 h-full w-[240px] shrink-0 overflow-hidden border-r border-stone-800 bg-stone-900 transition-transform duration-200`}
         data-testid="shell-sidebar"
       >
-        <div className="card-header flex items-center justify-between">
-          <Link to="/" className="logo">
-            <span className="logo-icon">🦦</span>
-            <span className="logo-text">otter.camp</span>
-          </Link>
+        <div className="flex h-16 items-center gap-3 border-b border-stone-800 p-4">
+          <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-lg">
+            <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="h-full w-full">
+              <defs>
+                <linearGradient id="otterGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#d97706" />
+                  <stop offset="100%" stopColor="#84cc16" />
+                </linearGradient>
+              </defs>
+              <circle cx="16" cy="14" r="6" fill="url(#otterGradient)" opacity="0.3" />
+              <ellipse cx="16" cy="20" rx="8" ry="6" fill="url(#otterGradient)" opacity="0.3" />
+              <circle cx="13" cy="12" r="1.5" fill="white" />
+              <circle cx="19" cy="12" r="1.5" fill="white" />
+              <path d="M 12 18 Q 16 20 20 18" stroke="white" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+              <circle cx="8" cy="16" r="3" fill="url(#otterGradient)" opacity="0.5" />
+              <circle cx="24" cy="16" r="3" fill="url(#otterGradient)" opacity="0.5" />
+            </svg>
+          </div>
+          <div className="min-w-0 overflow-hidden">
+            <h1 className="truncate text-sm font-bold tracking-tight text-stone-100">Otter Camp</h1>
+            <p className="truncate text-[10px] font-mono uppercase tracking-wider text-stone-500">Agent Ops</p>
+          </div>
           <button
             type="button"
-            className="mobile-menu-btn"
+            className="ml-auto rounded-md p-2 text-stone-400 hover:bg-stone-800 lg:hidden"
             aria-label="Close menu"
             onClick={() => setMobileMenuOpen(false)}
           >
-            ✕
+            <span aria-hidden="true">✕</span>
           </button>
         </div>
-        <nav className="p-3">
-          {NAV_ITEMS.map((item) => (
-            <Link
-              key={item.id}
-              to={item.href}
-              className={`nav-link ${activeNavId === item.id ? "active" : ""}`}
-              aria-current={activeNavId === item.id ? "page" : undefined}
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              {item.label}
-              {item.id === "inbox" && inboxCount !== null && (
-                <span className="nav-badge oc-chip" aria-label={`Inbox count ${inboxCount}`}>
-                  {inboxCount}
-                </span>
-              )}
-            </Link>
-          ))}
-        </nav>
-      </aside>
 
-      <div className="shell-main">
-        <header className="shell-header oc-toolbar" data-testid="shell-header">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="mobile-menu-btn"
-              aria-label="Toggle menu"
-            >
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                {mobileMenuOpen ? (
-                  <path d="M6 18L18 6M6 6l12 12" />
-                ) : (
-                  <path d="M4 6h16M4 12h16M4 18h16" />
-                )}
-              </svg>
-            </button>
-            <button
-              type="button"
-              onClick={openCommandPalette}
-              className="search-trigger oc-toolbar-input"
-            >
-              <span className="search-icon">🔍</span>
-              <span className="search-text">Search or command...</span>
-              <kbd>⌘K</kbd>
-            </button>
+        <nav className="flex-1 space-y-1 overflow-y-auto p-3">
+          <NavLink
+            to="/inbox"
+            className="flex items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wider text-stone-400 transition-colors hover:text-stone-200"
+          >
+            <span className="flex items-center gap-2">
+              <span aria-hidden="true">📥</span>
+              <span>Inbox</span>
+            </span>
+            <span aria-hidden="true" className="text-xs opacity-60">›</span>
+          </NavLink>
+
+          <div className="mb-6 space-y-0.5">
+            {SIDEBAR_INBOX_ITEMS.map((item) => (
+              <Link
+                key={item.id}
+                to={`/issue/${encodeURIComponent(item.id)}`}
+                className="group flex items-start gap-2 rounded-md px-3 py-2 text-left text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200"
+              >
+                <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${priorityClass(item.priority)}`} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium text-stone-300 group-hover:text-stone-100">{item.title}</span>
+                  <span className="mt-0.5 flex items-center gap-1.5">
+                    <span className="text-[10px] font-mono text-stone-600">{item.id}</span>
+                    <span className="text-[10px] text-stone-600">•</span>
+                    <span className="truncate text-[10px] text-stone-500">{item.project}</span>
+                  </span>
+                </span>
+              </Link>
+            ))}
           </div>
 
-          <div className="topbar-right">
-            <div
-              className={`connection-status oc-chip ${bridgeStatusClass}`}
-              aria-label={bridgeStatusLabel}
-              role="status"
+          <NavLink
+            to="/projects"
+            className="flex items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wider text-stone-400 transition-colors hover:text-stone-200"
+          >
+            <span className="flex items-center gap-2">
+              <span aria-hidden="true">📁</span>
+              <span>Projects</span>
+            </span>
+            <span aria-hidden="true" className="text-xs opacity-60">›</span>
+          </NavLink>
+
+          <div className="space-y-0.5">
+            {SIDEBAR_PROJECT_ITEMS.map((project) => (
+              <NavLink
+                key={project.id}
+                to={`/projects/${encodeURIComponent(project.id)}`}
+                className="group flex items-center gap-2 rounded-md px-3 py-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200"
+              >
+                <span className={`h-2 w-2 shrink-0 rounded-full ${projectStatusClass(project.status)}`} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium text-stone-300 group-hover:text-stone-100">{project.name}</span>
+                  <span className="mt-0.5 flex items-center gap-1.5">
+                    <span className="text-[10px] text-stone-500">{project.issueCount} issues</span>
+                    <span className="text-[10px] text-stone-600">•</span>
+                    <span className="text-[10px] text-stone-600">{project.lastAccessed}</span>
+                  </span>
+                </span>
+              </NavLink>
+            ))}
+          </div>
+        </nav>
+
+        <div className="shrink-0 border-t border-stone-800">
+          <div className="flex items-center justify-around border-b border-stone-800 px-3 py-3">
+            <NavLink
+              to="/projects"
+              className={({ isActive }) =>
+                `rounded-md p-2 transition-colors ${
+                  isActive ? "bg-amber-500/10 text-amber-400" : "text-stone-500 hover:bg-stone-800 hover:text-stone-300"
+                }`
+              }
+              title="Projects quick nav"
+              aria-label="Projects quick nav"
             >
-              <span className={`status-dot oc-status-dot ${bridgeDotClass}`}></span>
-              <span className="status-text">{bridgeStatusLabel}</span>
-            </div>
+              <span aria-hidden="true">📁</span>
+            </NavLink>
+            <NavLink
+              to="/agents"
+              className={({ isActive }) =>
+                `rounded-md p-2 transition-colors ${
+                  isActive ? "bg-amber-500/10 text-amber-400" : "text-stone-500 hover:bg-stone-800 hover:text-stone-300"
+                }`
+              }
+              title="Agents quick nav"
+              aria-label="Agents quick nav"
+            >
+              <span aria-hidden="true">🤖</span>
+            </NavLink>
+            <NavLink
+              to="/knowledge"
+              className={({ isActive }) =>
+                `rounded-md p-2 transition-colors ${
+                  isActive ? "bg-amber-500/10 text-amber-400" : "text-stone-500 hover:bg-stone-800 hover:text-stone-300"
+                }`
+              }
+              title="Memory quick nav"
+              aria-label="Memory quick nav"
+            >
+              <span aria-hidden="true">🧠</span>
+            </NavLink>
+            <NavLink
+              to="/connections"
+              className={({ isActive }) =>
+                `rounded-md p-2 transition-colors ${
+                  isActive ? "bg-amber-500/10 text-amber-400" : "text-stone-500 hover:bg-stone-800 hover:text-stone-300"
+                }`
+              }
+              title="Operations quick nav"
+              aria-label="Operations quick nav"
+            >
+              <span aria-hidden="true">⚙</span>
+            </NavLink>
+          </div>
+
+          <div className="p-4" ref={avatarMenuRef}>
             <button
               type="button"
-              className="btn btn-secondary"
-              aria-label="Toggle chat panel"
-              onClick={() => setChatOpen((open) => !open)}
+              className="flex w-full items-center gap-3 rounded-md border border-stone-800 bg-stone-950 px-3 py-2 text-left"
+              aria-label="Sidebar user menu"
+              aria-expanded={avatarMenuOpen}
+              onClick={() => setAvatarMenuOpen((open) => !open)}
             >
-              {chatOpen ? "Hide chat" : "Show chat"}
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-800 text-xs font-mono">JS</span>
+              <span className="min-w-0 overflow-hidden">
+                <span className="block truncate text-xs font-medium text-stone-300">Jane Smith</span>
+                <span className="block truncate text-[10px] text-stone-500">Admin</span>
+              </span>
             </button>
-            <div className="avatar-menu-container" ref={avatarMenuRef}>
-              <button
-                type="button"
-                className="avatar"
-                aria-label="User menu"
-                aria-expanded={avatarMenuOpen}
-                onClick={() => setAvatarMenuOpen(!avatarMenuOpen)}
-              >
-                S
-              </button>
-              {avatarMenuOpen && (
-                <div className="avatar-dropdown">
-                  {AVATAR_MENU_ITEMS.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`avatar-dropdown-item ${activeNavId === item.id ? "active" : ""}`}
-                      onClick={() => {
-                        navigate(item.href);
-                        setAvatarMenuOpen(false);
-                      }}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                  <div className="avatar-dropdown-divider" />
+            {avatarMenuOpen && (
+              <div className="avatar-dropdown mt-2 rounded-md border border-stone-800 bg-stone-900 p-1">
+                {AVATAR_MENU_ITEMS.map((item) => (
                   <button
+                    key={item.id}
                     type="button"
-                    className="avatar-dropdown-item avatar-dropdown-logout"
-                    onClick={logOut}
+                    className="avatar-dropdown-item w-full rounded px-3 py-2 text-left text-sm text-stone-300 hover:bg-stone-800"
+                    onClick={() => {
+                      navigate(item.href);
+                      setAvatarMenuOpen(false);
+                    }}
                   >
-                    Log Out
+                    {item.label}
                   </button>
-                </div>
-              )}
+                ))}
+                <div className="avatar-dropdown-divider my-1 border-t border-stone-800" />
+                <button
+                  type="button"
+                  className="avatar-dropdown-item avatar-dropdown-logout w-full rounded px-3 py-2 text-left text-sm text-rose-300 hover:bg-stone-800"
+                  onClick={logOut}
+                >
+                  Log Out
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </aside>
+
+      <div className="flex flex-1 flex-col overflow-hidden" data-testid="shell-main">
+        <header className="shell-header flex h-16 items-center justify-between border-b border-stone-800 bg-stone-950/80 px-4 backdrop-blur-md md:px-6" data-testid="shell-header">
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              aria-label="Toggle menu"
+              onClick={() => setMobileMenuOpen((open) => !open)}
+              className="rounded-md p-2 text-stone-400 hover:bg-stone-800 md:hidden"
+            >
+              <span aria-hidden="true">☰</span>
+            </button>
+            <div className="flex items-center gap-2 text-sm text-stone-400">
+              <span className="text-stone-600">/</span>
+              <span className="capitalize text-stone-200" data-testid="shell-route-label">
+                {currentRouteLabel}
+              </span>
             </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="group relative hidden md:block">
+              <span aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500">🔎</span>
+              <input
+                aria-label="Search"
+                type="text"
+                placeholder="Search..."
+                readOnly
+                onFocus={openCommandPalette}
+                className="w-64 rounded-full border border-stone-800 bg-stone-900 py-1.5 pl-9 pr-12 text-sm text-stone-300 outline-none transition-all placeholder:text-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50"
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-stone-700 px-1 text-[10px] font-mono text-stone-600">
+                ⌘K
+              </span>
+            </div>
+
+            <button
+              type="button"
+              aria-label="Toggle chat panel"
+              title={chatOpen ? "Hide Chat" : "Show Chat"}
+              onClick={() => setChatOpen((open) => !open)}
+              className="rounded-full p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200"
+            >
+              <span aria-hidden="true">{chatOpen ? "◧" : "◨"}</span>
+            </button>
+
+            <button
+              type="button"
+              className="rounded-full border border-stone-700 bg-stone-900 px-3 py-1 text-xs text-stone-300"
+              aria-label="User menu"
+              aria-expanded={avatarMenuOpen}
+              onClick={() => setAvatarMenuOpen((open) => !open)}
+            >
+              JS
+            </button>
           </div>
         </header>
 
-        {showBridgeDelayBanner && (
-          <div className={`bridge-delay-banner ${bridgeStatus}`} role="status" aria-live="polite">
-            <span>{bridgeDelayBannerMessage}</span>
-            {bridgeLastSyncLabel && (
-              <span className="bridge-delay-detail">{bridgeLastSyncLabel}</span>
-            )}
-          </div>
-        )}
-
-        <div className="shell-workspace" data-testid="shell-workspace">
-          <main className="shell-content main" id="main-content">
-            {children}
+        <div className="shell-workspace flex flex-1 overflow-hidden" data-testid="shell-workspace">
+          <main className="shell-content min-w-0 flex-1 overflow-y-auto bg-stone-950 p-4 md:p-6" id="main-content">
+            <div className="mx-auto max-w-6xl space-y-4 md:space-y-6">{children}</div>
           </main>
           <aside
-            className={`shell-chat-slot ${chatOpen ? "" : "hidden"}`.trim()}
+            className={`shell-chat-slot ${chatOpen ? "" : "hidden"} w-96 shrink-0 border-l border-stone-800 bg-stone-900 max-lg:hidden`.trim()}
             data-testid="shell-chat-slot"
             aria-hidden={!chatOpen}
           >
-            {chatOpen && <GlobalChatDock />}
+            {chatOpen ? <GlobalChatDock /> : null}
           </aside>
         </div>
       </div>
 
-      {/* Keyboard Shortcuts Help Modal */}
       <ShortcutsHelpModal isOpen={isShortcutsHelpOpen} onClose={closeShortcutsHelp} />
-
-      {/* Global Search / Command Palette */}
       <GlobalSearch
         isOpen={isCommandPaletteOpen}
-        onOpenChange={(open) => open ? openCommandPalette() : closeCommandPalette()}
+        onOpenChange={(open) => (open ? openCommandPalette() : closeCommandPalette())}
         orgId={localStorage.getItem("otter-camp-org-id") || undefined}
       />
     </div>
