@@ -148,6 +148,7 @@ Primary implementation wave came through issue/commit streams around Spec #150-#
 
 ## Change Log
 
+- 2026-02-19: Fixed Spec 516 reviewer follow-ups for review-link fallback and issue/review test stability; updated regression coverage and test timing guards.
 - 2026-02-16: Added join waitlist fallback behavior for invalid invite codes and documented DB-backed + throttled `/api/waitlist` signup handling (Spec 315).
 - 2026-02-17: Bug fix in hosted CLI setup handoff conflict-resolution follow-up; no behavior change.
 - 2026-02-17: Added hosted CLI setup handoff path (`/install` script + `otter init --mode hosted --token --url` import/bridge flow) for non-interactive hosted onboarding (Spec 312).
