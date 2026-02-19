@@ -32,6 +32,35 @@ test.describe("Navigation", () => {
     await expect(page.getByText("Critical: API rate limit exceeded")).toBeVisible();
   });
 
+  test("figma-parity-projects baseline cards and activity render", async ({ page }) => {
+    await page.goto("/projects");
+
+    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+    await expect(page.getByText("Git-backed repositories & tracking")).toBeVisible();
+    await expect(page.getByRole("button", { name: "New Project" })).toBeVisible();
+    const customerPortalCard = page.getByTestId("project-card-project-1");
+    await expect(customerPortalCard).toBeVisible();
+    await expect(customerPortalCard.getByText("Customer Portal")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Recent Activity" })).toBeVisible();
+
+    await customerPortalCard.click();
+    await expect(page).toHaveURL(/\/projects\/project-1$/);
+  });
+
+  test("figma-parity-project-detail baseline right rail and explorer render", async ({ page }) => {
+    await page.goto("/projects/project-2");
+
+    await expect(page.getByRole("heading", { name: "API Gateway" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Open Issues" })).toBeVisible();
+    await expect(page.getByTestId("project-detail-right-rail")).toBeVisible();
+    await expect(page.getByTestId("project-detail-file-explorer")).toBeVisible();
+    const readmeLink = page.getByRole("link", { name: /README\.md/i });
+    await expect(readmeLink).toBeVisible();
+
+    await readmeLink.click();
+    await expect(page).toHaveURL(/\/review\/docs%2FREADME\.md$/);
+  });
+
   test("shows primary topbar links", async ({ page }) => {
     await page.goto("/");
 
