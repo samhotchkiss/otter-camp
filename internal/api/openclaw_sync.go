@@ -444,10 +444,25 @@ func (h *OpenClawSyncHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 
 		name := agentNames[agentID]
+		if name == "" && db != nil && workspaceID != "" {
+			// For chameleon sessions the agentID is a UUID — resolve display
+			// name from the agents table so the sync state carries a human-
+			// readable label instead of a raw UUID.
+			_ = db.QueryRowContext(r.Context(),
+				`SELECT COALESCE(NULLIF(display_name,''), slug) FROM agents WHERE org_id = $1 AND id = $2`,
+				workspaceID, agentID,
+			).Scan(&name)
+		}
 		if name == "" {
 			name = agentID
 		}
 		role := agentRoles[agentID]
+		if role == "" && db != nil && workspaceID != "" {
+			_ = db.QueryRowContext(r.Context(),
+				`SELECT slug FROM agents WHERE org_id = $1 AND id = $2`,
+				workspaceID, agentID,
+			).Scan(&role)
+		}
 		avatar := agentAvatars[agentID]
 
 		updatedAt := time.Unix(session.UpdatedAt/1000, 0)

@@ -580,6 +580,14 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 	orgNameInput := strings.TrimSpace(firstNonEmpty(req.OrganizationName, req.OrgName, req.Org))
 	orgSlugInput := strings.TrimSpace(req.OrgSlug)
 
+	// When no explicit org is provided, resolve from the caller's auth token.
+	// This ensures the bridge creates magic links for its own org automatically.
+	if orgNameInput == "" && orgSlugInput == "" {
+		if callerOrgSlug := resolveCallerOrgSlug(r); callerOrgSlug != "" {
+			orgSlugInput = callerOrgSlug
+		}
+	}
+
 	orgName := orgNameInput
 	if orgName == "" {
 		orgName = strings.TrimSpace(name)
@@ -697,6 +705,36 @@ func HandleMagicLink(w http.ResponseWriter, r *http.Request) {
 		Token:     authToken,
 		ExpiresAt: expiresAt,
 	})
+}
+
+// resolveCallerOrgSlug extracts the org slug from the caller's Bearer token.
+// This allows the magic link endpoint to inherit the caller's org when no
+// explicit org is provided — critical for 1:1 OpenClaw↔OtterCamp mapping.
+func resolveCallerOrgSlug(r *http.Request) string {
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authHeader == "" {
+		return ""
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	token = strings.TrimSpace(token)
+	if token == "" || token == authHeader {
+		return ""
+	}
+	db, err := getAuthDB()
+	if err != nil || db == nil {
+		return ""
+	}
+	var slug string
+	err = db.QueryRowContext(r.Context(),
+		`SELECT o.slug FROM sessions s
+		 JOIN organizations o ON s.org_id = o.id
+		 WHERE s.token = $1 AND s.expires_at > NOW()`,
+		token,
+	).Scan(&slug)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(slug)
 }
 
 func lookupActiveSessionExpiry(ctx context.Context, db *sql.DB, token string) (time.Time, bool) {
