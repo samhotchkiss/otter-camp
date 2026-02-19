@@ -201,7 +201,7 @@ test.describe("Agents Page", () => {
     await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
 
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Toggle chat panel" })).toHaveAttribute("title", "Show Chat");
   });
 
   test("can send message in DM", async ({ page }) => {
@@ -260,6 +260,8 @@ test.describe("Agents Page", () => {
   });
 
   test("displays loading state initially", async ({ page }) => {
+    await page.unroute("**/api/agents");
+
     // Set up a slow response
     await page.route("**/api/agents", async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -270,7 +272,7 @@ test.describe("Agents Page", () => {
       });
     });
 
-    await page.goto("/agents");
+    await page.reload();
     // Loading text may flash briefly
     await expect(page.getByText("Loading agents...")).toBeVisible({ timeout: 500 }).catch(() => {
       // Loading state may have passed, that's okay

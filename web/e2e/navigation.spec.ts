@@ -84,30 +84,27 @@ test.describe("Navigation", () => {
     await expect(page.getByRole("heading", { name: "All Comments" })).toBeVisible();
   });
 
-  test("shows primary topbar links", async ({ page }) => {
+  test("shows primary shell navigation links", async ({ page }) => {
     await page.goto("/");
 
-    const nav = page.locator("nav.nav-links");
-    await expect(nav).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Inbox" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Projects" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Workflows" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Knowledge" })).toBeVisible();
+    const sidebar = page.getByTestId("shell-sidebar");
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Inbox" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Projects", exact: true })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Memory quick nav" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Operations quick nav" })).toBeVisible();
   });
 
-  test("navigates between primary routes", async ({ page }) => {
+  test("navigates between available primary routes", async ({ page }) => {
     await page.goto("/");
 
-    await page.getByRole("link", { name: "Projects" }).click();
+    await page.getByRole("link", { name: "Projects", exact: true }).click();
     await expect(page).toHaveURL(/\/projects$/);
 
     await page.getByRole("link", { name: "Inbox" }).click();
     await expect(page).toHaveURL(/\/inbox$/);
 
-    await page.getByRole("link", { name: "Workflows" }).click();
-    await expect(page).toHaveURL(/\/workflows$/);
-
-    await page.getByRole("link", { name: "Knowledge" }).click();
+    await page.getByRole("link", { name: "Memory quick nav" }).click();
     await expect(page).toHaveURL(/\/knowledge$/);
   });
 
@@ -196,18 +193,17 @@ test.describe("Navigation", () => {
     await page.goto("/inbox");
     await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
 
-    await page.getByRole("link", { name: "Projects" }).click();
+    await page.getByRole("link", { name: "Projects", exact: true }).click();
     await expect(page).toHaveURL(/\/projects$/);
 
     await expect(page.getByTestId("project-card-project-1")).toBeVisible();
     await page.getByTestId("project-card-project-1").click();
     await expect(page).toHaveURL(/\/projects\/project-1$/);
-    await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
+    await expect(page.getByTestId("project-detail-shell")).toBeVisible();
 
-    await page.getByRole("tab", { name: "List" }).click();
-    await page.getByRole("button", { name: /cross-route continuity issue/i }).click();
-    await expect(page).toHaveURL(/\/projects\/project-1\/issues\/issue-1$/);
-    await expect(page.getByRole("heading", { name: "Issue #issue-1" })).toBeVisible();
+    await page.getByRole("link", { name: "Fix API rate limiting" }).first().click();
+    await expect(page).toHaveURL(/\/issue\/ISS-209$/);
+    await expect(page.getByRole("heading", { name: "Fix API rate limiting" })).toBeVisible();
 
     await page.goto("/review/docs%2Fplaybook.md");
     await expect(page).toHaveURL(/\/review\/docs%2Fplaybook\.md$/);
@@ -221,7 +217,7 @@ test.describe("Navigation", () => {
   test("opens avatar menu and navigates to settings", async ({ page }) => {
     await page.goto("/");
 
-    await page.getByRole("button", { name: "User menu" }).click();
+    await page.getByTestId("shell-header").getByRole("button", { name: "User menu" }).click();
 
     const avatarMenu = page.locator(".avatar-dropdown");
     await expect(avatarMenu).toBeVisible();
@@ -242,10 +238,10 @@ test.describe("Navigation", () => {
     await expect(toggleButton).toBeVisible();
 
     await toggleButton.click();
-    const mobileNav = page.locator("nav.mobile-nav");
-    await expect(mobileNav).toBeVisible();
+    const sidebar = page.getByTestId("shell-sidebar");
+    await expect(page.getByRole("button", { name: "Close menu" })).toBeVisible();
 
-    await mobileNav.getByRole("link", { name: "Inbox" }).click();
+    await sidebar.getByRole("link", { name: "Inbox" }).first().click();
     await expect(page).toHaveURL(/\/inbox$/);
   });
 

@@ -14,12 +14,13 @@ test.describe("Tasks Route", () => {
     await expect(page.locator("#main-content .projects-header")).toBeVisible();
   });
 
-  test("keeps topbar navigation available on /tasks", async ({ page }) => {
+  test("keeps shell navigation available on /tasks", async ({ page }) => {
     await page.goto("/tasks");
 
-    await expect(page.getByRole("link", { name: "Inbox" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Projects" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Workflows" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Knowledge" })).toBeVisible();
+    const sidebar = page.getByTestId("shell-sidebar");
+    await expect(sidebar.getByRole("link", { name: "Inbox" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Projects", exact: true })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Memory quick nav" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "Operations quick nav" })).toBeVisible();
   });
 });

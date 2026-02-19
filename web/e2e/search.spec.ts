@@ -8,7 +8,7 @@ async function openGlobalSearchWithShortcut(page: Page) {
 }
 
 async function openGlobalSearchWithButton(page: Page) {
-  await page.getByRole("button", { name: /search or command/i }).click();
+  await page.getByTestId("shell-header").getByRole("textbox", { name: /^Search$/i }).click();
   await expect(page.getByRole("dialog", { name: /global search/i })).toBeVisible();
 }
 
@@ -65,13 +65,13 @@ test.describe("Global Search", () => {
     });
 
     await page.goto("/");
-    await expect(page.getByRole("button", { name: /search or command/i })).toBeVisible();
+    await expect(page.getByTestId("shell-header").getByRole("textbox", { name: /^Search$/i })).toBeVisible();
   });
 
   test("opens with keyboard shortcut and focuses search input", async ({ page }) => {
     await openGlobalSearchWithShortcut(page);
 
-    const input = page.getByRole("textbox", { name: /^Search$/i });
+    const input = page.getByRole("dialog", { name: /global search/i }).getByRole("textbox", { name: /^Search$/i });
     await expect(input).toBeFocused();
   });
 
@@ -85,7 +85,7 @@ test.describe("Global Search", () => {
   test("filters API search results as user types", async ({ page }) => {
     await openGlobalSearchWithButton(page);
 
-    const input = page.getByRole("textbox", { name: /^Search$/i });
+    const input = page.getByRole("dialog", { name: /global search/i }).getByRole("textbox", { name: /^Search$/i });
     await input.fill("project");
 
     await expect(page.getByRole("button", { name: /otter camp project/i })).toBeVisible();
@@ -95,7 +95,7 @@ test.describe("Global Search", () => {
   test("executes a search result navigation", async ({ page }) => {
     await openGlobalSearchWithButton(page);
 
-    const input = page.getByRole("textbox", { name: /^Search$/i });
+    const input = page.getByRole("dialog", { name: /global search/i }).getByRole("textbox", { name: /^Search$/i });
     await input.fill("project");
 
     await page.getByRole("button", { name: /otter camp project/i }).click();
@@ -105,7 +105,7 @@ test.describe("Global Search", () => {
   test("shows recent searches after selecting a result", async ({ page }) => {
     await openGlobalSearchWithButton(page);
 
-    const input = page.getByRole("textbox", { name: /^Search$/i });
+    const input = page.getByRole("dialog", { name: /global search/i }).getByRole("textbox", { name: /^Search$/i });
     await input.fill("task");
 
     await page.getByRole("button", { name: /set up camp perimeter/i }).click();
