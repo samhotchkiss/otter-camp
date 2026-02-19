@@ -245,6 +245,9 @@ func (h *AttachmentsHandler) GetAttachment(w http.ResponseWriter, r *http.Reques
 	var commentID sql.NullString
 	var chatMessageID sql.NullString
 	if authenticatedViaSyncToken {
+		// Sync-token requests come only from the trusted OpenClaw bridge runtime.
+		// We intentionally allow attachment lookup by opaque attachment ID without
+		// org filtering so dispatch URLs do not need org-specific parameters.
 		err = db.QueryRowContext(r.Context(), `
 			SELECT id, org_id, comment_id, chat_message_id, filename, size_bytes, mime_type, storage_key, url, thumbnail_url, created_at
 			FROM attachments
