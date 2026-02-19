@@ -6,6 +6,19 @@ test.describe("Navigation", () => {
     await bootstrapAuthenticatedSession(page);
   });
 
+  test("figma-parity-shell baseline scaffold renders", async ({ page }) => {
+    await page.goto("/inbox");
+
+    await expect(page.getByTestId("shell-layout")).toBeVisible();
+    await expect(page.getByTestId("shell-sidebar")).toBeVisible();
+    await expect(page.getByTestId("shell-header")).toBeVisible();
+    await expect(page.getByTestId("shell-workspace")).toBeVisible();
+    await expect(page.getByTestId("shell-chat-slot")).toBeVisible();
+    await expect(page.getByText("Otter Camp")).toBeVisible();
+    await expect(page.getByText("Agent Ops")).toBeVisible();
+    await expect(page.getByPlaceholder("Search...")).toBeVisible();
+  });
+
   test("shows primary topbar links", async ({ page }) => {
     await page.goto("/");
 
