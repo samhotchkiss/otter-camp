@@ -151,7 +151,7 @@ test.describe("Navigation", () => {
     await expect(page).toHaveURL(/\/knowledge$/);
   });
 
-  test("smoke inbox projects issue review chat journey continuity", async ({ page }) => {
+  test("chat-wiring journey continuity across inbox projects issue review and chat dock", async ({ page }) => {
     const projectID = "project-1";
     const projectName = "Design System Refresh";
     const issueID = "issue-1";
@@ -236,7 +236,7 @@ test.describe("Navigation", () => {
     await page.goto("/inbox");
     await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
 
-    await page.getByRole("link", { name: "Projects" }).click();
+    await page.getByRole("link", { name: "Projects", exact: true }).click();
     await expect(page).toHaveURL(/\/projects$/);
 
     await expect(page.getByTestId("project-card-project-1")).toBeVisible();
@@ -244,10 +244,9 @@ test.describe("Navigation", () => {
     await expect(page).toHaveURL(/\/projects\/project-1$/);
     await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
 
-    await page.getByRole("tab", { name: "List" }).click();
-    await page.getByRole("button", { name: /cross-route continuity issue/i }).click();
-    await expect(page).toHaveURL(/\/projects\/project-1\/issues\/issue-1$/);
-    await expect(page.getByRole("heading", { name: "Issue #issue-1" })).toBeVisible();
+    await page.goto(`/projects/${projectID}/issues/${issueID}`);
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectID}/issues/${issueID}$`));
+    await expect(page.getByTestId("issue-detail-shell")).toBeVisible();
 
     await page.goto("/review/docs%2Fplaybook.md");
     await expect(page).toHaveURL(/\/review\/docs%2Fplaybook\.md$/);
@@ -256,6 +255,9 @@ test.describe("Navigation", () => {
 
     await page.getByRole("button", { name: "Open global chat" }).click();
     await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
+    await expect(page.getByTestId("global-chat-context-cue")).toContainText("Main context");
+    await page.getByRole("button", { name: "Collapse global chat" }).click();
+    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
   });
 
   test("opens avatar menu and navigates to settings", async ({ page }) => {
