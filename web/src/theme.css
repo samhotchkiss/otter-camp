@@ -102,6 +102,77 @@ body {
   display: none;
 }
 
+/* Embedded chat rail theme (Figma parity) */
+.oc-chat-shell {
+  --surface: #1a1816;
+  --surface-alt: #22201d;
+  --border: #35312d;
+  --text: #ece7df;
+  --text-muted: #9d9182;
+  --accent: #ccb17d;
+  --accent-hover: #d9bf8e;
+  --green: #8aca2f;
+  background: linear-gradient(180deg, #1b1917 0%, #191715 100%);
+}
+
+.oc-chat-shell .oc-chat-shell-header {
+  background: #1f1c1a;
+  border-bottom-color: #3a342f;
+}
+
+.oc-chat-shell .oc-chat-surface {
+  background: #1b1917;
+}
+
+.oc-chat-shell .oc-chat-history {
+  background: #1b1917;
+}
+
+.oc-chat-shell .oc-chat-composer {
+  background: #201d1b;
+  border-top: 1px solid #3a342f;
+}
+
+.oc-chat-shell .oc-chat-input {
+  background: #121110;
+  border-color: #4a443d;
+}
+
+.oc-chat-shell .oc-chat-send {
+  background: #8b744a;
+  color: #18140f;
+}
+
+.oc-chat-shell .oc-chat-send:hover {
+  background: #9e8557;
+}
+
+.oc-chat-shell .oc-message-bubble-agent {
+  border-color: #4a433d;
+  background: #2a2724;
+}
+
+.oc-chat-shell .oc-message-bubble-user {
+  background: #8b744a;
+  color: #18140f;
+}
+
+.oc-chat-shell .oc-message-agent-chip {
+  display: none;
+}
+
+.oc-chat-shell .oc-chat-markdown-pre {
+  border-color: #3f3933;
+  background: #131210;
+  color: #ece7df;
+}
+
+.oc-chat-shell .oc-chat-inline-code {
+  border: 1px solid #3f3933;
+  background: #131210;
+  color: #ece7df;
+}
+
 @media (max-width: 1024px) {
   .shell-sidebar {
     position: fixed;

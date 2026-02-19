@@ -736,30 +736,28 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
 
     return (
       <section
-        className={`flex h-full min-h-0 flex-col overflow-hidden border border-[var(--border)] bg-[var(--surface)] ${
+        className={`oc-chat-shell flex h-full min-h-0 flex-col overflow-hidden border border-[var(--border)] bg-[var(--surface)] ${
           isFullscreen ? "fixed inset-0 top-[var(--topbar-height,56px)] z-50" : ""
         }`}
       >
-        <header className="flex min-h-[52px] items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5">
+        <header className="oc-chat-shell-header flex min-h-[52px] items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-2.5">
           <div className="min-w-0 flex-1">
             <h2 className="sr-only">Global Chat</h2>
             <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate whitespace-nowrap text-sm font-semibold text-[var(--text)]">Otter Shell</span>
+              <span
+                aria-hidden="true"
+                className="font-mono text-[15px] leading-none text-lime-400"
+              >
+                &gt;_
+              </span>
+              <span className="truncate whitespace-nowrap font-mono text-sm font-semibold text-[var(--text)]">Otter Shell</span>
               <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] font-mono uppercase tracking-wide text-[var(--text-muted)]">
-                <span className="h-1.5 w-1.5 rounded-full bg-lime-500" />
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--green)]" />
                 ONLINE
               </span>
             </div>
           </div>
           <div className="ml-2 flex shrink-0 items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setIsFullscreen((open) => !open)}
-              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
-              aria-label={isFullscreen ? "Exit fullscreen chat" : "Fullscreen chat"}
-            >
-              {isFullscreen ? "⊡" : "⊞"}
-            </button>
             <button
               type="button"
               onClick={() => {
@@ -770,7 +768,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
                   toggleDock();
                 }
               }}
-              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-[11px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
               aria-label="Collapse global chat"
             >
               Hide
@@ -806,52 +804,49 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
         <div className="min-h-0 flex-1">
           {selectedConversation ? (
             <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-[var(--border)] bg-[var(--surface-alt)]/40 px-4 py-3">
-                <div className="mb-2 flex items-start justify-between gap-3">
+              <div className="border-b border-[var(--border)]/90 bg-[var(--surface-alt)]/40 px-4 py-2.5">
+                <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <h3 className="truncate text-lg font-semibold text-[var(--text)]">
+                    <h3 className="truncate text-base font-semibold text-[var(--text)]">
                       {resolveConversationTitle(selectedConversation)}
                     </h3>
-                    <p className="truncate text-xs text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
+                    <p className="truncate text-[11px] text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
                   </div>
-                  <span
-                    className="oc-chip mt-1 inline-flex shrink-0 rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]"
-                  >
-                    {selectedContextCue}
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  {routeScopedConversation ? (
+                  <div className="mt-0.5 flex items-center gap-1.5">
+                    {routeScopedConversation ? (
+                      <button
+                        type="button"
+                        onClick={handleSwapScope}
+                        disabled={routeScopeMode === "route" && !hasOrgChatTarget}
+                        className="rounded-lg border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {routeScopedSwapLabel}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      onClick={handleSwapScope}
-                      disabled={routeScopeMode === "route" && !hasOrgChatTarget}
-                      className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                      onClick={() => {
+                        if (selectedJumpTarget) {
+                          navigate(selectedJumpTarget.href);
+                        }
+                      }}
+                      disabled={!selectedJumpTarget}
+                      className="shrink-0 rounded-lg border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {routeScopedSwapLabel}
+                      {selectedJumpTarget?.label || "Open"}
                     </button>
-                  ) : null}
+                  </div>
+                </div>
+                <div className="mt-2 flex justify-end">
                   <button
                     type="button"
                     onClick={() => {
                       void handleClearSession();
                     }}
                     disabled={resettingProjectSession}
-                    className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-lg border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {resettingProjectSession ? "Clearing..." : "Clear session"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (selectedJumpTarget) {
-                        navigate(selectedJumpTarget.href);
-                      }
-                    }}
-                    disabled={!selectedJumpTarget}
-                    className="shrink-0 rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {selectedJumpTarget?.label || "Open context"}
                   </button>
                 </div>
               </div>
@@ -872,7 +867,7 @@ export default function GlobalChatDock({ embedded = false, onToggleRail }: Globa
             </div>
           ) : (
             <div className="flex h-full flex-col justify-between p-4">
-              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)]/70 p-3">
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)]/65 p-3">
                 <p className="text-sm text-[var(--text)]">Welcome to Otter Camp. Systems are online. How can I assist you today?</p>
               </div>
               <p className="text-xs text-[var(--text-muted)]">Open a project, issue, or direct-message thread to continue.</p>

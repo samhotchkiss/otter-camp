@@ -157,19 +157,26 @@ export default function MessageMarkdown({
   className,
 }: MessageMarkdownProps) {
   return (
-    <div className={className}>
+    <div className={`oc-chat-markdown min-w-0 max-w-full ${className ?? ""}`.trim()}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           pre({ children }) {
             return (
-              <pre className="my-2 overflow-x-auto rounded-xl border border-slate-200 bg-slate-950/90 p-3 text-xs text-slate-100 dark:border-slate-700">
+              <pre className="oc-chat-markdown-pre my-2 w-full max-w-full overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 text-xs text-[var(--text)]">
                 {children}
               </pre>
             );
           },
           p({ children }) {
             return <p className="whitespace-pre-wrap break-words">{children}</p>;
+          },
+          table({ children }) {
+            return (
+              <div className="my-2 w-full max-w-full overflow-x-auto">
+                <table className="w-full min-w-max border-collapse text-left text-xs">{children}</table>
+              </div>
+            );
           },
           a({ children, href }) {
             const internal = resolveOtterInternalLink(href);
@@ -179,7 +186,7 @@ export default function MessageMarkdown({
               return (
                 <a
                   href={internal.href}
-                  className="my-1 inline-flex max-w-[30rem] items-start gap-3 rounded-xl border border-[var(--accent)]/35 bg-[var(--accent)]/10 px-3 py-2 no-underline transition hover:border-[var(--accent)]/60 hover:bg-[var(--accent)]/15"
+                  className="my-1 inline-flex max-w-full items-start gap-3 rounded-xl border border-[var(--accent)]/35 bg-[var(--accent)]/10 px-3 py-2 no-underline transition hover:border-[var(--accent)]/60 hover:bg-[var(--accent)]/15"
                   data-testid="otter-internal-link-card"
                 >
                   <span
@@ -229,8 +236,8 @@ export default function MessageMarkdown({
           code({ inline, className: codeClassName, children, ...props }: any) {
             if (inline) {
               return (
-                <code
-                  className="rounded bg-black/10 px-1 py-0.5 font-mono text-[0.85em] dark:bg-white/10"
+              <code
+                  className="oc-chat-inline-code break-all rounded bg-black/10 px-1 py-0.5 font-mono text-[0.85em] dark:bg-white/10"
                   {...props}
                 >
                   {children}

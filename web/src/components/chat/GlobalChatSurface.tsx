@@ -1471,7 +1471,7 @@ export default function GlobalChatSurface({
 
   return (
     <div
-      className={`flex h-full min-h-0 flex-col overflow-hidden ${isDragActive ? "ring-2 ring-inset ring-[var(--accent)]" : ""}`}
+      className={`oc-chat-surface flex h-full min-h-0 flex-col overflow-hidden ${isDragActive ? "ring-2 ring-inset ring-[var(--accent)]" : ""}`}
       onDragOver={onContainerDragOver}
       onDragLeave={onContainerDragLeave}
       onDrop={onContainerDrop}
@@ -1538,7 +1538,7 @@ export default function GlobalChatSurface({
         </div>
       ) : null}
 
-      <form onSubmit={onSubmit} className="flex items-end gap-3 border-t border-[var(--border)] px-4 py-3">
+      <form onSubmit={onSubmit} className="oc-chat-composer flex items-end gap-3 px-4 py-3">
         <input
           ref={fileInputRef}
           type="file"
@@ -1567,7 +1567,7 @@ export default function GlobalChatSurface({
           placeholder={`Message ${conversationTitle}...`}
           rows={1}
           disabled={sending || uploadingAttachments || (conversationType === "issue" && issueAuthorID === "")}
-          className="flex-1 resize-none rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:opacity-50"
+          className="oc-chat-input flex-1 resize-none rounded-xl border px-4 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)] disabled:opacity-50"
         />
         <button
           type="submit"
@@ -1577,7 +1577,7 @@ export default function GlobalChatSurface({
             (draft.trim() === "" && queuedAttachments.length === 0) ||
             (conversationType === "issue" && issueAuthorID === "")
           }
-          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-[#1A1918] transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="oc-chat-send inline-flex h-10 w-10 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="Send message"
         >
           {sending ? (
