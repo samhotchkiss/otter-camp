@@ -19,6 +19,7 @@ const TaskDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/TaskD
 const NotFoundPage = lazy(() => lazyWithChunkRetry(() => import("./pages/NotFoundPage")));
 const InboxPage = lazy(() => lazyWithChunkRetry(() => import("./pages/InboxPage")));
 const ProjectDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/ProjectDetailPage")));
+const ProjectSettingsRoutePage = lazy(() => lazyWithChunkRetry(() => import("./pages/ProjectSettingsRoutePage")));
 const IssueDetailPage = lazy(() => lazyWithChunkRetry(() => import("./pages/IssueDetailPage")));
 const WorkflowsPage = lazy(() => lazyWithChunkRetry(() => import("./pages/WorkflowsPage")));
 const KnowledgePage = lazy(() => lazyWithChunkRetry(() => import("./pages/KnowledgePage")));
@@ -116,6 +117,10 @@ export const router = createBrowserRouter([
       {
         path: "projects/:id",
         element: <ProjectDetailPage />,
+      },
+      {
+        path: "projects/:id/settings",
+        element: <ProjectSettingsRoutePage />,
       },
       {
         path: "projects/:id/tasks/:taskId",
