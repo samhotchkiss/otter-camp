@@ -15,7 +15,8 @@ type ProjectIssue = {
 };
 
 function buildCoreDataFixtures() {
-  const now = Date.now();
+  // Use a fixed clock to keep screenshot baselines deterministic.
+  const now = new Date("2026-02-18T20:00:00.000Z").getTime();
   const minutesAgo = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
 
   const inbox = {
@@ -160,11 +161,65 @@ function buildCoreDataFixtures() {
 
   issuesByProjectID.set("project-3", []);
 
+  const issueDetailByID = new Map<
+    string,
+    {
+      issue: Record<string, unknown>;
+      participants: Array<Record<string, unknown>>;
+      comments: Array<Record<string, unknown>>;
+    }
+  >();
+  issueDetailByID.set("ISS-209", {
+    issue: {
+      id: "ISS-209",
+      issue_number: 209,
+      title: "Fix API rate limiting",
+      state: "open",
+      origin: "local",
+      kind: "issue",
+      project_id: "project-2",
+      priority: "P1",
+      work_status: "in_progress",
+      approval_state: "ready_for_review",
+      owner_agent_id: "Agent-007",
+      document_path: "/posts/rate-limiting-implementation.md",
+      document_content: "# Rate limiting implementation\n\n- Add token bucket middleware\n- Persist burst settings",
+    },
+    participants: [],
+    comments: [],
+  });
+  issueDetailByID.set("issue-209", {
+    issue: {
+      id: "issue-209",
+      issue_number: 209,
+      title: "Fix API rate limiting",
+      state: "open",
+      origin: "local",
+      kind: "issue",
+      project_id: "project-2",
+      priority: "P1",
+      work_status: "in_progress",
+      approval_state: "ready_for_review",
+      owner_agent_id: "Agent-007",
+      document_path: "/posts/rate-limiting-implementation.md",
+      document_content: "# Rate limiting implementation\n\n- Add token bucket middleware\n- Persist burst settings",
+    },
+    participants: [],
+    comments: [],
+  });
+
+  const agents = [
+    { id: "Agent-007", name: "Atlas", type: "worker", status: "active" },
+    { id: "Agent-127", name: "Ivy", type: "reviewer", status: "active" },
+  ];
+
   return {
     inbox,
     projects,
     projectByID,
     issuesByProjectID,
+    issueDetailByID,
+    agents,
   };
 }
 
@@ -251,6 +306,74 @@ export async function installCoreDataApiMocks(page: Page): Promise<void> {
         items,
         total: items.length,
       }),
+    });
+  });
+
+  await page.route("**/api/issues/*/review/history**", async (route) => {
+    const requestURL = new URL(route.request().url());
+    const parts = requestURL.pathname.split("/").filter(Boolean);
+    const issueID = decodeURIComponent(parts[2] || "");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        issue_id: issueID,
+        document_path: "/posts/rate-limiting-implementation.md",
+        last_review_commit_sha: "sha-review",
+        items: [],
+        total: 0,
+      }),
+    });
+  });
+
+  await page.route("**/api/issues/*/review/changes**", async (route) => {
+    const requestURL = new URL(route.request().url());
+    const parts = requestURL.pathname.split("/").filter(Boolean);
+    const issueID = decodeURIComponent(parts[2] || "");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        issue_id: issueID,
+        document_path: "/posts/rate-limiting-implementation.md",
+        base_sha: "sha-review",
+        head_sha: "sha-head",
+        fallback_to_first_commit: false,
+        files: [],
+        total: 0,
+      }),
+    });
+  });
+
+  await page.route("**/api/issues/**", async (route) => {
+    const requestURL = new URL(route.request().url());
+    const parts = requestURL.pathname.split("/").filter(Boolean);
+    if (parts.length !== 3 || parts[0] !== "api" || parts[1] !== "issues") {
+      await route.fallback();
+      return;
+    }
+    const issueID = decodeURIComponent(parts[2] || "");
+    const detail = fixtures.issueDetailByID.get(issueID);
+    if (!detail) {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "issue not found" }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(detail),
+    });
+  });
+
+  await page.route("**/api/agents**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ agents: fixtures.agents }),
     });
   });
 }

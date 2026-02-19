@@ -131,7 +131,7 @@ export default function ContentReview({
   }, [sections]);
 
   useEffect(() => {
-    if (documentView !== "source" || composerOpen || imageComposerOpen) {
+    if (readOnly || documentView !== "source" || composerOpen || imageComposerOpen) {
       return;
     }
     const source = sourceRef.current;
@@ -150,7 +150,7 @@ export default function ContentReview({
     });
 
     return () => window.cancelAnimationFrame(rafID);
-  }, [documentView, sourceSelection, markdown.length, composerOpen, imageComposerOpen]);
+  }, [readOnly, documentView, sourceSelection, markdown.length, composerOpen, imageComposerOpen]);
 
   const captureSourceSelection = () => {
     const source = sourceRef.current;
