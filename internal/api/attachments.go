@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -17,7 +18,7 @@ import (
 )
 
 const (
-	maxUploadSize  = 10 << 20 // 10 MB
+	maxUploadSize  = 20 << 20 // 20 MB
 	uploadsDir     = "uploads"
 	defaultBaseURL = "/uploads"
 )
@@ -70,7 +71,7 @@ func (h *AttachmentsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	// Parse multipart form
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		if strings.Contains(err.Error(), "request body too large") {
-			sendJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "file too large (max 10MB)"})
+			sendJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "file too large (max 20MB)"})
 			return
 		}
 		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid multipart form"})
@@ -98,7 +99,7 @@ func (h *AttachmentsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	// Validate file size
 	if header.Size > maxUploadSize {
-		sendJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "file too large (max 10MB)"})
+		sendJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "file too large (max 20MB)"})
 		return
 	}
 
@@ -120,6 +121,10 @@ func (h *AttachmentsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	// Detect MIME type
 	mimeType := detectMimeType(file, header.Filename)
+	if !isSupportedAttachmentMimeType(mimeType) {
+		sendJSON(w, http.StatusUnsupportedMediaType, errorResponse{Error: "unsupported attachment type"})
+		return
+	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to process file"})
 		return
@@ -326,6 +331,37 @@ func getUploadsStorageDir() string {
 // isImageMimeType checks if a MIME type is an image.
 func isImageMimeType(mimeType string) bool {
 	return strings.HasPrefix(mimeType, "image/")
+}
+
+func isSupportedAttachmentMimeType(mimeType string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(mimeType))
+	if normalized == "" {
+		return false
+	}
+	if parsed, _, err := mime.ParseMediaType(normalized); err == nil {
+		normalized = parsed
+	}
+
+	if strings.HasPrefix(normalized, "text/") {
+		return true
+	}
+
+	switch normalized {
+	case "image/png",
+		"image/jpeg",
+		"image/gif",
+		"image/webp",
+		"application/pdf",
+		"application/json",
+		"application/javascript",
+		"application/xml",
+		"application/yaml",
+		"application/x-yaml",
+		"application/toml":
+		return true
+	default:
+		return false
+	}
 }
 
 // UpdateCommentAttachments updates the attachments JSONB array on a comment.
