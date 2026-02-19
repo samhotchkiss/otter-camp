@@ -226,16 +226,18 @@ export default function IssueDetailPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <button
             type="button"
+            aria-label="Approve Solution"
             className="flex items-center justify-center gap-2 rounded-md bg-lime-600 px-4 py-2 font-medium text-white transition-colors hover:bg-lime-700"
           >
-            <span>+</span>
+            <span aria-hidden="true">+</span>
             <span>Approve Solution</span>
           </button>
           <button
             type="button"
+            aria-label="Request Changes"
             className="flex items-center justify-center gap-2 rounded-md bg-rose-600 px-4 py-2 font-medium text-white transition-colors hover:bg-rose-700"
           >
-            <span>-</span>
+            <span aria-hidden="true">-</span>
             <span>Request Changes</span>
           </button>
           <NavLink
