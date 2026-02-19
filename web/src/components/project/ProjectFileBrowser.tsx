@@ -40,6 +40,13 @@ type ProjectBlobResponse = {
   encoding: "utf-8" | "base64";
 };
 
+type IssueLookupResponse = {
+  items?: Array<{
+    id?: string;
+    document_path?: string | null;
+  }>;
+};
+
 function getOrgID(): string {
   try {
     return (localStorage.getItem(ORG_STORAGE_KEY) ?? "").trim();
@@ -122,6 +129,7 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
   const [markdownViewMode, setMarkdownViewMode] = useState<MarkdownViewMode>("render");
   const [creatingIssue, setCreatingIssue] = useState(false);
   const [createIssueError, setCreateIssueError] = useState<string | null>(null);
+  const [openingReview, setOpeningReview] = useState(false);
 
   const navigate = useNavigate();
   const orgID = getOrgID();
@@ -260,6 +268,66 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
     setMarkdownViewMode("render");
     setCreateIssueError(null);
   }, [selectedFilePath]);
+
+  async function resolveLinkedIssueID(documentPath: string): Promise<string | null> {
+    if (!projectId || !orgID) {
+      return null;
+    }
+
+    const url = new URL(`${API_URL}/api/issues`);
+    url.searchParams.set("org_id", orgID);
+    url.searchParams.set("project_id", projectId);
+    url.searchParams.set("state", "open");
+    url.searchParams.set("limit", "200");
+
+    const response = await fetch(url.toString(), {
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as IssueLookupResponse;
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    const normalizedDocumentPath = normalizeAbsolutePath(documentPath);
+    const match = items.find((item) => {
+      const candidate = typeof item.document_path === "string" ? item.document_path : "";
+      if (!candidate.trim()) {
+        return false;
+      }
+      return normalizeAbsolutePath(candidate) === normalizedDocumentPath;
+    });
+
+    if (!match || typeof match.id !== "string" || !match.id.trim()) {
+      return null;
+    }
+    return match.id.trim();
+  }
+
+  async function handleOpenInReview(): Promise<void> {
+    if (!selectedFilePath) {
+      return;
+    }
+
+    setOpeningReview(true);
+    try {
+      const basePath = `/review/${buildReviewDocumentId(selectedFilePath)}`;
+      const query = new URLSearchParams();
+      if (projectId) {
+        query.set("project_id", projectId);
+      }
+
+      const linkedIssueID = await resolveLinkedIssueID(selectedFilePath);
+      if (linkedIssueID) {
+        query.set("issue_id", linkedIssueID);
+      }
+
+      const queryString = query.toString();
+      navigate(queryString ? `${basePath}?${queryString}` : basePath);
+    } finally {
+      setOpeningReview(false);
+    }
+  }
 
   function handleOpenEntry(entry: ProjectTreeEntry): void {
     if (entry.type === "dir") {
@@ -479,12 +547,10 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
                     <button
                       type="button"
                       className="rounded border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-1 text-xs text-[var(--text)] hover:border-[#C9A86C] hover:text-[#C9A86C]"
-                      onClick={() => {
-                        if (!selectedFilePath) return;
-                        navigate(`/review/${buildReviewDocumentId(selectedFilePath)}`);
-                      }}
+                      onClick={() => void handleOpenInReview()}
+                      disabled={openingReview}
                     >
-                      Open in Review
+                      {openingReview ? "Opening..." : "Open in Review"}
                     </button>
                   )}
                   <button
