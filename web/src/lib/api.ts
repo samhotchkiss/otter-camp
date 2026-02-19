@@ -147,6 +147,26 @@ export interface Project {
   labels?: Label[];
 }
 
+export interface IssueSummary {
+  id: string;
+  project_id: string;
+  issue_number: number;
+  title: string;
+  state: string;
+  origin: string;
+  approval_state?: string;
+  kind: string;
+  owner_agent_id?: string | null;
+  work_status?: string;
+  priority?: string;
+  last_activity_at?: string;
+}
+
+export interface IssueListResponse {
+  items: IssueSummary[];
+  total: number;
+}
+
 export interface Label {
   id: string;
   name: string;
@@ -298,6 +318,27 @@ export const api = {
     const query = params.toString();
     const path = query ? `/api/projects?${query}` : "/api/projects";
     return apiFetch<{ projects: Project[] }>(path);
+  },
+  project: (id: string) => {
+    const params = new URLSearchParams(getOrgQueryParam().replace(/^\?/, ""));
+    const query = params.toString();
+    const path = query
+      ? `/api/projects/${encodeURIComponent(id)}?${query}`
+      : `/api/projects/${encodeURIComponent(id)}`;
+    return apiFetch<Project>(path);
+  },
+  issues: (options: { projectID: string; state?: string; limit?: number }) => {
+    const params = new URLSearchParams(getOrgQueryParam().replace(/^\?/, ""));
+    params.set("project_id", options.projectID);
+    if (options.state) {
+      params.set("state", options.state);
+    }
+    if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+      params.set("limit", String(Math.max(1, Math.floor(options.limit))));
+    }
+    const query = params.toString();
+    const path = query ? `/api/issues?${query}` : "/api/issues";
+    return apiFetch<IssueListResponse>(path);
   },
   syncAgents: () => apiFetch<SyncAgentsResponse>(`/api/sync/agents`),
   adminConnections: () => apiFetch<AdminConnectionsResponse>(`/api/admin/connections`),

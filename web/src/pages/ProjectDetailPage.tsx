@@ -1,13 +1,13 @@
-import { NavLink } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, useParams } from "react-router-dom";
 
-type DetailIssue = {
-  id: string;
-  title: string;
-  status: "approval-needed" | "in-progress" | "blocked" | "review" | "open";
-  priority: "critical" | "high" | "medium" | "low";
-  assignee: string | null;
-  created: string;
-};
+import api from "../lib/api";
+import {
+  mapProjectIssuesPayloadToCoreDetailIssues,
+  mapProjectPayloadToCoreDetailProject,
+  type CoreProjectDetailIssue,
+  type CoreProjectDetailProject,
+} from "../lib/coreDataAdapters";
 
 type DetailActivity = {
   user: string;
@@ -21,64 +21,6 @@ type ExplorerFile = {
   path: string;
   kind: "markdown" | "code";
 };
-
-const PROJECT = {
-  id: "PRJ-101",
-  name: "API Gateway",
-  description:
-    "Core API gateway handling authentication, rate limiting, and request routing for all services",
-  repo: "github.com/company/api-gateway",
-  lastSync: "2 minutes ago",
-  stats: {
-    openIssues: 5,
-    branches: 12,
-    commits: 247,
-    contributors: 3,
-  },
-};
-
-const ISSUES: DetailIssue[] = [
-  {
-    id: "ISS-209",
-    title: "Fix API rate limiting",
-    status: "approval-needed",
-    priority: "critical",
-    assignee: "Agent-007",
-    created: "2h ago",
-  },
-  {
-    id: "ISS-234",
-    title: "Auth flow refactor",
-    status: "in-progress",
-    priority: "high",
-    assignee: "Agent-127",
-    created: "1d ago",
-  },
-  {
-    id: "ISS-301",
-    title: "Add GraphQL support",
-    status: "blocked",
-    priority: "medium",
-    assignee: "Agent-042",
-    created: "3d ago",
-  },
-  {
-    id: "ISS-198",
-    title: "Optimize database queries",
-    status: "review",
-    priority: "high",
-    assignee: "Agent-007",
-    created: "5d ago",
-  },
-  {
-    id: "ISS-156",
-    title: "Update API documentation",
-    status: "open",
-    priority: "low",
-    assignee: null,
-    created: "1w ago",
-  },
-];
 
 const RECENT_ACTIVITY: DetailActivity[] = [
   {
@@ -115,7 +57,7 @@ const EXPLORER_FILES: ExplorerFile[] = [
   { name: "database.ts", path: "src/config/database.ts", kind: "code" },
 ];
 
-function issueStatusClass(status: DetailIssue["status"]): string {
+function issueStatusClass(status: CoreProjectDetailIssue["status"]): string {
   if (status === "approval-needed") {
     return "text-rose-400 bg-rose-500/10";
   }
@@ -131,7 +73,7 @@ function issueStatusClass(status: DetailIssue["status"]): string {
   return "text-stone-400 bg-stone-500/10";
 }
 
-function issuePriorityDot(priority: DetailIssue["priority"]): string {
+function issuePriorityDot(priority: CoreProjectDetailIssue["priority"]): string {
   if (priority === "critical") {
     return "bg-rose-500";
   }
@@ -148,7 +90,77 @@ function explorerLink(path: string): string {
   return `/review/${encodeURIComponent(path)}`;
 }
 
+function normalizeErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return "Failed to load project details";
+}
+
 export default function ProjectDetailPage() {
+  const { id: projectID = "" } = useParams<{ id?: string }>();
+  const [project, setProject] = useState<CoreProjectDetailProject | null>(null);
+  const [issues, setIssues] = useState<CoreProjectDetailIssue[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!projectID) {
+      setProject(null);
+      setIssues([]);
+      setLoadError("Missing project identifier");
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setLoadError(null);
+
+    void Promise.all([
+      api.project(projectID),
+      api.issues({ projectID, state: "open", limit: 200 }),
+    ])
+      .then(([projectPayload, issuesPayload]) => {
+        if (cancelled) {
+          return;
+        }
+
+        const mappedIssues = mapProjectIssuesPayloadToCoreDetailIssues(issuesPayload);
+        setIssues(mappedIssues);
+        setProject(mapProjectPayloadToCoreDetailProject(projectPayload, mappedIssues.length));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setProject(null);
+        setIssues([]);
+        setLoadError(normalizeErrorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectID, refreshKey]);
+
+  const projectName = project?.name || "Project";
+  const projectDescription = project?.description || "No description provided.";
+  const projectRepo = project?.repo || `local/${projectID || "project"}`;
+  const projectStats = project?.stats || {
+    openIssues: 0,
+    branches: 0,
+    commits: 0,
+    contributors: 0,
+  };
+  const projectLastSync = project?.lastSync || "Unknown";
+
   return (
     <div className="min-w-0 space-y-4 md:space-y-6">
       <section className="rounded-lg border border-stone-800 bg-stone-900 p-4 md:p-6" data-testid="project-detail-shell">
@@ -158,8 +170,8 @@ export default function ProjectDetailPage() {
               <>⇄</>
             </div>
             <div>
-              <h1 className="text-xl font-bold text-stone-100 md:text-2xl">{PROJECT.name}</h1>
-              <p className="mt-1 text-xs text-stone-400 md:text-sm">{PROJECT.description}</p>
+              <h1 className="text-xl font-bold text-stone-100 md:text-2xl">{projectName}</h1>
+              <p className="mt-1 text-xs text-stone-400 md:text-sm">{projectDescription}</p>
             </div>
           </div>
           <div className="flex items-center gap-2 self-end sm:self-auto">
@@ -174,36 +186,36 @@ export default function ProjectDetailPage() {
 
         <div className="flex flex-col gap-2 text-xs md:text-sm sm:flex-row sm:items-center sm:gap-4">
           <a
-            href={`https://${PROJECT.repo}`}
+            href={`https://${projectRepo}`}
             target="_blank"
             rel="noreferrer"
             className="break-all font-mono text-stone-400 transition-colors hover:text-amber-400"
           >
-            {PROJECT.repo}
+            {projectRepo}
           </a>
           <span className="hidden text-stone-600 sm:inline">•</span>
           <p className="flex items-center gap-1.5 text-stone-400">
             <span className="h-2 w-2 animate-pulse rounded-full bg-lime-500" />
-            <span>Synced {PROJECT.lastSync}</span>
+            <span>Synced {projectLastSync}</span>
           </p>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3 md:mt-6 md:grid-cols-4 md:gap-4">
           <div className="rounded-lg border border-stone-800 bg-stone-950 p-3 md:p-4">
             <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-rose-400 md:text-xs">Issues</p>
-            <p className="text-xl font-bold text-stone-100 md:text-2xl">{PROJECT.stats.openIssues}</p>
+            <p className="text-xl font-bold text-stone-100 md:text-2xl">{projectStats.openIssues}</p>
           </div>
           <div className="rounded-lg border border-stone-800 bg-stone-950 p-3 md:p-4">
             <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-amber-400 md:text-xs">Branches</p>
-            <p className="text-xl font-bold text-stone-100 md:text-2xl">{PROJECT.stats.branches}</p>
+            <p className="text-xl font-bold text-stone-100 md:text-2xl">{projectStats.branches}</p>
           </div>
           <div className="rounded-lg border border-stone-800 bg-stone-950 p-3 md:p-4">
             <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-stone-400 md:text-xs">Commits</p>
-            <p className="text-xl font-bold text-stone-100 md:text-2xl">{PROJECT.stats.commits}</p>
+            <p className="text-xl font-bold text-stone-100 md:text-2xl">{projectStats.commits}</p>
           </div>
           <div className="rounded-lg border border-stone-800 bg-stone-950 p-3 md:p-4">
             <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-stone-400 md:text-xs">Contributors</p>
-            <p className="text-xl font-bold text-stone-100 md:text-2xl">{PROJECT.stats.contributors}</p>
+            <p className="text-xl font-bold text-stone-100 md:text-2xl">{projectStats.contributors}</p>
           </div>
         </div>
       </section>
@@ -217,33 +229,57 @@ export default function ProjectDetailPage() {
                 View All
               </button>
             </div>
+
             <div className="divide-y divide-stone-800">
-              {ISSUES.map((issue) => (
-                <NavLink
-                  key={issue.id}
-                  to={`/issue/${encodeURIComponent(issue.id)}`}
-                  className="group block px-4 py-3 transition-colors hover:bg-stone-800/50 md:px-6 md:py-4"
-                >
-                  <div className="flex items-start gap-2 md:gap-3">
-                    <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${issuePriorityDot(issue.priority)}`} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+              {loading ? (
+                <div className="px-4 py-4 text-sm text-stone-400 md:px-6">Loading issues...</div>
+              ) : null}
+
+              {!loading && loadError ? (
+                <div className="space-y-3 px-4 py-4 md:px-6">
+                  <p className="text-sm text-rose-400">{loadError}</p>
+                  <button
+                    type="button"
+                    onClick={() => setRefreshKey((current) => current + 1)}
+                    className="rounded border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 transition-colors hover:bg-rose-500/20"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : null}
+
+              {!loading && !loadError && issues.length === 0 ? (
+                <div className="px-4 py-4 text-sm text-stone-400 md:px-6">No open issues.</div>
+              ) : null}
+
+              {!loading && !loadError
+                ? issues.map((issue) => (
+                    <NavLink
+                      key={issue.id}
+                      to={`/issue/${encodeURIComponent(issue.id)}`}
+                      className="group block px-4 py-3 transition-colors hover:bg-stone-800/50 md:px-6 md:py-4"
+                    >
+                      <div className="flex items-start gap-2 md:gap-3">
+                        <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${issuePriorityDot(issue.priority)}`} />
                         <div className="min-w-0 flex-1">
-                          <h3 className="mb-1 text-sm font-medium text-stone-200 group-hover:text-stone-100 md:text-base">{issue.title}</h3>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-mono text-xs text-stone-500">{issue.id}</span>
-                            <span className={`rounded-full px-2 py-0.5 text-[10px] md:text-xs ${issueStatusClass(issue.status)}`}>
-                              {issue.status.replace("-", " ")}
-                            </span>
-                            {issue.assignee ? <span className="text-xs text-stone-500">{issue.assignee}</span> : null}
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                            <div className="min-w-0 flex-1">
+                              <h3 className="mb-1 text-sm font-medium text-stone-200 group-hover:text-stone-100 md:text-base">{issue.title}</h3>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-mono text-xs text-stone-500">{issue.id}</span>
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] md:text-xs ${issueStatusClass(issue.status)}`}>
+                                  {issue.status.replace("-", " ")}
+                                </span>
+                                {issue.assignee ? <span className="text-xs text-stone-500">{issue.assignee}</span> : null}
+                              </div>
+                            </div>
+                            <span className="whitespace-nowrap text-xs text-stone-600">{issue.created}</span>
                           </div>
                         </div>
-                        <span className="whitespace-nowrap text-xs text-stone-600">{issue.created}</span>
                       </div>
-                    </div>
-                  </div>
-                </NavLink>
-              ))}
+                    </NavLink>
+                  ))
+                : null}
             </div>
           </section>
         </section>
