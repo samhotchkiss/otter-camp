@@ -239,12 +239,18 @@ describe("GlobalChatDock", () => {
 
     const firstURL = String(fetchMock.mock.calls[0]?.[0] ?? "");
     expect(firstURL).toContain(`/api/admin/agents/${encodeURIComponent(agentID)}/reset`);
+    const firstInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const firstHeaders = (firstInit?.headers ?? {}) as Record<string, string>;
+    expect(firstHeaders.Authorization).toBe("Bearer tok");
 
     const secondURL = String(fetchMock.mock.calls[1]?.[0] ?? "");
     expect(secondURL).toContain("/api/messages");
 
     const secondInit = fetchMock.mock.calls[1]?.[1] as RequestInit | undefined;
+    const secondHeaders = (secondInit?.headers ?? {}) as Record<string, string>;
+    expect(secondHeaders.Authorization).toBe("Bearer tok");
     const secondBody = JSON.parse(String(secondInit?.body ?? "{}")) as Record<string, unknown>;
+    expect(secondBody.org_id).toBe("org-1");
     expect(secondBody.thread_id).toBe(`dm_${agentID}`);
     expect(String(secondBody.content || "")).toContain("chat_session_reset:");
   });

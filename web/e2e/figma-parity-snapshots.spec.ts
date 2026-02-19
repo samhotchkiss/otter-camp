@@ -49,6 +49,27 @@ test.describe("Figma parity snapshots", () => {
     }
   });
 
+  test("figma-parity-chat screenshot baselines", async ({ page }) => {
+    for (const viewport of VIEWPORTS) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto("/inbox");
+      await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-chat-closed-${viewport.name}.png`, {
+        animations: "disabled",
+      });
+
+      const openButton = page.getByRole("button", { name: "Open global chat" });
+      if (await openButton.isVisible().catch(() => false)) {
+        await openButton.click();
+      }
+
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-chat-open-${viewport.name}.png`, {
+        animations: "disabled",
+      });
+    }
+  });
+
   test("figma-parity-project-detail screenshot baselines", async ({ page }) => {
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -60,6 +81,30 @@ test.describe("Figma parity snapshots", () => {
           animations: "disabled",
         },
       );
+    }
+  });
+
+  test("figma-parity-secondary screenshot baselines", async ({ page }) => {
+    for (const viewport of VIEWPORTS) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+
+      await page.goto("/agents");
+      await expect(page.getByRole("heading", { name: "Agent Status" })).toBeVisible();
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-secondary-agents-${viewport.name}.png`, {
+        animations: "disabled",
+      });
+
+      await page.goto("/knowledge");
+      await expect(page.getByRole("heading", { name: "Memory System" })).toBeVisible();
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-secondary-memory-${viewport.name}.png`, {
+        animations: "disabled",
+      });
+
+      await page.goto("/connections");
+      await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-secondary-ops-${viewport.name}.png`, {
+        animations: "disabled",
+      });
     }
   });
 });
