@@ -1426,7 +1426,7 @@ export function isCanonicalChameleonSessionKey(sessionKey: string): boolean {
 function parseAgentIDFromSessionKey(sessionKey: string): string {
   const chameleonContext = parseChameleonSessionKey(sessionKey);
   if (chameleonContext) {
-    return chameleonContext.projectID;
+    return '';
   }
   const match = /^agent:([^:]+):/i.exec(sessionKey.trim());
   if (!match || !match[1]) {
@@ -1538,6 +1538,48 @@ function resolveIssueCommentDispatchTarget(
   };
 }
 
+function inferSessionContextFromKey(sessionKey: string): SessionContext | null {
+  const normalized = getTrimmedString(sessionKey);
+  if (!normalized) {
+    return null;
+  }
+
+  const chameleon = parseChameleonSessionKey(normalized);
+  if (chameleon) {
+    const fallbackOrgID = resolveConfiguredOtterCampOrgID();
+    if (chameleon.issueID) {
+      return {
+        kind: 'issue_comment',
+        ...(fallbackOrgID ? { orgID: fallbackOrgID } : {}),
+        projectID: chameleon.projectID,
+        issueID: chameleon.issueID,
+      };
+    }
+    return {
+      kind: 'project_chat',
+      ...(fallbackOrgID ? { orgID: fallbackOrgID } : {}),
+      projectID: chameleon.projectID,
+    };
+  }
+
+  const projectID = getTrimmedString(PROJECT_ID_PATTERN.exec(normalized)?.[1]);
+  const issueID = getTrimmedString(ISSUE_ID_PATTERN.exec(normalized)?.[1]);
+  if (!projectID && !issueID) {
+    return null;
+  }
+  if (issueID) {
+    return {
+      kind: 'issue_comment',
+      ...(projectID ? { projectID } : {}),
+      issueID,
+    };
+  }
+  return {
+    kind: 'project_chat',
+    projectID,
+  };
+}
+
 function normalizeUpdatedAt(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return Date.now();
@@ -1577,10 +1619,15 @@ function deriveActivityScope(session: OpenClawSession): AgentActivityScope | und
   }
 
   const context = sessionContexts.get(sessionKey);
+  const inferredContext = inferSessionContextFromKey(sessionKey);
   const deliveryContext = asRecord(session.deliveryContext);
 
-  const projectFromSession = PROJECT_ID_PATTERN.exec(sessionKey)?.[1];
-  const issueFromSession = ISSUE_ID_PATTERN.exec(sessionKey)?.[1];
+  const projectFromSession =
+    getTrimmedString(inferredContext?.projectID) ||
+    PROJECT_ID_PATTERN.exec(sessionKey)?.[1];
+  const issueFromSession =
+    getTrimmedString(inferredContext?.issueID) ||
+    ISSUE_ID_PATTERN.exec(sessionKey)?.[1];
   const projectID =
     projectFromSession ||
     getTrimmedString(context?.projectID) ||
@@ -3271,13 +3318,11 @@ async function resolveSessionIdentityMetadata(
   content: string,
 ): Promise<SessionIdentityMetadata | null> {
   const canonicalChameleonSession = parseChameleonSessionKey(sessionKey);
-  const canonicalChameleonProjectID = canonicalChameleonSession?.projectID || '';
   const normalizedContextAgentID =
     getTrimmedString(context.agentID) ||
     getTrimmedString(context.responderAgentID);
   const fallbackAgentID = parseAgentIDFromSessionKey(sessionKey);
   const agentID = (
-    canonicalChameleonProjectID ||
     normalizedContextAgentID ||
     fallbackAgentID
   ).trim().toLowerCase();
@@ -3287,7 +3332,7 @@ async function resolveSessionIdentityMetadata(
   const orgID = getTrimmedString(context.orgID) || OTTERCAMP_ORG_ID;
   const taskSummary = deriveTaskSummary(context, content);
   const whoAmISessionKey = canonicalChameleonSession
-    ? sessionKey
+    ? undefined
     : (context.kind === 'dm' ? sessionKey : undefined);
 
   const compactPayload = await fetchWhoAmIProfile(agentID, whoAmISessionKey, orgID, 'compact');
@@ -4569,10 +4614,15 @@ async function persistAssistantReplyToOtterCamp(params: {
     return;
   }
 
-  const context = sessionContexts.get(sessionKey);
+  const existingContext = sessionContexts.get(sessionKey);
+  const inferredContext = inferSessionContextFromKey(sessionKey);
+  const context = existingContext || inferredContext;
   if (!context) {
     // Ignore non-DM assistant activity (e.g. cron/system sessions).
     return;
+  }
+  if (!existingContext && inferredContext) {
+    setSessionContext(sessionKey, inferredContext);
   }
   let persistedTarget = sessionKey;
 
@@ -4653,7 +4703,7 @@ async function persistAssistantReplyToOtterCamp(params: {
     }
     persistedTarget = threadID;
   } else if (context.kind === 'project_chat') {
-    const orgID = getTrimmedString(context.orgID);
+    const orgID = getTrimmedString(context.orgID) || resolveConfiguredOtterCampOrgID();
     const projectID = getTrimmedString(context.projectID);
     if (!orgID || !projectID) {
       return;
@@ -4683,7 +4733,7 @@ async function persistAssistantReplyToOtterCamp(params: {
     }
     persistedTarget = `project:${projectID}`;
   } else if (context.kind === 'issue_comment') {
-    const orgID = getTrimmedString(context.orgID);
+    const orgID = getTrimmedString(context.orgID) || resolveConfiguredOtterCampOrgID();
     const issueID = getTrimmedString(context.issueID);
     const responderAgentID = getTrimmedString(context.responderAgentID);
     if (!orgID || !issueID || !responderAgentID) {
@@ -5265,7 +5315,11 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
     return;
   }
   if (!sessionContexts.has(sessionKey)) {
-    return;
+    const inferredContext = inferSessionContextFromKey(sessionKey);
+    if (!inferredContext) {
+      return;
+    }
+    setSessionContext(sessionKey, inferredContext);
   }
 
   const runID = getTrimmedString(payload.runId) || getTrimmedString(payload.run_id);
