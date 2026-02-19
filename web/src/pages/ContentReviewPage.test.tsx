@@ -111,6 +111,94 @@ describe("ContentReviewPage", () => {
     );
   });
 
+  it("submits request-changes action through linked issue review context", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          issue: {
+            id: "issue-209",
+            project_id: "project-2",
+            document_path: "/posts/rate-limiting-implementation.md",
+            document_content: "# Review",
+            approval_state: "ready_for_review",
+          },
+          comments: [{ id: "c1" }, { id: "c2" }],
+          participants: [{ agent_id: "agent-1" }],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ success: true }));
+
+    renderRoute("/review/posts%2Frate-limiting-implementation.md?project_id=project-2&issue_id=issue-209");
+    await screen.findByTestId("content-review-linked-issue");
+
+    await user.click(screen.getByRole("button", { name: "Mark Ready for Review" }));
+    await user.click(screen.getByRole("button", { name: "Request Changes" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Changes requested.");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/issues/issue-209/approval-state?org_id=org-123"),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ approval_state: "needs_changes" }),
+      }),
+    );
+  });
+
+  it("persists new inline comments and increments linked comment count", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          issue: {
+            id: "issue-209",
+            project_id: "project-2",
+            document_path: "/posts/rate-limiting-implementation.md",
+            document_content: "# Review",
+            approval_state: "ready_for_review",
+          },
+          comments: [{ id: "c1" }, { id: "c2" }],
+          participants: [{ agent_id: "agent-1" }],
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ id: "comment-3" }));
+
+    renderRoute("/review/posts%2Frate-limiting-implementation.md?project_id=project-2&issue_id=issue-209");
+
+    expect(await screen.findByTestId("content-review-linked-issue")).toHaveTextContent("Comments: 2");
+
+    await user.click(screen.getByRole("button", { name: "Add Inline Comment" }));
+    await user.type(screen.getByTestId("inline-comment-input"), "Needs tighter phrasing");
+    await user.click(screen.getByRole("button", { name: "Insert Inline Comment" }));
+
+    expect(await screen.findByTestId("content-review-linked-issue")).toHaveTextContent("Comments: 3");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/issues/issue-209/comments?org_id=org-123"),
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("surfaces linked review context API errors", async () => {
+    fetchMock.mockResolvedValueOnce(mockJSONResponse({ error: "linked context failed" }, false));
+
+    renderRoute("/review/posts%2Frate-limiting-implementation.md?project_id=project-2&issue_id=issue-209");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("linked context failed");
+  });
+
+  it("shows no-org error and skips linked context fetch", async () => {
+    localStorage.removeItem("otter-camp-org-id");
+
+    renderRoute("/review/posts%2Frate-limiting-implementation.md?project_id=project-2&issue_id=issue-209");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Set an organization to load linked review context.",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("falls back to untitled path when alias route document is empty after trim", () => {
     renderRoute("/review/%20");
 

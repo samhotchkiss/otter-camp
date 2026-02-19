@@ -97,4 +97,63 @@ describe("IssueDetailPage", () => {
       );
     });
   });
+
+  it("renders fetch error state and retries loading issue details", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(mockJSONResponse({ error: "Issue load failed" }, false))
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          issue: {
+            id: "issue-209",
+            issue_number: 209,
+            title: "Recovered issue context",
+            approval_state: "ready_for_review",
+            project_id: "project-2",
+          },
+        }),
+      );
+
+    renderIssueDetailPage();
+
+    expect(await screen.findByText("Issue load failed")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Recovered issue context" })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends needs_changes approval action and surfaces success feedback", async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          issue: {
+            id: "issue-209",
+            issue_number: 209,
+            title: "Fix API rate limiting",
+            approval_state: "ready_for_review",
+            project_id: "project-2",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ success: true }));
+
+    renderIssueDetailPage();
+    await screen.findByRole("heading", { level: 1, name: "Fix API rate limiting" });
+
+    await user.click(screen.getByRole("button", { name: "Request Changes" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Changes requested.");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining("/api/issues/issue-209/approval-state?org_id=org-123"),
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ approval_state: "needs_changes" }),
+        }),
+      );
+    });
+  });
 });
