@@ -506,7 +506,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         </header>
 
         <div className="shell-workspace flex flex-1 overflow-hidden" data-testid="shell-workspace">
-          <main className="shell-content flex-1 overflow-y-auto bg-stone-950 p-4 md:p-6" id="main-content">
+          <main className="shell-content min-w-0 flex-1 overflow-y-auto bg-stone-950 p-4 md:p-6" id="main-content">
             <div className="mx-auto max-w-6xl space-y-4 md:space-y-6">{children}</div>
           </main>
           <aside

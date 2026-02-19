@@ -91,4 +91,28 @@ describe("DashboardLayout", () => {
     const activeProjectsLink = await screen.findByRole("link", { name: "Projects" });
     expect(activeProjectsLink).toHaveAttribute("aria-current", "page");
   });
+
+  it("applies responsive shell guard classes to prevent overflow drift", async () => {
+    renderLayout("/projects");
+
+    const sidebar = await screen.findByTestId("shell-sidebar");
+    expect(sidebar).toHaveClass("fixed");
+    expect(sidebar).toHaveClass("lg:relative");
+
+    const menuToggle = screen.getByRole("button", { name: "Toggle menu" });
+    expect(menuToggle).toHaveClass("md:hidden");
+
+    const searchInput = screen.getByPlaceholderText("Search...");
+    expect(searchInput.parentElement).toHaveClass("hidden");
+    expect(searchInput.parentElement).toHaveClass("md:block");
+
+    const workspace = screen.getByTestId("shell-workspace");
+    expect(workspace).toHaveClass("overflow-hidden");
+
+    const chatSlot = screen.getByTestId("shell-chat-slot");
+    expect(chatSlot).toHaveClass("max-lg:hidden");
+
+    const mainContent = document.getElementById("main-content");
+    expect(mainContent).toHaveClass("min-w-0");
+  });
 });

@@ -75,4 +75,21 @@ describe("InboxPage", () => {
     const issueRow = screen.getByRole("link", { name: /Critical: API rate limit exceeded/i });
     expect(issueRow).toHaveAttribute("href", "/issue/ISS-209");
   });
+
+  it("applies responsive inbox guard classes for overflow stability", () => {
+    const { container } = render(
+      <MemoryRouter initialEntries={["/inbox"]}>
+        <InboxPage />
+      </MemoryRouter>,
+    );
+
+    const root = container.firstElementChild;
+    expect(root).toHaveClass("min-w-0");
+
+    const listSurface = screen.getByTestId("inbox-list-surface");
+    expect(listSurface).toHaveClass("overflow-hidden");
+
+    const linkedRows = screen.getAllByRole("link");
+    expect(linkedRows[0]).toHaveClass("min-w-0");
+  });
 });

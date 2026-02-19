@@ -161,7 +161,7 @@ export default function InboxPage() {
   };
 
   return (
-    <div className="space-y-4 md:space-y-6">
+    <div className="min-w-0 space-y-4 md:space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="mb-1 text-2xl font-bold text-stone-100 md:text-3xl">Inbox</h1>
@@ -221,7 +221,7 @@ export default function InboxPage() {
         </button>
       </div>
 
-      <div className="divide-y divide-stone-800 rounded-lg border border-stone-800 bg-stone-900" data-testid="inbox-list-surface">
+      <div className="divide-y divide-stone-800 overflow-hidden rounded-lg border border-stone-800 bg-stone-900" data-testid="inbox-list-surface">
         {filteredItems.map((item) => {
           const content = (
             <>
@@ -309,7 +309,7 @@ export default function InboxPage() {
             <NavLink
               key={item.id}
               to={`/issue/${encodeURIComponent(item.issueId)}`}
-              className={`group block p-4 transition-colors hover:bg-stone-800/50 md:p-6 ${item.read ? "" : "bg-stone-950/30"}`}
+              className={`group block min-w-0 p-4 transition-colors hover:bg-stone-800/50 md:p-6 ${item.read ? "" : "bg-stone-950/30"}`}
             >
               {content}
             </NavLink>
