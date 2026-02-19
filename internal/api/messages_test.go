@@ -149,6 +149,163 @@ func (f *fakeOpenClawDispatcher) IsConnected() bool {
 	return f.connected
 }
 
+func TestDMInjectionDecider(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	tests := []struct {
+		name        string
+		state       *dmInjectionState
+		currentHash string
+		want        bool
+	}{
+		{
+			name:        "nil state injects",
+			state:       nil,
+			currentHash: "hash-a",
+			want:        true,
+		},
+		{
+			name: "never injected injects",
+			state: &dmInjectionState{
+				InjectionHash: "hash-a",
+			},
+			currentHash: "hash-a",
+			want:        true,
+		},
+		{
+			name: "compaction flagged injects",
+			state: &dmInjectionState{
+				InjectedAt:         sql.NullTime{Time: now, Valid: true},
+				InjectionHash:      "hash-a",
+				CompactionDetected: true,
+			},
+			currentHash: "hash-a",
+			want:        true,
+		},
+		{
+			name: "hash mismatch injects",
+			state: &dmInjectionState{
+				InjectedAt:    sql.NullTime{Time: now, Valid: true},
+				InjectionHash: "hash-a",
+			},
+			currentHash: "hash-b",
+			want:        true,
+		},
+		{
+			name: "warmed current hash does not inject",
+			state: &dmInjectionState{
+				InjectedAt:    sql.NullTime{Time: now, Valid: true},
+				InjectionHash: "hash-a",
+			},
+			currentHash: "hash-a",
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, shouldInjectDMIdentity(tt.state, tt.currentHash))
+		})
+	}
+}
+
+func TestBuildDMDispatchEvent_InjectionState(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-injection-state-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-injection-agent")
+	_, err := db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3,
+		     identity_md = $4,
+		     instructions_md = $5
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v1",
+		"Identity v1",
+		"Instructions v1",
+	)
+	require.NoError(t, err)
+
+	handler := &MessageHandler{}
+	threadID := "dm_" + agentID
+	req := createMessageRequest{
+		ThreadID: &threadID,
+		Content:  "First turn",
+	}
+	target := dmDispatchTarget{
+		AgentID:    agentID,
+		SessionKey: canonicalChameleonSessionKey(agentID),
+	}
+
+	event := handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-1", req, target)
+	require.True(t, event.Data.InjectIdentity)
+
+	event = handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-2", req, target)
+	require.False(t, event.Data.InjectIdentity)
+
+	_, err = db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v2",
+	)
+	require.NoError(t, err)
+
+	event = handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-3", req, target)
+	require.True(t, event.Data.InjectIdentity)
+
+	_, err = db.Exec(
+		`UPDATE dm_injection_state
+		 SET compaction_detected = TRUE
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+	)
+	require.NoError(t, err)
+
+	event = handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-4", req, target)
+	require.True(t, event.Data.InjectIdentity)
+
+	var compactionDetected bool
+	err = db.QueryRow(
+		`SELECT compaction_detected
+		 FROM dm_injection_state
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+	).Scan(&compactionDetected)
+	require.NoError(t, err)
+	require.False(t, compactionDetected)
+}
+
+func TestBuildDMDispatchEvent_IncrementalContext(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-injection-incremental-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-injection-incremental-agent")
+
+	handler := &MessageHandler{}
+	threadID := "dm_" + agentID
+	incrementalContext := "Updated project status: release candidate approved."
+	req := createMessageRequest{
+		ThreadID:           &threadID,
+		Content:            "Ack",
+		IncrementalContext: &incrementalContext,
+	}
+	target := dmDispatchTarget{
+		AgentID:    agentID,
+		SessionKey: canonicalChameleonSessionKey(agentID),
+	}
+
+	event := handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-1", req, target)
+	require.Equal(t, incrementalContext, event.Data.IncrementalContext)
+}
+
 func TestMessageCRUDTaskThread(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "messages-org")
