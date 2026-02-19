@@ -6,6 +6,8 @@ import ShortcutsHelpModal from "../components/ShortcutsHelpModal";
 import DemoBanner from "../components/DemoBanner";
 import GlobalSearch from "../components/GlobalSearch";
 import GlobalChatDock from "../components/chat/GlobalChatDock";
+import api from "../lib/api";
+import { mapInboxPayloadToCoreItems, mapProjectsPayloadToCoreCards } from "../lib/coreDataAdapters";
 
 type DashboardLayoutProps = {
   children: ReactNode;
@@ -22,6 +24,7 @@ type SidebarInboxItem = {
   title: string;
   project: string;
   priority: "critical" | "high" | "medium" | "low";
+  href: string;
 };
 
 type SidebarProjectItem = {
@@ -37,51 +40,6 @@ const AVATAR_MENU_ITEMS: NavItem[] = [
   { id: "connections", label: "Connections", href: "/connections" },
   { id: "feed", label: "Feed", href: "/feed" },
   { id: "settings", label: "Settings", href: "/settings" },
-];
-
-const SIDEBAR_INBOX_ITEMS: SidebarInboxItem[] = [
-  {
-    id: "ISS-209",
-    title: "Fix API rate limiting",
-    project: "API Gateway",
-    priority: "critical",
-  },
-  {
-    id: "ISS-234",
-    title: "Auth flow refactor",
-    project: "Customer Portal",
-    priority: "high",
-  },
-  {
-    id: "ISS-445",
-    title: "Memory sync error",
-    project: "Internal Tools",
-    priority: "medium",
-  },
-];
-
-const SIDEBAR_PROJECT_ITEMS: SidebarProjectItem[] = [
-  {
-    id: "project-api-gateway",
-    name: "API Gateway",
-    status: "active",
-    issueCount: 5,
-    lastAccessed: "2 days ago",
-  },
-  {
-    id: "project-customer-portal",
-    name: "Customer Portal",
-    status: "review",
-    issueCount: 3,
-    lastAccessed: "1 week ago",
-  },
-  {
-    id: "project-internal-tools",
-    name: "Internal Tools",
-    status: "active",
-    issueCount: 8,
-    lastAccessed: "3 days ago",
-  },
 ];
 
 function logOut() {
@@ -125,6 +83,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(true);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
+  const [sidebarInboxItems, setSidebarInboxItems] = useState<SidebarInboxItem[]>([]);
+  const [sidebarProjectItems, setSidebarProjectItems] = useState<SidebarProjectItem[]>([]);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -238,6 +198,51 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     };
   }, [avatarMenuOpen]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    void Promise.allSettled([api.inbox(), api.projects()]).then(([inboxResult, projectsResult]) => {
+      if (cancelled) {
+        return;
+      }
+
+      if (inboxResult.status === "fulfilled") {
+        const mappedInbox = mapInboxPayloadToCoreItems(inboxResult.value)
+          .slice(0, 6)
+          .map<SidebarInboxItem>((item) => ({
+            id: item.issueId || item.id,
+            title: item.title || item.description || "Inbox item",
+            project: item.project || "Inbox",
+            priority: item.priority,
+            href: item.issueId ? `/issue/${encodeURIComponent(item.issueId)}` : "/inbox",
+          }));
+        setSidebarInboxItems(mappedInbox);
+      } else {
+        setSidebarInboxItems([]);
+      }
+
+      if (projectsResult.status === "fulfilled") {
+        const mappedProjects = mapProjectsPayloadToCoreCards(projectsResult.value)
+          .slice(0, 6)
+          .map<SidebarProjectItem>((project) => ({
+            id: project.id,
+            name: project.name,
+            status:
+              project.needsApproval > 0 ? "review" : project.openIssues > 0 || project.inProgress > 0 ? "active" : "idle",
+            issueCount: project.openIssues,
+            lastAccessed: project.githubSync ? "synced" : "local",
+          }));
+        setSidebarProjectItems(mappedProjects);
+      } else {
+        setSidebarProjectItems([]);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const currentRouteLabel = useMemo(() => routeLabel(location.pathname), [location.pathname]);
 
   return (
@@ -302,10 +307,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           </NavLink>
 
           <div className="mb-6 space-y-0.5">
-            {SIDEBAR_INBOX_ITEMS.map((item) => (
+            {sidebarInboxItems.map((item) => (
               <Link
                 key={item.id}
-                to={`/issue/${encodeURIComponent(item.id)}`}
+                to={item.href}
                 className="group flex items-start gap-2 rounded-md px-3 py-2 text-left text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200"
               >
                 <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${priorityClass(item.priority)}`} />
@@ -319,6 +324,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 </span>
               </Link>
             ))}
+            {sidebarInboxItems.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-stone-600">No live inbox items</p>
+            ) : null}
           </div>
 
           <NavLink
@@ -333,7 +341,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           </NavLink>
 
           <div className="space-y-0.5">
-            {SIDEBAR_PROJECT_ITEMS.map((project) => (
+            {sidebarProjectItems.map((project) => (
               <NavLink
                 key={project.id}
                 to={`/projects/${encodeURIComponent(project.id)}`}
@@ -350,6 +358,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 </span>
               </NavLink>
             ))}
+            {sidebarProjectItems.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-stone-600">No live projects</p>
+            ) : null}
           </div>
         </nav>
 

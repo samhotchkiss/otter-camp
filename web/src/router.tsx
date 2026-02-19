@@ -67,7 +67,7 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <Dashboard />,
+        element: <Navigate to="/inbox" replace />,
       },
       {
         path: "tasks",
