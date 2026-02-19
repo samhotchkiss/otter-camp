@@ -222,6 +222,20 @@ describe("ContentReview read-only snapshots", () => {
     await user.click(screen.getByRole("button", { name: "Rendered" }));
     expect(await screen.findByText("old feedback")).toBeInTheDocument();
   });
+
+  it("does not auto-focus the source editor in read-only mode", async () => {
+    render(
+      <ContentReview
+        initialMarkdown={"# Snapshot\n\nBody {>>AB: old feedback<<}"}
+        reviewerName="Sam"
+        readOnly
+      />
+    );
+
+    const source = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
+    await new Promise((resolve) => window.setTimeout(resolve, 25));
+    expect(document.activeElement).not.toBe(source);
+  });
 });
 
 describe("ContentReview sidebar navigation", () => {

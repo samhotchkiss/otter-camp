@@ -1,103 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink } from "react-router-dom";
+
+import api from "../lib/api";
+import { mapInboxPayloadToCoreItems, type CoreInboxItem } from "../lib/coreDataAdapters";
 
 type InboxFilter = "all" | "unread" | "starred";
 
-type InboxItem = {
-  id: string;
-  issueId?: string;
-  type: "approval" | "issue" | "notification" | "mention";
-  title: string;
-  description: string;
-  project: string;
-  from: string;
-  timestamp: string;
-  priority: "critical" | "high" | "medium" | "low";
-  read: boolean;
-  starred: boolean;
-};
-
-const INITIAL_ITEMS: InboxItem[] = [
-  {
-    id: "1",
-    issueId: "ISS-234",
-    type: "approval",
-    title: "PR #234 awaiting approval",
-    description: "Authentication flow refactor ready for review",
-    project: "Customer Portal",
-    from: "Agent-042",
-    timestamp: "2 min ago",
-    priority: "high",
-    read: false,
-    starred: false,
-  },
-  {
-    id: "2",
-    issueId: "ISS-209",
-    type: "issue",
-    title: "Critical: API rate limit exceeded",
-    description: "Multiple requests hitting rate limit on /api/users endpoint",
-    project: "API Gateway",
-    from: "System",
-    timestamp: "5 min ago",
-    priority: "critical",
-    read: false,
-    starred: true,
-  },
-  {
-    id: "3",
-    issueId: "ISS-209",
-    type: "mention",
-    title: "You were mentioned in a discussion",
-    description: "Agent-127 mentioned you in ISS-209 comments",
-    project: "API Gateway",
-    from: "Agent-127",
-    timestamp: "12 min ago",
-    priority: "medium",
-    read: false,
-    starred: false,
-  },
-  {
-    id: "4",
-    issueId: "ISS-198",
-    type: "approval",
-    title: "PR #231 approved and merged",
-    description: "Database optimization changes have been deployed",
-    project: "Internal Tools",
-    from: "Agent-089",
-    timestamp: "1 hour ago",
-    priority: "low",
-    read: true,
-    starred: false,
-  },
-  {
-    id: "5",
-    type: "notification",
-    title: "GitHub sync completed",
-    description: "Successfully synced 15 commits from ottercamp/customer-portal",
-    project: "Customer Portal",
-    from: "GitHub Bot",
-    timestamp: "2 hours ago",
-    priority: "low",
-    read: true,
-    starred: false,
-  },
-  {
-    id: "6",
-    issueId: "ISS-311",
-    type: "issue",
-    title: "New issue: Update documentation",
-    description: "README needs updates for new authentication flow",
-    project: "Customer Portal",
-    from: "Agent-042",
-    timestamp: "3 hours ago",
-    priority: "medium",
-    read: true,
-    starred: false,
-  },
-];
-
-function typeGlyph(type: InboxItem["type"]): string {
+function typeGlyph(type: CoreInboxItem["type"]): string {
   if (type === "approval") {
     return "PR";
   }
@@ -110,7 +19,7 @@ function typeGlyph(type: InboxItem["type"]): string {
   return "OK";
 }
 
-function priorityClass(priority: InboxItem["priority"]): string {
+function priorityClass(priority: CoreInboxItem["priority"]): string {
   if (priority === "critical") {
     return "bg-rose-500";
   }
@@ -123,7 +32,7 @@ function priorityClass(priority: InboxItem["priority"]): string {
   return "bg-stone-600";
 }
 
-function surfaceClass(type: InboxItem["type"]): string {
+function surfaceClass(type: CoreInboxItem["type"]): string {
   if (type === "approval") {
     return "bg-amber-500/10 text-amber-400 border-amber-500/20";
   }
@@ -136,9 +45,57 @@ function surfaceClass(type: InboxItem["type"]): string {
   return "bg-stone-700/50 text-stone-400 border-stone-600/50";
 }
 
+function normalizeErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return "Failed to load inbox items";
+}
+
+function isApprovalRow(item: CoreInboxItem): boolean {
+  return item.type === "approval";
+}
+
 export default function InboxPage() {
   const [filter, setFilter] = useState<InboxFilter>("all");
-  const [items, setItems] = useState<InboxItem[]>(INITIAL_ITEMS);
+  const [items, setItems] = useState<CoreInboxItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [actingItemID, setActingItemID] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    setActionError(null);
+
+    void api
+      .inbox()
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setItems(mapInboxPayloadToCoreItems(payload));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setItems([]);
+        setLoadError(normalizeErrorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
 
   const unreadCount = useMemo(() => items.filter((item) => !item.read).length, [items]);
   const starredCount = useMemo(() => items.filter((item) => item.starred).length, [items]);
@@ -158,6 +115,35 @@ export default function InboxPage() {
 
   const toggleStar = (id: string) => {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, starred: !item.starred } : item)));
+  };
+
+  const resolveApproval = async (id: string, decision: "approve" | "reject") => {
+    let previousItems: CoreInboxItem[] = [];
+    setActingItemID(id);
+    setActionError(null);
+    setItems((current) => {
+      previousItems = current;
+      return current.filter((item) => item.id !== id);
+    });
+
+    try {
+      if (decision === "approve") {
+        await api.approveItem(id);
+      } else {
+        await api.rejectItem(id);
+      }
+    } catch (error: unknown) {
+      setItems(previousItems);
+      setActionError(
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : decision === "approve"
+            ? "Failed to approve inbox item"
+            : "Failed to reject inbox item",
+      );
+    } finally {
+      setActingItemID(null);
+    }
   };
 
   return (
@@ -222,99 +208,142 @@ export default function InboxPage() {
       </div>
 
       <div className="divide-y divide-stone-800 overflow-hidden rounded-lg border border-stone-800 bg-stone-900" data-testid="inbox-list-surface">
-        {filteredItems.map((item) => {
-          const content = (
-            <>
-              <div className="flex gap-3 md:gap-4">
-                <div className={`mt-2 h-2 w-2 shrink-0 rounded-full ${priorityClass(item.priority)}`}></div>
+        {!loading && !loadError && actionError ? (
+          <div className="border-b border-stone-800 bg-rose-500/10 p-4 md:p-6">
+            <p className="text-sm text-rose-400">{actionError}</p>
+          </div>
+        ) : null}
 
-                <div className="min-w-0 flex-1">
-                  <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-1 flex flex-wrap items-center gap-2">
-                        <span className={`inline-flex h-5 min-w-6 items-center justify-center rounded border px-1 text-[10px] font-semibold ${surfaceClass(item.type)}`}>
-                          {typeGlyph(item.type)}
-                        </span>
-                        <h3 className={`text-sm font-medium md:text-base ${item.read ? "text-stone-300" : "text-stone-100"}`}>{item.title}</h3>
-                      </div>
-                      <p className="text-xs text-stone-400 md:text-sm">{item.description}</p>
-                    </div>
-                    <span className="whitespace-nowrap text-xs text-stone-600">{item.timestamp}</span>
-                  </div>
+        {loading ? (
+          <div className="p-4 text-sm text-stone-400 md:p-6">Loading inbox...</div>
+        ) : null}
 
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex flex-wrap items-center gap-3 text-xs text-stone-500">
-                      <span>{item.project}</span>
-                      <span className="hidden sm:inline">•</span>
-                      <span>from {item.from}</span>
-                      {item.issueId ? (
-                        <>
-                          <span className="hidden sm:inline">•</span>
-                          <span className="font-mono text-amber-400">{item.issueId}</span>
-                        </>
-                      ) : null}
-                    </div>
-
-                    <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          toggleStar(item.id);
-                        }}
-                        className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-700 hover:text-amber-400"
-                        aria-label={`Toggle star for ${item.title}`}
-                      >
-                        {item.starred ? "★" : "☆"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          markAsRead(item.id);
-                        }}
-                        className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-700 hover:text-lime-400"
-                        aria-label={`Mark ${item.title} as read`}
-                      >
-                        ✓
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-700 hover:text-stone-200"
-                        aria-label={`Archive ${item.title}`}
-                      >
-                        ▣
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </>
-          );
-
-          if (!item.issueId) {
-            return (
-              <div
-                key={item.id}
-                className={`group p-4 transition-colors hover:bg-stone-800/50 md:p-6 ${item.read ? "" : "bg-stone-950/30"}`}
-              >
-                {content}
-              </div>
-            );
-          }
-
-          return (
-            <NavLink
-              key={item.id}
-              to={`/issue/${encodeURIComponent(item.issueId)}`}
-              className={`group block min-w-0 p-4 transition-colors hover:bg-stone-800/50 md:p-6 ${item.read ? "" : "bg-stone-950/30"}`}
+        {!loading && loadError ? (
+          <div className="space-y-3 p-4 md:p-6">
+            <p className="text-sm text-rose-400">{loadError}</p>
+            <button
+              type="button"
+              onClick={() => setRefreshKey((current) => current + 1)}
+              className="rounded border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 transition-colors hover:bg-rose-500/20"
             >
-              {content}
-            </NavLink>
-          );
-        })}
+              Retry
+            </button>
+          </div>
+        ) : null}
+
+        {!loading && !loadError && filteredItems.length === 0 ? (
+          <div className="p-4 text-sm text-stone-400 md:p-6">No inbox items found.</div>
+        ) : null}
+
+        {!loading && !loadError
+          ? filteredItems.map((item) => {
+              const content = (
+                <>
+                  <div className="flex gap-3 md:gap-4">
+                    <div className={`mt-2 h-2 w-2 shrink-0 rounded-full ${priorityClass(item.priority)}`}></div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                        <div className="min-w-0 flex-1">
+                          <div className="mb-1 flex flex-wrap items-center gap-2">
+                            <span className={`inline-flex h-5 min-w-6 items-center justify-center rounded border px-1 text-[10px] font-semibold ${surfaceClass(item.type)}`}>
+                              {typeGlyph(item.type)}
+                            </span>
+                            <h3 className={`text-sm font-medium md:text-base ${item.read ? "text-stone-300" : "text-stone-100"}`}>{item.title}</h3>
+                          </div>
+                          <p className="text-xs text-stone-400 md:text-sm">{item.description}</p>
+                        </div>
+                        <span className="whitespace-nowrap text-xs text-stone-600">{item.timestamp}</span>
+                      </div>
+
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-stone-500">
+                          <span>{item.project}</span>
+                          <span className="hidden sm:inline">•</span>
+                          <span>from {item.from}</span>
+                          {item.issueId ? (
+                            <>
+                              <span className="hidden sm:inline">•</span>
+                              <span className="font-mono text-amber-400">{item.issueId}</span>
+                            </>
+                          ) : null}
+                        </div>
+
+                        <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              toggleStar(item.id);
+                            }}
+                            className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-700 hover:text-amber-400"
+                            aria-label={`Toggle star for ${item.title}`}
+                          >
+                            {item.starred ? "★" : "☆"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              if (isApprovalRow(item)) {
+                                void resolveApproval(item.id, "approve");
+                                return;
+                              }
+                              markAsRead(item.id);
+                            }}
+                            disabled={actingItemID === item.id}
+                            className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-700 hover:text-lime-400 disabled:cursor-not-allowed disabled:opacity-60"
+                            aria-label={isApprovalRow(item) ? `Approve ${item.title}` : `Mark ${item.title} as read`}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              if (!isApprovalRow(item)) {
+                                return;
+                              }
+                              void resolveApproval(item.id, "reject");
+                            }}
+                            disabled={actingItemID === item.id}
+                            className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-700 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                            aria-label={isApprovalRow(item) ? `Reject ${item.title}` : `Archive ${item.title}`}
+                          >
+                            ▣
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              );
+
+              if (!item.issueId) {
+                return (
+                  <div
+                    key={item.id}
+                    className={`group p-4 transition-colors hover:bg-stone-800/50 md:p-6 ${item.read ? "" : "bg-stone-950/30"}`}
+                  >
+                    {content}
+                  </div>
+                );
+              }
+
+              return (
+                <NavLink
+                  key={item.id}
+                  to={`/issue/${encodeURIComponent(item.issueId)}`}
+                  className={`group block min-w-0 p-4 transition-colors hover:bg-stone-800/50 md:p-6 ${item.read ? "" : "bg-stone-950/30"}`}
+                >
+                  {content}
+                </NavLink>
+              );
+            })
+          : null}
       </div>
     </div>
   );
