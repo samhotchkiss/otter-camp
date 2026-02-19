@@ -439,6 +439,49 @@ describe("bridge chameleon identity + persistence fallbacks", () => {
       true,
     );
   });
+
+  it("persists issue replies for compound chameleon issue sessions", async () => {
+    const orgID = "00000000-0000-0000-0000-000000000123";
+    const projectID = "bbbbbbbb-1111-2222-3333-444444444444";
+    const issueID = "99999999-aaaa-bbbb-cccc-dddddddddddd";
+    const sessionKey = `agent:chameleon:oc:${projectID}:${issueID}`;
+    const fetchURLs: string[] = [];
+    globalThis.fetch = (async (input: URL | string, init?: RequestInit) => {
+      fetchURLs.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({}),
+        text: async () => "",
+        ...(init ? { headers: init.headers } : {}),
+      } as Response;
+    }) as typeof fetch;
+
+    setSessionContextForTest(sessionKey, {
+      kind: "issue_comment",
+      orgID,
+      projectID,
+      issueID,
+      responderAgentID: "technonymous",
+      agentID: "technonymous",
+      agentName: "Technonymous",
+    });
+
+    await handleOpenClawEventForTest({
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Issue update from compound chameleon session." }],
+        },
+      },
+    });
+
+    assert.equal(fetchURLs.some((url) => url.includes(`/api/issues/${issueID}/comments?org_id=${orgID}`)), true);
+  });
 });
 
 describe("bridge local session reset helpers", () => {
