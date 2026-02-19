@@ -10,6 +10,7 @@ import (
 type EllieIngestionResetResult struct {
 	DeletedMemories         int `json:"deleted_memories"`
 	DeletedIngestionCursors int `json:"deleted_ingestion_cursors"`
+	DeletedWindowRuns       int `json:"deleted_window_runs"`
 	DeletedDedupReviewed    int `json:"deleted_dedup_reviewed"`
 	DeletedDedupCursors     int `json:"deleted_dedup_cursors"`
 }
@@ -28,6 +29,7 @@ func NewEllieIngestionResetStore(db *sql.DB) *EllieIngestionResetStore {
 // It deletes:
 // - `memories` rows created from `chat_messages` ingestion (metadata.source_table='chat_messages')
 // - `ellie_ingestion_cursors` rows for the org
+// - `ellie_ingestion_window_runs` rows for the org (so coverage reflects the fresh rerun only)
 // - Ellie dedup cursor/review state (memory ids change after a re-extract)
 func (s *EllieIngestionResetStore) ResetMemoryExtractionState(
 	ctx context.Context,
@@ -76,6 +78,14 @@ func (s *EllieIngestionResetStore) ResetMemoryExtractionState(
 	); err != nil {
 		return EllieIngestionResetResult{}, err
 	}
+	if result.DeletedWindowRuns, err = executeOpenClawMigrationResetCount(
+		ctx,
+		tx,
+		`DELETE FROM ellie_ingestion_window_runs WHERE org_id = $1`,
+		orgID,
+	); err != nil {
+		return EllieIngestionResetResult{}, err
+	}
 
 	// Only delete memories that were extracted from chat history ingestion.
 	if result.DeletedMemories, err = executeOpenClawMigrationResetCount(
@@ -95,4 +105,3 @@ func (s *EllieIngestionResetStore) ResetMemoryExtractionState(
 
 	return result, nil
 }
-

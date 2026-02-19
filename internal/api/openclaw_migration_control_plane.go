@@ -103,6 +103,7 @@ type openClawMigrationMemoryResetResponse struct {
 	Status                  string `json:"status"`
 	DeletedMemories         int    `json:"deleted_memories"`
 	DeletedIngestionCursors int    `json:"deleted_ingestion_cursors"`
+	DeletedWindowRuns       int    `json:"deleted_window_runs"`
 	DeletedDedupReviewed    int    `json:"deleted_dedup_reviewed"`
 	DeletedDedupCursors     int    `json:"deleted_dedup_cursors"`
 }
@@ -584,6 +585,7 @@ func (s *defaultOpenClawMigrationControlPlaneService) ResetMemoryExtraction(
 		Status:                  "reset",
 		DeletedMemories:         result.DeletedMemories,
 		DeletedIngestionCursors: result.DeletedIngestionCursors,
+		DeletedWindowRuns:       result.DeletedWindowRuns,
 		DeletedDedupReviewed:    result.DeletedDedupReviewed,
 		DeletedDedupCursors:     result.DeletedDedupCursors,
 		// Reuse unused fields? Keep API stable by adding fields later if needed.
@@ -881,10 +883,11 @@ func (h *OpenClawMigrationControlPlaneHandler) ResetMemoryExtraction(w http.Resp
 	}
 
 	log.Printf(
-		"openclaw memory extraction reset completed: org_id=%s deleted_memories=%d deleted_ingestion_cursors=%d deleted_dedup_reviewed=%d deleted_dedup_cursors=%d",
+		"openclaw memory extraction reset completed: org_id=%s deleted_memories=%d deleted_ingestion_cursors=%d deleted_window_runs=%d deleted_dedup_reviewed=%d deleted_dedup_cursors=%d",
 		orgID,
 		response.DeletedMemories,
 		response.DeletedIngestionCursors,
+		response.DeletedWindowRuns,
 		response.DeletedDedupReviewed,
 		response.DeletedDedupCursors,
 	)
