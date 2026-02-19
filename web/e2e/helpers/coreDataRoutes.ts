@@ -345,6 +345,22 @@ export async function installCoreDataApiMocks(page: Page): Promise<void> {
     });
   });
 
+  await page.route("**/api/issues/*/approve**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ success: true }),
+    });
+  });
+
+  await page.route("**/api/issues/*/approval-state**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ success: true }),
+    });
+  });
+
   await page.route("**/api/issues/**", async (route) => {
     const requestURL = new URL(route.request().url());
     const parts = requestURL.pathname.split("/").filter(Boolean);
