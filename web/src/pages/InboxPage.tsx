@@ -61,6 +61,7 @@ export default function InboxPage() {
   const [items, setItems] = useState<CoreInboxItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [actingItemID, setActingItemID] = useState<string | null>(null);
 
@@ -68,6 +69,7 @@ export default function InboxPage() {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
+    setActionError(null);
 
     void api
       .inbox()
@@ -116,10 +118,13 @@ export default function InboxPage() {
   };
 
   const resolveApproval = async (id: string, decision: "approve" | "reject") => {
-    const previousItems = items;
+    let previousItems: CoreInboxItem[] = [];
     setActingItemID(id);
-    setLoadError(null);
-    setItems((current) => current.filter((item) => item.id !== id));
+    setActionError(null);
+    setItems((current) => {
+      previousItems = current;
+      return current.filter((item) => item.id !== id);
+    });
 
     try {
       if (decision === "approve") {
@@ -129,7 +134,7 @@ export default function InboxPage() {
       }
     } catch (error: unknown) {
       setItems(previousItems);
-      setLoadError(
+      setActionError(
         error instanceof Error && error.message.trim()
           ? error.message
           : decision === "approve"
@@ -203,6 +208,12 @@ export default function InboxPage() {
       </div>
 
       <div className="divide-y divide-stone-800 overflow-hidden rounded-lg border border-stone-800 bg-stone-900" data-testid="inbox-list-surface">
+        {!loading && !loadError && actionError ? (
+          <div className="border-b border-stone-800 bg-rose-500/10 p-4 md:p-6">
+            <p className="text-sm text-rose-400">{actionError}</p>
+          </div>
+        ) : null}
+
         {loading ? (
           <div className="p-4 text-sm text-stone-400 md:p-6">Loading inbox...</div>
         ) : null}

@@ -130,6 +130,19 @@ describe("InboxPage", () => {
     await waitFor(() => expect(screen.queryByText("Nightly sync complete")).not.toBeInTheDocument());
   });
 
+  it("restores optimistically removed row when approval action fails", async () => {
+    approveItemMock.mockRejectedValueOnce(new Error("network error"));
+
+    renderInbox();
+
+    expect(await screen.findByText("Deploy frontend")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Approve Deploy frontend" }));
+
+    await waitFor(() => expect(approveItemMock).toHaveBeenCalledWith("approval-1"));
+    await waitFor(() => expect(screen.getByText("Deploy frontend")).toBeInTheDocument());
+    expect(screen.getByText("network error")).toBeInTheDocument();
+  });
+
   it("keeps issue-linked rows on issue routes when issue metadata is present", async () => {
     renderInbox();
 
