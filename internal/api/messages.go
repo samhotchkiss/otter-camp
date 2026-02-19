@@ -983,6 +983,22 @@ func dmFallbackSessionKeyForAgentSlug(agentSlug string, agentID string) string {
 	return canonicalChameleonSessionKey(agentID)
 }
 
+func normalizeDMDispatchSessionKeyForAgentSlug(agentSlug string, agentID string, sessionKey string) string {
+	normalizedSessionKey := strings.TrimSpace(sessionKey)
+	normalizedSlug := strings.TrimSpace(agentSlug)
+	if normalizedSessionKey == "" {
+		return normalizedSessionKey
+	}
+
+	if isDMRoutingExemptAgentSlug(normalizedSlug) && ValidateChameleonSessionKey(normalizedSessionKey) {
+		return canonicalAgentMainSessionKey(normalizedSlug)
+	}
+	if normalizedSlug != "" && !isDMRoutingExemptAgentSlug(normalizedSlug) && strings.EqualFold(normalizedSessionKey, canonicalAgentMainSessionKey(normalizedSlug)) {
+		return canonicalChameleonSessionKey(agentID)
+	}
+	return normalizedSessionKey
+}
+
 func fallbackDMDispatchSessionKey(
 	ctx context.Context,
 	db *sql.DB,
@@ -1017,12 +1033,7 @@ func normalizeDMDispatchSessionKey(
 	if err != nil {
 		return "", err
 	}
-	// If the existing session key is a chameleon key but the agent has its own
-	// OpenClaw slot, override to the agent's real session key.
-	if agentSlug != "" && !strings.EqualFold(agentSlug, openClawSystemAgentChameleon) && ValidateChameleonSessionKey(normalizedSessionKey) {
-		return "agent:" + strings.ToLower(agentSlug) + ":main", nil
-	}
-	return normalizedSessionKey, nil
+	return normalizeDMDispatchSessionKeyForAgentSlug(agentSlug, agentID, normalizedSessionKey), nil
 }
 
 func resolveWorkspaceAgentSlugByID(

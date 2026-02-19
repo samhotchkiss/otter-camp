@@ -205,6 +205,63 @@ func TestDMFallbackSessionKeyForAgentSlug(t *testing.T) {
 	}
 }
 
+func TestNormalizeDMDispatchSessionKeyForAgentSlug(t *testing.T) {
+	t.Parallel()
+
+	agentID := "28d27f83-5518-468a-83bf-750f7ec1c9f5"
+	tests := []struct {
+		name       string
+		agentSlug  string
+		sessionKey string
+		want       string
+	}{
+		{
+			name:       "non exempt chameleon key stays chameleon",
+			agentSlug:  "technonymous",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       canonicalChameleonSessionKey(agentID),
+		},
+		{
+			name:       "non exempt stale main key migrates to chameleon",
+			agentSlug:  "technonymous",
+			sessionKey: "agent:technonymous:main",
+			want:       canonicalChameleonSessionKey(agentID),
+		},
+		{
+			name:       "exempt main slug rewrites chameleon to dedicated session",
+			agentSlug:  "main",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       "agent:main:main",
+		},
+		{
+			name:       "exempt elephant slug rewrites chameleon to dedicated session",
+			agentSlug:  "elephant",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       "agent:elephant:main",
+		},
+		{
+			name:       "exempt lori slug rewrites chameleon to dedicated session",
+			agentSlug:  "lori",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       "agent:lori:main",
+		},
+		{
+			name:       "non exempt unrelated key is preserved",
+			agentSlug:  "technonymous",
+			sessionKey: "agent:other:main",
+			want:       "agent:other:main",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, normalizeDMDispatchSessionKeyForAgentSlug(tt.agentSlug, agentID, tt.sessionKey))
+		})
+	}
+}
+
 func TestMessageCRUDTaskThread(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "messages-org")
