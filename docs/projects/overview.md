@@ -1,7 +1,7 @@
 # Projects: Overview
 
 > Summary: Project model, issue model, Git/repo integration, and how project work flows through Otter Camp.
-> Last updated: 2026-02-16
+> Last updated: 2026-02-19
 > Audience: Agents doing project-level execution or platform changes.
 
 ## Project Core
@@ -46,5 +46,6 @@ Primary modules:
 
 ## Change Log
 
+- 2026-02-19: Bug fix in project detail CI stability/docs guard compliance for Spec 515 follow-up; no behavior change.
 - 2026-02-16: Added hosted wildcard routing runbook link for DNS/TLS and validation workflow (Spec 311).
 - 2026-02-16: Created canonical documentation file and migrated relevant legacy content.

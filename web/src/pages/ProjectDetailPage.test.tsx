@@ -80,12 +80,12 @@ describe("ProjectDetailPage", () => {
   it("renders mapped project stats and open issues list", async () => {
     renderProjectDetailPage();
 
-    expect(await screen.findByText("Issues")).toBeInTheDocument();
+    const issueLink = await screen.findByRole("link", { name: /Fix API rate limiting/i });
+    expect(issueLink).toBeInTheDocument();
     expect(screen.getByText("Branches")).toBeInTheDocument();
     expect(screen.getByText("Commits")).toBeInTheDocument();
     expect(screen.getByText("Contributors")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Open Issues" })).toBeInTheDocument();
-    expect(screen.getByText("Fix API rate limiting")).toBeInTheDocument();
     expect(screen.getByText("approval needed")).toBeInTheDocument();
   });
 
