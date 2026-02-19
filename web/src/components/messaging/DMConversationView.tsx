@@ -718,6 +718,7 @@ export default function DMConversationView({
         <input
           ref={attachmentInputRef}
           type="file"
+          multiple
           className="hidden"
           onChange={handleAttachmentInputChange}
           data-testid="dm-attachment-input"

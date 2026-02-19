@@ -281,6 +281,34 @@ describe("DMConversationView", () => {
     expect(body.attachments?.map((attachment) => attachment.id)).toEqual(["att-1"]);
   });
 
+  it("enables multi-file selection on the hidden attachment input", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          messages: [],
+          hasMore: false,
+          totalCount: 0,
+        }),
+    });
+
+    const agent: Agent = {
+      id: "agent-1",
+      name: "Agent One",
+      status: "online",
+      role: "Helper",
+    };
+
+    render(<DMConversationView agent={agent} />);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Message Agent One...")).toBeInTheDocument();
+    });
+
+    const fileInput = screen.getByTestId("dm-attachment-input") as HTMLInputElement;
+    expect(fileInput.multiple).toBe(true);
+  });
+
   it("shows clear upload errors for unsupported attachments", async () => {
     window.localStorage.setItem("otter-camp-org-id", "org-123");
     window.localStorage.setItem("otter_camp_token", "token-123");
