@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { bootstrapAuthenticatedSession } from "./helpers/auth";
+import { installCoreDataApiMocks } from "./helpers/coreDataRoutes";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1440, height: 900 },
@@ -10,6 +11,7 @@ const VIEWPORTS = [
 test.describe("Figma parity snapshots", () => {
   test.beforeEach(async ({ page }) => {
     await bootstrapAuthenticatedSession(page);
+    await installCoreDataApiMocks(page);
     await page.addStyleTag({
       content:
         "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }",
