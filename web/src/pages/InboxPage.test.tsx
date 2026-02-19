@@ -215,6 +215,28 @@ describe("InboxPage", () => {
     expect(screen.getAllByTestId("inbox-row")).toHaveLength(1);
   });
 
+  it("renders non-functional header actions as disabled buttons", async () => {
+    inboxMock.mockResolvedValue({
+      items: [
+        {
+          id: "approval-33",
+          type: "Code review",
+          command: "npm run lint",
+          agent: "Agent-007",
+          status: "pending",
+          createdAt: "2026-02-18T20:00:00Z",
+        },
+      ],
+    });
+
+    render(<InboxPage />);
+
+    await screen.findByRole("heading", { name: /Code review.*Agent-007/ });
+
+    expect(screen.getByRole("button", { name: "Filter inbox" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Archive inbox" })).toBeDisabled();
+  });
+
   it("renders redesigned metadata lane with agent and timestamp context", async () => {
     inboxMock.mockResolvedValue({
       items: [
@@ -334,6 +356,51 @@ describe("InboxPage", () => {
       expect(screen.queryByRole("heading", { name: /Deploy.*Agent-128/ })).not.toBeInTheDocument();
     });
     expect(rejectItemMock).toHaveBeenCalledWith("approval-3");
+  });
+
+  it("disables non-active item actions while processing another item", async () => {
+    inboxMock.mockResolvedValue({
+      items: [
+        {
+          id: "approval-4",
+          type: "Deploy",
+          command: "deploy service",
+          agent: "Agent-200",
+          status: "pending",
+          createdAt: "2026-02-18T20:00:00Z",
+        },
+        {
+          id: "approval-5",
+          type: "Review",
+          command: "npm run test",
+          agent: "Agent-201",
+          status: "pending",
+          createdAt: "2026-02-18T19:00:00Z",
+        },
+      ],
+    });
+
+    const pendingApprove = deferred<{ success: boolean }>();
+    approveItemMock.mockReturnValue(pendingApprove.promise);
+
+    render(<InboxPage />);
+
+    const approveButtons = await screen.findAllByRole("button", { name: "Approve" });
+    const rejectButtons = screen.getAllByRole("button", { name: "Reject" });
+    const secondItemApprove = approveButtons[1];
+    const secondItemReject = rejectButtons[1];
+
+    fireEvent.click(approveButtons[0]);
+
+    await waitFor(() => {
+      expect(secondItemApprove).toBeDisabled();
+      expect(secondItemReject).toBeDisabled();
+    });
+
+    pendingApprove.resolve({ success: true });
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: /Deploy.*Agent-200/ })).not.toBeInTheDocument();
+    });
   });
 
   it("renders error state when inbox request fails", async () => {

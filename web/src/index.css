@@ -81,6 +81,17 @@
   background: var(--surface-alt);
 }
 
+.inbox-icon-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.inbox-icon-action:disabled:hover {
+  border-color: var(--border);
+  color: var(--text-muted);
+  background: var(--surface);
+}
+
 .inbox-filter-tabs {
   display: flex;
   align-items: center;

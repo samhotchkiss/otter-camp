@@ -201,10 +201,10 @@ export default function InboxPage() {
           </p>
         </div>
         <div className="inbox-header-actions" aria-label="Inbox actions">
-          <button type="button" className="inbox-icon-action" aria-label="Filter inbox">
+          <button type="button" className="inbox-icon-action" aria-label="Filter inbox" disabled>
             Filter
           </button>
-          <button type="button" className="inbox-icon-action" aria-label="Archive inbox">
+          <button type="button" className="inbox-icon-action" aria-label="Archive inbox" disabled>
             Archive
           </button>
         </div>
@@ -285,14 +285,14 @@ export default function InboxPage() {
                   <button
                     className="btn btn-primary oc-toolbar-button oc-toolbar-button--primary"
                     onClick={() => handleApprove(item.id)}
-                    disabled={processingId === item.id}
+                    disabled={!!processingId}
                   >
                     {processingId === item.id ? "Processing..." : "Approve"}
                   </button>
                   <button
                     className="btn btn-secondary oc-toolbar-button"
                     onClick={() => handleReject(item.id)}
-                    disabled={processingId === item.id}
+                    disabled={!!processingId}
                   >
                     {processingId === item.id ? "Processing..." : "Reject"}
                   </button>
