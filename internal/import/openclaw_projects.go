@@ -40,23 +40,26 @@ type OpenClawWorkspaceSignal struct {
 	RepoPath     string
 	ProjectHint  string
 	IssueHints   []string
+	IssueSignals []OpenClawIssueSignal
 }
 
 type OpenClawSessionSignal struct {
-	AgentID     string
-	Summary     string
-	RepoPath    string
-	ProjectHint string
-	IssueHints  []string
-	OccurredAt  time.Time
+	AgentID      string
+	Summary      string
+	RepoPath     string
+	ProjectHint  string
+	IssueHints   []string
+	IssueSignals []OpenClawIssueSignal
+	OccurredAt   time.Time
 }
 
 type OpenClawMemorySignal struct {
-	AgentID     string
-	Text        string
-	ProjectHint string
-	IssueHints  []string
-	OccurredAt  time.Time
+	AgentID      string
+	Text         string
+	ProjectHint  string
+	IssueHints   []string
+	IssueSignals []OpenClawIssueSignal
+	OccurredAt   time.Time
 }
 
 type OpenClawProjectCandidate struct {
@@ -72,19 +75,27 @@ type OpenClawProjectCandidate struct {
 
 type OpenClawIssueCandidate struct {
 	Title      string
+	Status     string
+	Source     string
+	OccurredAt time.Time
+}
+
+type OpenClawIssueSignal struct {
+	Title      string
+	Status     string
 	Source     string
 	OccurredAt time.Time
 }
 
 type openClawProjectSignal struct {
-	Key        string
-	Name       string
-	RepoPath   string
-	Weight     int
-	Source     string
-	IssueHints []string
-	OccurredAt time.Time
-	Completed  bool
+	Key          string
+	Name         string
+	RepoPath     string
+	Weight       int
+	Source       string
+	IssueSignals []OpenClawIssueSignal
+	OccurredAt   time.Time
+	Completed    bool
 }
 
 type openClawProjectAccumulator struct {
@@ -148,20 +159,23 @@ func InferOpenClawProjectCandidatesAt(input OpenClawProjectImportInput, now time
 			}
 		}
 
-		for _, hint := range signal.IssueHints {
-			title := normalizeIssueHint(hint)
+		for _, issueSignal := range signal.IssueSignals {
+			title := normalizeIssueTitle(issueSignal.Title)
 			if title == "" {
 				continue
 			}
 			norm := strings.ToLower(title)
-			if _, exists := acc.IssueByNorm[norm]; exists {
+			next := OpenClawIssueCandidate{
+				Title:      title,
+				Status:     normalizeOpenClawIssueStatus(issueSignal.Status, issueSignal.Title),
+				Source:     firstNonEmpty(issueSignal.Source, signal.Source),
+				OccurredAt: issueSignal.OccurredAt.UTC(),
+			}
+			if existing, exists := acc.IssueByNorm[norm]; exists {
+				acc.IssueByNorm[norm] = mergeOpenClawIssueCandidate(existing, next)
 				continue
 			}
-			acc.IssueByNorm[norm] = OpenClawIssueCandidate{
-				Title:      title,
-				Source:     signal.Source,
-				OccurredAt: signal.OccurredAt.UTC(),
-			}
+			acc.IssueByNorm[norm] = next
 		}
 	}
 
@@ -216,13 +230,13 @@ func ExtractOpenClawProjectSignals(input OpenClawProjectImportInput) []openClawP
 			continue
 		}
 		signals = append(signals, openClawProjectSignal{
-			Key:        key,
-			Name:       name,
-			RepoPath:   filepath.Clean(strings.TrimSpace(workspace.RepoPath)),
-			Weight:     3,
-			Source:     firstNonEmpty("workspace:"+workspace.AgentID, "workspace"),
-			IssueHints: workspace.IssueHints,
-			Completed:  hasOpenClawCompletionSignal(strings.Join(workspace.IssueHints, " ")),
+			Key:          key,
+			Name:         name,
+			RepoPath:     filepath.Clean(strings.TrimSpace(workspace.RepoPath)),
+			Weight:       3,
+			Source:       firstNonEmpty("workspace:"+workspace.AgentID, "workspace"),
+			IssueSignals: mergeOpenClawIssueSignals(firstNonEmpty("workspace:"+workspace.AgentID, "workspace"), time.Time{}, workspace.IssueHints, workspace.IssueSignals),
+			Completed:    hasOpenClawCompletionSignal(strings.Join(workspace.IssueHints, " ")),
 		})
 	}
 
@@ -237,14 +251,14 @@ func ExtractOpenClawProjectSignals(input OpenClawProjectImportInput) []openClawP
 			continue
 		}
 		signals = append(signals, openClawProjectSignal{
-			Key:        key,
-			Name:       name,
-			RepoPath:   filepath.Clean(strings.TrimSpace(session.RepoPath)),
-			Weight:     2,
-			Source:     firstNonEmpty("session:"+session.AgentID, "session"),
-			IssueHints: session.IssueHints,
-			OccurredAt: session.OccurredAt.UTC(),
-			Completed:  hasOpenClawCompletionSignal(session.Summary + " " + strings.Join(session.IssueHints, " ")),
+			Key:          key,
+			Name:         name,
+			RepoPath:     filepath.Clean(strings.TrimSpace(session.RepoPath)),
+			Weight:       2,
+			Source:       firstNonEmpty("session:"+session.AgentID, "session"),
+			IssueSignals: mergeOpenClawIssueSignals(firstNonEmpty("session:"+session.AgentID, "session"), session.OccurredAt.UTC(), session.IssueHints, session.IssueSignals),
+			OccurredAt:   session.OccurredAt.UTC(),
+			Completed:    hasOpenClawCompletionSignal(session.Summary + " " + strings.Join(session.IssueHints, " ")),
 		})
 	}
 
@@ -255,13 +269,13 @@ func ExtractOpenClawProjectSignals(input OpenClawProjectImportInput) []openClawP
 			continue
 		}
 		signals = append(signals, openClawProjectSignal{
-			Key:        key,
-			Name:       name,
-			Weight:     1,
-			Source:     firstNonEmpty("memory:"+memory.AgentID, "memory"),
-			IssueHints: memory.IssueHints,
-			OccurredAt: memory.OccurredAt.UTC(),
-			Completed:  hasOpenClawCompletionSignal(memory.Text + " " + strings.Join(memory.IssueHints, " ")),
+			Key:          key,
+			Name:         name,
+			Weight:       1,
+			Source:       firstNonEmpty("memory:"+memory.AgentID, "memory"),
+			IssueSignals: mergeOpenClawIssueSignals(firstNonEmpty("memory:"+memory.AgentID, "memory"), memory.OccurredAt.UTC(), memory.IssueHints, memory.IssueSignals),
+			OccurredAt:   memory.OccurredAt.UTC(),
+			Completed:    hasOpenClawCompletionSignal(memory.Text + " " + strings.Join(memory.IssueHints, " ")),
 		})
 	}
 
@@ -333,12 +347,16 @@ func humanizeProjectName(key string) string {
 }
 
 func normalizeIssueHint(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
+	words := strings.Fields(strings.TrimSpace(value))
+	if len(words) < 2 {
 		return ""
 	}
-	words := strings.Fields(value)
-	if len(words) < 2 {
+	return strings.Join(words, " ")
+}
+
+func normalizeIssueTitle(value string) string {
+	words := strings.Fields(strings.TrimSpace(value))
+	if len(words) == 0 {
 		return ""
 	}
 	return strings.Join(words, " ")
@@ -380,6 +398,130 @@ func inferOpenClawProjectStatus(lastDiscussedAt *time.Time, hasCompletion bool, 
 		}
 	}
 	return "active"
+}
+
+func mergeOpenClawIssueSignals(
+	fallbackSource string,
+	fallbackOccurredAt time.Time,
+	hints []string,
+	issueSignals []OpenClawIssueSignal,
+) []OpenClawIssueSignal {
+	out := make([]OpenClawIssueSignal, 0, len(hints)+len(issueSignals))
+	seen := map[string]struct{}{}
+
+	for _, hint := range hints {
+		title := normalizeIssueHint(hint)
+		if title == "" {
+			continue
+		}
+		key := strings.ToLower(title)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, OpenClawIssueSignal{
+			Title:      title,
+			Status:     normalizeOpenClawIssueStatus("", hint),
+			Source:     fallbackSource,
+			OccurredAt: fallbackOccurredAt.UTC(),
+		})
+	}
+
+	for _, signal := range issueSignals {
+		title := normalizeIssueTitle(signal.Title)
+		if title == "" {
+			continue
+		}
+		key := strings.ToLower(title)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		status := normalizeOpenClawIssueStatus(signal.Status, signal.Title)
+		out = append(out, OpenClawIssueSignal{
+			Title:      title,
+			Status:     status,
+			Source:     firstNonEmpty(signal.Source, fallbackSource),
+			OccurredAt: firstNonZeroOpenClawTime(signal.OccurredAt, fallbackOccurredAt).UTC(),
+		})
+	}
+
+	return out
+}
+
+func mergeOpenClawIssueCandidate(existing, next OpenClawIssueCandidate) OpenClawIssueCandidate {
+	merged := existing
+	if !next.OccurredAt.IsZero() && (merged.OccurredAt.IsZero() || next.OccurredAt.After(merged.OccurredAt)) {
+		merged.Source = next.Source
+		merged.OccurredAt = next.OccurredAt
+	}
+	if merged.Status == "" {
+		merged.Status = next.Status
+		return merged
+	}
+	if isOpenClawTerminalIssueStatus(merged.Status) {
+		return merged
+	}
+	if isOpenClawTerminalIssueStatus(next.Status) {
+		merged.Status = next.Status
+		return merged
+	}
+	if issueStatusRank(next.Status) > issueStatusRank(merged.Status) {
+		merged.Status = next.Status
+	}
+	return merged
+}
+
+func normalizeOpenClawIssueStatus(rawStatus, fallbackText string) string {
+	normalized := strings.TrimSpace(strings.ToLower(rawStatus))
+	normalized = strings.NewReplacer("-", "_", " ", "_").Replace(normalized)
+	switch normalized {
+	case "open", "queued", "todo", "backlog", "ready", "ready_for_work", "planning":
+		return "queued"
+	case "in_progress", "inprogress", "active", "working":
+		return "in_progress"
+	case "blocked", "flagged", "stuck":
+		return "blocked"
+	case "review", "ready_for_review", "needs_review":
+		return "review"
+	case "done", "completed", "complete", "resolved", "closed", "shipped":
+		return "done"
+	case "cancelled", "canceled", "wontfix":
+		return "cancelled"
+	}
+	if hasOpenClawCompletionSignal(fallbackText) {
+		return "done"
+	}
+	return "queued"
+}
+
+func isOpenClawTerminalIssueStatus(status string) bool {
+	status = strings.TrimSpace(strings.ToLower(status))
+	return status == "done" || status == "cancelled"
+}
+
+func issueStatusRank(status string) int {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "done", "cancelled":
+		return 5
+	case "review":
+		return 4
+	case "blocked":
+		return 3
+	case "in_progress":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func firstNonZeroOpenClawTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value
+		}
+	}
+	return time.Time{}
 }
 
 func hasOpenClawCompletionSignal(value string) bool {

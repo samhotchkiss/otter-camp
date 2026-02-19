@@ -58,7 +58,38 @@ func TestOpenClawProjectImportBuildsDeterministicCandidates(t *testing.T) {
 	require.Equal(t, []string{"memory:main", "session:main", "workspace:2b", "workspace:main"}, project.Signals)
 	require.Len(t, project.Issues, 2)
 	require.Equal(t, "Add OpenClaw importer tests", project.Issues[0].Title)
+	require.Equal(t, "queued", project.Issues[0].Status)
 	require.Equal(t, "Wire onboarding bootstrap endpoint", project.Issues[1].Title)
+	require.Equal(t, "queued", project.Issues[1].Status)
+}
+
+func TestOpenClawProjectImportPrefersTerminalIssueStatus(t *testing.T) {
+	input := OpenClawProjectImportInput{
+		Sessions: []OpenClawSessionSignal{
+			{
+				AgentID:     "main",
+				ProjectHint: "otter-camp",
+				IssueSignals: []OpenClawIssueSignal{
+					{Title: "Migrate ingestion to bridge", Status: "in_progress"},
+				},
+				OccurredAt: time.Date(2026, 2, 10, 10, 0, 0, 0, time.UTC),
+			},
+			{
+				AgentID:     "main",
+				ProjectHint: "otter-camp",
+				IssueSignals: []OpenClawIssueSignal{
+					{Title: "Migrate ingestion to bridge", Status: "completed"},
+				},
+				OccurredAt: time.Date(2026, 2, 11, 10, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	candidates := InferOpenClawProjectCandidates(input)
+	require.Len(t, candidates, 1)
+	require.Len(t, candidates[0].Issues, 1)
+	require.Equal(t, "Migrate ingestion to bridge", candidates[0].Issues[0].Title)
+	require.Equal(t, "done", candidates[0].Issues[0].Status)
 }
 
 func TestOpenClawProjectImportFiltersAmbiguousLowSignalInputs(t *testing.T) {
@@ -95,6 +126,43 @@ func TestOpenClawProjectImportHandlesEmptyInput(t *testing.T) {
 		Sessions:   nil,
 		Memories:   nil,
 	}))
+}
+
+func TestBuildOpenClawProjectDescriptionUsesIssueFocusAndSanitizedEvidence(t *testing.T) {
+	lastDiscussed := time.Date(2026, 2, 16, 15, 28, 23, 0, time.UTC)
+	description := BuildOpenClawProjectDescription(OpenClawProjectCandidate{
+		Name:            "Technonymous",
+		RepoPath:        "/Users/sam/dev/technonymous",
+		Status:          "active",
+		LastDiscussedAt: &lastDiscussed,
+		Signals:         []string{"workspace:main", "workspace:lori", "session:main", "memory:ellie"},
+		Issues: []OpenClawIssueCandidate{
+			{Title: "Fix API rate limiting"},
+			{Title: "Auth flow refactor"},
+			{Title: "Memory sync error"},
+		},
+	})
+
+	require.Contains(t, description, "Imported from OpenClaw activity. Initial focus:")
+	require.Contains(t, description, "Fix API rate limiting")
+	require.Contains(t, description, "Auth flow refactor")
+	require.Contains(t, description, "Memory sync error")
+	require.Contains(t, description, "Last discussed on 2026-02-16.")
+	require.Contains(t, description, "Evidence: workspace (2), session (1), memory (1).")
+	require.Contains(t, description, "Inferred status: active.")
+	require.NotContains(t, description, "workspace:main")
+	require.NotContains(t, description, "session:main")
+}
+
+func TestBuildOpenClawProjectDescriptionFallsBackToRepositoryContext(t *testing.T) {
+	description := BuildOpenClawProjectDescription(OpenClawProjectCandidate{
+		Name:     "Otter Camp",
+		RepoPath: "/Users/sam/dev/otter-camp.git",
+		Status:   "completed",
+	})
+
+	require.Contains(t, description, "Imported from OpenClaw activity for repository otter-camp.")
+	require.Contains(t, description, "Inferred status: completed.")
 }
 
 func TestOpenClawProjectDiscoveryBuildsProjectsAndIssuesFromHistory(t *testing.T) {
@@ -148,6 +216,47 @@ func TestOpenClawProjectDiscoveryBuildsProjectsAndIssuesFromHistory(t *testing.T
 	).Scan(&issueCount)
 	require.NoError(t, err)
 	require.Equal(t, 2, issueCount)
+}
+
+func TestOpenClawProjectDiscoveryPersistsTerminalIssueStatus(t *testing.T) {
+	connStr := getOpenClawImportTestDatabaseURL(t)
+	db := setupOpenClawImportTestDatabase(t, connStr)
+	orgID := createOpenClawImportTestOrganization(t, db, "openclaw-project-discovery-terminal-status")
+
+	result, err := DiscoverOpenClawProjects(context.Background(), db, OpenClawProjectDiscoveryPersistInput{
+		OrgID: orgID,
+		ImportInput: OpenClawProjectImportInput{
+			Memories: []OpenClawMemorySignal{
+				{
+					AgentID:     "ellie",
+					ProjectHint: "otter-camp",
+					IssueSignals: []OpenClawIssueSignal{
+						{Title: "Finalize hosted bridge migration", Status: "completed"},
+					},
+					OccurredAt: time.Date(2026, 2, 12, 11, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+		ReferenceTime: time.Date(2026, 2, 12, 17, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.ProjectsCreated)
+	require.Equal(t, 1, result.IssuesCreated)
+
+	var (
+		state      string
+		workStatus string
+	)
+	err = db.QueryRow(
+		`SELECT state, work_status
+		   FROM project_issues
+		  WHERE org_id = $1
+		  LIMIT 1`,
+		orgID,
+	).Scan(&state, &workStatus)
+	require.NoError(t, err)
+	require.Equal(t, "closed", state)
+	require.Equal(t, "done", workStatus)
 }
 
 func TestOpenClawProjectDiscoveryDedupesCrossConversationReferences(t *testing.T) {

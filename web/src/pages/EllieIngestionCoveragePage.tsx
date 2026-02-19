@@ -24,6 +24,25 @@ type CoverageDay = {
 type CoverageResponse = {
   summary?: CoverageSummary;
   days?: CoverageDay[];
+  diagnostics?: {
+    models?: {
+      model: string;
+      windows: number;
+      windowsOK: number;
+      windowsFailed: number;
+      retries: number;
+      insertedTotal: number;
+    }[];
+    recentFailures?: {
+      at: string;
+      roomId: string;
+      model: string;
+      llmAttempts: number;
+      messageCount: number;
+      tokenCount: number;
+      error: string;
+    }[];
+  };
 };
 
 function pct(n: number, d: number): string {
@@ -65,6 +84,8 @@ export default function EllieIngestionCoveragePage() {
 
   const days = payload?.days ?? [];
   const extractedUpTo = payload?.summary?.extractedUpTo ?? null;
+  const models = payload?.diagnostics?.models ?? [];
+  const recentFailures = payload?.diagnostics?.recentFailures ?? [];
 
   const totals = useMemo(() => {
     let totalMessages = 0;
@@ -176,7 +197,71 @@ export default function EllieIngestionCoveragePage() {
           </div>
         )}
       </section>
+
+      {!loading && !error && (models.length > 0 || recentFailures.length > 0) && (
+        <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <h2 className="text-base font-semibold text-[var(--text)]">LLM Diagnostics</h2>
+
+          {models.length > 0 && (
+            <div className="overflow-auto">
+              <table className="min-w-full border-separate border-spacing-y-2">
+                <thead>
+                  <tr className="text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
+                    <th className="px-3 py-2">Model</th>
+                    <th className="px-3 py-2">Windows</th>
+                    <th className="px-3 py-2">Ok</th>
+                    <th className="px-3 py-2">Failed</th>
+                    <th className="px-3 py-2">Retries</th>
+                    <th className="px-3 py-2">Inserted</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {models.map((m) => (
+                    <tr key={m.model} className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)]">
+                      <td className="whitespace-nowrap px-3 py-2 text-sm text-[var(--text)]">{m.model || "unknown"}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-sm text-[var(--text)]">{(m.windows ?? 0).toLocaleString()}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-sm text-emerald-300">{(m.windowsOK ?? 0).toLocaleString()}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-sm text-rose-300">{(m.windowsFailed ?? 0).toLocaleString()}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-sm text-[var(--text)]">{(m.retries ?? 0).toLocaleString()}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-sm text-[var(--text)]">{(m.insertedTotal ?? 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {recentFailures.length > 0 && (
+            <div className="overflow-auto">
+              <h3 className="mb-2 text-sm font-medium text-[var(--text)]">Recent failed windows</h3>
+              <table className="min-w-full border-separate border-spacing-y-2">
+                <thead>
+                  <tr className="text-left text-xs uppercase tracking-wide text-[var(--text-muted)]">
+                    <th className="px-3 py-2">At</th>
+                    <th className="px-3 py-2">Model</th>
+                    <th className="px-3 py-2">Attempts</th>
+                    <th className="px-3 py-2">Msgs</th>
+                    <th className="px-3 py-2">Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentFailures.map((f) => (
+                    <tr key={`${f.at}:${f.roomId}:${f.error}`} className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)]">
+                      <td className="whitespace-nowrap px-3 py-2 text-xs text-[var(--text-muted)]">
+                        {f.at ? new Date(f.at).toLocaleString() : "n/a"}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-sm text-[var(--text)]">{f.model || "unknown"}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-sm text-[var(--text)]">{(f.llmAttempts ?? 0).toLocaleString()}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-sm text-[var(--text)]">{(f.messageCount ?? 0).toLocaleString()}</td>
+                      <td className="max-w-[32rem] px-3 py-2 text-xs text-rose-300">{f.error || "unknown error"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }
-

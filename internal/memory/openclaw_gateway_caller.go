@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/samhotchkiss/otter-camp/internal/ws"
 )
 
 const openClawGatewayCallBridgeRequestEventType = "openclaw.gateway.call.request"
@@ -89,6 +91,7 @@ type OpenClawGatewayCaller struct {
 	expectedModel    string
 	callTimeout      time.Duration
 	now              func() time.Time
+	requireBridge    bool
 }
 
 func NewOpenClawGatewayCallerFromEnv() *OpenClawGatewayCaller {
@@ -124,6 +127,7 @@ func NewOpenClawGatewayCallerFromEnv() *OpenClawGatewayCaller {
 	expectedModel := strings.TrimSpace(strings.ToLower(firstNonEmpty(
 		strings.TrimSpace(os.Getenv("ELLIE_LLM_OPENCLAW_EXPECT_MODEL_CONTAINS")),
 		strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_EXPECT_MODEL_CONTAINS")),
+		"haiku",
 	)))
 	sessionNamespace := firstNonEmpty(
 		strings.TrimSpace(os.Getenv("ELLIE_LLM_OPENCLAW_SESSION_NAMESPACE")),
@@ -134,6 +138,7 @@ func NewOpenClawGatewayCallerFromEnv() *OpenClawGatewayCaller {
 		strings.TrimSpace(os.Getenv("ELLIE_INGESTION_OPENCLAW_BINARY")),
 		defaultEllieIngestionOpenClawBinary,
 	)
+	requireBridge := parseEllieBoolEnvDefault("ELLIE_LLM_OPENCLAW_REQUIRE_BRIDGE", true)
 
 	return &OpenClawGatewayCaller{
 		runner:           ellieIngestionOpenClawExecRunner{binary: binary},
@@ -144,6 +149,7 @@ func NewOpenClawGatewayCallerFromEnv() *OpenClawGatewayCaller {
 		expectedModel:    expectedModel,
 		callTimeout:      timeout,
 		now:              func() time.Time { return time.Now().UTC() },
+		requireBridge:    requireBridge,
 	}
 }
 
@@ -266,20 +272,14 @@ func (c *OpenClawGatewayCaller) runGatewayAgentCall(ctx context.Context, orgID s
 
 	if c.bridgeRunner != nil {
 		output, err := c.bridgeRunner.Run(ctx, trimmedOrgID, args)
-		if err == nil {
-			return output, nil
+		if err != nil {
+			return nil, fmt.Errorf("openclaw bridge call failed: %w", err)
 		}
+		return output, nil
+	}
 
-		fallbackOutput, fallbackErr := c.runner.Run(ctx, args)
-		if fallbackErr != nil {
-			return nil, fmt.Errorf(
-				"openclaw bridge call failed: %w; openclaw gateway agent call failed: %w (%s)",
-				err,
-				fallbackErr,
-				ellieIngestionOpenClawOutputSnippet(fallbackOutput),
-			)
-		}
-		return fallbackOutput, nil
+	if c.requireBridge {
+		return nil, ws.ErrOpenClawNotConnected
 	}
 
 	output, err := c.runner.Run(ctx, args)
