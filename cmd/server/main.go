@@ -374,6 +374,8 @@ func main() {
 		db, err := store.DB()
 		if err != nil {
 			log.Printf("⚠️  Agent job scheduler worker disabled; database unavailable: %v", err)
+		} else if strings.TrimSpace(cfg.OrgID) == "" {
+			log.Printf("⚠️  Agent job scheduler worker disabled; OTTER_ORG_ID is not configured")
 		} else {
 			worker := scheduler.NewAgentJobWorker(
 				store.NewAgentJobStore(db),
