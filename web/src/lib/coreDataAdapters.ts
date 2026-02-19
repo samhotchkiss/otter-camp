@@ -287,7 +287,7 @@ function readRowsFromPayload(payload: unknown, keys: string[]): unknown[] {
 export function mapInboxPayloadToCoreItems(payload: unknown, now = new Date()): CoreInboxItem[] {
   const rows = readRowsFromPayload(payload, ["items", "requests"]);
   return rows
-    .map((row, index) => {
+    .map<CoreInboxItem | null>((row, index) => {
       const record = asRecord(row);
       if (!record) {
         return null;
@@ -315,7 +315,7 @@ export function mapInboxPayloadToCoreItems(payload: unknown, now = new Date()): 
         status,
       } satisfies CoreInboxItem;
     })
-    .filter(Boolean) as CoreInboxItem[];
+    .filter((item): item is CoreInboxItem => item !== null);
 }
 
 export function mapProjectsPayloadToCoreCards(payload: unknown): CoreProjectCard[] {

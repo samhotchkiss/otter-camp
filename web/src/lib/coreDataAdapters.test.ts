@@ -59,6 +59,22 @@ describe("mapInboxPayloadToCoreItems", () => {
     expect(items[0]?.description).toBe("Awaiting response");
     expect(items[0]?.priority).toBe("medium");
   });
+
+  it("filters out malformed inbox rows that cannot map to records", () => {
+    const items = mapInboxPayloadToCoreItems({
+      items: [
+        null,
+        {
+          id: "approval-2",
+          title: "Ship release branch",
+          status: "pending",
+        },
+      ],
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.id).toBe("approval-2");
+  });
 });
 
 describe("mapProjectsPayloadToCoreCards", () => {
