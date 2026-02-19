@@ -149,6 +149,62 @@ func (f *fakeOpenClawDispatcher) IsConnected() bool {
 	return f.connected
 }
 
+func TestDMRoutingExemptAgentSlug(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isDMRoutingExemptAgentSlug("main"))
+	require.True(t, isDMRoutingExemptAgentSlug("elephant"))
+	require.True(t, isDMRoutingExemptAgentSlug("lori"))
+	require.True(t, isDMRoutingExemptAgentSlug("MAIN"))
+	require.False(t, isDMRoutingExemptAgentSlug("technonymous"))
+	require.False(t, isDMRoutingExemptAgentSlug(""))
+}
+
+func TestDMFallbackSessionKeyForAgentSlug(t *testing.T) {
+	t.Parallel()
+
+	agentID := "28d27f83-5518-468a-83bf-750f7ec1c9f5"
+	tests := []struct {
+		name      string
+		agentSlug string
+		want      string
+	}{
+		{
+			name:      "non exempt slug routes to chameleon",
+			agentSlug: "technonymous",
+			want:      canonicalChameleonSessionKey(agentID),
+		},
+		{
+			name:      "main slug stays on own session",
+			agentSlug: "main",
+			want:      "agent:main:main",
+		},
+		{
+			name:      "elephant slug stays on own session",
+			agentSlug: "elephant",
+			want:      "agent:elephant:main",
+		},
+		{
+			name:      "lori slug stays on own session",
+			agentSlug: "lori",
+			want:      "agent:lori:main",
+		},
+		{
+			name:      "no slug routes to chameleon",
+			agentSlug: "",
+			want:      canonicalChameleonSessionKey(agentID),
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, dmFallbackSessionKeyForAgentSlug(tt.agentSlug, agentID))
+		})
+	}
+}
+
 func TestMessageCRUDTaskThread(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "messages-org")
