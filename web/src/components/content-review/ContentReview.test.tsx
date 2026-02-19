@@ -8,9 +8,24 @@ describe("ContentReview state workflow", () => {
     render(<ContentReview initialMarkdown="# Title\n\nBody" reviewerName="Sam" />);
 
     expect(screen.getByTestId("content-review-shell")).toBeInTheDocument();
+    expect(screen.getByTestId("content-review-shell")).toHaveClass("min-w-0");
     expect(screen.getByTestId("review-stats-grid")).toBeInTheDocument();
+    expect(screen.getByTestId("review-stats-grid")).toHaveClass("grid-cols-1");
     expect(screen.getByTestId("review-line-lane")).toBeInTheDocument();
+    expect(screen.getByTestId("review-line-lane")).toHaveClass("min-w-0");
     expect(screen.getByTestId("review-comment-sidebar")).toBeInTheDocument();
+    expect(screen.getByTestId("review-comment-sidebar")).toHaveClass("min-w-0");
+  });
+
+  it("applies responsive overflow classes to source controls and line grid", () => {
+    render(<ContentReview initialMarkdown="# Title\n\nBody" reviewerName="Sam" />);
+
+    const controlsRow = screen.getByRole("button", { name: "Add Inline Comment" }).parentElement;
+    expect(controlsRow).toHaveClass("flex-col");
+    expect(controlsRow).toHaveClass("sm:flex-row");
+
+    const sourceGrid = screen.getByTestId("source-textarea").parentElement;
+    expect(sourceGrid).toHaveClass("overflow-x-auto");
   });
 
   it("starts in Draft and requires Ready-for-Review before approval actions", () => {

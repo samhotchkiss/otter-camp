@@ -1208,7 +1208,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
   return (
     <section
       data-testid="issue-thread-shell"
-      className="rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm"
+      className="min-w-0 rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm"
     >
       <WebSocketIssueSubscriber issueID={issueID} />
       {loading && (
@@ -1241,10 +1241,10 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
       {!loading && !notFound && !error && issue && (
         <div className="space-y-5">
           <header className="border-b border-[var(--border)] pb-4">
-            <h2 className="text-lg font-semibold text-[var(--text)]">
+            <h2 className="break-words text-lg font-semibold text-[var(--text)]">
               #{issue.issue_number} {issue.title}
             </h2>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
+            <div className="mt-2 flex flex-wrap items-start gap-2 sm:items-center">
               <p className="text-xs text-[var(--text-muted)]">
                 {issue.origin === "github" ? "GitHub" : "Local"} · {issue.state === "open" ? "Open" : "Closed"}
               </p>
@@ -1397,7 +1397,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
               </div>
 
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-alt)] px-3 py-3">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
                   <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                     Review Version History
                   </p>
@@ -1421,7 +1421,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
                   <ul className="mt-2 space-y-2" data-testid="issue-review-history-list">
                     {reviewHistory.map((item) => (
                       <li key={item.sha} className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-2">
-                        <div className="flex items-start justify-between gap-2">
+                        <div className="flex flex-col items-start justify-between gap-2 sm:flex-row">
                           <div>
                             <p className="text-xs font-semibold text-[var(--text)]">
                               {item.subject}
@@ -1505,7 +1505,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
               ))}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center">
               <select
                 aria-label="Add agent to issue"
                 className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
@@ -1531,7 +1531,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
           </div>
 
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h3 className="text-sm font-semibold text-[var(--text)]">Thread</h3>
               {comments.length > visibleCount && (
                 <button
@@ -1559,7 +1559,7 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
                       : "border-[var(--border)] bg-[var(--surface-alt)]"
                   }`}
                 >
-                  <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
                     <span>{agentNameByID.get(comment.author_agent_id) ?? comment.author_agent_id}</span>
                     <span>{formatTimestamp(comment.created_at)}</span>
                   </div>
@@ -1603,10 +1603,10 @@ export default function IssueThreadPanel({ issueID, projectID }: IssueThreadPane
               placeholder="Write a comment… use @AgentName to auto-add participants."
               className="h-24 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] outline-none ring-0 focus:border-amber-400"
             />
-            <div className="flex justify-end">
+            <div className="flex justify-stretch sm:justify-end">
               <button
                 type="submit"
-                className="rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#b79658] disabled:opacity-50"
+                className="w-full rounded-lg bg-[#C9A86C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#b79658] disabled:opacity-50 sm:w-auto"
                 disabled={submittingComment || !draft.trim() || !defaultCommentAuthorID}
               >
                 {submittingComment ? "Posting..." : "Post Comment"}

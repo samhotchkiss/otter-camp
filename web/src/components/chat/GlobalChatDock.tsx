@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useGlobalChat, type GlobalChatConversation } from "../../contexts/GlobalChatContext";
 import { API_URL } from "../../lib/api";
 import GlobalChatSurface from "./GlobalChatSurface";
+import { getChatContextCue } from "./chatContextCue";
 import { getInitials } from "../messaging/utils";
 
 const CHAT_SESSION_RESET_PREFIX = "chat_session_reset:";
@@ -103,16 +104,7 @@ export default function GlobalChatDock() {
     return null;
   }, [routeProjectID, selectedConversation]);
   const selectedContextCue = useMemo(() => {
-    if (!selectedConversation) {
-      return "Main context";
-    }
-    if (selectedConversation.type === "project") {
-      return "Project context";
-    }
-    if (selectedConversation.type === "issue") {
-      return "Issue context";
-    }
-    return "DM context";
+    return getChatContextCue(selectedConversation?.type ?? null);
   }, [selectedConversation]);
 
   useEffect(() => {
@@ -391,7 +383,10 @@ export default function GlobalChatDock() {
         <header className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-semibold text-[var(--text)]">Global Chat</h2>
-            <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">
+            <span
+              data-testid="global-chat-context-cue"
+              className="oc-chip rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]"
+            >
               {selectedContextCue}
             </span>
             {unreadBadge}
@@ -572,7 +567,7 @@ export default function GlobalChatDock() {
                             setIsFullscreen(false);
                             setDockOpen(false);
                           }}
-                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
+                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                           aria-label="Minimize global chat"
                         >
                           Minimize
@@ -585,7 +580,7 @@ export default function GlobalChatDock() {
                             }
                           }}
                           disabled={!selectedJumpTarget}
-                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {selectedJumpTarget?.label || "Open context"}
                         </button>
@@ -595,7 +590,7 @@ export default function GlobalChatDock() {
                             void handleClearSession();
                           }}
                           disabled={resettingProjectSession}
-                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                          className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {resettingProjectSession ? "Clearing..." : "Clear session"}
                         </button>

@@ -233,6 +233,7 @@ describe("InboxPage", () => {
 
     await screen.findByRole("heading", { name: /Code review.*Agent-007/ });
 
+    expect(screen.getByRole("toolbar", { name: "Inbox actions" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Filter inbox" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Archive inbox" })).toBeDisabled();
   });
@@ -280,6 +281,40 @@ describe("InboxPage", () => {
     expect(screen.getByTestId("inbox-list-container")).toHaveClass("inbox-list-container");
     expect(screen.getByTestId("inbox-row")).toHaveClass("inbox-row");
     expect(screen.getByTestId("inbox-row-meta")).toHaveClass("inbox-row-meta");
+  });
+
+  it("applies responsive overflow guard classes for header and list surfaces", async () => {
+    inboxMock.mockResolvedValue({
+      items: [
+        {
+          id: "approval-36",
+          type: "Code review",
+          command: "npm run lint",
+          agent: "Agent-007",
+          status: "pending",
+          createdAt: "2026-02-18T20:00:00Z",
+        },
+      ],
+    });
+
+    const { container } = render(<InboxPage />);
+
+    await screen.findByRole("heading", { name: /Code review.*Agent-007/ });
+
+    const headerMain = container.querySelector(".inbox-header-main");
+    expect(headerMain).toHaveClass("min-w-0");
+    expect(headerMain).toHaveClass("flex-1");
+
+    const headerActions = container.querySelector(".inbox-header-actions");
+    expect(headerActions).toHaveClass("w-full");
+    expect(headerActions).toHaveClass("sm:w-auto");
+    expect(headerActions).toHaveClass("sm:justify-end");
+
+    const tabList = screen.getByRole("tablist", { name: "Inbox filters" });
+    expect(tabList).toHaveClass("overflow-x-auto");
+    expect(tabList).toHaveClass("whitespace-nowrap");
+
+    expect(screen.getByTestId("inbox-list-container")).toHaveClass("min-w-0");
   });
 
   it("disables actions while approve is processing and removes item after success", async () => {

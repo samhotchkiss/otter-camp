@@ -276,10 +276,10 @@ export default function ProjectIssuesList({
   return (
     <section
       data-testid="project-issues-shell"
-      className="rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm"
+      className="min-w-0 rounded-3xl border border-[var(--border)] bg-[var(--surface)]/75 p-6 shadow-sm"
     >
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1">
+      <div className="mb-4 flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        <div className="flex w-full flex-col gap-1 sm:w-auto">
           <label className="text-xs font-semibold text-[var(--text-muted)]" htmlFor="issues-state-filter">
             State
           </label>
@@ -295,7 +295,7 @@ export default function ProjectIssuesList({
             <option value="closed">Closed</option>
           </select>
         </div>
-        <div className="flex flex-col gap-1">
+        <div className="flex w-full flex-col gap-1 sm:w-auto">
           <label className="text-xs font-semibold text-[var(--text-muted)]" htmlFor="issues-kind-filter">
             Type
           </label>
@@ -311,7 +311,7 @@ export default function ProjectIssuesList({
             <option value="pull_request">PRs</option>
           </select>
         </div>
-        <div className="flex flex-col gap-1">
+        <div className="flex w-full flex-col gap-1 sm:w-auto">
           <label className="text-xs font-semibold text-[var(--text-muted)]" htmlFor="issues-origin-filter">
             Origin
           </label>
@@ -367,14 +367,14 @@ export default function ProjectIssuesList({
                 <button
                   type="button"
                   onClick={() => onSelectIssue?.(issue.id)}
-                  className={`w-full rounded-xl border px-4 py-3 text-left transition ${
+                  className={`min-w-0 w-full rounded-xl border px-4 py-3 text-left transition ${
                     selected
                       ? "border-amber-500 bg-[var(--surface)] shadow-[0_0_0_1px_rgba(201,168,108,0.22)]"
                       : "border-[var(--border)] bg-[var(--surface)] hover:border-amber-300 hover:bg-[var(--surface-alt)]"
                   }`}
                 >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold text-[var(--text)]">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="break-words text-sm font-semibold text-[var(--text)]">
                       #{issue.issue_number} {issue.title}
                     </span>
                     <span className="rounded-full border border-[var(--border)] bg-[var(--surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)]">
@@ -394,7 +394,7 @@ export default function ProjectIssuesList({
                     </span>
                     <PipelineMiniProgress status={issue.work_status ?? "queued"} />
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-[var(--text-muted)]">
+                  <div className="mt-2 flex min-w-0 flex-wrap items-center gap-4 text-xs text-[var(--text-muted)]">
                     {parentIssueID !== "" && (
                       <span>
                         {parentIssue

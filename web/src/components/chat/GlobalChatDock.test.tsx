@@ -283,8 +283,10 @@ describe("GlobalChatDock", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("button", { name: "Open issue" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Open issue" }));
+    const openIssueButton = screen.getByRole("button", { name: "Open issue" });
+    expect(openIssueButton).toBeEnabled();
+    expect(openIssueButton).toHaveClass("focus-visible:ring-2");
+    await user.click(openIssueButton);
     expect(screen.getByTestId("location-probe")).toHaveTextContent("/projects/project-1/issues/issue-1");
   });
 
@@ -343,6 +345,9 @@ describe("GlobalChatDock", () => {
     );
 
     expect(screen.getByText("Project context")).toBeInTheDocument();
+    const contextCue = screen.getByTestId("global-chat-context-cue");
+    expect(contextCue).toHaveClass("oc-chip");
+    expect(contextCue).toHaveClass("uppercase");
   });
 
   it("shows a context cue for selected issue conversations", () => {

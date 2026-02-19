@@ -231,7 +231,41 @@ describe("ProjectsPage", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Recent Activity" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "View All" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View all recent activity" })).toBeInTheDocument();
+  });
+
+  it("applies responsive class hooks to projects controls and activity rows", async () => {
+    const fetchMock = vi.fn(async () => response({ projects: PROJECTS }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(
+      <MemoryRouter>
+        <ProjectsPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Otter Camp")).toBeInTheDocument();
+
+    const createButton = screen.getByRole("button", { name: "New Project" });
+    expect(createButton).toHaveClass("w-full");
+    expect(createButton).toHaveClass("sm:w-auto");
+    expect(createButton).toHaveClass("justify-center");
+
+    const projectCountHint = screen.getByText(/projects • Press/i);
+    const hintRow = projectCountHint.parentElement;
+    expect(hintRow).toHaveClass("flex-col");
+    expect(hintRow).toHaveClass("sm:flex-row");
+    expect(hintRow).toHaveClass("items-start");
+    expect(hintRow).toHaveClass("sm:items-center");
+
+    const activityHeading = screen.getByRole("heading", { name: "Recent Activity" });
+    const activitySection = activityHeading.closest("section");
+    const activityRow = activitySection?.querySelector(".divide-y > div");
+    expect(activityRow).not.toBeNull();
+    expect(activityRow).toHaveClass("flex-col");
+    expect(activityRow).toHaveClass("sm:flex-row");
+    expect(activityRow).toHaveClass("items-start");
+    expect(activityRow).toHaveClass("sm:items-center");
   });
 
   it("navigates to project detail when clicking a project card", async () => {

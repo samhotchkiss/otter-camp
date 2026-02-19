@@ -250,4 +250,19 @@ describe("DashboardLayout", () => {
     fireEvent.click(screen.getByRole("link", { name: /Inbox/ }));
     expect(screen.getByTestId("shell-layout")).toBeInTheDocument();
   });
+
+  it("marks the active primary navigation link with aria-current", async () => {
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <KeyboardShortcutsProvider>
+          <DashboardLayout>
+            <div>child</div>
+          </DashboardLayout>
+        </KeyboardShortcutsProvider>
+      </MemoryRouter>,
+    );
+
+    const activeLink = await screen.findByRole("link", { name: "Projects" });
+    expect(activeLink).toHaveAttribute("aria-current", "page");
+  });
 });

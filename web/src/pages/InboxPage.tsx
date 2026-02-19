@@ -147,7 +147,7 @@ export default function InboxPage() {
 
   if (loading) {
     return (
-      <div className="inbox-container">
+      <div className="inbox-container min-w-0">
         <div className="mb-6">
           <h1 className="page-title">
             Inbox
@@ -165,7 +165,7 @@ export default function InboxPage() {
 
   if (error) {
     return (
-      <div className="inbox-container">
+      <div className="inbox-container min-w-0">
         <div className="mb-6">
           <h1 className="page-title">
             Inbox
@@ -190,9 +190,9 @@ export default function InboxPage() {
   }
 
   return (
-    <div className="inbox-container">
+    <div className="inbox-container min-w-0">
       <div className="inbox-header" data-testid="inbox-header">
-        <div className="inbox-header-main">
+        <div className="inbox-header-main min-w-0 flex-1">
           <h1 className="page-title">
             Inbox
           </h1>
@@ -200,7 +200,11 @@ export default function InboxPage() {
             {filteredItems.length} items requiring your attention
           </p>
         </div>
-        <div className="inbox-header-actions" aria-label="Inbox actions">
+        <div
+          className="inbox-header-actions w-full sm:w-auto sm:justify-end"
+          aria-label="Inbox actions"
+          role="toolbar"
+        >
           <button type="button" className="inbox-icon-action" aria-label="Filter inbox" disabled>
             Filter
           </button>
@@ -210,7 +214,11 @@ export default function InboxPage() {
         </div>
       </div>
 
-      <div className="inbox-filter-tabs" role="tablist" aria-label="Inbox filters">
+      <div
+        className="inbox-filter-tabs overflow-x-auto whitespace-nowrap"
+        role="tablist"
+        aria-label="Inbox filters"
+      >
         <button
           type="button"
           role="tab"
@@ -240,7 +248,7 @@ export default function InboxPage() {
         </button>
       </div>
 
-      <div className="inbox-list-container oc-panel" data-testid="inbox-list-container">
+      <div className="inbox-list-container oc-panel min-w-0" data-testid="inbox-list-container">
         <div className="inbox-list">
         {filteredItems.length === 0 ? (
           <div className="inbox-empty oc-panel">
@@ -251,7 +259,7 @@ export default function InboxPage() {
           filteredItems.map((item) => (
             <div
               key={item.id}
-              className={`inbox-row inbox-item oc-card oc-card-interactive ${item.urgent ? "urgent" : ""}`}
+              className={`inbox-row inbox-item oc-card oc-card-interactive min-w-0 ${item.urgent ? "urgent" : ""}`}
               data-testid="inbox-row"
             >
               <div className="item-header">

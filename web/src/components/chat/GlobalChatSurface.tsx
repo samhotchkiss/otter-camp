@@ -22,6 +22,7 @@ import type {
   GlobalChatConversation,
 } from "../../contexts/GlobalChatContext";
 import { API_URL } from "../../lib/api";
+import { getChatContextCue } from "./chatContextCue";
 
 const ORG_STORAGE_KEY = "otter-camp-org-id";
 const USER_NAME_STORAGE_KEY = "otter-camp-user-name";
@@ -1450,16 +1451,7 @@ export default function GlobalChatSurface({
     [conversationContextLabel, conversationKey, conversationTitle],
   );
   const surfaceContextCue = useMemo(() => {
-    if (conversationType === "project") {
-      return "Project context";
-    }
-    if (conversationType === "issue") {
-      return "Issue context";
-    }
-    if (conversationType === "dm") {
-      return "DM context";
-    }
-    return "Main context";
+    return getChatContextCue(conversationType);
   }, [conversationType]);
 
   if (loading) {
@@ -1481,7 +1473,10 @@ export default function GlobalChatSurface({
       onDrop={onContainerDrop}
     >
       <div className="border-b border-[var(--border)]/70 bg-[var(--surface-alt)]/40 px-4 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+        <p
+          data-testid="global-chat-surface-context-cue"
+          className="oc-chip inline-flex rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]"
+        >
           {surfaceContextCue}
         </p>
         <p className="truncate text-xs text-[var(--text-muted)]">{conversationContextLabel}</p>
