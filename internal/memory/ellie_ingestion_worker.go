@@ -79,6 +79,10 @@ type EllieIngestionLLMExtractor interface {
 	Extract(ctx context.Context, input EllieIngestionLLMExtractionInput) (EllieIngestionLLMExtractionResult, error)
 }
 
+type EllieIngestionPauseChecker interface {
+	ShouldPause(ctx context.Context, orgID string) (bool, error)
+}
+
 type EllieIngestionWorkerConfig struct {
 	OrgID                string
 	Interval             time.Duration
@@ -91,6 +95,7 @@ type EllieIngestionWorkerConfig struct {
 	WindowGap            time.Duration
 	Mode                 EllieIngestionMode
 	LLMExtractor         EllieIngestionLLMExtractor
+	PauseChecker         EllieIngestionPauseChecker
 }
 
 type EllieIngestionWorker struct {
@@ -106,6 +111,7 @@ type EllieIngestionWorker struct {
 	WindowGap            time.Duration
 	Mode                 EllieIngestionMode
 	LLMExtractor         EllieIngestionLLMExtractor
+	PauseChecker         EllieIngestionPauseChecker
 	Logf                 func(format string, args ...any)
 }
 
@@ -156,6 +162,7 @@ func NewEllieIngestionWorker(store EllieIngestionStore, cfg EllieIngestionWorker
 		WindowGap:            windowGap,
 		Mode:                 mode,
 		LLMExtractor:         cfg.LLMExtractor,
+		PauseChecker:         cfg.PauseChecker,
 		Logf:                 log.Printf,
 	}
 }
@@ -182,6 +189,12 @@ func (w *EllieIngestionWorker) Start(ctx context.Context) {
 		if err := ctx.Err(); err != nil {
 			return
 		}
+		if w.shouldPause(ctx) {
+			if err := sleepWithContext(ctx, w.Interval); err != nil {
+				return
+			}
+			continue
+		}
 		result, err := w.RunOnce(ctx)
 		if err != nil {
 			if w.Logf != nil {
@@ -203,6 +216,24 @@ func (w *EllieIngestionWorker) Start(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (w *EllieIngestionWorker) shouldPause(ctx context.Context) bool {
+	if w == nil || w.PauseChecker == nil {
+		return false
+	}
+	orgID := strings.TrimSpace(w.OrgID)
+	if orgID == "" {
+		return false
+	}
+	pause, err := w.PauseChecker.ShouldPause(ctx, orgID)
+	if err != nil {
+		if w.Logf != nil {
+			w.Logf("ellie ingestion pause check failed org=%s: %v", orgID, err)
+		}
+		return false
+	}
+	return pause
 }
 
 func (w *EllieIngestionWorker) RunOnce(ctx context.Context) (EllieIngestionRunResult, error) {
@@ -730,6 +761,10 @@ func normalizeEllieLLMExtractedCandidate(
 	if len(window) == 0 {
 		return store.CreateEllieExtractedMemoryInput{}, false
 	}
+	scoringWindow := normalizeEllieIngestionWindowForScoring(window)
+	if len(scoringWindow) == 0 {
+		scoringWindow = window
+	}
 
 	kind := strings.ToLower(strings.TrimSpace(candidate.Kind))
 	switch kind {
@@ -773,7 +808,7 @@ func normalizeEllieLLMExtractedCandidate(
 
 	metadata := map[string]any{
 		"source_table":       "chat_messages",
-		"source_message_ids": ellieWindowMessageIDs(window),
+		"source_message_ids": ellieWindowMessageIDs(scoringWindow),
 		"source_room_id":     room.RoomID,
 		"extraction_method":  "llm_windowed",
 	}
@@ -800,7 +835,7 @@ func normalizeEllieLLMExtractedCandidate(
 
 	// Stage 2-lite: score and filter candidates so hosted and local run the same
 	// "high recall -> deterministic keep" pipeline.
-	score, decision := ellieIngestionStage2Decision(kind, title, content, metadata, window)
+	score, decision := ellieIngestionStage2Decision(kind, title, content, metadata, scoringWindow)
 	metadata["accept_score"] = score
 	metadata["accept_decision"] = decision
 	// Keep review-scored candidates to match local high-recall behavior.
@@ -815,7 +850,7 @@ func normalizeEllieLLMExtractedCandidate(
 		originHint, _ := metadata["origin_hint"].(string)
 		switch strings.TrimSpace(strings.ToLower(originHint)) {
 		case "queued_task", "system_artifact", "log_output":
-			if !ellieIngestionCandidateHasUserEvidence(metadata, window) {
+			if !ellieIngestionCandidateHasUserEvidence(metadata, scoringWindow) {
 				return store.CreateEllieExtractedMemoryInput{}, false
 			}
 		}
@@ -856,6 +891,19 @@ func normalizeEllieLLMExtractedCandidate(
 		OccurredAt:           window[len(window)-1].CreatedAt,
 		Sensitivity:          sensitivity,
 	}, true
+}
+
+func normalizeEllieIngestionWindowForScoring(window []store.EllieIngestionMessage) []store.EllieIngestionMessage {
+	if len(window) == 0 {
+		return nil
+	}
+	out := make([]store.EllieIngestionMessage, 0, len(window))
+	for _, msg := range window {
+		if normalized, ok := normalizeEllieIngestionPromptMessage(msg); ok {
+			out = append(out, normalized)
+		}
+	}
+	return out
 }
 
 func ellieIngestionHasSensitiveLeak(text string) bool {

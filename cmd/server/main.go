@@ -29,6 +29,24 @@ var (
 	runServerAutoMigrate = automigrate.Run
 )
 
+type ellieIngestionMigrationPauseChecker struct {
+	ProgressStore *store.MigrationProgressStore
+}
+
+func (c *ellieIngestionMigrationPauseChecker) ShouldPause(ctx context.Context, orgID string) (bool, error) {
+	if c == nil || c.ProgressStore == nil {
+		return false, nil
+	}
+	progress, err := c.ProgressStore.GetByType(ctx, strings.TrimSpace(orgID), "memory_extraction")
+	if err != nil {
+		return false, err
+	}
+	if progress == nil {
+		return false, nil
+	}
+	return progress.Status == store.MigrationProgressStatusRunning, nil
+}
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -125,6 +143,7 @@ func main() {
 					WindowGap:            cfg.EllieIngestion.WindowGap,
 					Mode:                 memory.EllieIngestionMode(cfg.EllieIngestion.Mode),
 					LLMExtractor:         llmExtractor,
+					PauseChecker:         &ellieIngestionMigrationPauseChecker{ProgressStore: store.NewMigrationProgressStore(db)},
 				},
 			)
 			startWorker(worker.Start)
