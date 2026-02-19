@@ -1,222 +1,199 @@
-import { useState, useEffect, useCallback } from "react";
-import api, { Approval } from "../lib/api";
+import { useMemo, useState } from "react";
+import { NavLink } from "react-router-dom";
 
-type ItemType = "approval" | "review" | "decision" | "blocked";
-type InboxFilter = "all" | "unread" | "urgent";
+type InboxFilter = "all" | "unread" | "starred";
 
-interface InboxItem extends Approval {
-  itemType: ItemType;
-  unread: boolean;
-  urgent: boolean;
+type InboxItem = {
+  id: string;
+  issueId?: string;
+  type: "approval" | "issue" | "notification" | "mention";
+  title: string;
   description: string;
-}
+  project: string;
+  from: string;
+  timestamp: string;
+  priority: "critical" | "high" | "medium" | "low";
+  read: boolean;
+  starred: boolean;
+};
 
-function getItemType(approval: Approval): ItemType {
-  const type = approval.type?.toLowerCase() || "";
-  if (type.includes("review")) return "review";
-  if (type.includes("decision")) return "decision";
-  if (type.includes("blocked") || approval.status === "blocked") return "blocked";
-  return "approval";
-}
+const INITIAL_ITEMS: InboxItem[] = [
+  {
+    id: "1",
+    issueId: "ISS-234",
+    type: "approval",
+    title: "PR #234 awaiting approval",
+    description: "Authentication flow refactor ready for review",
+    project: "Customer Portal",
+    from: "Agent-042",
+    timestamp: "2 min ago",
+    priority: "high",
+    read: false,
+    starred: false,
+  },
+  {
+    id: "2",
+    issueId: "ISS-209",
+    type: "issue",
+    title: "Critical: API rate limit exceeded",
+    description: "Multiple requests hitting rate limit on /api/users endpoint",
+    project: "API Gateway",
+    from: "System",
+    timestamp: "5 min ago",
+    priority: "critical",
+    read: false,
+    starred: true,
+  },
+  {
+    id: "3",
+    issueId: "ISS-209",
+    type: "mention",
+    title: "You were mentioned in a discussion",
+    description: "Agent-127 mentioned you in ISS-209 comments",
+    project: "API Gateway",
+    from: "Agent-127",
+    timestamp: "12 min ago",
+    priority: "medium",
+    read: false,
+    starred: false,
+  },
+  {
+    id: "4",
+    issueId: "ISS-198",
+    type: "approval",
+    title: "PR #231 approved and merged",
+    description: "Database optimization changes have been deployed",
+    project: "Internal Tools",
+    from: "Agent-089",
+    timestamp: "1 hour ago",
+    priority: "low",
+    read: true,
+    starred: false,
+  },
+  {
+    id: "5",
+    type: "notification",
+    title: "GitHub sync completed",
+    description: "Successfully synced 15 commits from ottercamp/customer-portal",
+    project: "Customer Portal",
+    from: "GitHub Bot",
+    timestamp: "2 hours ago",
+    priority: "low",
+    read: true,
+    starred: false,
+  },
+  {
+    id: "6",
+    issueId: "ISS-311",
+    type: "issue",
+    title: "New issue: Update documentation",
+    description: "README needs updates for new authentication flow",
+    project: "Customer Portal",
+    from: "Agent-042",
+    timestamp: "3 hours ago",
+    priority: "medium",
+    read: true,
+    starred: false,
+  },
+];
 
-function getItemIcon(itemType: ItemType): string {
-  switch (itemType) {
-    case "approval":
-      return "📋";
-    case "review":
-      return "👀";
-    case "decision":
-      return "🤔";
-    case "blocked":
-      return "🚫";
-    default:
-      return "📋";
+function typeGlyph(type: InboxItem["type"]): string {
+  if (type === "approval") {
+    return "PR";
   }
-}
-
-function getChipVariant(itemType: ItemType): string {
-  switch (itemType) {
-    case "review":
-      return "oc-chip--info";
-    case "decision":
-      return "oc-chip--success";
-    case "blocked":
-      return "oc-chip--danger";
-    case "approval":
-    default:
-      return "oc-chip--warning";
+  if (type === "issue") {
+    return "!";
   }
-}
-
-function mapToInboxItem(approval: Approval): InboxItem {
-  const itemType = getItemType(approval);
-  const unread = approval.status === "pending";
-  const urgent = unread || approval.status === "blocked" || itemType === "blocked";
-  return {
-    ...approval,
-    itemType,
-    unread,
-    urgent,
-    description: approval.command || `${approval.type} request from ${approval.agent}`,
-  };
-}
-
-function formatTime(dateString: string): string {
-  try {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
-
-    if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
-  } catch {
-    return dateString;
+  if (type === "mention") {
+    return "@";
   }
+  return "OK";
+}
+
+function priorityClass(priority: InboxItem["priority"]): string {
+  if (priority === "critical") {
+    return "bg-rose-500";
+  }
+  if (priority === "high") {
+    return "bg-orange-500";
+  }
+  if (priority === "medium") {
+    return "bg-amber-500";
+  }
+  return "bg-stone-600";
+}
+
+function surfaceClass(type: InboxItem["type"]): string {
+  if (type === "approval") {
+    return "bg-amber-500/10 text-amber-400 border-amber-500/20";
+  }
+  if (type === "issue") {
+    return "bg-rose-500/10 text-rose-400 border-rose-500/20";
+  }
+  if (type === "mention") {
+    return "bg-lime-500/10 text-lime-400 border-lime-500/20";
+  }
+  return "bg-stone-700/50 text-stone-400 border-stone-600/50";
 }
 
 export default function InboxPage() {
-  const [items, setItems] = useState<InboxItem[]>([]);
   const [filter, setFilter] = useState<InboxFilter>("all");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [items, setItems] = useState<InboxItem[]>(INITIAL_ITEMS);
 
-  useEffect(() => {
-    async function fetchApprovals() {
-      try {
-        setLoading(true);
-        setError(null);
-        const response = await api.inbox();
-        const inboxItems = response.items.map(mapToInboxItem);
-        setItems(inboxItems);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to fetch approvals");
-      } finally {
-        setLoading(false);
-      }
-    }
+  const unreadCount = useMemo(() => items.filter((item) => !item.read).length, [items]);
+  const starredCount = useMemo(() => items.filter((item) => item.starred).length, [items]);
+  const filteredItems = useMemo(
+    () =>
+      items.filter((item) => {
+        if (filter === "unread") return !item.read;
+        if (filter === "starred") return item.starred;
+        return true;
+      }),
+    [filter, items],
+  );
 
-    fetchApprovals();
-  }, []);
+  const markAsRead = (id: string) => {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, read: true } : item)));
+  };
 
-  const [processingId, setProcessingId] = useState<string | null>(null);
-  const unreadCount = items.filter((item) => item.unread).length;
-  const urgentCount = items.filter((item) => item.urgent).length;
-  const filteredItems = items.filter((item) => {
-    if (filter === "unread") return item.unread;
-    if (filter === "urgent") return item.urgent;
-    return true;
-  });
-
-  const handleApprove = useCallback(async (id: string) => {
-    if (processingId) return; // Prevent double-click
-    
-    setProcessingId(id);
-    try {
-      await api.approveItem(id);
-      // Remove item from list with smooth transition
-      setItems((prev) => prev.filter((item) => item.id !== id));
-    } catch (err) {
-      console.error("Approve failed:", err);
-      setError(err instanceof Error ? err.message : "Failed to approve");
-    } finally {
-      setProcessingId(null);
-    }
-  }, [processingId]);
-
-  const handleReject = useCallback(async (id: string) => {
-    if (processingId) return; // Prevent double-click
-    
-    setProcessingId(id);
-    try {
-      await api.rejectItem(id);
-      // Remove item from list with smooth transition
-      setItems((prev) => prev.filter((item) => item.id !== id));
-    } catch (err) {
-      console.error("Reject failed:", err);
-      setError(err instanceof Error ? err.message : "Failed to reject");
-    } finally {
-      setProcessingId(null);
-    }
-  }, [processingId]);
-
-  if (loading) {
-    return (
-      <div className="inbox-container">
-        <div className="mb-6">
-          <h1 className="page-title">
-            Inbox
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            Pending approvals and items requiring your attention
-          </p>
-        </div>
-        <div className="inbox-list">
-          <div className="inbox-loading oc-panel">Loading...</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="inbox-container">
-        <div className="mb-6">
-          <h1 className="page-title">
-            Inbox
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            Pending approvals and items requiring your attention
-          </p>
-        </div>
-        <div className="inbox-list">
-          <div className="inbox-error oc-panel">
-            <p>Error: {error}</p>
-            <button
-              className="btn btn-secondary oc-toolbar-button mt-4"
-              onClick={() => window.location.reload()}
-            >
-              Retry
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const toggleStar = (id: string) => {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, starred: !item.starred } : item)));
+  };
 
   return (
-    <div className="inbox-container">
-      <div className="inbox-header" data-testid="inbox-header">
-        <div className="inbox-header-main">
-          <h1 className="page-title">
-            Inbox
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            {filteredItems.length} items requiring your attention
-          </p>
+    <div className="min-w-0 space-y-4 md:space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="mb-1 text-2xl font-bold text-stone-100 md:text-3xl">Inbox</h1>
+          <p className="text-sm text-stone-400">{filteredItems.length} items waiting for your attention</p>
         </div>
-        <div className="inbox-header-actions" aria-label="Inbox actions">
-          <button type="button" className="inbox-icon-action" aria-label="Filter inbox" disabled>
-            Filter
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="rounded-md p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200"
+            aria-label="Filter inbox"
+          >
+            FLT
           </button>
-          <button type="button" className="inbox-icon-action" aria-label="Archive inbox" disabled>
-            Archive
+          <button
+            type="button"
+            className="rounded-md p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200"
+            aria-label="Archive inbox"
+          >
+            ARC
           </button>
         </div>
       </div>
 
-      <div className="inbox-filter-tabs" role="tablist" aria-label="Inbox filters">
+      <div className="flex items-center gap-2 overflow-x-auto border-b border-stone-800" role="tablist" aria-label="Inbox filters">
         <button
           type="button"
           role="tab"
           aria-selected={filter === "all"}
-          className={`inbox-filter-tab ${filter === "all" ? "active" : ""}`}
           onClick={() => setFilter("all")}
+          className={`whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors ${
+            filter === "all" ? "border-b-2 border-amber-400 text-amber-400" : "text-stone-400 hover:text-stone-200"
+          }`}
         >
           All ({items.length})
         </button>
@@ -224,84 +201,120 @@ export default function InboxPage() {
           type="button"
           role="tab"
           aria-selected={filter === "unread"}
-          className={`inbox-filter-tab ${filter === "unread" ? "active" : ""}`}
           onClick={() => setFilter("unread")}
+          className={`whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors ${
+            filter === "unread" ? "border-b-2 border-amber-400 text-amber-400" : "text-stone-400 hover:text-stone-200"
+          }`}
         >
           Unread ({unreadCount})
         </button>
         <button
           type="button"
           role="tab"
-          aria-selected={filter === "urgent"}
-          className={`inbox-filter-tab ${filter === "urgent" ? "active" : ""}`}
-          onClick={() => setFilter("urgent")}
+          aria-selected={filter === "starred"}
+          onClick={() => setFilter("starred")}
+          className={`whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors ${
+            filter === "starred" ? "border-b-2 border-amber-400 text-amber-400" : "text-stone-400 hover:text-stone-200"
+          }`}
         >
-          Urgent ({urgentCount})
+          Starred ({starredCount})
         </button>
       </div>
 
-      <div className="inbox-list-container oc-panel" data-testid="inbox-list-container">
-        <div className="inbox-list">
-        {filteredItems.length === 0 ? (
-          <div className="inbox-empty oc-panel">
-            <span className="inbox-empty-icon">📭</span>
-            <p>No pending items</p>
-          </div>
-        ) : (
-          filteredItems.map((item) => (
-            <div
-              key={item.id}
-              className={`inbox-row inbox-item oc-card oc-card-interactive ${item.urgent ? "urgent" : ""}`}
-              data-testid="inbox-row"
-            >
-              <div className="item-header">
-                <div className={`item-icon ${item.itemType}`}>
-                  {getItemIcon(item.itemType)}
-                </div>
-                <div className="item-main">
-                  <h3 className="item-title">
-                    {item.type} — {item.agent}
-                  </h3>
-                  <div className="item-meta">
-                    <span className={`badge-type badge-${item.itemType} oc-chip ${getChipVariant(item.itemType)}`}>
-                      {item.itemType}
-                    </span>
-                    {item.unread ? <span className="item-unread">Unread</span> : null}
-                    <span className={`item-status ${item.status}`}>
-                      {item.status}
-                    </span>
-                    <span className="item-time">{formatTime(item.createdAt)}</span>
+      <div className="divide-y divide-stone-800 overflow-hidden rounded-lg border border-stone-800 bg-stone-900" data-testid="inbox-list-surface">
+        {filteredItems.map((item) => {
+          const content = (
+            <>
+              <div className="flex gap-3 md:gap-4">
+                <div className={`mt-2 h-2 w-2 shrink-0 rounded-full ${priorityClass(item.priority)}`}></div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-1 flex flex-wrap items-center gap-2">
+                        <span className={`inline-flex h-5 min-w-6 items-center justify-center rounded border px-1 text-[10px] font-semibold ${surfaceClass(item.type)}`}>
+                          {typeGlyph(item.type)}
+                        </span>
+                        <h3 className={`text-sm font-medium md:text-base ${item.read ? "text-stone-300" : "text-stone-100"}`}>{item.title}</h3>
+                      </div>
+                      <p className="text-xs text-stone-400 md:text-sm">{item.description}</p>
+                    </div>
+                    <span className="whitespace-nowrap text-xs text-stone-600">{item.timestamp}</span>
+                  </div>
+
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-stone-500">
+                      <span>{item.project}</span>
+                      <span className="hidden sm:inline">•</span>
+                      <span>from {item.from}</span>
+                      {item.issueId ? (
+                        <>
+                          <span className="hidden sm:inline">•</span>
+                          <span className="font-mono text-amber-400">{item.issueId}</span>
+                        </>
+                      ) : null}
+                    </div>
+
+                    <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          toggleStar(item.id);
+                        }}
+                        className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-700 hover:text-amber-400"
+                        aria-label={`Toggle star for ${item.title}`}
+                      >
+                        {item.starred ? "★" : "☆"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          markAsRead(item.id);
+                        }}
+                        className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-700 hover:text-lime-400"
+                        aria-label={`Mark ${item.title} as read`}
+                      >
+                        ✓
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded p-1.5 text-stone-400 transition-colors hover:bg-stone-700 hover:text-stone-200"
+                        aria-label={`Archive ${item.title}`}
+                      >
+                        ▣
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-              <div className="inbox-row-meta" data-testid="inbox-row-meta">
-                <span className="inbox-row-type">{item.type}</span>
-                <span className="inbox-row-from">from {item.agent}</span>
-                <span className="inbox-row-timestamp">{formatTime(item.createdAt)}</span>
+            </>
+          );
+
+          if (!item.issueId) {
+            return (
+              <div
+                key={item.id}
+                className={`group p-4 transition-colors hover:bg-stone-800/50 md:p-6 ${item.read ? "" : "bg-stone-950/30"}`}
+              >
+                {content}
               </div>
-              <div className="item-body">
-                <p className="item-desc">{item.description}</p>
-                <div className="item-actions oc-toolbar">
-                  <button
-                    className="btn btn-primary oc-toolbar-button oc-toolbar-button--primary"
-                    onClick={() => handleApprove(item.id)}
-                    disabled={!!processingId}
-                  >
-                    {processingId === item.id ? "Processing..." : "Approve"}
-                  </button>
-                  <button
-                    className="btn btn-secondary oc-toolbar-button"
-                    onClick={() => handleReject(item.id)}
-                    disabled={!!processingId}
-                  >
-                    {processingId === item.id ? "Processing..." : "Reject"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))
-        )}
-        </div>
+            );
+          }
+
+          return (
+            <NavLink
+              key={item.id}
+              to={`/issue/${encodeURIComponent(item.issueId)}`}
+              className={`group block min-w-0 p-4 transition-colors hover:bg-stone-800/50 md:p-6 ${item.read ? "" : "bg-stone-950/30"}`}
+            >
+              {content}
+            </NavLink>
+          );
+        })}
       </div>
     </div>
   );

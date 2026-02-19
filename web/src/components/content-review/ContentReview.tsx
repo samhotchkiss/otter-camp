@@ -289,7 +289,7 @@ export default function ContentReview({
 
   return (
     <section
-      className="space-y-6 rounded-3xl border border-slate-200 bg-white/70 p-6 shadow-lg backdrop-blur dark:border-slate-800 dark:bg-slate-900/40"
+      className="min-w-0 space-y-6 rounded-3xl border border-slate-200 bg-white/70 p-6 shadow-lg backdrop-blur dark:border-slate-800 dark:bg-slate-900/40"
       data-testid="content-review-shell"
     >
       <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -349,7 +349,7 @@ export default function ContentReview({
       </header>
 
       <div
-        className="grid grid-cols-2 gap-3 sm:grid-cols-4"
+        className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
         data-testid="review-stats-grid"
       >
         <div className="rounded-2xl border border-slate-200 bg-white/80 p-3 dark:border-slate-800 dark:bg-slate-900/40">
@@ -370,8 +370,8 @@ export default function ContentReview({
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-4" data-testid="review-line-lane">
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 space-y-4" data-testid="review-line-lane">
           <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white/70 p-2 dark:border-slate-800 dark:bg-slate-900/40">
             {DOCUMENT_VIEWS.map((mode) => (
               <button
@@ -391,7 +391,7 @@ export default function ContentReview({
           </div>
           {documentView === "source" ? (
             <div className="space-y-4 rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-900/40">
-              <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Line-by-line Review</p>
                 {!readOnly && (
                   <>
@@ -412,7 +412,7 @@ export default function ContentReview({
                   </>
                 )}
               </div>
-              <div className="grid grid-cols-[44px_minmax(0,1fr)] gap-3">
+              <div className="grid min-w-0 grid-cols-[44px_minmax(0,1fr)] gap-3 overflow-x-auto">
                 <div className="rounded-xl border border-slate-200 bg-slate-50/70 py-2 text-right text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
                   {markdownLines.map((_, index) => (
                     <p key={`line-${index + 1}`} className="px-2 py-[0.18rem]">
@@ -538,7 +538,7 @@ export default function ContentReview({
         </div>
 
         <aside
-          className="space-y-3 rounded-2xl border border-slate-200 bg-white/80 p-4 dark:border-slate-800 dark:bg-slate-900/40"
+          className="min-w-0 space-y-3 rounded-2xl border border-slate-200 bg-white/80 p-4 dark:border-slate-800 dark:bg-slate-900/40"
           data-testid="review-comment-sidebar"
         >
           <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Comment Sidebar</h3>

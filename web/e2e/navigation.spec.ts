@@ -6,6 +6,61 @@ test.describe("Navigation", () => {
     await bootstrapAuthenticatedSession(page);
   });
 
+  test("figma-parity-shell baseline scaffold renders", async ({ page }) => {
+    await page.goto("/inbox");
+
+    await expect(page.getByTestId("shell-layout")).toBeVisible();
+    await expect(page.getByTestId("shell-sidebar")).toBeVisible();
+    await expect(page.getByTestId("shell-header")).toBeVisible();
+    await expect(page.getByTestId("shell-workspace")).toBeVisible();
+    await expect(page.getByTestId("shell-chat-slot")).toBeVisible();
+    await expect(page.getByText("Otter Camp")).toBeVisible();
+    await expect(page.getByText("Agent Ops")).toBeVisible();
+    await expect(page.getByPlaceholder("Search...")).toBeVisible();
+  });
+
+  test("figma-parity-inbox baseline content and filters render", async ({ page }) => {
+    await page.goto("/inbox");
+
+    await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "All (6)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Unread (3)" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Starred (1)" })).toBeVisible();
+    await expect(page.getByText("PR #234 awaiting approval")).toBeVisible();
+
+    await page.getByRole("tab", { name: "Starred (1)" }).click();
+    await expect(page.getByText("Critical: API rate limit exceeded")).toBeVisible();
+  });
+
+  test("figma-parity-projects baseline cards and activity render", async ({ page }) => {
+    await page.goto("/projects");
+
+    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+    await expect(page.getByText("Git-backed repositories & tracking")).toBeVisible();
+    await expect(page.getByRole("button", { name: "New Project" })).toBeVisible();
+    const customerPortalCard = page.getByTestId("project-card-project-1");
+    await expect(customerPortalCard).toBeVisible();
+    await expect(customerPortalCard.getByText("Customer Portal")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Recent Activity" })).toBeVisible();
+
+    await customerPortalCard.click();
+    await expect(page).toHaveURL(/\/projects\/project-1$/);
+  });
+
+  test("figma-parity-project-detail baseline right rail and explorer render", async ({ page }) => {
+    await page.goto("/projects/project-2");
+
+    await expect(page.getByRole("heading", { name: "API Gateway" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Open Issues" })).toBeVisible();
+    await expect(page.getByTestId("project-detail-right-rail")).toBeVisible();
+    await expect(page.getByTestId("project-detail-file-explorer")).toBeVisible();
+    const readmeLink = page.getByRole("link", { name: /README\.md/i });
+    await expect(readmeLink).toBeVisible();
+
+    await readmeLink.click();
+    await expect(page).toHaveURL(/\/review\/docs%2FREADME\.md$/);
+  });
+
   test("shows primary topbar links", async ({ page }) => {
     await page.goto("/");
 
@@ -31,6 +86,113 @@ test.describe("Navigation", () => {
 
     await page.getByRole("link", { name: "Knowledge" }).click();
     await expect(page).toHaveURL(/\/knowledge$/);
+  });
+
+  test("smoke inbox projects issue review chat journey continuity", async ({ page }) => {
+    const projectID = "project-1";
+    const projectName = "Design System Refresh";
+    const issueID = "issue-1";
+    const issueTitle = "Cross-route continuity issue";
+
+    await page.route("**/api/projects**", async (route) => {
+      const url = route.request().url();
+      if (url.includes(`/api/projects/${projectID}`)) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: projectID,
+            name: projectName,
+            status: "active",
+            description: "Redesign hardening",
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          projects: [
+            {
+              id: projectID,
+              name: projectName,
+              status: "active",
+              description: "Redesign hardening",
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.route("**/api/issues**", async (route) => {
+      const url = route.request().url();
+      if (url.includes(`/api/issues/${issueID}`)) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            issue: {
+              id: issueID,
+              issue_number: 41,
+              title: issueTitle,
+              project_id: projectID,
+              status: "open",
+              work_status: "in_progress",
+              priority: "P1",
+              document_path: "",
+            },
+            participants: [],
+            comments: [],
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [
+            {
+              id: issueID,
+              issue_number: 41,
+              title: issueTitle,
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "in_progress",
+              priority: "P1",
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.goto("/inbox");
+    await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+
+    await page.getByRole("link", { name: "Projects" }).click();
+    await expect(page).toHaveURL(/\/projects$/);
+
+    await expect(page.getByTestId("project-card-project-1")).toBeVisible();
+    await page.getByTestId("project-card-project-1").click();
+    await expect(page).toHaveURL(/\/projects\/project-1$/);
+    await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
+
+    await page.getByRole("tab", { name: "List" }).click();
+    await page.getByRole("button", { name: /cross-route continuity issue/i }).click();
+    await expect(page).toHaveURL(/\/projects\/project-1\/issues\/issue-1$/);
+    await expect(page.getByRole("heading", { name: "Issue #issue-1" })).toBeVisible();
+
+    await page.goto("/review/docs%2Fplaybook.md");
+    await expect(page).toHaveURL(/\/review\/docs%2Fplaybook\.md$/);
+    await expect(page.getByRole("heading", { name: "Content Review" })).toBeVisible();
+    await expect(page.getByTestId("content-review-route-path")).toContainText("docs/playbook.md");
+
+    await page.getByRole("button", { name: "Open global chat" }).click();
+    await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
   });
 
   test("opens avatar menu and navigates to settings", async ({ page }) => {
