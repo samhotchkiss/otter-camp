@@ -37,4 +37,29 @@ test.describe("Figma parity snapshots", () => {
       });
     }
   });
+
+  test("figma-parity-projects screenshot baselines", async ({ page }) => {
+    for (const viewport of VIEWPORTS) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto("/projects");
+      await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-projects-${viewport.name}.png`, {
+        animations: "disabled",
+      });
+    }
+  });
+
+  test("figma-parity-project-detail screenshot baselines", async ({ page }) => {
+    for (const viewport of VIEWPORTS) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto("/projects/project-2");
+      await expect(page.getByRole("heading", { name: "API Gateway" })).toBeVisible();
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(
+        `figma-parity-project-detail-${viewport.name}.png`,
+        {
+          animations: "disabled",
+        },
+      );
+    }
+  });
 });
