@@ -115,4 +115,37 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("0 open issue(s) queued")).toBeInTheDocument();
     expect(screen.getAllByText("needs approval").length).toBeGreaterThan(0);
   });
+
+  it("renders todo activity rows when no projects need approval or active work", async () => {
+    projectsMock.mockResolvedValueOnce({
+      projects: [
+        {
+          id: "project-a",
+          name: "Planning Board",
+          repo_url: "https://github.com/ottercamp/planning-board.git",
+          taskCount: 5,
+          completedCount: 5,
+          in_progress: 0,
+          needs_approval: 0,
+          tech_stack: ["TypeScript"],
+        },
+        {
+          id: "project-b",
+          name: "Content Hub",
+          repo_url: "https://github.com/ottercamp/content-hub.git",
+          taskCount: 3,
+          completedCount: 3,
+          in_progress: 0,
+          needs_approval: 0,
+          tech_stack: ["Go"],
+        },
+      ],
+    });
+
+    renderProjectsPage();
+
+    expect(await screen.findByRole("heading", { name: "Recent Activity" })).toBeInTheDocument();
+    expect(screen.getAllByText("0 open issue(s) queued")).toHaveLength(2);
+    expect(screen.getAllByText("todo")).toHaveLength(2);
+  });
 });
