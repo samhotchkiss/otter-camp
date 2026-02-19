@@ -125,6 +125,21 @@ describe("ProjectDetailPage", () => {
     expect(screen.getByText("No files indexed yet.")).toBeInTheDocument();
   });
 
+  it("switches to kanban view and expands board to full width", async () => {
+    const user = userEvent.setup();
+    renderProjectDetailPage();
+
+    await screen.findByRole("heading", { name: "API Gateway" });
+    await user.click(screen.getByRole("button", { name: "Project issue kanban view" }));
+
+    expect(screen.getByTestId("project-kanban-board")).toBeInTheDocument();
+    expect(screen.getByTestId("project-kanban-full-width")).toBeInTheDocument();
+    expect(screen.queryByTestId("project-detail-right-rail")).not.toBeInTheDocument();
+    expect(screen.getByText("Issue Kanban")).toBeInTheDocument();
+    expect(screen.getByText("Approval")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Fix API rate limiting/i })).toBeInTheDocument();
+  });
+
   it("routes markdown review links from the live file explorer", async () => {
     const user = userEvent.setup();
     localStorage.setItem("otter-camp-org-id", "org-1");
