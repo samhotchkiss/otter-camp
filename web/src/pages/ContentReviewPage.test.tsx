@@ -10,41 +10,33 @@ function renderRoute(path: string) {
       <Routes>
         <Route path="/review/:documentId" element={<ContentReviewPage />} />
       </Routes>
-    </MemoryRouter>
+    </MemoryRouter>,
   );
 }
 
 describe("ContentReviewPage", () => {
-  it("renders the redesigned route shell and decodes alias paths", () => {
-    renderRoute("/review/docs%2Fguides%2Fapi%20spec.md");
+  it("renders figma-baseline review layout and controls", () => {
+    renderRoute("/review/docs%2Frate-limiting-implementation.md");
 
     expect(screen.getByTestId("content-review-page-shell")).toBeInTheDocument();
-    expect(screen.getByTestId("content-review-page-shell")).toHaveClass("min-w-0");
-    expect(screen.getByTestId("content-review-route-header")).toBeInTheDocument();
-    expect(screen.getByTestId("content-review-route-header")).toHaveClass("flex-col");
-    expect(screen.getByTestId("content-review-route-header")).toHaveClass("sm:flex-row");
     expect(screen.getByRole("heading", { name: "Content Review" })).toBeInTheDocument();
-    expect(screen.getByTestId("content-review-route-path")).toHaveTextContent("docs/guides/api spec.md");
-    expect(screen.getByTestId("content-review-page-shell")).toHaveAttribute("aria-labelledby", "content-review-page-title");
-    expect(screen.getByTestId("content-review-shell")).toBeInTheDocument();
-
-    const sourceTextarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
-    expect(sourceTextarea.value).toContain("# Review: docs/guides/api spec.md");
+    expect(screen.getByTestId("content-review-route-path")).toHaveTextContent("docs/rate-limiting-implementation.md");
+    expect(screen.getByRole("button", { name: /Request Changes/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Approve/ })).toBeInTheDocument();
+    expect(screen.getByText("Comments")).toBeInTheDocument();
+    expect(screen.getByText("Unresolved")).toBeInTheDocument();
+    expect(screen.getByText("Resolved")).toBeInTheDocument();
+    expect(screen.getByText("Document")).toBeInTheDocument();
+    expect(screen.getByText("All Comments")).toBeInTheDocument();
   });
 
-  it("falls back to untitled path when alias route document is empty after trim", () => {
-    renderRoute("/review/%20");
-
-    expect(screen.getByTestId("content-review-route-path")).toHaveTextContent("untitled.md");
-    const sourceTextarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
-    expect(sourceTextarea.value).toContain("# Review: untitled.md");
-  });
-
-  it("keeps malformed encoded route segments stable without crashing", () => {
+  it("keeps malformed route segments stable without crashing", () => {
     renderRoute("/review/%E0%A4%A.md");
-
     expect(screen.getByTestId("content-review-route-path")).toHaveTextContent("%E0%A4%A.md");
-    const sourceTextarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;
-    expect(sourceTextarea.value).toContain("# Review: %E0%A4%A.md");
+  });
+
+  it("falls back to baseline default path when route segment is empty after trim", () => {
+    renderRoute("/review/%20");
+    expect(screen.getByTestId("content-review-route-path")).toHaveTextContent("docs/rate-limiting-implementation.md");
   });
 });
