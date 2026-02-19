@@ -525,7 +525,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             data-testid="shell-chat-slot"
             aria-hidden={!chatOpen}
           >
-            {chatOpen ? <GlobalChatDock /> : null}
+            {chatOpen ? <GlobalChatDock embedded /> : null}
           </aside>
         </div>
       </div>

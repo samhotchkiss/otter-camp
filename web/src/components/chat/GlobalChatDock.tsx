@@ -23,7 +23,11 @@ function isGenericDMLabel(value: string): boolean {
   return lower === "" || lower === "you" || lower === "user" || lower === "agent" || lower === "assistant";
 }
 
-export default function GlobalChatDock() {
+type GlobalChatDockProps = {
+  embedded?: boolean;
+};
+
+export default function GlobalChatDock({ embedded = false }: GlobalChatDockProps) {
   const {
     isOpen,
     totalUnread,
@@ -357,6 +361,150 @@ export default function GlobalChatDock() {
       setResettingProjectSession(false);
     }
   }, [selectedConversation]);
+
+  if (embedded) {
+    if (!isOpen) {
+      return (
+        <div className="flex h-full items-end justify-end p-3">
+          <button
+            type="button"
+            onClick={() => setDockOpen(true)}
+            className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-sm font-medium text-[var(--text)] shadow-md transition hover:border-[var(--accent)]"
+            aria-label="Open global chat"
+          >
+            <span>Chats</span>
+            {unreadBadge}
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <section
+        className={`flex h-full min-h-0 flex-col overflow-hidden border border-[var(--border)] bg-[var(--surface)] ${
+          isFullscreen ? "fixed inset-0 top-[var(--topbar-height,56px)] z-50" : ""
+        }`}
+      >
+        <header className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface-alt)] px-4 py-2.5">
+          <div className="min-w-0 flex-1">
+            <h2 className="sr-only">Global Chat</h2>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-[var(--text)]">Otter Shell</span>
+              <span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide text-[var(--text-muted)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-lime-500" />
+                ONLINE
+              </span>
+            </div>
+            <span
+              data-testid="global-chat-context-cue"
+              className="mt-1 inline-flex rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]"
+            >
+              {selectedContextCue}
+            </span>
+          </div>
+          <div className="ml-3 flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                void handleClearSession();
+              }}
+              disabled={resettingProjectSession || !selectedConversation}
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {resettingProjectSession ? "Clearing..." : "Clear session"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsFullscreen((open) => !open)}
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
+              aria-label={isFullscreen ? "Exit fullscreen chat" : "Fullscreen chat"}
+            >
+              {isFullscreen ? "⊡" : "⊞"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsFullscreen(false);
+                toggleDock();
+              }}
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
+              aria-label="Collapse global chat"
+            >
+              Collapse
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsFullscreen(false);
+                setDockOpen(false);
+              }}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border)] text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
+              aria-label="Close global chat"
+            >
+              ×
+            </button>
+          </div>
+        </header>
+        {resetProjectError ? (
+          <div className="border-b border-[var(--red)]/40 bg-[var(--red)]/15 px-4 py-2">
+            <p className="text-xs text-[var(--red)]">{resetProjectError}</p>
+          </div>
+        ) : null}
+        {archiveError ? (
+          <div className="border-b border-[var(--red)]/40 bg-[var(--red)]/15 px-4 py-2">
+            <p className="text-xs text-[var(--red)]">{archiveError}</p>
+          </div>
+        ) : null}
+
+        <div className="min-h-0 flex-1">
+          {selectedConversation ? (
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2">
+                <div className="min-w-0 flex-1">
+                  <h3 className="truncate text-sm font-semibold text-[var(--text)]">
+                    {resolveConversationTitle(selectedConversation)}
+                  </h3>
+                  <p className="truncate text-xs text-[var(--text-muted)]">{selectedConversation.contextLabel}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedJumpTarget) {
+                      navigate(selectedJumpTarget.href);
+                    }
+                  }}
+                  disabled={!selectedJumpTarget}
+                  className="ml-3 shrink-0 rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {selectedJumpTarget?.label || "Open context"}
+                </button>
+              </div>
+              <div className="min-h-0 flex-1">
+                <GlobalChatSurface
+                  conversation={selectedConversation}
+                  refreshVersion={refreshVersion}
+                  agentNamesByID={agentNamesByID}
+                  resolveAgentName={resolveAgentName}
+                  onConversationTouched={() => {
+                    if (selectedConversation.unreadCount > 0) {
+                      markConversationRead(selectedConversation.key);
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-full flex-col justify-between p-4">
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-alt)]/70 p-3">
+                <p className="text-sm text-[var(--text)]">Welcome to Otter Camp. Systems are online. How can I assist you today?</p>
+              </div>
+              <p className="text-xs text-[var(--text-muted)]">Open a project, issue, or direct-message thread to continue.</p>
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
 
   if (!isOpen) {
     return (
