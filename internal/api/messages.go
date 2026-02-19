@@ -879,9 +879,21 @@ func (h *MessageHandler) resolveDMDispatchTarget(
 		}
 	}
 	if err == nil && strings.TrimSpace(target.SessionKey) != "" {
+		originalSessionKey := strings.TrimSpace(target.SessionKey)
 		normalizedSessionKey, normalizeErr := normalizeDMDispatchSessionKey(ctx, db, orgID, target.AgentID, target.SessionKey)
 		if normalizeErr != nil {
 			return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+		}
+		if strings.TrimSpace(normalizedSessionKey) != originalSessionKey {
+			if _, updateErr := db.ExecContext(
+				ctx,
+				`UPDATE agent_sync_state SET session_key = $3, updated_at = NOW() WHERE org_id = $1 AND id = $2`,
+				orgID,
+				target.AgentID,
+				normalizedSessionKey,
+			); updateErr != nil {
+				return dmDispatchTarget{}, false, "", http.StatusInternalServerError, errors.New("failed to resolve agent thread")
+			}
 		}
 		target.SessionKey = normalizedSessionKey
 		return target, true, "", 0, nil
