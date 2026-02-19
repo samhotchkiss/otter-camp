@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, useParams } from "react-router-dom";
 
 import api, { apiFetch } from "../lib/api";
@@ -52,6 +52,24 @@ type ProjectCommitListPayload = {
 type ProjectBranchesPayload = {
   branches?: unknown[];
 };
+
+type ProjectIssueView = "list" | "kanban";
+
+type KanbanColumnID = CoreProjectDetailIssue["status"];
+
+type KanbanColumn = {
+  id: KanbanColumnID;
+  title: string;
+  tone: string;
+};
+
+const KANBAN_COLUMNS: KanbanColumn[] = [
+  { id: "open", title: "Open", tone: "border-stone-700 text-stone-300" },
+  { id: "in-progress", title: "In Progress", tone: "border-amber-500/30 text-amber-300" },
+  { id: "review", title: "Review", tone: "border-lime-500/30 text-lime-300" },
+  { id: "approval-needed", title: "Approval", tone: "border-rose-500/30 text-rose-300" },
+  { id: "blocked", title: "Blocked", tone: "border-orange-500/30 text-orange-300" },
+];
 
 function issueStatusClass(status: CoreProjectDetailIssue["status"]): string {
   if (status === "approval-needed") {
@@ -179,6 +197,7 @@ export default function ProjectDetailPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [issueView, setIssueView] = useState<ProjectIssueView>("list");
 
   useEffect(() => {
     let cancelled = false;
@@ -318,6 +337,16 @@ export default function ProjectDetailPage() {
   };
   const projectLastSync = project?.lastSync || "Unknown";
   const showRepoLink = projectRepo.startsWith("github.com/") || projectRepo.startsWith("git@github.com:");
+  const issuesByStatus = useMemo<Record<KanbanColumnID, CoreProjectDetailIssue[]>>(
+    () => ({
+      open: issues.filter((issue) => issue.status === "open"),
+      "in-progress": issues.filter((issue) => issue.status === "in-progress"),
+      review: issues.filter((issue) => issue.status === "review"),
+      "approval-needed": issues.filter((issue) => issue.status === "approval-needed"),
+      blocked: issues.filter((issue) => issue.status === "blocked"),
+    }),
+    [issues],
+  );
 
   return (
     <div className="min-w-0 space-y-4 md:space-y-6">
@@ -336,6 +365,32 @@ export default function ProjectDetailPage() {
             <button type="button" className="rounded-md p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200" aria-label="Star project">
               ☆
             </button>
+            <div className="inline-flex overflow-hidden rounded-md border border-stone-700 bg-stone-900" role="group" aria-label="Issue layout view">
+              <button
+                type="button"
+                onClick={() => setIssueView("list")}
+                aria-label="Project issue list view"
+                className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  issueView === "list"
+                    ? "bg-stone-800 text-stone-100"
+                    : "text-stone-400 hover:bg-stone-800/60 hover:text-stone-200"
+                }`}
+              >
+                List
+              </button>
+              <button
+                type="button"
+                onClick={() => setIssueView("kanban")}
+                aria-label="Project issue kanban view"
+                className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  issueView === "kanban"
+                    ? "bg-stone-800 text-stone-100"
+                    : "text-stone-400 hover:bg-stone-800/60 hover:text-stone-200"
+                }`}
+              >
+                Kanban
+              </button>
+            </div>
             <button type="button" className="rounded-md p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200" aria-label="Project settings">
               ⚙
             </button>
@@ -382,17 +437,76 @@ export default function ProjectDetailPage() {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-4 md:gap-6 lg:grid-cols-3">
-        <section className="space-y-4 md:space-y-6 lg:col-span-2">
-          <section className="rounded-lg border border-stone-800 bg-stone-900">
-            <div className="flex items-center justify-between border-b border-stone-800 px-4 py-3 md:px-6 md:py-4">
-              <h2 className="text-sm font-semibold text-stone-100 md:text-base">Open Issues</h2>
-              <button type="button" className="text-xs font-medium text-amber-400 hover:text-amber-300">
-                View All
-              </button>
-            </div>
+      <div className={issueView === "kanban" ? "space-y-4 md:space-y-6" : "grid grid-cols-1 gap-4 md:gap-6 lg:grid-cols-3"}>
+        <section className={issueView === "kanban" ? "w-full" : "space-y-4 md:space-y-6 lg:col-span-2"}>
+          {issueView === "list" ? (
+            <section className="rounded-lg border border-stone-800 bg-stone-900">
+              <div className="flex items-center justify-between border-b border-stone-800 px-4 py-3 md:px-6 md:py-4">
+                <h2 className="text-sm font-semibold text-stone-100 md:text-base">Open Issues</h2>
+                <button type="button" className="text-xs font-medium text-amber-400 hover:text-amber-300">
+                  View All
+                </button>
+              </div>
 
-            <div className="divide-y divide-stone-800">
+              <div className="divide-y divide-stone-800">
+                {loading ? (
+                  <div className="px-4 py-4 text-sm text-stone-400 md:px-6">Loading issues...</div>
+                ) : null}
+
+                {!loading && loadError ? (
+                  <div className="space-y-3 px-4 py-4 md:px-6">
+                    <p className="text-sm text-rose-400">{loadError}</p>
+                    <button
+                      type="button"
+                      onClick={() => setRefreshKey((current) => current + 1)}
+                      className="rounded border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 transition-colors hover:bg-rose-500/20"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : null}
+
+                {!loading && !loadError && issues.length === 0 ? (
+                  <div className="px-4 py-4 text-sm text-stone-400 md:px-6">No open issues.</div>
+                ) : null}
+
+                {!loading && !loadError
+                  ? issues.map((issue) => (
+                      <NavLink
+                        key={issue.id}
+                        to={`/issue/${encodeURIComponent(issue.id)}`}
+                        className="group block px-4 py-3 transition-colors hover:bg-stone-800/50 md:px-6 md:py-4"
+                      >
+                        <div className="flex items-start gap-2 md:gap-3">
+                          <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${issuePriorityDot(issue.priority)}`} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                              <div className="min-w-0 flex-1">
+                                <h3 className="mb-1 text-sm font-medium text-stone-200 group-hover:text-stone-100 md:text-base">{issue.title}</h3>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-mono text-xs text-stone-500">{issue.id}</span>
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] md:text-xs ${issueStatusClass(issue.status)}`}>
+                                    {issue.status.replace("-", " ")}
+                                  </span>
+                                  {issue.assignee ? <span className="text-xs text-stone-500">{issue.assignee}</span> : null}
+                                </div>
+                              </div>
+                              <span className="whitespace-nowrap text-xs text-stone-600">{issue.created}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </NavLink>
+                    ))
+                  : null}
+              </div>
+            </section>
+          ) : (
+            <section className="rounded-lg border border-stone-800 bg-stone-900" data-testid="project-kanban-board">
+              <div className="flex items-center justify-between border-b border-stone-800 px-4 py-3 md:px-6 md:py-4">
+                <h2 className="text-sm font-semibold text-stone-100 md:text-base">Issue Kanban</h2>
+                <span className="text-xs text-stone-500">Full Width</span>
+              </div>
+
               {loading ? (
                 <div className="px-4 py-4 text-sm text-stone-400 md:px-6">Loading issues...</div>
               ) : null}
@@ -410,43 +524,47 @@ export default function ProjectDetailPage() {
                 </div>
               ) : null}
 
-              {!loading && !loadError && issues.length === 0 ? (
-                <div className="px-4 py-4 text-sm text-stone-400 md:px-6">No open issues.</div>
-              ) : null}
-
-              {!loading && !loadError
-                ? issues.map((issue) => (
-                    <NavLink
-                      key={issue.id}
-                      to={`/issue/${encodeURIComponent(issue.id)}`}
-                      className="group block px-4 py-3 transition-colors hover:bg-stone-800/50 md:px-6 md:py-4"
-                    >
-                      <div className="flex items-start gap-2 md:gap-3">
-                        <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${issuePriorityDot(issue.priority)}`} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-                            <div className="min-w-0 flex-1">
-                              <h3 className="mb-1 text-sm font-medium text-stone-200 group-hover:text-stone-100 md:text-base">{issue.title}</h3>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="font-mono text-xs text-stone-500">{issue.id}</span>
-                                <span className={`rounded-full px-2 py-0.5 text-[10px] md:text-xs ${issueStatusClass(issue.status)}`}>
-                                  {issue.status.replace("-", " ")}
-                                </span>
-                                {issue.assignee ? <span className="text-xs text-stone-500">{issue.assignee}</span> : null}
-                              </div>
-                            </div>
-                            <span className="whitespace-nowrap text-xs text-stone-600">{issue.created}</span>
+              {!loading && !loadError ? (
+                <div className="overflow-x-auto p-4 md:p-6" data-testid="project-kanban-full-width">
+                  <div className="grid min-w-[980px] grid-cols-5 gap-4">
+                    {KANBAN_COLUMNS.map((column) => {
+                      const columnIssues = issuesByStatus[column.id];
+                      return (
+                        <section key={column.id} className={`rounded-lg border bg-stone-950/70 p-3 ${column.tone}`}>
+                          <header className="mb-3 flex items-center justify-between">
+                            <h3 className="text-xs font-semibold uppercase tracking-wide">{column.title}</h3>
+                            <span className="rounded-full bg-stone-800 px-2 py-0.5 text-[10px] text-stone-300">{columnIssues.length}</span>
+                          </header>
+                          <div className="space-y-2">
+                            {columnIssues.map((issue) => (
+                              <NavLink
+                                key={issue.id}
+                                to={`/issue/${encodeURIComponent(issue.id)}`}
+                                className="block rounded-md border border-stone-800 bg-stone-900 p-2.5 transition-colors hover:border-stone-700 hover:bg-stone-800/60"
+                              >
+                                <p className="text-xs font-medium text-stone-200">{issue.title}</p>
+                                <div className="mt-2 flex items-center justify-between gap-2">
+                                  <span className="font-mono text-[10px] text-stone-500">{issue.id}</span>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${issuePriorityDot(issue.priority)}`} />
+                                </div>
+                              </NavLink>
+                            ))}
+                            {columnIssues.length === 0 ? (
+                              <p className="rounded-md border border-dashed border-stone-800 px-2.5 py-2 text-[11px] text-stone-500">No issues</p>
+                            ) : null}
                           </div>
-                        </div>
-                      </div>
-                    </NavLink>
-                  ))
-                : null}
-            </div>
-          </section>
+                        </section>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          )}
         </section>
 
-        <aside className="space-y-4 md:space-y-6 lg:col-span-1" data-testid="project-detail-right-rail">
+        {issueView === "list" ? (
+          <aside className="space-y-4 md:space-y-6 lg:col-span-1" data-testid="project-detail-right-rail">
           <section className="rounded-lg border border-stone-800 bg-stone-900">
             <div className="border-b border-stone-800 px-4 py-3 md:px-6 md:py-4">
               <h2 className="text-sm font-semibold text-stone-100 md:text-base">Recent Activity</h2>
@@ -517,7 +635,8 @@ export default function ProjectDetailPage() {
               </div>
             </div>
           </section>
-        </aside>
+          </aside>
+        ) : null}
       </div>
     </div>
   );
