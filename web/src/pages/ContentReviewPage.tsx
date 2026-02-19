@@ -35,18 +35,20 @@ export default function ContentReviewPage() {
   }, [baseContent]);
 
   return (
-    <section className="space-y-5" data-testid="content-review-page-shell">
+    <section className="min-w-0 space-y-5" data-testid="content-review-page-shell">
       <header
-        className="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/50"
+        className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm sm:flex-row sm:items-start sm:justify-between dark:border-slate-800 dark:bg-slate-900/50"
         data-testid="content-review-route-header"
       >
-        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-indigo-500">
-          Review Route Adapter
-        </p>
-        <h1 className="page-title">Content Review</h1>
-        <p className="page-subtitle" data-testid="content-review-route-path">
-          {path}
-        </p>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-indigo-500">
+            Review Route Adapter
+          </p>
+          <h1 className="page-title">Content Review</h1>
+          <p className="page-subtitle break-all" data-testid="content-review-route-path">
+            {path}
+          </p>
+        </div>
       </header>
       <DocumentWorkspace
         path={path}

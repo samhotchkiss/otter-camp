@@ -19,7 +19,10 @@ describe("ContentReviewPage", () => {
     renderRoute("/review/docs%2Fguides%2Fapi%20spec.md");
 
     expect(screen.getByTestId("content-review-page-shell")).toBeInTheDocument();
+    expect(screen.getByTestId("content-review-page-shell")).toHaveClass("min-w-0");
     expect(screen.getByTestId("content-review-route-header")).toBeInTheDocument();
+    expect(screen.getByTestId("content-review-route-header")).toHaveClass("flex-col");
+    expect(screen.getByTestId("content-review-route-header")).toHaveClass("sm:flex-row");
     expect(screen.getByRole("heading", { name: "Content Review" })).toBeInTheDocument();
     expect(screen.getByTestId("content-review-route-path")).toHaveTextContent("docs/guides/api spec.md");
     expect(screen.getByTestId("content-review-shell")).toBeInTheDocument();

@@ -47,6 +47,9 @@ describe("DocumentWorkspace mode routing", () => {
 
     expect(screen.getByTestId("code-syntax-preview")).toBeInTheDocument();
     expect(screen.getByTestId("code-diff-view")).toBeInTheDocument();
+    expect(screen.getByTestId("editor-mode-code")).toHaveClass("min-w-0");
+    expect(screen.getByTestId("code-syntax-preview")).toHaveClass("overflow-x-auto");
+    expect(screen.getByTestId("code-diff-view")).toHaveClass("overflow-x-auto");
     expect(screen.getByTestId("code-diff-view")).toHaveTextContent("println");
   });
 
