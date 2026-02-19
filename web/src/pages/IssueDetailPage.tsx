@@ -285,6 +285,7 @@ export default function IssueDetailPage() {
                 </div>
                 <div className="flex-1">
                   <textarea
+                    aria-label="Add a comment"
                     className="h-20 w-full resize-none rounded-lg border border-stone-700 bg-stone-950 px-4 py-3 text-sm text-stone-200 placeholder:text-stone-600 focus:border-amber-500/50 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
                     placeholder="Add a comment..."
                     readOnly

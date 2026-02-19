@@ -38,6 +38,7 @@ describe("IssueDetailPage", () => {
     expect(screen.getByRole("heading", { name: "Timeline" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Related Issues" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Details" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Add a comment")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Review Documentation/ })).toHaveAttribute("href", "/review/rate-limiting-docs");
   });
 
