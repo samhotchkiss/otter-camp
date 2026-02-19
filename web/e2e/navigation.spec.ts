@@ -33,6 +33,113 @@ test.describe("Navigation", () => {
     await expect(page).toHaveURL(/\/knowledge$/);
   });
 
+  test("smoke inbox projects issue review chat journey continuity", async ({ page }) => {
+    const projectID = "project-1";
+    const projectName = "Design System Refresh";
+    const issueID = "issue-1";
+    const issueTitle = "Cross-route continuity issue";
+
+    await page.route("**/api/projects**", async (route) => {
+      const url = route.request().url();
+      if (url.includes(`/api/projects/${projectID}`)) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: projectID,
+            name: projectName,
+            status: "active",
+            description: "Redesign hardening",
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          projects: [
+            {
+              id: projectID,
+              name: projectName,
+              status: "active",
+              description: "Redesign hardening",
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.route("**/api/issues**", async (route) => {
+      const url = route.request().url();
+      if (url.includes(`/api/issues/${issueID}`)) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            issue: {
+              id: issueID,
+              issue_number: 41,
+              title: issueTitle,
+              project_id: projectID,
+              status: "open",
+              work_status: "in_progress",
+              priority: "P1",
+              document_path: "",
+            },
+            participants: [],
+            comments: [],
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [
+            {
+              id: issueID,
+              issue_number: 41,
+              title: issueTitle,
+              state: "open",
+              origin: "local",
+              kind: "issue",
+              work_status: "in_progress",
+              priority: "P1",
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.goto("/inbox");
+    await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+
+    await page.getByRole("link", { name: "Projects" }).click();
+    await expect(page).toHaveURL(/\/projects$/);
+
+    await expect(page.getByTestId("project-card-project-1")).toBeVisible();
+    await page.getByTestId("project-card-project-1").click();
+    await expect(page).toHaveURL(/\/projects\/project-1$/);
+    await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
+
+    await page.getByRole("tab", { name: "List" }).click();
+    await page.getByRole("button", { name: /cross-route continuity issue/i }).click();
+    await expect(page).toHaveURL(/\/projects\/project-1\/issues\/issue-1$/);
+    await expect(page.getByRole("heading", { name: "Issue #issue-1" })).toBeVisible();
+
+    await page.goto("/review/docs%2Fplaybook.md");
+    await expect(page).toHaveURL(/\/review\/docs%2Fplaybook\.md$/);
+    await expect(page.getByRole("heading", { name: "Content Review" })).toBeVisible();
+    await expect(page.getByTestId("content-review-route-path")).toContainText("docs/playbook.md");
+
+    await page.getByRole("button", { name: "Open global chat" }).click();
+    await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
+  });
+
   test("opens avatar menu and navigates to settings", async ({ page }) => {
     await page.goto("/");
 
