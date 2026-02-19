@@ -59,6 +59,7 @@ function renderProjectDetailPage(initialEntry = "/projects/project-2") {
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
         <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        <Route path="/projects/:id/settings" element={<div data-testid="project-settings-route" />} />
         <Route path="/issue/:issueId" element={<div data-testid="issue-detail-route" />} />
         <Route path="/review/:documentId" element={<div data-testid="content-review-route" />} />
       </Routes>
@@ -111,6 +112,16 @@ describe("ProjectDetailPage", () => {
     await user.click(await screen.findByRole("link", { name: /Fix API rate limiting/i }));
 
     expect(screen.getByTestId("issue-detail-route")).toBeInTheDocument();
+  });
+
+  it("navigates to project settings when settings is clicked", async () => {
+    const user = userEvent.setup();
+    renderProjectDetailPage();
+
+    await screen.findByRole("heading", { level: 1, name: "API Gateway" });
+    await user.click(screen.getByRole("link", { name: "Project settings" }));
+
+    expect(screen.getByTestId("project-settings-route")).toBeInTheDocument();
   });
 
   it("keeps activity and file explorer in right rail position", async () => {

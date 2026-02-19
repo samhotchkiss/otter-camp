@@ -928,7 +928,7 @@ func resolveDMThreadWorkspaceAgentID(
 		).Scan(&resolved)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return "", nil
+				return resolveDefaultDMWorkspaceAgentID(ctx, db, orgID)
 			}
 			return "", err
 		}
@@ -937,9 +937,62 @@ func resolveDMThreadWorkspaceAgentID(
 
 	err := db.QueryRowContext(
 		ctx,
-		`SELECT id FROM agents WHERE org_id = $1 AND slug = $2`,
+		`SELECT id FROM agents WHERE org_id = $1 AND LOWER(slug) = LOWER($2)`,
 		orgID,
 		candidate,
+	).Scan(&resolved)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return resolveDefaultDMWorkspaceAgentID(ctx, db, orgID)
+		}
+		return "", err
+	}
+	return strings.TrimSpace(resolved), nil
+}
+
+func resolveDefaultDMWorkspaceAgentID(
+	ctx context.Context,
+	db *sql.DB,
+	orgID string,
+) (string, error) {
+	if strings.TrimSpace(orgID) == "" {
+		return "", nil
+	}
+
+	var resolved string
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT a.id
+		 FROM agents a
+		 LEFT JOIN agent_sync_state ass
+		   ON ass.org_id = a.org_id
+		  AND (
+			LOWER(ass.id) = LOWER(a.slug)
+			OR LOWER(ass.id) = LOWER(a.id::text)
+		  )
+		 WHERE a.org_id = $1
+		   AND a.status = 'active'
+		 ORDER BY
+		   CASE LOWER(a.slug)
+		     WHEN 'main' THEN 0
+		     WHEN 'frank' THEN 1
+		     WHEN 'chameleon' THEN 2
+		     WHEN 'elephant' THEN 3
+		     ELSE 10
+		   END,
+		   CASE
+		     WHEN LOWER(a.display_name) LIKE '%frank%' THEN 0
+		     ELSE 1
+		   END,
+		   CASE
+		     WHEN LOWER(COALESCE(ass.status, '')) = 'online' THEN 0
+		     ELSE 1
+		   END,
+		   COALESCE(ass.updated_at, a.updated_at) DESC,
+		   a.updated_at DESC,
+		   a.display_name ASC
+		 LIMIT 1`,
+		orgID,
 	).Scan(&resolved)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

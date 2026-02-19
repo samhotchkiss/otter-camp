@@ -478,6 +478,49 @@ func TestCreateMessageDMUsesChameleonFallbackWhenSyncStateMissingBySlug(t *testi
 	require.Equal(t, "agent:chameleon:oc:"+agentID, event.Data.SessionKey)
 }
 
+func TestCreateMessageDMFallsBackToMainWhenFrankAliasMissing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-frank-org")
+	agentID := "f22b9d7c-bd76-41aa-a762-5584c43157b4"
+	_, err := db.Exec(
+		`INSERT INTO agents (id, org_id, slug, display_name, status)
+		 VALUES ($1, $2, 'main', 'Frank', 'active')`,
+		agentID,
+		orgID,
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_frank",
+		"content":     "Hey Frank",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	var createResp struct {
+		Delivery dmDeliveryStatus `json:"delivery"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &createResp))
+	require.True(t, createResp.Delivery.Delivered)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, "agent:main:main", event.Data.SessionKey)
+	require.Equal(t, "dm_frank", event.Data.ThreadID)
+}
+
 func TestCreateMessageDMUsesElephantMainFallbackWhenSyncStateMissing(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-elephant-org")

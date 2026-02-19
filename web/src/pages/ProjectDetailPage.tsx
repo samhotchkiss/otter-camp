@@ -391,9 +391,13 @@ export default function ProjectDetailPage() {
                 Kanban
               </button>
             </div>
-            <button type="button" className="rounded-md p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200" aria-label="Project settings">
+            <NavLink
+              to={projectID ? `/projects/${encodeURIComponent(projectID)}/settings` : "/projects"}
+              className="rounded-md p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200"
+              aria-label="Project settings"
+            >
               ⚙
-            </button>
+            </NavLink>
           </div>
         </div>
 
