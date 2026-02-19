@@ -19,6 +19,8 @@ const globalChatState = {
   markConversationRead: vi.fn(),
   removeConversation: vi.fn(),
   archiveConversation: vi.fn(async () => true),
+  openConversation: vi.fn(),
+  upsertConversation: vi.fn(),
 };
 
 vi.mock("../../contexts/GlobalChatContext", () => ({
@@ -41,6 +43,8 @@ describe("GlobalChatDock", () => {
     globalChatState.selectedConversation = null;
     globalChatState.selectedKey = null;
     globalChatState.totalUnread = 0;
+    globalChatState.archiveConversation = vi.fn(async () => true);
+    globalChatState.openConversation = vi.fn();
     window.localStorage.clear();
     vi.restoreAllMocks();
   });
@@ -326,6 +330,90 @@ describe("GlobalChatDock", () => {
 
     await user.click(screen.getByRole("button", { name: "Minimize global chat" }));
     expect(globalChatState.setDockOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("defaults to project-scoped chat on project detail routes", async () => {
+    globalChatState.conversations = [
+      {
+        key: "dm:dm_frank",
+        type: "dm",
+        threadId: "dm_frank",
+        title: "Frank",
+        contextLabel: "Direct message",
+        subtitle: "Agent chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T10:00:00.000Z",
+        agent: {
+          id: "frank",
+          name: "Frank",
+          status: "online",
+        },
+      },
+      {
+        key: "project:project-1",
+        type: "project",
+        projectId: "project-1",
+        title: "Project One",
+        contextLabel: "Project • Project One",
+        subtitle: "Project chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T10:00:00.000Z",
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(globalChatState.selectConversation).toHaveBeenCalledWith("project:project-1");
+    });
+  });
+
+  it("offers a project route switch to org chat", async () => {
+    const user = userEvent.setup();
+    globalChatState.conversations = [
+      {
+        key: "project:project-1",
+        type: "project",
+        projectId: "project-1",
+        title: "Project One",
+        contextLabel: "Project • Project One",
+        subtitle: "Project chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T10:00:00.000Z",
+      },
+      {
+        key: "dm:dm_frank",
+        type: "dm",
+        threadId: "dm_frank",
+        title: "Frank",
+        contextLabel: "Direct message",
+        subtitle: "Agent chat",
+        unreadCount: 0,
+        updatedAt: "2026-02-11T10:00:00.000Z",
+        agent: {
+          id: "frank",
+          name: "Frank",
+          status: "online",
+        },
+      },
+    ];
+    globalChatState.selectedConversation = globalChatState.conversations[0];
+    globalChatState.selectedKey = globalChatState.conversations[0].key;
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <GlobalChatDock />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /org chat \(frank\)/i }));
+    expect(globalChatState.selectConversation).toHaveBeenCalledWith("dm:dm_frank");
   });
 
   it("shows a context cue for selected project conversations", () => {

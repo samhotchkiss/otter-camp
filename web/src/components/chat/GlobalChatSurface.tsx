@@ -85,6 +85,7 @@ type GlobalChatSurfaceProps = {
   refreshVersion?: number;
   agentNamesByID?: Map<string, string>;
   resolveAgentName?: (raw: string) => string;
+  showContextHeader?: boolean;
 };
 
 function getStoredOrgID(): string {
@@ -612,6 +613,7 @@ export default function GlobalChatSurface({
   refreshVersion = 0,
   agentNamesByID,
   resolveAgentName,
+  showContextHeader = true,
 }: GlobalChatSurfaceProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1474,15 +1476,17 @@ export default function GlobalChatSurface({
       onDragLeave={onContainerDragLeave}
       onDrop={onContainerDrop}
     >
-      <div className="border-b border-[var(--border)]/70 bg-[var(--surface-alt)]/40 px-4 py-2">
-        <p
-          data-testid="global-chat-surface-context-cue"
-          className="oc-chip inline-flex rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]"
-        >
-          {surfaceContextCue}
-        </p>
-        <p className="truncate text-xs text-[var(--text-muted)]">{conversationContextLabel}</p>
-      </div>
+      {showContextHeader ? (
+        <div className="border-b border-[var(--border)]/70 bg-[var(--surface-alt)]/40 px-4 py-2">
+          <p
+            data-testid="global-chat-surface-context-cue"
+            className="oc-chip inline-flex rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]"
+          >
+            {surfaceContextCue}
+          </p>
+          <p className="truncate text-xs text-[var(--text-muted)]">{conversationContextLabel}</p>
+        </div>
+      ) : null}
 
       <MessageHistory
         messages={messages}

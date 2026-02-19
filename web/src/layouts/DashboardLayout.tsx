@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useKeyboardShortcutsContext } from "../contexts/KeyboardShortcutsContext";
 import { useKeyboardShortcuts, type Shortcut } from "../hooks/useKeyboardShortcuts";
@@ -35,6 +43,11 @@ type SidebarProjectItem = {
   lastAccessed: string;
 };
 
+type SessionUser = {
+  name: string;
+  email: string;
+};
+
 const AVATAR_MENU_ITEMS: NavItem[] = [
   { id: "agents", label: "Agents", href: "/agents" },
   { id: "connections", label: "Connections", href: "/connections" },
@@ -42,9 +55,21 @@ const AVATAR_MENU_ITEMS: NavItem[] = [
   { id: "settings", label: "Settings", href: "/settings" },
 ];
 
+const CHAT_DOCK_DEFAULT_WIDTH_PX = 384;
+const CHAT_DOCK_MIN_WIDTH_PX = 320;
+const CHAT_DOCK_MAX_WIDTH_PX = 960;
+const CHAT_DOCK_HANDLE_VISIBLE_PX = 16;
+
 function logOut() {
   document.cookie = "otter_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-  const keysToRemove = ["otter-camp-org-id", "otter-camp-token", "otter_camp_token", "otter-camp-theme"];
+  const keysToRemove = [
+    "otter-camp-org-id",
+    "otter-camp-token",
+    "otter_camp_token",
+    "otter_camp_user",
+    "otter-camp-user-name",
+    "otter-camp-theme",
+  ];
   keysToRemove.forEach((key) => localStorage.removeItem(key));
   window.location.href = "/";
 }
@@ -77,15 +102,66 @@ function routeLabel(pathname: string): string {
   return decodeURIComponent(firstSegment);
 }
 
+function parseStoredSessionUser(): SessionUser {
+  let name = "";
+  let email = "";
+
+  try {
+    const raw = window.localStorage.getItem("otter_camp_user");
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof parsed.name === "string") {
+        name = parsed.name.trim();
+      }
+      if (typeof parsed.email === "string") {
+        email = parsed.email.trim();
+      }
+    }
+  } catch {
+    // Ignore malformed session cache; fallback to legacy keys below.
+  }
+
+  if (!name) {
+    try {
+      name = (window.localStorage.getItem("otter-camp-user-name") ?? "").trim();
+    } catch {
+      name = "";
+    }
+  }
+  if (!name && email) {
+    name = email.split("@")[0] ?? "";
+  }
+  if (!name) {
+    name = "User";
+  }
+  return { name, email };
+}
+
+function initialsFromName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    return "U";
+  }
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  return `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`.toUpperCase();
+}
+
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(true);
+  const [chatDockWidth, setChatDockWidth] = useState(CHAT_DOCK_DEFAULT_WIDTH_PX);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const [sidebarInboxItems, setSidebarInboxItems] = useState<SidebarInboxItem[]>([]);
   const [sidebarProjectItems, setSidebarProjectItems] = useState<SidebarProjectItem[]>([]);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
+  const chatResizeStateRef = useRef<{ startX: number; startWidth: number; didDrag: boolean } | null>(null);
+  const sessionUser = useMemo(() => parseStoredSessionUser(), []);
+  const sessionUserInitials = useMemo(() => initialsFromName(sessionUser.name), [sessionUser.name]);
+  const sessionUserSubtitle = sessionUser.email || "Member";
 
   const {
     openCommandPalette,
@@ -197,6 +273,71 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [avatarMenuOpen]);
+
+  const clampChatDockWidth = useCallback((rawWidth: number): number => {
+    const viewportBound = typeof window === "undefined"
+      ? CHAT_DOCK_MAX_WIDTH_PX
+      : Math.max(CHAT_DOCK_MIN_WIDTH_PX, Math.floor(window.innerWidth - 220));
+    const maxWidth = Math.min(CHAT_DOCK_MAX_WIDTH_PX, viewportBound);
+    const normalized = Number.isFinite(rawWidth) ? Math.round(rawWidth) : CHAT_DOCK_DEFAULT_WIDTH_PX;
+    return Math.max(CHAT_DOCK_MIN_WIDTH_PX, Math.min(maxWidth, normalized));
+  }, []);
+
+  useEffect(() => {
+    setChatDockWidth((current) => clampChatDockWidth(current));
+  }, [clampChatDockWidth]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setChatDockWidth((current) => clampChatDockWidth(current));
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [clampChatDockWidth]);
+
+  const toggleChatDock = useCallback(() => {
+    setChatOpen((open) => !open);
+  }, []);
+
+  const onChatHandleMouseDown = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    chatResizeStateRef.current = {
+      startX: event.clientX,
+      startWidth: chatDockWidth,
+      didDrag: false,
+    };
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const active = chatResizeStateRef.current;
+      if (!active) {
+        return;
+      }
+      const deltaX = moveEvent.clientX - active.startX;
+      if (Math.abs(deltaX) >= 3) {
+        active.didDrag = true;
+      }
+      if (!chatOpen && deltaX < -2) {
+        setChatOpen(true);
+      }
+      setChatDockWidth(clampChatDockWidth(active.startWidth - deltaX));
+    };
+
+    const handleMouseUp = () => {
+      const active = chatResizeStateRef.current;
+      chatResizeStateRef.current = null;
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      if (!active || active.didDrag) {
+        return;
+      }
+      setChatOpen((open) => !open);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  }, [chatDockWidth, chatOpen, clampChatDockWidth]);
 
   useEffect(() => {
     let cancelled = false;
@@ -424,10 +565,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               aria-expanded={avatarMenuOpen}
               onClick={() => setAvatarMenuOpen((open) => !open)}
             >
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-800 text-xs font-mono">JS</span>
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-800 text-xs font-mono">
+                {sessionUserInitials}
+              </span>
               <span className="min-w-0 overflow-hidden">
-                <span className="block truncate text-xs font-medium text-stone-300">Jane Smith</span>
-                <span className="block truncate text-[10px] text-stone-500">Admin</span>
+                <span className="block truncate text-xs font-medium text-stone-300">{sessionUser.name}</span>
+                <span className="block truncate text-[10px] text-stone-500">{sessionUserSubtitle}</span>
               </span>
             </button>
             {avatarMenuOpen && (
@@ -497,8 +640,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             <button
               type="button"
               aria-label="Toggle chat panel"
-              title={chatOpen ? "Hide Chat" : "Show Chat"}
-              onClick={() => setChatOpen((open) => !open)}
+              title={chatOpen ? "Slide chat out" : "Slide chat in"}
+              onClick={toggleChatDock}
               className="rounded-full p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200"
             >
               <span aria-hidden="true">{chatOpen ? "◧" : "◨"}</span>
@@ -511,21 +654,43 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               aria-expanded={avatarMenuOpen}
               onClick={() => setAvatarMenuOpen((open) => !open)}
             >
-              JS
+              {sessionUserInitials}
             </button>
           </div>
         </header>
 
-        <div className="shell-workspace flex flex-1 overflow-hidden" data-testid="shell-workspace">
+        <div className="shell-workspace relative flex flex-1 overflow-hidden" data-testid="shell-workspace">
           <main className="shell-content min-w-0 flex-1 overflow-y-auto bg-stone-950 p-4 md:p-6" id="main-content">
             <div className="mx-auto max-w-6xl space-y-4 md:space-y-6">{children}</div>
           </main>
           <aside
-            className={`shell-chat-slot ${chatOpen ? "" : "hidden"} w-96 shrink-0 border-l border-stone-800 bg-stone-900 max-lg:hidden`.trim()}
+            className="shell-chat-slot pointer-events-none absolute inset-y-0 right-0 z-20 max-lg:hidden"
             data-testid="shell-chat-slot"
             aria-hidden={!chatOpen}
+            style={{ width: `${chatDockWidth}px` }}
           >
-            {chatOpen ? <GlobalChatDock embedded /> : null}
+            <div className="pointer-events-auto relative h-full overflow-visible">
+              <div
+                className="absolute inset-y-0 right-0 transition-transform duration-200 ease-out"
+                style={{
+                  width: `${chatDockWidth}px`,
+                  transform: `translateX(${chatOpen ? 0 : chatDockWidth - CHAT_DOCK_HANDLE_VISIBLE_PX}px)`,
+                }}
+              >
+                <button
+                  type="button"
+                  onMouseDown={onChatHandleMouseDown}
+                  className="absolute left-[-10px] top-1/2 z-30 inline-flex h-14 w-5 -translate-y-1/2 items-center justify-center rounded-l-full border border-stone-700 bg-stone-900 text-[10px] text-stone-300 shadow-lg shadow-black/40 transition hover:border-amber-500/50 hover:text-stone-100 cursor-ew-resize"
+                  aria-label={chatOpen ? "Slide chat closed" : "Slide chat open"}
+                  title="Drag to resize; click to toggle chat"
+                >
+                  <span aria-hidden="true">{chatOpen ? "›" : "‹"}</span>
+                </button>
+                <div className="h-full border-l border-stone-800 bg-stone-900 shadow-2xl shadow-black/40">
+                  <GlobalChatDock embedded />
+                </div>
+              </div>
+            </div>
           </aside>
         </div>
       </div>
