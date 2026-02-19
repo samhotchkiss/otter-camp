@@ -1505,6 +1505,39 @@ function resolveProjectChatDispatchTarget(
   };
 }
 
+function resolveIssueCommentDispatchTarget(
+  agentID: string,
+  projectID: string,
+  issueID: string,
+  rawSessionKey: string,
+): DispatchSessionTarget {
+  const normalizedAgentID = getTrimmedString(agentID).toLowerCase();
+  const requestedSessionKey = getTrimmedString(rawSessionKey);
+  if (!normalizedAgentID) {
+    return { sessionKey: requestedSessionKey, routedAgentID: '' };
+  }
+
+  if (normalizedAgentID === 'main') {
+    return {
+      sessionKey: resolveMainDispatchSessionKey(requestedSessionKey),
+      routedAgentID: normalizedAgentID,
+    };
+  }
+
+  const routedAgentID = isPermanentOpenClawAgent(normalizedAgentID) ? normalizedAgentID : 'chameleon';
+  if (routedAgentID === 'chameleon') {
+    return {
+      sessionKey: `agent:chameleon:oc:${projectID}:${issueID}`,
+      routedAgentID,
+    };
+  }
+
+  return {
+    sessionKey: requestedSessionKey || `agent:${routedAgentID}:issue:${issueID}`,
+    routedAgentID,
+  };
+}
+
 function normalizeUpdatedAt(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return Date.now();
@@ -6473,7 +6506,8 @@ async function handleProjectChatDispatchEvent(event: ProjectChatDispatchEvent): 
 async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent): Promise<void> {
   const issueID = getTrimmedString(event.data?.issue_id);
   const projectID = getTrimmedString(event.data?.project_id);
-  const agentID = getTrimmedString(event.data?.agent_id);
+  const requestedSessionKey = getTrimmedString(event.data?.session_key);
+  const agentID = getTrimmedString(event.data?.agent_id) || parseAgentIDFromSessionKey(requestedSessionKey);
   const agentName = getTrimmedString(event.data?.agent_name);
   const responderAgentID = getTrimmedString(event.data?.responder_agent_id);
   const issueTitle = getTrimmedString(event.data?.issue_title);
@@ -6484,9 +6518,9 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   const messageID = getTrimmedString(event.data?.message_id) || undefined;
   const parsedIssueNumber = Number(event.data?.issue_number);
   const issueNumber = Number.isFinite(parsedIssueNumber) ? parsedIssueNumber : undefined;
-  const sessionKey =
-    getTrimmedString(event.data?.session_key) ||
-    (agentID && issueID ? `agent:${agentID}:issue:${issueID}` : '');
+  const dispatchTarget = resolveIssueCommentDispatchTarget(agentID, projectID, issueID, requestedSessionKey);
+  const sessionKey = dispatchTarget.sessionKey;
+  const useAgentMethod = dispatchTarget.routedAgentID === 'main';
   let outboundContent = content;
   if (questionnaire) {
     const formatted = formatQuestionnaireForFallback(questionnaire);
@@ -6513,7 +6547,9 @@ async function handleIssueCommentDispatchEvent(event: IssueCommentDispatchEvent)
   });
 
   try {
-    await sendMessageToSession(sessionKey, outboundContent, messageID);
+    await sendMessageToSession(sessionKey, outboundContent, messageID, {
+      preferAgentMethod: useAgentMethod,
+    });
     console.log(
       `[bridge] delivered issue.comment.message to ${sessionKey} (message_id=${messageID || 'n/a'})`,
     );

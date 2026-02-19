@@ -286,6 +286,74 @@ describe("bridge project dispatch routing", () => {
   });
 });
 
+describe("bridge issue dispatch routing", () => {
+  const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+
+  beforeEach(() => {
+    rpcCalls.length = 0;
+    resetSessionContextsForTest();
+    setSendRequestForTest(async (method, params) => {
+      rpcCalls.push({ method, params });
+      return {};
+    });
+  });
+
+  afterEach(() => {
+    setSendRequestForTest(null);
+  });
+
+  it("routes non-permanent issue dispatches through compound chameleon keys", async () => {
+    const projectID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const issueID = "11111111-2222-3333-4444-555555555555";
+    await dispatchInboundEventForTest("issue.comment.message", {
+      type: "issue.comment.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "issue-msg-1",
+        project_id: projectID,
+        issue_id: issueID,
+        issue_number: 52,
+        issue_title: "Bridge routing",
+        agent_id: "technonymous",
+        responder_agent_id: "technonymous",
+        content: "Please update this issue thread.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, `agent:chameleon:oc:${projectID}:${issueID}`);
+
+    const context = getSessionContextForTest(`agent:chameleon:oc:${projectID}:${issueID}`);
+    assert.equal(context?.kind, "issue_comment");
+    assert.equal(context?.agentID, "technonymous");
+    assert.equal(context?.responderAgentID, "technonymous");
+    assert.equal(context?.issueID, issueID);
+    assert.equal(context?.projectID, projectID);
+  });
+
+  it("routes main issue dispatches to the main session via agent method", async () => {
+    await dispatchInboundEventForTest("issue.comment.message", {
+      type: "issue.comment.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "issue-msg-main",
+        project_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        issue_id: "66666666-7777-8888-9999-aaaaaaaaaaaa",
+        issue_number: 89,
+        issue_title: "Main issue routing",
+        agent_id: "main",
+        responder_agent_id: "main",
+        content: "Frank, please respond on this issue.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, "agent:main:main");
+  });
+});
+
 describe("bridge local session reset helpers", () => {
   it("clears a canonical chameleon session key from local store", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "oc-session-reset-"));
