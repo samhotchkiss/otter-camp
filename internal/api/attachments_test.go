@@ -334,6 +334,27 @@ func TestGetAttachmentRejectsMissingAuth(t *testing.T) {
 	}
 }
 
+func TestGetAttachmentRejectsWrongOrgSession(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgA := insertMessageTestOrganization(t, db, "attachment-get-org-a")
+	orgB := insertMessageTestOrganization(t, db, "attachment-get-org-b")
+	attachmentID, _ := insertStoredAttachmentFixture(t, db, orgA, "private.txt", []byte("private body"), "text/plain")
+
+	userID := insertTestUser(t, db, orgB, "attachment-get-wrong-org-user")
+	token := "oc_sess_attachment_get_wrong_org"
+	insertTestSession(t, db, orgB, userID, token, time.Now().UTC().Add(1*time.Hour))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/attachments/"+attachmentID, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	handler := &AttachmentsHandler{}
+	handler.GetAttachment(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("GetAttachment() status = %v, want %v (body=%s)", rr.Code, http.StatusNotFound, rr.Body.String())
+	}
+}
+
 func TestGetAttachmentStreamsFileWithSyncToken(t *testing.T) {
 	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
 	db := setupMessageTestDB(t)
