@@ -493,8 +493,8 @@ export default function ProjectsPage({
 
   if (isLoading) {
     return (
-      <div className="w-full">
-        <div className="mb-6 flex items-center justify-between">
+      <div className="w-full min-w-0">
+        <div className="mb-6 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-[var(--text)]">
               Projects
@@ -512,7 +512,7 @@ export default function ProjectsPage({
 
   if (error) {
     return (
-      <div className="w-full">
+      <div className="w-full min-w-0">
         <div className="mb-6">
           <h1 className="text-2xl font-semibold text-[var(--text)]">
             Projects
@@ -545,8 +545,8 @@ export default function ProjectsPage({
 
   if (projects.length === 0 && selectedLabelIDs.length > 0) {
     return (
-      <div className="w-full">
-        <div className="mb-6 flex items-center justify-between">
+      <div className="w-full min-w-0">
+        <div className="mb-6 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-[var(--text)]">
               Projects
@@ -558,7 +558,7 @@ export default function ProjectsPage({
           <button
             type="button"
             onClick={() => setSelectedLabelIDs([])}
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 sm:w-auto dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
           >
             Clear filters
           </button>
@@ -575,8 +575,8 @@ export default function ProjectsPage({
   }
 
   return (
-    <div className="w-full">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="w-full min-w-0">
+      <div className="mb-6 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-[var(--text)]">
             Projects
@@ -588,7 +588,7 @@ export default function ProjectsPage({
         <button
           type="button"
           onClick={handleCreateProject}
-          className="inline-flex items-center gap-2 rounded-xl bg-[#C9A86C] px-4 py-2.5 text-sm font-medium text-[#1a1a1a] shadow-sm transition hover:bg-[#B8975B] focus:outline-none focus:ring-2 focus:ring-[#C9A86C] focus:ring-offset-2 focus:ring-offset-[var(--bg)]"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#C9A86C] px-4 py-2.5 text-sm font-medium text-[#1a1a1a] shadow-sm transition hover:bg-[#B8975B] focus:outline-none focus:ring-2 focus:ring-[#C9A86C] focus:ring-offset-2 focus:ring-offset-[var(--bg)] sm:w-auto"
         >
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -598,7 +598,7 @@ export default function ProjectsPage({
       </div>
 
       {/* Use Cmd+K (magic bar) to search projects */}
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-[var(--text-muted)]">
           {projects.length} projects • Press <kbd className="rounded bg-[var(--surface-alt)] px-1.5 py-0.5 text-xs">⌘K</kbd> to search
         </p>
@@ -637,7 +637,7 @@ export default function ProjectsPage({
       </div>
 
       <section className="mt-6 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm">
-        <div className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface-alt)]/40 px-5 py-4">
+        <div className="flex flex-col items-start gap-2 border-b border-[var(--border)] bg-[var(--surface-alt)]/40 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-sm font-semibold text-[var(--text)]">Recent Activity</h2>
           <button
             type="button"
@@ -650,7 +650,7 @@ export default function ProjectsPage({
           {recentActivity.map((item) => (
             <div
               key={item.id}
-              className="flex items-center justify-between gap-3 px-5 py-3 transition hover:bg-[var(--surface-alt)]/30"
+              className="flex flex-col items-start gap-2 px-5 py-3 transition hover:bg-[var(--surface-alt)]/30 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-[var(--text)]">{item.summary}</p>
@@ -659,7 +659,7 @@ export default function ProjectsPage({
                 </p>
               </div>
               <span
-                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                className={`self-start rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide sm:self-auto ${
                   item.status === "needs-approval"
                     ? "border-orange-500/30 bg-orange-500/10 text-orange-500"
                     : item.status === "in-progress"
