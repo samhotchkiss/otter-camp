@@ -4694,6 +4694,40 @@ async function recordCompactionMemory(signal: CompactionSignal): Promise<void> {
   }
 }
 
+async function reportCompactionSignalToOtterCamp(signal: CompactionSignal): Promise<void> {
+  if (!signal.orgID || !signal.sessionKey) {
+    return;
+  }
+
+  const response = await fetchWithRetry(`${OTTERCAMP_URL}/api/openclaw/events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(OTTERCAMP_TOKEN
+        ? {
+            Authorization: `Bearer ${OTTERCAMP_TOKEN}`,
+            'X-OpenClaw-Token': OTTERCAMP_TOKEN,
+          }
+        : {}),
+    },
+    body: JSON.stringify({
+      event: 'session.compaction',
+      org_id: signal.orgID,
+      session_key: signal.sessionKey,
+      compaction_detected: true,
+      data: {
+        session_key: signal.sessionKey,
+        compaction_detected: true,
+      },
+    }),
+  }, 'report compaction signal');
+
+  if (!response.ok) {
+    const snippet = (await response.text().catch(() => '')).slice(0, 300);
+    throw new Error(`compaction signal report failed: ${response.status} ${response.statusText} ${snippet}`.trim());
+  }
+}
+
 async function fetchCompactionRecoveryContext(signal: CompactionSignal): Promise<string> {
   if (!signal.orgID || !signal.agentID) {
     return '';
@@ -4869,6 +4903,10 @@ export async function runCompactionRecoveryForTest(
 
 export async function fetchCompactionRecoveryContextForTest(signal: CompactionSignal): Promise<string> {
   return fetchCompactionRecoveryContext(signal);
+}
+
+export async function reportCompactionSignalToOtterCampForTest(signal: CompactionSignal): Promise<void> {
+  await reportCompactionSignalToOtterCamp(signal);
 }
 
 export function resetCompactionRecoveryStateForTest(): void {
@@ -5057,6 +5095,18 @@ async function handleOpenClawEvent(message: Record<string, unknown>): Promise<vo
     } else if (!compactionSignal.agentID) {
       compactionSignal.agentID = parseAgentIDFromSessionKey(compactionSignal.sessionKey) || undefined;
     }
+
+    if (sessionContext) {
+      contextPrimedSessions.delete(compactionSignal.sessionKey);
+      setSessionContext(compactionSignal.sessionKey, {
+        ...sessionContext,
+        forceIdentityBootstrap: true,
+      });
+    }
+
+    await reportCompactionSignalToOtterCamp(compactionSignal).catch((err) => {
+      console.warn(`[bridge] failed to report compaction signal for ${compactionSignal.sessionKey}:`, err);
+    });
 
     await runCompactionRecovery(compactionSignal).catch((err) => {
       console.warn(`[bridge] compaction recovery failed for ${compactionSignal.sessionKey}:`, err);
