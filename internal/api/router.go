@@ -97,6 +97,7 @@ func NewRouter() http.Handler {
 	githubIntegrationHandler := NewGitHubIntegrationHandler(db)
 	projectChatHandler := &ProjectChatHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
 	issuesHandler := &IssuesHandler{Hub: hub, OpenClawDispatcher: openClawWSHandler}
+	openClawEventsHandler := &OpenClawEventsHandler{DB: db}
 	questionnaireHandler := &QuestionnaireHandler{}
 	projectCommitsHandler := &ProjectCommitsHandler{}
 	projectTreeHandler := &ProjectTreeHandler{}
@@ -429,6 +430,7 @@ func NewRouter() http.Handler {
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Get("/github/sync/dead-letters", githubSyncDeadLettersHandler.List)
 		r.With(RequireCapability(db, CapabilityGitHubManualSync)).Post("/github/sync/dead-letters/{id}/replay", githubSyncDeadLettersHandler.Replay)
 		r.Post("/sync/openclaw", openclawSyncHandler.Handle)
+		r.Post("/openclaw/events", openClawEventsHandler.Handle)
 		r.Get("/sync/openclaw/dispatch/pending", openclawSyncHandler.PullDispatchQueue)
 		r.Post("/sync/openclaw/dispatch/{id}/ack", openclawSyncHandler.AckDispatchQueue)
 		r.Get("/sync/agents", openclawSyncHandler.GetAgents)
@@ -505,7 +507,9 @@ func NewRouter() http.Handler {
 	// WebSocket handlers
 	r.Handle("/ws", websocketHandler)
 	r.Handle("/ws/openclaw", openClawWSHandler)
-	r.Handle("/uploads/*", http.StripPrefix("/uploads/", http.FileServer(http.Dir(getUploadsStorageDir()))))
+	r.Get("/uploads/*", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
 
 	// Static file fallback for frontend SPA (must be last)
 	r.Get("/*", handleRoot)

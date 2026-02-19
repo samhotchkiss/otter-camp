@@ -14,6 +14,7 @@ import {
   ensureChameleonWorkspaceOtterCLIConfigInstalledForTest,
   formatSessionContextMessageForTest,
   formatSessionSystemPromptForTest,
+  formatIncrementalDMContentForTest,
   formatSessionDisplayLabel,
   getSessionContextForTest,
   extractMutationToolTargetPathsForTest,
@@ -21,6 +22,7 @@ import {
   formatQuestionnaireForFallback,
   isCompactWhoAmIInsufficient,
   isCanonicalChameleonSessionKey,
+  isPermanentOpenClawAgentForTest,
   normalizeQuestionnairePayload,
   parseAgentIDFromSessionKeyForTest,
   parseChameleonSessionKey,
@@ -42,6 +44,8 @@ import {
   resolveOpenClawCommandTimeoutMSForTest,
   setExecFileForTest,
   setOtterCampSocketForTest,
+  setOtterCampOrgIDForTest,
+  setSendRequestForTest,
   runSerializedSyncOperationForTest,
   setContinuousModeEnabledForTest,
   setPathWithinProjectRootForTest,
@@ -168,6 +172,12 @@ describe("bridge chameleon session key helpers", () => {
       true,
     );
     assert.equal(
+      isCanonicalChameleonSessionKey(
+        "agent:chameleon:oc:a1b2c3d4-5678-90ab-cdef-1234567890ab:11111111-2222-3333-4444-555555555555",
+      ),
+      true,
+    );
+    assert.equal(
       isCanonicalChameleonSessionKey("agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB"),
       true,
     );
@@ -175,10 +185,21 @@ describe("bridge chameleon session key helpers", () => {
     assert.equal(isCanonicalChameleonSessionKey("agent:chameleon:oc:not-a-uuid"), false);
   });
 
-  it("extracts the agent UUID from canonical chameleon session keys", () => {
-    assert.equal(
+  it("extracts project/issue UUIDs from canonical chameleon session keys", () => {
+    assert.deepEqual(
       parseChameleonSessionKey("agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB"),
-      "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      {
+        projectID: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      },
+    );
+    assert.deepEqual(
+      parseChameleonSessionKey(
+        "agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB:11111111-2222-3333-4444-555555555555",
+      ),
+      {
+        projectID: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+        issueID: "11111111-2222-3333-4444-555555555555",
+      },
     );
     assert.equal(parseChameleonSessionKey("agent:main:slack"), null);
     assert.equal(parseChameleonSessionKey("agent:chameleon:oc:not-a-uuid"), null);
@@ -193,6 +214,273 @@ describe("bridge chameleon session key helpers", () => {
     );
     assert.equal(parseAgentIDFromSessionKeyForTest("agent:../../etc:main"), "");
     assert.equal(parseAgentIDFromSessionKeyForTest("agent:foo/bar:main"), "");
+    assert.equal(
+      parseAgentIDFromSessionKeyForTest("agent:chameleon:oc:a1b2c3d4-5678-90ab-cdef-1234567890ab"),
+      "",
+    );
+  });
+
+  it("tracks permanent OpenClaw agent IDs", () => {
+    assert.equal(isPermanentOpenClawAgentForTest("main"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("elephant"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("ellie-extractor"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("lori"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("chameleon"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("technonymous"), false);
+  });
+});
+
+describe("bridge project dispatch routing", () => {
+  const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+
+  beforeEach(() => {
+    rpcCalls.length = 0;
+    resetSessionContextsForTest();
+    setSendRequestForTest(async (method, params) => {
+      rpcCalls.push({ method, params });
+      return {};
+    });
+  });
+
+  afterEach(() => {
+    setSendRequestForTest(null);
+  });
+
+  it("routes non-permanent project agents through chameleon session keys", async () => {
+    const projectID = "11111111-2222-3333-4444-555555555555";
+    await dispatchInboundEventForTest("project.chat.message", {
+      type: "project.chat.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "msg-1",
+        project_id: projectID,
+        project_name: "Spec 521",
+        agent_id: "technonymous",
+        agent_name: "Technonymous",
+        content: "Ship the patch.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, `agent:chameleon:oc:${projectID}`);
+
+    const context = getSessionContextForTest(`agent:chameleon:oc:${projectID}`);
+    assert.equal(context?.kind, "project_chat");
+    assert.equal(context?.agentID, "technonymous");
+    assert.equal(context?.agentName, "Technonymous");
+  });
+
+  it("routes main project dispatches to the main session via agent method", async () => {
+    await dispatchInboundEventForTest("project.chat.message", {
+      type: "project.chat.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "msg-main",
+        project_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        project_name: "Main routing",
+        agent_id: "main",
+        agent_name: "Frank",
+        content: "Please review this project update.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, "agent:main:main");
+  });
+});
+
+describe("bridge issue dispatch routing", () => {
+  const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+
+  beforeEach(() => {
+    rpcCalls.length = 0;
+    resetSessionContextsForTest();
+    setSendRequestForTest(async (method, params) => {
+      rpcCalls.push({ method, params });
+      return {};
+    });
+  });
+
+  afterEach(() => {
+    setSendRequestForTest(null);
+  });
+
+  it("routes non-permanent issue dispatches through compound chameleon keys", async () => {
+    const projectID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const issueID = "11111111-2222-3333-4444-555555555555";
+    await dispatchInboundEventForTest("issue.comment.message", {
+      type: "issue.comment.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "issue-msg-1",
+        project_id: projectID,
+        issue_id: issueID,
+        issue_number: 52,
+        issue_title: "Bridge routing",
+        agent_id: "technonymous",
+        responder_agent_id: "technonymous",
+        content: "Please update this issue thread.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, `agent:chameleon:oc:${projectID}:${issueID}`);
+
+    const context = getSessionContextForTest(`agent:chameleon:oc:${projectID}:${issueID}`);
+    assert.equal(context?.kind, "issue_comment");
+    assert.equal(context?.agentID, "technonymous");
+    assert.equal(context?.responderAgentID, "technonymous");
+    assert.equal(context?.issueID, issueID);
+    assert.equal(context?.projectID, projectID);
+  });
+
+  it("routes main issue dispatches to the main session via agent method", async () => {
+    await dispatchInboundEventForTest("issue.comment.message", {
+      type: "issue.comment.message",
+      org_id: "00000000-0000-0000-0000-000000000123",
+      data: {
+        message_id: "issue-msg-main",
+        project_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        issue_id: "66666666-7777-8888-9999-aaaaaaaaaaaa",
+        issue_number: 89,
+        issue_title: "Main issue routing",
+        agent_id: "main",
+        responder_agent_id: "main",
+        content: "Frank, please respond on this issue.",
+      },
+    });
+
+    const dispatchCall = rpcCalls.find((call) => call.method === "agent");
+    assert.equal(dispatchCall?.method, "agent");
+    assert.equal(dispatchCall?.params.sessionKey, "agent:main:main");
+  });
+});
+
+describe("bridge chameleon identity + persistence fallbacks", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    setOtterCampOrgIDForTest(null);
+    resetSessionContextsForTest();
+  });
+
+  it("resolves whoami identity using context agent slug for chameleon sessions", async () => {
+    const projectID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const sessionKey = `agent:chameleon:oc:${projectID}`;
+    const fetchURLs: string[] = [];
+    globalThis.fetch = (async (input: URL | string) => {
+      fetchURLs.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({
+          profile: "compact",
+          agent: { id: "technonymous", name: "Technonymous" },
+          soul_summary: "Focuses on delivery.",
+          identity_summary: "Bridges project context.",
+          instructions_summary: "Keep updates concise.",
+        }),
+        text: async () => "",
+      } as Response;
+    }) as typeof fetch;
+
+    setSessionContextForTest(sessionKey, {
+      kind: "project_chat",
+      orgID: "00000000-0000-0000-0000-000000000123",
+      projectID,
+      agentID: "technonymous",
+      agentName: "Technonymous",
+    });
+
+    await formatSessionContextMessageForTest(sessionKey, "Please plan the next step.");
+
+    assert.equal(fetchURLs.some((url) => url.includes("/api/agents/technonymous/whoami")), true);
+    assert.equal(fetchURLs.some((url) => url.includes(`/api/agents/${projectID}/whoami`)), false);
+  });
+
+  it("persists project replies for chameleon sessions using inferred project context", async () => {
+    const projectID = "bbbbbbbb-1111-2222-3333-444444444444";
+    const sessionKey = `agent:chameleon:oc:${projectID}`;
+    const fetchURLs: string[] = [];
+    globalThis.fetch = (async (input: URL | string, init?: RequestInit) => {
+      fetchURLs.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({}),
+        text: async () => "",
+        ...(init ? { headers: init.headers } : {}),
+      } as Response;
+    }) as typeof fetch;
+    setOtterCampOrgIDForTest("00000000-0000-0000-0000-000000000123");
+
+    await handleOpenClawEventForTest({
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Project update from inferred context." }],
+        },
+      },
+    });
+
+    assert.equal(
+      fetchURLs.some((url) =>
+        url.includes(`/api/projects/${projectID}/chat/messages?org_id=00000000-0000-0000-0000-000000000123`)
+      ),
+      true,
+    );
+  });
+
+  it("persists issue replies for compound chameleon issue sessions", async () => {
+    const orgID = "00000000-0000-0000-0000-000000000123";
+    const projectID = "bbbbbbbb-1111-2222-3333-444444444444";
+    const issueID = "99999999-aaaa-bbbb-cccc-dddddddddddd";
+    const sessionKey = `agent:chameleon:oc:${projectID}:${issueID}`;
+    const fetchURLs: string[] = [];
+    globalThis.fetch = (async (input: URL | string, init?: RequestInit) => {
+      fetchURLs.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({}),
+        text: async () => "",
+        ...(init ? { headers: init.headers } : {}),
+      } as Response;
+    }) as typeof fetch;
+
+    setSessionContextForTest(sessionKey, {
+      kind: "issue_comment",
+      orgID,
+      projectID,
+      issueID,
+      responderAgentID: "technonymous",
+      agentID: "technonymous",
+      agentName: "Technonymous",
+    });
+
+    await handleOpenClawEventForTest({
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Issue update from compound chameleon session." }],
+        },
+      },
+    });
+
+    assert.equal(fetchURLs.some((url) => url.includes(`/api/issues/${issueID}/comments?org_id=${orgID}`)), true);
   });
 });
 
@@ -328,11 +616,22 @@ describe("bridge identity preamble helpers", () => {
     assert.equal(systemPrompt.includes(userText), false);
 
     const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
-    assert.ok(secondPrompt.includes("[OtterCamp Identity Injection]"));
+    assert.equal(secondPrompt.includes("[OtterCamp Identity Injection]"), false);
     assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
     assert.ok(secondPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"));
     assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
     assert.equal(secondPrompt.includes("next turn"), false);
+  });
+
+  it("formats optional incremental context updates without forcing full identity resend", () => {
+    const formatted = formatIncrementalDMContentForTest(
+      "Please continue.",
+      "New context: release blocker resolved.",
+    );
+    assert.ok(formatted.includes("[OtterCamp Context Update]"));
+    assert.ok(formatted.includes("New context: release blocker resolved."));
+    assert.ok(formatted.includes("[/OtterCamp Context Update]"));
+    assert.ok(formatted.endsWith("Please continue."));
   });
 
   it("installs and injects the OtterCamp guide from the chameleon workspace", async () => {

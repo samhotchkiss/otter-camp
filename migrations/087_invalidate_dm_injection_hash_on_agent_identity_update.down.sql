@@ -1,0 +1,2 @@
+DROP TRIGGER IF EXISTS trg_dm_injection_hash_invalidate_on_agent_identity_update ON agents;
+DROP FUNCTION IF EXISTS invalidate_dm_injection_hash_on_agent_identity_update();

@@ -149,6 +149,350 @@ func (f *fakeOpenClawDispatcher) IsConnected() bool {
 	return f.connected
 }
 
+func TestDMRoutingExemptAgentSlug(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isDMRoutingExemptAgentSlug("main"))
+	require.True(t, isDMRoutingExemptAgentSlug("elephant"))
+	require.True(t, isDMRoutingExemptAgentSlug("lori"))
+	require.True(t, isDMRoutingExemptAgentSlug("MAIN"))
+	require.False(t, isDMRoutingExemptAgentSlug("technonymous"))
+	require.False(t, isDMRoutingExemptAgentSlug(""))
+}
+
+func TestDMFallbackSessionKeyForAgentSlug(t *testing.T) {
+	t.Parallel()
+
+	agentID := "28d27f83-5518-468a-83bf-750f7ec1c9f5"
+	tests := []struct {
+		name      string
+		agentSlug string
+		want      string
+	}{
+		{
+			name:      "non exempt slug routes to chameleon",
+			agentSlug: "technonymous",
+			want:      canonicalChameleonSessionKey(agentID),
+		},
+		{
+			name:      "main slug stays on own session",
+			agentSlug: "main",
+			want:      "agent:main:main",
+		},
+		{
+			name:      "elephant slug stays on own session",
+			agentSlug: "elephant",
+			want:      "agent:elephant:main",
+		},
+		{
+			name:      "lori slug stays on own session",
+			agentSlug: "lori",
+			want:      "agent:lori:main",
+		},
+			{
+				name:      "no slug routes to chameleon",
+				agentSlug: "",
+				want:      canonicalChameleonSessionKey(agentID),
+			},
+		}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, dmFallbackSessionKeyForAgentSlug(tt.agentSlug, agentID))
+		})
+	}
+}
+
+func TestNormalizeDMDispatchSessionKeyForAgentSlug(t *testing.T) {
+	t.Parallel()
+
+	agentID := "28d27f83-5518-468a-83bf-750f7ec1c9f5"
+	tests := []struct {
+		name       string
+		agentSlug  string
+		sessionKey string
+		want       string
+	}{
+		{
+			name:       "non exempt chameleon key stays chameleon",
+			agentSlug:  "technonymous",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       canonicalChameleonSessionKey(agentID),
+		},
+		{
+			name:       "non exempt stale main key migrates to chameleon",
+			agentSlug:  "technonymous",
+			sessionKey: "agent:technonymous:main",
+			want:       canonicalChameleonSessionKey(agentID),
+		},
+		{
+			name:       "exempt main slug rewrites chameleon to dedicated session",
+			agentSlug:  "main",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       "agent:main:main",
+		},
+		{
+			name:       "exempt elephant slug rewrites chameleon to dedicated session",
+			agentSlug:  "elephant",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       "agent:elephant:main",
+		},
+		{
+			name:       "exempt lori slug rewrites chameleon to dedicated session",
+			agentSlug:  "lori",
+			sessionKey: canonicalChameleonSessionKey(agentID),
+			want:       "agent:lori:main",
+		},
+		{
+			name:       "non exempt unrelated key is preserved",
+			agentSlug:  "technonymous",
+			sessionKey: "agent:other:main",
+			want:       "agent:other:main",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, normalizeDMDispatchSessionKeyForAgentSlug(tt.agentSlug, agentID, tt.sessionKey))
+		})
+	}
+}
+
+func TestDMInjectionDecider(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	tests := []struct {
+		name        string
+		state       *dmInjectionState
+		currentHash string
+		want        bool
+	}{
+		{
+			name:        "nil state injects",
+			state:       nil,
+			currentHash: "hash-a",
+			want:        true,
+		},
+		{
+			name: "never injected injects",
+			state: &dmInjectionState{
+				InjectionHash: "hash-a",
+			},
+			currentHash: "hash-a",
+			want:        true,
+		},
+		{
+			name: "compaction flagged injects",
+			state: &dmInjectionState{
+				InjectedAt:         sql.NullTime{Time: now, Valid: true},
+				InjectionHash:      "hash-a",
+				CompactionDetected: true,
+			},
+			currentHash: "hash-a",
+			want:        true,
+		},
+		{
+			name: "hash mismatch injects",
+			state: &dmInjectionState{
+				InjectedAt:    sql.NullTime{Time: now, Valid: true},
+				InjectionHash: "hash-a",
+			},
+			currentHash: "hash-b",
+			want:        true,
+		},
+		{
+			name: "warmed current hash does not inject",
+			state: &dmInjectionState{
+				InjectedAt:    sql.NullTime{Time: now, Valid: true},
+				InjectionHash: "hash-a",
+			},
+			currentHash: "hash-a",
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, shouldInjectDMIdentity(tt.state, tt.currentHash))
+		})
+	}
+}
+
+func TestBuildDMDispatchEvent_InjectionState(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-injection-state-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-injection-agent")
+	_, err := db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3,
+		     identity_md = $4,
+		     instructions_md = $5
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v1",
+		"Identity v1",
+		"Instructions v1",
+	)
+	require.NoError(t, err)
+
+	handler := &MessageHandler{}
+	threadID := "dm_" + agentID
+	req := createMessageRequest{
+		ThreadID: &threadID,
+		Content:  "First turn",
+	}
+	target := dmDispatchTarget{
+		AgentID:    agentID,
+		SessionKey: canonicalChameleonSessionKey(agentID),
+	}
+
+	event := handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-1", req, target)
+	require.True(t, event.Data.InjectIdentity)
+
+	event = handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-2", req, target)
+	require.False(t, event.Data.InjectIdentity)
+
+	_, err = db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v2",
+	)
+	require.NoError(t, err)
+
+	event = handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-3", req, target)
+	require.True(t, event.Data.InjectIdentity)
+
+	_, err = db.Exec(
+		`UPDATE dm_injection_state
+		 SET compaction_detected = TRUE
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+	)
+	require.NoError(t, err)
+
+	event = handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-4", req, target)
+	require.True(t, event.Data.InjectIdentity)
+
+	var compactionDetected bool
+	err = db.QueryRow(
+		`SELECT compaction_detected
+		 FROM dm_injection_state
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+	).Scan(&compactionDetected)
+	require.NoError(t, err)
+	require.False(t, compactionDetected)
+}
+
+func TestBuildDMDispatchEvent_IncrementalContext(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-injection-incremental-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-injection-incremental-agent")
+
+	handler := &MessageHandler{}
+	threadID := "dm_" + agentID
+	incrementalContext := "Updated project status: release candidate approved."
+	req := createMessageRequest{
+		ThreadID:           &threadID,
+		Content:            "Ack",
+		IncrementalContext: &incrementalContext,
+	}
+	target := dmDispatchTarget{
+		AgentID:    agentID,
+		SessionKey: canonicalChameleonSessionKey(agentID),
+	}
+
+	event := handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-1", req, target)
+	require.Equal(t, incrementalContext, event.Data.IncrementalContext)
+}
+
+func TestDMInjectionState_InvalidatesOnAgentIdentityUpdate(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-injection-invalidate-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "dm-injection-invalidate-agent")
+	threadID := "dm_" + agentID
+	sessionKey := canonicalChameleonSessionKey(agentID)
+
+	_, err := db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3,
+		     identity_md = $4,
+		     instructions_md = $5
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v1",
+		"Identity v1",
+		"Instructions v1",
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`INSERT INTO dm_injection_state (
+			org_id,
+			thread_id,
+			session_key,
+			agent_id,
+			injected_at,
+			injection_hash,
+			compaction_detected
+		) VALUES ($1, $2, $3, $4, NOW(), $5, FALSE)`,
+		orgID,
+		threadID,
+		sessionKey,
+		agentID,
+		"hash-v1",
+	)
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		`UPDATE agents
+		 SET soul_md = $3
+		 WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+		"Soul v2",
+	)
+	require.NoError(t, err)
+
+	var injectionHash sql.NullString
+	err = db.QueryRow(
+		`SELECT injection_hash
+		 FROM dm_injection_state
+		 WHERE org_id = $1 AND thread_id = $2`,
+		orgID,
+		threadID,
+	).Scan(&injectionHash)
+	require.NoError(t, err)
+	require.False(t, injectionHash.Valid)
+
+	handler := &MessageHandler{}
+	req := createMessageRequest{
+		ThreadID: &threadID,
+		Content:  "Need refreshed identity",
+	}
+	target := dmDispatchTarget{
+		AgentID:    agentID,
+		SessionKey: sessionKey,
+	}
+
+	event := handler.buildDMDispatchEvent(context.Background(), db, orgID, "msg-refresh", req, target)
+	require.True(t, event.Data.InjectIdentity)
+}
+
 func TestMessageCRUDTaskThread(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "messages-org")
@@ -395,11 +739,91 @@ func TestCreateMessageDMDispatchesToOpenClaw(t *testing.T) {
 	require.Equal(t, "sam-user", event.Data.SenderID)
 	require.Equal(t, "user", event.Data.SenderType)
 	require.Equal(t, "Sam", event.Data.SenderName)
+	require.Len(t, event.Data.Attachments, 0)
 
 	var count int
 	err = db.QueryRow(`SELECT COUNT(*) FROM comments WHERE thread_id = 'dm_itsalive'`).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
+}
+
+func TestCreateMessageDMDispatchIncludesAttachments(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-attachments-org")
+	attachmentID := insertMessageTestAttachment(t, db, orgID, "diagram.png")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		orgID,
+		"itsalive",
+		"Ivy",
+		"online",
+		"agent:itsalive:main",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":    orgID,
+		"thread_id": "dm_itsalive",
+		"content":   "Please review the attached image",
+		"attachments": []map[string]interface{}{
+			{
+				"id":         attachmentID,
+				"filename":   "diagram.png",
+				"size_bytes": 2048,
+				"mime_type":  "image/png",
+				"url":        "/api/attachments/" + attachmentID,
+			},
+		},
+		"sender_id":   "sam-user",
+		"sender_type": "user",
+		"sender_name": "Sam",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, "dm.message", event.Type)
+	require.Len(t, event.Data.Attachments, 1)
+	require.Equal(t, "/api/attachments/"+attachmentID, event.Data.Attachments[0].URL)
+	require.Equal(t, "diagram.png", event.Data.Attachments[0].Filename)
+	require.Equal(t, "image/png", event.Data.Attachments[0].ContentType)
+	require.EqualValues(t, 2048, event.Data.Attachments[0].SizeBytes)
+}
+
+func TestBuildDMDispatchEventOmitsAttachmentsWhenEmpty(t *testing.T) {
+	handler := &MessageHandler{}
+	threadID := "dm_itsalive"
+	req := createMessageRequest{
+		ThreadID: &threadID,
+		Content:  "no attachments payload",
+	}
+	event := handler.buildDMDispatchEvent(
+		context.Background(),
+		nil,
+		"org-id",
+		"message-id",
+		req,
+		dmDispatchTarget{
+			AgentID:    "itsalive",
+			SessionKey: "agent:itsalive:main",
+		},
+	)
+
+	raw, err := json.Marshal(event)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "\"attachments\"")
 }
 
 func TestCreateMessageDMUsesChameleonFallbackWhenSyncStateMissingByUUID(t *testing.T) {
@@ -550,6 +974,64 @@ func TestCreateMessageDMUsesElephantMainFallbackWhenSyncStateMissing(t *testing.
 	require.Equal(t, "agent:elephant:main", event.Data.SessionKey)
 }
 
+func TestCreateMessageDMUsesMainFallbackWhenSyncStateMissing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-main-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "main")
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_main",
+		"content":     "Hey Frank",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, "agent:main:main", event.Data.SessionKey)
+}
+
+func TestCreateMessageDMUsesLoriFallbackWhenSyncStateMissing(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-fallback-lori-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "lori")
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_lori",
+		"content":     "Hey Lori",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, "agent:lori:main", event.Data.SessionKey)
+}
+
 func TestCreateMessageDMNormalizesElephantSyncStateFromChameleonKey(t *testing.T) {
 	db := setupMessageTestDB(t)
 	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-elephant-normalize-org")
@@ -587,6 +1069,54 @@ func TestCreateMessageDMNormalizesElephantSyncStateFromChameleonKey(t *testing.T
 	require.True(t, ok)
 	require.Equal(t, agentID, event.Data.AgentID)
 	require.Equal(t, "agent:elephant:main", event.Data.SessionKey)
+}
+
+func TestCreateMessageDMNormalizesNonExemptSyncStateMainKeyToChameleonAndPersists(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "dm-dispatch-nonexempt-normalize-org")
+	agentID := insertMessageTestAgent(t, db, orgID, "technonymous")
+
+	_, err := db.Exec(
+		`INSERT INTO agent_sync_state (org_id, id, name, status, session_key, updated_at)
+		 VALUES ($1, $2, $3, 'online', $4, NOW())`,
+		orgID,
+		agentID,
+		"Technonymous",
+		"agent:technonymous:main",
+	)
+	require.NoError(t, err)
+
+	dispatcher := &fakeOpenClawDispatcher{connected: true}
+	handler := &MessageHandler{OpenClawDispatcher: dispatcher}
+
+	payload := map[string]interface{}{
+		"org_id":      orgID,
+		"thread_id":   "dm_" + agentID,
+		"content":     "Check route",
+		"sender_type": "user",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewReader(body))
+	handler.CreateMessage(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Len(t, dispatcher.calls, 1)
+
+	event, ok := dispatcher.calls[0].(openClawDMDispatchEvent)
+	require.True(t, ok)
+	require.Equal(t, agentID, event.Data.AgentID)
+	require.Equal(t, canonicalChameleonSessionKey(agentID), event.Data.SessionKey)
+
+	var persistedSessionKey string
+	err = db.QueryRow(
+		`SELECT session_key FROM agent_sync_state WHERE org_id = $1 AND id = $2`,
+		orgID,
+		agentID,
+	).Scan(&persistedSessionKey)
+	require.NoError(t, err)
+	require.Equal(t, canonicalChameleonSessionKey(agentID), persistedSessionKey)
 }
 
 func TestCreateMessageDMDispatchFailurePersistsMessageWithDeliveryWarning(t *testing.T) {

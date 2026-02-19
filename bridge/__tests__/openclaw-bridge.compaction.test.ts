@@ -3,6 +3,7 @@ import { beforeEach, describe, it } from "node:test";
 import {
   detectCompactionSignalForTest,
   fetchCompactionRecoveryContextForTest,
+  reportCompactionSignalToOtterCampForTest,
   resetCompactionRecoveryStateForTest,
   runCompactionRecoveryForTest,
   type CompactionSignal,
@@ -212,5 +213,41 @@ describe("bridge compaction detection + recovery", () => {
       deps,
     );
     assert.equal(newestSignalReplayed, false);
+  });
+
+  it("reports compaction signals to OtterCamp events endpoint", async () => {
+    const signal: CompactionSignal = {
+      sessionKey: "agent:main:dm",
+      orgID: "org-1",
+      agentID: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      summaryText: "Compacted summary text",
+      reason: "explicit",
+    };
+
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const bodyText = typeof init?.body === "string" ? init.body : "";
+      calls.push({
+        url: String(input),
+        body: bodyText ? JSON.parse(bodyText) : {},
+      });
+      return new Response(JSON.stringify({ ok: true, updated: 1 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      await reportCompactionSignalToOtterCampForTest(signal);
+      assert.equal(calls.length, 1);
+      assert.match(calls[0]?.url ?? "", /\/api\/openclaw\/events$/);
+      assert.equal(calls[0]?.body.event, "session.compaction");
+      assert.equal(calls[0]?.body.org_id, "org-1");
+      assert.equal(calls[0]?.body.session_key, "agent:main:dm");
+      assert.equal(calls[0]?.body.compaction_detected, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
