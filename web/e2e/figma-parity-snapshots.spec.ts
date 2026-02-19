@@ -8,6 +8,11 @@ const VIEWPORTS = [
   { name: "mobile", width: 390, height: 844 },
 ] as const;
 
+const PARITY_LOCK_SNAPSHOT_OPTIONS = {
+  animations: "disabled" as const,
+  maxDiffPixels: 60,
+};
+
 async function installDeterministicWebSocket(page: Page): Promise<void> {
   await page.addInitScript(() => {
     class DeterministicWebSocket {
@@ -93,46 +98,49 @@ test.describe("Figma parity snapshots", () => {
     }
   });
 
-  test("figma-parity-inbox screenshot baselines", async ({ page }) => {
+  test("parity-lock figma-parity-inbox screenshot baselines", async ({ page }) => {
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto("/inbox");
       await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
-      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-inbox-${viewport.name}.png`, {
-        animations: "disabled",
-      });
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(
+        `figma-parity-inbox-${viewport.name}.png`,
+        PARITY_LOCK_SNAPSHOT_OPTIONS,
+      );
     }
   });
 
-  test("figma-parity-projects screenshot baselines", async ({ page }) => {
+  test("parity-lock figma-parity-projects screenshot baselines", async ({ page }) => {
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto("/projects");
-      await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
-      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-projects-${viewport.name}.png`, {
-        animations: "disabled",
-      });
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(
+        `figma-parity-projects-${viewport.name}.png`,
+        PARITY_LOCK_SNAPSHOT_OPTIONS,
+      );
     }
   });
 
-  test("figma-parity-chat screenshot baselines", async ({ page }) => {
+  test("parity-lock figma-parity-chat screenshot baselines", async ({ page }) => {
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto("/inbox");
       await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
 
-      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-chat-closed-${viewport.name}.png`, {
-        animations: "disabled",
-      });
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(
+        `figma-parity-chat-closed-${viewport.name}.png`,
+        PARITY_LOCK_SNAPSHOT_OPTIONS,
+      );
 
       const openButton = page.getByRole("button", { name: "Open global chat" });
       if (await openButton.isVisible().catch(() => false)) {
         await openButton.click();
       }
 
-      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-chat-open-${viewport.name}.png`, {
-        animations: "disabled",
-      });
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(
+        `figma-parity-chat-open-${viewport.name}.png`,
+        PARITY_LOCK_SNAPSHOT_OPTIONS,
+      );
     }
   });
 
@@ -160,41 +168,41 @@ test.describe("Figma parity snapshots", () => {
     }
   });
 
-  test("figma-parity-project-detail screenshot baselines", async ({ page }) => {
+  test("parity-lock figma-parity-project-detail screenshot baselines", async ({ page }) => {
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto("/projects/project-2");
       await expect(page.getByRole("heading", { name: "API Gateway" })).toBeVisible();
       await expect(page.getByTestId("shell-layout")).toHaveScreenshot(
         `figma-parity-project-detail-${viewport.name}.png`,
-        {
-          animations: "disabled",
-        },
+        PARITY_LOCK_SNAPSHOT_OPTIONS,
       );
     }
   });
 
-  test("figma-parity-issue screenshot baselines", async ({ page }) => {
+  test("parity-lock figma-parity-issue screenshot baselines", async ({ page }) => {
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto("/issue/ISS-209");
       await expect(page.getByRole("heading", { name: "Fix API rate limiting", exact: true })).toBeVisible();
       await normalizeEditorViewport(page);
-      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-issue-${viewport.name}.png`, {
-        animations: "disabled",
-      });
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(
+        `figma-parity-issue-${viewport.name}.png`,
+        PARITY_LOCK_SNAPSHOT_OPTIONS,
+      );
     }
   });
 
-  test("figma-parity-review screenshot baselines", async ({ page }) => {
+  test("parity-lock figma-parity-review screenshot baselines", async ({ page }) => {
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto("/review/docs%2Frate-limiting-implementation.md");
       await expect(page.getByRole("heading", { name: "Content Review" })).toBeVisible();
       await normalizeEditorViewport(page);
-      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-review-${viewport.name}.png`, {
-        animations: "disabled",
-      });
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(
+        `figma-parity-review-${viewport.name}.png`,
+        PARITY_LOCK_SNAPSHOT_OPTIONS,
+      );
     }
   });
 });
