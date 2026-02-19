@@ -2,9 +2,11 @@ import { useState, useEffect, useCallback } from "react";
 import api, { Approval } from "../lib/api";
 
 type ItemType = "approval" | "review" | "decision" | "blocked";
+type InboxFilter = "all" | "unread" | "urgent";
 
 interface InboxItem extends Approval {
   itemType: ItemType;
+  unread: boolean;
   urgent: boolean;
   description: string;
 }
@@ -48,10 +50,13 @@ function getChipVariant(itemType: ItemType): string {
 
 function mapToInboxItem(approval: Approval): InboxItem {
   const itemType = getItemType(approval);
+  const unread = approval.status === "pending";
+  const urgent = unread || approval.status === "blocked" || itemType === "blocked";
   return {
     ...approval,
     itemType,
-    urgent: approval.status === "pending" || itemType === "blocked",
+    unread,
+    urgent,
     description: approval.command || `${approval.type} request from ${approval.agent}`,
   };
 }
@@ -77,6 +82,7 @@ function formatTime(dateString: string): string {
 
 export default function InboxPage() {
   const [items, setItems] = useState<InboxItem[]>([]);
+  const [filter, setFilter] = useState<InboxFilter>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -99,6 +105,13 @@ export default function InboxPage() {
   }, []);
 
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const unreadCount = items.filter((item) => item.unread).length;
+  const urgentCount = items.filter((item) => item.urgent).length;
+  const filteredItems = items.filter((item) => {
+    if (filter === "unread") return item.unread;
+    if (filter === "urgent") return item.urgent;
+    return true;
+  });
 
   const handleApprove = useCallback(async (id: string) => {
     if (processingId) return; // Prevent double-click
@@ -178,26 +191,68 @@ export default function InboxPage() {
 
   return (
     <div className="inbox-container">
-      <div className="mb-6">
-        <h1 className="page-title">
-          Inbox
-        </h1>
-        <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-          Pending approvals and items requiring your attention
-        </p>
+      <div className="inbox-header" data-testid="inbox-header">
+        <div className="inbox-header-main">
+          <h1 className="page-title">
+            Inbox
+          </h1>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            {filteredItems.length} items requiring your attention
+          </p>
+        </div>
+        <div className="inbox-header-actions" aria-label="Inbox actions">
+          <button type="button" className="inbox-icon-action" aria-label="Filter inbox" disabled>
+            Filter
+          </button>
+          <button type="button" className="inbox-icon-action" aria-label="Archive inbox" disabled>
+            Archive
+          </button>
+        </div>
       </div>
 
-      <div className="inbox-list">
-        {items.length === 0 ? (
+      <div className="inbox-filter-tabs" role="tablist" aria-label="Inbox filters">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === "all"}
+          className={`inbox-filter-tab ${filter === "all" ? "active" : ""}`}
+          onClick={() => setFilter("all")}
+        >
+          All ({items.length})
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === "unread"}
+          className={`inbox-filter-tab ${filter === "unread" ? "active" : ""}`}
+          onClick={() => setFilter("unread")}
+        >
+          Unread ({unreadCount})
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === "urgent"}
+          className={`inbox-filter-tab ${filter === "urgent" ? "active" : ""}`}
+          onClick={() => setFilter("urgent")}
+        >
+          Urgent ({urgentCount})
+        </button>
+      </div>
+
+      <div className="inbox-list-container oc-panel" data-testid="inbox-list-container">
+        <div className="inbox-list">
+        {filteredItems.length === 0 ? (
           <div className="inbox-empty oc-panel">
             <span className="inbox-empty-icon">📭</span>
             <p>No pending items</p>
           </div>
         ) : (
-          items.map((item) => (
+          filteredItems.map((item) => (
             <div
               key={item.id}
-              className={`inbox-item oc-card oc-card-interactive ${item.urgent ? "urgent" : ""}`}
+              className={`inbox-row inbox-item oc-card oc-card-interactive ${item.urgent ? "urgent" : ""}`}
+              data-testid="inbox-row"
             >
               <div className="item-header">
                 <div className={`item-icon ${item.itemType}`}>
@@ -211,6 +266,7 @@ export default function InboxPage() {
                     <span className={`badge-type badge-${item.itemType} oc-chip ${getChipVariant(item.itemType)}`}>
                       {item.itemType}
                     </span>
+                    {item.unread ? <span className="item-unread">Unread</span> : null}
                     <span className={`item-status ${item.status}`}>
                       {item.status}
                     </span>
@@ -218,20 +274,25 @@ export default function InboxPage() {
                   </div>
                 </div>
               </div>
+              <div className="inbox-row-meta" data-testid="inbox-row-meta">
+                <span className="inbox-row-type">{item.type}</span>
+                <span className="inbox-row-from">from {item.agent}</span>
+                <span className="inbox-row-timestamp">{formatTime(item.createdAt)}</span>
+              </div>
               <div className="item-body">
                 <p className="item-desc">{item.description}</p>
                 <div className="item-actions oc-toolbar">
                   <button
                     className="btn btn-primary oc-toolbar-button oc-toolbar-button--primary"
                     onClick={() => handleApprove(item.id)}
-                    disabled={processingId === item.id}
+                    disabled={!!processingId}
                   >
                     {processingId === item.id ? "Processing..." : "Approve"}
                   </button>
                   <button
                     className="btn btn-secondary oc-toolbar-button"
                     onClick={() => handleReject(item.id)}
-                    disabled={processingId === item.id}
+                    disabled={!!processingId}
                   >
                     {processingId === item.id ? "Processing..." : "Reject"}
                   </button>
@@ -240,6 +301,7 @@ export default function InboxPage() {
             </div>
           ))
         )}
+        </div>
       </div>
     </div>
   );
