@@ -317,7 +317,12 @@ export default function ProjectFileBrowser({ projectId }: ProjectFileBrowserProp
         query.set("project_id", projectId);
       }
 
-      const linkedIssueID = await resolveLinkedIssueID(selectedFilePath);
+      let linkedIssueID: string | null = null;
+      try {
+        linkedIssueID = await resolveLinkedIssueID(selectedFilePath);
+      } catch {
+        linkedIssueID = null;
+      }
       if (linkedIssueID) {
         query.set("issue_id", linkedIssueID);
       }
