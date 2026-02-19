@@ -10,10 +10,38 @@ const REQUIRED_LORI_ENTRY: Record<string, unknown> = {
   model: "anthropic/claude-opus-4-6",
   workspace: "~/.openclaw/workspace-lori",
 };
+const REQUIRED_LORI_FILES = ["SOUL.md", "IDENTITY.md", "TOOLS.md"] as const;
+const LORI_FILE_TEMPLATES: Record<(typeof REQUIRED_LORI_FILES)[number], string> = {
+  "SOUL.md": [
+    "# Lori Soul",
+    "",
+    "Lori focuses on people-management and interpersonal coordination in OtterCamp.",
+    "",
+  ].join("\n"),
+  "IDENTITY.md": [
+    "# Lori Identity",
+    "",
+    "- Agent ID: lori",
+    "- Role: People management and relationship support",
+    "",
+  ].join("\n"),
+  "TOOLS.md": [
+    "# Lori Tools",
+    "",
+    "- Use standard OpenClaw/OtterCamp toolchain via identity injection.",
+    "",
+  ].join("\n"),
+};
 
 type LoriConfigResult = {
   changed: boolean;
   configPath: string;
+};
+
+type LoriWorkspaceResult = {
+  changed: boolean;
+  workspacePath: string;
+  samsBrainPath: string;
 };
 
 function parseJSONFile(filePath: string): Record<string, unknown> {
@@ -69,6 +97,56 @@ export function ensureLoriAgentConfig(configPath: string): LoriConfigResult {
   return {
     changed,
     configPath: resolvedPath,
+  };
+}
+
+export function ensureLoriWorkspaceScaffold(workspacePath: string, samsBrainPath: string): LoriWorkspaceResult {
+  const resolvedWorkspace = path.resolve(workspacePath);
+  const resolvedSamsBrain = path.resolve(samsBrainPath);
+  let changed = false;
+
+  if (!fs.existsSync(resolvedWorkspace)) {
+    fs.mkdirSync(resolvedWorkspace, { recursive: true });
+    changed = true;
+  }
+  if (!fs.existsSync(resolvedSamsBrain)) {
+    fs.mkdirSync(resolvedSamsBrain, { recursive: true });
+    changed = true;
+  }
+
+  for (const fileName of REQUIRED_LORI_FILES) {
+    const samsBrainFile = path.join(resolvedSamsBrain, fileName);
+    const workspaceFile = path.join(resolvedWorkspace, fileName);
+    if (!fs.existsSync(samsBrainFile)) {
+      fs.writeFileSync(samsBrainFile, LORI_FILE_TEMPLATES[fileName], "utf8");
+      changed = true;
+    }
+
+    const expectedTarget = fs.realpathSync(samsBrainFile);
+    if (fs.existsSync(workspaceFile)) {
+      const stat = fs.lstatSync(workspaceFile);
+      if (stat.isSymbolicLink()) {
+        const linkedTarget = fs.realpathSync(workspaceFile);
+        if (linkedTarget !== expectedTarget) {
+          fs.rmSync(workspaceFile, { force: true });
+          fs.symlinkSync(samsBrainFile, workspaceFile);
+          changed = true;
+        }
+      } else {
+        fs.rmSync(workspaceFile, { recursive: true, force: true });
+        fs.symlinkSync(samsBrainFile, workspaceFile);
+        changed = true;
+      }
+    } else {
+      fs.symlinkSync(samsBrainFile, workspaceFile);
+      changed = true;
+    }
+  }
+
+  return {
+    changed,
+    workspacePath: resolvedWorkspace,
+    samsBrainPath: resolvedSamsBrain,
   };
 }
 
