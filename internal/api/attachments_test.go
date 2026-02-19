@@ -185,6 +185,8 @@ func TestIsSupportedAttachmentMimeType(t *testing.T) {
 		{name: "plain text", mimeType: "text/plain; charset=utf-8", want: true},
 		{name: "json", mimeType: "application/json", want: true},
 		{name: "shell script", mimeType: "text/x-shellscript; charset=utf-8", want: true},
+		{name: "html markup blocked", mimeType: "text/html; charset=utf-8", want: false},
+		{name: "xhtml markup blocked", mimeType: "text/xhtml+xml", want: false},
 		{name: "unsupported exe", mimeType: "application/x-msdownload", want: false},
 		{name: "octet stream", mimeType: "application/octet-stream", want: false},
 	}

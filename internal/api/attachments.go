@@ -402,6 +402,12 @@ func isSupportedAttachmentMimeType(mimeType string) bool {
 		normalized = parsed
 	}
 
+	// Block markup types that can contain executable scripts.
+	switch normalized {
+	case "text/html", "text/xhtml+xml", "text/xml":
+		return false
+	}
+
 	if strings.HasPrefix(normalized, "text/") {
 		return true
 	}
