@@ -72,6 +72,30 @@ test.describe("Figma parity snapshots", () => {
     }
   });
 
+  test("figma-parity-secondary screenshot baselines", async ({ page }) => {
+    for (const viewport of VIEWPORTS) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+
+      await page.goto("/agents");
+      await expect(page.getByRole("heading", { name: "Agent Status" })).toBeVisible();
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-secondary-agents-${viewport.name}.png`, {
+        animations: "disabled",
+      });
+
+      await page.goto("/knowledge");
+      await expect(page.getByRole("heading", { name: "Memory System" })).toBeVisible();
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-secondary-memory-${viewport.name}.png`, {
+        animations: "disabled",
+      });
+
+      await page.goto("/connections");
+      await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-secondary-ops-${viewport.name}.png`, {
+        animations: "disabled",
+      });
+    }
+  });
+
   test("figma-parity-project-detail screenshot baselines", async ({ page }) => {
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -103,30 +127,6 @@ test.describe("Figma parity snapshots", () => {
       await page.goto("/review/docs%2Frate-limiting-implementation.md");
       await expect(page.getByRole("heading", { name: "Content Review" })).toBeVisible();
       await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-review-${viewport.name}.png`, {
-        animations: "disabled",
-      });
-    }
-  });
-
-  test("figma-parity-secondary screenshot baselines", async ({ page }) => {
-    for (const viewport of VIEWPORTS) {
-      await page.setViewportSize({ width: viewport.width, height: viewport.height });
-
-      await page.goto("/agents");
-      await expect(page.getByRole("heading", { name: "Agent Status" })).toBeVisible();
-      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-secondary-agents-${viewport.name}.png`, {
-        animations: "disabled",
-      });
-
-      await page.goto("/knowledge");
-      await expect(page.getByRole("heading", { name: "Memory System" })).toBeVisible();
-      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-secondary-memory-${viewport.name}.png`, {
-        animations: "disabled",
-      });
-
-      await page.goto("/connections");
-      await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
-      await expect(page.getByTestId("shell-layout")).toHaveScreenshot(`figma-parity-secondary-ops-${viewport.name}.png`, {
         animations: "disabled",
       });
     }

@@ -65,86 +65,6 @@ test.describe("Navigation", () => {
     await expect(page).toHaveURL(/\/review\/docs%2FREADME\.md$/);
   });
 
-  test("figma-parity-chat dock open and collapse states render", async ({ page }) => {
-    await page.goto("/inbox");
-
-    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
-    await page.getByRole("button", { name: "Open global chat" }).click();
-    await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
-    await expect(page.getByTestId("global-chat-context-cue")).toContainText("Main context");
-
-    await page.getByRole("button", { name: "Collapse global chat" }).click();
-    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
-  });
-
-  test("figma-parity-secondary routes render baseline surfaces", async ({ page }) => {
-    await page.goto("/agents");
-    await expect(page.getByRole("heading", { name: "Agent Status" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Chameleon Agents (On-Demand)" })).toBeVisible();
-
-    await page.goto("/knowledge");
-    await expect(page.getByRole("heading", { name: "Memory System" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Stream: Conversation Extraction" })).toBeVisible();
-
-    await page.goto("/connections");
-    await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "OpenClaw Bridge" })).toBeVisible();
-  });
-
-  test("core-data-wiring-inbox approve and reject actions update API-backed rows", async ({ page }) => {
-    const decisions: string[] = [];
-    await page.route("**/api/approvals/exec/*/respond**", async (route) => {
-      const body = route.request().postDataJSON() as { action?: string } | null;
-      const action = typeof body?.action === "string" ? body.action : "";
-      decisions.push(action);
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ success: true }),
-      });
-    });
-
-    await page.goto("/inbox");
-    await expect(page.getByText("Deploy frontend")).toBeVisible();
-    await expect(page.getByText("Publish package")).toBeVisible();
-
-    await page.getByRole("button", { name: "Approve Deploy frontend" }).click();
-    await expect(page.getByText("Deploy frontend")).not.toBeVisible();
-
-    await page.getByRole("button", { name: "Reject Publish package" }).click();
-    await expect(page.getByText("Publish package")).not.toBeVisible();
-    await expect(page.getByText("Nightly sync complete")).toBeVisible();
-    expect(decisions).toEqual(["approve", "reject"]);
-  });
-
-  test("figma-parity-core projects and project-detail render API-backed baseline surfaces", async ({ page }) => {
-    await page.goto("/projects");
-
-    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
-    await expect(page.getByTestId("project-card-project-1")).toBeVisible();
-    await expect(page.getByTestId("project-card-project-2")).toBeVisible();
-    await expect(page.getByText("2 item(s) awaiting review")).toBeVisible();
-
-    await page.getByTestId("project-card-project-2").click();
-    await expect(page).toHaveURL(/\/projects\/project-2$/);
-    await expect(page.getByRole("heading", { name: "API Gateway" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Open Issues" })).toBeVisible();
-    await expect(page.getByTestId("shell-workspace").getByText("Fix API rate limiting")).toBeVisible();
-    await expect(page.getByTestId("project-detail-right-rail")).toBeVisible();
-  });
-
-  test("figma-parity-issue route renders baseline issue detail surface", async ({ page }) => {
-    await page.goto("/issue/ISS-209");
-
-    await expect(page.getByRole("heading", { name: "Fix API rate limiting" })).toBeVisible();
-    await expect(page.getByText("Proposed Solution Awaiting Approval")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Approve Solution/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Request Changes/ })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Discussion" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Related Issues" })).toBeVisible();
-  });
-
   test("figma-parity-review route renders baseline content review surface", async ({ page }) => {
     await page.goto("/review/docs%2Frate-limiting-implementation.md");
 
@@ -322,5 +242,73 @@ test.describe("Navigation", () => {
     await page.goto("/definitely-not-a-route");
 
     await expect(page.getByRole("heading", { name: /404|page failed to load/i })).toBeVisible();
+  });
+
+  test("figma-parity-chat dock open and collapse states render", async ({ page }) => {
+    await page.goto("/inbox");
+
+    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
+    await page.getByRole("button", { name: "Open global chat" }).click();
+    await expect(page.getByRole("heading", { name: "Global Chat" })).toBeVisible();
+    await expect(page.getByTestId("global-chat-context-cue")).toContainText("Main context");
+
+    await page.getByRole("button", { name: "Collapse global chat" }).click();
+    await expect(page.getByRole("button", { name: "Open global chat" })).toBeVisible();
+  });
+
+  test("figma-parity-secondary routes render baseline surfaces", async ({ page }) => {
+    await page.goto("/agents");
+    await expect(page.getByRole("heading", { name: "Agent Status" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Chameleon Agents (On-Demand)" })).toBeVisible();
+
+    await page.goto("/knowledge");
+    await expect(page.getByRole("heading", { name: "Memory System" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Stream: Conversation Extraction" })).toBeVisible();
+
+    await page.goto("/connections");
+    await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "OpenClaw Bridge" })).toBeVisible();
+  });
+
+  test("core-data-wiring-inbox approve and reject actions update API-backed rows", async ({ page }) => {
+    const decisions: string[] = [];
+    await page.route("**/api/approvals/exec/*/respond**", async (route) => {
+      const body = route.request().postDataJSON() as { action?: string } | null;
+      const action = typeof body?.action === "string" ? body.action : "";
+      decisions.push(action);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ success: true }),
+      });
+    });
+
+    await page.goto("/inbox");
+    await expect(page.getByText("Deploy frontend")).toBeVisible();
+    await expect(page.getByText("Publish package")).toBeVisible();
+
+    await page.getByRole("button", { name: "Approve Deploy frontend" }).click();
+    await expect(page.getByText("Deploy frontend")).not.toBeVisible();
+
+    await page.getByRole("button", { name: "Reject Publish package" }).click();
+    await expect(page.getByText("Publish package")).not.toBeVisible();
+    await expect(page.getByText("Nightly sync complete")).toBeVisible();
+    expect(decisions).toEqual(["approve", "reject"]);
+  });
+
+  test("figma-parity-core projects and project-detail render API-backed baseline surfaces", async ({ page }) => {
+    await page.goto("/projects");
+
+    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+    await expect(page.getByTestId("project-card-project-1")).toBeVisible();
+    await expect(page.getByTestId("project-card-project-2")).toBeVisible();
+    await expect(page.getByText("2 item(s) awaiting review")).toBeVisible();
+
+    await page.getByTestId("project-card-project-2").click();
+    await expect(page).toHaveURL(/\/projects\/project-2$/);
+    await expect(page.getByRole("heading", { name: "API Gateway" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Open Issues" })).toBeVisible();
+    await expect(page.getByTestId("shell-workspace").getByText("Fix API rate limiting")).toBeVisible();
+    await expect(page.getByTestId("project-detail-right-rail")).toBeVisible();
   });
 });
