@@ -92,7 +92,7 @@ const PROJECT_ID_PATTERN = /(?:^|:)project:([0-9a-f-]{36})(?:$|:)/i;
 const ISSUE_ID_PATTERN = /(?:^|:)issue:([0-9a-f-]{36})(?:$|:)/i;
 const COMPLETION_PROGRESS_LINE_PATTERN = /\bIssue\s+#(\d+)\s+\|\s+Commit\s+([0-9a-f]{7,40})\s+\|\s+([^|]+)\|/i;
 const CHAMELEON_SESSION_KEY_PATTERN =
-  /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+  /^agent:chameleon:oc:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?$/i;
 const SUPPORTED_DISPATCH_EVENT_TYPES = new Set([
   'dm.message',
   'project.chat.message',
@@ -111,6 +111,7 @@ const SAFE_SESSION_FILENAME_PATTERN = /^[a-z0-9][a-z0-9._-]{7,127}$/i;
 const HEARTBEAT_PATTERN = /\bheartbeat\b/i;
 const CHAT_CHANNELS = new Set(['slack', 'telegram', 'tui', 'discord']);
 const OPENCLAW_SYSTEM_AGENT_PATCH_TARGETS = new Set(['chameleon', 'elephant']);
+const PERMANENT_OPENCLAW_AGENTS = new Set(['main', 'elephant', 'ellie-extractor', 'lori', 'chameleon']);
 const OPENCLAW_TOOL_EVENT_CAP = 'tool-events';
 const OTTERCAMP_ORG_ID = (process.env.OTTERCAMP_ORG_ID || '').trim();
 let otterCampOrgIDForTestOverride: string | null = null;
@@ -1390,12 +1391,31 @@ function setSessionContext(sessionKey: string, context: SessionContext): void {
   }
 }
 
-export function parseChameleonSessionKey(sessionKey: string): string | null {
+export type ParsedChameleonSessionKey = {
+  projectID: string;
+  issueID?: string;
+};
+
+function isPermanentOpenClawAgent(agentID: string): boolean {
+  const normalized = getTrimmedString(agentID).toLowerCase();
+  return normalized !== '' && PERMANENT_OPENCLAW_AGENTS.has(normalized);
+}
+
+export function isPermanentOpenClawAgentForTest(agentID: string): boolean {
+  return isPermanentOpenClawAgent(agentID);
+}
+
+export function parseChameleonSessionKey(sessionKey: string): ParsedChameleonSessionKey | null {
   const match = CHAMELEON_SESSION_KEY_PATTERN.exec(getTrimmedString(sessionKey));
   if (!match || !match[1]) {
     return null;
   }
-  return match[1].toLowerCase();
+  const projectID = match[1].toLowerCase();
+  const issueID = getTrimmedString(match[2]).toLowerCase();
+  if (issueID) {
+    return { projectID, issueID };
+  }
+  return { projectID };
 }
 
 export function isCanonicalChameleonSessionKey(sessionKey: string): boolean {
@@ -1403,9 +1423,9 @@ export function isCanonicalChameleonSessionKey(sessionKey: string): boolean {
 }
 
 function parseAgentIDFromSessionKey(sessionKey: string): string {
-  const chameleonAgentID = parseChameleonSessionKey(sessionKey);
-  if (chameleonAgentID) {
-    return chameleonAgentID;
+  const chameleonContext = parseChameleonSessionKey(sessionKey);
+  if (chameleonContext) {
+    return chameleonContext.projectID;
   }
   const match = /^agent:([^:]+):/i.exec(sessionKey.trim());
   if (!match || !match[1]) {
@@ -3166,13 +3186,14 @@ async function resolveSessionIdentityMetadata(
   context: SessionContext,
   content: string,
 ): Promise<SessionIdentityMetadata | null> {
-  const canonicalChameleonAgentID = parseChameleonSessionKey(sessionKey);
+  const canonicalChameleonSession = parseChameleonSessionKey(sessionKey);
+  const canonicalChameleonProjectID = canonicalChameleonSession?.projectID || '';
   const normalizedContextAgentID =
     getTrimmedString(context.agentID) ||
     getTrimmedString(context.responderAgentID);
   const fallbackAgentID = parseAgentIDFromSessionKey(sessionKey);
   const agentID = (
-    canonicalChameleonAgentID ||
+    canonicalChameleonProjectID ||
     normalizedContextAgentID ||
     fallbackAgentID
   ).trim().toLowerCase();
@@ -3181,7 +3202,7 @@ async function resolveSessionIdentityMetadata(
   }
   const orgID = getTrimmedString(context.orgID) || OTTERCAMP_ORG_ID;
   const taskSummary = deriveTaskSummary(context, content);
-  const whoAmISessionKey = canonicalChameleonAgentID
+  const whoAmISessionKey = canonicalChameleonSession
     ? sessionKey
     : (context.kind === 'dm' ? sessionKey : undefined);
 

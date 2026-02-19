@@ -22,6 +22,7 @@ import {
   formatQuestionnaireForFallback,
   isCompactWhoAmIInsufficient,
   isCanonicalChameleonSessionKey,
+  isPermanentOpenClawAgentForTest,
   normalizeQuestionnairePayload,
   parseAgentIDFromSessionKeyForTest,
   parseChameleonSessionKey,
@@ -169,6 +170,12 @@ describe("bridge chameleon session key helpers", () => {
       true,
     );
     assert.equal(
+      isCanonicalChameleonSessionKey(
+        "agent:chameleon:oc:a1b2c3d4-5678-90ab-cdef-1234567890ab:11111111-2222-3333-4444-555555555555",
+      ),
+      true,
+    );
+    assert.equal(
       isCanonicalChameleonSessionKey("agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB"),
       true,
     );
@@ -176,10 +183,21 @@ describe("bridge chameleon session key helpers", () => {
     assert.equal(isCanonicalChameleonSessionKey("agent:chameleon:oc:not-a-uuid"), false);
   });
 
-  it("extracts the agent UUID from canonical chameleon session keys", () => {
-    assert.equal(
+  it("extracts project/issue UUIDs from canonical chameleon session keys", () => {
+    assert.deepEqual(
       parseChameleonSessionKey("agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB"),
-      "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      {
+        projectID: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      },
+    );
+    assert.deepEqual(
+      parseChameleonSessionKey(
+        "agent:chameleon:oc:A1B2C3D4-5678-90AB-CDEF-1234567890AB:11111111-2222-3333-4444-555555555555",
+      ),
+      {
+        projectID: "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+        issueID: "11111111-2222-3333-4444-555555555555",
+      },
     );
     assert.equal(parseChameleonSessionKey("agent:main:slack"), null);
     assert.equal(parseChameleonSessionKey("agent:chameleon:oc:not-a-uuid"), null);
@@ -194,6 +212,15 @@ describe("bridge chameleon session key helpers", () => {
     );
     assert.equal(parseAgentIDFromSessionKeyForTest("agent:../../etc:main"), "");
     assert.equal(parseAgentIDFromSessionKeyForTest("agent:foo/bar:main"), "");
+  });
+
+  it("tracks permanent OpenClaw agent IDs", () => {
+    assert.equal(isPermanentOpenClawAgentForTest("main"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("elephant"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("ellie-extractor"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("lori"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("chameleon"), true);
+    assert.equal(isPermanentOpenClawAgentForTest("technonymous"), false);
   });
 });
 
