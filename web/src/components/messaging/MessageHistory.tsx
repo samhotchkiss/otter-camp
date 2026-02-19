@@ -176,7 +176,7 @@ function MessageAvatar({
 }) {
   const bgColor =
     senderType === "agent"
-      ? "bg-[var(--accent)]/20 text-[var(--accent)]"
+      ? "bg-[#ff9800] text-[#1c1200]"
       : "bg-[var(--surface-alt)] text-[var(--text)]";
 
   if (avatarUrl) {
@@ -234,14 +234,14 @@ function MessageBubble({
   }
 
   const bubbleStyle = isOwnMessage
-    ? "bg-[var(--accent)] text-[#1A1918]"
+    ? "oc-message-bubble-user bg-[var(--accent)] text-[#1A1918]"
     : message.senderType === "agent"
-      ? "border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)]"
+      ? "oc-message-bubble-agent border border-[var(--border)] bg-[var(--surface-alt)] text-[var(--text)]"
       : "bg-[var(--surface-alt)] text-[var(--text)]";
 
   return (
     <div
-      className={`flex gap-3 ${isOwnMessage ? "flex-row-reverse" : "flex-row"}`}
+      className={`flex min-w-0 gap-3 ${isOwnMessage ? "flex-row-reverse" : "flex-row"}`}
     >
       <MessageAvatar
         name={displaySenderName}
@@ -249,19 +249,22 @@ function MessageBubble({
         senderType={message.senderType}
       />
       <div
-        className={`flex max-w-[75%] flex-col ${isOwnMessage ? "items-end" : "items-start"}`}
+        className={`flex min-w-0 max-w-[75%] flex-col ${isOwnMessage ? "items-end" : "items-start"}`}
       >
-        <div className="mb-1 flex items-center gap-2">
-          <span className="text-xs font-medium text-[var(--text-muted)]">
+        <div className="mb-1 flex min-w-0 items-center gap-2">
+          <span className="truncate text-xs font-medium text-[var(--text-muted)]">
             {displaySenderName}
           </span>
           {message.senderType === "agent" && (
-            <span className="rounded-full bg-[var(--accent)]/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--accent)]">
+            <span className="oc-message-agent-chip rounded-full bg-[var(--accent)]/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--accent)]">
               Agent
             </span>
           )}
+          <span className="text-[10px] text-[var(--text-muted)]">
+            {formatTimestamp(message.createdAt)}
+          </span>
         </div>
-        <div className={`rounded-2xl px-4 py-2.5 ${bubbleStyle}`}>
+        <div className={`min-w-0 max-w-full overflow-hidden rounded-2xl px-4 py-2.5 ${bubbleStyle}`}>
           {message.questionnaire ? (
             message.questionnaire.responses ? (
               <QuestionnaireResponse questionnaire={message.questionnaire} />
@@ -302,9 +305,6 @@ function MessageBubble({
             ) : null}
           </div>
         ) : null}
-        <span className="mt-1 text-[10px] text-[var(--text-muted)]">
-          {formatTimestamp(message.createdAt)}
-        </span>
       </div>
     </div>
   );
@@ -488,7 +488,7 @@ export default function MessageHistory({
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className={`flex-1 overflow-y-auto px-5 py-4 ${className}`}
+      className={`oc-chat-history flex-1 overflow-x-hidden overflow-y-auto px-5 py-4 ${className}`}
     >
       {hasMore && onLoadMore && (
         <div className="mb-4 flex justify-center">
