@@ -66,6 +66,13 @@ function asArray(value: unknown): unknown[] {
   return [];
 }
 
+function countArray(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+  return 0;
+}
+
 function readString(record: UnknownRecord, ...keys: string[]): string {
   for (const key of keys) {
     const value = record[key];
@@ -390,9 +397,9 @@ export function mapProjectPayloadToCoreDetailProject(
     lastSync: toRelativeTimestamp(lastSyncSource, now),
     stats: {
       openIssues,
-      branches: toCount(readNumber(record, "branches")),
-      commits: toCount(readNumber(record, "commits")),
-      contributors: toCount(readNumber(record, "contributors")),
+      branches: toCount(readNumber(record, "branches", "branch_count", "active_branches_count")) || countArray(record["active_branches"]),
+      commits: toCount(readNumber(record, "commits", "commit_count", "commits_count")),
+      contributors: toCount(readNumber(record, "contributors", "contributor_count", "contributors_count")),
     },
   };
 }

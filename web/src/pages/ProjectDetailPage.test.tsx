@@ -1,21 +1,28 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ProjectDetailPage from "./ProjectDetailPage";
 
-const { projectMock, issuesMock } = vi.hoisted(() => ({
+const { projectMock, issuesMock, activityRecentMock } = vi.hoisted(() => ({
   projectMock: vi.fn(),
   issuesMock: vi.fn(),
+  activityRecentMock: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => ({
-  default: {
-    project: projectMock,
-    issues: issuesMock,
-  },
-}));
+vi.mock("../lib/api", async () => {
+  const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
+  return {
+    ...actual,
+    default: {
+      ...actual.default,
+      project: projectMock,
+      issues: issuesMock,
+      activityRecent: activityRecentMock,
+    },
+  };
+});
 
 const PROJECT_PAYLOAD = {
   id: "project-2",
@@ -63,8 +70,16 @@ describe("ProjectDetailPage", () => {
   beforeEach(() => {
     projectMock.mockReset();
     issuesMock.mockReset();
+    activityRecentMock.mockReset();
     projectMock.mockResolvedValue(PROJECT_PAYLOAD);
     issuesMock.mockResolvedValue(ISSUES_PAYLOAD);
+    activityRecentMock.mockResolvedValue({ items: [] });
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it("renders API-driven project metadata scaffold", async () => {
@@ -106,11 +121,43 @@ describe("ProjectDetailPage", () => {
     expect(rightRail).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Recent Activity" })).toBeInTheDocument();
     expect(screen.getByTestId("project-detail-file-explorer")).toBeInTheDocument();
-    expect(screen.getByText("README.md")).toBeInTheDocument();
+    expect(screen.getByText("No recent activity yet.")).toBeInTheDocument();
+    expect(screen.getByText("No files indexed yet.")).toBeInTheDocument();
   });
 
-  it("routes markdown review links from the static file explorer", async () => {
+  it("routes markdown review links from the live file explorer", async () => {
     const user = userEvent.setup();
+    localStorage.setItem("otter-camp-org-id", "org-1");
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/projects/project-2/tree")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              entries: [{ name: "README.md", path: "docs/README.md", type: "file" }],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (url.includes("/api/projects/project-2/commits")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ total: 0, items: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.includes("/api/projects/project-2/repo/branches")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ branches: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(new Response("{}", { status: 404 }));
+    });
     renderProjectDetailPage();
 
     await user.click(await screen.findByRole("link", { name: /README\.md/i }));
@@ -136,5 +183,64 @@ describe("ProjectDetailPage", () => {
     expect(await screen.findByText("project detail failed")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("heading", { level: 1, name: "API Gateway" })).toBeInTheDocument();
+  });
+
+  it("hydrates right-rail files/activity and stats from live endpoints when org context exists", async () => {
+    localStorage.setItem("otter-camp-org-id", "org-1");
+    activityRecentMock.mockResolvedValue({
+      items: [
+        {
+          agent_id: "Agent-321",
+          project_id: "project-2",
+          summary: "published release notes",
+          issue_number: 401,
+          created_at: "2026-02-18T20:01:00Z",
+        },
+      ],
+    });
+
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/projects/project-2/tree")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              entries: [
+                { name: "architecture.md", path: "docs/architecture.md", type: "file" },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (url.includes("/api/projects/project-2/commits")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              total: 42,
+              items: [{ author_name: "Agent-321" }, { author_name: "Agent-007" }],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (url.includes("/api/projects/project-2/repo/branches")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              branches: ["main", "release"],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(new Response("{}", { status: 404 }));
+    });
+
+    renderProjectDetailPage();
+
+    expect(await screen.findByText("Agent-321")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /architecture\.md/i })).toBeInTheDocument();
+    expect(screen.getByText("42")).toBeInTheDocument();
   });
 });
