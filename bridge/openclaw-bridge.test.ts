@@ -14,6 +14,7 @@ import {
   ensureChameleonWorkspaceOtterCLIConfigInstalledForTest,
   formatSessionContextMessageForTest,
   formatSessionSystemPromptForTest,
+  formatIncrementalDMContentForTest,
   formatSessionDisplayLabel,
   getSessionContextForTest,
   extractMutationToolTargetPathsForTest,
@@ -328,11 +329,22 @@ describe("bridge identity preamble helpers", () => {
     assert.equal(systemPrompt.includes(userText), false);
 
     const secondPrompt = await formatSessionSystemPromptForTest(sessionKey, "next turn");
-    assert.ok(secondPrompt.includes("[OtterCamp Identity Injection]"));
+    assert.equal(secondPrompt.includes("[OtterCamp Identity Injection]"), false);
     assert.ok(secondPrompt.includes("[OTTERCAMP_OPERATING_GUIDE_REMINDER]"));
     assert.ok(secondPrompt.includes("[OTTERCAMP_ACTION_DEFAULTS]"));
     assert.ok(secondPrompt.includes("[OTTERCAMP_CONTEXT_REMINDER]"));
     assert.equal(secondPrompt.includes("next turn"), false);
+  });
+
+  it("formats optional incremental context updates without forcing full identity resend", () => {
+    const formatted = formatIncrementalDMContentForTest(
+      "Please continue.",
+      "New context: release blocker resolved.",
+    );
+    assert.ok(formatted.includes("[OtterCamp Context Update]"));
+    assert.ok(formatted.includes("New context: release blocker resolved."));
+    assert.ok(formatted.includes("[/OtterCamp Context Update]"));
+    assert.ok(formatted.endsWith("Please continue."));
   });
 
   it("installs and injects the OtterCamp guide from the chameleon workspace", async () => {
