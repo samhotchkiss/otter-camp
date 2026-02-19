@@ -2,10 +2,14 @@ package api
 
 import (
 	"bytes"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -267,4 +271,128 @@ func TestUploadRejectsOversizedFile(t *testing.T) {
 			rr.Body.String(),
 		)
 	}
+}
+
+func TestUploadReturnsAuthenticatedAttachmentURL(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "attachment-upload-url")
+	userID := insertTestUser(t, db, orgID, "attachment-upload-url-user")
+	token := "oc_sess_attachment_upload_url"
+	insertTestSession(t, db, orgID, userID, token, time.Now().UTC().Add(1*time.Hour))
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("org_id", orgID); err != nil {
+		t.Fatalf("WriteField() error = %v", err)
+	}
+	part, err := writer.CreateFormFile("file", "readme.txt")
+	if err != nil {
+		t.Fatalf("CreateFormFile() error = %v", err)
+	}
+	if _, err := part.Write([]byte("readme contents")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/messages/attachments", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	handler := &AttachmentsHandler{}
+	handler.Upload(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Upload() status = %v, want %v (body=%s)", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var resp UploadResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	wantPrefix := "/api/attachments/"
+	if !strings.HasPrefix(resp.Attachment.URL, wantPrefix) {
+		t.Fatalf("Upload() attachment URL = %q, want prefix %q", resp.Attachment.URL, wantPrefix)
+	}
+}
+
+func TestGetAttachmentRejectsMissingAuth(t *testing.T) {
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "attachment-get-auth-required")
+	attachmentID, _ := insertStoredAttachmentFixture(t, db, orgID, "private.txt", []byte("private body"), "text/plain")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/attachments/"+attachmentID, nil)
+	rr := httptest.NewRecorder()
+	handler := &AttachmentsHandler{}
+	handler.GetAttachment(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("GetAttachment() status = %v, want %v (body=%s)", rr.Code, http.StatusUnauthorized, rr.Body.String())
+	}
+}
+
+func TestGetAttachmentStreamsFileWithSyncToken(t *testing.T) {
+	t.Setenv("OPENCLAW_SYNC_SECRET", "sync-secret")
+	db := setupMessageTestDB(t)
+	orgID := insertMessageTestOrganization(t, db, "attachment-get-sync-token")
+	attachmentID, content := insertStoredAttachmentFixture(t, db, orgID, "doc.txt", []byte("sync token body"), "text/plain")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/attachments/"+attachmentID, nil)
+	req.Header.Set("X-OpenClaw-Token", "sync-secret")
+	rr := httptest.NewRecorder()
+	handler := &AttachmentsHandler{}
+	handler.GetAttachment(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GetAttachment() status = %v, want %v (body=%s)", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Body.String(); got != string(content) {
+		t.Fatalf("GetAttachment() body = %q, want %q", got, string(content))
+	}
+}
+
+func insertStoredAttachmentFixture(
+	t *testing.T,
+	db *sql.DB,
+	orgID string,
+	filename string,
+	content []byte,
+	mimeType string,
+) (string, []byte) {
+	t.Helper()
+
+	storageKey, err := generateStorageKey(filename)
+	if err != nil {
+		t.Fatalf("generateStorageKey() error = %v", err)
+	}
+	uploadDir := filepath.Join(getUploadsStorageDir(), orgID)
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	filePath := filepath.Join(uploadDir, storageKey)
+	if err := os.WriteFile(filePath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(filePath)
+	})
+
+	url := "/api/attachments/pending"
+	var attachmentID string
+	if err := db.QueryRow(
+		`INSERT INTO attachments (org_id, filename, size_bytes, mime_type, storage_key, url)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 RETURNING id`,
+		orgID,
+		filename,
+		len(content),
+		mimeType,
+		storageKey,
+		url,
+	).Scan(&attachmentID); err != nil {
+		t.Fatalf("insert attachment error = %v", err)
+	}
+
+	return attachmentID, content
 }

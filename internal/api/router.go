@@ -505,7 +505,9 @@ func NewRouter() http.Handler {
 	// WebSocket handlers
 	r.Handle("/ws", websocketHandler)
 	r.Handle("/ws/openclaw", openClawWSHandler)
-	r.Handle("/uploads/*", http.StripPrefix("/uploads/", http.FileServer(http.Dir(getUploadsStorageDir()))))
+	r.Get("/uploads/*", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
 
 	// Static file fallback for frontend SPA (must be last)
 	r.Get("/*", handleRoot)

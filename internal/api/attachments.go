@@ -20,7 +20,6 @@ import (
 const (
 	maxUploadSize  = 20 << 20 // 20 MB
 	uploadsDir     = "uploads"
-	defaultBaseURL = "/uploads"
 )
 
 // Attachment represents a file attachment on a message.
@@ -160,26 +159,34 @@ func (h *AttachmentsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build URL
-	baseURL := getUploadBaseURL()
-	fileURL := fmt.Sprintf("%s/%s/%s", baseURL, orgID, storageKey)
-
-	// Generate thumbnail URL for images
-	var thumbnailURL *string
-	if isImageMimeType(mimeType) {
-		thumbURL := fileURL + "?thumb=1"
-		thumbnailURL = &thumbURL
-	}
+	placeholderURL := "/api/attachments/pending"
 
 	var attachmentID string
 	err = db.QueryRowContext(r.Context(), `
 		INSERT INTO attachments (org_id, filename, size_bytes, mime_type, storage_key, url, thumbnail_url)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id
-	`, orgID, header.Filename, written, mimeType, storageKey, fileURL, thumbnailURL).Scan(&attachmentID)
+	`, orgID, header.Filename, written, mimeType, storageKey, placeholderURL, nil).Scan(&attachmentID)
 	if err != nil {
 		os.Remove(destPath)
 		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to save attachment metadata"})
+		return
+	}
+
+	attachmentURL := fmt.Sprintf("/api/attachments/%s", attachmentID)
+	var thumbnailURL *string
+	if isImageMimeType(mimeType) {
+		thumbnailURL = &attachmentURL
+	}
+	if _, err := db.ExecContext(
+		r.Context(),
+		`UPDATE attachments SET url = $1, thumbnail_url = $2 WHERE id = $3`,
+		attachmentURL,
+		thumbnailURL,
+		attachmentID,
+	); err != nil {
+		os.Remove(destPath)
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to finalize attachment metadata"})
 		return
 	}
 
@@ -189,13 +196,13 @@ func (h *AttachmentsHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			Filename:     header.Filename,
 			SizeBytes:    written,
 			MimeType:     mimeType,
-			URL:          fileURL,
+			URL:          attachmentURL,
 			ThumbnailURL: thumbnailURL,
 		},
 	})
 }
 
-// GetAttachment handles GET /api/attachments/{id} - returns signed URL.
+// GetAttachment handles GET /api/attachments/{id} - returns attachment binary when authenticated.
 func (h *AttachmentsHandler) GetAttachment(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		sendJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
@@ -220,33 +227,60 @@ func (h *AttachmentsHandler) GetAttachment(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	var identityOrgID string
+	authenticatedViaSyncToken := false
 	identity, err := requireSessionIdentity(r.Context(), db, r)
-	if err != nil {
-		sendJSON(w, http.StatusUnauthorized, errorResponse{Error: err.Error()})
-		return
+	if err == nil {
+		identityOrgID = identity.OrgID
+	} else {
+		if _, syncErr := requireOpenClawSyncAuth(r.Context(), db, r); syncErr != nil {
+			sendJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid authentication"})
+			return
+		}
+		authenticatedViaSyncToken = true
 	}
 
 	var attachment Attachment
 	var thumbnailURL sql.NullString
 	var commentID sql.NullString
 	var chatMessageID sql.NullString
-	err = db.QueryRowContext(r.Context(), `
-		SELECT id, org_id, comment_id, chat_message_id, filename, size_bytes, mime_type, storage_key, url, thumbnail_url, created_at
-		FROM attachments
-		WHERE id = $1 AND org_id = $2
-	`, attachmentID, identity.OrgID).Scan(
-		&attachment.ID,
-		&attachment.OrgID,
-		&commentID,
-		&chatMessageID,
-		&attachment.Filename,
-		&attachment.SizeBytes,
-		&attachment.MimeType,
-		&attachment.StorageKey,
-		&attachment.URL,
-		&thumbnailURL,
-		&attachment.CreatedAt,
-	)
+	if authenticatedViaSyncToken {
+		err = db.QueryRowContext(r.Context(), `
+			SELECT id, org_id, comment_id, chat_message_id, filename, size_bytes, mime_type, storage_key, url, thumbnail_url, created_at
+			FROM attachments
+			WHERE id = $1
+		`, attachmentID).Scan(
+			&attachment.ID,
+			&attachment.OrgID,
+			&commentID,
+			&chatMessageID,
+			&attachment.Filename,
+			&attachment.SizeBytes,
+			&attachment.MimeType,
+			&attachment.StorageKey,
+			&attachment.URL,
+			&thumbnailURL,
+			&attachment.CreatedAt,
+		)
+	} else {
+		err = db.QueryRowContext(r.Context(), `
+			SELECT id, org_id, comment_id, chat_message_id, filename, size_bytes, mime_type, storage_key, url, thumbnail_url, created_at
+			FROM attachments
+			WHERE id = $1 AND org_id = $2
+		`, attachmentID, identityOrgID).Scan(
+			&attachment.ID,
+			&attachment.OrgID,
+			&commentID,
+			&chatMessageID,
+			&attachment.Filename,
+			&attachment.SizeBytes,
+			&attachment.MimeType,
+			&attachment.StorageKey,
+			&attachment.URL,
+			&thumbnailURL,
+			&attachment.CreatedAt,
+		)
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
 			sendJSON(w, http.StatusNotFound, errorResponse{Error: "attachment not found"})
@@ -266,7 +300,41 @@ func (h *AttachmentsHandler) GetAttachment(w http.ResponseWriter, r *http.Reques
 		attachment.ThumbnailURL = &thumbnailURL.String
 	}
 
-	sendJSON(w, http.StatusOK, attachment)
+	cleanStorageKey := filepath.Clean(strings.TrimSpace(attachment.StorageKey))
+	if cleanStorageKey == "." || strings.Contains(cleanStorageKey, "..") || strings.ContainsAny(cleanStorageKey, `/\`) {
+		sendJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid attachment storage key"})
+		return
+	}
+	filePath := filepath.Join(getUploadsStorageDir(), attachment.OrgID, cleanStorageKey)
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			sendJSON(w, http.StatusNotFound, errorResponse{Error: "attachment file not found"})
+			return
+		}
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read attachment file"})
+		return
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to read attachment file"})
+		return
+	}
+	defer file.Close()
+
+	contentType := strings.TrimSpace(attachment.MimeType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	dispositionType := "attachment"
+	if isImageMimeType(contentType) {
+		dispositionType = "inline"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename=%q`, dispositionType, attachment.Filename))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, attachment.Filename, stat.ModTime(), file)
 }
 
 // detectMimeType detects the MIME type of a file.
@@ -311,14 +379,6 @@ func generateStorageKey(filename string) (string, error) {
 	}
 	ext := filepath.Ext(filename)
 	return hex.EncodeToString(randomBytes) + ext, nil
-}
-
-// getUploadBaseURL returns the base URL for uploaded files.
-func getUploadBaseURL() string {
-	if baseURL := os.Getenv("UPLOAD_BASE_URL"); baseURL != "" {
-		return strings.TrimSuffix(baseURL, "/")
-	}
-	return defaultBaseURL
 }
 
 func getUploadsStorageDir() string {
