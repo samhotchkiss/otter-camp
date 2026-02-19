@@ -422,7 +422,6 @@ func isSupportedAttachmentMimeType(mimeType string) bool {
 		"image/webp",
 		"application/pdf",
 		"application/json",
-		"application/javascript",
 		"application/xml",
 		"application/yaml",
 		"application/x-yaml",
