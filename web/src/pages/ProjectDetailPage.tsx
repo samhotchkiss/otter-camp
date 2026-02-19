@@ -22,6 +22,7 @@ type ExplorerFile = {
   kind: "markdown" | "code";
 };
 
+// TODO(spec-515): Replace RECENT_ACTIVITY placeholder data with live API activity feed wiring (#1221).
 const RECENT_ACTIVITY: DetailActivity[] = [
   {
     user: "Agent-127",
@@ -49,6 +50,7 @@ const RECENT_ACTIVITY: DetailActivity[] = [
   },
 ];
 
+// TODO(spec-515): Replace EXPLORER_FILES placeholder data with live API file explorer wiring (#1221).
 const EXPLORER_FILES: ExplorerFile[] = [
   { name: "README.md", path: "docs/README.md", kind: "markdown" },
   { name: "API.md", path: "docs/API.md", kind: "markdown" },
