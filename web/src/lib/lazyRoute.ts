@@ -16,7 +16,11 @@ function defaultReload(): (() => void) | undefined {
   if (typeof window === "undefined") {
     return undefined;
   }
-  return () => window.location.reload();
+  return () => {
+    const next = new URL(window.location.href);
+    next.searchParams.set("oc_chunk_reload", Date.now().toString(36));
+    window.location.replace(next.toString());
+  };
 }
 
 export function isChunkLoadError(error: unknown): boolean {
@@ -49,11 +53,8 @@ export async function lazyWithChunkRetry<T>(
       storage?.setItem(CHUNK_RELOAD_SESSION_KEY, "1");
       if (reload) {
         reload();
-        // Keep suspense pending while browser refreshes.
-        return new Promise<T>(() => {});
       }
     }
     throw error;
   }
 }
-
