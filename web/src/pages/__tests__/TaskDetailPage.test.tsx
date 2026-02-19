@@ -170,14 +170,14 @@ describe("TaskDetailPage", () => {
 
   it("renders dedicated issue-detail shell on project issue route", async () => {
     renderIssueDetail("/projects/550e8400-e29b-41d4-a716-446655440010/issues/issue-123");
-    expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Request Changes" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(await screen.findByTestId("issue-detail-shell")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Request Changes" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 
   it("renders dedicated issue-detail shell on issue alias route", async () => {
     renderIssueDetail("/issue/issue-123");
-    expect(screen.getByTestId("issue-detail-shell")).toBeInTheDocument();
+    expect(await screen.findByTestId("issue-detail-shell")).toBeInTheDocument();
   });
 
   it("renders missing issue id fallback when alias route param trims empty", async () => {
