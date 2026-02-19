@@ -81,10 +81,10 @@ describe("ProjectDetailPage files tab", () => {
     expect(screen.getByTestId("project-detail-shell")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Chat" })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "+ New Task" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Files" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Code" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Files" }));
+    await user.click(screen.getByRole("tab", { name: "Files" }));
     expect(await screen.findByTestId("project-file-browser-mock")).toBeInTheDocument();
   });
 
@@ -391,11 +391,11 @@ describe("ProjectDetailPage files tab", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
     expect(screen.getByTestId("project-detail-shell")).toHaveClass("min-w-0");
 
-    const tabsContainer = screen.getByRole("button", { name: "Board" }).closest("div");
+    const tabsContainer = screen.getByRole("tab", { name: "Board" }).closest("div");
     expect(tabsContainer).toHaveClass("overflow-x-auto");
     expect(tabsContainer).toHaveClass("whitespace-nowrap");
 
-    await user.click(screen.getByRole("button", { name: "List" }));
+    await user.click(screen.getByRole("tab", { name: "List" }));
 
     const listHeader = screen.getByText("Issue").parentElement;
     expect(listHeader).toHaveClass("min-w-[720px]");
@@ -467,6 +467,33 @@ describe("ProjectDetailPage files tab", () => {
       expect.objectContaining({ type: "project", projectId: "project-1" }),
       expect.objectContaining({ focus: true, openDock: true }),
     );
+  });
+
+  it("exposes project sections with tablist semantics", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockJSONResponse({
+          id: "project-1",
+          name: "Technonymous",
+          status: "active",
+        }),
+      )
+      .mockResolvedValueOnce(mockJSONResponse({ agents: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }))
+      .mockResolvedValueOnce(mockJSONResponse({ items: [] }));
+
+    render(
+      <MemoryRouter initialEntries={["/projects/project-1"]}>
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
+    const tablist = screen.getByRole("tablist", { name: "Project detail sections" });
+    expect(tablist).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Board" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("navigates to project issue detail when a board issue card is clicked", async () => {
@@ -547,7 +574,7 @@ describe("ProjectDetailPage files tab", () => {
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "List" }));
+    await user.click(screen.getByRole("tab", { name: "List" }));
     await user.click(screen.getByText(/Verify list row click route/i));
     expect(await screen.findByTestId("project-issue-route")).toHaveTextContent(
       "project-1:550e8400-e29b-41d4-a716-446655440112",
@@ -592,7 +619,7 @@ describe("ProjectDetailPage files tab", () => {
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "List" }));
+    await user.click(screen.getByRole("tab", { name: "List" }));
 
     expect(screen.getByText(/Ship status column/i)).toBeInTheDocument();
     expect(screen.getByText("In Progress")).toBeInTheDocument();
@@ -648,7 +675,7 @@ describe("ProjectDetailPage files tab", () => {
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "List" }));
+    await user.click(screen.getByRole("tab", { name: "List" }));
 
     expect(screen.getByText("Status")).toBeInTheDocument();
     expect(screen.getByText("Assignee")).toBeInTheDocument();
@@ -698,7 +725,7 @@ describe("ProjectDetailPage files tab", () => {
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "List" }));
+    await user.click(screen.getByRole("tab", { name: "List" }));
 
     expect(screen.getByText("No active issues")).toBeInTheDocument();
     expect(screen.queryByText("No active tasks")).not.toBeInTheDocument();
@@ -868,7 +895,7 @@ describe("ProjectDetailPage files tab", () => {
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
-    await user.click(screen.getAllByRole("button", { name: "Settings" })[1]);
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
 
     await user.selectOptions(screen.getByLabelText("Workflow schedule type"), "every");
     await user.clear(screen.getByLabelText("Workflow every milliseconds"));
@@ -990,7 +1017,7 @@ describe("ProjectDetailPage files tab", () => {
     );
 
     expect(await screen.findByRole("heading", { level: 1, name: "Technonymous" })).toBeInTheDocument();
-    await user.click(screen.getAllByRole("button", { name: "Settings" })[1]);
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
 
     expect(screen.getByLabelText("Workflow schedule type")).toHaveValue("cron");
     await user.selectOptions(screen.getByLabelText("Workflow schedule type"), "every");

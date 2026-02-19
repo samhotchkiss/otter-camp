@@ -25,6 +25,7 @@ describe("ContentReviewPage", () => {
     expect(screen.getByTestId("content-review-route-header")).toHaveClass("sm:flex-row");
     expect(screen.getByRole("heading", { name: "Content Review" })).toBeInTheDocument();
     expect(screen.getByTestId("content-review-route-path")).toHaveTextContent("docs/guides/api spec.md");
+    expect(screen.getByTestId("content-review-page-shell")).toHaveAttribute("aria-labelledby", "content-review-page-title");
     expect(screen.getByTestId("content-review-shell")).toBeInTheDocument();
 
     const sourceTextarea = screen.getByTestId("source-textarea") as HTMLTextAreaElement;

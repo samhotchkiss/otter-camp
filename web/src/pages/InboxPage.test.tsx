@@ -233,6 +233,7 @@ describe("InboxPage", () => {
 
     await screen.findByRole("heading", { name: /Code review.*Agent-007/ });
 
+    expect(screen.getByRole("toolbar", { name: "Inbox actions" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Filter inbox" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Archive inbox" })).toBeDisabled();
   });

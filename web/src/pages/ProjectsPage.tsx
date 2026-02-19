@@ -641,6 +641,7 @@ export default function ProjectsPage({
           <h2 className="text-sm font-semibold text-[var(--text)]">Recent Activity</h2>
           <button
             type="button"
+            aria-label="View all recent activity"
             className="text-xs font-medium text-[var(--accent)] transition hover:opacity-80"
           >
             View All

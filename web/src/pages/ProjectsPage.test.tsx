@@ -231,7 +231,7 @@ describe("ProjectsPage", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Recent Activity" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "View All" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View all recent activity" })).toBeInTheDocument();
   });
 
   it("applies responsive class hooks to projects controls and activity rows", async () => {

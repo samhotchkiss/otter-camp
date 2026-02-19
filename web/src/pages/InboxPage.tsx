@@ -203,6 +203,7 @@ export default function InboxPage() {
         <div
           className="inbox-header-actions w-full sm:w-auto sm:justify-end"
           aria-label="Inbox actions"
+          role="toolbar"
         >
           <button type="button" className="inbox-icon-action" aria-label="Filter inbox" disabled>
             Filter

@@ -1095,12 +1095,20 @@ export default function ProjectDetailPage() {
       </header>
 
       {/* Tabs */}
-      <div className="mb-6 flex gap-1 overflow-x-auto whitespace-nowrap border-b border-[var(--border)]">
+      <div
+        className="mb-6 flex gap-1 overflow-x-auto whitespace-nowrap border-b border-[var(--border)]"
+        role="tablist"
+        aria-label="Project detail sections"
+      >
         {tabs.map((tab) => (
           <button
             key={tab.key}
             type="button"
             onClick={() => setActiveTab(tab.key)}
+            id={`project-detail-tab-${tab.key}`}
+            role="tab"
+            aria-controls={`project-detail-panel-${tab.key}`}
+            aria-selected={activeTab === tab.key}
             className={`relative px-5 py-3 text-sm font-medium transition ${
               activeTab === tab.key
                 ? "text-amber-600 dark:text-amber-400"
@@ -1122,7 +1130,12 @@ export default function ProjectDetailPage() {
 
       {/* Tab Content */}
       {activeTab === "board" && (
-        <div className="flex min-w-0 flex-1 gap-6 overflow-x-auto pb-4">
+        <section
+          role="tabpanel"
+          id="project-detail-panel-board"
+          aria-labelledby="project-detail-tab-board"
+          className="flex min-w-0 flex-1 gap-6 overflow-x-auto pb-4"
+        >
           {/* Kanban Board */}
           <div className="flex min-w-0 flex-1 gap-5 overflow-x-auto">
             {COLUMNS.map((col) => (
@@ -1169,11 +1182,16 @@ export default function ProjectDetailPage() {
               )}
             </div>
           </aside>
-        </div>
+        </section>
       )}
 
       {activeTab === "list" && (
-        <div className="overflow-x-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+        <section
+          role="tabpanel"
+          id="project-detail-panel-list"
+          aria-labelledby="project-detail-tab-list"
+          className="overflow-x-auto rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6"
+        >
           <div className="space-y-3">
             {tasks.filter(t => t.status !== "done" && t.status !== "cancelled").length > 0 ? (
               <>
@@ -1222,11 +1240,16 @@ export default function ProjectDetailPage() {
               </div>
             )}
           </div>
-        </div>
+        </section>
       )}
 
       {activeTab === "activity" && (
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+        <section
+          role="tabpanel"
+          id="project-detail-panel-activity"
+          aria-labelledby="project-detail-tab-activity"
+          className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6"
+        >
           <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface-alt)] p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
               Live Emissions
@@ -1251,13 +1274,26 @@ export default function ProjectDetailPage() {
               </div>
             )}
           </div>
-        </div>
+        </section>
       )}
 
-      {activeTab === "files" && <ProjectFileBrowser projectId={project.id} />}
+      {activeTab === "files" && (
+        <section
+          role="tabpanel"
+          id="project-detail-panel-files"
+          aria-labelledby="project-detail-tab-files"
+        >
+          <ProjectFileBrowser projectId={project.id} />
+        </section>
+      )}
 
       {activeTab === "issues" && (
-        <div className={`grid min-w-0 gap-4 ${issueId ? "xl:grid-cols-[minmax(320px,420px)_1fr]" : "grid-cols-1"}`}>
+        <section
+          role="tabpanel"
+          id="project-detail-panel-issues"
+          aria-labelledby="project-detail-tab-issues"
+          className={`grid min-w-0 gap-4 ${issueId ? "xl:grid-cols-[minmax(320px,420px)_1fr]" : "grid-cols-1"}`}
+        >
           <ProjectIssuesList
             projectId={project.id}
             selectedIssueID={issueId ?? null}
@@ -1266,11 +1302,16 @@ export default function ProjectDetailPage() {
             }
           />
           {issueId && <IssueThreadPanel issueID={issueId} projectID={project.id} />}
-        </div>
+        </section>
       )}
 
       {activeTab === "settings" && (
-        <div className="space-y-5">
+        <section
+          role="tabpanel"
+          id="project-detail-panel-settings"
+          aria-labelledby="project-detail-tab-settings"
+          className="space-y-5"
+        >
           <ProjectSettingsPage
             projectID={project.id}
             availableAgents={availableAgents}
@@ -1299,7 +1340,7 @@ export default function ProjectDetailPage() {
             />
             </div>
           </section>
-          </div>
+        </section>
       )}
     </div>
   );

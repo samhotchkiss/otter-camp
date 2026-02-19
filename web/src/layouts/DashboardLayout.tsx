@@ -402,6 +402,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               key={item.id}
               to={item.href}
               className={`nav-link ${activeNavId === item.id ? "active" : ""}`}
+              aria-current={activeNavId === item.id ? "page" : undefined}
               onClick={() => setMobileMenuOpen(false)}
             >
               {item.label}
